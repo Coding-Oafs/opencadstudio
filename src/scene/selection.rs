@@ -330,6 +330,7 @@ impl Scene {
     // ── Erase ─────────────────────────────────────────────────────────────
 
     pub fn erase_entities(&mut self, handles: &[Handle]) {
+        let handle_set: HashSet<Handle> = handles.iter().copied().collect();
         let mut erased: Vec<(Handle, ChangeKind)> = Vec::new();
         for &h in handles {
             // Objects on a locked layer can't be erased.
@@ -338,13 +339,15 @@ impl Scene {
             }
             // Delta-undo: capture the removed entity so an undo can re-insert it.
             if self.is_recording_undo() {
-                let before = self.document.get_entity(h).cloned();
+                let before = self.document.get_entity_arc(h);
                 self.record_undo_before(h, before);
             }
-            self.document.remove_entity(h);
+            self.document.remove_entity_arc(h);
             self.selected.remove(&h);
             self.hatches.remove(&h);
+            self.images.remove(&h);
             self.meshes.remove(&h);
+            self.block_meshes.remove(&h);
             self.solid_models.remove(&h);
             erased.push((h, ChangeKind::Removed));
         }
@@ -358,7 +361,7 @@ impl Scene {
             .filter_map(|obj| match obj {
                 ObjectType::Group(g) => {
                     let before = g.entities.len();
-                    g.entities.retain(|h| !handles.contains(h));
+                    g.entities.retain(|h| !handle_set.contains(h));
                     if g.entities.len() != before {
                         groups_changed = true;
                     }
@@ -389,5 +392,30 @@ impl Scene {
         // the resident set removes only their wires (bump_entities drops them
         // from the tessellation memos too).
         self.bump_entities(&erased);
+    }
+
+    /// Restore erased Arc-backed entities without re-linking their still-present
+    /// block-record handles. Used by OOPS and history replay.
+    pub fn restore_erased_entities(&mut self, entities: Vec<Arc<EntityType>>) -> Vec<Handle> {
+        let mut restored = Vec::with_capacity(entities.len());
+        let mut changes = Vec::with_capacity(entities.len());
+        for entity in entities {
+            let handle = entity.common().handle;
+            if handle.is_null() || self.document.get_entity(handle).is_some() {
+                continue;
+            }
+            if self.is_recording_undo() {
+                self.record_undo_before(handle, None);
+            }
+            if self.document.restore_entity_arc(entity).is_some() {
+                self.reseed_derived_caches(handle);
+                restored.push(handle);
+                changes.push((handle, ChangeKind::Added));
+            }
+        }
+        if !changes.is_empty() {
+            self.bump_entities(&changes);
+        }
+        restored
     }
 }

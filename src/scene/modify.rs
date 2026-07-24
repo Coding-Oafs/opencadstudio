@@ -77,6 +77,39 @@ fn mirror_true_text_flags(e: &mut EntityType) {
 }
 
 impl Scene {
+    /// Invalidate a dimension's baked block while capturing every removed
+    /// sub-entity for an active history transaction.
+    pub fn invalidate_dim_block_recorded(&mut self, handle: Handle) {
+        if self.is_recording_undo() {
+            let owned: Vec<Handle> = self
+                .document
+                .get_entity(handle)
+                .and_then(|entity| match entity {
+                    EntityType::Dimension(d) => {
+                        let name = d.base().block_name.clone();
+                        self.document.block_records.get(&name).map(|record| {
+                            let mut handles = record.entity_handles.clone();
+                            handles.push(record.block_entity_handle);
+                            handles.push(record.block_end_handle);
+                            handles
+                        })
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if let Some(before) = self.document.get_entity_arc(handle) {
+                self.record_undo_before(handle, Some(before));
+            }
+            for owned_handle in owned {
+                if let Some(before) = self.document.get_entity_arc(owned_handle) {
+                    self.record_undo_before(owned_handle, Some(before));
+                }
+            }
+            self.poison_undo_recording();
+        }
+        crate::modules::draw::modify::explode::invalidate_dim_block(&mut self.document, handle);
+    }
+
     // ── Modify (transform / copy) ─────────────────────────────────────────
 
     pub fn transform_entities(&mut self, handles: &[Handle], t: &EntityTransform) {
@@ -137,7 +170,7 @@ impl Scene {
         for &h in handles {
             // Delta-undo: capture the pre-transform image before mutating.
             if self.is_recording_undo() {
-                let before = self.document.get_entity(h).cloned();
+                let before = self.document.get_entity_arc(h);
                 self.record_undo_before(h, before);
             }
             if let Some(entity) = self.document.get_entity_mut(h) {
@@ -172,7 +205,7 @@ impl Scene {
         // must capture their before-images here or a dimension move won't undo.
         for h in &dim_block_subs {
             if self.is_recording_undo() {
-                let before = self.document.get_entity(*h).cloned();
+                let before = self.document.get_entity_arc(*h);
                 self.record_undo_before(*h, before);
             }
             if let Some(entity) = self.document.get_entity_mut(*h) {
@@ -409,7 +442,7 @@ impl Scene {
         // the grip only moved a definition point, so the baked graphics are
         // stale — drop them so tessellation falls back to the live geometry
         // and the next save re-bakes (no-op for non-dimensions). (#398)
-        crate::modules::draw::modify::explode::invalidate_dim_block(&mut self.document, handle);
+        self.invalidate_dim_block_recorded(handle);
 
         // Translate MeshModel vertices by the same delta the grip applied.
         if let Some(old) = old_por {

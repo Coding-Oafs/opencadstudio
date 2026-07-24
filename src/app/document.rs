@@ -13,6 +13,7 @@ use iced;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 // ── Dynamic input ──────────────────────────────────────────────────────────
 
@@ -477,51 +478,60 @@ impl DocumentTab {
     }
 }
 
-/// One undo/redo entry. Most edits touch the whole drawing's state and store a
-/// [`FullSnapshot`] (a document clone); frequent entity-only edits (move / copy /
-/// draw / erase) instead store a cheap [`DeltaSnapshot`] naming just the entities
-/// they changed, so an 800k-entity drawing doesn't pay a ~46 ms document clone
-/// per edit.
+/// One undo/redo entry. Every edit is represented as a first-touch entity delta
+/// plus an optional structure-only document image, so history never clones the
+/// full entity store.
 #[derive(Clone)]
 pub(super) enum HistorySnapshot {
-    Full(FullSnapshot),
     Delta(DeltaSnapshot),
 }
 
 impl HistorySnapshot {
     pub(super) fn label(&self) -> &str {
         match self {
-            HistorySnapshot::Full(f) => &f.label,
             HistorySnapshot::Delta(d) => &d.label,
+        }
+    }
+
+    /// Approximate retained history memory. Entity images are shared through
+    /// `Arc`; the estimate conservatively budgets their payloads and optional
+    /// structure state to keep pathological histories bounded.
+    pub(super) fn estimated_bytes(&self) -> usize {
+        match self {
+            HistorySnapshot::Delta(d) => d
+                .entities
+                .len()
+                .saturating_mul(512)
+                .saturating_add(
+                    d.structure
+                        .as_ref()
+                        .map_or(0, |doc| doc.objects.len().saturating_mul(192)),
+                )
+                .saturating_add(d.selected_before.len().saturating_mul(16))
+                .saturating_add(d.selected_after.len().saturating_mul(16))
+                .saturating_add(d.label.len()),
         }
     }
 }
 
-/// A whole-document undo entry: the safe fallback for any command that may touch
-/// layers, objects, block records, styles or tables.
-#[derive(Clone)]
-pub(super) struct FullSnapshot {
-    pub(super) document: CadDocument,
-    pub(super) current_layout: String,
-    pub(super) selected: Vec<Handle>,
-    pub(super) dirty: bool,
-    pub(super) label: String,
-}
-
-/// An entity-only undo entry: for each touched handle, its before-image and
+/// A transactional undo entry: for each touched handle, its before-image and
 /// after-image (`None` = the entity was absent on that side, i.e. an add or an
 /// erase). Symmetric — undo applies the before side, redo the after side — so
 /// one delta moves between the undo and redo stacks without re-capturing. The
-/// command by construction changes no layers / objects / blocks, so only the
-/// cheap scalars (`current_layout`, selection, `dirty`) ride alongside.
+/// Optional structure state covers layers, objects, blocks and tables without
+/// cloning the flat entity store.
 #[derive(Clone)]
 pub(super) struct DeltaSnapshot {
-    pub(super) entities: Vec<(Handle, Option<EntityType>, Option<EntityType>)>,
-    pub(super) current_layout: String,
+    pub(super) entities: Vec<(Handle, Option<Arc<EntityType>>, Option<Arc<EntityType>>)>,
+    pub(super) current_layout_before: String,
+    pub(super) current_layout_after: String,
     pub(super) selected_before: Vec<Handle>,
     pub(super) selected_after: Vec<Handle>,
     pub(super) dirty_before: bool,
     pub(super) dirty_after: bool,
+    /// Opposite non-entity document state. `apply_delta_state` swaps this with
+    /// the live structure, so the same allocation shuttles between undo/redo.
+    pub(super) structure: Option<CadDocument>,
     pub(super) label: String,
 }
 
@@ -529,4 +539,14 @@ pub(super) struct DeltaSnapshot {
 pub(super) struct HistoryState {
     pub(super) undo_stack: Vec<HistorySnapshot>,
     pub(super) redo_stack: Vec<HistorySnapshot>,
+    pub(super) pending: Option<PendingHistorySnapshot>,
+}
+
+pub(super) struct PendingHistorySnapshot {
+    pub(super) label: String,
+    pub(super) current_layout: String,
+    pub(super) selected_before: Vec<Handle>,
+    pub(super) dirty_before: bool,
+    pub(super) structure_before: CadDocument,
+    pub(super) recorder: Arc<acadrust::document::EntityChangeRecorder>,
 }

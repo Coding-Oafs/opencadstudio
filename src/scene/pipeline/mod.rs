@@ -217,6 +217,19 @@ pub struct Pipeline {
     gpu_face3d_fill: Option<Face3DGpu>,
     gpu_face3d_edges: Vec<WireGpu>,
     pub viewcube: ViewCubePipeline,
+    /// Strong source guards for category-specific GPU uploads. Holding the old
+    /// Arc makes pointer identity ABA-safe: an unchanged category reuses the
+    /// same Arc even when an unrelated entity advances `geometry_epoch`.
+    pub cached_hatch_source: Option<std::sync::Arc<Vec<HatchModel>>>,
+    pub cached_wipeout_source: Option<std::sync::Arc<Vec<HatchModel>>>,
+    pub cached_image_source: Option<std::sync::Arc<Vec<ImageModel>>>,
+    pub cached_text_source: Option<std::sync::Arc<Vec<text_gpu::TextVertex>>>,
+    pub cached_mesh_source: Option<std::sync::Arc<Vec<MeshLodSet>>>,
+    pub cached_face3d_source: Option<std::sync::Arc<Vec<WireModel>>>,
+    pub cached_face3d_wire_source: Option<std::sync::Arc<Vec<WireModel>>>,
+    pub cached_face3d_depth_source:
+        Option<std::sync::Arc<rustc_hash::FxHashMap<u64, [f32; 2]>>>,
+    pub cached_fill_mode: bool,
     /// Last `(geometry_epoch, camera_generation)` value for which GPU buffers
     /// were uploaded. We re-upload when either side changes — pan/zoom bumps
     /// camera_generation, which triggers re-culling and a fresh upload.
@@ -1458,6 +1471,15 @@ impl Pipeline {
             gpu_face3d_fill: None,
             gpu_face3d_edges: vec![],
             viewcube,
+            cached_hatch_source: None,
+            cached_wipeout_source: None,
+            cached_image_source: None,
+            cached_text_source: None,
+            cached_mesh_source: None,
+            cached_face3d_source: None,
+            cached_face3d_wire_source: None,
+            cached_face3d_depth_source: None,
+            cached_fill_mode: false,
             cached_epoch: (u64::MAX, u64::MAX, u64::MAX),
             cached_wire_id: u64::MAX,
             cached_selection: (u64::MAX, u64::MAX),

@@ -715,7 +715,7 @@ impl OpenCADStudio {
                     // Stash the erased entities so OOPS can restore them.
                     self.oops_cache = handles
                         .iter()
-                        .filter_map(|h| self.tabs[i].scene.document.get_entity(*h).cloned())
+                        .filter_map(|h| self.tabs[i].scene.document.get_entity_arc(*h))
                         .collect();
                     self.tabs[i].scene.erase_entities(&handles);
                     self.tabs[i].dirty = true;

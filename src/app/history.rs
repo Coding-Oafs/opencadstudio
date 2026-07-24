@@ -1,15 +1,64 @@
 use super::{
-    document::{DeltaSnapshot, FullSnapshot, HistorySnapshot},
+    document::{DeltaSnapshot, HistorySnapshot, PendingHistorySnapshot},
     OpenCADStudio,
 };
 use acadrust::{EntityType, Handle};
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap, FxHashSet as HashSet};
+use std::sync::Arc;
 
-/// Above this many touched entities a "delta-safe" command falls back to a full
-/// snapshot: deep-cloning that many before-images would cost more than the (now
-/// Arc-cheap) document clone, and huge bulk edits are rare. Below it, the delta
-/// keeps a per-edit undo at roughly zero cost.
-const DELTA_UNDO_MAX_ENTITIES: usize = 5000;
+const DEFAULT_HISTORY_MAX_ENTRIES: usize = 256;
+const DEFAULT_HISTORY_MAX_BYTES: usize = 512 * 1024 * 1024;
+
+fn history_limits() -> (usize, usize) {
+    use std::sync::OnceLock;
+    static LIMITS: OnceLock<(usize, usize)> = OnceLock::new();
+    *LIMITS.get_or_init(|| {
+        let entries = std::env::var("OCS_HISTORY_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_HISTORY_MAX_ENTRIES);
+        let mib = std::env::var("OCS_HISTORY_MAX_MB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_HISTORY_MAX_BYTES / (1024 * 1024));
+        (
+            if entries == 0 { usize::MAX } else { entries },
+            if mib == 0 {
+                usize::MAX
+            } else {
+                mib.saturating_mul(1024 * 1024)
+            },
+        )
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn defer_history_drop(entries: Vec<HistorySnapshot>) {
+    if entries.is_empty() {
+        return;
+    }
+    use std::sync::{mpsc, OnceLock};
+    static TX: OnceLock<mpsc::Sender<Vec<HistorySnapshot>>> = OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Vec<HistorySnapshot>>();
+        let _ = std::thread::Builder::new()
+            .name("ocs-history-drop".to_string())
+            .spawn(move || {
+                while let Ok(entries) = rx.recv() {
+                    drop(entries);
+                }
+            });
+        tx
+    });
+    if let Err(err) = tx.send(entries) {
+        drop(err.0);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn defer_history_drop(entries: Vec<HistorySnapshot>) {
+    drop(entries);
+}
 
 /// Pre-command state captured by [`OpenCADStudio::begin_undo`] and handed back to
 /// [`OpenCADStudio::commit_undo_delta`] to close a delta entry. Lives on the
@@ -19,6 +68,7 @@ pub(super) struct PendingDelta {
     current_layout: String,
     selected_before: Vec<Handle>,
     dirty_before: bool,
+    structure_before: Option<acadrust::CadDocument>,
 }
 
 impl OpenCADStudio {
@@ -30,52 +80,187 @@ impl OpenCADStudio {
             .unwrap_or_else(|| fallback.to_string())
     }
 
-    pub(super) fn capture_history_snapshot(
-        &self,
+    fn clear_redo_history(&mut self, i: usize) {
+        let discarded = std::mem::take(&mut self.tabs[i].history.redo_stack);
+        defer_history_drop(discarded);
+    }
+
+    fn trim_history(&mut self, i: usize) {
+        let (max_entries, max_bytes) = history_limits();
+        let history = &mut self.tabs[i].history;
+        let mut entries = history
+            .undo_stack
+            .len()
+            .saturating_add(history.redo_stack.len());
+        let mut bytes = history
+            .undo_stack
+            .iter()
+            .chain(history.redo_stack.iter())
+            .fold(0usize, |sum, item| {
+                sum.saturating_add(item.estimated_bytes())
+            });
+        let mut discarded = Vec::new();
+        while entries > max_entries || bytes > max_bytes {
+            let item = if !history.undo_stack.is_empty() {
+                history.undo_stack.remove(0)
+            } else if !history.redo_stack.is_empty() {
+                history.redo_stack.remove(0)
+            } else {
+                break;
+            };
+            entries -= 1;
+            bytes = bytes.saturating_sub(item.estimated_bytes());
+            discarded.push(item);
+        }
+        defer_history_drop(discarded);
+    }
+
+    fn push_undo_entry(&mut self, i: usize, snapshot: HistorySnapshot) {
+        self.tabs[i].history.undo_stack.push(snapshot);
+        self.clear_redo_history(i);
+        self.trim_history(i);
+    }
+
+    pub(super) fn push_single_entity_history(
+        &mut self,
         i: usize,
         label: impl Into<String>,
-    ) -> HistorySnapshot {
-        HistorySnapshot::Full(FullSnapshot {
-            document: self.tabs[i].scene.document.clone(),
-            current_layout: self.tabs[i].scene.current_layout.clone(),
-            selected: self.tabs[i].scene.selected.iter().copied().collect(),
-            dirty: self.tabs[i].dirty,
+        handle: Handle,
+        before: Arc<EntityType>,
+    ) {
+        self.finish_pending_history(i);
+        let Some(after) = self.tabs[i].scene.document.get_entity_arc(handle) else {
+            return;
+        };
+        let selected: Vec<Handle> = self.tabs[i].scene.selected.iter().copied().collect();
+        let dirty_before = self.tabs[i].dirty;
+        let delta = DeltaSnapshot {
+            entities: vec![(handle, Some(before), Some(after))],
+            current_layout_before: self.tabs[i].scene.current_layout.clone(),
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: selected.clone(),
+            selected_after: selected,
+            dirty_before,
+            dirty_after: true,
+            structure: None,
             label: label.into(),
-        })
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
+    }
+
+    pub(super) fn discard_last_undo_entry(&mut self, i: usize) {
+        if self.tabs[i].history.pending.take().is_some() {
+            self.tabs[i].scene.document.end_entity_change_recording();
+            return;
+        }
+        if let Some(discarded) = self.tabs[i].history.undo_stack.pop() {
+            defer_history_drop(vec![discarded]);
+        }
+    }
+
+    pub(super) fn finish_pending_history(&mut self, i: usize) {
+        let Some(mut pending) = self.tabs[i].history.pending.take() else {
+            return;
+        };
+        self.tabs[i].scene.document.end_entity_change_recording();
+        let structure_after = self.tabs[i].scene.document.snapshot_structure();
+        let before_images = pending.recorder.take_before_images();
+        let added_handles: Vec<Handle> = before_images
+            .iter()
+            .filter_map(|(handle, before)| {
+                (before.is_none() && self.tabs[i].scene.document.get_entity(*handle).is_some())
+                    .then_some(*handle)
+            })
+            .collect();
+        acadrust::CadDocument::align_added_entity_structure(
+            &mut pending.structure_before,
+            &structure_after,
+            &added_handles,
+        );
+        let structure_changed = pending.structure_before != structure_after;
+        let entities: Vec<_> = before_images
+            .into_iter()
+            .map(|(handle, before)| {
+                let after = self.tabs[i].scene.document.get_entity_arc(handle);
+                (handle, before, after)
+            })
+            .filter(|(_, before, after)| match (before, after) {
+                (Some(before), Some(after)) => !Arc::ptr_eq(before, after),
+                (None, None) => false,
+                _ => true,
+            })
+            .collect();
+        let selected_after: Vec<Handle> = self.tabs[i].scene.selected.iter().copied().collect();
+        let dirty_after = self.tabs[i].dirty;
+        if entities.is_empty()
+            && !structure_changed
+            && pending.selected_before == selected_after
+            && pending.dirty_before == dirty_after
+        {
+            return;
+        }
+        let delta = DeltaSnapshot {
+            entities,
+            current_layout_before: pending.current_layout,
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: pending.selected_before,
+            selected_after,
+            dirty_before: pending.dirty_before,
+            dirty_after,
+            structure: structure_changed.then_some(pending.structure_before),
+            label: pending.label,
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
+    }
+
+    pub(super) fn finish_all_pending_history(&mut self) {
+        for i in 0..self.tabs.len() {
+            self.finish_pending_history(i);
+        }
     }
 
     pub(super) fn push_undo_snapshot(&mut self, i: usize, label: impl Into<String>) {
-        let snapshot = self.capture_history_snapshot(i, label);
-        self.tabs[i].history.undo_stack.push(snapshot);
-        self.tabs[i].history.redo_stack.clear();
+        self.finish_pending_history(i);
+        let label = label.into();
+        let current_layout = self.tabs[i].scene.current_layout.clone();
+        let selected_before = self.tabs[i].scene.selected.iter().copied().collect();
+        let dirty_before = self.tabs[i].dirty;
+        let structure_before = self.tabs[i].scene.document.snapshot_structure();
+        let recorder = self.tabs[i].scene.document.begin_entity_change_recording();
+        self.tabs[i].history.pending = Some(PendingHistorySnapshot {
+            label,
+            current_layout,
+            selected_before,
+            dirty_before,
+            structure_before,
+            recorder,
+        });
     }
 
     /// Begin undo capture for an entity edit that will touch `touched` entities.
-    /// When `delta_safe` (the caller's per-command predicate guarantees the edit
-    /// mutates only entities, through the five Scene primitives) and the edit is
-    /// small enough, starts a cheap Scene delta recording and returns the
-    /// pre-command state to pass to [`OpenCADStudio::commit_undo_delta`] after the
-    /// mutation. Otherwise pushes a full snapshot and returns `None`.
+    /// Starts a cheap Scene delta recording and returns the pre-command state to
+    /// pass to [`OpenCADStudio::commit_undo_delta`] after the mutation. A command
+    /// that may touch layers/objects/block records also retains a structure-only
+    /// document image; the O(N) entity store is excluded.
     pub(super) fn begin_undo(
         &mut self,
         i: usize,
         label: impl Into<String>,
-        touched: usize,
+        _touched: usize,
         delta_safe: bool,
     ) -> Option<PendingDelta> {
+        self.finish_pending_history(i);
         let label = label.into();
-        if delta_safe && touched <= DELTA_UNDO_MAX_ENTITIES {
-            self.tabs[i].scene.begin_undo_recording();
-            Some(PendingDelta {
-                label,
-                current_layout: self.tabs[i].scene.current_layout.clone(),
-                selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
-                dirty_before: self.tabs[i].dirty,
-            })
-        } else {
-            self.push_undo_snapshot(i, label);
-            None
-        }
+        let structure_before =
+            (!delta_safe).then(|| self.tabs[i].scene.document.snapshot_structure());
+        self.tabs[i].scene.begin_undo_recording();
+        Some(PendingDelta {
+            label,
+            current_layout: self.tabs[i].scene.current_layout.clone(),
+            selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: self.tabs[i].dirty,
+            structure_before,
+        })
     }
 
     /// Copy is delta-safe only when no target is a Dimension and no complete
@@ -85,12 +270,13 @@ impl OpenCADStudio {
     pub(super) fn delta_copy_safe(&self, i: usize, handles: &[Handle]) -> bool {
         use acadrust::objects::ObjectType;
         let doc = &self.tabs[i].scene.document;
+        let handle_set: HashSet<Handle> = handles.iter().copied().collect();
         let copies_dimension = handles
             .iter()
             .any(|h| matches!(doc.get_entity(*h), Some(EntityType::Dimension(_))));
         let copies_complete_group = doc.objects.values().any(|o| match o {
             ObjectType::Group(g) => {
-                !g.entities.is_empty() && g.entities.iter().all(|h| handles.contains(h))
+                !g.entities.is_empty() && g.entities.iter().all(|h| handle_set.contains(h))
             }
             _ => false,
         });
@@ -102,8 +288,9 @@ impl OpenCADStudio {
     pub(super) fn delta_erase_safe(&self, i: usize, handles: &[Handle]) -> bool {
         use acadrust::objects::ObjectType;
         let doc = &self.tabs[i].scene.document;
+        let handle_set: HashSet<Handle> = handles.iter().copied().collect();
         !doc.objects.values().any(|o| match o {
-            ObjectType::Group(g) => g.entities.iter().any(|h| handles.contains(h)),
+            ObjectType::Group(g) => g.entities.iter().any(|h| handle_set.contains(h)),
             _ => false,
         })
     }
@@ -145,45 +332,61 @@ impl OpenCADStudio {
         // entity part stays correct; a leaked layer/group/block just won't
         // revert). Loud in debug, a warning in release — never a silent wrong.
         debug_assert!(
-            !rec.is_poisoned(),
-            "delta command '{}' mutated non-entity state",
+            !rec.is_poisoned() || pending.structure_before.is_some(),
+            "delta command '{}' mutated unrecorded non-entity state",
             pending.label
         );
-        if rec.is_empty() {
+        if rec.is_empty() && pending.structure_before.is_none() {
             // Nothing actually changed (e.g. every target was on a locked
             // layer). Leave the undo/redo stacks untouched.
             return;
         }
-        if rec.is_poisoned() {
+        if rec.is_poisoned() && pending.structure_before.is_none() {
             eprintln!(
                 "[undo] delta '{}' touched non-entity state; undo may be incomplete",
                 pending.label
             );
         }
-        let entities: Vec<(Handle, Option<EntityType>, Option<EntityType>)> = rec
+        let entities: Vec<(Handle, Option<Arc<EntityType>>, Option<Arc<EntityType>>)> = rec
             .into_before_images()
             .into_iter()
             .map(|(h, before)| {
-                let after = self.tabs[i].scene.document.get_entity(h).cloned();
+                let after = self.tabs[i].scene.document.get_entity_arc(h);
                 (h, before, after)
             })
             .collect();
         let selected_after = self.tabs[i].scene.selected.iter().copied().collect();
         let dirty_after = self.tabs[i].dirty;
+        let mut structure = pending.structure_before;
+        if let Some(before_structure) = structure.as_mut() {
+            let after_structure = self.tabs[i].scene.document.snapshot_structure();
+            let added_handles: Vec<Handle> = entities
+                .iter()
+                .filter_map(|(handle, before, after)| {
+                    (before.is_none() && after.is_some()).then_some(*handle)
+                })
+                .collect();
+            acadrust::CadDocument::align_added_entity_structure(
+                before_structure,
+                &after_structure,
+                &added_handles,
+            );
+            if *before_structure == after_structure {
+                structure = None;
+            }
+        }
         let delta = DeltaSnapshot {
             entities,
-            current_layout: pending.current_layout,
+            current_layout_before: pending.current_layout,
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
             selected_before: pending.selected_before,
             selected_after,
             dirty_before: pending.dirty_before,
             dirty_after,
+            structure,
             label: pending.label,
         };
-        self.tabs[i]
-            .history
-            .undo_stack
-            .push(HistorySnapshot::Delta(delta));
-        self.tabs[i].history.redo_stack.clear();
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
     }
 
     /// Apply one side of a delta entry in place: `undo` restores each entity's
@@ -191,13 +394,21 @@ impl OpenCADStudio {
     /// means the entity is absent there (erase it). Reports the exact touched
     /// handles through `bump_entities` so the incremental caches patch per-handle
     /// — no full re-tessellation, no `populate_*` document walk.
-    fn apply_delta(&mut self, i: usize, d: &DeltaSnapshot, undo: bool) {
-        // Install the chosen side of every entity image (Scene handles the
-        // in-place / re-insert / remove, the derived-cache reseed and the
-        // block-record dedup); we report the touched handles incrementally.
+    fn apply_delta_state(
+        &mut self,
+        i: usize,
+        d: &mut DeltaSnapshot,
+        undo: bool,
+    ) -> Vec<(Handle, crate::scene::ChangeKind)> {
+        // Install the chosen side of every entity image. Derived-cache, geometry
+        // and UI invalidation are deferred until every requested undo/redo step
+        // has been applied.
+        if let Some(structure) = d.structure.take() {
+            let inverse = self.tabs[i].scene.document.swap_structure(structure);
+            d.structure = Some(inverse);
+        }
         let changes = self.tabs[i].scene.apply_entity_delta(&d.entities, undo);
         let scene = &mut self.tabs[i].scene;
-        scene.bump_entities(&changes);
         let (sel, dirty) = if undo {
             (&d.selected_before, d.dirty_before)
         } else {
@@ -209,49 +420,77 @@ impl OpenCADStudio {
             .filter(|h| scene.document.get_entity(*h).is_some())
             .collect();
         scene.selected = restored;
-        // Delta commands never change the layout; this is a no-op unless a
-        // future caller widens the delta scope, in which case it stays correct.
-        scene.set_current_layout(d.current_layout.clone());
-        scene.clear_preview_wire();
+        // Do not call set_current_layout here: it bumps geometry immediately.
+        // Entity deltas currently preserve the layout; direct assignment also
+        // keeps future widened deltas batchable.
+        scene.current_layout = if undo {
+            d.current_layout_before.clone()
+        } else {
+            d.current_layout_after.clone()
+        };
         self.tabs[i].dirty = dirty;
-        self.tabs[i].active_cmd = None;
-        self.tabs[i].snap_result = None;
-        self.tabs[i].active_grip = None;
-        self.refresh_properties();
+        changes
     }
 
-    pub(super) fn restore_history_snapshot(&mut self, i: usize, snapshot: FullSnapshot) {
-        self.tabs[i].scene.document = snapshot.document;
-        self.tabs[i]
-            .scene
-            .set_current_layout(snapshot.current_layout);
-        // Force a re-tessellation: the cached wires were keyed against the
-        // outgoing document / layout and would be returned unchanged
-        // otherwise (`set_current_layout` only bumps on actual change).
-        self.tabs[i].scene.bump_geometry();
-        self.tabs[i].scene.selected = snapshot
-            .selected
-            .into_iter()
-            .filter(|h| self.tabs[i].scene.document.get_entity(*h).is_some())
-            .collect::<HashSet<_>>();
-        self.tabs[i].scene.populate_hatches_from_document();
-        self.tabs[i].scene.populate_images_from_document();
-        self.tabs[i].scene.populate_meshes_from_document();
-        // Keep the Isolate/Hide set in step with the restored per-entity
-        // visibility so End Isolation stays correct after undo/redo.
-        self.tabs[i].scene.sync_hidden_from_invisible();
-        self.tabs[i].scene.clear_preview_wire();
-        self.tabs[i].scene.images.clear();
+    /// Perform the one expensive cache/UI synchronization required after a
+    /// batch of history steps. Intermediate states are never rendered, so
+    /// rebuilding them only multiplies latency.
+    fn finish_history_apply(
+        &mut self,
+        i: usize,
+        had_full: bool,
+        changes: &[(Handle, crate::scene::ChangeKind)],
+    ) {
+        {
+            let scene = &mut self.tabs[i].scene;
+            if had_full {
+                // One document walk per derived category and one geometry bump
+                // for the final state. Unlike the old path, decoded images stay
+                // cached instead of being immediately cleared.
+                scene.rebuild_derived_caches();
+                scene.sync_hidden_from_invisible();
+            } else if !changes.is_empty() {
+                use crate::scene::ChangeKind::{Added, Modified, Removed};
+                let mut net: FxHashMap<Handle, crate::scene::ChangeKind> = FxHashMap::default();
+                for &(handle, kind) in changes {
+                    match (net.get(&handle).copied(), kind) {
+                        (None, kind) => {
+                            net.insert(handle, kind);
+                        }
+                        (Some(Added), Removed) => {
+                            net.remove(&handle);
+                        }
+                        (Some(Added), _) => {}
+                        (Some(Removed), Added) => {
+                            net.insert(handle, Modified);
+                        }
+                        (Some(Modified), Removed) => {
+                            net.insert(handle, Removed);
+                        }
+                        (Some(Removed), _) | (Some(Modified), _) => {}
+                    }
+                }
+                let final_changes: Vec<_> = net.into_iter().collect();
+                for &(handle, _) in &final_changes {
+                    scene.reseed_derived_caches(handle);
+                }
+                if !final_changes.is_empty() {
+                    scene.bump_entities(&final_changes);
+                }
+            }
+            scene.clear_preview_wire();
+        }
         self.tabs[i].active_cmd = None;
         self.tabs[i].snap_result = None;
         self.tabs[i].active_grip = None;
-        self.tabs[i].dirty = snapshot.dirty;
-        let doc_layers = self.tabs[i].scene.document.layers.clone();
-        let vp_info = self.tabs[i].scene.viewport_list();
-        self.tabs[i]
-            .layers
-            .sync_with_viewports(&doc_layers, vp_info);
-        self.sync_ribbon_layers();
+        if had_full {
+            let doc_layers = self.tabs[i].scene.document.layers.clone();
+            let vp_info = self.tabs[i].scene.viewport_list();
+            self.tabs[i]
+                .layers
+                .sync_with_viewports(&doc_layers, vp_info);
+            self.sync_ribbon_layers();
+        }
         self.refresh_properties();
     }
 
@@ -265,6 +504,7 @@ impl OpenCADStudio {
 
     pub(super) fn undo_steps(&mut self, steps: usize) {
         let i = self.active_tab;
+        self.finish_pending_history(i);
         let available = self.tabs[i].history.undo_stack.len();
         let steps = steps.min(available);
         if steps == 0 {
@@ -273,22 +513,20 @@ impl OpenCADStudio {
         }
 
         let mut last_label = String::new();
+        let mut had_full = false;
+        let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.undo_stack.pop() else {
                 break;
             };
             last_label = snapshot.label().to_string();
             match snapshot {
-                HistorySnapshot::Full(f) => {
-                    let current = self.capture_history_snapshot(i, f.label.clone());
-                    self.tabs[i].history.redo_stack.push(current);
-                    self.restore_history_snapshot(i, f);
-                }
-                HistorySnapshot::Delta(d) => {
+                HistorySnapshot::Delta(mut d) => {
                     // Symmetric: undo applies the before side, then the same
                     // delta rides to the redo stack (it still holds the after
                     // side) — no current-state capture needed.
-                    self.apply_delta(i, &d, true);
+                    had_full |= d.structure.is_some();
+                    changes.extend(self.apply_delta_state(i, &mut d, true));
                     self.tabs[i]
                         .history
                         .redo_stack
@@ -296,12 +534,14 @@ impl OpenCADStudio {
                 }
             }
         }
+        self.finish_history_apply(i, had_full, &changes);
         self.command_line
             .push_output(&format!("Undo: {last_label}"));
     }
 
     pub(super) fn redo_steps(&mut self, steps: usize) {
         let i = self.active_tab;
+        self.finish_pending_history(i);
         let available = self.tabs[i].history.redo_stack.len();
         let steps = steps.min(available);
         if steps == 0 {
@@ -310,19 +550,17 @@ impl OpenCADStudio {
         }
 
         let mut last_label = String::new();
+        let mut had_full = false;
+        let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.redo_stack.pop() else {
                 break;
             };
             last_label = snapshot.label().to_string();
             match snapshot {
-                HistorySnapshot::Full(f) => {
-                    let current = self.capture_history_snapshot(i, f.label.clone());
-                    self.tabs[i].history.undo_stack.push(current);
-                    self.restore_history_snapshot(i, f);
-                }
-                HistorySnapshot::Delta(d) => {
-                    self.apply_delta(i, &d, false);
+                HistorySnapshot::Delta(mut d) => {
+                    had_full |= d.structure.is_some();
+                    changes.extend(self.apply_delta_state(i, &mut d, false));
                     self.tabs[i]
                         .history
                         .undo_stack
@@ -330,6 +568,7 @@ impl OpenCADStudio {
                 }
             }
         }
+        self.finish_history_apply(i, had_full, &changes);
         self.command_line
             .push_output(&format!("Redo: {last_label}"));
     }

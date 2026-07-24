@@ -335,7 +335,7 @@ impl Scene {
         // overwritten) so an undo can restore it, and poison if this replace
         // also created a layer or crossed a block boundary.
         if self.is_recording_undo() {
-            let before = self.document.get_entity(handle).cloned();
+            let before = self.document.get_entity_arc(handle);
             self.record_undo_before(handle, before);
             if creates_layer || affects_blocks {
                 self.poison_undo_recording();
@@ -382,8 +382,8 @@ impl Scene {
     /// [`Scene::update_entity`]; used by delta-undo when it re-applies an
     /// entity's before / after image so the fills and meshes follow.
     pub(crate) fn reseed_derived_caches(&mut self, handle: Handle) {
-        let (hatch_seed, image_seed, mesh_seed) = match self.document.get_entity(handle) {
-            None => (None, None, None),
+        let (hatch_seed, image_seed) = match self.document.get_entity(handle) {
+            None => (None, None),
             Some(entity) => {
                 let hatch_seed = if let EntityType::Hatch(dxf) = entity {
                     let color = self.render_style(entity).0;
@@ -395,22 +395,7 @@ impl Scene {
                     None
                 };
                 let image_seed = self.image_seed_for(entity);
-                let facet_res = self.document.header.facet_resolution;
-                let isolines = self.document.header.isolines.max(0) as usize;
-                let mesh_seed = if matches!(
-                    entity,
-                    EntityType::Solid3D(_)
-                        | EntityType::Region(_)
-                        | EntityType::Body(_)
-                        | EntityType::Surface(_)
-                ) {
-                    let color = self.render_style(entity).0;
-                    crate::entities::solid3d::tessellate_volume(entity, color, facet_res, isolines)
-                        .map(offset_mesh_lod_set)
-                } else {
-                    None
-                };
-                (hatch_seed, image_seed, mesh_seed)
+                (hatch_seed, image_seed)
             }
         };
         self.hatches.remove(&handle);
@@ -423,8 +408,78 @@ impl Scene {
         if let Some(model) = image_seed {
             self.images.insert(handle, model);
         }
-        if let Some(model) = mesh_seed {
-            self.meshes.insert(handle, model);
+        self.refresh_meshes_for_handles(&[handle]);
+    }
+
+    /// Re-tessellate only the named ACIS entities. The former edit path
+    /// cleared and rebuilt every solid in the drawing when one selected solid
+    /// moved or was copied.
+    pub fn refresh_meshes_for_handles(&mut self, handles: &[Handle]) {
+        if handles.is_empty() {
+            return;
+        }
+        let layout_blocks: std::collections::HashSet<Handle> = self
+            .document
+            .objects
+            .values()
+            .filter_map(|o| match o {
+                acadrust::objects::ObjectType::Layout(l) if !l.block_record.is_null() => {
+                    Some(l.block_record)
+                }
+                _ => None,
+            })
+            .collect();
+        let entries: Vec<(Handle, std::sync::Arc<EntityType>, [f32; 4], bool)> = handles
+            .iter()
+            .filter_map(|&handle| {
+                let entity = self.document.get_entity_arc(handle)?;
+                if !matches!(
+                    entity.as_ref(),
+                    EntityType::Solid3D(_)
+                        | EntityType::Region(_)
+                        | EntityType::Body(_)
+                        | EntityType::Surface(_)
+                ) {
+                    return None;
+                }
+                let color = self.render_style(entity.as_ref()).0;
+                let top_level = layout_blocks.contains(&entity.common().owner_handle);
+                Some((handle, entity, color, top_level))
+            })
+            .collect();
+        for handle in handles {
+            self.meshes.remove(handle);
+            self.block_meshes.remove(handle);
+            self.solid_models.remove(handle);
+        }
+        let facet_res = self.document.header.facet_resolution;
+        let isolines = self.document.header.isolines.max(0) as usize;
+        use crate::par::prelude::*;
+        let built: Vec<(Handle, MeshLodSet, bool)> = entries
+            .into_par_iter()
+            .filter_map(|(handle, entity, color, top_level)| {
+                crate::entities::solid3d::tessellate_volume(
+                    entity.as_ref(),
+                    color,
+                    facet_res,
+                    isolines,
+                )
+                .map(|mesh| {
+                    let mesh = if top_level {
+                        offset_mesh_lod_set(mesh)
+                    } else {
+                        mesh
+                    };
+                    (handle, mesh, top_level)
+                })
+            })
+            .collect();
+        for (handle, mesh, top_level) in built {
+            if top_level {
+                self.meshes.insert(handle, mesh);
+            } else {
+                self.block_meshes.insert(handle, mesh);
+            }
         }
     }
 
@@ -1834,6 +1889,11 @@ impl Scene {
     /// Decode and cache all RasterImage entities from the current document.
     /// Silently skips images whose files cannot be read.
     pub fn populate_images_from_document(&mut self) {
+        self.populate_images_from_document_unbumped();
+        self.bump_geometry();
+    }
+
+    fn populate_images_from_document_unbumped(&mut self) {
         self.images.clear();
         let entries: Vec<(Handle, acadrust::entities::RasterImage)> = self
             .document
@@ -1851,7 +1911,6 @@ impl Scene {
                 self.images.insert(handle, model);
             }
         }
-        self.bump_geometry();
     }
 
     /// Rebuild the cached fill model (hatch / DXF SOLID) for `handle` after
@@ -1876,6 +1935,11 @@ impl Scene {
     }
 
     pub fn populate_hatches_from_document(&mut self) {
+        self.populate_hatches_from_document_unbumped();
+        self.bump_geometry();
+    }
+
+    fn populate_hatches_from_document_unbumped(&mut self) {
         self.hatches.clear();
 
         let entries: Vec<(Handle, EntityType)> = self
@@ -1907,8 +1971,6 @@ impl Scene {
                 model.map(|m| (handle, m))
             })
             .collect();
-
-        self.bump_geometry();
     }
 
     /// Tessellate all `Solid3D` entities in the current document into
@@ -1932,7 +1994,7 @@ impl Scene {
     }
 
     pub fn populate_meshes_from_document(&mut self) {
-        self.populate_meshes_impl(false);
+        self.populate_meshes_impl(false, true);
     }
 
     /// Like [`populate_meshes_from_document`] but tessellates only solids
@@ -1946,10 +2008,10 @@ impl Scene {
     /// only the newly merged xref solids" — the dominant cost when a drawing
     /// attaches several large xrefs. (#203)
     pub fn populate_missing_meshes_from_document(&mut self) {
-        self.populate_meshes_impl(true);
+        self.populate_meshes_impl(true, true);
     }
 
-    fn populate_meshes_impl(&mut self, incremental: bool) {
+    fn populate_meshes_impl(&mut self, incremental: bool, bump: bool) {
         if !incremental {
             self.meshes.clear();
             self.block_meshes.clear();
@@ -2016,15 +2078,18 @@ impl Scene {
             }
         }
 
-        self.bump_geometry();
+        if bump {
+            self.bump_geometry();
+        }
     }
 
     /// Rebuild hatch / image / mesh caches after the document is modified
     /// outside the normal `add_entity` path (e.g. REFCLOSE SAVE).
     pub fn rebuild_derived_caches(&mut self) {
-        self.populate_hatches_from_document();
-        self.populate_images_from_document();
-        self.populate_meshes_from_document();
+        self.populate_hatches_from_document_unbumped();
+        self.populate_images_from_document_unbumped();
+        self.populate_meshes_impl(false, false);
+        self.bump_geometry();
     }
 
     /// Build a solid-fill HatchModel for a DXF Solid entity.
@@ -2218,13 +2283,17 @@ impl Scene {
     }
 
     pub fn clear(&mut self) {
+        self.document.record_all_entities_for_transaction();
         self.document = CadDocument::new();
         self.selected = HashSet::default();
         self.preview_wires = vec![];
         self.preview_text = vec![];
         self.current_layout = "Model".to_string();
         self.hatches = HashMap::default();
+        self.images = HashMap::default();
         self.meshes = HashMap::default();
+        self.block_meshes = HashMap::default();
+        self.solid_models = HashMap::default();
         *self.camera.borrow_mut() = Camera::default();
         self.camera_generation += 1;
         self.bump_geometry();

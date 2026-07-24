@@ -134,6 +134,9 @@ impl OpenCADStudio {
             }
         }
         let task = self.update_inner(msg);
+        // Close the document-level first-touch transaction started by
+        // push_undo_snapshot at this message boundary.
+        self.finish_all_pending_history();
         // After every message, mirror the active command step's prompt so
         // its history line stays pinned (non-fading) until the step changes.
         let prompt = self.tabs[self.active_tab]
@@ -2228,7 +2231,7 @@ impl OpenCADStudio {
                     // Stash the erased entities so OOPS can restore them.
                     self.oops_cache = handles
                         .iter()
-                        .filter_map(|h| self.tabs[i].scene.document.get_entity(*h).cloned())
+                        .filter_map(|h| self.tabs[i].scene.document.get_entity_arc(*h))
                         .collect();
                     self.tabs[i].scene.erase_entities(&handles);
                     self.tabs[i].dirty = true;

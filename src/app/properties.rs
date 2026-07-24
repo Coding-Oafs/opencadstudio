@@ -1125,7 +1125,6 @@ impl OpenCADStudio {
 
     pub(super) fn invalidate_property_targets(&mut self, i: usize, handles: &[Handle]) {
         for &handle in handles {
-            self.tabs[i].scene.mark_entity_dirty(handle);
             // Hatch / SOLID fills render from prebuilt cached models; rebuild
             // them or pattern edits (scale, background, …) stay invisible
             // (#415).
@@ -1134,8 +1133,12 @@ impl OpenCADStudio {
         // Solid (ACIS) meshes bake their colour into the mesh, so a colour /
         // layer change needs an explicit recolour — re-tessellating wires
         // alone wouldn't update them.
-        self.tabs[i].scene.recolor_meshes();
-        self.tabs[i].scene.bump_geometry_no_blocks();
+        self.tabs[i].scene.recolor_meshes_for_handles(handles);
+        let changes: Vec<_> = handles
+            .iter()
+            .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
+            .collect();
+        self.tabs[i].scene.bump_entities(&changes);
     }
 
     /// Add an entity to the correct space (model or paper space layout).
@@ -1355,6 +1358,10 @@ impl OpenCADStudio {
                 .add_entity_to_layout(entity, &layout)
             {
                 Ok(new_handle) => {
+                    if self.tabs[i].scene.is_recording_undo() {
+                        self.tabs[i].scene.record_undo_before(new_handle, None);
+                        self.tabs[i].scene.poison_undo_recording();
+                    }
                     self.tabs[i].scene.auto_fit_viewport(new_handle);
                     // Adding a viewport straight onto the document layout
                     // bypasses Scene::add_entity, which is what normally

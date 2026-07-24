@@ -78,15 +78,15 @@ impl OpenCADStudio {
                 if self.oops_cache.is_empty() {
                     self.command_line.push_info("OOPS: nothing to restore.");
                 } else {
-                    self.push_undo_snapshot(i, "OOPS");
                     let restored = std::mem::take(&mut self.oops_cache);
+                    let pending = self.begin_undo(i, "OOPS", restored.len(), true);
+                    let restored = self.tabs[i].scene.restore_erased_entities(restored);
                     let n = restored.len();
-                    for e in restored {
-                        self.tabs[i].scene.add_entity_clone(e);
-                    }
-                    self.tabs[i].scene.bump_geometry();
                     self.tabs[i].dirty = true;
                     self.refresh_properties();
+                    if let Some(pending) = pending {
+                        self.commit_undo_delta(i, pending);
+                    }
                     self.command_line
                         .push_output(&format!("OOPS: restored {n} object(s)."));
                 }

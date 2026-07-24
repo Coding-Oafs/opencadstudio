@@ -541,7 +541,7 @@ pub(super) struct OpenCADStudio {
     /// In-memory clipboard: cloned entities waiting to be pasted.
     clipboard: Vec<acadrust::EntityType>,
     /// Entities removed by the most recent ERASE, kept so OOPS can restore them.
-    oops_cache: Vec<acadrust::EntityType>,
+    oops_cache: Vec<Arc<acadrust::EntityType>>,
     /// Paste anchor: lower-left corner of the clipboard entities' bounding box
     /// (or the point picked by COPYBASE). This point lands under the cursor at
     /// paste time.

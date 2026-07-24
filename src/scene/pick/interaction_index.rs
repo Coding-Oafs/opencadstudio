@@ -455,6 +455,10 @@ impl<T: Copy + Ord> SpatialSet<T> {
 
 pub struct InteractionIndex {
     wires: SpatialSet<u32>,
+    /// Stable entity handle for each source wire. Lets a stale-but-valid base
+    /// index feed an incremental overlay after small edits without retaining
+    /// the old heavyweight wire set or trusting shifted vector indices.
+    wire_handles: Vec<Option<u64>>,
     segments: SpatialSet<SegmentRef>,
     snap_points: SpatialSet<SnapPointRef>,
     key_vertices: SpatialSet<KeyVertexRef>,
@@ -518,6 +522,10 @@ impl InteractionIndex {
     }
 
     pub fn build(wires: &[WireModel]) -> Self {
+        let wire_handles: Vec<Option<u64>> = wires
+            .iter()
+            .map(|wire| wire.name.parse::<u64>().ok())
+            .collect();
         let mut wire_entries = Vec::with_capacity(wires.len());
         let mut segment_entries = Vec::new();
         let mut snap_point_entries = Vec::new();
@@ -692,6 +700,7 @@ impl InteractionIndex {
 
         Self {
             wires,
+            wire_handles,
             segments,
             snap_points,
             key_vertices,
@@ -706,6 +715,31 @@ impl InteractionIndex {
 
     pub fn pick_radius_px(&self, base_radius_px: f32) -> f32 {
         base_radius_px.max(self.max_line_half_width_px)
+    }
+
+    fn queried_wire_handles(&self, mut indices: Vec<u32>) -> Vec<u64> {
+        indices.extend_from_slice(&self.unbounded_wires);
+        let mut handles: Vec<u64> = indices
+            .into_iter()
+            .filter_map(|index| self.wire_handles.get(index as usize).copied().flatten())
+            .collect();
+        handles.sort_unstable();
+        handles.dedup();
+        handles
+    }
+
+    pub fn query_wire_handles_xy(&self, aabb: [f64; 4]) -> Vec<u64> {
+        self.queried_wire_handles(self.wires.query_xy(aabb))
+    }
+
+    pub fn query_wire_handles_screen(
+        &self,
+        screen_rect: [f32; 4],
+        view_rot: Mat4,
+        eye: DVec3,
+        bounds: Rectangle,
+    ) -> Vec<u64> {
+        self.queried_wire_handles(self.wires.query_screen(screen_rect, view_rot, eye, bounds))
     }
 
     pub fn query_xy(&self, wires: Arc<Vec<WireModel>>, aabb: [f64; 4]) -> InteractionCandidates {

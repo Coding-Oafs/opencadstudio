@@ -168,10 +168,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                     // A typed grip-menu value reshapes dimensions too — drop a
                     // stale baked *D block (no-op for non-dims). (#398)
-                    crate::modules::draw::modify::explode::invalidate_dim_block(
-                        &mut self.tabs[i].scene.document,
-                        pending.handle,
-                    );
+                    self.tabs[i]
+                        .scene
+                        .invalidate_dim_block_recorded(pending.handle);
                     self.tabs[i].scene.bump_geometry();
                     self.tabs[i].dirty = true;
                     self.refresh_selected_grips();
@@ -987,10 +986,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 // Menu actions reshape dimensions too — drop a stale baked *D
                 // block so the edit is visible (no-op for non-dims). (#398)
-                crate::modules::draw::modify::explode::invalidate_dim_block(
-                    &mut self.tabs[i].scene.document,
-                    popup.handle,
-                );
+                self.tabs[i]
+                    .scene
+                    .invalidate_dim_block_recorded(popup.handle);
                 self.tabs[i].scene.bump_geometry();
                 self.tabs[i].dirty = true;
                 self.refresh_selected_grips();
@@ -1918,7 +1916,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
             self.tabs[i].dirty = true;
         } else {
             // Nothing changed — drop the snapshot pushed a moment ago.
-            let _ = self.tabs[i].history.undo_stack.pop();
+            self.discard_last_undo_entry(i);
         }
         self.refresh_properties();
         Task::none()

@@ -354,7 +354,7 @@ impl OpenCADStudio {
                 // body — wire re-tessellation alone leaves the solid drawn at
                 // its old spot. (#135)
                 if self.tabs[i].scene.any_solid(&handles) {
-                    self.tabs[i].scene.populate_meshes_from_document();
+                    self.tabs[i].scene.refresh_meshes_for_handles(&handles);
                 }
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
@@ -374,7 +374,7 @@ impl OpenCADStudio {
                 let pending = self.begin_undo(i, label, handles.len(), delta_safe);
                 let new_handles = self.tabs[i].scene.copy_entities(&handles, &transform);
                 if self.tabs[i].scene.any_solid(&new_handles) {
-                    self.tabs[i].scene.populate_meshes_from_document();
+                    self.tabs[i].scene.refresh_meshes_for_handles(&new_handles);
                 }
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.deselect_all();
@@ -522,7 +522,7 @@ impl OpenCADStudio {
                         self.refresh_properties();
                     }
                     Err(err) => {
-                        let _ = self.tabs[i].history.undo_stack.pop();
+                        self.discard_last_undo_entry(i);
                         self.command_line.push_error(&err);
                         let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                         if let Some(p) = prompt {
@@ -584,10 +584,7 @@ impl OpenCADStudio {
                             self.tabs[i].scene.document.get_entity(nh),
                             Some(acadrust::EntityType::Dimension(_))
                         ) {
-                            crate::modules::draw::modify::explode::invalidate_dim_block(
-                                &mut self.tabs[i].scene.document,
-                                nh,
-                            );
+                            self.tabs[i].scene.invalidate_dim_block_recorded(nh);
                         }
                     }
                 }
@@ -707,10 +704,7 @@ impl OpenCADStudio {
                         self.tabs[i].scene.document.get_entity(nh),
                         Some(acadrust::EntityType::Dimension(_))
                     ) {
-                        crate::modules::draw::modify::explode::invalidate_dim_block(
-                            &mut self.tabs[i].scene.document,
-                            nh,
-                        );
+                        self.tabs[i].scene.invalidate_dim_block_recorded(nh);
                     }
                 }
                 if let Some(cmd) = &mut self.tabs[i].active_cmd {
@@ -978,10 +972,7 @@ impl OpenCADStudio {
                         // A restyled dimension renders from its baked *D block —
                         // drop the stale block so the new style shows (#398).
                         if any_dim {
-                            crate::modules::draw::modify::explode::invalidate_dim_block(
-                                &mut self.tabs[i].scene.document,
-                                *h,
-                            );
+                            self.tabs[i].scene.invalidate_dim_block_recorded(*h);
                         }
                         // Hatch fills render from a prebuilt model (#415).
                         self.tabs[i].scene.refresh_fill_model(*h);
@@ -1364,7 +1355,7 @@ impl OpenCADStudio {
                             self.command_line.push_output("PEDIT: applied.");
                             self.refresh_properties();
                         } else {
-                            let _ = self.tabs[i].history.undo_stack.pop();
+                            self.discard_last_undo_entry(i);
                             self.command_line
                                 .push_error("PEDIT: operation not applicable to this entity.");
                         }
@@ -1554,8 +1545,15 @@ impl OpenCADStudio {
                 win_max,
                 delta,
             } => {
-                self.push_undo_snapshot(i, "STRETCH");
+                let structural = handles.iter().any(|handle| {
+                    matches!(
+                        self.tabs[i].scene.document.get_entity(*handle),
+                        Some(acadrust::EntityType::Dimension(_))
+                    )
+                });
+                let pending = self.begin_undo(i, "STRETCH", handles.len(), !structural);
                 let mut count = 0usize;
+                let mut changed_handles = Vec::new();
 
                 // Helper: is DXF point (x, y) inside the world-space window?
                 // Drawing plane is world XY (= DXF XY).
@@ -1571,6 +1569,7 @@ impl OpenCADStudio {
                 // stale afterwards and must be dropped (see #398 / #372).
                 let mut stretched_dims: Vec<acadrust::Handle> = Vec::new();
                 for handle in &handles {
+                    let before = self.tabs[i].scene.document.get_entity_arc(*handle);
                     let Some(entity) = self.tabs[i].scene.document.get_entity_mut(*handle) else {
                         continue;
                     };
@@ -1746,7 +1745,11 @@ impl OpenCADStudio {
                         }
                     }
                     if stretched {
+                        if let Some(before) = before {
+                            self.tabs[i].scene.record_undo_before(*handle, Some(before));
+                        }
                         self.tabs[i].scene.mark_entity_dirty(*handle);
+                        changed_handles.push(*handle);
                         count += 1;
                     }
                 }
@@ -1754,10 +1757,7 @@ impl OpenCADStudio {
                 // one exists (file roundtrip) — drop it so tessellation falls
                 // back to the live points and the next save re-bakes. (#372)
                 for h in stretched_dims {
-                    crate::modules::draw::modify::explode::invalidate_dim_block(
-                        &mut self.tabs[i].scene.document,
-                        h,
-                    );
+                    self.tabs[i].scene.invalidate_dim_block_recorded(h);
                 }
 
                 // Geometry was edited in place via get_entity_mut, which the
@@ -1765,7 +1765,15 @@ impl OpenCADStudio {
                 // moved entities so the viewport reflects the stretch right away
                 // instead of only on the next unrelated redraw. See #95.
                 if count > 0 {
-                    self.tabs[i].scene.bump_geometry_no_blocks();
+                    if structural {
+                        self.tabs[i].scene.bump_geometry();
+                    } else {
+                        let changes: Vec<_> = changed_handles
+                            .iter()
+                            .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
+                            .collect();
+                        self.tabs[i].scene.bump_entities(&changes);
+                    }
                 }
                 self.tabs[i].dirty = true;
                 self.tabs[i].active_cmd = None;
@@ -1775,6 +1783,9 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(&format!("STRETCH: {count} entity(ies) stretched."));
                 self.refresh_properties();
+                if let Some(pending) = pending {
+                    self.commit_undo_delta(i, pending);
+                }
             }
             // ── Solid3D creation (BOX / SPHERE / CYLINDER) ────────────────
             CmdResult::CommitSolid3D { mesh_fn } => {
@@ -2322,6 +2333,7 @@ impl OpenCADStudio {
                 self.tabs[i].scene.clear_preview_wire();
             }
             CmdResult::DdeditEntity { handle, new_text } => {
+                self.push_undo_snapshot(i, "DDEDIT");
                 let mut updated = false;
                 let mut is_dim = false;
                 if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
@@ -2355,16 +2367,13 @@ impl OpenCADStudio {
                 if is_dim {
                     // The edited override changed the dimension text; drop its
                     // stale *D block so save re-bakes it. (#181)
-                    crate::modules::draw::modify::explode::invalidate_dim_block(
-                        &mut self.tabs[i].scene.document,
-                        handle,
-                    );
+                    self.tabs[i].scene.invalidate_dim_block_recorded(handle);
                 }
                 if updated {
-                    self.push_undo_snapshot(i, "DDEDIT");
                     self.tabs[i].dirty = true;
                     self.command_line.push_output("DDEDIT: text updated.");
                 } else {
+                    self.discard_last_undo_entry(i);
                     self.command_line
                         .push_error("DDEDIT: entity type not supported.");
                 }
@@ -2759,7 +2768,7 @@ fn apply_dimspace(scene: &mut crate::scene::Scene, encoded: &str) {
         }
         // The dimension line moved, so its baked *D block is stale — drop it so
         // the next save re-bakes it (no-op for non-dimensions). (#181)
-        crate::modules::draw::modify::explode::invalidate_dim_block(&mut scene.document, h);
+        scene.invalidate_dim_block_recorded(h);
     }
     scene.bump_geometry();
 }

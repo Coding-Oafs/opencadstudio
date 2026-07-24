@@ -262,6 +262,14 @@ impl shader::Primitive for Primitive {
                 inner.cached_selection = (u64::MAX, u64::MAX);
                 inner.cached_mesh_key = (u64::MAX, u64::MAX);
                 inner.cached_face3d_key = (u64::MAX, false);
+                inner.cached_hatch_source = None;
+                inner.cached_wipeout_source = None;
+                inner.cached_image_source = None;
+                inner.cached_text_source = None;
+                inner.cached_mesh_source = None;
+                inner.cached_face3d_source = None;
+                inner.cached_face3d_wire_source = None;
+                inner.cached_face3d_depth_source = None;
                 inner.render_sig = u64::MAX;
             }
             // The MSAA / depth / resolve textures are always sized to the
@@ -328,35 +336,70 @@ impl shader::Primitive for Primitive {
             // the view toggle so 2D fills stay on even when the user picks
             // the Wireframe overlay style.
             let face3d_fill_active = fill_mode && !vp.view_wireframe;
-            if cur_key != inner.cached_epoch {
-                // Hatches carry a selected-tint, so re-upload on a geometry OR
-                // a selection change (issue #71); images / meshes only need a
-                // geometry change.
-                let geo_changed = vp.geometry_epoch != inner.cached_epoch.0;
-                let sel_changed = vp.selected_sig != inner.cached_epoch.2;
-                if geo_changed || sel_changed {
-                    if fill_mode {
-                        inner.upload_hatches(device, queue, &vp.hatches[..]);
-                        inner.upload_wipeouts(device, &vp.wipeout_hatches[..]);
-                    } else {
-                        inner.upload_hatches(device, queue, &[]);
-                        inner.upload_wipeouts(device, &[]);
-                    }
-                }
-                if geo_changed {
-                    inner.upload_images(device, queue, &vp.images[..]);
-                    inner.upload_text(device, queue, &vp.text_verts[..]);
-                }
-                inner.cached_epoch = cur_key;
+            let fill_changed = inner.cached_fill_mode != fill_mode;
+            let hatch_changed = inner
+                .cached_hatch_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.hatches));
+            let wipeout_changed = inner
+                .cached_wipeout_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.wipeout_hatches));
+            if hatch_changed || fill_changed {
+                inner.upload_hatches(
+                    device,
+                    queue,
+                    if fill_mode { &vp.hatches[..] } else { &[] },
+                );
+                inner.cached_hatch_source = Some(Arc::clone(&vp.hatches));
             }
+            if wipeout_changed || fill_changed {
+                inner.upload_wipeouts(
+                    device,
+                    if fill_mode {
+                        &vp.wipeout_hatches[..]
+                    } else {
+                        &[]
+                    },
+                );
+                inner.cached_wipeout_source = Some(Arc::clone(&vp.wipeout_hatches));
+            }
+            if inner
+                .cached_image_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.images))
+            {
+                inner.upload_images(device, queue, &vp.images[..]);
+                inner.cached_image_source = Some(Arc::clone(&vp.images));
+            }
+            if inner
+                .cached_text_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.text_verts))
+            {
+                inner.upload_text(device, queue, &vp.text_verts[..]);
+                inner.cached_text_source = Some(Arc::clone(&vp.text_verts));
+            }
+            inner.cached_fill_mode = fill_mode;
+            inner.cached_epoch = cur_key;
             // Face3D edge/fill buffers are world-space and selection-independent
             // (upload_face3d takes no selection input), so they only change with
             // the geometry or the 3D-fill toggle — never on a pan/orbit. Gating
-            // here on `(geometry_epoch, face3d_fill_active)` instead of inside the
-            // `cur_key` block (which carries `camera_generation`) stops a camera
-            // move from re-walking every wire to rebuild the Face3D fill buffer.
-            let face3d_key = (vp.geometry_epoch, face3d_fill_active);
-            if face3d_key != inner.cached_face3d_key {
+            // on its three source Arcs avoids rebuilding it when another entity
+            // category alone advances `geometry_epoch`.
+            let face3d_changed = inner
+                .cached_face3d_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.face3d_wires))
+                || inner
+                    .cached_face3d_wire_source
+                    .as_ref()
+                    .map_or(true, |source| !Arc::ptr_eq(source, &vp.wires))
+                || inner
+                    .cached_face3d_depth_source
+                    .as_ref()
+                    .map_or(true, |source| !Arc::ptr_eq(source, &vp.draw_depths));
+            if face3d_changed || face3d_fill_active != inner.cached_face3d_key.1 {
                 inner.upload_face3d(
                     device,
                     &vp.face3d_wires[..],
@@ -364,7 +407,10 @@ impl shader::Primitive for Primitive {
                     !face3d_fill_active,
                     &vp.draw_depths,
                 );
-                inner.cached_face3d_key = face3d_key;
+                inner.cached_face3d_source = Some(Arc::clone(&vp.face3d_wires));
+                inner.cached_face3d_wire_source = Some(Arc::clone(&vp.wires));
+                inner.cached_face3d_depth_source = Some(Arc::clone(&vp.draw_depths));
+                inner.cached_face3d_key = (vp.geometry_epoch, face3d_fill_active);
             }
             // Wire buffers are world-space, so a camera move alone doesn't
             // change them — only the view_proj uniform (uploaded every frame).
@@ -531,17 +577,24 @@ impl shader::Primitive for Primitive {
                 );
                 inner.cached_selection = sel_key;
             }
-            // Batched solid meshes — geometry-only, so they ride the geometry
-            // epoch alone and stay resident across camera moves and selection /
-            // hover changes (no per-pick rebuild of the whole solid set).
-            if vp.geometry_epoch != inner.cached_mesh_batch_epoch {
+            // Batched solid meshes stay resident while unrelated entity
+            // categories change.
+            if inner
+                .cached_mesh_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.meshes))
+            {
                 inner.upload_mesh_batch(device, &vp.meshes[..]);
+                inner.cached_mesh_source = Some(Arc::clone(&vp.meshes));
                 inner.cached_mesh_batch_epoch = vp.geometry_epoch;
             }
             // Selection / hover highlight overlay — tinted copies of just the
             // picked solids, rebuilt only when the highlight set (or geometry)
             // changes. Drawn over the static batch so the base never re-packs.
-            let hl_key = (vp.geometry_epoch, vp.selection_generation);
+            let hl_key = (
+                Arc::as_ptr(&vp.meshes) as usize as u64,
+                vp.selection_generation,
+            );
             if hl_key != inner.cached_highlight_key {
                 inner.upload_mesh_highlight(
                     device,

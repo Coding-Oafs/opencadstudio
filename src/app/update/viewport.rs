@@ -1932,29 +1932,20 @@ impl OpenCADStudio {
             // once, dropping the overlay preview.
             if let Some(h) = self.grip_preview_handle.take() {
                 // Undo entry for the drag (#332): the pre-drag backup
-                // swaps in, the PRE state is snapshotted, then the
-                // dragged result swaps back. Without this a grip edit
-                // (e.g. reshaping a polyline vertex) was un-undoable —
-                // the drag mutated the document without any history.
+                // and live dragged image form a one-entity Arc delta. The old
+                // swap/full-document snapshot made a vertex drag O(document).
                 if let Some(orig) = self.grip_original.take() {
-                    if let Some(e) = self.tabs[i].scene.document.get_entity_mut(h) {
-                        let dragged = std::mem::replace(e, orig);
-                        let snap = self.capture_history_snapshot(i, "GRIP");
-                        if let Some(e2) = self.tabs[i].scene.document.get_entity_mut(h) {
-                            *e2 = dragged;
-                        }
-                        self.tabs[i].history.undo_stack.push(snap);
-                        self.tabs[i].history.redo_stack.clear();
-                        self.tabs[i].dirty = true;
-                    }
+                    self.push_single_entity_history(i, "GRIP", h, std::sync::Arc::new(orig));
+                    self.tabs[i].dirty = true;
                 }
                 self.grip_text_verts = Vec::new();
                 self.grip_text_slide = false;
                 self.tabs[i].scene.hidden.remove(&h);
                 self.tabs[i].scene.clear_preview_wire();
                 // Only the dragged entity changed — re-tessellate just it.
-                self.tabs[i].scene.mark_entity_dirty(h);
-                self.tabs[i].scene.bump_geometry_no_blocks();
+                self.tabs[i]
+                    .scene
+                    .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             }
             // Placement confirmed — keep the just-added leader.
             self.grip_add_provisional = None;

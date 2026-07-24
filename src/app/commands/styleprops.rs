@@ -1785,7 +1785,7 @@ impl OpenCADStudio {
                         self.command_line
                             .push_output(&format!("RENAME: '{}' → '{}'.", old_name, new_name));
                     } else {
-                        let _ = self.tabs[i].history.undo_stack.pop();
+                        self.discard_last_undo_entry(i);
                         if !known {
                             self.command_line.push_error(&format!("RENAME: unknown type '{}'. Use LAYER BLOCK STYLE DIMSTYLE LINETYPE UCS VIEW", type_str));
                         } else if type_str == "BLOCK" {
