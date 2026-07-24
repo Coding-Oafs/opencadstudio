@@ -66,6 +66,42 @@ fn hatch_interaction_aabb(hatch: &model::hatch_model::HatchModel) -> Option<[f64
     aabb.iter().all(|value| value.is_finite()).then_some(aabb)
 }
 
+fn mesh_interaction_aabb(set: &model::mesh_model::MeshLodSet) -> Option<[f64; 6]> {
+    let mut aabb = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    let mut include = |high: [f32; 3], low: [f32; 3]| {
+        let point = [
+            high[0] as f64 + low[0] as f64,
+            high[1] as f64 + low[1] as f64,
+            high[2] as f64 + low[2] as f64,
+        ];
+        if point.iter().all(|value| value.is_finite()) {
+            for axis in 0..3 {
+                aabb[axis] = aabb[axis].min(point[axis]);
+                aabb[axis + 3] = aabb[axis + 3].max(point[axis]);
+            }
+        }
+    };
+    for mesh in &set.lods {
+        for (index, &high) in mesh.verts.iter().enumerate() {
+            include(high, mesh.verts_low.get(index).copied().unwrap_or([0.0; 3]));
+        }
+    }
+    for (index, &high) in set.edge_verts.iter().enumerate() {
+        include(
+            high,
+            set.edge_verts_low.get(index).copied().unwrap_or([0.0; 3]),
+        );
+    }
+    aabb.iter().all(|value| value.is_finite()).then_some(aabb)
+}
+
 pub use model::hatch_model::HatchModel;
 pub use model::image_model::ImageModel;
 pub use model::mesh_model::MeshLodSet;
@@ -940,7 +976,7 @@ pub struct Scene {
     /// area selection. The source pointer is part of the key because a camera
     /// cull can replace the wire Arc without changing `geometry_epoch`.
     interaction_index_cache: RefCell<
-        Option<(
+        Vec<(
             u64,
             usize,
             std::sync::Weak<Vec<WireModel>>,
@@ -952,9 +988,13 @@ pub struct Scene {
     interaction_handle_index_cache: RefCell<
         Option<(
             u64,
+            u64,
             Arc<crate::scene::pick::interaction_index::InteractionHandleIndex>,
         )>,
     >,
+    /// Estimated hatch/mesh/Insert interaction work, cached per geometry epoch
+    /// so the index threshold itself stays O(1) on pointer-move events.
+    interaction_aux_work_cache: std::cell::Cell<Option<(u64, u64, usize)>>,
     /// Index built from every SortEntitiesTable in the document.
     /// Maps block_handle → (entity_handle.value() → sort_handle.value()).
     /// Replaces the O(objects) linear scan inside `wires_for_block()` with an O(1) lookup.
@@ -987,6 +1027,20 @@ pub struct Scene {
     image_cache: RefCell<Option<(u64, Arc<Vec<ImageModel>>)>>,
     /// Cached mesh models, keyed by geometry_epoch.
     mesh_cache: RefCell<Option<(u64, Arc<Vec<MeshLodSet>>)>>,
+    /// Picking mesh source for a non-model active space, keyed by geometry epoch
+    /// and interaction block. Model/MSPACE reuse `mesh_cache` directly.
+    interaction_mesh_cache: RefCell<Option<(u64, u64, Arc<Vec<MeshLodSet>>)>>,
+    /// Direct handle → expanded mesh-set indices for the current renderer mesh
+    /// source. Block instances may contribute several sets under one Insert
+    /// handle. The weak source guard prevents stale pointer reuse.
+    #[allow(clippy::type_complexity)]
+    mesh_pick_lookup_cache: RefCell<
+        Option<(
+            usize,
+            std::sync::Weak<Vec<MeshLodSet>>,
+            Arc<HashMap<Handle, Vec<u32>>>,
+        )>,
+    >,
     /// Per-viewport (VP-frozen-layer) filtered fill / image / mesh sets, keyed by
     /// the order-independent signature of the viewport's frozen-layer set. A
     /// content viewport that freezes layers must hide their hatches, 2-D solids,
@@ -1003,7 +1057,7 @@ pub struct Scene {
     /// heavy block-instanced drawing re-explodes thousands of inserts on every
     /// hover. The set is geometry-derived, so a camera move / hover never
     /// invalidates it.
-    insert_hatch_cache: RefCell<Option<(u64, Arc<Vec<(Handle, HatchModel)>>)>>,
+    insert_hatch_cache: RefCell<Option<(u64, u64, Arc<HashMap<Handle, Vec<HatchModel>>>)>>,
     /// Sheet "dressing" cache over the unified resident set: the paper sheet
     /// drops its own border wire and appends the printable-area guide.
     /// `(geometry_epoch, content gen, wires)` — the base is camera-independent
@@ -1231,14 +1285,17 @@ impl Scene {
             block_epoch: GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed),
             selection_generation: 0,
             wire_cache: RefCell::new(None),
-            interaction_index_cache: RefCell::new(None),
+            interaction_index_cache: RefCell::new(Vec::new()),
             interaction_handle_index_cache: RefCell::new(None),
+            interaction_aux_work_cache: std::cell::Cell::new(None),
             sort_cache: RefCell::new(None),
             draw_depth_cache: RefCell::new(None),
             hatch_cache: RefCell::new(None),
             wipeout_cache: RefCell::new(None),
             image_cache: RefCell::new(None),
             mesh_cache: RefCell::new(None),
+            interaction_mesh_cache: RefCell::new(None),
+            mesh_pick_lookup_cache: RefCell::new(None),
             frozen_hatch_cache: RefCell::new(HashMap::default()),
             frozen_wipeout_cache: RefCell::new(HashMap::default()),
             frozen_image_cache: RefCell::new(HashMap::default()),
@@ -1287,54 +1344,8 @@ impl Scene {
         }
     }
 
-    /// Compute the current camera's world-space XY view AABB with
-    /// `world_offset` already subtracted (so the result is in the same f32
-    /// space as emitted wire points). Adds a 25% margin around the
-    /// frustum to absorb pan inertia and avoid clipped-edge popping.
-    pub(super) fn view_world_aabb(&self) -> Option<[f32; 4]> {
-        if self.current_layout != "Model" {
-            // Paper-space viewport composition handles its own culling; the
-            // top-level paper view is small enough not to need it.
-            return None;
-        }
-        // Until the first explicit camera move (typically `fit_all()` after
-        // file open), the camera sits at the default origin while geometry
-        // lives at large local offsets — culling against the default rect
-        // would discard everything and starve fit_all of points to fit to.
-        if self.camera_generation == 0 {
-            return None;
-        }
-        let cam = self.camera.borrow();
-        // A world-XY rectangle only bounds the on-screen footprint in a plan
-        // (top-down) view. In a tilted / 3D view the visible area maps to a
-        // skewed world region, so an axis-aligned XY box would wrongly cull
-        // entities that are actually on screen — and because this box culls the
-        // pick wire set (while the render holds the full set), those entities
-        // render but become unselectable. Skip culling there, matching
-        // `view_cull_aabb`.
-        let fwd = cam.rotation * glam::Vec3::Z;
-        if fwd.z.abs() < 0.999 {
-            return None;
-        }
-        let aspect = self.last_render_aspect.get().max(0.01);
-        let h = cam.ortho_size();
-        let w = h * aspect;
-        let margin = 1.25_f32;
-        // `cam.target` is in the same local f32 space as emitted wire points
-        // (fit_to_bounds populates it from local wire coords). No further
-        // `world_offset` subtraction is needed.
-        let cx = cam.target.x as f32;
-        let cy = cam.target.y as f32;
-        Some([
-            cx - w * margin,
-            cy - h * margin,
-            cx + w * margin,
-            cy + h * margin,
-        ])
-    }
-
-    /// Called by the render pipeline once per frame so `view_world_aabb` knows
-    /// the active widget's aspect ratio.
+    /// Called by the render pipeline once per frame so camera fit operations
+    /// know the active widget's aspect ratio.
     pub fn set_render_aspect(&self, aspect: f32) {
         if aspect.is_finite() && aspect > 0.0 {
             self.last_render_aspect.set(aspect);
@@ -1347,7 +1358,7 @@ impl Scene {
     /// Also returns `None` in paper space: `last_world_per_pixel` tracks the
     /// model camera, so a cached value applied to mm-sheet entity AABBs would
     /// be a stale model-world wpp and cull every paper-space annotation.
-    /// Matches the same skip already in `view_world_aabb`.
+    /// Paper-space callers use their own scale instead.
     pub(super) fn world_per_pixel(&self) -> Option<f32> {
         if self.current_layout != "Model" {
             return None;
@@ -3746,6 +3757,133 @@ impl Scene {
         arc
     }
 
+    fn interaction_block_handle(&self) -> Handle {
+        if self.block_edit_block.is_none() && self.active_viewport.is_some() {
+            self.model_space_block_handle()
+        } else {
+            self.current_layout_block_handle()
+        }
+    }
+
+    fn interaction_viewport_frozen_layers(&self) -> Option<&[Handle]> {
+        if self.block_edit_block.is_some() {
+            return None;
+        }
+        let handle = self.active_viewport?;
+        match self.document.get_entity(handle) {
+            Some(EntityType::Viewport(viewport)) => Some(&viewport.frozen_layers),
+            _ => None,
+        }
+    }
+
+    fn interaction_space_key(&self) -> u64 {
+        let block = self.interaction_block_handle().value();
+        let viewport = self
+            .active_viewport
+            .filter(|_| self.block_edit_block.is_none())
+            .map_or(0, |handle| handle.value());
+        let frozen = self
+            .interaction_viewport_frozen_layers()
+            .map_or(0, |layers| {
+                layers
+                    .iter()
+                    .fold(layers.len() as u64, |signature, handle| {
+                        signature ^ handle.value().wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    })
+            });
+        block ^ viewport.rotate_left(29) ^ frozen.rotate_left(47)
+    }
+
+    fn interaction_layer_frozen(&self, layer: &str) -> bool {
+        let Some(frozen) = self.interaction_viewport_frozen_layers() else {
+            return false;
+        };
+        self.document
+            .layers
+            .get(layer)
+            .is_some_and(|record| frozen.contains(&record.handle))
+    }
+
+    fn interaction_meshes_arc(&self) -> Arc<Vec<MeshLodSet>> {
+        let block = self.interaction_block_handle();
+        if self.block_edit_block.is_none() && block == self.model_space_block_handle() {
+            let Some(frozen) = self.interaction_viewport_frozen_layers() else {
+                return self.meshes_arc();
+            };
+            if frozen.is_empty() {
+                return self.meshes_arc();
+            }
+            let key = self.interaction_space_key();
+            if let Some((epoch, cached_key, meshes)) = self.interaction_mesh_cache.borrow().as_ref()
+            {
+                if *epoch == self.geometry_epoch && *cached_key == key {
+                    return Arc::clone(meshes);
+                }
+            }
+            let frozen: HashSet<Handle> = frozen.iter().copied().collect();
+            let meshes = self.meshes_for_viewport(&frozen);
+            *self.interaction_mesh_cache.borrow_mut() =
+                Some((self.geometry_epoch, key, Arc::clone(&meshes)));
+            return meshes;
+        }
+        let key = self.interaction_space_key();
+        if let Some((epoch, cached_key, meshes)) = self.interaction_mesh_cache.borrow().as_ref() {
+            if *epoch == self.geometry_epoch && *cached_key == key {
+                return Arc::clone(meshes);
+            }
+        }
+        let mut all: Vec<MeshLodSet> = self
+            .meshes
+            .iter()
+            .filter(|(&handle, _)| {
+                self.mesh_entity_visible(handle)
+                    && self.document.get_entity(handle).is_some_and(|entity| {
+                        self.belongs_to_visible_block(handle, entity.common().owner_handle, block)
+                    })
+            })
+            .map(|(_, set)| set.clone())
+            .collect();
+        all.extend(self.instanced_block_meshes(block, None));
+        let meshes = Arc::new(all);
+        *self.interaction_mesh_cache.borrow_mut() =
+            Some((self.geometry_epoch, key, Arc::clone(&meshes)));
+        meshes
+    }
+
+    fn mesh_pick_lookup(&self, meshes: &Arc<Vec<MeshLodSet>>) -> Arc<HashMap<Handle, Vec<u32>>> {
+        let source = Arc::as_ptr(meshes) as usize;
+        {
+            let cache = self.mesh_pick_lookup_cache.borrow();
+            if let Some((ptr, weak, lookup)) = cache.as_ref() {
+                if *ptr == source
+                    && weak
+                        .upgrade()
+                        .is_some_and(|cached| Arc::ptr_eq(&cached, meshes))
+                {
+                    return Arc::clone(lookup);
+                }
+            }
+        }
+        let mut lookup: HashMap<Handle, Vec<u32>> = HashMap::default();
+        for (index, set) in meshes.iter().enumerate() {
+            let Some(value) = set
+                .lods
+                .first()
+                .and_then(|mesh| mesh.name.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            lookup
+                .entry(Handle::new(value))
+                .or_default()
+                .push(index as u32);
+        }
+        let lookup = Arc::new(lookup);
+        *self.mesh_pick_lookup_cache.borrow_mut() =
+            Some((source, Arc::downgrade(meshes), Arc::clone(&lookup)));
+        lookup
+    }
+
     /// Solid-mesh set (top-level + block-instanced), optionally dropping those
     /// whose layer is frozen in a content viewport (`frozen`). `None` reproduces
     /// the full set.
@@ -3937,6 +4075,18 @@ impl Scene {
             return false;
         }
         !self.layer_hidden(&c.layer)
+    }
+
+    fn mesh_visible_for_interaction(&self, handle: Handle) -> bool {
+        self.mesh_entity_visible(handle)
+            && self.document.get_entity(handle).is_some_and(|entity| {
+                !self.interaction_layer_frozen(&entity.common().layer)
+                    && self.belongs_to_visible_block(
+                        handle,
+                        entity.common().owner_handle,
+                        self.interaction_block_handle(),
+                    )
+            })
     }
 
     /// One transformed mesh per block-definition solid instance reached from an
@@ -4140,40 +4290,43 @@ impl Scene {
         &self,
         candidate_handles: Option<&HashSet<Handle>>,
     ) -> HashMap<Handle, HatchModel> {
-        let layout_block = self.current_layout_block_handle();
-        let model_block = self.model_space_block_handle();
-        let layer_hidden = |layer: &str| {
-            self.document
-                .layers
-                .get(layer)
-                .map(|l| l.flags.off || l.flags.frozen)
-                .unwrap_or(false)
+        let visible = |h: Handle, m: &HatchModel| {
+            self.hatch_visible_for_interaction(h)
+                .then(|| (h, m.clone()))
         };
-        self.hatches
-            .iter()
-            .filter_map(|(&h, m)| {
-                if candidate_handles.is_some_and(|handles| !handles.contains(&h)) {
-                    return None;
-                }
-                let c = self.document.get_entity(h)?.common();
-                if c.invisible || layer_hidden(&c.layer) {
-                    return None;
-                }
-                // Mirror `synced_hatch_models`' visibility test (which drives
-                // the fill render) so anything drawn is also clickable on its
-                // fill, not just its boundary wire. The model-space fallback
-                // matters when the layout block handle differs from the
-                // entity's owner (issue: hatch fill not selectable).
-                if self.belongs_to_visible_block(h, c.owner_handle, layout_block)
-                    || (self.block_edit_block.is_none()
-                        && self.belongs_to_visible_block(h, c.owner_handle, model_block))
-                {
-                    Some((h, m.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect()
+        if let Some(handles) = candidate_handles {
+            handles
+                .iter()
+                .filter_map(|&handle| {
+                    self.hatches
+                        .get(&handle)
+                        .and_then(|hatch| visible(handle, hatch))
+                })
+                .collect()
+        } else {
+            self.hatches
+                .iter()
+                .filter_map(|(&handle, hatch)| visible(handle, hatch))
+                .collect()
+        }
+    }
+
+    fn hatch_visible_for_interaction(&self, handle: Handle) -> bool {
+        let Some(common) = self
+            .document
+            .get_entity(handle)
+            .map(|entity| entity.common())
+        else {
+            return false;
+        };
+        if common.invisible
+            || (!self.hidden.is_empty() && self.hidden.contains(&handle))
+            || self.layer_hidden(&common.layer)
+            || self.interaction_layer_frozen(&common.layer)
+        {
+            return false;
+        }
+        self.belongs_to_visible_block(handle, common.owner_handle, self.interaction_block_handle())
     }
 
     /// Per-Insert hatch models in the current layout, keyed by the Insert
@@ -4266,24 +4419,20 @@ impl Scene {
         result
     }
 
-    pub fn insert_hatches_for_click(&self) -> Arc<Vec<(Handle, HatchModel)>> {
+    pub fn insert_hatches_for_click(&self) -> Arc<HashMap<Handle, Vec<HatchModel>>> {
+        let interaction_block = self.interaction_block_handle();
+        let space_key = self.interaction_space_key();
         {
             let c = self.insert_hatch_cache.borrow();
-            if let Some((epoch, ref arc)) = *c {
-                if epoch == self.geometry_epoch {
+            if let Some((epoch, cached_space, ref arc)) = *c {
+                if epoch == self.geometry_epoch && cached_space == space_key {
                     return Arc::clone(arc);
                 }
             }
         }
-        let layout_block = self.current_layout_block_handle();
-        let layer_hidden = |layer: &str| {
-            self.document
-                .layers
-                .get(layer)
-                .map(|l| l.flags.off || l.flags.frozen)
-                .unwrap_or(false)
-        };
-        let mut out: Vec<(Handle, HatchModel)> = Vec::new();
+        let layer_hidden =
+            |layer: &str| self.layer_hidden(layer) || self.interaction_layer_frozen(layer);
+        let mut out: HashMap<Handle, Vec<HatchModel>> = HashMap::default();
         // Exploding an INSERT to find block-internal hatches is expensive, so
         // skip blocks that contain no hatch at all (the common case for solid-
         // only blocks). The hatch-presence test is memoised across inserts.
@@ -4293,13 +4442,16 @@ impl Scene {
             let EntityType::Insert(ins) = entity else {
                 continue;
             };
-            if ins.common.invisible || layer_hidden(&ins.common.layer) {
+            if ins.common.invisible
+                || (!self.hidden.is_empty() && self.hidden.contains(&ins.common.handle))
+                || layer_hidden(&ins.common.layer)
+            {
                 continue;
             }
             if !self.belongs_to_visible_block(
                 ins.common.handle,
                 ins.common.owner_handle,
-                layout_block,
+                interaction_block,
             ) {
                 continue;
             }
@@ -4319,12 +4471,13 @@ impl Scene {
                 }
                 let color = self.render_style(&EntityType::Hatch(dxf.clone())).0;
                 if let Some(model) = Self::hatch_model_from_dxf(&dxf, color) {
-                    out.push((ins.common.handle, model));
+                    out.entry(ins.common.handle).or_default().push(model);
                 }
             }
         }
         let arc = Arc::new(out);
-        *self.insert_hatch_cache.borrow_mut() = Some((self.geometry_epoch, Arc::clone(&arc)));
+        *self.insert_hatch_cache.borrow_mut() =
+            Some((self.geometry_epoch, space_key, Arc::clone(&arc)));
         arc
     }
 
@@ -4343,42 +4496,96 @@ impl Scene {
         }
         let layout_block = self.current_layout_block_handle();
         match self.active_viewport {
-            None => Arc::new(self.wires_for_block(layout_block)),
+            None => self.paper_sheet_wires_arc(),
             Some(vp_handle) => {
                 Arc::new(self.viewport_content_wires(layout_block, Some(vp_handle), None))
             }
         }
     }
 
-    /// Below this size a full scan is cheaper than building both wire and
-    /// segment grids.
-    const INTERACTION_INDEX_MIN: usize = 4_000;
+    /// Small simple sets are cheaper to scan. Either many wires or substantial
+    /// sub-geometry (one giant polyline/text batch/mesh) enables the index.
+    const INTERACTION_INDEX_MIN_WIRES: usize = 4_000;
+    const INTERACTION_INDEX_MIN_WORK: usize = 20_000;
+
+    fn interaction_index_worthwhile(&self, wires: &[WireModel]) -> bool {
+        if wires.len() >= Self::INTERACTION_INDEX_MIN_WIRES
+            || crate::scene::pick::interaction_index::InteractionIndex::estimated_work(wires)
+                >= Self::INTERACTION_INDEX_MIN_WORK
+        {
+            return true;
+        }
+        let space_key = self.interaction_space_key();
+        let aux_work = self
+            .interaction_aux_work_cache
+            .get()
+            .filter(|(epoch, space, _)| *epoch == self.geometry_epoch && *space == space_key)
+            .map(|(_, _, work)| work)
+            .unwrap_or_else(|| {
+                let hatch_work = self.hatches.iter().fold(0usize, |total, (&handle, hatch)| {
+                    if self.hatch_visible_for_interaction(handle) {
+                        total.saturating_add(hatch.boundary.len())
+                    } else {
+                        total
+                    }
+                });
+                let insert_work = self
+                    .insert_hatches_for_click()
+                    .values()
+                    .flatten()
+                    .fold(0usize, |total, hatch| {
+                        total.saturating_add(hatch.boundary.len())
+                    });
+                let mesh_work = self
+                    .interaction_meshes_arc()
+                    .iter()
+                    .fold(0usize, |total, set| {
+                        total.saturating_add(set.lods.first().map_or(0, |mesh| mesh.verts.len()))
+                    });
+                let work = hatch_work
+                    .saturating_add(mesh_work)
+                    .saturating_add(insert_work);
+                self.interaction_aux_work_cache
+                    .set(Some((self.geometry_epoch, space_key, work)));
+                work
+            });
+        aux_work >= Self::INTERACTION_INDEX_MIN_WORK
+    }
 
     fn interaction_index(
         &self,
         wires: &Arc<Vec<WireModel>>,
     ) -> Arc<crate::scene::pick::interaction_index::InteractionIndex> {
+        const MAX_CACHED_SOURCES: usize = 4;
         let source = Arc::as_ptr(wires) as usize;
         {
-            let cache = self.interaction_index_cache.borrow();
-            if let Some((epoch, ptr, weak, index)) = cache.as_ref() {
-                if *epoch == self.geometry_epoch
-                    && *ptr == source
+            let mut cache = self.interaction_index_cache.borrow_mut();
+            cache.retain(|(epoch, _, weak, _)| {
+                *epoch == self.geometry_epoch && weak.strong_count() > 0
+            });
+            if let Some(position) = cache.iter().position(|(_, ptr, weak, _)| {
+                *ptr == source
                     && weak
                         .upgrade()
                         .is_some_and(|cached| Arc::ptr_eq(&cached, wires))
-                {
-                    return Arc::clone(index);
-                }
+            }) {
+                let entry = cache.remove(position);
+                let index = Arc::clone(&entry.3);
+                cache.push(entry);
+                return index;
             }
         }
         let index = Arc::new(crate::scene::pick::interaction_index::InteractionIndex::build(wires));
-        *self.interaction_index_cache.borrow_mut() = Some((
+        let mut cache = self.interaction_index_cache.borrow_mut();
+        cache.push((
             self.geometry_epoch,
             source,
             Arc::downgrade(wires),
             Arc::clone(&index),
         ));
+        if cache.len() > MAX_CACHED_SOURCES {
+            cache.remove(0);
+        }
         index
     }
 
@@ -4390,46 +4597,61 @@ impl Scene {
         if self.current_layout == "Model" {
             return true;
         }
-        self.active_viewport.is_some_and(|viewport| {
-            let resident = self.model_wires_for_viewport_arc(viewport, screen_height_px);
-            Arc::ptr_eq(&resident, wires)
-        })
+        match self.active_viewport {
+            Some(viewport) => {
+                let resident = self.model_wires_for_viewport_arc(viewport, screen_height_px);
+                Arc::ptr_eq(&resident, wires)
+            }
+            None => Arc::ptr_eq(&self.paper_sheet_wires_arc(), wires),
+        }
     }
 
     fn interaction_handle_index(
         &self,
     ) -> Arc<crate::scene::pick::interaction_index::InteractionHandleIndex> {
+        let space_key = self.interaction_space_key();
         {
             let cache = self.interaction_handle_index_cache.borrow();
-            if let Some((epoch, index)) = cache.as_ref() {
-                if *epoch == self.geometry_epoch {
+            if let Some((epoch, cached_space, index)) = cache.as_ref() {
+                if *epoch == self.geometry_epoch && *cached_space == space_key {
                     return Arc::clone(index);
                 }
             }
         }
-        let mut entries: Vec<(u64, [f64; 4])> = Vec::new();
-        for (handle, hatch) in self.insert_hatches_for_click().iter() {
-            if let Some(aabb) = hatch_interaction_aabb(hatch) {
-                entries.push((handle.value(), aabb));
+        let mut entries: Vec<(u64, [f64; 6])> = Vec::new();
+        for (&handle, hatch) in &self.hatches {
+            if !self.hatch_visible_for_interaction(handle) {
+                continue;
+            }
+            if let Some([min_x, min_y, max_x, max_y]) = hatch_interaction_aabb(hatch) {
+                entries.push((handle.value(), [min_x, min_y, 0.0, max_x, max_y, 0.0]));
             }
         }
-        for set in self.meshes_arc().iter() {
+        for (&handle, hatches) in self.insert_hatches_for_click().iter() {
+            for hatch in hatches {
+                if let Some([min_x, min_y, max_x, max_y]) = hatch_interaction_aabb(hatch) {
+                    entries.push((handle.value(), [min_x, min_y, 0.0, max_x, max_y, 0.0]));
+                }
+            }
+        }
+        for set in self.interaction_meshes_arc().iter() {
             let Some(mesh) = set.lods.first() else {
                 continue;
             };
             let Ok(handle) = mesh.name.parse::<u64>() else {
                 continue;
             };
-            let [min_x, min_y, max_x, max_y] = set.world_aabb;
-            entries.push((
-                handle,
-                [min_x as f64, min_y as f64, max_x as f64, max_y as f64],
-            ));
+            if !self.mesh_visible_for_interaction(Handle::new(handle)) {
+                continue;
+            }
+            if let Some(aabb) = mesh_interaction_aabb(set) {
+                entries.push((handle, aabb));
+            }
         }
         let index =
             Arc::new(crate::scene::pick::interaction_index::InteractionHandleIndex::build(entries));
         *self.interaction_handle_index_cache.borrow_mut() =
-            Some((self.geometry_epoch, Arc::clone(&index)));
+            Some((self.geometry_epoch, space_key, Arc::clone(&index)));
         index
     }
 
@@ -4442,19 +4664,82 @@ impl Scene {
         wires: Arc<Vec<WireModel>>,
         cursor: glam::DVec3,
         view_rot: glam::Mat4,
+        eye: glam::DVec3,
         bounds: iced::Rectangle,
         radius_px: f32,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
+        self.interaction_candidates_near_impl(
+            wires, cursor, view_rot, eye, bounds, radius_px, false,
+        )
+    }
+
+    pub fn interaction_pick_candidates_near(
+        &self,
+        wires: Arc<Vec<WireModel>>,
+        cursor: glam::DVec3,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        radius_px: f32,
+    ) -> crate::scene::pick::interaction_index::InteractionCandidates {
+        self.interaction_candidates_near_impl(
+            wires,
+            cursor,
+            view_rot,
+            eye,
+            bounds,
+            radius_px,
+            self.document.header.lineweight_display,
+        )
+    }
+
+    fn interaction_candidates_near_impl(
+        &self,
+        wires: Arc<Vec<WireModel>>,
+        cursor: glam::DVec3,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        radius_px: f32,
+        include_line_weight: bool,
+    ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         if !self.interaction_source_is_resident(&wires, bounds.height)
-            || wires.len() < Self::INTERACTION_INDEX_MIN
+            || !self.interaction_index_worthwhile(&wires)
         {
             return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
         }
+        let index = self.interaction_index(&wires);
+        let radius_px = if include_line_weight {
+            index.pick_radius_px(radius_px)
+        } else {
+            radius_px
+        };
         let flat_ortho = view_rot.z_axis.x.abs() < 1e-9
             && view_rot.z_axis.y.abs() < 1e-9
             && (view_rot.w_axis.w - 1.0).abs() < 1e-6;
         if !flat_ortho {
-            return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
+            let clip = view_rot * (cursor - eye).as_vec3().extend(1.0);
+            if !clip.is_finite() || clip.w <= 1e-6 {
+                return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
+            }
+            let ndc = clip.truncate() / clip.w;
+            let screen = iced::Point::new(
+                (ndc.x + 1.0) * 0.5 * bounds.width,
+                (1.0 - ndc.y) * 0.5 * bounds.height,
+            );
+            let radius = radius_px.max(0.0);
+            return index.query_screen(
+                wires,
+                [
+                    screen.x - radius,
+                    screen.y - radius,
+                    screen.x + radius,
+                    screen.y + radius,
+                ],
+                view_rot,
+                eye,
+                bounds,
+            );
         }
         let world_x_px = ((view_rot.x_axis.x * bounds.width * 0.5).powi(2)
             + (view_rot.x_axis.y * bounds.height * 0.5).powi(2))
@@ -4473,44 +4758,60 @@ impl Scene {
             cursor.x + radius,
             cursor.y + radius,
         ];
-        self.interaction_index(&wires).query(wires, query)
+        index.query_xy(wires, query)
     }
 
-    /// World-XY rectangular broad phase for box/lasso/fence and command
-    /// windows. Tilted and paper views use the same candidate type with an
-    /// all-wire fallback so exact screen-space rules stay unchanged.
+    /// Shared rectangular broad phase for box/lasso/fence and command windows.
+    /// Flat orthographic views query world XY; tilted/perspective views query
+    /// projected 3D bounds using the supplied screen rectangle.
     pub fn interaction_candidates_in_aabb(
         &self,
         wires: Arc<Vec<WireModel>>,
         aabb: [f64; 4],
+        screen_rect: [f32; 4],
         view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         let flat_ortho = view_rot.z_axis.x.abs() < 1e-9
             && view_rot.z_axis.y.abs() < 1e-9
             && (view_rot.w_axis.w - 1.0).abs() < 1e-6;
-        if !self.interaction_source_is_resident(&wires, 0.0)
-            || wires.len() < Self::INTERACTION_INDEX_MIN
-            || !flat_ortho
+        if !self.interaction_source_is_resident(&wires, bounds.height)
+            || !self.interaction_index_worthwhile(&wires)
         {
             return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
         }
-        self.interaction_index(&wires).query(wires, aabb)
+        if flat_ortho {
+            self.interaction_index(&wires).query_xy(wires, aabb)
+        } else {
+            self.interaction_index(&wires)
+                .query_screen(wires, screen_rect, view_rot, eye, bounds)
+        }
     }
 
     pub fn interaction_candidate_handles(
         &self,
         candidates: &crate::scene::pick::interaction_index::InteractionCandidates,
     ) -> Option<HashSet<Handle>> {
-        let aabb = candidates.query_aabb()?;
         let mut handles: HashSet<Handle> = candidates
             .iter()
             .filter_map(|wire| Self::handle_from_wire_name(&wire.name))
             .collect();
-        let index = self.entity_index();
-        handles.extend(index.tree.query_rect(aabb));
+        if let Some(aabb) = candidates.query_aabb() {
+            let index = self.entity_index();
+            handles.extend(index.tree.query_rect(aabb));
+            handles.extend(
+                self.interaction_handle_index()
+                    .query_xy(aabb)
+                    .into_iter()
+                    .map(Handle::new),
+            );
+            return Some(handles);
+        }
+        let (screen_rect, view_rot, eye, bounds) = candidates.screen_query()?;
         handles.extend(
             self.interaction_handle_index()
-                .query(aabb)
+                .query_screen(screen_rect, view_rot, eye, bounds)
                 .into_iter()
                 .map(Handle::new),
         );
@@ -4519,28 +4820,28 @@ impl Scene {
 
     pub fn interaction_handles_in_world_aabb(&self, aabb: [f64; 4]) -> HashSet<Handle> {
         let wires = self.hit_test_wires();
-        let candidates = self.interaction_index(&wires).query(wires, aabb);
-        candidates
+        let candidates = self.interaction_index(&wires).query_xy(wires, aabb);
+        let mut handles: HashSet<Handle> = candidates
             .iter()
             .filter_map(|wire| Self::handle_from_wire_name(&wire.name))
-            .collect()
-    }
-
-    /// Pick a meshed 3D solid by clicking on its shaded body (face), not just
-    /// its thin projected edges. Returns the front-most mesh under `cursor`.
-    #[allow(dead_code)]
-    pub fn mesh_click_hit(
-        &self,
-        cursor: iced::Point,
-        view_rot: glam::Mat4,
-        eye: glam::DVec3,
-        bounds: iced::Rectangle,
-    ) -> Option<Handle> {
-        let iter = self
-            .meshes
-            .iter()
-            .filter_map(|(h, set)| set.lods.first().map(|m| (*h, m)));
-        pick::hit_test::mesh_click_hit(cursor, iter, view_rot, eye, bounds)
+            .collect();
+        let insert_hatches = self.insert_hatches_for_click();
+        let meshes = self.interaction_meshes_arc();
+        let mesh_lookup = self.mesh_pick_lookup(&meshes);
+        handles.extend(
+            self.interaction_handle_index()
+                .query_xy(aabb)
+                .into_iter()
+                .filter_map(|value| {
+                    let handle = Handle::new(value);
+                    (self.hatch_visible_for_interaction(handle)
+                        || insert_hatches.contains_key(&handle)
+                        || (mesh_lookup.contains_key(&handle)
+                            && self.mesh_visible_for_interaction(handle)))
+                    .then_some(handle)
+                }),
+        );
+        handles
     }
 
     /// True when any handle resolves to an ACIS volume entity (3D solid /
@@ -4569,12 +4870,47 @@ impl Scene {
         bounds: iced::Rectangle,
         candidate_handles: Option<&HashSet<Handle>>,
     ) -> Vec<Handle> {
-        let iter = self
-            .meshes
-            .iter()
-            .filter(|(h, _)| candidate_handles.is_none_or(|handles| handles.contains(h)))
-            .filter_map(|(h, set)| set.lods.first().map(|m| (*h, m)));
-        pick::hit_test::mesh_box_hit(a, b, crossing, iter, view_rot, eye, bounds)
+        let meshes = self.interaction_meshes_arc();
+        let lookup = self.mesh_pick_lookup(&meshes);
+        let handles: Vec<Handle> = candidate_handles.map_or_else(
+            || lookup.keys().copied().collect(),
+            |candidates| candidates.iter().copied().collect(),
+        );
+        let mut out = Vec::new();
+        for handle in handles {
+            if !self.mesh_visible_for_interaction(handle)
+                || matches!(
+                    self.document.get_entity(handle),
+                    Some(EntityType::Insert(_))
+                )
+            {
+                continue;
+            }
+            let Some(indices) = lookup.get(&handle) else {
+                continue;
+            };
+            if indices
+                .iter()
+                .filter_map(|&index| meshes.get(index as usize))
+                .any(|set| {
+                    set.lods.first().is_some_and(|mesh| {
+                        !pick::hit_test::mesh_box_hit(
+                            a,
+                            b,
+                            crossing,
+                            std::iter::once((handle, mesh)),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                        .is_empty()
+                    })
+                })
+            {
+                out.push(handle);
+            }
+        }
+        out
     }
 
     /// Top-level solid handles caught by a lasso polygon.
@@ -4587,12 +4923,46 @@ impl Scene {
         bounds: iced::Rectangle,
         candidate_handles: Option<&HashSet<Handle>>,
     ) -> Vec<Handle> {
-        let iter = self
-            .meshes
-            .iter()
-            .filter(|(h, _)| candidate_handles.is_none_or(|handles| handles.contains(h)))
-            .filter_map(|(h, set)| set.lods.first().map(|m| (*h, m)));
-        pick::hit_test::mesh_poly_hit(poly, crossing, iter, view_rot, eye, bounds)
+        let meshes = self.interaction_meshes_arc();
+        let lookup = self.mesh_pick_lookup(&meshes);
+        let handles: Vec<Handle> = candidate_handles.map_or_else(
+            || lookup.keys().copied().collect(),
+            |candidates| candidates.iter().copied().collect(),
+        );
+        let mut out = Vec::new();
+        for handle in handles {
+            if !self.mesh_visible_for_interaction(handle)
+                || matches!(
+                    self.document.get_entity(handle),
+                    Some(EntityType::Insert(_))
+                )
+            {
+                continue;
+            }
+            let Some(indices) = lookup.get(&handle) else {
+                continue;
+            };
+            if indices
+                .iter()
+                .filter_map(|&index| meshes.get(index as usize))
+                .any(|set| {
+                    set.lods.first().is_some_and(|mesh| {
+                        !pick::hit_test::mesh_poly_hit(
+                            poly,
+                            crossing,
+                            std::iter::once((handle, mesh)),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                        .is_empty()
+                    })
+                })
+            {
+                out.push(handle);
+            }
+        }
+        out
     }
 
     /// Front-most solid under the cursor across BOTH top-level solid meshes
@@ -4612,28 +4982,42 @@ impl Scene {
         // block instances), cached per geometry epoch — so hover no longer
         // re-expands every block instance on each move. Every `MeshLodSet`
         // carries its handle (in `mesh.name`) and a 3D AABB.
-        let meshes = self.meshes_arc();
-        // Broad-phase: project each solid's 3D AABB and skip the per-triangle
-        // ray test for those whose footprint isn't under the cursor — O(solids)
-        // cheap projections instead of O(total triangles) on every hover.
-        let candidates = meshes.iter().filter_map(|set| {
-            let m = set.lods.first()?;
-            if !pick::hit_test::aabb_under_cursor(
-                set.world_aabb,
-                set.z_aabb,
-                cursor,
-                view_rot,
-                eye,
-                bounds,
-            ) {
-                return None;
+        let meshes = self.interaction_meshes_arc();
+        let lookup = candidate_handles.map(|_| self.mesh_pick_lookup(&meshes));
+        // Candidate handles already came from the precise f64 interaction BVH.
+        // When no index is active the source is small/non-resident, so exact
+        // triangles are safer than reintroducing the old f32 AABB precision loss.
+        let mut sets: Vec<(Handle, &MeshLodSet)> = Vec::new();
+        if let (Some(handles), Some(lookup)) = (candidate_handles, lookup.as_ref()) {
+            for handle in handles {
+                if !self.mesh_visible_for_interaction(*handle) {
+                    continue;
+                }
+                let Some(indices) = lookup.get(handle) else {
+                    continue;
+                };
+                sets.extend(
+                    indices
+                        .iter()
+                        .filter_map(|&index| meshes.get(index as usize).map(|set| (*handle, set))),
+                );
             }
-            let handle = Handle::new(m.name.parse::<u64>().ok()?);
-            if candidate_handles.is_some_and(|handles| !handles.contains(&handle)) {
-                return None;
-            }
-            Some((handle, m))
-        });
+        } else {
+            sets.extend(meshes.iter().filter_map(|set| {
+                let handle = set
+                    .lods
+                    .first()?
+                    .name
+                    .parse::<u64>()
+                    .ok()
+                    .map(Handle::new)?;
+                self.mesh_visible_for_interaction(handle)
+                    .then_some((handle, set))
+            }));
+        }
+        let candidates = sets
+            .into_iter()
+            .filter_map(|(handle, set)| set.lods.first().map(|mesh| (handle, mesh)));
         pick::hit_test::mesh_click_hit(cursor, candidates, view_rot, eye, bounds)
     }
 
@@ -4654,36 +5038,43 @@ impl Scene {
         if self.block_meshes.is_empty() {
             return Vec::new();
         }
-        let layout_block = self.current_layout_block_handle();
+        let meshes = self.interaction_meshes_arc();
+        let lookup = self.mesh_pick_lookup(&meshes);
+        let handles: Vec<Handle> = candidate_handles.map_or_else(
+            || lookup.keys().copied().collect(),
+            |candidates| candidates.iter().copied().collect(),
+        );
         let mut out = Vec::new();
-        for e in self.document.entities() {
-            if e.common().owner_handle != layout_block {
-                continue;
-            }
-            let EntityType::Insert(ins) = e else { continue };
-            if candidate_handles.is_some_and(|handles| !handles.contains(&ins.common.handle))
-                || !self.mesh_entity_visible(ins.common.handle)
+        for handle in handles {
+            if !matches!(
+                self.document.get_entity(handle),
+                Some(EntityType::Insert(_))
+            ) || !self.mesh_visible_for_interaction(handle)
             {
                 continue;
             }
-            let mut sets = Vec::new();
-            self.expand_block_meshes(&ins.block_name, &ins.get_transform(), 0, None, &mut sets);
-            let hit = sets.iter().any(|set| {
-                set.lods.first().map_or(false, |m| {
-                    !pick::hit_test::mesh_box_hit(
-                        a,
-                        b,
-                        crossing,
-                        std::iter::once((ins.common.handle, m)),
-                        view_rot,
-                        eye,
-                        bounds,
-                    )
-                    .is_empty()
-                })
-            });
+            let Some(indices) = lookup.get(&handle) else {
+                continue;
+            };
+            let hit = indices
+                .iter()
+                .filter_map(|&index| meshes.get(index as usize))
+                .any(|set| {
+                    set.lods.first().map_or(false, |m| {
+                        !pick::hit_test::mesh_box_hit(
+                            a,
+                            b,
+                            crossing,
+                            std::iter::once((handle, m)),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                        .is_empty()
+                    })
+                });
             if hit {
-                out.push(ins.common.handle);
+                out.push(handle);
             }
         }
         out
@@ -4702,53 +5093,45 @@ impl Scene {
         if self.block_meshes.is_empty() {
             return Vec::new();
         }
-        let layout_block = self.current_layout_block_handle();
+        let meshes = self.interaction_meshes_arc();
+        let lookup = self.mesh_pick_lookup(&meshes);
+        let handles: Vec<Handle> = candidate_handles.map_or_else(
+            || lookup.keys().copied().collect(),
+            |candidates| candidates.iter().copied().collect(),
+        );
         let mut out = Vec::new();
-        for e in self.document.entities() {
-            if e.common().owner_handle != layout_block {
-                continue;
-            }
-            let EntityType::Insert(ins) = e else { continue };
-            if candidate_handles.is_some_and(|handles| !handles.contains(&ins.common.handle))
-                || !self.mesh_entity_visible(ins.common.handle)
+        for handle in handles {
+            if !matches!(
+                self.document.get_entity(handle),
+                Some(EntityType::Insert(_))
+            ) || !self.mesh_visible_for_interaction(handle)
             {
                 continue;
             }
-            let mut sets = Vec::new();
-            self.expand_block_meshes(&ins.block_name, &ins.get_transform(), 0, None, &mut sets);
-            let hit = sets.iter().any(|set| {
-                set.lods.first().map_or(false, |m| {
-                    !pick::hit_test::mesh_poly_hit(
-                        poly,
-                        crossing,
-                        std::iter::once((ins.common.handle, m)),
-                        view_rot,
-                        eye,
-                        bounds,
-                    )
-                    .is_empty()
-                })
-            });
+            let Some(indices) = lookup.get(&handle) else {
+                continue;
+            };
+            let hit = indices
+                .iter()
+                .filter_map(|&index| meshes.get(index as usize))
+                .any(|set| {
+                    set.lods.first().map_or(false, |m| {
+                        !pick::hit_test::mesh_poly_hit(
+                            poly,
+                            crossing,
+                            std::iter::once((handle, m)),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                        .is_empty()
+                    })
+                });
             if hit {
-                out.push(ins.common.handle);
+                out.push(handle);
             }
         }
         out
-    }
-
-    /// Tessellate all non-invisible entities owned by `block_handle`.
-    fn wires_for_block(&self, block_handle: Handle) -> Vec<WireModel> {
-        // Default culling is driven by the live `Scene::camera`. Multi-tile
-        // Model layouts and paper-space content viewports call
-        // `wires_for_block_culled` directly with their own per-view cull
-        // parameters so each pane culls independently.
-        self.wires_for_block_culled(
-            block_handle,
-            self.view_world_aabb(),
-            self.world_per_pixel(),
-            None,
-            None,
-        )
     }
 
     /// Whether entity `e` renders as direct content of `block_handle` right now:

@@ -776,6 +776,7 @@ impl OpenCADStudio {
                 all_wires,
                 raw,
                 view_rot,
+                eye,
                 bounds,
                 self.snapper.osnap_radius_px,
             );
@@ -941,6 +942,7 @@ impl OpenCADStudio {
                 all_wires,
                 snap_cursor,
                 view_rot,
+                eye,
                 bounds,
                 self.snapper.osnap_radius_px,
             );
@@ -1547,6 +1549,7 @@ impl OpenCADStudio {
             all_wires,
             raw,
             view_rot,
+            eye,
             bounds,
             self.snapper.osnap_radius_px,
         );
@@ -2034,6 +2037,7 @@ impl OpenCADStudio {
                     all_wires,
                     snap_cursor,
                     view_rot,
+                    eye,
                     bounds,
                     self.snapper.osnap_radius_px,
                 );
@@ -2206,10 +2210,11 @@ impl OpenCADStudio {
                 .unwrap_or(false)
             {
                 let (view_rot2, eye2, all_wires2) = self.pick_view(i, &edit_cam, bounds);
-                let click_candidates = self.tabs[i].scene.interaction_candidates_near(
+                let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
                     all_wires2,
                     world_pt,
                     view_rot2,
+                    eye2,
                     bounds,
                     scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
                 );
@@ -2445,9 +2450,14 @@ impl OpenCADStudio {
                                         aabb
                                     },
                                 );
-                        let area_candidates = self.tabs[i]
-                            .scene
-                            .interaction_candidates_in_aabb(all_wires, world_aabb, view_rot);
+                        let area_candidates = self.tabs[i].scene.interaction_candidates_in_aabb(
+                            all_wires,
+                            world_aabb,
+                            [a.x.min(p.x), a.y.min(p.y), a.x.max(p.x), a.y.max(p.y)],
+                            view_rot,
+                            eye,
+                            bounds,
+                        );
                         let candidate_handles = self.tabs[i]
                             .scene
                             .interaction_candidate_handles(&area_candidates);
@@ -2470,6 +2480,16 @@ impl OpenCADStudio {
                             &self.tabs[i]
                                 .scene
                                 .visible_hatches_for_click(candidate_handles.as_ref()),
+                            view_rot,
+                            eye,
+                            bounds,
+                            candidate_handles.as_ref(),
+                        ));
+                        handles.extend(scene::pick::hit_test::box_hit_insert_hatch(
+                            a,
+                            p,
+                            crossing,
+                            self.tabs[i].scene.insert_hatches_for_click().as_ref(),
                             view_rot,
                             eye,
                             bounds,
@@ -2548,9 +2568,28 @@ impl OpenCADStudio {
                             aabb
                         },
                     );
-                    let area_candidates = self.tabs[i]
-                        .scene
-                        .interaction_candidates_in_aabb(all_wires, world_aabb, view_rot);
+                    let area_candidates = self.tabs[i].scene.interaction_candidates_in_aabb(
+                        all_wires,
+                        world_aabb,
+                        poly_pts.iter().fold(
+                            [
+                                f32::INFINITY,
+                                f32::INFINITY,
+                                f32::NEG_INFINITY,
+                                f32::NEG_INFINITY,
+                            ],
+                            |mut rect, point| {
+                                rect[0] = rect[0].min(point.x);
+                                rect[1] = rect[1].min(point.y);
+                                rect[2] = rect[2].max(point.x);
+                                rect[3] = rect[3].max(point.y);
+                                rect
+                            },
+                        ),
+                        view_rot,
+                        eye,
+                        bounds,
+                    );
                     let candidate_handles = self.tabs[i]
                         .scene
                         .interaction_candidate_handles(&area_candidates);
@@ -2571,6 +2610,15 @@ impl OpenCADStudio {
                         &self.tabs[i]
                             .scene
                             .visible_hatches_for_click(candidate_handles.as_ref()),
+                        view_rot,
+                        eye,
+                        bounds,
+                        candidate_handles.as_ref(),
+                    ));
+                    handles.extend(scene::pick::hit_test::poly_hit_insert_hatch(
+                        &poly_pts,
+                        crossing,
+                        self.tabs[i].scene.insert_hatches_for_click().as_ref(),
                         view_rot,
                         eye,
                         bounds,
@@ -2630,10 +2678,11 @@ impl OpenCADStudio {
                 if box_anchor.is_none() {
                     let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                     let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-                    let click_candidates = self.tabs[i].scene.interaction_candidates_near(
+                    let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
                         all_wires,
                         click_world,
                         view_rot,
+                        eye,
                         bounds,
                         scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
                     );
@@ -2695,7 +2744,7 @@ impl OpenCADStudio {
                             // parent Insert (AutoCAD behaviour).
                             scene::pick::hit_test::click_hit_insert_hatch(
                                 p,
-                                &self.tabs[i].scene.insert_hatches_for_click()[..],
+                                self.tabs[i].scene.insert_hatches_for_click().as_ref(),
                                 view_rot,
                                 eye,
                                 bounds,
@@ -2801,9 +2850,14 @@ impl OpenCADStudio {
                                 aabb
                             },
                         );
-                    let area_candidates = self.tabs[i]
-                        .scene
-                        .interaction_candidates_in_aabb(all_wires, world_aabb, view_rot);
+                    let area_candidates = self.tabs[i].scene.interaction_candidates_in_aabb(
+                        all_wires,
+                        world_aabb,
+                        [a.x.min(p.x), a.y.min(p.y), a.x.max(p.x), a.y.max(p.y)],
+                        view_rot,
+                        eye,
+                        bounds,
+                    );
                     let candidate_handles = self.tabs[i]
                         .scene
                         .interaction_candidate_handles(&area_candidates);
@@ -2826,6 +2880,16 @@ impl OpenCADStudio {
                         &self.tabs[i]
                             .scene
                             .visible_hatches_for_click(candidate_handles.as_ref()),
+                        view_rot,
+                        eye,
+                        bounds,
+                        candidate_handles.as_ref(),
+                    ));
+                    handles.extend(scene::pick::hit_test::box_hit_insert_hatch(
+                        a,
+                        p,
+                        crossing,
+                        self.tabs[i].scene.insert_hatches_for_click().as_ref(),
                         view_rot,
                         eye,
                         bounds,
@@ -2937,10 +3001,11 @@ impl OpenCADStudio {
                 };
                 let all_wires = self.tabs[i].scene.hit_test_wires();
                 let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-                let click_candidates = self.tabs[i].scene.interaction_candidates_near(
+                let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
                     all_wires,
                     click_world,
                     view_rot,
+                    eye,
                     bounds,
                     scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
                 );
@@ -3058,10 +3123,11 @@ impl OpenCADStudio {
                     };
                     let all_wires = self.tabs[i].scene.hit_test_wires();
                     let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-                    let click_candidates = self.tabs[i].scene.interaction_candidates_near(
+                    let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
                         all_wires,
                         click_world,
                         view_rot,
+                        eye,
                         bounds,
                         scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
                     );
@@ -3384,10 +3450,11 @@ impl OpenCADStudio {
             .map(|(cam, _)| cam);
         let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
         let hover_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-        let hover_candidates = self.tabs[i].scene.interaction_candidates_near(
+        let hover_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
             all_wires,
             hover_world,
             view_rot,
+            eye,
             bounds,
             scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
         );
@@ -3421,7 +3488,7 @@ impl OpenCADStudio {
         .or_else(|| {
             scene::pick::hit_test::click_hit_insert_hatch(
                 p,
-                &self.tabs[i].scene.insert_hatches_for_click()[..],
+                self.tabs[i].scene.insert_hatches_for_click().as_ref(),
                 view_rot,
                 eye,
                 bounds,
