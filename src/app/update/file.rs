@@ -768,6 +768,213 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn prepare_native_save(&mut self, i: usize) {
+        self.sync_vport_display(i);
+        sync_annotation_scale_header(&mut self.tabs[i].scene);
+        self.stamp_header_sysvars(i);
+        self.tabs[i].scene.document.header.user_real1 =
+            self.tabs[i].scene.annotation_scale as f64;
+        self.sync_truck_solids_to_acis(i);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn queue_native_save(
+        &mut self,
+        i: usize,
+        path: std::path::PathBuf,
+        version: acadrust::DxfVersion,
+        purpose: crate::app::SavePurpose,
+        continuation: crate::app::SaveContinuation,
+        set_current_path: bool,
+    ) -> Task<Message> {
+        let tab_id = self.tabs[i].id;
+        if self.active_save_jobs.contains_key(&tab_id) {
+            if purpose != crate::app::SavePurpose::Autosave {
+                self.command_line
+                    .push_info("Save already running for this drawing.");
+            }
+            return Task::none();
+        }
+
+        let epoch = self.tabs[i].scene.geometry_epoch;
+        let revision = self.tabs[i].edit_revision;
+        let camera_generation = self.tabs[i].scene.camera_generation;
+        let thumbnail = if purpose == crate::app::SavePurpose::Autosave {
+            None
+        } else {
+            let scene = &self.tabs[i].scene;
+            Some((
+                scene.entity_wires(),
+                scene.camera.borrow().clone(),
+                scene.bg_color,
+                version >= acadrust::DxfVersion::AC1027,
+                self.vp_size,
+            ))
+        };
+        let clone_started = std::time::Instant::now();
+        let mut snapshot = self.tabs[i].scene.document.clone();
+        let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
+        if std::env::var_os("OCS_PERF").is_some() {
+            eprintln!(
+                "[perf] save-snapshot {:.1}ms entities={} objects={} purpose={purpose:?}",
+                clone_ms,
+                snapshot.entities().count(),
+                snapshot.objects.len(),
+            );
+        }
+
+        self.save_job_serial = self.save_job_serial.wrapping_add(1);
+        let job_id = self.save_job_serial;
+        self.active_save_jobs.insert(tab_id, job_id);
+        let previous_autosave = set_current_path.then(|| self.autosave_target(i));
+        let backup = purpose != crate::app::SavePurpose::Autosave && self.backup_on_save;
+        let worker_path = path.clone();
+
+        Task::perform(
+            async move {
+                let result = std::thread::spawn(move || {
+                    if let Some((wires, camera, bg_color, png, viewport)) = thumbnail {
+                        let started = std::time::Instant::now();
+                        snapshot.preview = crate::io::thumbnail::from_snapshot(
+                            &wires,
+                            &camera,
+                            bg_color,
+                            png,
+                            viewport,
+                        );
+                        if std::env::var_os("OCS_PERF").is_some() {
+                            eprintln!(
+                                "[perf] save-thumbnail {:.1}ms wires={}",
+                                started.elapsed().as_secs_f64() * 1000.0,
+                                wires.len(),
+                            );
+                        }
+                    }
+                    crate::io::save_owned_as_version_atomic(
+                        snapshot,
+                        &worker_path,
+                        version,
+                        backup,
+                    )
+                })
+                .join()
+                .unwrap_or_else(|_| Err("save worker panicked".to_string()));
+                crate::app::SaveOutcome {
+                    job_id,
+                    tab_id,
+                    epoch,
+                    revision,
+                    camera_generation,
+                    path,
+                    previous_autosave,
+                    set_current_path,
+                    purpose,
+                    continuation,
+                    result,
+                }
+            },
+            Message::SaveFinished,
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn on_save_finished(
+        &mut self,
+        outcome: crate::app::SaveOutcome,
+    ) -> Task<Message> {
+        let latest = self.active_save_jobs.get(&outcome.tab_id).copied()
+            == Some(outcome.job_id);
+        if latest {
+            self.active_save_jobs.remove(&outcome.tab_id);
+        }
+
+        let Some(i) = self.tabs.iter().position(|tab| tab.id == outcome.tab_id) else {
+            if outcome.purpose == crate::app::SavePurpose::Autosave {
+                let _ = std::fs::remove_file(&outcome.path);
+            }
+            return Task::none();
+        };
+        if !latest {
+            if outcome.purpose == crate::app::SavePurpose::Autosave {
+                let _ = std::fs::remove_file(&outcome.path);
+            }
+            return Task::none();
+        }
+
+        if let Err(error) = outcome.result {
+            self.command_line
+                .push_error(&format!("Save failed: {error}"));
+            return match outcome.continuation {
+                crate::app::SaveContinuation::CloseTab => {
+                    self.pending_close = Some(crate::app::PendingClose::Tab(i));
+                    self.open_unsaved_dialog_window()
+                }
+                crate::app::SaveContinuation::Quit => {
+                    self.pending_close = Some(crate::app::PendingClose::Quit);
+                    self.open_unsaved_dialog_window()
+                }
+                crate::app::SaveContinuation::None => Task::none(),
+            };
+        }
+
+        let snapshot_is_current = self.tabs[i].scene.geometry_epoch == outcome.epoch
+            && self.tabs[i].edit_revision == outcome.revision
+            && self.tabs[i].scene.camera_generation == outcome.camera_generation;
+        let mut tasks = Vec::new();
+        match outcome.purpose {
+            crate::app::SavePurpose::Autosave => {
+                self.command_line.push_output("Autosaved 1 drawing");
+            }
+            crate::app::SavePurpose::Manual | crate::app::SavePurpose::SaveAs => {
+                self.command_line
+                    .push_output(&format!("Saved: {}", outcome.path.display()));
+                self.recent_thumbs.remove(&outcome.path);
+                if let Some(previous) = outcome.previous_autosave {
+                    if previous != outcome.path {
+                        let _ = std::fs::remove_file(previous);
+                    }
+                }
+                if outcome.set_current_path {
+                    self.tabs[i].current_path = Some(outcome.path.clone());
+                    tasks.push(self.push_recent(outcome.path.clone()));
+                }
+                if snapshot_is_current {
+                    self.tabs[i].dirty = false;
+                    let _ = std::fs::remove_file(outcome.path.with_extension("sv$"));
+                }
+            }
+        }
+
+        match outcome.continuation {
+            crate::app::SaveContinuation::None => {}
+            crate::app::SaveContinuation::CloseTab if snapshot_is_current => {
+                self.pending_close = None;
+                tasks.push(self.close_unsaved_dialog_window());
+                tasks.push(self.update(Message::TabClose(i)));
+            }
+            crate::app::SaveContinuation::Quit if snapshot_is_current => {
+                self.pending_close = None;
+                if self.tabs.iter().any(|tab| tab.dirty) {
+                    self.pending_close = Some(crate::app::PendingClose::Quit);
+                    tasks.push(self.open_unsaved_dialog_window());
+                } else {
+                    tasks.push(self.close_unsaved_dialog_window());
+                    tasks.push(self.exit_app());
+                }
+            }
+            crate::app::SaveContinuation::CloseTab => {
+                self.pending_close = Some(crate::app::PendingClose::Tab(i));
+                tasks.push(self.open_unsaved_dialog_window());
+            }
+            crate::app::SaveContinuation::Quit => {
+                self.pending_close = Some(crate::app::PendingClose::Quit);
+                tasks.push(self.open_unsaved_dialog_window());
+            }
+        }
+        Task::batch(tasks)
+    }
+
     pub(super) fn on_save_file(&mut self) -> Task<Message> {
                 if self.read_only {
                     self.command_line
@@ -775,37 +982,28 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 }
                 let i = self.active_tab;
-                // Stamp the live grid/snap toggles onto the VPort so the file
-                // reflects them even if they came from settings with no
-                // in-session toggle (#121).
-                self.sync_vport_display(i);
-                // Persist Ortho ($ORTHOMODE) + running OSNAP ($OSMODE) into the
-                // drawing header so they survive save/reopen (per-drawing).
-                self.stamp_header_sysvars(i);
+                // Web serializes immediately below. Native preparation happens
+                // once after the destination/version is known.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.sync_vport_display(i);
+                    self.stamp_header_sysvars(i);
+                }
                 // Native: save straight to the known path. Web has no path
                 // (downloads instead), so always go through the Save dialog.
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(path) = self.tabs[i].current_path.clone() {
-                    self.tabs[i].scene.document.header.user_real1 =
-                        self.tabs[i].scene.annotation_scale as f64;
                     // A direct Save preserves the document's current version.
-                    if self.backup_on_save {
-                        crate::io::write_backup(&path);
-                    }
-                    self.sync_truck_solids_to_acis(i);
                     let ver = self.tabs[i].scene.document.version;
-                    self.stamp_thumbnail(i, ver);
-                    match crate::io::save(&self.tabs[i].scene.document, &path) {
-                        Ok(()) => {
-                            self.command_line
-                                .push_output(&format!("Saved: {}", path.display()));
-                            self.tabs[i].dirty = false;
-                            // A clean save supersedes any autosave recovery copy.
-                            let _ = std::fs::remove_file(path.with_extension("sv$"));
-                        }
-                        Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
-                    }
-                    return Task::none();
+                    self.prepare_native_save(i);
+                    return self.queue_native_save(
+                        i,
+                        path,
+                        ver,
+                        crate::app::SavePurpose::Manual,
+                        crate::app::SaveContinuation::None,
+                        false,
+                    );
                 }
                 self.save_dialog_for_unsaved = false;
                 self.save_default_dwg2018(i)
@@ -937,37 +1135,24 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
         let (_ext, version) = crate::io::parse_save_format(&self.save_dialog_format);
         let i = self.active_tab;
-        sync_annotation_scale_header(&mut self.tabs[i].scene);
-        // Persist Ortho / running OSNAP into the header (Save-As path).
-        self.stamp_header_sysvars(i);
-        self.sync_truck_solids_to_acis(i);
-        self.stamp_thumbnail(i, version);
-        if self.backup_on_save {
-            crate::io::write_backup(&path);
-        }
-        match crate::io::save_as_version(&self.tabs[i].scene.document, &path, version) {
-            Ok(()) => {
-                self.command_line
-                    .push_output(&format!("Saved: {}", path.display()));
-                // Drop any prior autosave copy — including the temp one used
-                // while the drawing was still unsaved — before the tab takes on
-                // its new path.
-                let _ = std::fs::remove_file(self.autosave_target(i));
-                self.tabs[i].current_path = Some(path.clone());
-                self.tabs[i].dirty = false;
-                let _ = std::fs::remove_file(path.with_extension("sv$"));
-                let recent = self.push_recent(path.clone());
-                if self.save_dialog_for_unsaved {
-                    return Task::batch([
-                        recent,
-                        self.update(Message::UnsavedPickedSavePath(Some(path))),
-                    ]);
-                }
-                return recent;
+        self.prepare_native_save(i);
+        let continuation = if self.save_dialog_for_unsaved {
+            match self.pending_close {
+                Some(crate::app::PendingClose::Tab(_)) => crate::app::SaveContinuation::CloseTab,
+                Some(crate::app::PendingClose::Quit) => crate::app::SaveContinuation::Quit,
+                None => crate::app::SaveContinuation::None,
             }
-            Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
-        }
-        Task::none()
+        } else {
+            crate::app::SaveContinuation::None
+        };
+        self.queue_native_save(
+            i,
+            path,
+            version,
+            crate::app::SavePurpose::SaveAs,
+            continuation,
+            true,
+        )
     }
 
     /// AEC-drop warning → "Save anyway": accept the loss and proceed with the
@@ -1019,25 +1204,25 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// touches the original file or the dirty flag.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn on_autosave(&mut self) -> Task<Message> {
-        let mut n = 0;
+        let mut tasks = Vec::new();
         for i in 0..self.tabs.len() {
-            if !self.tabs[i].dirty {
+            if !self.tabs[i].dirty
+                || self.active_save_jobs.contains_key(&self.tabs[i].id)
+            {
                 continue;
             }
             let version = self.tabs[i].scene.document.version;
-            if let Ok(bytes) =
-                crate::io::save_to_bytes(&self.tabs[i].scene.document, "dwg", version)
-            {
-                if std::fs::write(self.autosave_target(i), bytes).is_ok() {
-                    n += 1;
-                }
-            }
+            let target = self.autosave_target(i);
+            tasks.push(self.queue_native_save(
+                i,
+                target,
+                version,
+                crate::app::SavePurpose::Autosave,
+                crate::app::SaveContinuation::None,
+                false,
+            ));
         }
-        if n > 0 {
-            self.command_line
-                .push_output(&format!("Autosaved {n} drawing(s)"));
-        }
-        Task::none()
+        Task::batch(tasks)
     }
 
     #[cfg(target_arch = "wasm32")]

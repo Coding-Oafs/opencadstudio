@@ -65,9 +65,10 @@ fn instance_buffer_mapped<T: bytemuck::Pod>(
 // even though it's constant along the wire. On native we hoist those into a
 // per-wire `WireConst` storage buffer indexed by `wire_id`, so the instance
 // keeps only the per-segment data (endpoints + arc-length distances). Cuts the
-// instance from 104 B to 60 B (~42 %) and removes the redundant per-segment
-// re-fetch of the shared constants. WebGL2 has no vertex-stage storage buffers,
-// so the wasm build below keeps the original self-contained fat instance.
+// instance from 104 B to one 64-byte cache line and removes the redundant
+// per-segment re-fetch of the shared constants. WebGL2 has no vertex-stage
+// storage buffers, so the wasm build below keeps the original self-contained
+// fat instance.
 #[cfg(not(target_arch = "wasm32"))]
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -80,11 +81,11 @@ pub struct WireInstance {
     pub distance_b: f32,
     /// Index into the per-wire `WireConst` storage buffer (group 1).
     pub wire_id: u32,
-    /// World-space half-width at each endpoint for a TAPERED band. `0.0` =
-    /// use the per-wire constant (`WireConst.world_half_width`). The shader
-    /// interpolates between the two so the band tapers across the segment.
-    pub world_hw_a: f32,
-    pub world_hw_b: f32,
+    /// Endpoint width / the per-wire maximum width, normalized by the vertex
+    /// fetch unit. `[0, 0]` means use the constant width. Ratios retain the
+    /// full f32 world-width scale in `WireConst` while making every instance
+    /// exactly one 64-byte cache line.
+    pub taper_ratio: [u16; 2],
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -99,8 +100,7 @@ impl WireInstance {
             wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, distance_a) as u64, shader_location: 4, format: wgpu::VertexFormat::Float32   },
             wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, distance_b) as u64, shader_location: 5, format: wgpu::VertexFormat::Float32   },
             wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, wire_id) as u64,    shader_location: 6, format: wgpu::VertexFormat::Uint32    },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, world_hw_a) as u64, shader_location: 7, format: wgpu::VertexFormat::Float32   },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, world_hw_b) as u64, shader_location: 8, format: wgpu::VertexFormat::Float32   },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, taper_ratio) as u64, shader_location: 7, format: wgpu::VertexFormat::Unorm16x2 },
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<WireInstance>() as u64,
@@ -284,6 +284,8 @@ impl WirePipelineMode {
 
 pub struct WireGpu {
     pub instance_buffer: wgpu::Buffer,
+    /// First instance in a shared arena buffer. Standalone buffers start at 0.
+    pub first_instance: u32,
     pub instance_count: u32,
     /// `true` when the source `WireModel` also carries `fill_tris`
     /// (i.e. it is a 3D mesh face — PolyfaceMesh / PolygonMesh — whose
@@ -520,9 +522,20 @@ pub(crate) fn emit_wire_native(
         return (Vec::new(), cst);
     }
     let low = |i: usize| -> [f32; 3] { wire.points_low.get(i).copied().unwrap_or([0.0; 3]) };
-    // Per-point half-width for a tapered band (empty ⇒ 0 ⇒ shader uses the
-    // per-wire constant width).
-    let tw = |i: usize| -> f32 { wire.taper_widths.get(i).copied().unwrap_or(0.0) * 0.5 };
+    // Store an endpoint/max-width ratio. The shared f32 maximum keeps drawing
+    // units and range out of the packed field; UNORM16 contributes only a
+    // relative error below 1/65535. Preserve zero as the existing constant
+    // width fallback sentinel.
+    let taper_ratio = |i: usize| -> u16 {
+        let width = wire.taper_widths.get(i).copied().unwrap_or(0.0);
+        if width <= 0.0 || wire.world_width <= 0.0 {
+            0
+        } else {
+            ((width / wire.world_width).clamp(0.0, 1.0) * u16::MAX as f32)
+                .round()
+                .max(1.0) as u16
+        }
+    };
     let mut instances: Vec<WireInstance> = Vec::with_capacity(seg_count);
     for i in 0..seg_count {
         let a = wire.points[i];
@@ -538,8 +551,7 @@ pub(crate) fn emit_wire_native(
             distance_a: dists[i],
             distance_b: dists[i + 1],
             wire_id,
-            world_hw_a: tw(i),
-            world_hw_b: tw(i + 1),
+            taper_ratio: [taper_ratio(i), taper_ratio(i + 1)],
         });
     }
     (instances, cst)
@@ -652,6 +664,7 @@ impl WireGpu {
                     let buf = instance_buffer_mapped(device, "wire.run.ibuf", chunk);
                     Self {
                         instance_buffer: buf,
+                        first_instance: 0,
                         instance_count: chunk.len() as u32,
                         is_3d_mesh_edge: mesh_edge,
                         const_bind_group: Some(bg.clone()),
@@ -684,6 +697,7 @@ impl WireGpu {
                 let buf = instance_buffer_mapped(device, "wire.run.compat.ibuf", chunk);
                 Self {
                     instance_buffer: buf,
+                    first_instance: 0,
                     instance_count: chunk.len() as u32,
                     is_3d_mesh_edge: mesh_edge,
                     const_bind_group: None,
@@ -740,6 +754,7 @@ impl WireGpu {
                     let instance_buffer = instance_buffer_mapped(device, &label, chunk);
                     Self {
                         instance_buffer,
+                        first_instance: 0,
                         instance_count: chunk.len() as u32,
                         is_3d_mesh_edge: false,
                         const_bind_group: Some(bg.clone()),
@@ -766,6 +781,7 @@ impl WireGpu {
                 let instance_buffer = instance_buffer_mapped(device, &label, chunk);
                 Self {
                     instance_buffer,
+                    first_instance: 0,
                     instance_count: chunk.len() as u32,
                     is_3d_mesh_edge: false,
                     const_bind_group: None,

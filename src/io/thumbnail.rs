@@ -15,6 +15,7 @@ use image::{ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
 
 use crate::scene::{Scene, WireModel};
+use crate::scene::view::camera::Camera;
 
 /// Longest edge of the generated thumbnail, in pixels.
 const MAX_DIM: u32 = 256;
@@ -31,6 +32,20 @@ const MAX_DIM: u32 = 256;
 /// (AC1027) on, so the caller passes `false` for older targets → BMP/DIB.
 pub fn from_scene(scene: &Scene, png: bool, viewport: (f32, f32)) -> Option<Preview> {
     let wires = scene.entity_wires();
+    let camera = scene.camera.borrow();
+    from_snapshot(&wires, &camera, scene.bg_color, png, viewport)
+}
+
+/// Build a preview from immutable render inputs. Native background saves retain
+/// the resident wire `Arc` and a small camera copy, then run the point scan and
+/// image encoding on the save worker instead of blocking the UI thread.
+pub fn from_snapshot(
+    wires: &[WireModel],
+    camera: &Camera,
+    bg_color: [f32; 4],
+    png: bool,
+    viewport: (f32, f32),
+) -> Option<Preview> {
     if wires.is_empty() {
         return None;
     }
@@ -49,9 +64,8 @@ pub fn from_scene(scene: &Scene, png: bool, viewport: (f32, f32)) -> Option<Prev
         width: cw as f32,
         height: ch as f32,
     };
-    let cam = scene.camera.borrow();
-    rasterize(&wires, cw, ch, scene.bg_color, png, |x, y, z| {
-        cam.project(glam::DVec3::new(x, y, z), bounds)
+    rasterize(wires, cw, ch, bg_color, png, |x, y, z| {
+        camera.project(glam::DVec3::new(x, y, z), bounds)
             .map(|s| (s.x.round() as i32, s.y.round() as i32))
     })
 }

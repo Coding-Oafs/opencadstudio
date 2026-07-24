@@ -1,9 +1,9 @@
 // Wire shader (native) — same as wire.wgsl, but the per-wire constants
 // (color / half_width / dash pattern / draw_depth) live in a per-wire storage
 // buffer indexed by `wire_id` instead of being replicated on every segment
-// instance. Cuts the instance from 104 B to 60 B and removes the redundant
-// per-segment re-fetch of constants. WebGL2 has no vertex-stage storage
-// buffers, so the wasm build uses wire.wgsl (fat instance) instead.
+// instance. Cuts the instance from 104 B to one 64-byte cache line and removes
+// the redundant per-segment re-fetch of constants. WebGL2 has no vertex-stage
+// storage buffers, so the wasm build uses wire.wgsl (fat instance) instead.
 
 struct Uniforms {
     viewport_size:    vec2<f32>,
@@ -44,10 +44,9 @@ struct InstanceIn {
     @location(4) distance_a: f32,
     @location(5) distance_b: f32,
     @location(6) wire_id:    u32,
-    // Per-endpoint world half-width for a tapered band (0 = use the per-wire
-    // constant `world_half_width`).
-    @location(7) world_hw_a: f32,
-    @location(8) world_hw_b: f32,
+    // Per-endpoint width / per-wire maximum width. Vertex UNORM16 conversion
+    // expands this to 0..1; zero keeps the constant-width fallback.
+    @location(7) taper_ratio: vec2<f32>,
 }
 
 const DRAW_ORDER_BIAS: f32 = 0.001;
@@ -73,8 +72,10 @@ struct VertexOut {
 // Half-width of one segment end: a tapered band's own end width wins, then a
 // constant world-unit band, then the screen-pixel lineweight (LWDISPLAY off
 // collapses to a hairline).
-fn resolve_hw(taper: f32, world_hw: f32, px_hw: f32) -> f32 {
-    if taper > 0.0 { return max(taper / u.world_per_pixel, 0.5); }
+fn resolve_hw(taper_ratio: f32, world_hw: f32, px_hw: f32) -> f32 {
+    if taper_ratio > 0.0 {
+        return max((taper_ratio * world_hw) / u.world_per_pixel, 0.5);
+    }
     if world_hw > 0.0 { return max(world_hw / u.world_per_pixel, 0.5); }
     return select(0.5, px_hw, u.lwdisplay_enable > 0.5);
 }
@@ -114,12 +115,12 @@ fn resolve_hw(taper: f32, world_hw: f32, px_hw: f32) -> f32 {
     // by `world_half_width / world_per_pixel` (screen pixels) so the band grows
     // and shrinks with zoom. A normal wire (world_half_width == 0) uses the
     // screen-pixel half-width, honouring the LWDISPLAY toggle.
-    // A tapered band carries a per-endpoint world half-width on the instance:
+    // A tapered band carries normalized endpoint widths on the instance:
     // interpolate across the segment so the band narrows/widens smoothly. A
     // constant band uses the per-wire `world_half_width`. Both clamp to a
     // half-pixel so a zoomed-out band stays a hairline instead of vanishing.
-    let hw_a = resolve_hw(in.world_hw_a, c.world_half_width, c.half_width);
-    let hw_b = resolve_hw(in.world_hw_b, c.world_half_width, c.half_width);
+    let hw_a = resolve_hw(in.taper_ratio.x, c.world_half_width, c.half_width);
+    let hw_b = resolve_hw(in.taper_ratio.y, c.world_half_width, c.half_width);
     let hw = mix(hw_a, hw_b, which_end);
 
     // Extend the quad longitudinally by the end half-width and let the

@@ -739,6 +739,10 @@ pub(super) struct OpenCADStudio {
     // ── Unsaved-changes dialog ────────────────────────────────────────────
     /// Set when the user tries to close a tab or quit while there are unsaved changes.
     pending_close: Option<PendingClose>,
+    /// Latest save job per stable tab id. Older completions may finish, but
+    /// cannot mark a newer document state clean or redirect its path.
+    active_save_jobs: std::collections::HashMap<u64, u64>,
+    save_job_serial: u64,
     /// OS window for the unsaved-changes confirmation dialog.
 
     // ── Custom Save-As dialog ─────────────────────────────────────────────
@@ -845,6 +849,35 @@ pub(super) enum PendingClose {
     Tab(usize),
     /// User tried to quit the application.
     Quit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SavePurpose {
+    Manual,
+    SaveAs,
+    Autosave,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SaveContinuation {
+    None,
+    CloseTab,
+    Quit,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveOutcome {
+    job_id: u64,
+    tab_id: u64,
+    epoch: u64,
+    revision: u64,
+    camera_generation: u64,
+    path: PathBuf,
+    previous_autosave: Option<PathBuf>,
+    set_current_path: bool,
+    purpose: SavePurpose,
+    continuation: SaveContinuation,
+    result: Result<(), String>,
 }
 
 /// Where a colour chosen in the standalone palette window should be applied.
@@ -1404,8 +1437,8 @@ pub enum Message {
     AecDropBack,
     /// Periodic autosave tick — write `.sv$` recovery files for dirty tabs.
     AutoSave,
-    /// Save-as path picked for the unsaved-changes → save → close flow.
-    UnsavedPickedSavePath(Option<std::path::PathBuf>),
+    /// Native background save/autosave completed.
+    SaveFinished(SaveOutcome),
     // ─────────────────────────────────────────────────────────────────────
     CommandInput(String),
     CommandSubmit,
@@ -2418,6 +2451,8 @@ impl OpenCADStudio {
             opening: None,
             pending_opens: std::collections::VecDeque::new(),
             pending_close: None,
+            active_save_jobs: std::collections::HashMap::new(),
+            save_job_serial: 0,
             save_dialog_format: "DWG 2018".to_string(),
             save_dialog_filename: "drawing.dwg".to_string(),
             save_dialog_for_unsaved: false,

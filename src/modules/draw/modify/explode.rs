@@ -944,34 +944,59 @@ fn explode_dimension(dim: &Dimension, doc: &CadDocument) -> Vec<EntityType> {
 /// field but not `base`, so without this the saved group 10 goes stale and the
 /// dimension's line / leader / origin jumps on reload (#181). Angular-2-line
 /// keeps a distinct base point (the second line's point) and is left alone.
-fn sync_dimension_base_points(doc: &mut CadDocument) {
-    for e in doc.entities_mut() {
-        if let EntityType::Dimension(d) = e {
-            let def = match d {
-                Dimension::Linear(x) => Some(x.definition_point),
-                Dimension::Aligned(x) => Some(x.definition_point),
-                Dimension::Radius(x) => Some(x.definition_point),
-                Dimension::Diameter(x) => Some(x.definition_point),
-                Dimension::Ordinate(x) => Some(x.definition_point),
-                Dimension::Angular3Pt(x) => Some(x.definition_point),
+fn sync_dimension_base_points_and_collect_pending(doc: &mut CadDocument) -> Vec<Handle> {
+    let existing_blocks: rustc_hash::FxHashSet<String> = doc
+        .block_records
+        .iter()
+        .map(|record| record.name.to_ascii_lowercase())
+        .collect();
+    let dimensions: Vec<(Handle, Option<Vector3>, bool)> = doc
+        .entities()
+        .filter_map(|entity| {
+            let EntityType::Dimension(dimension) = entity else {
+                return None;
+            };
+            let definition_point = match dimension {
+                Dimension::Linear(value) => Some(value.definition_point),
+                Dimension::Aligned(value) => Some(value.definition_point),
+                Dimension::Radius(value) => Some(value.definition_point),
+                Dimension::Diameter(value) => Some(value.definition_point),
+                Dimension::Ordinate(value) => Some(value.definition_point),
+                Dimension::Angular3Pt(value) => Some(value.definition_point),
                 Dimension::Angular2Ln(_) => None,
             };
-            if let Some(p) = def {
-                d.base_mut().definition_point = p;
+            let base = dimension.base();
+            let needs_sync =
+                definition_point.filter(|point| *point != base.definition_point);
+            let block_missing = base.block_name.trim().is_empty()
+                || !existing_blocks.contains(&base.block_name.to_ascii_lowercase());
+            Some((base.common.handle, needs_sync, block_missing))
+        })
+        .collect();
+
+    let mut pending = Vec::new();
+    for (handle, definition_point, block_missing) in dimensions {
+        if let Some(point) = definition_point {
+            if let Some(EntityType::Dimension(dimension)) = doc.get_entity_mut(handle) {
+                dimension.base_mut().definition_point = point;
             }
         }
+        if block_missing {
+            pending.push(handle);
+        }
     }
+    pending
 }
 
 /// Smallest free `*D<n>` anonymous block name in `doc`.
-fn next_dimension_block_name(doc: &CadDocument) -> String {
-    let mut n = 0u64;
+fn next_dimension_block_name(doc: &CadDocument, next: &mut u64) -> String {
     loop {
+        let n = *next;
+        *next = (*next).saturating_add(1);
         let cand = format!("*D{n}");
         if doc.block_records.get(&cand).is_none() {
             return cand;
         }
-        n += 1;
     }
 }
 
@@ -993,37 +1018,32 @@ fn next_dimension_block_name(doc: &CadDocument) -> String {
 /// DWG, or copied via the `*D`-cloning copy path) are left untouched so their
 /// original graphics are preserved.
 pub fn bake_dimension_blocks(doc: &mut CadDocument) {
-    // Keep group-10 (base.definition_point) in step with the per-type geometry
-    // before writing — see sync_dimension_base_points.
-    sync_dimension_base_points(doc);
-
-    // Handles of dimensions whose block reference is missing or dangling.
-    let pending: Vec<Handle> = doc
-        .entities()
-        .filter_map(|e| match e {
-            EntityType::Dimension(d) => {
-                let bn = &d.base().block_name;
-                if bn.trim().is_empty() || doc.block_records.get(bn).is_none() {
-                    Some(d.base().common.handle)
-                } else {
-                    None
-                }
-            }
+    // Keep group-10 in step and find missing blocks in one entity pass. Existing
+    // `*D` blocks are the save cache: only invalidated/new dimensions enter the
+    // relatively expensive geometry generation below.
+    let pending = sync_dimension_base_points_and_collect_pending(doc);
+    let dimensions: Vec<(Handle, Dimension)> = pending
+        .into_iter()
+        .filter_map(|handle| match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => Some((handle, d.clone())),
             _ => None,
         })
         .collect();
 
-    for handle in pending {
-        let dim = match doc.get_entity(handle) {
-            Some(EntityType::Dimension(d)) => d.clone(),
-            _ => continue,
-        };
-        let subs = explode_dimension(&dim, doc);
+    use crate::par::prelude::*;
+    let doc_ref: &CadDocument = doc;
+    let generated: Vec<(Handle, Vec<EntityType>)> = dimensions
+        .par_iter()
+        .map(|(handle, dim)| (*handle, explode_dimension(dim, doc_ref)))
+        .collect();
+
+    let mut next_block_number = 0u64;
+    for (handle, subs) in generated {
         if subs.is_empty() {
             continue;
         }
 
-        let name = next_dimension_block_name(doc);
+        let name = next_dimension_block_name(doc, &mut next_block_number);
         // Reserve three consecutive handles for the record / block / endblk.
         // Adding the block + endblk (which carry explicit handles) advances the
         // document's handle counter past them, so the NULL-handle sub-entities

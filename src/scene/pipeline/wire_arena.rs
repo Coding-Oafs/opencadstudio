@@ -62,6 +62,9 @@ struct Slab {
     inst_len: u32,
     const_off: u32,
     const_len: u32,
+    /// World-XY bounds for plan-view draw-range culling. Unbounded whenever a
+    /// source wire does not carry a trustworthy entity AABB.
+    aabb: [f32; 4],
     /// Entity-level draw depth used when this slab was emitted. Individual
     /// consts may carry block-local offsets around it; structural edits shift
     /// the whole slab by the base-depth delta instead of flattening those
@@ -182,6 +185,37 @@ fn handle_ranges(wires: &[&WireModel]) -> Option<Vec<(Handle, usize, usize)>> {
     Some(out)
 }
 
+fn run_aabb(wires: &[&WireModel]) -> [f32; 4] {
+    let mut out = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for wire in wires {
+        let [x0, y0, x1, y1] = wire.aabb;
+        if !x0.is_finite()
+            || !y0.is_finite()
+            || !x1.is_finite()
+            || !y1.is_finite()
+            || x0 > x1
+            || y0 > y1
+        {
+            return WireModel::UNBOUNDED_AABB;
+        }
+        let pad = (wire.world_width * 0.5).max(0.0);
+        out[0] = out[0].min(x0 - pad);
+        out[1] = out[1].min(y0 - pad);
+        out[2] = out[2].max(x1 + pad);
+        out[3] = out[3].max(y1 + pad);
+    }
+    if out[0].is_finite() {
+        out
+    } else {
+        WireModel::UNBOUNDED_AABB
+    }
+}
+
 fn make_const_bg(
     device: &wgpu::Device,
     bgl: &wgpu::BindGroupLayout,
@@ -197,22 +231,50 @@ fn make_const_bg(
     }))
 }
 
-fn alloc_inst(device: &wgpu::Device, cap: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
+fn alloc_inst_initialized(
+    device: &wgpu::Device,
+    cap: u64,
+    data: &[WireInstance],
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("wire_arena.ibuf"),
         size: cap * std::mem::size_of::<WireInstance>() as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+        mapped_at_creation: true,
+    });
+    if !data.is_empty() {
+        let bytes = bytemuck::cast_slice(data);
+        let mut mapped = buffer
+            .slice(..bytes.len() as u64)
+            .get_mapped_range_mut();
+        mapped.copy_from_slice(bytes);
+        drop(mapped);
+    }
+    buffer.unmap();
+    buffer
 }
 
-fn alloc_const(device: &wgpu::Device, cap: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
+fn alloc_const_initialized(
+    device: &wgpu::Device,
+    cap: u64,
+    data: &[WireConst],
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("wire_arena.cbuf"),
         size: cap * std::mem::size_of::<WireConst>() as u64,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+        mapped_at_creation: true,
+    });
+    if !data.is_empty() {
+        let bytes = bytemuck::cast_slice(data);
+        let mut mapped = buffer
+            .slice(..bytes.len() as u64)
+            .get_mapped_range_mut();
+        mapped.copy_from_slice(bytes);
+        drop(mapped);
+    }
+    buffer.unmap();
+    buffer
 }
 
 fn blank_const() -> WireConst {
@@ -230,8 +292,7 @@ fn blank_instance() -> WireInstance {
         distance_a: 0.0,
         distance_b: 0.0,
         wire_id: 0,
-        world_hw_a: 0.0,
-        world_hw_b: 0.0,
+        taper_ratio: [0; 2],
     }
 }
 
@@ -241,44 +302,128 @@ impl WireArena {
     /// path).
     pub fn build(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         wires: &[&WireModel],
         depth_map: &FxHashMap<u64, [f32; 2]>,
         const_bgl: &wgpu::BindGroupLayout,
         mesh_edge: bool,
     ) -> Option<Self> {
         let ranges = handle_ranges(wires)?;
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let total_started = std::time::Instant::now();
+
+        // Reject an oversized batch before parallel emission allocates hundreds
+        // of megabytes. `points.len() - 1` is an upper bound because NaN-break
+        // segments are skipped by emit_wire_native.
+        let max_instances: usize = wires
+            .iter()
+            .map(|w| w.points.len().saturating_sub(1))
+            .sum();
+        if max_instances as u64 > MAX_INSTANCES || wires.len() as u64 + 1 > MAX_CONSTS {
+            return None;
+        }
+
+        struct BuildPlan {
+            handle: Handle,
+            start: usize,
+            end: usize,
+            const_off: u32,
+            base_depth: f32,
+        }
+        struct PackedSlab {
+            handle: Handle,
+            const_off: u32,
+            base_depth: f32,
+            aabb: [f32; 4],
+            instances: Vec<WireInstance>,
+            consts: Vec<WireConst>,
+        }
+
+        // Assign global const slots serially so parallel workers can emit final
+        // wire_id values directly. Indexed parallel collect preserves handle and
+        // wire submission order.
+        let mut next_const = 1u32;
+        let plans: Vec<BuildPlan> = ranges
+            .into_iter()
+            .map(|(handle, start, end)| {
+                let const_off = next_const;
+                next_const += (end - start) as u32;
+                let base_depth = if mesh_edge {
+                    0.0
+                } else {
+                    depth_map.get(&handle.value()).map_or(0.0, |d| d[0])
+                };
+                BuildPlan {
+                    handle,
+                    start,
+                    end,
+                    const_off,
+                    base_depth,
+                }
+            })
+            .collect();
+
+        let pack_started = std::time::Instant::now();
+        use crate::par::prelude::*;
+        let packed: Vec<PackedSlab> = plans
+            .par_iter()
+            .map(|plan| {
+                let run = &wires[plan.start..plan.end];
+                let capacity: usize = run
+                    .iter()
+                    .map(|w| w.points.len().saturating_sub(1))
+                    .sum();
+                let mut instances: Vec<WireInstance> = Vec::with_capacity(capacity);
+                let mut consts: Vec<WireConst> = Vec::with_capacity(run.len());
+                for (local, &w) in run.iter().enumerate() {
+                    let wire_id = plan.const_off + local as u32;
+                    // 3D mesh outline edges are occluded by true depth and must NOT
+                    // take the draw-order z-bias (or hidden back edges peek through
+                    // the shaded fill) — matching WireGpu::from_run.
+                    let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
+                    let (mut emitted, cst) = emit_wire_native(w, wire_id, w.color, dd);
+                    instances.append(&mut emitted);
+                    consts.push(cst);
+                }
+                PackedSlab {
+                    handle: plan.handle,
+                    const_off: plan.const_off,
+                    base_depth: plan.base_depth,
+                    aabb: run_aabb(run),
+                    instances,
+                    consts,
+                }
+            })
+            .collect();
+        let pack_ms = pack_started.elapsed().as_secs_f64() * 1000.0;
+
+        let inst_count: usize = packed.iter().map(|slab| slab.instances.len()).sum();
+        let const_count: usize = 1 + packed.iter().map(|slab| slab.consts.len()).sum::<usize>();
+        if inst_count as u64 > MAX_INSTANCES || const_count as u64 > MAX_CONSTS {
+            return None;
+        }
 
         // const slot 0 = blank tombstone target.
-        let mut instances: Vec<WireInstance> = Vec::new();
-        let mut consts_cpu: Vec<WireConst> = vec![blank_const()];
-        let mut slabs: FxHashMap<Handle, Slab> = FxHashMap::default();
-        for (h, i, j) in ranges {
+        let mut instances: Vec<WireInstance> = Vec::with_capacity(inst_count);
+        let mut consts_cpu: Vec<WireConst> = Vec::with_capacity(const_count);
+        consts_cpu.push(blank_const());
+        let mut slabs: FxHashMap<Handle, Slab> =
+            FxHashMap::with_capacity_and_hasher(packed.len(), Default::default());
+        for mut packed_slab in packed {
             let inst_off = instances.len() as u32;
-            let const_off = consts_cpu.len() as u32;
-            let base_depth = if mesh_edge {
-                0.0
-            } else {
-                depth_map.get(&h.value()).map_or(0.0, |d| d[0])
-            };
-            for &w in &wires[i..j] {
-                let wire_id = consts_cpu.len() as u32;
-                // 3D mesh outline edges are occluded by true depth and must NOT
-                // take the draw-order z-bias (or hidden back edges peek through
-                // the shaded fill) — matching WireGpu::from_run.
-                let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
-                let (mut insts, cst) = emit_wire_native(w, wire_id, w.color, dd);
-                instances.append(&mut insts);
-                consts_cpu.push(cst);
-            }
+            let inst_len = packed_slab.instances.len() as u32;
+            let const_len = packed_slab.consts.len() as u32;
+            instances.append(&mut packed_slab.instances);
+            consts_cpu.append(&mut packed_slab.consts);
             slabs.insert(
-                h,
+                packed_slab.handle,
                 Slab {
                     inst_off,
-                    inst_len: instances.len() as u32 - inst_off,
-                    const_off,
-                    const_len: consts_cpu.len() as u32 - const_off,
-                    base_depth,
+                    inst_len,
+                    const_off: packed_slab.const_off,
+                    const_len,
+                    aabb: packed_slab.aabb,
+                    base_depth: packed_slab.base_depth,
                 },
             );
         }
@@ -296,13 +441,24 @@ impl WireArena {
         let const_cap = ((const_tail as u64 * HEADROOM_NUM / HEADROOM_DEN)
             .max(MIN_CONST_CAP)
             .min(MAX_CONSTS)) as u32;
-        let inst_buf = alloc_inst(device, inst_cap as u64);
-        let const_buf = alloc_const(device, const_cap as u64);
-        if inst_tail > 0 {
-            queue.write_buffer(&inst_buf, 0, bytemuck::cast_slice(&instances));
-        }
-        queue.write_buffer(&const_buf, 0, bytemuck::cast_slice(&consts_cpu));
+        let upload_started = std::time::Instant::now();
+        let inst_buf = alloc_inst_initialized(device, inst_cap as u64, &instances);
+        let const_buf = alloc_const_initialized(device, const_cap as u64, &consts_cpu);
+        let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
         let const_bind_group = make_const_bg(device, const_bgl, &const_buf);
+        if perf {
+            eprintln!(
+                "[perf] arena-build-detail total={:.1}ms pack={:.1} mapped-upload={:.1} handles={} wires={} instances={} instance-bytes={} consts={}",
+                total_started.elapsed().as_secs_f64() * 1000.0,
+                pack_ms,
+                upload_ms,
+                slabs.len(),
+                wires.len(),
+                inst_tail,
+                inst_tail as usize * std::mem::size_of::<WireInstance>(),
+                const_tail,
+            );
+        }
 
         Some(Self {
             inst_buf,
@@ -381,6 +537,7 @@ impl WireArena {
             } else {
                 depth_map.get(&h.value()).map_or(0.0, |d| d[0])
             };
+            let aabb = run_aabb(run);
 
             if !self.slabs.contains_key(&h)
                 && self
@@ -419,7 +576,9 @@ impl WireArena {
                     const_off as u64 * csz,
                     bytemuck::cast_slice(&csts),
                 );
-                self.slabs.get_mut(&h).unwrap().base_depth = base_depth;
+                let slab = self.slabs.get_mut(&h).unwrap();
+                slab.base_depth = base_depth;
+                slab.aabb = aabb;
                 continue;
             }
 
@@ -465,6 +624,7 @@ impl WireArena {
                     inst_len,
                     const_off,
                     const_len,
+                    aabb,
                     base_depth,
                 },
             );
@@ -509,9 +669,101 @@ impl WireArena {
         }
         vec![WireGpu {
             instance_buffer: self.inst_buf.clone(),
+            first_instance: 0,
             instance_count: self.inst_tail,
             is_3d_mesh_edge: self.mesh_edge,
             const_bind_group: Some(self.const_bind_group.clone()),
         }]
+    }
+
+    /// Draw only plan-view entity ranges that can reach the viewport. The
+    /// instance buffer stays fully resident, so pan/zoom changes only this tiny
+    /// list of offsets — no repack and no GPU upload. Non-plan views use the
+    /// conservative full draw because a 2-D entity AABB does not contain Z.
+    pub fn wire_gpus_visible(
+        &self,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        clip_w: u32,
+        clip_h: u32,
+    ) -> Vec<WireGpu> {
+        if self.inst_tail == 0 {
+            return vec![];
+        }
+        let projected_x = view_rot.transform_vector3(glam::Vec3::X);
+        let projected_y = view_rot.transform_vector3(glam::Vec3::Y);
+        let projected_z = view_rot.transform_vector3(glam::Vec3::Z);
+        let xy_scale = projected_x
+            .truncate()
+            .length()
+            .max(projected_y.truncate().length())
+            .max(f32::MIN_POSITIVE);
+        if projected_z.truncate().length() > xy_scale * 1e-5 {
+            return self.wire_gpus();
+        }
+
+        let mut ranges: Vec<(u32, u32)> = self
+            .slabs
+            .values()
+            .filter(|slab| {
+                slab.inst_len > 0
+                    && !super::aabb_offscreen(slab.aabb, view_rot, eye, clip_w, clip_h)
+            })
+            .map(|slab| (slab.inst_off, slab.inst_off + slab.inst_len))
+            .collect();
+        ranges.sort_unstable_by_key(|range| range.0);
+        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            if let Some((_, previous_end)) = merged.last_mut() {
+                if *previous_end == start {
+                    *previous_end = end;
+                    continue;
+                }
+            }
+            merged.push((start, end));
+        }
+        let mut ranges = merged;
+        if ranges.is_empty() {
+            return vec![];
+        }
+
+        // Cap CPU draw-call overhead on pathologically interleaved draw order.
+        // Merging a few separated visible spans draws their offscreen gap too,
+        // but retains order and still avoids the rest of a multi-million
+        // instance drawing.
+        const MAX_RANGES: usize = 64;
+        if ranges.len() > MAX_RANGES {
+            let group = (ranges.len() + MAX_RANGES - 1) / MAX_RANGES;
+            ranges = ranges
+                .chunks(group)
+                .map(|chunk| (chunk[0].0, chunk[chunk.len() - 1].1))
+                .collect();
+        }
+
+        if std::env::var_os("OCS_PERF").is_some() {
+            let submitted: u64 = ranges
+                .iter()
+                .map(|(start, end)| (end - start) as u64)
+                .sum();
+            if submitted < self.inst_tail as u64 {
+                eprintln!(
+                    "[perf] wire-cull submitted={} resident={} ranges={}",
+                    submitted,
+                    self.inst_tail,
+                    ranges.len(),
+                );
+            }
+        }
+
+        ranges
+            .into_iter()
+            .map(|(start, end)| WireGpu {
+                instance_buffer: self.inst_buf.clone(),
+                first_instance: start,
+                instance_count: end - start,
+                is_3d_mesh_edge: self.mesh_edge,
+                const_bind_group: Some(self.const_bind_group.clone()),
+            })
+            .collect()
     }
 }

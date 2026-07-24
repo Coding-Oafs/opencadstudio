@@ -234,130 +234,83 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
     }
 
     pub(super) fn on_unsaved_dialog_save(&mut self) -> Task<Message> {
-                match self.pending_close.take() {
-                    Some(crate::app::PendingClose::Tab(idx)) => {
-                        if let Some(path) = if cfg!(target_arch = "wasm32") { None } else { self.tabs[idx].current_path.clone() } {
-                            match crate::io::save(&self.tabs[idx].scene.document, &path) {
-                                Ok(()) => {
-                                    self.command_line
-                                        .push_output(&format!("Saved: {}", path.display()));
-                                    self.tabs[idx].dirty = false;
-                                    let close_win = self.close_unsaved_dialog_window();
-                                    let close_tab = self.update(Message::TabClose(idx));
-                                    return Task::batch(vec![close_win, close_tab]);
-                                }
-                                Err(e) => {
-                                    // Keep dialog open for retry.
-                                    self.command_line.push_error(&format!("Save failed: {e}"));
-                                    self.pending_close = Some(crate::app::PendingClose::Tab(idx));
-                                }
-                            }
-                        } else {
-                            // No path — close unsaved dialog and save a default
-                            // DWG 2018 via the native destination dialog (no
-                            // version picker; that is reserved for Save As).
-                            self.pending_close = Some(crate::app::PendingClose::Tab(idx));
-                            self.save_dialog_for_unsaved = true;
-                            let close_win = self.close_unsaved_dialog_window();
-                            let open_save = self.save_default_dwg2018(idx);
-                            return Task::batch([close_win, open_save]);
-                        }
-                    }
-                    Some(crate::app::PendingClose::Quit) => {
-                        if let Some(idx) = self.tabs.iter().position(|t| t.dirty) {
-                            if let Some(path) = if cfg!(target_arch = "wasm32") { None } else { self.tabs[idx].current_path.clone() } {
-                                match crate::io::save(&self.tabs[idx].scene.document, &path) {
-                                    Ok(()) => {
-                                        self.command_line
-                                            .push_output(&format!("Saved: {}", path.display()));
-                                        self.tabs[idx].dirty = false;
-                                    }
-                                    Err(e) => {
-                                        self.command_line.push_error(&format!("Save failed: {e}"));
-                                        self.pending_close = Some(crate::app::PendingClose::Quit);
-                                        return Task::none();
-                                    }
-                                }
-                            } else {
-                                // No path — close unsaved dialog and save a
-                                // default DWG 2018 via the native destination
-                                // dialog (version picker is Save-As only).
-                                self.active_tab = idx;
-                                self.pending_close = Some(crate::app::PendingClose::Quit);
-                                self.save_dialog_for_unsaved = true;
-                                let close_win = self.close_unsaved_dialog_window();
-                                let open_save = self.save_default_dwg2018(idx);
-                                return Task::batch([close_win, open_save]);
-                            }
-                        }
-                        if self.tabs.iter().any(|t| t.dirty) {
-                            // More dirty tabs — keep window open.
-                            self.pending_close = Some(crate::app::PendingClose::Quit);
-                        } else {
-                            let close_win = self.close_unsaved_dialog_window();
-                            return Task::batch(vec![close_win, self.exit_app()]);
-                        }
-                    }
-                    None => {}
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(pending) = self.pending_close.clone() else {
+                return Task::none();
+            };
+            let (idx, continuation) = match pending {
+                crate::app::PendingClose::Tab(idx) => {
+                    (idx, crate::app::SaveContinuation::CloseTab)
                 }
-                Task::none()
+                crate::app::PendingClose::Quit => {
+                    let Some(idx) = self.tabs.iter().position(|tab| tab.dirty) else {
+                        self.pending_close = None;
+                        return Task::batch([
+                            self.close_unsaved_dialog_window(),
+                            self.exit_app(),
+                        ]);
+                    };
+                    (idx, crate::app::SaveContinuation::Quit)
+                }
+            };
+
+            if self.active_save_jobs.contains_key(&self.tabs[idx].id) {
+                self.command_line
+                    .push_info("Save already running for this drawing.");
+                return Task::none();
+            }
+
+            if let Some(path) = self.tabs[idx].current_path.clone() {
+                let version = self.tabs[idx].scene.document.version;
+                self.prepare_native_save(idx);
+                let close = self.close_unsaved_dialog_window();
+                let save = self.queue_native_save(
+                    idx,
+                    path,
+                    version,
+                    crate::app::SavePurpose::Manual,
+                    continuation,
+                    false,
+                );
+                return Task::batch([close, save]);
+            }
+
+            self.active_tab = idx;
+            self.save_dialog_for_unsaved = true;
+            let close = self.close_unsaved_dialog_window();
+            let save = self.save_default_dwg2018(idx);
+            return Task::batch([close, save]);
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            match self.pending_close.take() {
+                Some(crate::app::PendingClose::Tab(idx)) => {
+                    self.pending_close = Some(crate::app::PendingClose::Tab(idx));
+                    self.save_dialog_for_unsaved = true;
+                    let close = self.close_unsaved_dialog_window();
+                    let save = self.save_default_dwg2018(idx);
+                    Task::batch([close, save])
+                }
+                Some(crate::app::PendingClose::Quit) => {
+                    if let Some(idx) = self.tabs.iter().position(|tab| tab.dirty) {
+                        self.active_tab = idx;
+                        self.pending_close = Some(crate::app::PendingClose::Quit);
+                        self.save_dialog_for_unsaved = true;
+                        let close = self.close_unsaved_dialog_window();
+                        let save = self.save_default_dwg2018(idx);
+                        Task::batch([close, save])
+                    } else {
+                        Task::batch([
+                            self.close_unsaved_dialog_window(),
+                            self.exit_app(),
+                        ])
+                    }
+                }
+                None => Task::none(),
+            }
+        }
     }
 
-    pub(super) fn on_unsaved_picked_save_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
-                let (_ext, version) = crate::io::parse_save_format(&self.save_dialog_format);
-                match self.pending_close.take() {
-                    Some(crate::app::PendingClose::Tab(idx)) => {
-                        match crate::io::save_as_version(
-                            &self.tabs[idx].scene.document,
-                            &path,
-                            version,
-                        ) {
-                            Ok(()) => {
-                                self.command_line
-                                    .push_output(&format!("Saved: {}", path.display()));
-                                #[cfg(not(target_arch = "wasm32"))]
-                                let _ = std::fs::remove_file(self.autosave_target(idx));
-                                self.tabs[idx].current_path = Some(path);
-                                self.tabs[idx].dirty = false;
-                                return self.update(Message::TabClose(idx));
-                            }
-                            Err(e) => {
-                                self.command_line.push_error(&format!("Save failed: {e}"));
-                                self.pending_close = Some(crate::app::PendingClose::Tab(idx));
-                                return self.open_unsaved_dialog_window();
-                            }
-                        }
-                    }
-                    Some(crate::app::PendingClose::Quit) => {
-                        let i = self.active_tab;
-                        match crate::io::save_as_version(
-                            &self.tabs[i].scene.document,
-                            &path,
-                            version,
-                        ) {
-                            Ok(()) => {
-                                self.command_line
-                                    .push_output(&format!("Saved: {}", path.display()));
-                                #[cfg(not(target_arch = "wasm32"))]
-                                let _ = std::fs::remove_file(self.autosave_target(i));
-                                self.tabs[i].current_path = Some(path);
-                                self.tabs[i].dirty = false;
-                                if self.tabs.iter().any(|t| t.dirty) {
-                                    self.pending_close = Some(crate::app::PendingClose::Quit);
-                                    return self.open_unsaved_dialog_window();
-                                } else {
-                                    return self.exit_app();
-                                }
-                            }
-                            Err(e) => {
-                                self.command_line.push_error(&format!("Save failed: {e}"));
-                                self.pending_close = Some(crate::app::PendingClose::Quit);
-                                return self.open_unsaved_dialog_window();
-                            }
-                        }
-                    }
-                    None => {}
-                }
-                Task::none()
-    }
 }

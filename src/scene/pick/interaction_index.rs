@@ -479,6 +479,128 @@ pub struct InteractionHandleIndex {
     handles: SpatialSet<u64>,
 }
 
+struct WireIndexEntries {
+    wire: Option<Entry3<u32>>,
+    segments: Vec<Entry3<SegmentRef>>,
+    snap_points: Vec<Entry3<SnapPointRef>>,
+    key_vertices: Vec<Entry3<KeyVertexRef>>,
+    key_segments: Vec<Entry3<KeySegmentRef>>,
+    fill_triangles: Vec<Entry3<TriangleRef>>,
+    pick_triangles: Vec<Entry3<TriangleRef>>,
+    glyphs: Vec<Entry3<GlyphRef>>,
+    unbounded: bool,
+    max_line_half_width_px: f32,
+}
+
+fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntries {
+    let mut entries = WireIndexEntries {
+        wire: finite_wire_aabb3(wire).map(|aabb| Entry3 {
+            aabb,
+            value: wire_idx,
+        }),
+        segments: Vec::with_capacity(wire.points.len().saturating_sub(1)),
+        snap_points: Vec::with_capacity(wire.snap_pts.len()),
+        key_vertices: Vec::with_capacity(wire.key_vertices.len()),
+        key_segments: Vec::with_capacity(wire.key_vertices.len().saturating_sub(1)),
+        fill_triangles: Vec::with_capacity(wire.fill_tris.len() / 3),
+        pick_triangles: Vec::with_capacity(wire.pick_tris.len() / 3),
+        glyphs: Vec::with_capacity(wire.text_verts.len() / 6),
+        unbounded: false,
+        max_line_half_width_px: if wire.line_weight_px.is_finite() {
+            (wire.line_weight_px * 0.5).max(0.0)
+        } else {
+            0.0
+        },
+    };
+    entries.unbounded = entries.wire.is_none();
+
+    for start in 0..wire.points.len().saturating_sub(1) {
+        let Some(aabb) = points_aabb3([
+            wire_point(wire, start),
+            wire_point(wire, start + 1),
+        ]) else {
+            continue;
+        };
+        entries.segments.push(Entry3 {
+            aabb,
+            value: SegmentRef {
+                wire: wire_idx,
+                start: start as u32,
+            },
+        });
+    }
+    for (index, (point, _)) in wire.snap_pts.iter().enumerate() {
+        if point.is_finite() {
+            entries.snap_points.push(Entry3 {
+                aabb: [point.x, point.y, point.z, point.x, point.y, point.z],
+                value: SnapPointRef {
+                    wire: wire_idx,
+                    index: index as u32,
+                },
+            });
+        }
+    }
+    for (index, &point) in wire.key_vertices.iter().enumerate() {
+        if point.iter().all(|value| value.is_finite()) {
+            entries.key_vertices.push(Entry3 {
+                aabb: [point[0], point[1], point[2], point[0], point[1], point[2]],
+                value: KeyVertexRef {
+                    wire: wire_idx,
+                    index: index as u32,
+                },
+            });
+        }
+    }
+    for start in 0..wire.key_vertices.len().saturating_sub(1) {
+        let Some(aabb) =
+            points_aabb3([wire.key_vertices[start], wire.key_vertices[start + 1]])
+        else {
+            continue;
+        };
+        entries.key_segments.push(Entry3 {
+            aabb,
+            value: KeySegmentRef {
+                wire: wire_idx,
+                start: start as u32,
+            },
+        });
+    }
+    append_triangle_entries(
+        wire_idx,
+        &wire.fill_tris,
+        &wire.fill_tris_low,
+        &mut entries.fill_triangles,
+    );
+    append_triangle_entries(
+        wire_idx,
+        &wire.pick_tris,
+        &wire.pick_tris_low,
+        &mut entries.pick_triangles,
+    );
+    for start in (0..wire.text_verts.len()).step_by(6) {
+        let Some(quad) = wire.text_verts.get(start..start + 6) else {
+            break;
+        };
+        let Some(aabb) = points_aabb3(quad.iter().map(|vertex| {
+            [
+                vertex.pos[0] as f64 + vertex.pos_low[0] as f64,
+                vertex.pos[1] as f64 + vertex.pos_low[1] as f64,
+                vertex.pos[2] as f64 + vertex.pos_low[2] as f64,
+            ]
+        })) else {
+            continue;
+        };
+        entries.glyphs.push(Entry3 {
+            aabb,
+            value: GlyphRef {
+                wire: wire_idx,
+                start: start as u32,
+            },
+        });
+    }
+    entries
+}
+
 impl InteractionHandleIndex {
     pub fn build(entries: impl IntoIterator<Item = (u64, [f64; 6])>) -> Self {
         Self {
@@ -554,106 +676,76 @@ impl InteractionIndex {
         let mut unbounded_wires = Vec::new();
         let mut max_line_half_width_px = 0.0f32;
 
-        for (wire_idx, wire) in wires.iter().enumerate() {
-            if wire.line_weight_px.is_finite() {
-                max_line_half_width_px =
-                    max_line_half_width_px.max((wire.line_weight_px * 0.5).max(0.0));
-            }
-            let wire_idx = wire_idx as u32;
-            if let Some(aabb) = finite_wire_aabb3(wire) {
-                wire_entries.push(Entry3 {
-                    aabb,
-                    value: wire_idx,
-                });
-            } else {
-                unbounded_wires.push(wire_idx);
-            }
+        #[cfg(not(target_arch = "wasm32"))]
+        let per_wire: Vec<WireIndexEntries> = {
+            use crate::par::prelude::*;
+            wires
+                .par_iter()
+                .enumerate()
+                .map(|(index, wire)| collect_wire_index_entries(index as u32, wire))
+                .collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let per_wire: Vec<WireIndexEntries> = wires
+            .iter()
+            .enumerate()
+            .map(|(index, wire)| collect_wire_index_entries(index as u32, wire))
+            .collect();
 
-            for start in 0..wire.points.len().saturating_sub(1) {
-                let a = wire_point(wire, start);
-                let b = wire_point(wire, start + 1);
-                let Some(aabb) = points_aabb3([a, b]) else {
-                    continue;
-                };
-                segment_entries.push(Entry3 {
-                    aabb,
-                    value: SegmentRef {
-                        wire: wire_idx,
-                        start: start as u32,
-                    },
-                });
+        // Every per-wire worker knows its exact output sizes. Reserve the flat
+        // arrays once before draining them so a dense block drawing does not
+        // repeatedly copy already-flattened entries while the Vecs grow.
+        wire_entries.reserve(per_wire.iter().filter(|entries| entries.wire.is_some()).count());
+        unbounded_wires.reserve(per_wire.iter().filter(|entries| entries.unbounded).count());
+        segment_entries.reserve(per_wire.iter().map(|entries| entries.segments.len()).sum());
+        snap_point_entries.reserve(
+            per_wire
+                .iter()
+                .map(|entries| entries.snap_points.len())
+                .sum(),
+        );
+        key_vertex_entries.reserve(
+            per_wire
+                .iter()
+                .map(|entries| entries.key_vertices.len())
+                .sum(),
+        );
+        key_segment_entries.reserve(
+            per_wire
+                .iter()
+                .map(|entries| entries.key_segments.len())
+                .sum(),
+        );
+        fill_triangle_entries.reserve(
+            per_wire
+                .iter()
+                .map(|entries| entries.fill_triangles.len())
+                .sum(),
+        );
+        pick_triangle_entries.reserve(
+            per_wire
+                .iter()
+                .map(|entries| entries.pick_triangles.len())
+                .sum(),
+        );
+        glyph_entries.reserve(per_wire.iter().map(|entries| entries.glyphs.len()).sum());
+
+        for (wire_idx, mut entries) in per_wire.into_iter().enumerate() {
+            max_line_half_width_px =
+                max_line_half_width_px.max(entries.max_line_half_width_px);
+            if let Some(entry) = entries.wire {
+                wire_entries.push(entry);
             }
-            for (index, (point, _)) in wire.snap_pts.iter().enumerate() {
-                if !point.is_finite() {
-                    continue;
-                }
-                snap_point_entries.push(Entry3 {
-                    aabb: [point.x, point.y, point.z, point.x, point.y, point.z],
-                    value: SnapPointRef {
-                        wire: wire_idx,
-                        index: index as u32,
-                    },
-                });
+            if entries.unbounded {
+                unbounded_wires.push(wire_idx as u32);
             }
-            for (index, &point) in wire.key_vertices.iter().enumerate() {
-                if !point.iter().all(|value| value.is_finite()) {
-                    continue;
-                }
-                key_vertex_entries.push(Entry3 {
-                    aabb: [point[0], point[1], point[2], point[0], point[1], point[2]],
-                    value: KeyVertexRef {
-                        wire: wire_idx,
-                        index: index as u32,
-                    },
-                });
-            }
-            for start in 0..wire.key_vertices.len().saturating_sub(1) {
-                let Some(aabb) =
-                    points_aabb3([wire.key_vertices[start], wire.key_vertices[start + 1]])
-                else {
-                    continue;
-                };
-                key_segment_entries.push(Entry3 {
-                    aabb,
-                    value: KeySegmentRef {
-                        wire: wire_idx,
-                        start: start as u32,
-                    },
-                });
-            }
-            append_triangle_entries(
-                wire_idx,
-                &wire.fill_tris,
-                &wire.fill_tris_low,
-                &mut fill_triangle_entries,
-            );
-            append_triangle_entries(
-                wire_idx,
-                &wire.pick_tris,
-                &wire.pick_tris_low,
-                &mut pick_triangle_entries,
-            );
-            for start in (0..wire.text_verts.len()).step_by(6) {
-                let Some(quad) = wire.text_verts.get(start..start + 6) else {
-                    break;
-                };
-                let Some(aabb) = points_aabb3(quad.iter().map(|vertex| {
-                    [
-                        vertex.pos[0] as f64 + vertex.pos_low[0] as f64,
-                        vertex.pos[1] as f64 + vertex.pos_low[1] as f64,
-                        vertex.pos[2] as f64 + vertex.pos_low[2] as f64,
-                    ]
-                })) else {
-                    continue;
-                };
-                glyph_entries.push(Entry3 {
-                    aabb,
-                    value: GlyphRef {
-                        wire: wire_idx,
-                        start: start as u32,
-                    },
-                });
-            }
+            segment_entries.append(&mut entries.segments);
+            snap_point_entries.append(&mut entries.snap_points);
+            key_vertex_entries.append(&mut entries.key_vertices);
+            key_segment_entries.append(&mut entries.key_segments);
+            fill_triangle_entries.append(&mut entries.fill_triangles);
+            pick_triangle_entries.append(&mut entries.pick_triangles);
+            glyph_entries.append(&mut entries.glyphs);
         }
 
         #[cfg(not(target_arch = "wasm32"))]

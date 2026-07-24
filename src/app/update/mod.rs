@@ -3770,17 +3770,11 @@ impl OpenCADStudio {
 
             Message::AutoSave => self.on_autosave(),
 
-            Message::UnsavedPickedSavePath(Some(path)) => {
-                self.on_unsaved_picked_save_path_some(path)
-            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SaveFinished(outcome) => self.on_save_finished(outcome),
 
-            Message::UnsavedPickedSavePath(None) => {
-                // User cancelled the save-as dialog — re-open the confirmation dialog.
-                if self.pending_close.is_some() {
-                    return self.open_unsaved_dialog_window();
-                }
-                Task::none()
-            }
+            #[cfg(target_arch = "wasm32")]
+            Message::SaveFinished(_) => Task::none(),
 
             // ── Page Setup ────────────────────────────────────────────────
             Message::UpdateCheckResult(latest) => {

@@ -149,7 +149,9 @@ pub struct Pipeline {
     /// ref-counted, so N paper viewports (or Model tiles) drawing one identical
     /// resident set hold one copy of the GPU vertex buffers between them —
     /// their camera uniforms + scissor stay per-slot, only the geometry is
-    /// deduplicated. Never mutated in place, only reassigned on content change.
+    /// deduplicated. Never mutated in place; an arena-backed slot may also
+    /// replace this thin draw-range list on camera changes without touching the
+    /// shared resident buffer.
     pub(crate) gpu_wires: std::sync::Arc<Vec<WireGpu>>,
     /// Persistent per-entity wire instance arena (native, `OCS_WIRE_GPU_PATCH`).
     /// When active, `gpu_wires` is a thin wrapper over this arena's buffers and an
@@ -164,6 +166,10 @@ pub struct Pipeline {
     /// The Model content id both arenas currently mirror (`u64::MAX` = none).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_id: u64,
+    /// Last content/camera/viewport tuple used to derive visible instance
+    /// ranges from the resident arena.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wire_cull_key: (u64, u64, u32, u32),
     /// This content viewport's non-rectangular clip boundary as a triangle-fan
     /// vertex buffer in the render target's normalized device coords (`None` =
     /// rectangular / unclipped, where the viewport's own render rectangle does
@@ -1450,6 +1456,8 @@ impl Pipeline {
             wire_arena_mesh: None,
             #[cfg(not(target_arch = "wasm32"))]
             wire_arena_id: u64::MAX,
+            #[cfg(not(target_arch = "wasm32"))]
+            wire_cull_key: (u64::MAX, u64::MAX, 0, 0),
             clip_boundary: None,
             gpu_selected_wires: vec![],
             gpu_preview_wires: vec![],
@@ -2572,7 +2580,10 @@ impl Pipeline {
                         pass.set_bind_group(1, bg.as_ref(), &[]);
                     }
                     pass.set_vertex_buffer(0, edges.instance_buffer.slice(..));
-                    pass.draw(0..6, 0..edges.instance_count);
+                    pass.draw(
+                        0..6,
+                        edges.first_instance..edges.first_instance + edges.instance_count,
+                    );
                 }
             }
         }
@@ -2638,7 +2649,10 @@ impl Pipeline {
                     pass.set_bind_group(1, bg.as_ref(), &[]);
                 }
                 pass.set_vertex_buffer(0, wire.instance_buffer.slice(..));
-                pass.draw(0..6, 0..wire.instance_count);
+                pass.draw(
+                    0..6,
+                    wire.first_instance..wire.first_instance + wire.instance_count,
+                );
             }
             // Live overlay wires (command preview / interim / grip drag) always
             // on top: the xray pipeline (depth_compare=Always, no depth write)
@@ -2653,7 +2667,10 @@ impl Pipeline {
                             pass.set_bind_group(1, bg.as_ref(), &[]);
                         }
                         pass.set_vertex_buffer(0, pw.instance_buffer.slice(..));
-                        pass.draw(0..6, 0..pw.instance_count);
+                        pass.draw(
+                            0..6,
+                            pw.first_instance..pw.first_instance + pw.instance_count,
+                        );
                     }
                 }
             }
@@ -2791,7 +2808,10 @@ impl Pipeline {
                         pass.set_bind_group(1, bg.as_ref(), &[]);
                     }
                     pass.set_vertex_buffer(0, wire.instance_buffer.slice(..));
-                    pass.draw(0..6, 0..wire.instance_count);
+                    pass.draw(
+                        0..6,
+                        wire.first_instance..wire.first_instance + wire.instance_count,
+                    );
                 }
             }
         }

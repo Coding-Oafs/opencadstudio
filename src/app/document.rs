@@ -13,7 +13,10 @@ use iced;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+static NEXT_DOCUMENT_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
 // ── Dynamic input ──────────────────────────────────────────────────────────
 
@@ -154,9 +157,15 @@ impl DocumentTab {
 }
 
 pub(super) struct DocumentTab {
+    /// Stable identity across tab insert/remove operations. Background work
+    /// must never target a tab by its transient vector index.
+    pub(super) id: u64,
     pub(super) scene: Scene,
     pub(super) current_path: Option<PathBuf>,
     pub(super) dirty: bool,
+    /// Monotonic committed-edit/undo/redo revision. Background save completion
+    /// uses it with scene epochs so an older snapshot never clears newer work.
+    pub(super) edit_revision: u64,
     pub(super) tab_title: String,
     pub(super) properties: PropertiesPanel,
     pub(super) layers: LayerPanel,
@@ -413,9 +422,11 @@ impl DocumentTab {
             }
         }
         Self {
+            id: NEXT_DOCUMENT_TAB_ID.fetch_add(1, Ordering::Relaxed),
             scene,
             current_path: None,
             dirty: false,
+            edit_revision: 0,
             prev_selection: Vec::new(),
             tab_title: format!("Drawing{}", n),
             properties: PropertiesPanel::empty(),

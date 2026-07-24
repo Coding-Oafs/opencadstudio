@@ -271,6 +271,10 @@ impl shader::Primitive for Primitive {
                 inner.cached_mesh_source = None;
                 inner.cached_face3d_source = None;
                 inner.cached_face3d_depth_source = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
+                }
                 inner.render_sig = u64::MAX;
             }
             // The MSAA / depth / resolve textures are always sized to the
@@ -709,6 +713,41 @@ impl shader::Primitive for Primitive {
             inner.compute_hatch_lod(queue, view_rot, eye, clip_size.width, clip_size.height);
             inner.compute_wipeout_lod(view_rot, eye, clip_size.width, clip_size.height);
             inner.compute_mesh_lod(view_rot, eye, clip_size.width, clip_size.height);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let cull_key = (
+                    vp.wire_content_id,
+                    vp.camera_generation,
+                    clip_size.width,
+                    clip_size.height,
+                );
+                if inner.wire_arena_id == vp.wire_content_id
+                    && inner.wire_cull_key != cull_key
+                {
+                    let mut visible = inner
+                        .wire_arena
+                        .as_ref()
+                        .map(|arena| {
+                            arena.wire_gpus_visible(
+                                view_rot,
+                                eye,
+                                clip_size.width,
+                                clip_size.height,
+                            )
+                        })
+                        .unwrap_or_default();
+                    if let Some(arena) = inner.wire_arena_mesh.as_ref() {
+                        visible.extend(arena.wire_gpus_visible(
+                            view_rot,
+                            eye,
+                            clip_size.width,
+                            clip_size.height,
+                        ));
+                    }
+                    inner.gpu_wires = std::sync::Arc::new(visible);
+                    inner.wire_cull_key = cull_key;
+                }
+            }
             if vp.show_viewcube {
                 inner.viewcube.upload(
                     queue,

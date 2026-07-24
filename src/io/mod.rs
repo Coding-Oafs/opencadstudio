@@ -183,6 +183,12 @@ pub fn load_file(path: &Path) -> Result<CadDocument, String> {
 
     match effective.as_str() {
         "dwg" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut doc = DwgReader::from_mmap(path)
+                .map_err(|e| e.to_string())?
+                .read()
+                .map_err(|e| e.to_string())?;
+            #[cfg(target_arch = "wasm32")]
             let mut doc = DwgReader::from_file(path)
                 .map_err(|e| e.to_string())?
                 .read()
@@ -418,19 +424,130 @@ pub fn save_as_version(
     path: &Path,
     version: acadrust::DxfVersion,
 ) -> Result<(), String> {
-    let mut doc = doc.clone();
+    let clone_started = std::time::Instant::now();
+    let snapshot = doc.clone();
+    let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
+    save_owned_as_version_inner(snapshot, path, version, false, clone_ms)
+}
+
+/// Save an owned document snapshot. Preparation, serialization, compression and
+/// disk I/O can therefore run on a worker without borrowing live editor state.
+/// Output is written beside the destination and atomically renamed only after a
+/// complete file exists, so a failed save cannot truncate the previous drawing.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub fn save_owned_as_version_atomic(
+    doc: CadDocument,
+    path: &Path,
+    version: acadrust::DxfVersion,
+    backup: bool,
+) -> Result<(), String> {
+    save_owned_as_version_inner(doc, path, version, backup, 0.0)
+}
+
+fn save_owned_as_version_inner(
+    mut doc: CadDocument,
+    path: &Path,
+    version: acadrust::DxfVersion,
+    backup: bool,
+    clone_ms: f64,
+) -> Result<(), String> {
+    let perf = std::env::var_os("OCS_PERF").is_some();
+    let total_started = std::time::Instant::now();
     doc.version = version;
+    let styles_started = std::time::Instant::now();
     sync_current_styles_on_save(&mut doc);
+    let styles_ms = styles_started.elapsed().as_secs_f64() * 1000.0;
+    let dimensions_started = std::time::Instant::now();
     crate::modules::draw::modify::explode::bake_dimension_blocks(&mut doc);
-    let ext = path
+    let dimensions_ms = dimensions_started.elapsed().as_secs_f64() * 1000.0;
+    let temp_path = save_temp_path(path);
+    let ext = temp_path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    match ext.as_str() {
+    let write_started = std::time::Instant::now();
+    let result = match ext.as_str() {
         "dxf" => DxfWriter::new(&doc)
-            .write_to_file(path)
+            .write_to_file(&temp_path)
             .map_err(|e| e.to_string()),
-        _ => DwgWriter::write_to_file(path, &doc).map_err(|e| e.to_string()),
+        _ => DwgWriter::write_to_file(&temp_path, &doc).map_err(|e| e.to_string()),
+    };
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    if backup {
+        write_backup(path);
+    }
+    if let Err(error) = replace_save_file(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("replace {}: {error}", path.display()));
+    }
+    if perf {
+        eprintln!(
+            "[perf] save total={:.1}ms clone={:.1} styles={:.1} dimensions={:.1} write={:.1} entities={} objects={} path={}",
+            total_started.elapsed().as_secs_f64() * 1000.0,
+            clone_ms,
+            styles_ms,
+            dimensions_ms,
+            write_started.elapsed().as_secs_f64() * 1000.0,
+            doc.entities().count(),
+            doc.objects.len(),
+            path.display(),
+        );
+    }
+    Ok(())
+}
+
+fn save_temp_path(path: &Path) -> PathBuf {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "drawing".to_string());
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "dwg".to_string());
+    let name = format!(
+        ".{stem}.ocs-save-{}-{serial}.{extension}",
+        std::process::id()
+    );
+    path.parent().unwrap_or_else(|| Path::new(".")).join(name)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_save_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(temp_path, path)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_save_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return std::fs::rename(temp_path, path);
+    }
+    use std::os::windows::ffi::OsStrExt;
+    let replaced: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let replacement: Vec<u16> = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -450,18 +567,42 @@ pub fn save_to_bytes(
     ext: &str,
     version: acadrust::DxfVersion,
 ) -> Result<Vec<u8>, String> {
+    let perf = std::env::var_os("OCS_PERF").is_some();
+    let total_started = std::time::Instant::now();
+    let clone_started = std::time::Instant::now();
     let mut doc = doc.clone();
+    let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
     doc.version = version;
+    let styles_started = std::time::Instant::now();
     sync_current_styles_on_save(&mut doc);
+    let styles_ms = styles_started.elapsed().as_secs_f64() * 1000.0;
+    let dimensions_started = std::time::Instant::now();
     crate::modules::draw::modify::explode::bake_dimension_blocks(&mut doc);
-    match ext.to_lowercase().as_str() {
+    let dimensions_ms = dimensions_started.elapsed().as_secs_f64() * 1000.0;
+    let write_started = std::time::Instant::now();
+    let result = match ext.to_lowercase().as_str() {
         "dxf" => DxfWriter::new(&doc).write_to_vec().map_err(|e| e.to_string()),
         _ => {
             let mut buf = std::io::Cursor::new(Vec::new());
             DwgWriter::write_to_writer(&mut buf, &doc).map_err(|e| e.to_string())?;
             Ok(buf.into_inner())
         }
+    };
+    if perf {
+        let bytes = result.as_ref().map_or(0, Vec::len);
+        eprintln!(
+            "[perf] save-bytes total={:.1}ms clone={:.1} styles={:.1} dimensions={:.1} write={:.1} bytes={} entities={} objects={}",
+            total_started.elapsed().as_secs_f64() * 1000.0,
+            clone_ms,
+            styles_ms,
+            dimensions_ms,
+            write_started.elapsed().as_secs_f64() * 1000.0,
+            bytes,
+            doc.entities().count(),
+            doc.objects.len(),
+        );
     }
+    result
 }
 
 

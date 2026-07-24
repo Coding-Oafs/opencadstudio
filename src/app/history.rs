@@ -117,6 +117,7 @@ impl OpenCADStudio {
 
     fn push_undo_entry(&mut self, i: usize, snapshot: HistorySnapshot) {
         self.tabs[i].history.undo_stack.push(snapshot);
+        self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
         self.clear_redo_history(i);
         self.trim_history(i);
     }
@@ -480,6 +481,7 @@ impl OpenCADStudio {
         had_full: bool,
         changes: &[(Handle, crate::scene::ChangeKind)],
     ) {
+        self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
         {
             let scene = &mut self.tabs[i].scene;
             if had_full {

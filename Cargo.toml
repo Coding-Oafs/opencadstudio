@@ -86,14 +86,11 @@ lyon_tessellation = "1.0.20"
 #                       (IApplicationAssociationRegistrationUI dialog).
 # Win32_System_Registry — HKCU registration that lists the app under
 #                       "Open with" for the portable .exe.
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [patch.crates-io]
-# The `acadrust` crate now tracks the OpenAEC-Foundation/acadifc fork's main
-# (still the `acadrust` package): the in-flight DWG reader work plus the Arc
-# copy-on-write entity storage that makes the undo document clone cheap. Drop the
-# patch once these land in a published 0.4 crate.
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc", branch = "main" }
+# Track the DWG reader/writer performance work used by this release.
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc", rev = "f045889e0243d88b6905124907487e0c0a1bf0e3" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).
