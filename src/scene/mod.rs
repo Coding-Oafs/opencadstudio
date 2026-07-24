@@ -1042,6 +1042,18 @@ pub struct Scene {
             Arc<crate::scene::pick::interaction_index::InteractionIndex>,
         )>,
     >,
+    /// Index of only the live handles changed since the immutable interaction
+    /// base. Reused across pointer events so a large unchanged block is never
+    /// re-indexed merely because one top-level entity was added or removed.
+    interaction_overlay_index_cache: RefCell<
+        Option<(
+            u64,
+            u64,
+            u64,
+            Arc<Vec<WireModel>>,
+            Arc<crate::scene::pick::interaction_index::InteractionIndex>,
+        )>,
+    >,
     /// Auxiliary broad phase for objects that have no wire representation:
     /// hatch-only and solid-only block instances.
     interaction_handle_index_cache: RefCell<
@@ -1346,6 +1358,7 @@ impl Scene {
             wire_cache: RefCell::new(None),
             interaction_index_cache: RefCell::new(Vec::new()),
             interaction_base_index_cache: RefCell::new(None),
+            interaction_overlay_index_cache: RefCell::new(None),
             interaction_handle_index_cache: RefCell::new(None),
             interaction_aux_work_cache: std::cell::Cell::new(None),
             sort_cache: RefCell::new(None),
@@ -4851,7 +4864,16 @@ impl Scene {
                 return index;
             }
         }
+        let started = iced::time::Instant::now();
         let index = Arc::new(crate::scene::pick::interaction_index::InteractionIndex::build(wires));
+        let build_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if std::env::var_os("OCS_PERF").is_some() && build_ms >= 50.0 {
+            eprintln!(
+                "[perf] interaction-index   {:>7.1}ms wires={}",
+                build_ms,
+                wires.len(),
+            );
+        }
         let mut cache = self.interaction_index_cache.borrow_mut();
         cache.push((
             self.geometry_epoch,
@@ -4877,6 +4899,7 @@ impl Scene {
     fn interaction_overlay_base(
         &self,
     ) -> Option<(
+        u64,
         Arc<crate::scene::pick::interaction_index::InteractionIndex>,
         Vec<(Handle, ChangeKind)>,
     )> {
@@ -4890,20 +4913,67 @@ impl Scene {
             (*epoch, Arc::clone(index))
         };
         let changes = self.replay_since(epoch)?;
-        (changes.len() <= Self::INTERACTION_OVERLAY_MAX_HANDLES).then_some((index, changes))
+        (changes.len() <= Self::INTERACTION_OVERLAY_MAX_HANDLES)
+            .then_some((epoch, index, changes))
+    }
+
+    fn interaction_overlay_changed_index(
+        &self,
+        base_epoch: u64,
+        changes: &[(Handle, ChangeKind)],
+    ) -> (
+        Arc<Vec<WireModel>>,
+        Arc<crate::scene::pick::interaction_index::InteractionIndex>,
+    ) {
+        let space_key = self.interaction_space_key();
+        {
+            let cache = self.interaction_overlay_index_cache.borrow();
+            if let Some((epoch, cached_base, cached_space, wires, index)) = cache.as_ref() {
+                if *epoch == self.geometry_epoch
+                    && *cached_base == base_epoch
+                    && *cached_space == space_key
+                {
+                    return (Arc::clone(wires), Arc::clone(index));
+                }
+            }
+        }
+        let changed_live: Vec<Handle> = changes
+            .iter()
+            .filter_map(|(handle, kind)| {
+                (!matches!(kind, ChangeKind::Removed)).then_some(*handle)
+            })
+            .collect();
+        let wires = Arc::new(self.wire_models_for(&changed_live));
+        let index = Arc::new(
+            crate::scene::pick::interaction_index::InteractionIndex::build(&wires),
+        );
+        *self.interaction_overlay_index_cache.borrow_mut() = Some((
+            self.geometry_epoch,
+            base_epoch,
+            space_key,
+            Arc::clone(&wires),
+            Arc::clone(&index),
+        ));
+        (wires, index)
     }
 
     fn interaction_overlay_wires(
         &self,
         base_keys: impl IntoIterator<Item = (u64, u32)>,
         changes: &[(Handle, ChangeKind)],
-    ) -> Arc<Vec<WireModel>> {
+        changed_wires: &[WireModel],
+    ) -> (
+        Arc<Vec<WireModel>>,
+        HashMap<(u64, u32), u32>,
+        HashMap<(u64, u32), u32>,
+    ) {
         let changed: HashSet<Handle> = changes.iter().map(|(handle, _)| *handle).collect();
         let memo = self.resident_tess_memo.borrow();
         let mut wires = Vec::new();
+        let mut base_slots = HashMap::default();
         let mut misses: HashMap<Handle, Vec<u32>> = HashMap::default();
-        for (handle, ordinal) in base_keys {
-            let handle = Handle::new(handle);
+        for (handle_value, ordinal) in base_keys {
+            let handle = Handle::new(handle_value);
             if changed.contains(&handle) || self.document.get_entity(handle).is_none() {
                 continue;
             }
@@ -4911,6 +4981,7 @@ impl Scene {
                 .get(&handle)
                 .and_then(|entity_wires| entity_wires.get(ordinal as usize))
             {
+                base_slots.insert((handle_value, ordinal), wires.len() as u32);
                 wires.push(wire.clone());
             } else {
                 misses.entry(handle).or_default().push(ordinal);
@@ -4925,22 +4996,22 @@ impl Scene {
             let entity_wires = self.wire_models_for(&[handle]);
             for ordinal in ordinals {
                 if let Some(wire) = entity_wires.get(ordinal as usize) {
+                    base_slots.insert((handle.value(), ordinal), wires.len() as u32);
                     wires.push(wire.clone());
                 }
             }
         }
-        // Changed handles are absent or stale in the immutable base index. The
-        // journal is deliberately small, so append their current runs in full.
-        let changed_live: Vec<Handle> = changes
-            .iter()
-            .filter_map(|(handle, kind)| {
-                (!matches!(kind, ChangeKind::Removed)).then_some(*handle)
-            })
-            .collect();
-        if !changed_live.is_empty() {
-            wires.extend(self.wire_models_for(&changed_live));
+        let mut changed_slots = HashMap::default();
+        let mut next_ordinal: HashMap<u64, u32> = HashMap::default();
+        for wire in changed_wires {
+            if let Ok(handle) = wire.name.parse::<u64>() {
+                let ordinal = next_ordinal.entry(handle).or_default();
+                changed_slots.insert((handle, *ordinal), wires.len() as u32);
+                *ordinal += 1;
+            }
+            wires.push(wire.clone());
         }
-        Arc::new(wires)
+        (Arc::new(wires), base_slots, changed_slots)
     }
 
     fn indexed_interaction_candidates_xy(
@@ -4948,29 +5019,40 @@ impl Scene {
         wires: Arc<Vec<WireModel>>,
         aabb: [f64; 4],
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
-        if let Some((base, changes)) = self.interaction_overlay_base() {
+        if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
             let perf = std::env::var_os("OCS_PERF").is_some();
             let t0 = iced::time::Instant::now();
             let keys = base.query_wire_keys_xy(aabb);
             let key_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let t_changed = iced::time::Instant::now();
+            let (changed_wires, changed_index) =
+                self.interaction_overlay_changed_index(base_epoch, &changes);
+            let changed_ms = t_changed.elapsed().as_secs_f64() * 1000.0;
             let t_local = iced::time::Instant::now();
-            let local = self.interaction_overlay_wires(keys.iter().copied(), &changes);
+            let (local, base_slots, changed_slots) = self.interaction_overlay_wires(
+                keys.iter().copied(),
+                &changes,
+                &changed_wires,
+            );
             let local_ms = t_local.elapsed().as_secs_f64() * 1000.0;
-            let t_index = iced::time::Instant::now();
-            let local_index =
-                crate::scene::pick::interaction_index::InteractionIndex::build(&local);
-            let index_ms = t_index.elapsed().as_secs_f64() * 1000.0;
-            let result = local_index.query_xy(Arc::clone(&local), aabb);
+            let t_remap = iced::time::Instant::now();
+            let mut result =
+                base.query_remapped_xy(Arc::clone(&local), &base_slots, aabb);
+            result.extend_indexed(
+                changed_index.query_remapped_xy(local, &changed_slots, aabb),
+            );
+            let remap_ms = t_remap.elapsed().as_secs_f64() * 1000.0;
             let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
             if perf && total_ms >= 50.0 {
                 eprintln!(
-                    "[perf] interaction-overlay {:>7.1}ms keys={} wires={} query={:.1} gather={:.1} index={:.1}",
+                    "[perf] interaction-overlay {:>7.1}ms keys={} wires={} query={:.1} changed={:.1} gather={:.1} remap={:.1}",
                     total_ms,
                     keys.len(),
-                    local.len(),
+                    result.len(),
                     key_ms,
+                    changed_ms,
                     local_ms,
-                    index_ms,
+                    remap_ms,
                 );
             }
             return result;
@@ -4986,35 +5068,51 @@ impl Scene {
         eye: glam::DVec3,
         bounds: iced::Rectangle,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
-        if let Some((base, changes)) = self.interaction_overlay_base() {
+        if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
             let perf = std::env::var_os("OCS_PERF").is_some();
             let t0 = iced::time::Instant::now();
             let keys = base.query_wire_keys_screen(screen_rect, view_rot, eye, bounds);
             let key_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let t_changed = iced::time::Instant::now();
+            let (changed_wires, changed_index) =
+                self.interaction_overlay_changed_index(base_epoch, &changes);
+            let changed_ms = t_changed.elapsed().as_secs_f64() * 1000.0;
             let t_local = iced::time::Instant::now();
-            let local = self.interaction_overlay_wires(keys.iter().copied(), &changes);
+            let (local, base_slots, changed_slots) = self.interaction_overlay_wires(
+                keys.iter().copied(),
+                &changes,
+                &changed_wires,
+            );
             let local_ms = t_local.elapsed().as_secs_f64() * 1000.0;
-            let t_index = iced::time::Instant::now();
-            let local_index =
-                crate::scene::pick::interaction_index::InteractionIndex::build(&local);
-            let index_ms = t_index.elapsed().as_secs_f64() * 1000.0;
-            let result = local_index.query_screen(
+            let t_remap = iced::time::Instant::now();
+            let mut result = base.query_remapped_screen(
                 Arc::clone(&local),
+                &base_slots,
                 screen_rect,
                 view_rot,
                 eye,
                 bounds,
             );
+            result.extend_indexed(changed_index.query_remapped_screen(
+                local,
+                &changed_slots,
+                screen_rect,
+                view_rot,
+                eye,
+                bounds,
+            ));
+            let remap_ms = t_remap.elapsed().as_secs_f64() * 1000.0;
             let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
             if perf && total_ms >= 50.0 {
                 eprintln!(
-                    "[perf] interaction-overlay {:>7.1}ms keys={} wires={} query={:.1} gather={:.1} index={:.1}",
+                    "[perf] interaction-overlay {:>7.1}ms keys={} wires={} query={:.1} changed={:.1} gather={:.1} remap={:.1}",
                     total_ms,
                     keys.len(),
-                    local.len(),
+                    result.len(),
                     key_ms,
+                    changed_ms,
                     local_ms,
-                    index_ms,
+                    remap_ms,
                 );
             }
             return result;
@@ -5028,8 +5126,10 @@ impl Scene {
         wires: &Arc<Vec<WireModel>>,
         base_radius_px: f32,
     ) -> f32 {
-        if let Some((base, _)) = self.interaction_overlay_base() {
-            base.pick_radius_px(base_radius_px)
+        if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
+            let (_, changed) =
+                self.interaction_overlay_changed_index(base_epoch, &changes);
+            base.pick_radius_px(changed.pick_radius_px(base_radius_px))
         } else {
             self.interaction_index(wires).pick_radius_px(base_radius_px)
         }

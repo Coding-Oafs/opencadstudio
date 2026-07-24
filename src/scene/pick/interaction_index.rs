@@ -163,28 +163,24 @@ struct BvhNode3 {
     len: u32,
 }
 
-struct SpatialBvh3<T> {
-    entries: Vec<Entry3<T>>,
+struct SpatialBvh3 {
     nodes: Vec<BvhNode3>,
     order: Vec<u32>,
 }
 
-impl<T: Copy + Ord> SpatialBvh3<T> {
-    fn build(entries: Vec<Entry3<T>>) -> Self {
+impl SpatialBvh3 {
+    fn build<T>(entries: &[Entry3<T>]) -> Self {
         let mut order: Vec<u32> = (0..entries.len() as u32).collect();
         let mut nodes = Vec::new();
         if !order.is_empty() {
-            build_bvh3_node(&entries, &mut order, 0, &mut nodes);
+            build_bvh3_node(entries, &mut order, 0, &mut nodes);
         }
-        Self {
-            entries,
-            nodes,
-            order,
-        }
+        Self { nodes, order }
     }
 
-    fn query_screen(
+    fn query_screen<T: Copy + Ord>(
         &self,
+        entries: &[Entry3<T>],
         screen_rect: [f32; 4],
         view_rot: Mat4,
         eye: DVec3,
@@ -203,7 +199,7 @@ impl<T: Copy + Ord> SpatialBvh3<T> {
             if node.left == u32::MAX {
                 for &entry_idx in &self.order[node.start as usize..(node.start + node.len) as usize]
                 {
-                    let entry = self.entries[entry_idx as usize];
+                    let entry = entries[entry_idx as usize];
                     if aabb3_projects_into(entry.aabb, screen_rect, view_rot, eye, bounds) {
                         entry_indices.push(entry.value);
                     }
@@ -425,21 +421,23 @@ impl SpatialGrid {
 }
 
 struct SpatialSet<T> {
+    entries: Vec<Entry3<T>>,
     xy: SpatialGrid,
-    xyz: SpatialBvh3<T>,
+    xyz: std::sync::OnceLock<SpatialBvh3>,
 }
 
 impl<T: Copy + Ord> SpatialSet<T> {
     fn build(entries: Vec<Entry3<T>>) -> Self {
         let xy = SpatialGrid::build(&entries);
         Self {
+            entries,
             xy,
-            xyz: SpatialBvh3::build(entries),
+            xyz: std::sync::OnceLock::new(),
         }
     }
 
     fn query_xy(&self, aabb: [f64; 4]) -> Vec<T> {
-        self.xy.query(&self.xyz.entries, aabb)
+        self.xy.query(&self.entries, aabb)
     }
 
     fn query_screen(
@@ -449,7 +447,9 @@ impl<T: Copy + Ord> SpatialSet<T> {
         eye: DVec3,
         bounds: Rectangle,
     ) -> Vec<T> {
-        self.xyz.query_screen(screen_rect, view_rot, eye, bounds)
+        self.xyz
+            .get_or_init(|| SpatialBvh3::build(&self.entries))
+            .query_screen(&self.entries, screen_rect, view_rot, eye, bounds)
     }
 }
 
@@ -771,6 +771,184 @@ impl InteractionIndex {
         self.queried_wire_keys(self.wires.query_screen(screen_rect, view_rot, eye, bounds))
     }
 
+    fn remap_wire_index(
+        &self,
+        index: u32,
+        slots: &rustc_hash::FxHashMap<(u64, u32), u32>,
+    ) -> Option<u32> {
+        let handle = self
+            .wire_handles
+            .get(index as usize)
+            .copied()
+            .flatten()?;
+        let ordinal = self
+            .wire_ordinals
+            .get(index as usize)
+            .copied()
+            .flatten()?;
+        slots.get(&(handle, ordinal)).copied()
+    }
+
+    fn remap_wire_indices(
+        &self,
+        mut indices: Vec<u32>,
+        slots: &rustc_hash::FxHashMap<(u64, u32), u32>,
+    ) -> Vec<u32> {
+        indices.extend_from_slice(&self.unbounded_wires);
+        let mut local: Vec<u32> = indices
+            .into_iter()
+            .filter_map(|index| self.remap_wire_index(index, slots))
+            .collect();
+        local.sort_unstable();
+        local.dedup();
+        local
+    }
+
+    fn remap_refs<T>(
+        &self,
+        values: Vec<T>,
+        slots: &rustc_hash::FxHashMap<(u64, u32), u32>,
+        wire_of: impl Fn(&T) -> u32,
+        set_wire: impl Fn(&mut T, u32),
+    ) -> Vec<T> {
+        values
+            .into_iter()
+            .filter_map(|mut value| {
+                let wire = self.remap_wire_index(wire_of(&value), slots)?;
+                set_wire(&mut value, wire);
+                Some(value)
+            })
+            .collect()
+    }
+
+    pub(crate) fn query_remapped_xy(
+        &self,
+        wires: Arc<Vec<WireModel>>,
+        slots: &rustc_hash::FxHashMap<(u64, u32), u32>,
+        aabb: [f64; 4],
+    ) -> InteractionCandidates {
+        InteractionCandidates {
+            wires,
+            wire_indices: Some(self.remap_wire_indices(self.wires.query_xy(aabb), slots)),
+            segments: Some(self.remap_refs(
+                self.segments.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            snap_points: Some(self.remap_refs(
+                self.snap_points.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            key_vertices: Some(self.remap_refs(
+                self.key_vertices.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            key_segments: Some(self.remap_refs(
+                self.key_segments.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            fill_triangles: Some(self.remap_refs(
+                self.fill_triangles.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            pick_triangles: Some(self.remap_refs(
+                self.pick_triangles.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            glyphs: Some(self.remap_refs(
+                self.glyphs.query_xy(aabb),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            query_aabb: Some(aabb),
+            screen_rect: None,
+            screen_view: None,
+        }
+    }
+
+    pub(crate) fn query_remapped_screen(
+        &self,
+        wires: Arc<Vec<WireModel>>,
+        slots: &rustc_hash::FxHashMap<(u64, u32), u32>,
+        screen_rect: [f32; 4],
+        view_rot: Mat4,
+        eye: DVec3,
+        bounds: Rectangle,
+    ) -> InteractionCandidates {
+        InteractionCandidates {
+            wires,
+            wire_indices: Some(self.remap_wire_indices(
+                self.wires
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+            )),
+            segments: Some(self.remap_refs(
+                self.segments
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            snap_points: Some(self.remap_refs(
+                self.snap_points
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            key_vertices: Some(self.remap_refs(
+                self.key_vertices
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            key_segments: Some(self.remap_refs(
+                self.key_segments
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            fill_triangles: Some(self.remap_refs(
+                self.fill_triangles
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            pick_triangles: Some(self.remap_refs(
+                self.pick_triangles
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            glyphs: Some(self.remap_refs(
+                self.glyphs
+                    .query_screen(screen_rect, view_rot, eye, bounds),
+                slots,
+                |value| value.wire,
+                |value, wire| value.wire = wire,
+            )),
+            query_aabb: None,
+            screen_rect: Some(screen_rect),
+            screen_view: Some((view_rot, eye, bounds)),
+        }
+    }
+
     pub fn query_xy(&self, wires: Arc<Vec<WireModel>>, aabb: [f64; 4]) -> InteractionCandidates {
         let mut wire_indices = self.wires.query_xy(aabb);
         wire_indices.extend_from_slice(&self.unbounded_wires);
@@ -969,6 +1147,28 @@ impl InteractionCandidates {
         self.screen_rect
             .zip(self.screen_view)
             .map(|(rect, (view, eye, bounds))| (rect, view, eye, bounds))
+    }
+
+    pub(crate) fn extend_indexed(&mut self, other: Self) {
+        debug_assert!(Arc::ptr_eq(&self.wires, &other.wires));
+
+        fn extend<T: Ord>(target: &mut Option<Vec<T>>, incoming: Option<Vec<T>>) {
+            let (Some(target), Some(incoming)) = (target.as_mut(), incoming) else {
+                return;
+            };
+            target.extend(incoming);
+            target.sort_unstable();
+            target.dedup();
+        }
+
+        extend(&mut self.wire_indices, other.wire_indices);
+        extend(&mut self.segments, other.segments);
+        extend(&mut self.snap_points, other.snap_points);
+        extend(&mut self.key_vertices, other.key_vertices);
+        extend(&mut self.key_segments, other.key_segments);
+        extend(&mut self.fill_triangles, other.fill_triangles);
+        extend(&mut self.pick_triangles, other.pick_triangles);
+        extend(&mut self.glyphs, other.glyphs);
     }
 }
 
