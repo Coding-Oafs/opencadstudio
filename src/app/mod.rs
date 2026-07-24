@@ -67,7 +67,10 @@ pub struct HoverDwell {
 }
 
 /// How long the cursor must sit still before the idle rollover pick runs.
-pub const HOVER_DWELL_MS: u128 = 120;
+pub const HOVER_DWELL_MS: u128 = 500;
+/// Dense resident sets also retain the previous rollover while moving; this
+/// threshold gates that extra redraw-avoidance behavior.
+pub const HOVER_DWELL_DENSE_WIRES: usize = 50_000;
 
 /// Open multi-functional-grip popup state.
 #[derive(Clone, Debug)]

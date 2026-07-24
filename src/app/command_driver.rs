@@ -435,13 +435,16 @@ impl OpenCADStudio {
             }
             CmdResult::CommitSolid { entity, solid } => {
                 let label = self.history_label_from_active_cmd(i, "SOLID");
-                self.push_undo_snapshot(i, label);
+                let pending = self.begin_undo(i, label, 1, true);
                 self.add_solid_model(entity, *solid);
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.restore_pre_cmd_tangent();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
             }
             CmdResult::CommitAndEditText(entity) => {
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
@@ -466,7 +469,10 @@ impl OpenCADStudio {
                 edit_index,
             } => {
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
-                self.push_undo_snapshot(i, label);
+                let delta_safe = entities
+                    .iter()
+                    .all(|entity| self.delta_add_safe(i, entity));
+                let pending = self.begin_undo(i, label, entities.len(), delta_safe);
                 let mut edit_handle = None;
                 let mut leader_handle = None;
                 for (idx, entity) in entities.into_iter().enumerate() {
@@ -494,6 +500,9 @@ impl OpenCADStudio {
                 self.tabs[i].snap_result = None;
                 self.restore_pre_cmd_tangent();
                 self.ribbon.deactivate_tool();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
                 if let Some(h) = edit_handle {
                     return self.begin_text_edit(h);
                 }
@@ -533,7 +542,7 @@ impl OpenCADStudio {
             }
             CmdResult::CommitHatch(hatch) => {
                 let label = self.history_label_from_active_cmd(i, "HATCH");
-                self.push_undo_snapshot(i, label);
+                let pending = self.begin_undo(i, label, 1, true);
                 let new_handle = self.tabs[i].scene.add_hatch(hatch);
                 if !new_handle.is_null() {
                     self.tabs[i].scene.select_entity(new_handle, true);
@@ -544,6 +553,9 @@ impl OpenCADStudio {
                 self.tabs[i].snap_result = None;
                 self.restore_pre_cmd_tangent();
                 self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
             }
             CmdResult::BatchCopy(handles, transforms) => {
                 let label = self.history_label_from_active_cmd(i, "ARRAY");
@@ -747,13 +759,17 @@ impl OpenCADStudio {
                         .and_then(|c| c.attreq_take_insert());
                     if let Some(entity) = entity {
                         let label = self.history_label_from_active_cmd(i, "INSERT");
-                        self.push_undo_snapshot(i, label);
+                        let delta_safe = self.delta_add_safe(i, &entity);
+                        let pending = self.begin_undo(i, label, 1, delta_safe);
                         self.commit_entity(entity);
                         self.tabs[i].dirty = true;
                         self.tabs[i].scene.clear_preview_wire();
                         self.tabs[i].active_cmd = None;
                         self.tabs[i].snap_result = None;
                         self.restore_pre_cmd_tangent();
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
                     }
                 } else {
                     // Inject attdefs so the command enters attr-filling mode.
@@ -768,11 +784,19 @@ impl OpenCADStudio {
             }
             CmdResult::CommitLiveEntity(entity) => {
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
-                self.push_undo_snapshot(i, label);
+                let delta_safe = self.delta_add_safe(i, &entity);
+                let pending = self.begin_undo(i, label, 1, delta_safe);
                 let handle = self.commit_entity_handle(entity);
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
                 if let Some(h) = handle {
+                    // Keep the live document Arc unique while later vertices
+                    // replace the geometry in place. The final Arc is captured
+                    // by UpdateLiveEntity when the command completes.
+                    self.defer_live_entity_history_after(i, h);
                     if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
                         cmd.set_live_handle(h);
                     }
@@ -800,11 +824,13 @@ impl OpenCADStudio {
                     new.as_entity_mut().set_handle(old_handle);
                     new.as_entity_mut().set_layer(layer);
                     *old = new;
-                    self.tabs[i].scene.mark_entity_dirty(handle);
-                    self.tabs[i].scene.bump_geometry_no_blocks();
+                    self.tabs[i]
+                        .scene
+                        .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
                     self.tabs[i].dirty = true;
                 }
                 if finish {
+                    self.finish_live_entity_history(i, handle);
                     self.tabs[i].scene.clear_preview_wire();
                     self.tabs[i].active_cmd = None;
                     self.tabs[i].snap_result = None;
@@ -819,10 +845,10 @@ impl OpenCADStudio {
             CmdResult::RemoveLiveEntity(handle) => {
                 // The command backed off below a valid entity (PLINE Undo at
                 // one remaining vertex): take the live entity out of the
-                // document and keep prompting. No undo bookkeeping — the
-                // create's snapshot already covers the whole in-progress
-                // object as one unit.
+                // document, drop its provisional history entry and keep
+                // prompting. A later second point creates one fresh entry.
                 self.tabs[i].scene.erase_entities(&[handle]);
+                self.discard_last_undo_entry(i);
                 self.tabs[i].dirty = true;
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                 if let Some(p) = prompt {
@@ -1790,7 +1816,7 @@ impl OpenCADStudio {
             // ── Solid3D creation (BOX / SPHERE / CYLINDER) ────────────────
             CmdResult::CommitSolid3D { mesh_fn } => {
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
-                self.push_undo_snapshot(i, "SOLID3D");
+                let pending = self.begin_undo(i, "SOLID3D", 1, true);
                 let entity = empty_solid3d();
                 let handle = self.tabs[i].scene.add_entity(entity);
                 if !handle.is_null() {
@@ -1805,6 +1831,9 @@ impl OpenCADStudio {
                     }
                     self.tabs[i].dirty = true;
                     self.command_line.push_output("Solid created.");
+                }
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
                 }
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
@@ -1861,7 +1890,7 @@ impl OpenCADStudio {
                         }
                     });
                     if let Some((mut mesh, solid)) = result {
-                        self.push_undo_snapshot(i, "EXTRUDE");
+                        let pending = self.begin_undo(i, "EXTRUDE", 1, true);
                         let new_entity = empty_solid3d();
                         let new_handle = self.tabs[i].scene.add_entity(new_entity);
                         mesh.name = format!("{}", new_handle.value());
@@ -1874,6 +1903,9 @@ impl OpenCADStudio {
                         self.tabs[i].scene.solid_models.insert(new_handle, solid);
                         self.tabs[i].dirty = true;
                         self.command_line.push_output("EXTRUDE: solid created.");
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
                     } else {
                         self.command_line.push_error("EXTRUDE: could not build profile. Select a closed 2D entity (Circle, LwPolyline, etc.).");
                     }
@@ -1943,7 +1975,7 @@ impl OpenCADStudio {
                         }
                     });
                     if let Some(mut mesh) = result {
-                        self.push_undo_snapshot(i, "REVOLVE");
+                        let pending = self.begin_undo(i, "REVOLVE", 1, true);
                         let new_entity = empty_solid3d();
                         let new_handle = self.tabs[i].scene.add_entity(new_entity);
                         mesh.name = format!("{}", new_handle.value());
@@ -1954,6 +1986,9 @@ impl OpenCADStudio {
                         self.tabs[i].dirty = true;
                         self.command_line
                             .push_output(&format!("REVOLVE: solid created ({:.0}°).", angle_deg));
+                        if let Some(pd) = pending {
+                            self.commit_undo_delta(i, pd);
+                        }
                     } else {
                         self.command_line
                             .push_error("REVOLVE: could not revolve profile.");
@@ -2111,7 +2146,7 @@ impl OpenCADStudio {
                 });
 
                 if let Some(mut mesh) = result {
-                    self.push_undo_snapshot(i, "SWEEP");
+                    let pending = self.begin_undo(i, "SWEEP", 1, true);
                     let new_entity = empty_solid3d();
                     let new_handle = self.tabs[i].scene.add_entity(new_entity);
                     mesh.name = format!("{}", new_handle.value());
@@ -2121,6 +2156,9 @@ impl OpenCADStudio {
                         .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
                     self.tabs[i].dirty = true;
                     self.command_line.push_output("SWEEP: solid created.");
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
+                    }
                 } else {
                     self.command_line.push_error("SWEEP: could not sweep profile along path. Use a closed 2D profile and a Line or Polyline path.");
                 }
@@ -2200,7 +2238,7 @@ impl OpenCADStudio {
                 );
 
                 if let Some(mut mesh) = result {
-                    self.push_undo_snapshot(i, "LOFT");
+                    let pending = self.begin_undo(i, "LOFT", 1, true);
                     let new_entity = empty_solid3d();
                     let new_handle = self.tabs[i].scene.add_entity(new_entity);
                     mesh.name = format!("{}", new_handle.value());
@@ -2213,6 +2251,9 @@ impl OpenCADStudio {
                         "LOFT: solid created from {} profiles.",
                         handles.len()
                     ));
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
+                    }
                 } else {
                     self.command_line.push_error("LOFT: could not loft profiles. Ensure sections have the same edge count and are compatible.");
                 }

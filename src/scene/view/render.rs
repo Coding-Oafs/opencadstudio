@@ -36,7 +36,10 @@ pub struct ViewportData {
     /// drops off-canvas viewports, so this lets the slot detect when it has been
     /// reused by a different viewport and reset its (index-addressed) caches.
     pub(in crate::scene) instance_id: u64,
-    pub(in crate::scene) wires: Arc<Vec<WireModel>>,
+    /// Weak resident source. Scene owns the strong Arc; retaining another one
+    /// in the previous shader Primitive prevented the next UI event from
+    /// splicing a changed entity in place and forced a full rebuild.
+    pub(in crate::scene) wires: std::sync::Weak<Vec<WireModel>>,
     /// This content viewport's non-rectangular clip boundary (paper layouts
     /// only), as a polygon already projected into the viewport's render-target
     /// NDC. The GPU stamps it into the stencil so content is clipped to the
@@ -120,8 +123,7 @@ pub struct ViewportData {
     /// GPU wire-arena handoff (`OCS_WIRE_GPU_PATCH`): `(prev_gen, changed)` when
     /// this Model set reached `wire_content_id` by an incremental resident patch,
     /// so `prepare` can patch just those entities' slabs. `None` ⇒ full build.
-    pub(in crate::scene) wire_patch:
-        Option<(u64, Arc<Vec<(acadrust::Handle, crate::scene::ChangeKind)>>)>,
+    pub(in crate::scene) wire_patch: Option<(u64, Arc<crate::scene::WireGpuPatch>)>,
     /// Selected handles only (no hover) — solid meshes tint these blue.
     pub(in crate::scene) selected_handles: Arc<rustc_hash::FxHashSet<acadrust::Handle>>,
     /// Currently hovered handle — solid meshes tint it orange.
@@ -268,7 +270,6 @@ impl shader::Primitive for Primitive {
                 inner.cached_text_source = None;
                 inner.cached_mesh_source = None;
                 inner.cached_face3d_source = None;
-                inner.cached_face3d_wire_source = None;
                 inner.cached_face3d_depth_source = None;
                 inner.render_sig = u64::MAX;
             }
@@ -326,6 +327,9 @@ impl shader::Primitive for Primitive {
                 }
                 continue;
             }
+            let Some(vp_wires) = vp.wires.upgrade() else {
+                continue;
+            };
             // Third component is the *selected-set* signature (not
             // selection_generation, which also bumps on hover) so a rollover
             // doesn't re-upload the static hatch / face3d buffers.
@@ -385,33 +389,36 @@ impl shader::Primitive for Primitive {
             // Face3D edge/fill buffers are world-space and selection-independent
             // (upload_face3d takes no selection input), so they only change with
             // the geometry or the 3D-fill toggle — never on a pan/orbit. Gating
-            // on its three source Arcs avoids rebuilding it when another entity
-            // category alone advances `geometry_epoch`.
+            // on its category sources plus the stable wire content id avoids
+            // rebuilding it when another entity category alone changes. Never
+            // retain `vp.wires` here: Scene needs unique ownership to splice a
+            // one-entity edit into the resident set.
+            let face_pass_unchanged = vp
+                .wire_patch
+                .as_ref()
+                .is_some_and(|(_, patch)| !patch.face_pass_changed);
             let face3d_changed = inner
                 .cached_face3d_source
                 .as_ref()
                 .map_or(true, |source| !Arc::ptr_eq(source, &vp.face3d_wires))
                 || inner
-                    .cached_face3d_wire_source
-                    .as_ref()
-                    .map_or(true, |source| !Arc::ptr_eq(source, &vp.wires))
-                || inner
                     .cached_face3d_depth_source
                     .as_ref()
-                    .map_or(true, |source| !Arc::ptr_eq(source, &vp.draw_depths));
+                    .map_or(true, |source| !Arc::ptr_eq(source, &vp.draw_depths))
+                || (inner.cached_face3d_key.0 != vp.wire_content_id
+                    && !face_pass_unchanged);
             if face3d_changed || face3d_fill_active != inner.cached_face3d_key.1 {
                 inner.upload_face3d(
                     device,
                     &vp.face3d_wires[..],
-                    &vp.wires[..],
+                    &vp_wires[..],
                     !face3d_fill_active,
                     &vp.draw_depths,
                 );
                 inner.cached_face3d_source = Some(Arc::clone(&vp.face3d_wires));
-                inner.cached_face3d_wire_source = Some(Arc::clone(&vp.wires));
                 inner.cached_face3d_depth_source = Some(Arc::clone(&vp.draw_depths));
-                inner.cached_face3d_key = (vp.geometry_epoch, face3d_fill_active);
             }
+            inner.cached_face3d_key = (vp.wire_content_id, face3d_fill_active);
             // Wire buffers are world-space, so a camera move alone doesn't
             // change them — only the view_proj uniform (uploaded every frame).
             // Gate the upload on the wire content id instead of the camera tick:
@@ -435,55 +442,120 @@ impl shader::Primitive for Primitive {
                 #[cfg(not(target_arch = "wasm32"))]
                 if crate::scene::wire_gpu_patch_enabled() && inner.wire_const_bgl.is_some() {
                     use crate::scene::pipeline::wire_arena::{self, WireArena};
-                    // Split the resident set into the regular 2D wires and the
-                    // mesh/solid EDGE wires (which need the mesh-edge draw
-                    // treatment), one arena each, so both patch incrementally.
-                    // Fill-only wires (no segments) are drawn in the face3d pass,
-                    // not here, so they go in neither.
-                    let mesh_names: rustc_hash::FxHashSet<u64> = vp
-                        .wires
-                        .iter()
-                        .filter(|w| !w.fill_tris.is_empty() && !w.fill_tris_low.is_empty())
-                        .filter_map(|w| w.name.parse::<u64>().ok())
-                        .collect();
-                    let regular: Vec<&crate::scene::WireModel> = vp
-                        .wires
-                        .iter()
-                        .filter(|w| {
-                            !w.points.is_empty() && !wire_arena::is_mesh_edge(w, &mesh_names)
-                        })
-                        .collect();
-                    let mesh: Vec<&crate::scene::WireModel> = vp
-                        .wires
-                        .iter()
-                        .filter(|w| wire_arena::is_mesh_edge(w, &mesh_names))
-                        .collect();
                     let bgl = inner.wire_const_bgl.as_ref().unwrap();
                     let base_ok = vp
                         .wire_patch
                         .as_ref()
-                        .map_or(false, |(base, changes)| {
-                            inner.wire_arena_id == *base && !changes.is_empty()
+                        .map_or(false, |(base, patch)| {
+                            inner.wire_arena_id == *base && !patch.changes.is_empty()
                         });
-                    let changes = vp.wire_patch.as_ref().map(|(_, c)| c);
+                    let patch = vp.wire_patch.as_ref().map(|(_, patch)| patch);
+                    if _perf {
+                        eprintln!(
+                            "[perf] arena-base ok={} held={} patch={:?} changes={}",
+                            base_ok,
+                            inner.wire_arena_id,
+                            vp.wire_patch.as_ref().map(|(base, _)| *base),
+                            patch.map_or(0, |p| p.changes.len()),
+                        );
+                    }
 
-                    // Each batch: patch from the shared base if possible, else
-                    // rebuild just that batch. They advance together.
+                    // Split only changed runs on a patch. The previous path
+                    // scanned/parses all resident wires repeatedly here even
+                    // though WireArena emits just one changed entity.
+                    let mut regular_changed: rustc_hash::FxHashMap<
+                        acadrust::Handle,
+                        Vec<&crate::scene::WireModel>,
+                    > = rustc_hash::FxHashMap::default();
+                    let mut mesh_changed: rustc_hash::FxHashMap<
+                        acadrust::Handle,
+                        Vec<&crate::scene::WireModel>,
+                    > = rustc_hash::FxHashMap::default();
+                    if let Some(patch) = patch {
+                        for &(handle, _) in patch.changes.iter() {
+                            let run = patch
+                                .runs
+                                .get(&handle)
+                                .map(|wires| wires.as_slice())
+                                .unwrap_or(&[]);
+                            let mesh_entity = run
+                                .iter()
+                                .any(|w| !w.fill_tris.is_empty() && !w.fill_tris_low.is_empty());
+                            regular_changed.insert(
+                                handle,
+                                run.iter()
+                                    .filter(|w| !w.points.is_empty() && !mesh_entity)
+                                    .collect(),
+                            );
+                            mesh_changed.insert(
+                                handle,
+                                run.iter()
+                                    .filter(|w| !w.points.is_empty() && mesh_entity)
+                                    .collect(),
+                            );
+                        }
+                    }
                     let reg_ok = base_ok
                         && inner.wire_arena.as_mut().map_or(false, |a| {
-                            a.patch(queue, changes.unwrap(), &regular, &vp.draw_depths)
+                            let patch = patch.unwrap();
+                            a.patch(
+                                queue,
+                                &patch.changes,
+                                &regular_changed,
+                                patch.new_handles_are_suffix,
+                                &vp.draw_depths,
+                            )
                         });
-                    if !reg_ok {
-                        inner.wire_arena =
-                            WireArena::build(device, queue, &regular, &vp.draw_depths, bgl, false);
-                    }
                     let mesh_ok = base_ok
                         && inner.wire_arena_mesh.as_mut().map_or(false, |a| {
-                            a.patch(queue, changes.unwrap(), &mesh, &vp.draw_depths)
+                            let patch = patch.unwrap();
+                            a.patch(
+                                queue,
+                                &patch.changes,
+                                &mesh_changed,
+                                patch.new_handles_are_suffix,
+                                &vp.draw_depths,
+                            )
                         });
-                    if !mesh_ok {
-                        inner.wire_arena_mesh =
-                            WireArena::build(device, queue, &mesh, &vp.draw_depths, bgl, true);
+                    if !reg_ok || !mesh_ok {
+                        // Initial upload or a patch that outgrew arena capacity:
+                        // only then pay the full regular/mesh split.
+                        let mesh_names: rustc_hash::FxHashSet<u64> = vp_wires
+                            .iter()
+                            .filter(|w| !w.fill_tris.is_empty() && !w.fill_tris_low.is_empty())
+                            .filter_map(|w| w.name.parse::<u64>().ok())
+                            .collect();
+                        if !reg_ok {
+                            let regular: Vec<&crate::scene::WireModel> = vp_wires
+                                .iter()
+                                .filter(|w| {
+                                    !w.points.is_empty()
+                                        && !wire_arena::is_mesh_edge(w, &mesh_names)
+                                })
+                                .collect();
+                            inner.wire_arena = WireArena::build(
+                                device,
+                                queue,
+                                &regular,
+                                &vp.draw_depths,
+                                bgl,
+                                false,
+                            );
+                        }
+                        if !mesh_ok {
+                            let mesh: Vec<&crate::scene::WireModel> = vp_wires
+                                .iter()
+                                .filter(|w| wire_arena::is_mesh_edge(w, &mesh_names))
+                                .collect();
+                            inner.wire_arena_mesh = WireArena::build(
+                                device,
+                                queue,
+                                &mesh,
+                                &vp.draw_depths,
+                                bgl,
+                                true,
+                            );
+                        }
                     }
                     _patched = reg_ok && mesh_ok;
 
@@ -493,7 +565,15 @@ impl shader::Primitive for Primitive {
                         let mut gpus = reg.wire_gpus();
                         gpus.extend(me.wire_gpus());
                         inner.gpu_wires = std::sync::Arc::new(gpus);
-                        inner.wire_handle_index = wire_arena::build_handle_index(&vp.wires[..]);
+                        if _patched {
+                            wire_arena::patch_handle_index(
+                                &mut inner.wire_handle_index,
+                                &patch.unwrap().index_edits,
+                            );
+                        } else {
+                            inner.wire_handle_index =
+                                wire_arena::build_handle_index(&vp_wires[..]);
+                        }
                         inner.wire_arena_id = vp.wire_content_id;
                         arena_served = true;
                     } else {
@@ -515,7 +595,7 @@ impl shader::Primitive for Primitive {
                     Some(entry) => entry,
                     None => {
                         let entry =
-                            inner.build_wire_buffers(device, &vp.wires[..], &vp.draw_depths);
+                            inner.build_wire_buffers(device, &vp_wires[..], &vp.draw_depths);
                         pipeline
                             .wire_buffer_cache
                             .insert(vp.wire_content_id, entry.clone());
@@ -548,7 +628,7 @@ impl shader::Primitive for Primitive {
                         "[perf] wire {:>7.1}ms  {:<18} wires={} gpu_instances={}",
                         _t0.elapsed().as_secs_f64() * 1000.0,
                         outcome,
-                        vp.wires.len(),
+                        vp_wires.len(),
                         gi,
                     );
                 }
@@ -561,7 +641,7 @@ impl shader::Primitive for Primitive {
             if sel_key != inner.cached_selection {
                 inner.upload_selected_wires(
                     device,
-                    &vp.wires[..],
+                    &vp_wires[..],
                     &vp.selected_handles,
                     vp.hover_handle,
                     &vp.draw_depths,
@@ -571,7 +651,7 @@ impl shader::Primitive for Primitive {
                 // base text buffer.
                 inner.upload_text_highlight(
                     device,
-                    &vp.wires[..],
+                    &vp_wires[..],
                     &vp.selected_handles,
                     vp.hover_handle,
                 );
@@ -1310,13 +1390,27 @@ impl Scene {
         // overlay buffer below), so the base id is the source's stable content
         // gen — a drag or camera move never re-uploads the base wire set.
         let wire_content_id = self.last_model_wire_gen.get();
+        let wire_patch = self.model_wire_patch_for(wire_content_id);
         // Split Face3D wires from the rest. The split is content-only (keyed
         // by the wire-set content id), so while the geometry is unchanged it's
         // memoized rather than re-walking every wire (handle lookup + clone)
         // each frame — for every source, since all ids are stable now.
         let (face3d_wires, other_arc) = {
             let cached = { self.split_cache.borrow().get(&wire_content_id).cloned() };
-            let (fa, oa) = cached.unwrap_or_else(|| {
+            let inherited_empty = if let Some((base, patch)) = wire_patch.as_ref() {
+                if patch.face_pass_changed {
+                    None
+                } else {
+                    self.split_cache
+                        .borrow()
+                        .get(base)
+                        .filter(|(_, others)| others.is_none())
+                        .cloned()
+                }
+            } else {
+                None
+            };
+            let (fa, oa) = cached.or(inherited_empty).unwrap_or_else(|| {
                 // No Face3D wire at all (pure 2-D drawings, mesh imports):
                 // "others" would be a wire-for-wire copy of the base set —
                 // mark it `None` and use the base set directly instead of
@@ -1337,6 +1431,10 @@ impl Scene {
                 c.insert(wire_content_id, (fa.clone(), oa.clone()));
                 (fa, oa)
             });
+            self.split_cache
+                .borrow_mut()
+                .entry(wire_content_id)
+                .or_insert_with(|| (fa.clone(), oa.clone()));
             (fa, oa.unwrap_or_else(|| Arc::clone(&base_arc)))
         };
         // Base wire set — the cached `other` Arc directly, never cloned to
@@ -1517,7 +1615,7 @@ impl Scene {
         };
         Some(ViewportData {
             instance_id,
-            wires: all_wires,
+            wires: Arc::downgrade(&all_wires),
             clip_boundary_ndc,
             preview_wires,
             face3d_wires,
@@ -1552,7 +1650,7 @@ impl Scene {
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,
             wire_content_id,
-            wire_patch: self.model_wire_patch_for(wire_content_id),
+            wire_patch,
             selected_handles: Arc::new(self.selected.iter().copied().collect()),
             hover_handle: self.hover_highlight,
             selection_generation: self.selection_generation,

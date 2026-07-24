@@ -62,6 +62,11 @@ struct Slab {
     inst_len: u32,
     const_off: u32,
     const_len: u32,
+    /// Entity-level draw depth used when this slab was emitted. Individual
+    /// consts may carry block-local offsets around it; structural edits shift
+    /// the whole slab by the base-depth delta instead of flattening those
+    /// offsets.
+    base_depth: f32,
 }
 
 pub struct WireArena {
@@ -76,6 +81,9 @@ pub struct WireArena {
     /// slab's draw_depth (denominator change) without re-emitting geometry.
     consts_cpu: Vec<WireConst>,
     slabs: FxHashMap<Handle, Slab>,
+    /// Temporarily hidden Modified slabs. Grip drag blanks these but keeps their
+    /// offsets so commit/cancel can restore the original submission order.
+    vacant: FxHashMap<Handle, Slab>,
     /// Tombstoned instances (blanked, not reclaimed) — past half the tail a patch
     /// bails so the caller compacts with a full rebuild.
     tombstoned: u32,
@@ -84,6 +92,8 @@ pub struct WireArena {
     /// them black in filled-with-edges modes. The regular and mesh-edge subsets
     /// of the resident set each get their own arena so both patch incrementally.
     mesh_edge: bool,
+    /// Conservative submission-order sensitivity of current arena content.
+    order_sensitive: bool,
 }
 
 fn handle_of(w: &WireModel) -> Option<Handle> {
@@ -105,7 +115,7 @@ pub fn is_mesh_edge(w: &WireModel, mesh_names: &rustc_hash::FxHashSet<u64>) -> b
 ///     Surface) are excluded from `draw_depth_map`, so their fallback edge wires
 ///     get draw_depth 0.0. Two coincident opaque such wires share a z-bias and
 ///     resolve by submission order, which a tail relocation would flip.
-fn append_unsafe(wires: &[&WireModel], depth_map: &FxHashMap<u64, [f32; 2]>) -> bool {
+fn order_sensitive(wires: &[&WireModel], depth_map: &FxHashMap<u64, [f32; 2]>) -> bool {
     wires.iter().any(|w| {
         w.color[3] < 0.999
             || handle_of(w).map_or(true, |h| !depth_map.contains_key(&h.value()))
@@ -123,6 +133,37 @@ pub fn build_handle_index(wires: &[WireModel]) -> std::sync::Arc<FxHashMap<u64, 
         }
     }
     std::sync::Arc::new(index)
+}
+
+/// Apply the resident Vec's exact splice operations to the selection/text
+/// handle index. Avoids reparsing every wire name after a one-entity patch.
+pub(crate) fn patch_handle_index(
+    index: &mut std::sync::Arc<FxHashMap<u64, Vec<u32>>>,
+    edits: &[crate::scene::WireIndexEdit],
+) {
+    let index = std::sync::Arc::make_mut(index);
+    for edit in edits {
+        index.remove(&edit.handle.value());
+        let old_end = edit.start + edit.old_len;
+        let delta = edit.new_len as isize - edit.old_len as isize;
+        if delta != 0 {
+            for slots in index.values_mut() {
+                for slot in slots {
+                    if *slot as usize >= old_end {
+                        *slot = (*slot as isize + delta) as u32;
+                    }
+                }
+            }
+        }
+        if edit.new_len != 0 {
+            index.insert(
+                edit.handle.value(),
+                (edit.start..edit.start + edit.new_len)
+                    .map(|slot| slot as u32)
+                    .collect(),
+            );
+        }
+    }
 }
 
 /// Group `wires` (draw-order sorted, entity-contiguous) into per-handle ranges.
@@ -215,6 +256,11 @@ impl WireArena {
         for (h, i, j) in ranges {
             let inst_off = instances.len() as u32;
             let const_off = consts_cpu.len() as u32;
+            let base_depth = if mesh_edge {
+                0.0
+            } else {
+                depth_map.get(&h.value()).map_or(0.0, |d| d[0])
+            };
             for &w in &wires[i..j] {
                 let wire_id = consts_cpu.len() as u32;
                 // 3D mesh outline edges are occluded by true depth and must NOT
@@ -232,6 +278,7 @@ impl WireArena {
                     inst_len: instances.len() as u32 - inst_off,
                     const_off,
                     const_len: consts_cpu.len() as u32 - const_off,
+                    base_depth,
                 },
             );
         }
@@ -267,8 +314,10 @@ impl WireArena {
             const_tail,
             consts_cpu,
             slabs,
+            vacant: FxHashMap::default(),
             tombstoned: 0,
             mesh_edge,
+            order_sensitive: order_sensitive(wires, depth_map),
         })
     }
 
@@ -287,34 +336,33 @@ impl WireArena {
         &mut self,
         queue: &wgpu::Queue,
         changes: &[(Handle, ChangeKind)],
-        wires: &[&WireModel],
+        runs: &FxHashMap<Handle, Vec<&WireModel>>,
+        new_handles_are_suffix: bool,
         depth_map: &FxHashMap<u64, [f32; 2]>,
     ) -> bool {
-        let Some(ranges) = handle_ranges(wires) else {
-            return false;
-        };
-        let range_of: FxHashMap<Handle, (usize, usize)> =
-            ranges.into_iter().map(|(h, i, j)| (h, (i, j))).collect();
-        let append_unsafe = append_unsafe(wires, depth_map);
-
-        let mut structural = false;
+        let depth_structural = changes
+            .iter()
+            .any(|(_, kind)| !matches!(kind, ChangeKind::Modified));
         for &(h, kind) in changes {
-            let new_range = range_of.get(&h).copied();
+            let run = runs.get(&h).map(Vec::as_slice).unwrap_or(&[]);
 
             // Removed / now-hidden ⇒ tombstone the slab. A handle not in THIS
             // arena's subset (it belongs to the other batch) simply isn't in its
             // slabs, so this is a no-op for it.
-            if matches!(kind, ChangeKind::Removed) || new_range.is_none() {
+            if matches!(kind, ChangeKind::Removed) || run.is_empty() {
                 if let Some(slab) = self.slabs.remove(&h) {
                     let blanks = vec![blank_instance(); slab.inst_len as usize];
                     self.write_insts(queue, slab.inst_off, &blanks);
                     self.tombstoned += slab.inst_len;
-                    structural = true;
+                    if matches!(kind, ChangeKind::Modified) {
+                        self.vacant.insert(h, slab);
+                    }
+                }
+                if matches!(kind, ChangeKind::Removed) {
+                    self.vacant.remove(&h);
                 }
                 continue;
             }
-            let (i, j) = new_range.unwrap();
-            let run = &wires[i..j];
 
             // Emit into fresh, run-local const slots (patched to absolute below).
             let mut insts: Vec<WireInstance> = Vec::new();
@@ -328,7 +376,22 @@ impl WireArena {
             }
             let inst_len = insts.len() as u32;
             let const_len = csts.len() as u32;
+            let base_depth = if self.mesh_edge {
+                0.0
+            } else {
+                depth_map.get(&h.value()).map_or(0.0, |d| d[0])
+            };
 
+            if !self.slabs.contains_key(&h)
+                && self
+                    .vacant
+                    .get(&h)
+                    .is_some_and(|s| s.inst_len == inst_len && s.const_len == const_len)
+            {
+                let slab = self.vacant.remove(&h).unwrap();
+                self.tombstoned = self.tombstoned.saturating_sub(slab.inst_len);
+                self.slabs.insert(h, slab);
+            }
             let in_place = self
                 .slabs
                 .get(&h)
@@ -356,6 +419,7 @@ impl WireArena {
                     const_off as u64 * csz,
                     bytemuck::cast_slice(&csts),
                 );
+                self.slabs.get_mut(&h).unwrap().base_depth = base_depth;
                 continue;
             }
 
@@ -364,7 +428,12 @@ impl WireArena {
             // draw-order depth, or the mesh-edge arena (all its wires are forced
             // to depth 0, so coincident edges resolve by submission order). Fall
             // back to a full rebuild instead.
-            if append_unsafe || self.mesh_edge {
+            let is_new = !self.slabs.contains_key(&h);
+            let preserves_submission_order = is_new && new_handles_are_suffix;
+            let run_order_sensitive = order_sensitive(run, depth_map);
+            if (self.order_sensitive || run_order_sensitive || self.mesh_edge)
+                && !preserves_submission_order
+            {
                 return false;
             }
             if self.inst_tail + inst_len > self.inst_cap
@@ -372,7 +441,7 @@ impl WireArena {
             {
                 return false;
             }
-            structural = true;
+            self.vacant.remove(&h);
             if let Some(s) = self.slabs.remove(&h) {
                 let blanks = vec![blank_instance(); s.inst_len as usize];
                 self.write_insts(queue, s.inst_off, &blanks);
@@ -396,30 +465,21 @@ impl WireArena {
                     inst_len,
                     const_off,
                     const_len,
+                    base_depth,
                 },
             );
+            self.order_sensitive |= run_order_sensitive;
         }
 
-        if structural {
+        if depth_structural {
             // The entity count changed ⇒ draw_depth_map re-normalised every
             // entity's z-bias. Refresh each live slab's draw_depth from the new
             // depth map and re-upload the whole (small) const buffer; the instance
             // buffer is untouched.
-            // A slab whose consts carry DIFFERENT depths holds block-band wires
-            // with composed per-child offsets (`depth_override`); a flat refresh
-            // to the entity's base depth would erase them. Fall back to a full
-            // rebuild, which recomputes each wire's composed depth.
-            if !self.mesh_edge {
-                for slab in self.slabs.values() {
-                    let first = self.consts_cpu[slab.const_off as usize].draw_depth;
-                    for k in 1..slab.const_len {
-                        if self.consts_cpu[(slab.const_off + k) as usize].draw_depth != first {
-                            return false;
-                        }
-                    }
-                }
-            }
-            for (h, slab) in &self.slabs {
+            // Preserve block-local depth composition. A slab may contain many
+            // different child offsets around its entity base; shifting every
+            // const by the base delta keeps those offsets intact.
+            for (h, slab) in &mut self.slabs {
                 // Mesh-edge wires keep depth 0 (no draw-order bias); regular wires
                 // take the re-normalised map value.
                 let dd = if self.mesh_edge {
@@ -427,14 +487,16 @@ impl WireArena {
                 } else {
                     depth_map.get(&h.value()).map_or(0.0, |d| d[0])
                 };
+                let delta = dd - slab.base_depth;
                 for k in 0..slab.const_len {
-                    self.consts_cpu[(slab.const_off + k) as usize].draw_depth = dd;
+                    self.consts_cpu[(slab.const_off + k) as usize].draw_depth += delta;
                 }
+                slab.base_depth = dd;
             }
             queue.write_buffer(&self.const_buf, 0, bytemuck::cast_slice(&self.consts_cpu));
-            if self.tombstoned > self.inst_tail / 2 {
-                return false;
-            }
+        }
+        if self.tombstoned > self.inst_tail / 2 {
+            return false;
         }
         true
     }

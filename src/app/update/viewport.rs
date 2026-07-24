@@ -496,6 +496,8 @@ impl OpenCADStudio {
             return Task::none();
         }
         let i = self.active_tab;
+        let perf_move = std::env::var_os("OCS_PERF").is_some();
+        let move_started = Instant::now();
 
         // UCS icon grip drag: map the cursor onto the UCS plane and
         // slide the origin / rotate the axis. Short-circuits pan & snap.
@@ -694,6 +696,7 @@ impl OpenCADStudio {
 
         // ── Grip drag ─────────────────────────────────────────────
         if let Some(grip) = self.tabs[i].active_grip.clone() {
+            let grip_started = Instant::now();
             let (vw, vh) = vp_size;
             let bounds = iced::Rectangle {
                 x: 0.0,
@@ -734,9 +737,11 @@ impl OpenCADStudio {
                 // Back up the original geometry so Esc can cancel the drag.
                 self.grip_original = self.tabs[i].scene.document.get_entity(grip.handle).cloned();
                 self.tabs[i].scene.hidden.insert(grip.handle);
-                // Grip drag never changes a block definition — keep the
-                // block cache so the hide doesn't re-tessellate blocks.
-                self.tabs[i].scene.bump_geometry_no_blocks();
+                // Hiding changes exactly one resident run. Publishing a full
+                // delta here made the first grip move rebuild every wire.
+                self.tabs[i]
+                    .scene
+                    .bump_entities(&[(grip.handle, crate::scene::ChangeKind::Modified)]);
                 self.grip_preview_handle = Some(grip.handle);
                 // Snapshot the entity's glyph quads once so each move can
                 // slide the already-shaped text rather than re-shaping it
@@ -760,6 +765,8 @@ impl OpenCADStudio {
                     && snap.iter().all(|w| w.points.is_empty())
                     && square_grip;
             }
+            let setup_ms = grip_started.elapsed().as_secs_f64() * 1000.0;
+            let snap_started = Instant::now();
 
             // The edited entity is hidden, so it's already absent from
             // `hit_test_wires` — snap against the set directly, no clone
@@ -833,6 +840,8 @@ impl OpenCADStudio {
                 }
             }
 
+            let snap_ms = snap_started.elapsed().as_secs_f64() * 1000.0;
+            let apply_started = Instant::now();
             let apply = if grip.is_translate {
                 GripApply::Translate(snapped - grip.last_world)
             } else {
@@ -843,6 +852,8 @@ impl OpenCADStudio {
                 .apply_grip(grip.handle, grip.grip_id, apply);
             self.tabs[i].dirty = true;
             self.tabs[i].active_grip.as_mut().unwrap().last_world = snapped;
+            let apply_ms = apply_started.elapsed().as_secs_f64() * 1000.0;
+            let preview_started = Instant::now();
             // Overlay the moved entity (hidden from the base). Pure text
             // moved as a whole slides its drag-start glyphs — no re-shaping
             // and no wire re-tess. Anything else (wire geometry, or a point
@@ -865,8 +876,25 @@ impl OpenCADStudio {
                 let preview = self.tabs[i].scene.wire_models_for(&[grip.handle]);
                 self.tabs[i].scene.set_preview_wires(preview);
             }
+            let preview_ms = preview_started.elapsed().as_secs_f64() * 1000.0;
+            let geometry_ms = grip_started.elapsed().as_secs_f64() * 1000.0;
             self.refresh_selected_grips();
-            self.refresh_properties();
+            let grips_ms = grip_started.elapsed().as_secs_f64() * 1000.0 - geometry_ms;
+            // Properties are refreshed when the grip is committed or cancelled.
+            // Rebuilding the inspector on every pointer event adds no drawing
+            // value and can monopolize the UI thread during a drag.
+            let total_ms = grip_started.elapsed().as_secs_f64() * 1000.0;
+            if perf_move && total_ms >= 50.0 {
+                eprintln!(
+                    "[perf] grip-move          {:>7.1}ms setup={:.1} snap={:.1} apply={:.1} preview={:.1} grips={:.1}",
+                    total_ms,
+                    setup_ms,
+                    snap_ms,
+                    apply_ms,
+                    preview_ms,
+                    grips_ms,
+                );
+            }
             return Task::none();
         }
 
@@ -888,11 +916,17 @@ impl OpenCADStudio {
         // drag), defer the pick until the cursor stops. The full
         // pick (wires + hatches + block hatches + shaded meshes) is
         // O(N) per frame and stalls the cursor on large drawings,
-        // so each move clears the current highlight and resets the
-        // dwell timer — `HoverDwellTick` runs the hit-test only
+        // so each move resets the dwell timer — `HoverDwellTick` runs the hit-test only
         // once the cursor has been still for `HOVER_DWELL_MS`.
         if !dragging && self.tabs[i].active_cmd.is_none() {
-            self.tabs[i].scene.set_hover_highlight(None);
+            // On dense drawings, clearing a rollover immediately schedules a
+            // second full scene frame just as motion resumes. Keep the previous
+            // highlight until the next settled pick replaces it.
+            if self.tabs[i].scene.last_tess_wires.get()
+                < crate::app::HOVER_DWELL_DENSE_WIRES
+            {
+                self.tabs[i].scene.set_hover_highlight(None);
+            }
             self.hover_dwell = Some(crate::app::HoverDwell {
                 last_move_at: Instant::now(),
                 point: p,
@@ -1417,6 +1451,13 @@ impl OpenCADStudio {
         }
 
         self.sync_dyn_fields();
+        let move_ms = move_started.elapsed().as_secs_f64() * 1000.0;
+        if perf_move && self.tabs[i].active_cmd.is_some() && move_ms >= 50.0 {
+            eprintln!(
+                "[perf] pointer-move       {:>7.1}ms",
+                move_ms,
+            );
+        }
         Task::none()
     }
 
@@ -3410,13 +3451,16 @@ impl OpenCADStudio {
         let Some(dwell) = self.hover_dwell.clone() else {
             return Task::none();
         };
+        let dwell_ms = crate::app::HOVER_DWELL_MS;
         if Instant::now()
             .duration_since(dwell.last_move_at)
             .as_millis()
-            < crate::app::HOVER_DWELL_MS
+            < dwell_ms
         {
             return Task::none();
         }
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        let hover_started = Instant::now();
         let i = dwell.tab;
         // Re-check the gate — drag / command may have started
         // between the move that armed the dwell and this tick.
@@ -3493,6 +3537,15 @@ impl OpenCADStudio {
         });
         self.tabs[i].scene.set_hover_highlight(hovered);
         self.hover_dwell = None;
+        let hover_ms = hover_started.elapsed().as_secs_f64() * 1000.0;
+        if perf && hover_ms >= 5.0 {
+            eprintln!(
+                "[perf] hover-dwell        {:>7.1}ms wires={} hit={}",
+                hover_ms,
+                self.tabs[i].scene.last_tess_wires.get(),
+                hovered.is_some(),
+            );
+        }
         Task::none()
     }
 

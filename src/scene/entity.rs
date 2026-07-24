@@ -120,6 +120,12 @@ impl Scene {
             &entity,
             EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
         );
+        // INSERT invalidates rendered block instances, but it does not mutate
+        // the referenced block definition. Only block sentinels require a
+        // structure image for undo; ordinary owner membership is intrinsic add
+        // bookkeeping and remains in place while an entity delta is undone.
+        let mutates_block_structure =
+            matches!(&entity, EntityType::Block(_) | EntityType::BlockEnd(_));
         let hatch_seed = if let EntityType::Hatch(dxf) = &entity {
             let color = self.render_style(&entity).0;
             Self::hatch_model_from_dxf(dxf, color)
@@ -208,7 +214,7 @@ impl Scene {
             // pure-entity delta would be incomplete.
             if self.is_recording_undo() {
                 self.record_undo_before(handle, None);
-                if creates_layer || affects_blocks || is_image {
+                if creates_layer || mutates_block_structure || is_image {
                     self.poison_undo_recording();
                 }
             }

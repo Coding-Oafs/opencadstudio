@@ -518,8 +518,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         self.tabs[i].scene.hidden.remove(&h);
                         self.tabs[i].scene.clear_preview_wire();
                         // Geometry restored to the backup — re-tessellate just it.
-                        self.tabs[i].scene.mark_entity_dirty(h);
-                        self.tabs[i].scene.bump_geometry_no_blocks();
+                        self.tabs[i]
+                            .scene
+                            .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
                         self.refresh_selected_grips();
                     }
                     self.tabs[self.active_tab].snap_result = None;

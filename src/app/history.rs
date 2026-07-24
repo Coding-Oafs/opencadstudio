@@ -148,6 +148,46 @@ impl OpenCADStudio {
         self.push_undo_entry(i, HistorySnapshot::Delta(delta));
     }
 
+    pub(super) fn defer_live_entity_history_after(&mut self, i: usize, handle: Handle) {
+        let Some(HistorySnapshot::Delta(delta)) =
+            self.tabs[i].history.undo_stack.last_mut()
+        else {
+            return;
+        };
+        if let Some((_, _, after)) = delta
+            .entities
+            .iter_mut()
+            .find(|(entry_handle, _, _)| *entry_handle == handle)
+        {
+            *after = None;
+        }
+    }
+
+    pub(super) fn finish_live_entity_history(&mut self, i: usize, handle: Handle) {
+        let Some(after) = self.tabs[i].scene.document.get_entity_arc(handle) else {
+            return;
+        };
+        let selected_after = self.tabs[i].scene.selected.iter().copied().collect();
+        let current_layout_after = self.tabs[i].scene.current_layout.clone();
+        let dirty_after = self.tabs[i].dirty;
+        let Some(HistorySnapshot::Delta(delta)) =
+            self.tabs[i].history.undo_stack.last_mut()
+        else {
+            return;
+        };
+        let Some((_, _, entry_after)) = delta
+            .entities
+            .iter_mut()
+            .find(|(entry_handle, _, _)| *entry_handle == handle)
+        else {
+            return;
+        };
+        *entry_after = Some(after);
+        delta.selected_after = selected_after;
+        delta.current_layout_after = current_layout_after;
+        delta.dirty_after = dirty_after;
+    }
+
     pub(super) fn discard_last_undo_entry(&mut self, i: usize) {
         if self.tabs[i].history.pending.take().is_some() {
             self.tabs[i].scene.document.end_entity_change_recording();
@@ -296,16 +336,15 @@ impl OpenCADStudio {
     }
 
     /// Add is delta-safe only for a plain drawable on an already-existing layer:
-    /// an insert / block / image / dimension add also creates block records,
-    /// image definitions or layers (non-entity state).
+    /// a block / image add also creates block records, image definitions or
+    /// layers (non-entity state). INSERT only references an existing block and
+    /// is entity-delta safe.
     pub(super) fn delta_add_safe(&self, i: usize, entity: &EntityType) -> bool {
         if matches!(
             entity,
-            EntityType::Insert(_)
-                | EntityType::Block(_)
+            EntityType::Block(_)
                 | EntityType::BlockEnd(_)
                 | EntityType::RasterImage(_)
-                | EntityType::Dimension(_)
                 // A viewport commit routes through add_entity_to_layout +
                 // bump_geometry_no_blocks, bypassing the recorded Scene::add_entity
                 // — nothing would be captured, so keep the full snapshot.

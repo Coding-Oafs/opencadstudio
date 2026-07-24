@@ -459,6 +459,11 @@ pub struct InteractionIndex {
     /// index feed an incremental overlay after small edits without retaining
     /// the old heavyweight wire set or trusting shifted vector indices.
     wire_handles: Vec<Option<u64>>,
+    /// Stable occurrence number of each wire inside its owning entity run.
+    /// Small-edit overlays use `(handle, ordinal)` to recover only the exact
+    /// nearby wires from the current resident memo instead of cloning every
+    /// wire emitted by a large INSERT.
+    wire_ordinals: Vec<Option<u32>>,
     segments: SpatialSet<SegmentRef>,
     snap_points: SpatialSet<SnapPointRef>,
     key_vertices: SpatialSet<KeyVertexRef>,
@@ -525,6 +530,18 @@ impl InteractionIndex {
         let wire_handles: Vec<Option<u64>> = wires
             .iter()
             .map(|wire| wire.name.parse::<u64>().ok())
+            .collect();
+        let mut next_ordinal: rustc_hash::FxHashMap<u64, u32> =
+            rustc_hash::FxHashMap::default();
+        let wire_ordinals: Vec<Option<u32>> = wire_handles
+            .iter()
+            .map(|handle| {
+                let handle = (*handle)?;
+                let ordinal = next_ordinal.entry(handle).or_default();
+                let current = *ordinal;
+                *ordinal += 1;
+                Some(current)
+            })
             .collect();
         let mut wire_entries = Vec::with_capacity(wires.len());
         let mut segment_entries = Vec::new();
@@ -701,6 +718,7 @@ impl InteractionIndex {
         Self {
             wires,
             wire_handles,
+            wire_ordinals,
             segments,
             snap_points,
             key_vertices,
@@ -717,29 +735,40 @@ impl InteractionIndex {
         base_radius_px.max(self.max_line_half_width_px)
     }
 
-    fn queried_wire_handles(&self, mut indices: Vec<u32>) -> Vec<u64> {
+    fn queried_wire_keys(&self, mut indices: Vec<u32>) -> Vec<(u64, u32)> {
         indices.extend_from_slice(&self.unbounded_wires);
-        let mut handles: Vec<u64> = indices
+        let mut keys: Vec<(u64, u32)> = indices
             .into_iter()
-            .filter_map(|index| self.wire_handles.get(index as usize).copied().flatten())
+            .filter_map(|index| {
+                self.wire_handles
+                    .get(index as usize)
+                    .copied()
+                    .flatten()
+                    .zip(
+                        self.wire_ordinals
+                            .get(index as usize)
+                            .copied()
+                            .flatten(),
+                    )
+            })
             .collect();
-        handles.sort_unstable();
-        handles.dedup();
-        handles
+        keys.sort_unstable();
+        keys.dedup();
+        keys
     }
 
-    pub fn query_wire_handles_xy(&self, aabb: [f64; 4]) -> Vec<u64> {
-        self.queried_wire_handles(self.wires.query_xy(aabb))
+    pub fn query_wire_keys_xy(&self, aabb: [f64; 4]) -> Vec<(u64, u32)> {
+        self.queried_wire_keys(self.wires.query_xy(aabb))
     }
 
-    pub fn query_wire_handles_screen(
+    pub fn query_wire_keys_screen(
         &self,
         screen_rect: [f32; 4],
         view_rot: Mat4,
         eye: DVec3,
         bounds: Rectangle,
-    ) -> Vec<u64> {
-        self.queried_wire_handles(self.wires.query_screen(screen_rect, view_rot, eye, bounds))
+    ) -> Vec<(u64, u32)> {
+        self.queried_wire_keys(self.wires.query_screen(screen_rect, view_rot, eye, bounds))
     }
 
     pub fn query_xy(&self, wires: Arc<Vec<WireModel>>, aabb: [f64; 4]) -> InteractionCandidates {

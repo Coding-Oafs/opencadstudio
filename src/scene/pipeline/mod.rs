@@ -226,7 +226,6 @@ pub struct Pipeline {
     pub cached_text_source: Option<std::sync::Arc<Vec<text_gpu::TextVertex>>>,
     pub cached_mesh_source: Option<std::sync::Arc<Vec<MeshLodSet>>>,
     pub cached_face3d_source: Option<std::sync::Arc<Vec<WireModel>>>,
-    pub cached_face3d_wire_source: Option<std::sync::Arc<Vec<WireModel>>>,
     pub cached_face3d_depth_source:
         Option<std::sync::Arc<rustc_hash::FxHashMap<u64, [f32; 2]>>>,
     pub cached_fill_mode: bool,
@@ -253,12 +252,10 @@ pub struct Pipeline {
     /// re-upload with their tint.
     #[allow(dead_code)] // per-mesh LOD path, bypassed by the batched mesh draw
     pub cached_mesh_key: (u64, u64),
-    /// `(geometry_epoch, face3d_fill_active)` the Face3D edge/fill buffers were
-    /// uploaded for. The buffers are world-space and selection-independent, so
-    /// they only change when the geometry changes or the 3D-fill mode toggles —
-    /// never on a pan/orbit. Keyed separately from `cached_epoch` (which carries
-    /// `camera_generation`) so a camera move no longer re-walks every wire to
-    /// rebuild the Face3D fill buffer.
+    /// `(wire_content_id, face3d_fill_active)` the Face3D edge/fill buffers were
+    /// uploaded for. A stable content id avoids retaining the resident wire Arc:
+    /// that Arc must stay uniquely owned by Scene so a small edit can splice it
+    /// in place instead of rebuilding the whole drawing.
     pub cached_face3d_key: (u64, bool),
     /// Handle → indices into the resident wire set, built once per wire upload
     /// (when `cached_wire_id` changes). Lets the selection/hover xray overlay
@@ -1477,7 +1474,6 @@ impl Pipeline {
             cached_text_source: None,
             cached_mesh_source: None,
             cached_face3d_source: None,
-            cached_face3d_wire_source: None,
             cached_face3d_depth_source: None,
             cached_fill_mode: false,
             cached_epoch: (u64::MAX, u64::MAX, u64::MAX),
