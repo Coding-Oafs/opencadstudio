@@ -89,8 +89,8 @@ lyon_tessellation = "1.0.20"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [patch.crates-io]
-# Track the DWG reader/writer performance work used by this release.
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc", rev = "f045889e0243d88b6905124907487e0c0a1bf0e3" }
+# Track the verified parallel DWG builder and table-control round-trip fix.
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc", rev = "4c1e5d51ff2c451a031fb5bedd8a7d4ef43e0f56" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).
