@@ -7,8 +7,9 @@
 //   • sphere-surface faces → sample a full UV grid.
 //   • torus-surface faces  → sample a full UV grid.
 //
-// All other surface types are silently skipped; partial results are still
-// returned so the solid renders with at least its planar faces.
+// Coverage is tracked explicitly. Unsupported or malformed faces retain
+// feature/display wires, and partial shells are marked non-complete so solid
+// editing never mistakes them for closed topology.
 
 use rustc_hash::FxHashSet as HashSet;
 use std::f64::consts::TAU;
@@ -122,16 +123,19 @@ fn tessellate_sat(
     color: [f32; 4],
     lod: LodConfig,
     xform: Option<([f64; 9], [f64; 3], f64)>,
-) -> Option<MeshModel> {
+) -> Option<(MeshModel, bool)> {
     let mut verts: Vec<[f64; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let mut complete = true;
 
     for face in sat.faces() {
         let surf_ptr = face.surface();
         let Some(surf_rec) = sat.resolve(surf_ptr) else {
+            complete = false;
             continue;
         };
+        let before = indices.len();
         match surf_rec.entity_type.as_str() {
             "plane-surface" => {
                 if let Some(plane) = SatPlaneSurface::from_record(surf_rec) {
@@ -197,11 +201,17 @@ fn tessellate_sat(
             }
             _ => {}
         }
+        if indices.len() == before {
+            complete = false;
+        }
     }
     if indices.is_empty() {
         return None;
     }
-    Some(finalize_mesh(name, verts, normals, indices, color, xform))
+    Some((
+        finalize_mesh(name, verts, normals, indices, color, xform),
+        complete,
+    ))
 }
 
 /// Tessellate an ACIS document, preferring the truck B-rep kernel and falling
@@ -214,26 +224,51 @@ fn tessellate_acis(
     facet_res: f64,
     isolines: usize,
 ) -> Option<MeshLodSet> {
-    let mut set = if let Some(set) = crate::scene::convert::acis_to_truck::tessellate_sat_truck(
+    let truck = crate::scene::convert::acis_to_truck::tessellate_sat_truck(
         sat,
         name.clone(),
         color,
         facet_res,
-    ) {
+    );
+    let manual = if truck.as_ref().is_some_and(|set| set.complete) {
+        None
+    } else {
+        tessellate_sat_lods(sat, name.clone(), color, facet_res)
+    };
+    let mut set = match (truck, manual) {
+        (Some(set), _) if set.complete => set,
+        (_, Some(set)) if set.complete => set,
+        (Some(truck), Some(manual)) => {
+            let truck_tris = truck
+                .lods
+                .first()
+                .map(|mesh| mesh.indices.len())
+                .unwrap_or(0);
+            let manual_tris = manual
+                .lods
+                .first()
+                .map(|mesh| mesh.indices.len())
+                .unwrap_or(0);
+            if manual_tris > truck_tris {
+                manual
+            } else {
+                truck
+            }
+        }
+        (Some(set), None) | (None, Some(set)) => set,
+        (None, None) => return None,
+    };
+    if set.complete {
         if std::env::var_os("OCS_TESS_DEBUG").is_some() {
             let tris = set.lods.first().map(|m| m.indices.len() / 3).unwrap_or(0);
-            eprintln!("acis_tess[{name}]: truck ({tris} tris)");
+            eprintln!("acis_tess[{name}]: complete ({tris} tris)");
         }
-        set
-    } else {
-        // truck couldn't rebuild the shell — fall back to the bespoke sampler.
-        let fallback = tessellate_sat_lods(sat, name.clone(), color, facet_res);
+    } else if std::env::var_os("OCS_TESS_DEBUG").is_some() {
+        let tris = set.lods.first().map(|m| m.indices.len() / 3).unwrap_or(0);
         eprintln!(
-            "acis_tess[{name}]: manual fallback ({})",
-            if fallback.is_some() { "ok" } else { "empty" }
+            "acis_tess[{name}]: partial ({tris} tris); feature/display wires retained"
         );
-        fallback?
-    };
+    }
     // Attach the B-rep face-boundary edges plus ISOLINES on curved faces
     // (body-transformed, split into the double-single pair) so the solid's
     // wireframe shows real edges and curved faces read from any angle.
@@ -878,16 +913,22 @@ fn tessellate_sat_lods(
     let configs = LodConfig::all();
     let xform = body_transform(sat);
     let mut lods: Vec<MeshModel> = Vec::with_capacity(3);
+    let mut complete = true;
     for lod in configs {
         let scaled = scale_lod(lod, facet_res);
-        if let Some(m) = tessellate_sat(sat, name.clone(), color, scaled, xform) {
+        if let Some((m, lod_complete)) = tessellate_sat(sat, name.clone(), color, scaled, xform) {
             lods.push(m);
+            complete &= lod_complete;
+        } else {
+            complete = false;
         }
     }
     if lods.is_empty() {
         return None;
     }
-    Some(MeshLodSet::from_lods(lods))
+    let mut set = MeshLodSet::from_lods(lods);
+    set.complete = complete;
+    Some(set)
 }
 
 /// Extract the body's placement transform from the SAT document: a row-major
@@ -1636,13 +1677,16 @@ fn angular_range(
 }
 
 /// Recover a cone/cylinder face's height span (along its axis) from the solid's
-/// circular rims when the face boundary collapses to a single height.
+/// circular rims or B-rep vertices when the face boundary collapses to a
+/// single height.
 ///
 /// Scans every ellipse/circle curve in the document, keeps those coaxial with
 /// this cone (centre on the axis line, normal parallel to the axis), and
-/// projects their centres onto the axis to get rim heights. For a true cone
-/// with a single rim, the tip is added analytically (the height where the
-/// radius reaches zero). Returns `None` when no coaxial rim is found.
+/// projects their centres onto the axis to get rim heights. Some imported
+/// solids represent circular rims as spline/intcurve edges, so point records
+/// lying on the analytic cone are the secondary source. For a true cone with a
+/// single rim, the tip is added analytically. Returns `None` when no span is
+/// recoverable.
 pub(crate) fn cone_axis_span(
     sat: &SatDocument,
     cone: &SatConeSurface,
@@ -1667,6 +1711,38 @@ pub(crate) fn cone_axis_span(
         let n_dot = dot3(norm3([n.0, n.1, n.2]), axis).abs();
         if radial_len < 1e-6 && n_dot > 0.999 {
             heights.push(h);
+        }
+    }
+    if heights.len() < 2 {
+        let sin_a = cone.sin_half_angle();
+        let cos_a = cone.cos_half_angle();
+        let tangent = if cos_a.abs() > 1e-9 {
+            sin_a / cos_a
+        } else {
+            0.0
+        };
+        for rec in &sat.records {
+            let Some(point) = SatPoint::from_record(rec) else {
+                continue;
+            };
+            let position = point.position();
+            let d = [
+                position.0 - center[0],
+                position.1 - center[1],
+                position.2 - center[2],
+            ];
+            let h = dot3(d, axis);
+            let radial = [
+                d[0] - h * axis[0],
+                d[1] - h * axis[1],
+                d[2] - h * axis[2],
+            ];
+            let radial_len = dot3(radial, radial).sqrt();
+            let expected = (cone.radius() + h * tangent).abs();
+            let tolerance = expected.max(cone.radius().abs()).max(1.0) * 1e-5;
+            if (radial_len - expected).abs() <= tolerance {
+                heights.push(h);
+            }
         }
     }
     if heights.is_empty() {

@@ -97,6 +97,10 @@ pub enum CurvedGen {
 #[derive(Clone, Debug)]
 pub struct MeshLodSet {
     pub lods: Vec<MeshModel>,
+    /// True only when every source face produced triangles. False keeps
+    /// downstream solid-edit code from treating a display-only partial shell
+    /// as a closed, valid solid.
+    pub complete: bool,
     /// Feature-edge line list (LOD-independent): pairs of endpoints, high half
     /// of the double-single. Populated for ACIS solids (the B-rep face-boundary
     /// edges) so their wireframe shows real edges rather than the triangulation.
@@ -146,6 +150,7 @@ impl MeshLodSet {
         let (world_aabb, z_aabb) = compute_mesh_aabb(&lods);
         Self {
             lods,
+            complete: true,
             edge_verts: Vec::new(),
             edge_verts_low: Vec::new(),
             curved_gens: Vec::new(),

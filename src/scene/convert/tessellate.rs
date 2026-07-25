@@ -1711,11 +1711,9 @@ fn solid_wire_fallback(entity: &EntityType) -> Vec<[f64; 3]> {
     if wires.is_empty() {
         return vec![];
     }
-    // Parseable ACIS → the mesh pipeline draws the body (placed); the embedded
-    // display-cache wires are body-local and would render unplaced at the
-    // origin (garbage for AcDs-backed solids). Only unreadable ACIS falls
-    // back to them.
-    if crate::entities::solid3d::acis_parses(entity) {
+    // Fully supported ACIS → mesh pipeline draws body. Parseable-but-partial
+    // ACIS keeps source display wires so unsupported faces never disappear.
+    if crate::entities::solid3d::acis_has_complete_surface_support(entity) {
         return vec![];
     }
 
@@ -1870,4 +1868,3 @@ pub(crate) fn normalized_or(v: Vec3, fallback: Vec3) -> Vec3 {
         v.normalize()
     }
 }
-

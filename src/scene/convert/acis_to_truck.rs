@@ -16,8 +16,8 @@
 // Each face is meshed independently and its triangles are oriented outward
 // using an analytic per-surface normal — truck's own face orientation is not
 // consistent across independently built faces, so normals/winding are derived
-// from geometry instead. Faces whose surface type isn't handled are skipped;
-// the caller falls back to `solid3d_tess` when this returns `None`.
+// from geometry instead. Face coverage is recorded on `MeshLodSet`; partial
+// shells remain displayable but cannot masquerade as complete solid topology.
 
 use truck_meshalgo::tessellation::{MeshableShape, MeshedShape};
 use truck_modeling::{builder, Face, InnerSpace, Point3, Rad, Shell, Vector3, Wire};
@@ -91,11 +91,14 @@ pub fn tessellate_sat_truck(
     let mut verts: Vec<[f64; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let mut complete = true;
 
     for face in sat.faces().into_iter() {
         let Some(surf_rec) = sat.resolve(face.surface()) else {
+            complete = false;
             continue;
         };
+        let before = indices.len();
         let mut appended = false;
         if let Some((faces, outward, tol)) = build_face_group(sat, &face, surf_rec) {
             if !faces.is_empty() {
@@ -114,19 +117,21 @@ pub fn tessellate_sat_truck(
         // buffers, so the shared finalize below still applies uniformly.
         if !appended {
             bespoke_face(sat, &face, surf_rec, &mut verts, &mut normals, &mut indices);
+            appended = indices.len() > before;
+        }
+        if !appended {
+            complete = false;
         }
     }
-
-    // Spline (NURBS) faces are meshed by direct grid sampling of the truck
-    // BSplineSurface — see spline_tess — and merged into the same buffers.
-    append_spline_faces(sat, &mut verts, &mut normals, &mut indices);
 
     if indices.is_empty() {
         return None;
     }
 
     let mesh = finalize_mesh(name, verts, normals, indices, color, body_transform(sat));
-    Some(MeshLodSet::from_lods(vec![mesh]))
+    let mut set = MeshLodSet::from_lods(vec![mesh]);
+    set.complete = complete;
+    Some(set)
 }
 
 /// Fill one face with the bespoke parametric sampler (body-local verts into the
@@ -160,6 +165,16 @@ fn bespoke_face(
             if let Some(t) = SatTorusSurface::from_record(surf_rec) {
                 tess_torus_face(sat, face, &t, LodConfig::HIGH, v, n, i);
             }
+        }
+        "spline-surface" => {
+            crate::scene::convert::spline_tess::tess_spline_face(
+                sat,
+                face,
+                LodConfig::HIGH,
+                v,
+                n,
+                i,
+            );
         }
         _ => {}
     }
@@ -402,34 +417,6 @@ fn cone_boundary_arc(
     // Start at the sample just after the largest gap, sweep CCW by `span`.
     let start = angles[(gap_at + 1) % angles.len()];
     (start, span)
-}
-
-// ── Spline faces (NURBS) ─────────────────────────────────────────────────────
-
-/// Append meshes for every `spline-surface` face, reusing the truck
-/// BSplineSurface grid sampler in `spline_tess`.
-fn append_spline_faces(
-    sat: &SatDocument,
-    verts: &mut Vec<[f64; 3]>,
-    normals: &mut Vec<[f32; 3]>,
-    indices: &mut Vec<u32>,
-) {
-    for face in sat.faces() {
-        let Some(surf_rec) = sat.resolve(face.surface()) else {
-            continue;
-        };
-        if surf_rec.entity_type != "spline-surface" {
-            continue;
-        }
-        crate::scene::convert::spline_tess::tess_spline_face(
-            sat,
-            &face,
-            LodConfig::HIGH,
-            verts,
-            normals,
-            indices,
-        );
-    }
 }
 
 // ── Mesh append with analytic outward normals ────────────────────────────────

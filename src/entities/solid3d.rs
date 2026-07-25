@@ -263,21 +263,34 @@ pub fn fallback_wires(e: &EntityType) -> Option<&[acadrust::entities::Wire]> {
     }
 }
 
-/// Whether the entity's ACIS payload parses into a SAT document. When it
-/// does, the mesh pipeline (fill + feature edges + isolines, all body-placed)
-/// is the authoritative render and the embedded display-cache wires must NOT
-/// be drawn: they are body-local (unplaced), and for R2013+ AcDs-backed
-/// solids the inline wire section misparses into garbage points near the
-/// origin. The wires remain useful only as a last resort when the ACIS data
-/// itself is unreadable.
-pub fn acis_parses(e: &EntityType) -> bool {
-    match e {
-        EntityType::Solid3D(s) => s.acis_data.parse().is_some(),
-        EntityType::Region(r) => r.acis_data.parse().is_some(),
-        EntityType::Body(b) => b.acis_data.parse().is_some(),
-        EntityType::Surface(s) => s.acis_data.parse().is_some(),
-        _ => false,
-    }
+/// Whether every ACIS face uses a surface family the mesh pipeline can decode.
+/// Unsupported or unresolved faces must keep their display-cache wires visible;
+/// otherwise a parseable but incomplete shell looks like a valid solid.
+pub fn acis_has_complete_surface_support(e: &EntityType) -> bool {
+    let sat = match e {
+        EntityType::Solid3D(s) => s.acis_data.parse(),
+        EntityType::Region(r) => r.acis_data.parse(),
+        EntityType::Body(b) => b.acis_data.parse(),
+        EntityType::Surface(s) => s.acis_data.parse(),
+        _ => None,
+    };
+    let Some(sat) = sat else {
+        return false;
+    };
+    let faces = sat.faces();
+    !faces.is_empty()
+        && faces.iter().all(|face| {
+            sat.resolve(face.surface()).is_some_and(|surface| {
+                matches!(
+                    surface.entity_type.as_str(),
+                    "plane-surface"
+                        | "cone-surface"
+                        | "sphere-surface"
+                        | "torus-surface"
+                        | "spline-surface"
+                )
+            })
+        })
 }
 
 /// Run the appropriate `solid3d_tess::tessellate_*` for the entity,
