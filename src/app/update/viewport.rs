@@ -19,6 +19,7 @@ use acadrust::types::Color as AcadColor;
 use acadrust::{EntityType as AcadEntityType, Handle};
 use iced::time::Instant;
 use iced::{mouse, Point, Task};
+use std::sync::Arc;
 
 /// Pixel radius for grabbing a UCS-icon grip (origin dot or an axis tip).
 const UCS_GRIP_HIT_PX: f32 = 9.0;
@@ -3484,8 +3485,17 @@ impl OpenCADStudio {
             .viewport_edit_frame(canvas_sz)
             .map(|(cam, _)| cam);
         let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
+        if let Some(task) =
+            self.prepare_interaction_index_task(i, Arc::clone(&all_wires), bounds.height)
+        {
+            // Keep the dwell armed. While the index is pending later timer
+            // ticks return immediately; once installed, the next tick performs
+            // the exact pick at the latest cursor position.
+            return task;
+        }
         let hover_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-        let hover_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
+        let candidate_started = Instant::now();
+        let hover_candidates = self.tabs[i].scene.interaction_hover_candidates_near(
             all_wires,
             hover_world,
             view_rot,
@@ -3493,13 +3503,18 @@ impl OpenCADStudio {
             bounds,
             scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
         );
+        let candidate_ms = candidate_started.elapsed().as_secs_f64() * 1000.0;
+        let candidate_count = hover_candidates.len();
+        let handles_started = Instant::now();
         let candidate_handles = self.tabs[i]
             .scene
             .interaction_candidate_handles(&hover_candidates);
+        let handles_ms = handles_started.elapsed().as_secs_f64() * 1000.0;
         // Mirror the click-selection pick order so the rollover
         // highlights every selectable object: wire → hatch →
         // block-internal hatch → shaded 3D solid body.
-        let hovered = scene::pick::hit_test::click_hit(
+        let wire_started = Instant::now();
+        let mut hovered = scene::pick::hit_test::click_hit(
             p,
             &hover_candidates,
             view_rot,
@@ -3507,9 +3522,14 @@ impl OpenCADStudio {
             bounds,
             self.tabs[i].scene.document.header.lineweight_display,
         )
-        .and_then(|s| Scene::handle_from_wire_name(s))
-        .or_else(|| {
-            scene::pick::hit_test::click_hit_hatch(
+        .and_then(Scene::handle_from_wire_name);
+        let wire_ms = wire_started.elapsed().as_secs_f64() * 1000.0;
+        let mut hatch_ms = 0.0;
+        let mut insert_ms = 0.0;
+        let mut solid_ms = 0.0;
+        if hovered.is_none() {
+            let started = Instant::now();
+            hovered = scene::pick::hit_test::click_hit_hatch(
                 p,
                 &self.tabs[i]
                     .scene
@@ -3518,27 +3538,35 @@ impl OpenCADStudio {
                 eye,
                 bounds,
                 candidate_handles.as_ref(),
-            )
-        })
-        .or_else(|| {
-            scene::pick::hit_test::click_hit_insert_hatch(
+            );
+            hatch_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
+        if hovered.is_none() {
+            let started = Instant::now();
+            hovered = scene::pick::hit_test::click_hit_insert_hatch(
                 p,
                 self.tabs[i].scene.insert_hatches_for_click().as_ref(),
                 view_rot,
                 eye,
                 bounds,
                 candidate_handles.as_ref(),
-            )
-        })
-        .or_else(|| {
-            self.tabs[i]
+            );
+            insert_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
+        if hovered.is_none() {
+            let started = Instant::now();
+            hovered = self.tabs[i]
                 .scene
-                .solid_click_hit(p, view_rot, eye, bounds, candidate_handles.as_ref())
-        });
+                .solid_hover_hit(p, view_rot, eye, bounds, candidate_handles.as_ref());
+            solid_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
         self.tabs[i].scene.set_hover_highlight(hovered);
         self.hover_dwell = None;
         let hover_ms = hover_started.elapsed().as_secs_f64() * 1000.0;
         if perf && hover_ms >= 5.0 {
+            eprintln!(
+                "[perf] hover-detail       query={candidate_ms:.1} handles={handles_ms:.1} wire={wire_ms:.1} hatch={hatch_ms:.1} insert={insert_ms:.1} solid={solid_ms:.1} candidates={candidate_count}",
+            );
             eprintln!(
                 "[perf] hover-dwell        {:>7.1}ms wires={} hit={}",
                 hover_ms,
@@ -3547,6 +3575,61 @@ impl OpenCADStudio {
             );
         }
         Task::none()
+    }
+
+    pub(in crate::app) fn prepare_interaction_index_task(
+        &mut self,
+        i: usize,
+        wires: Arc<Vec<crate::scene::WireModel>>,
+        screen_height_px: f32,
+    ) -> Option<Task<Message>> {
+        let (epoch, source) = self.tabs[i]
+            .scene
+            .interaction_index_build_key(&wires, screen_height_px)?;
+        let tab_id = self.tabs[i].id;
+        let key = (tab_id, epoch, source);
+        if let Some(active) = self.active_interaction_index {
+            if active != key {
+                if let Some(position) = self
+                    .queued_interaction_indices
+                    .iter()
+                    .position(|(queued_tab, ..)| *queued_tab == tab_id)
+                {
+                    self.queued_interaction_indices.remove(position);
+                }
+                self.queued_interaction_indices.push_back((
+                    tab_id,
+                    epoch,
+                    source,
+                    wires,
+                    screen_height_px,
+                ));
+            }
+            return Some(Task::none());
+        }
+        self.tabs[i]
+            .scene
+            .mark_interaction_index_pending(epoch, source);
+        self.active_interaction_index = Some(key);
+        let weak = Arc::downgrade(&wires);
+        Some(Task::perform(
+            async move {
+                let started = std::time::Instant::now();
+                let index = Arc::new(
+                    crate::scene::pick::interaction_index::InteractionIndex::build(&wires),
+                );
+                index.prepare_screen();
+                Message::InteractionIndexReady {
+                    tab_id,
+                    epoch,
+                    source,
+                    wires: weak,
+                    index,
+                    build_ms: started.elapsed().as_secs_f64() * 1000.0,
+                }
+            },
+            |message| message,
+        ))
     }
 
     pub(super) fn on_layout_switch(&mut self, name: String) -> Task<Message> {

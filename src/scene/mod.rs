@@ -1032,6 +1032,10 @@ pub struct Scene {
             Arc<crate::scene::pick::interaction_index::InteractionIndex>,
         )>,
     >,
+    /// Latest large source requested for off-thread preparation. A matching
+    /// cache miss returns no candidates temporarily instead of scanning the
+    /// entire scene on the UI thread.
+    interaction_index_pending_key: std::cell::Cell<Option<(u64, usize)>>,
     /// Large resident interaction index kept as an immutable base across small
     /// entity edits. Geometry-journal handles form a tombstone/delta overlay;
     /// the exact index is rebuilt only after the overlay grows too large.
@@ -1063,9 +1067,6 @@ pub struct Scene {
             Arc<crate::scene::pick::interaction_index::InteractionHandleIndex>,
         )>,
     >,
-    /// Estimated hatch/mesh/Insert interaction work, cached per geometry epoch
-    /// so the index threshold itself stays O(1) on pointer-move events.
-    interaction_aux_work_cache: std::cell::Cell<Option<(u64, u64, usize)>>,
     /// Index built from every SortEntitiesTable in the document.
     /// Maps block_handle → (entity_handle.value() → sort_handle.value()).
     /// Replaces the O(objects) linear scan inside `wires_for_block()` with an O(1) lookup.
@@ -1357,10 +1358,10 @@ impl Scene {
             selection_generation: 0,
             wire_cache: RefCell::new(None),
             interaction_index_cache: RefCell::new(Vec::new()),
+            interaction_index_pending_key: std::cell::Cell::new(None),
             interaction_base_index_cache: RefCell::new(None),
             interaction_overlay_index_cache: RefCell::new(None),
             interaction_handle_index_cache: RefCell::new(None),
-            interaction_aux_work_cache: std::cell::Cell::new(None),
             sort_cache: RefCell::new(None),
             draw_depth_cache: RefCell::new(None),
             hatch_cache: RefCell::new(None),
@@ -4791,107 +4792,137 @@ impl Scene {
     const INTERACTION_INDEX_MIN_WORK: usize = 20_000;
 
     fn interaction_index_worthwhile(&self, wires: &[WireModel]) -> bool {
-        if wires.len() >= Self::INTERACTION_INDEX_MIN_WIRES
+        wires.len() >= Self::INTERACTION_INDEX_MIN_WIRES
             || crate::scene::pick::interaction_index::InteractionIndex::estimated_work(wires)
                 >= Self::INTERACTION_INDEX_MIN_WORK
-        {
-            return true;
-        }
-        let space_key = self.interaction_space_key();
-        let aux_work = self
-            .interaction_aux_work_cache
-            .get()
-            .filter(|(epoch, space, _)| *epoch == self.geometry_epoch && *space == space_key)
-            .map(|(_, _, work)| work)
-            .unwrap_or_else(|| {
-                let hatch_work = self.hatches.iter().fold(0usize, |total, (&handle, hatch)| {
-                    if self.hatch_visible_for_interaction(handle) {
-                        total.saturating_add(hatch.boundary.len())
-                    } else {
-                        total
-                    }
-                });
-                let insert_work = self
-                    .insert_hatches_for_click()
-                    .values()
-                    .flatten()
-                    .fold(0usize, |total, hatch| {
-                        total.saturating_add(hatch.boundary.len())
-                    });
-                let mesh_work = self
-                    .interaction_meshes_arc()
-                    .iter()
-                    .fold(0usize, |total, set| {
-                        total.saturating_add(set.lods.first().map_or(0, |mesh| mesh.verts.len()))
-                    });
-                let work = hatch_work
-                    .saturating_add(mesh_work)
-                    .saturating_add(insert_work);
-                self.interaction_aux_work_cache
-                    .set(Some((self.geometry_epoch, space_key, work)));
-                work
-            });
-        aux_work >= Self::INTERACTION_INDEX_MIN_WORK
+            || self.hatches.len() >= Self::INTERACTION_INDEX_MIN_WIRES
+            || self.meshes.len().saturating_add(self.block_meshes.len())
+                >= Self::INTERACTION_INDEX_MIN_WIRES
+            || self
+                .hatches
+                .values()
+                .any(|hatch| hatch.boundary.len() >= Self::INTERACTION_INDEX_MIN_WORK)
+            || self
+                .meshes
+                .values()
+                .chain(self.block_meshes.values())
+                .any(|set| {
+                    set.lods
+                        .first()
+                        .is_some_and(|mesh| mesh.verts.len() >= Self::INTERACTION_INDEX_MIN_WORK)
+                })
     }
 
-    fn interaction_index(
+    fn cached_interaction_index(
         &self,
         wires: &Arc<Vec<WireModel>>,
-    ) -> Arc<crate::scene::pick::interaction_index::InteractionIndex> {
-        const MAX_CACHED_SOURCES: usize = 4;
+    ) -> Option<Arc<crate::scene::pick::interaction_index::InteractionIndex>> {
         let source = Arc::as_ptr(wires) as usize;
-        {
-            let mut cache = self.interaction_index_cache.borrow_mut();
-            cache.retain(|(epoch, _, weak, _)| {
-                *epoch == self.geometry_epoch && weak.strong_count() > 0
-            });
-            if let Some(position) = cache.iter().position(|(_, ptr, weak, _)| {
-                *ptr == source
-                    && weak
-                        .upgrade()
-                        .is_some_and(|cached| Arc::ptr_eq(&cached, wires))
-            }) {
-                let entry = cache.remove(position);
-                let index = Arc::clone(&entry.3);
-                cache.push(entry);
-                if self.current_layout == "Model" {
-                    *self.interaction_base_index_cache.borrow_mut() = Some((
-                        self.geometry_epoch,
-                        self.interaction_space_key(),
-                        Arc::clone(&index),
-                    ));
-                }
-                return index;
-            }
-        }
-        let started = iced::time::Instant::now();
-        let index = Arc::new(crate::scene::pick::interaction_index::InteractionIndex::build(wires));
-        let build_ms = started.elapsed().as_secs_f64() * 1000.0;
-        if std::env::var_os("OCS_PERF").is_some() && build_ms >= 50.0 {
-            eprintln!(
-                "[perf] interaction-index   {:>7.1}ms wires={}",
-                build_ms,
-                wires.len(),
-            );
-        }
         let mut cache = self.interaction_index_cache.borrow_mut();
+        cache.retain(|(epoch, _, weak, _)| {
+            *epoch == self.geometry_epoch && weak.strong_count() > 0
+        });
+        if let Some(position) = cache.iter().position(|(_, ptr, weak, _)| {
+            *ptr == source
+                && weak
+                    .upgrade()
+                    .is_some_and(|cached| Arc::ptr_eq(&cached, wires))
+        }) {
+            let entry = cache.remove(position);
+            let index = Arc::clone(&entry.3);
+            cache.push(entry);
+            if self.current_layout == "Model" {
+                *self.interaction_base_index_cache.borrow_mut() = Some((
+                    self.geometry_epoch,
+                    self.interaction_space_key(),
+                    Arc::clone(&index),
+                ));
+            }
+            return Some(index);
+        }
+        None
+    }
+
+    fn cache_interaction_index(
+        &self,
+        epoch: u64,
+        wires: Arc<Vec<WireModel>>,
+        index: Arc<crate::scene::pick::interaction_index::InteractionIndex>,
+    ) {
+        const MAX_CACHED_SOURCES: usize = 4;
+        let source = Arc::as_ptr(&wires) as usize;
+        let mut cache = self.interaction_index_cache.borrow_mut();
+        cache.retain(|(cached_epoch, ptr, weak, _)| {
+            *cached_epoch == self.geometry_epoch
+                && weak.strong_count() > 0
+                && !(*cached_epoch == epoch && *ptr == source)
+        });
         cache.push((
-            self.geometry_epoch,
+            epoch,
             source,
-            Arc::downgrade(wires),
+            Arc::downgrade(&wires),
             Arc::clone(&index),
         ));
         if cache.len() > MAX_CACHED_SOURCES {
             cache.remove(0);
         }
-        if self.current_layout == "Model" {
+        if epoch == self.geometry_epoch && self.current_layout == "Model" {
             *self.interaction_base_index_cache.borrow_mut() = Some((
-                self.geometry_epoch,
+                epoch,
                 self.interaction_space_key(),
-                Arc::clone(&index),
+                index,
             ));
         }
-        index
+    }
+
+    /// Return a stable build key when this source needs its large
+    /// interaction index. The app uses it to deduplicate background builds.
+    pub fn interaction_index_build_key(
+        &self,
+        wires: &Arc<Vec<WireModel>>,
+        screen_height_px: f32,
+    ) -> Option<(u64, usize)> {
+        let key = (self.geometry_epoch, Arc::as_ptr(wires) as usize);
+        if !self.interaction_source_is_resident(wires, screen_height_px.max(1.0))
+            || !self.interaction_index_worthwhile(wires)
+            || self.interaction_overlay_base().is_some()
+        {
+            return None;
+        }
+        if self.cached_interaction_index(wires).is_some() {
+            if self.interaction_index_pending_key.get() == Some(key) {
+                self.interaction_index_pending_key.set(None);
+            }
+            return None;
+        }
+        Some(key)
+    }
+
+    pub fn mark_interaction_index_pending(&self, epoch: u64, source: usize) {
+        self.interaction_index_pending_key
+            .set(Some((epoch, source)));
+    }
+
+    /// Install a fully prepared background index only if its geometry/source
+    /// still belongs to this scene.
+    pub fn install_prepared_interaction_index(
+        &self,
+        epoch: u64,
+        source: usize,
+        wires: std::sync::Weak<Vec<WireModel>>,
+        index: Arc<crate::scene::pick::interaction_index::InteractionIndex>,
+    ) -> bool {
+        if self.interaction_index_pending_key.get() == Some((epoch, source)) {
+            self.interaction_index_pending_key.set(None);
+        }
+        let Some(wires) = wires.upgrade() else {
+            return false;
+        };
+        if epoch != self.geometry_epoch || Arc::as_ptr(&wires) as usize != source {
+            return false;
+        }
+        self.cache_interaction_index(epoch, wires, index);
+        true
     }
 
     const INTERACTION_OVERLAY_MAX_HANDLES: usize = 2_048;
@@ -5018,6 +5049,7 @@ impl Scene {
         &self,
         wires: Arc<Vec<WireModel>>,
         aabb: [f64; 4],
+        allow_pending_empty: bool,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
             let perf = std::env::var_os("OCS_PERF").is_some();
@@ -5057,7 +5089,16 @@ impl Scene {
             }
             return result;
         }
-        self.interaction_index(&wires).query_xy(wires, aabb)
+        if let Some(index) = self.cached_interaction_index(&wires) {
+            index.query_xy(wires, aabb)
+        } else if allow_pending_empty
+            && self.interaction_index_pending_key.get()
+            == Some((self.geometry_epoch, Arc::as_ptr(&wires) as usize))
+        {
+            crate::scene::pick::interaction_index::InteractionCandidates::pending(wires)
+        } else {
+            crate::scene::pick::interaction_index::InteractionCandidates::all(wires)
+        }
     }
 
     fn indexed_interaction_candidates_screen(
@@ -5067,6 +5108,7 @@ impl Scene {
         view_rot: glam::Mat4,
         eye: glam::DVec3,
         bounds: iced::Rectangle,
+        allow_pending_empty: bool,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
             let perf = std::env::var_os("OCS_PERF").is_some();
@@ -5117,8 +5159,16 @@ impl Scene {
             }
             return result;
         }
-        self.interaction_index(&wires)
-            .query_screen(wires, screen_rect, view_rot, eye, bounds)
+        if let Some(index) = self.cached_interaction_index(&wires) {
+            index.query_screen(wires, screen_rect, view_rot, eye, bounds)
+        } else if allow_pending_empty
+            && self.interaction_index_pending_key.get()
+            == Some((self.geometry_epoch, Arc::as_ptr(&wires) as usize))
+        {
+            crate::scene::pick::interaction_index::InteractionCandidates::pending(wires)
+        } else {
+            crate::scene::pick::interaction_index::InteractionCandidates::all(wires)
+        }
     }
 
     fn indexed_interaction_pick_radius(
@@ -5131,7 +5181,8 @@ impl Scene {
                 self.interaction_overlay_changed_index(base_epoch, &changes);
             base.pick_radius_px(changed.pick_radius_px(base_radius_px))
         } else {
-            self.interaction_index(wires).pick_radius_px(base_radius_px)
+            self.cached_interaction_index(wires)
+                .map_or(base_radius_px, |index| index.pick_radius_px(base_radius_px))
         }
     }
 
@@ -5141,7 +5192,7 @@ impl Scene {
         screen_height_px: f32,
     ) -> bool {
         if self.current_layout == "Model" {
-            return true;
+            return Arc::ptr_eq(&self.entity_wires_arc(), wires);
         }
         match self.active_viewport {
             Some(viewport) => {
@@ -5237,7 +5288,7 @@ impl Scene {
         radius_px: f32,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         self.interaction_candidates_near_impl(
-            wires, cursor, view_rot, eye, bounds, radius_px, false,
+            wires, cursor, view_rot, eye, bounds, radius_px, false, false,
         )
     }
 
@@ -5258,6 +5309,28 @@ impl Scene {
             bounds,
             radius_px,
             self.document.header.lineweight_display,
+            false,
+        )
+    }
+
+    pub fn interaction_hover_candidates_near(
+        &self,
+        wires: Arc<Vec<WireModel>>,
+        cursor: glam::DVec3,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        radius_px: f32,
+    ) -> crate::scene::pick::interaction_index::InteractionCandidates {
+        self.interaction_candidates_near_impl(
+            wires,
+            cursor,
+            view_rot,
+            eye,
+            bounds,
+            radius_px,
+            self.document.header.lineweight_display,
+            true,
         )
     }
 
@@ -5270,6 +5343,7 @@ impl Scene {
         bounds: iced::Rectangle,
         radius_px: f32,
         include_line_weight: bool,
+        allow_pending_empty: bool,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         if !self.interaction_source_is_resident(&wires, bounds.height)
             || !self.interaction_index_worthwhile(&wires)
@@ -5306,6 +5380,7 @@ impl Scene {
                 view_rot,
                 eye,
                 bounds,
+                allow_pending_empty,
             );
         }
         let world_x_px = ((view_rot.x_axis.x * bounds.width * 0.5).powi(2)
@@ -5325,7 +5400,7 @@ impl Scene {
             cursor.x + radius,
             cursor.y + radius,
         ];
-        self.indexed_interaction_candidates_xy(wires, query)
+        self.indexed_interaction_candidates_xy(wires, query, allow_pending_empty)
     }
 
     /// Shared rectangular broad phase for box/lasso/fence and command windows.
@@ -5349,9 +5424,16 @@ impl Scene {
             return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
         }
         if flat_ortho {
-            self.indexed_interaction_candidates_xy(wires, aabb)
+            self.indexed_interaction_candidates_xy(wires, aabb, false)
         } else {
-            self.indexed_interaction_candidates_screen(wires, screen_rect, view_rot, eye, bounds)
+            self.indexed_interaction_candidates_screen(
+                wires,
+                screen_rect,
+                view_rot,
+                eye,
+                bounds,
+                false,
+            )
         }
     }
 
@@ -5363,6 +5445,12 @@ impl Scene {
             .iter()
             .filter_map(|wire| Self::handle_from_wire_name(&wire.name))
             .collect();
+        if candidates.is_indexed()
+            && candidates.query_aabb().is_none()
+            && candidates.screen_query().is_none()
+        {
+            return Some(handles);
+        }
         if let Some(aabb) = candidates.query_aabb() {
             let index = self.entity_index();
             handles.extend(index.tree.query_rect(aabb));
@@ -5386,7 +5474,7 @@ impl Scene {
 
     pub fn interaction_handles_in_world_aabb(&self, aabb: [f64; 4]) -> HashSet<Handle> {
         let wires = self.hit_test_wires();
-        let candidates = self.indexed_interaction_candidates_xy(wires, aabb);
+        let candidates = self.indexed_interaction_candidates_xy(wires, aabb, false);
         let mut handles: HashSet<Handle> = candidates
             .iter()
             .filter_map(|wire| Self::handle_from_wire_name(&wire.name))
@@ -5544,6 +5632,46 @@ impl Scene {
         bounds: iced::Rectangle,
         candidate_handles: Option<&HashSet<Handle>>,
     ) -> Option<Handle> {
+        self.solid_hit(
+            cursor,
+            view_rot,
+            eye,
+            bounds,
+            candidate_handles,
+            false,
+        )
+    }
+
+    /// Hover may use the coarsest cached solid LOD. Click selection keeps the
+    /// full-resolution mesh, while rollover only needs a stable parent handle
+    /// and must stay within an interactive frame budget.
+    pub fn solid_hover_hit(
+        &self,
+        cursor: iced::Point,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        candidate_handles: Option<&HashSet<Handle>>,
+    ) -> Option<Handle> {
+        self.solid_hit(
+            cursor,
+            view_rot,
+            eye,
+            bounds,
+            candidate_handles,
+            true,
+        )
+    }
+
+    fn solid_hit(
+        &self,
+        cursor: iced::Point,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        candidate_handles: Option<&HashSet<Handle>>,
+        coarse_lod: bool,
+    ) -> Option<Handle> {
         // Reuse the renderer's expanded mesh set (top-level solids + per-INSERT
         // block instances), cached per geometry epoch — so hover no longer
         // re-expands every block instance on each move. Every `MeshLodSet`
@@ -5581,10 +5709,24 @@ impl Scene {
                     .then_some((handle, set))
             }));
         }
-        let candidates = sets
-            .into_iter()
-            .filter_map(|(handle, set)| set.lods.first().map(|mesh| (handle, mesh)));
-        pick::hit_test::mesh_click_hit(cursor, candidates, view_rot, eye, bounds)
+        if coarse_lod {
+            return pick::hit_test::mesh_click_hit(
+                cursor,
+                sets.iter()
+                    .filter_map(|(handle, set)| set.lods.last().map(|mesh| (*handle, mesh))),
+                view_rot,
+                eye,
+                bounds,
+            );
+        }
+        pick::hit_test::mesh_click_hit(
+            cursor,
+            sets.iter()
+                .filter_map(|(handle, set)| set.lods.first().map(|mesh| (*handle, mesh))),
+            view_rot,
+            eye,
+            bounds,
+        )
     }
 
     /// Parent INSERT handles whose block-internal solid meshes fall in a

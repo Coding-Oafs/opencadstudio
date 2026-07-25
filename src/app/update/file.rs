@@ -616,7 +616,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].dirty = false;
                 self.tabs[i].history = crate::app::document::HistoryState::default();
                 self.refresh_selected_grips();
-                Task::batch([thumbs_task, self.drain_pending_open()])
+                #[cfg(not(target_arch = "wasm32"))]
+                let interaction_task = {
+                    let wires = self.tabs[i].scene.hit_test_wires();
+                    let screen_height = self.tabs[i].scene.selection.borrow().vp_size.1;
+                    self.prepare_interaction_index_task(i, wires, screen_height)
+                        .unwrap_or_else(Task::none)
+                };
+                #[cfg(target_arch = "wasm32")]
+                let interaction_task = Task::none();
+                let pending_open_task = self.drain_pending_open();
+                Task::batch([thumbs_task, pending_open_task, interaction_task])
     }
 
     pub(super) fn on_wblock_save_result_some(&mut self, block_name: String, path: std::path::PathBuf) -> Task<Message> {

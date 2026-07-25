@@ -140,12 +140,12 @@ fn build_bvh2_node<T>(
         return node_idx;
     }
     let axis = usize::from(bounds[3] - bounds[1] > bounds[2] - bounds[0]);
-    order.sort_unstable_by(|&a, &b| {
+    let mid = order.len() / 2;
+    order.select_nth_unstable_by(mid, |&a, &b| {
         let aa = entry_aabb2(&entries[a as usize]);
         let bb = entry_aabb2(&entries[b as usize]);
         (aa[axis] + aa[axis + 2]).total_cmp(&(bb[axis] + bb[axis + 2]))
     });
-    let mid = order.len() / 2;
     let (left_order, right_order) = order.split_at_mut(mid);
     let left = build_bvh2_node(entries, left_order, base, nodes);
     let right = build_bvh2_node(entries, right_order, base + mid, nodes);
@@ -253,12 +253,12 @@ fn build_bvh3_node<T>(
             axis = candidate;
         }
     }
-    order.sort_unstable_by(|&a, &b| {
+    let mid = order.len() / 2;
+    order.select_nth_unstable_by(mid, |&a, &b| {
         let aa = entries[a as usize].aabb;
         let bb = entries[b as usize].aabb;
         (aa[axis] + aa[axis + 3]).total_cmp(&(bb[axis] + bb[axis + 3]))
     });
-    let mid = order.len() / 2;
     let (left_order, right_order) = order.split_at_mut(mid);
     let left = build_bvh3_node(entries, left_order, base, nodes);
     let right = build_bvh3_node(entries, right_order, base + mid, nodes);
@@ -518,6 +518,11 @@ impl<T: Copy + Ord + Sync> SpatialSet<T> {
 
     fn query_xy(&self, aabb: [f64; 4]) -> Vec<T> {
         self.xy.query(&self.entries, aabb)
+    }
+
+    fn prepare_screen(&self) {
+        self.xyz
+            .get_or_init(|| SpatialBvh3::build(&self.entries));
     }
 
     fn query_screen(
@@ -951,6 +956,52 @@ impl InteractionIndex {
         }
     }
 
+    /// Build every projected 3D broad phase before the index reaches the UI
+    /// thread. Perspective/orbit hover must never pay this one-time cost.
+    pub fn prepare_screen(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        rayon::join(
+            || {
+                rayon::join(
+                    || rayon::join(|| self.wires.prepare_screen(), || self.segments.prepare_screen()),
+                    || {
+                        rayon::join(
+                            || self.snap_points.prepare_screen(),
+                            || self.key_vertices.prepare_screen(),
+                        )
+                    },
+                )
+            },
+            || {
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || self.key_segments.prepare_screen(),
+                            || self.fill_triangles.prepare_screen(),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || self.pick_triangles.prepare_screen(),
+                            || self.glyphs.prepare_screen(),
+                        )
+                    },
+                )
+            },
+        );
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.wires.prepare_screen();
+            self.segments.prepare_screen();
+            self.snap_points.prepare_screen();
+            self.key_vertices.prepare_screen();
+            self.key_segments.prepare_screen();
+            self.fill_triangles.prepare_screen();
+            self.pick_triangles.prepare_screen();
+            self.glyphs.prepare_screen();
+        }
+    }
+
     pub fn pick_radius_px(&self, base_radius_px: f32) -> f32 {
         base_radius_px.max(self.max_line_half_width_px)
     }
@@ -1241,6 +1292,17 @@ impl InteractionIndex {
     }
 }
 
+impl std::fmt::Debug for InteractionIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InteractionIndex")
+            .field("wires", &self.wire_handles.len())
+            .field("segments", &self.segments.entries.len())
+            .field("fill_triangles", &self.fill_triangles.entries.len())
+            .field("pick_triangles", &self.pick_triangles.entries.len())
+            .finish()
+    }
+}
+
 pub struct InteractionCandidates {
     wires: Arc<Vec<WireModel>>,
     wire_indices: Option<Vec<u32>>,
@@ -1300,6 +1362,30 @@ impl InteractionCandidates {
             screen_rect: None,
             screen_view: None,
         }
+    }
+
+    /// Empty but explicitly indexed candidate set. Used while a large source
+    /// is still being prepared off-thread so UI input never falls back to a
+    /// full-scene scan.
+    pub fn pending(wires: Arc<Vec<WireModel>>) -> Self {
+        Self {
+            wires,
+            wire_indices: Some(Vec::new()),
+            segments: Some(Vec::new()),
+            snap_points: Some(Vec::new()),
+            key_vertices: Some(Vec::new()),
+            key_segments: Some(Vec::new()),
+            fill_triangles: Some(Vec::new()),
+            pick_triangles: Some(Vec::new()),
+            glyphs: Some(Vec::new()),
+            query_aabb: None,
+            screen_rect: None,
+            screen_view: None,
+        }
+    }
+
+    pub fn is_indexed(&self) -> bool {
+        self.wire_indices.is_some()
     }
 
     pub fn iter(&self) -> WireIter<'_> {

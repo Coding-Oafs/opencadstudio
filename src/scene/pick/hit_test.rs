@@ -671,6 +671,24 @@ pub fn mesh_click_hit<'a>(
         let v = &mesh.verts;
         let idx = &mesh.indices;
         let lo = &mesh.verts_low;
+        // Indexed meshes reuse most vertices across several triangles.
+        // Project once per vertex instead of three matrix transforms per
+        // triangle; dense solid misses are otherwise the worst-case hover.
+        let projected: Vec<(Point, f32)> = v
+            .iter()
+            .enumerate()
+            .map(|(i, &vertex)| {
+                let ndc =
+                    view_rot.project_point3((mesh_vert(vertex, lo, i) - eye).as_vec3());
+                (
+                    Point::new(
+                        (ndc.x + 1.0) * 0.5 * bounds.width,
+                        (1.0 - ndc.y) * 0.5 * bounds.height,
+                    ),
+                    ndc.z,
+                )
+            })
+            .collect();
         let mut t = 0;
         while t + 2 < idx.len() {
             let tri = [idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize];
@@ -678,12 +696,9 @@ pub fn mesh_click_hit<'a>(
             let mut sp = [Point::ORIGIN; 3];
             let mut depth = 0.0f32;
             for (j, &k) in tri.iter().enumerate() {
-                let ndc = view_rot.project_point3((mesh_vert(v[k], lo, k) - eye).as_vec3());
-                sp[j] = Point::new(
-                    (ndc.x + 1.0) * 0.5 * bounds.width,
-                    (1.0 - ndc.y) * 0.5 * bounds.height,
-                );
-                depth += ndc.z;
+                let (point, z) = projected[k];
+                sp[j] = point;
+                depth += z;
             }
             if point_in_polygon(cursor, &sp) {
                 let d = depth / 3.0;

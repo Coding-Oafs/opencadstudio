@@ -1661,6 +1661,72 @@ impl OpenCADStudio {
 
             Message::HoverDwellTick => self.on_hover_dwell_tick(),
 
+            Message::InteractionIndexReady {
+                tab_id,
+                epoch,
+                source,
+                wires,
+                index,
+                build_ms,
+            } => {
+                if self.active_interaction_index == Some((tab_id, epoch, source)) {
+                    self.active_interaction_index = None;
+                }
+                let installed = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.id == tab_id)
+                    .is_some_and(|i| {
+                        self.tabs[i].scene.install_prepared_interaction_index(
+                            epoch, source, wires, index,
+                        )
+                    });
+                if std::env::var_os("OCS_PERF").is_some() {
+                    eprintln!(
+                        "[perf] interaction-index-bg {:>7.1}ms installed={installed}",
+                        build_ms,
+                    );
+                }
+                while let Some((
+                    queued_tab,
+                    queued_epoch,
+                    queued_source,
+                    queued_wires,
+                    screen_height,
+                )) = self.queued_interaction_indices.pop_front()
+                {
+                    let Some(i) = self.tabs.iter().position(|tab| tab.id == queued_tab) else {
+                        continue;
+                    };
+                    let stale = self.tabs[i].scene.geometry_epoch != queued_epoch
+                        || std::sync::Arc::as_ptr(&queued_wires) as usize != queued_source;
+                    let (wires, screen_height) = if stale {
+                        (
+                            self.tabs[i].scene.hit_test_wires(),
+                            self.tabs[i].scene.selection.borrow().vp_size.1,
+                        )
+                    } else {
+                        (queued_wires, screen_height)
+                    };
+                    if let Some(task) = self.prepare_interaction_index_task(
+                        i,
+                        wires,
+                        screen_height,
+                    ) {
+                        return task;
+                    }
+                }
+                if self.active_interaction_index.is_none() && !self.tabs.is_empty() {
+                    let i = self.active_tab.min(self.tabs.len() - 1);
+                    let wires = self.tabs[i].scene.hit_test_wires();
+                    let screen_height = self.tabs[i].scene.selection.borrow().vp_size.1;
+                    self.prepare_interaction_index_task(i, wires, screen_height)
+                        .unwrap_or_else(Task::none)
+                } else {
+                    Task::none()
+                }
+            }
+
             Message::VisibilityPick(idx) => {
                 if let Some(popup) = self.visibility_popup.take() {
                     self.apply_visibility_state(popup.insert_handle, idx);

@@ -735,6 +735,19 @@ pub(super) struct OpenCADStudio {
     /// drawings in a file manager produces exactly that (one process per file,
     /// all arriving at once), which makes this queue load-bearing, not polish.
     pub(super) pending_opens: std::collections::VecDeque<PathBuf>,
+    /// One global interaction-index build at a time. Large drawings can each
+    /// hold millions of entries, so file-open bursts must not multiply peak
+    /// CPU and memory by the number of tabs.
+    active_interaction_index: Option<(u64, u64, usize)>,
+    /// Latest resident source requested by each waiting tab. Jobs run
+    /// serially behind `active_interaction_index`.
+    queued_interaction_indices: std::collections::VecDeque<(
+        u64,
+        u64,
+        usize,
+        std::sync::Arc<Vec<crate::scene::WireModel>>,
+        f32,
+    )>,
 
     // ── Unsaved-changes dialog ────────────────────────────────────────────
     /// Set when the user tries to close a tab or quit while there are unsaved changes.
@@ -1576,6 +1589,17 @@ pub enum Message {
     /// Timer pulse while a rollover hit-test is queued; fires when the
     /// cursor has been still long enough to safely run the pick.
     HoverDwellTick,
+    /// Large projected interaction index finished preparing off the UI thread.
+    InteractionIndexReady {
+        tab_id: u64,
+        epoch: u64,
+        source: usize,
+        wires: std::sync::Weak<Vec<crate::scene::WireModel>>,
+        index: std::sync::Arc<
+            crate::scene::pick::interaction_index::InteractionIndex,
+        >,
+        build_ms: f64,
+    },
     WindowResized(f32, f32),
     /// Enter pressed globally — finalises the active command (no text-input involvement).
     CommandFinalize,
@@ -2461,6 +2485,8 @@ impl OpenCADStudio {
             plot_prev: None,
             opening: None,
             pending_opens: std::collections::VecDeque::new(),
+            active_interaction_index: None,
+            queued_interaction_indices: std::collections::VecDeque::new(),
             pending_close: None,
             active_save_jobs: std::collections::HashMap::new(),
             save_job_serial: 0,
