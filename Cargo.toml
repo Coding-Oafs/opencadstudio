@@ -92,10 +92,6 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 [patch.crates-io]
 # Track the verified DWG round-trip, I/O, and unified PERF fixes.
 acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "bee1a58" }
-# iced_wgpu 0.14 requests WebGL2 limits on every wasm adapter, including
-# BrowserWebGpu. Keep the release source local with the one adapter-aware limit
-# fix so WebGPU can expose storage buffers while WebGL2 remains the fallback.
-iced_wgpu = { path = "crates/iced_wgpu" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).

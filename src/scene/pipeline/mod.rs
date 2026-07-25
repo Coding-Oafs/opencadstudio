@@ -47,7 +47,7 @@ pub struct Pipeline {
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
     /// Layout for the per-wire `WireConst` storage buffer (group 1 of the wire /
-    /// xray pipelines). `Some` on native/WebGPU fast paths; `None` in packed
+    /// xray pipelines). `Some` only on the fast native path; `None` in packed
     /// compatibility mode. Passed to `WireGpu::from_run` / `from_batch`.
     pub(crate) wire_const_bgl: Option<wgpu::BindGroupLayout>,
     wipeout_pipeline: wgpu::RenderPipeline,
@@ -338,8 +338,8 @@ impl Pipeline {
         });
 
         // ── Wire pipeline ──────────────────────────────────────────────────
-        // Select once per device. Native and WebGPU hoist shared constants into
-        // storage when limits allow; WebGL2/compat keeps packed attributes.
+        // Select once per device. The fast native path hoists shared constants
+        // into storage; compatibility mode keeps them in 10 packed attributes.
         let wire_mode = wire_gpu::WirePipelineMode::select(device);
         let renderer_mode_name =
             if wire_mode.uses_storage() { "fast-storage" } else { "packed-compat" };
@@ -357,9 +357,12 @@ impl Pipeline {
             renderer_mode_name,
             device.limits().max_storage_buffers_per_shader_stage
         );
+        #[cfg(not(target_arch = "wasm32"))]
         let wire_const_bgl = wire_mode
             .uses_storage()
             .then(|| wire_gpu::WireConst::bind_group_layout(device));
+        #[cfg(target_arch = "wasm32")]
+        let wire_const_bgl: Option<wgpu::BindGroupLayout> = None;
         let mut wire_bgls: Vec<&wgpu::BindGroupLayout> = vec![&frame_bgl];
         if let Some(bgl) = &wire_const_bgl {
             wire_bgls.push(bgl);
@@ -376,6 +379,7 @@ impl Pipeline {
         let wire_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wire.shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(match wire_mode {
+                #[cfg(not(target_arch = "wasm32"))]
                 wire_gpu::WirePipelineMode::IndexedStorage => {
                     include_str!("../../shaders/wire_indexed.wgsl")
                 }

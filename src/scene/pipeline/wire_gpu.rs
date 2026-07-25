@@ -58,17 +58,18 @@ fn instance_buffer_mapped<T: bytemuck::Pod>(
 
 // ── Instance layout ───────────────────────────────────────────────────────
 
-// ── WebGPU/native: slim per-segment instance + shared constants ─────────────
+// ── Native: slim per-segment instance + shared per-wire constants ───────────
 //
 // Every segment of a wire used to carry the wire's color / line-weight / dash
 // pattern / draw-depth (~44 B) on each instance — re-fetched once per segment
-// even though it's constant along the wire. On storage-capable adapters we hoist those into a
+// even though it's constant along the wire. On native we hoist those into a
 // per-wire `WireConst` storage buffer indexed by `wire_id`, so the instance
 // keeps only the per-segment data (endpoints + arc-length distances). Cuts the
 // instance from 104 B to one 64-byte cache line and removes the redundant
 // per-segment re-fetch of the shared constants. WebGL2 has no vertex-stage
 // storage buffers, so the wasm build below keeps the original self-contained
 // fat instance.
+#[cfg(not(target_arch = "wasm32"))]
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WireInstance {
@@ -86,6 +87,8 @@ pub struct WireInstance {
     /// exactly one 64-byte cache line.
     pub taper_ratio: [u16; 2],
 }
+
+#[cfg(not(target_arch = "wasm32"))]
 impl WireInstance {
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         // Must match `InstanceIn` in wire_indexed.wgsl.
@@ -107,10 +110,11 @@ impl WireInstance {
     }
 }
 
-/// Per-wire constants shared by every segment of a wire. std430
+/// Per-wire constants shared by every segment of a wire (native only). std430
 /// layout: three vec4 then eight scalars = 80 B, matching `WireConst` in
 /// wire_indexed.wgsl. `align_end` / `align_total` carry the "A"-type endpoint
 /// alignment (see `wire_distances`); 0.0 total = no alignment.
+#[cfg(not(target_arch = "wasm32"))]
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WireConst {
@@ -130,6 +134,8 @@ pub struct WireConst {
     pub _pad1: f32,
     pub _pad2: f32,
 }
+
+#[cfg(not(target_arch = "wasm32"))]
 impl WireConst {
     /// Bind-group layout for the per-wire storage buffer (group 1 of the wire /
     /// xray pipelines). Read-only storage, visible to the vertex stage.
@@ -152,8 +158,8 @@ impl WireConst {
 
 // ── Packed compatibility instance (no vertex-stage storage) ────────────────
 //
-// WebGL2 and limited native adapters use this layout. WebGPU selects the
-// indexed storage path when its reported limits satisfy the same requirement.
+// Web always uses this layout. Native selects it at runtime for adapters whose
+// storage-buffer limits are insufficient, or when --compat-renderer is set.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PackedWireInstance {
@@ -218,15 +224,21 @@ impl PackedWireInstance {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+pub type WireInstance = PackedWireInstance;
+
 /// Wire and hatch pipelines switch together: the fast path uses storage
 /// buffers; the compatibility path carries wire constants in packed vertex
 /// attributes and hatch data in a texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WirePipelineMode {
+    #[cfg(not(target_arch = "wasm32"))]
     IndexedStorage,
     Packed,
 }
-fn select_pipeline(max_storage_buffers_per_stage: u32, forced: bool) -> WirePipelineMode {
+
+#[cfg(not(target_arch = "wasm32"))]
+fn select_native_pipeline(max_storage_buffers_per_stage: u32, forced: bool) -> WirePipelineMode {
     const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
     if forced || max_storage_buffers_per_stage < REQUIRED_STORAGE_BUFFERS_PER_STAGE {
         WirePipelineMode::Packed
@@ -237,15 +249,23 @@ fn select_pipeline(max_storage_buffers_per_stage: u32, forced: bool) -> WirePipe
 
 impl WirePipelineMode {
     pub fn select(device: &wgpu::Device) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        let forced = crate::cli::gui_config().compat_renderer;
         #[cfg(target_arch = "wasm32")]
-        let forced = false;
-        select_pipeline(device.limits().max_storage_buffers_per_shader_stage, forced)
+        {
+            let _ = device;
+            Self::Packed
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            select_native_pipeline(
+                device.limits().max_storage_buffers_per_shader_stage,
+                crate::cli::gui_config().compat_renderer,
+            )
+        }
     }
 
     pub fn uses_storage(self) -> bool {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::IndexedStorage => true,
             Self::Packed => false,
         }
@@ -253,6 +273,7 @@ impl WirePipelineMode {
 
     pub fn layout<'a>(self) -> wgpu::VertexBufferLayout<'a> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::IndexedStorage => WireInstance::layout(),
             Self::Packed => PackedWireInstance::layout(),
         }
@@ -473,8 +494,9 @@ fn emit_wire_packed(
     instances
 }
 
-/// Storage path: emit slim per-segment instances (positions + distances + `wire_id`)
+/// Native: emit slim per-segment instances (positions + distances + `wire_id`)
 /// plus the one `WireConst` record every segment of this wire shares.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn emit_wire_native(
     wire: &WireModel,
     wire_id: u32,
@@ -557,10 +579,11 @@ pub(crate) fn wire_draw_depth(
     }
 }
 
-/// Build the shared per-wire `WireConst` storage buffer and its bind group.
-/// All instance-buffer chunks from one build reference the same
+/// Build the shared per-wire `WireConst` storage buffer and its bind group
+/// (native only). All instance-buffer chunks from one build reference the same
 /// buffer via their global `wire_id`, so a single bind group is cloned into
 /// each chunk.
+#[cfg(not(target_arch = "wasm32"))]
 fn build_const_bind_group(
     device: &wgpu::Device,
     bgl: &wgpu::BindGroupLayout,
@@ -654,6 +677,7 @@ impl WireGpu {
         mesh_edge: bool,
         const_bgl: Option<&wgpu::BindGroupLayout>,
     ) -> Vec<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(const_bgl) = const_bgl {
             const MAX_INSTANCES: usize =
                 268_435_456 / std::mem::size_of::<WireInstance>();
@@ -745,6 +769,7 @@ impl WireGpu {
         if total_segs == 0 {
             return vec![];
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(const_bgl) = const_bgl {
             // GPU max buffer size is 256 MB; chunk to stay within the limit.
             const MAX_INSTANCES: usize =

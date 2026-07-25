@@ -436,10 +436,7 @@ impl shader::Primitive for Primitive {
                 // the whole wire buffer. Only for the scissor-free, mesh-free
                 // (single-batch) Model set; scissored paper viewports and mixed
                 // 2D/3D sets fall through to the shared batched path below.
-                #[cfg(not(target_arch = "wasm32"))]
                 let mut arena_served = false;
-                #[cfg(target_arch = "wasm32")]
-                let arena_served = false;
                 #[cfg(not(target_arch = "wasm32"))]
                 let _perf = crate::perf::enabled();
                 #[cfg(not(target_arch = "wasm32"))]
