@@ -25,6 +25,8 @@ use crate::modules::draw::defaults;
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 
+use super::entity_index::ModifyEntityIndex;
+
 // ── Ribbon definition ──────────────────────────────────────────────────────
 
 pub fn tool() -> ToolDef {
@@ -691,6 +693,7 @@ enum Step {
 pub struct OffsetCommand {
     step: Step,
     all_entities: Vec<EntityType>,
+    entity_index: ModifyEntityIndex,
     /// Pre-selected offsettable objects (pick-first, #422); consumed when the
     /// distance step resolves.
     preselected: Vec<EntityType>,
@@ -712,9 +715,11 @@ pub fn is_offsettable(e: &EntityType) -> bool {
 
 impl OffsetCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let entity_index = ModifyEntityIndex::build(&all_entities);
         Self {
             step: Step::Distance,
             all_entities,
+            entity_index,
             preselected: Vec::new(),
         }
     }
@@ -722,9 +727,11 @@ impl OffsetCommand {
     /// Pick-first flow (#422): the distance step still comes first, then the
     /// pre-selected objects go straight to the side step.
     pub fn with_selection(all_entities: Vec<EntityType>, targets: Vec<EntityType>) -> Self {
+        let entity_index = ModifyEntityIndex::build(&all_entities);
         Self {
             step: Step::Distance,
             all_entities,
+            entity_index,
             preselected: targets,
         }
     }
@@ -801,9 +808,7 @@ impl CadCommand for OffsetCommand {
         }
 
         let entity = self
-            .all_entities
-            .iter()
-            .find(|e| e.common().handle == handle)
+            .entity_index.get(&self.all_entities, handle)
             .cloned();
 
         // Accept every type compute_offset can offset — including XLine (#296),
@@ -881,9 +886,7 @@ impl CadCommand for OffsetCommand {
             return vec![];
         }
         if let Some(entity) = self
-            .all_entities
-            .iter()
-            .find(|e| e.common().handle == handle)
+            .entity_index.get(&self.all_entities, handle)
         {
             let pts = entity_wire_pts(entity);
             if !pts.is_empty() {

@@ -539,8 +539,7 @@ impl OpenCADStudio {
 
     /// Overwrite the live style state with a snapshot (used by commit's undo
     /// dance and by discard).
-    fn restore_style_state(&mut self, snap: &StyleStateSnapshot) {
-        let i = self.active_tab;
+    pub(super) fn restore_style_state(&mut self, i: usize, snap: &StyleStateSnapshot) {
         let doc = &mut self.tabs[i].scene.document;
         doc.text_styles = snap.text_styles.clone();
         doc.dim_styles = snap.dim_styles.clone();
@@ -560,8 +559,10 @@ impl OpenCADStudio {
         doc.header.multiline_style = snap.multiline_style.clone();
         doc.header.current_table_style_name = snap.current_table.clone();
         doc.header.current_mleader_style_name = snap.current_mleader.clone();
-        self.ribbon.active_table_style = snap.active_table.clone();
-        self.ribbon.active_mleader_style = snap.active_mleader.clone();
+        if i == self.active_tab {
+            self.ribbon.active_table_style = snap.active_table.clone();
+            self.ribbon.active_mleader_style = snap.active_mleader.clone();
+        }
         self.tabs[i].active_mleader_style = snap.tab_active_mleader.clone();
     }
 
@@ -587,18 +588,26 @@ impl OpenCADStudio {
             self.sync_ribbon_styles();
             return;
         };
-        // Capture the edited state, rewind to the baseline so the undo entry
-        // restores the pre-edit document, then re-apply the edits on top.
         let edited = self.capture_style_state();
-        self.restore_style_state(&stage.baseline);
-        self.push_undo_snapshot(i, "STYLE");
-        self.restore_style_state(&edited);
-        self.tabs[i].dirty = true;
-        self.tabs[i].scene.bump_geometry();
+        let changed = edited != stage.baseline;
+        if changed {
+            self.tabs[i].dirty = true;
+            let (text_names, dim_names, object_handles) = edited.changed_keys(&stage.baseline);
+            self.tabs[i].scene.invalidate_text_style_dependencies_many(&text_names);
+            self.tabs[i]
+                .scene
+                .invalidate_dim_style_dependencies_many(&dim_names);
+            self.tabs[i]
+                .scene
+                .invalidate_object_style_dependencies(&object_handles);
+            self.commit_style_undo(i, stage.baseline, edited.clone(), stage.dirty_at_open);
+        } else {
+            self.tabs[i].dirty = stage.dirty_at_open;
+        }
         self.sync_ribbon_styles();
         // Re-baseline so further edits in the still-open window stage afresh.
         self.style_stage = Some(StyleStage {
-            dirty_at_open: true,
+            dirty_at_open: self.tabs[i].dirty,
             baseline: edited,
         });
     }
@@ -609,13 +618,14 @@ impl OpenCADStudio {
         let Some(stage) = self.style_stage.take() else {
             return;
         };
-        self.restore_style_state(&stage.baseline);
+        self.restore_style_state(self.active_tab, &stage.baseline);
         self.tabs[self.active_tab].dirty = stage.dirty_at_open;
         self.sync_ribbon_styles();
     }
 }
 
 /// Snapshot of every document field a style manager can touch.
+#[derive(Clone, PartialEq)]
 pub(super) struct StyleStateSnapshot {
     text_styles: acadrust::tables::Table<TextStyle>,
     dim_styles: acadrust::tables::Table<DimStyle>,
@@ -628,6 +638,64 @@ pub(super) struct StyleStateSnapshot {
     active_table: String,
     active_mleader: String,
     tab_active_mleader: String,
+}
+
+impl StyleStateSnapshot {
+    pub(super) fn estimated_bytes(&self) -> usize {
+        self.text_styles
+            .iter()
+            .count()
+            .saturating_mul(320)
+            .saturating_add(self.dim_styles.iter().count().saturating_mul(1024))
+            .saturating_add(self.style_objects.len().saturating_mul(512))
+    }
+
+    pub(super) fn changed_keys(&self, other: &Self) -> (Vec<String>, Vec<String>, Vec<Handle>) {
+        let text_names = self
+            .text_styles
+            .iter()
+            .filter(|style| other.text_styles.get(&style.name) != Some(*style))
+            .map(|style| style.name.clone())
+            .chain(
+                other
+                    .text_styles
+                    .iter()
+                    .filter(|style| self.text_styles.get(&style.name) != Some(*style))
+                    .map(|style| style.name.clone()),
+            )
+            .collect::<rustc_hash::FxHashSet<_>>()
+            .into_iter()
+            .collect();
+        let dim_names = self
+            .dim_styles
+            .iter()
+            .filter(|style| other.dim_styles.get(&style.name) != Some(*style))
+            .map(|style| style.name.clone())
+            .chain(
+                other
+                    .dim_styles
+                    .iter()
+                    .filter(|style| self.dim_styles.get(&style.name) != Some(*style))
+                    .map(|style| style.name.clone()),
+            )
+            .collect::<rustc_hash::FxHashSet<_>>()
+            .into_iter()
+            .collect();
+        let self_objects: rustc_hash::FxHashMap<_, _> =
+            self.style_objects.iter().map(|(h, o)| (*h, o)).collect();
+        let other_objects: rustc_hash::FxHashMap<_, _> =
+            other.style_objects.iter().map(|(h, o)| (*h, o)).collect();
+        let object_handles = self
+            .style_objects
+            .iter()
+            .chain(other.style_objects.iter())
+            .map(|(handle, _)| *handle)
+            .collect::<rustc_hash::FxHashSet<_>>()
+            .into_iter()
+            .filter(|handle| self_objects.get(handle) != other_objects.get(handle))
+            .collect();
+        (text_names, dim_names, object_handles)
+    }
 }
 
 /// An in-progress style-manager transaction.

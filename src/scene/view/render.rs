@@ -152,13 +152,6 @@ pub struct Primitive {
     pub(in crate::scene) viewports: Vec<ViewportData>,
     /// Background color used to clear each viewport's MSAA buffer.
     pub(in crate::scene) bg_color: [f32; 4],
-    /// First `MultiPipeline` inner slot this primitive owns. Paper space (one
-    /// shader widget, many viewports) uses 0. Per-pane Model widgets each own a
-    /// distinct slot (= their tile index) so several shader widgets can share
-    /// the type-keyed pipeline storage without clobbering one another — all
-    /// `prepare` calls run before all `render` calls, so disjoint slots are
-    /// safe.
-    pub(in crate::scene) base_slot: usize,
     /// One input-to-render sample, carried only when PERF tracing is enabled.
     pub(in crate::scene) nav_perf: Option<NavPerfSample>,
 }
@@ -250,10 +243,11 @@ impl shader::Primitive for Primitive {
         let phys = viewport.physical_size();
         let full_size = Size::new(phys.width, phys.height);
         let scale = viewport.scale_factor() as f32;
-        pipeline.ensure_len(device, queue, self.base_slot + self.viewports.len());
+        let instance_ids: Vec<u64> = self.viewports.iter().map(|vp| vp.instance_id).collect();
+        let slots = pipeline.resolve_slots(device, queue, &instance_ids);
 
         for (i, vp) in self.viewports.iter().enumerate() {
-            let inner = &mut pipeline.inners[self.base_slot + i];
+            let inner = &mut pipeline.inners[slots[i]];
             // Pipeline slots are addressed by list index, but off-canvas
             // viewports are dropped from the list — so a slot can be reused by a
             // DIFFERENT viewport across frames (e.g. the first viewport scrolls
@@ -442,7 +436,10 @@ impl shader::Primitive for Primitive {
                 // the whole wire buffer. Only for the scissor-free, mesh-free
                 // (single-batch) Model set; scissored paper viewports and mixed
                 // 2D/3D sets fall through to the shared batched path below.
+                #[cfg(not(target_arch = "wasm32"))]
                 let mut arena_served = false;
+                #[cfg(target_arch = "wasm32")]
+                let arena_served = false;
                 #[cfg(not(target_arch = "wasm32"))]
                 let _perf = crate::perf::enabled();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -895,9 +892,12 @@ impl shader::Primitive for Primitive {
         let ch = clip.height as f32;
         let clip_right = clip.x + clip.width;
         let clip_bottom = clip.y + clip.height;
-        for (i, vp) in self.viewports.iter().enumerate() {
-            let Some(inner) = pipeline.inners.get(self.base_slot + i) else {
-                break;
+        for vp in &self.viewports {
+            let Some(slot) = pipeline.slot_by_instance.get(&vp.instance_id) else {
+                continue;
+            };
+            let Some(inner) = pipeline.inners.get(*slot) else {
+                continue;
             };
             // Where the viewport would land on the surface in absolute
             // pixels (i32 because either edge may stick off the canvas).
@@ -1433,14 +1433,9 @@ impl Scene {
             sample.build_ms = nav_build_started.elapsed().as_secs_f64() * 1000.0;
             sample
         });
-        // Model panes permanently own slots 0..N. Paper starts after them so
-        // its sheet/content viewports never evict the Model slot's wire arena,
-        // textures, mesh batches and render cache during a layout-tab switch.
-        let base_slot = self.model_tiles.borrow().len();
         Primitive {
             viewports,
             bg_color,
-            base_slot,
             nav_perf: perf_nav,
         }
     }
@@ -1466,7 +1461,6 @@ impl Scene {
             return Primitive {
                 viewports: vec![],
                 bg_color,
-                base_slot: tile_idx,
                 nav_perf: None,
             };
         };
@@ -1514,7 +1508,6 @@ impl Scene {
         Primitive {
             viewports,
             bg_color,
-            base_slot: tile_idx,
             nav_perf: perf_nav,
         }
     }

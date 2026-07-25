@@ -20,6 +20,28 @@ use acadrust::{EntityType as AcadEntityType, Handle};
 use iced::time::Instant;
 use iced::{mouse, Point, Task};
 
+pub(super) fn background_task<T, F, M>(work: F, map: M) -> Task<Message>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+    M: FnOnce(T) -> Message + Send + 'static,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (tx, rx) = iced::futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+        });
+        Task::perform(
+            async move { rx.await.expect("background export worker dropped") },
+            map,
+        )
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Task::perform(async move { work() }, map)
+    }
+}
 
 impl OpenCADStudio {
     /// Before a save, give every cached truck solid that still has no ACIS
@@ -362,15 +384,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     // progress, so mark one. The browser picker + parse happen
                     // inside `pick_and_load_web`; the real name is unknown until
                     // then, so show a generic label meanwhile.
+            let state = std::sync::Arc::new(crate::io::OpenProgressState::new(
+                crate::app::OPEN_PHASE_READING,
+            ));
                     self.opening = Some(crate::app::OpenProgress {
                         name: "Opening…".into(),
                         size_bytes: 0,
-                        phase: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
-                            crate::app::OPEN_PHASE_READING,
-                        )),
+                state: state.clone(),
                         started: Instant::now(),
                     });
-                    Task::perform(crate::io::pick_and_load_web(), Message::FileOpened)
+                    Task::perform(crate::io::pick_and_load_web(state), Message::FileOpened)
                 }
     }
 
@@ -403,13 +426,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
     }
 
-    pub(super) fn on_file_opened(&mut self, name: String, path: std::path::PathBuf, doc: acadrust::CadDocument, caches: crate::scene::DerivedCaches) -> Task<Message> {
+    pub(super) fn on_file_opened(&mut self, name: String, path: std::path::PathBuf, doc: acadrust::CadDocument,
+        mut caches: crate::scene::DerivedCaches,
+    ) -> Task<Message> {
                 // If the user clicked Cancel while the parser was running, the
                 // overlay state was cleared and we silently drop the result.
                 if self.opening.is_none() {
                     return Task::none();
                 }
-                let open_started = self.opening.take().map(|p| p.started);
+                let open_started = self.opening.as_ref().map(|p| p.started);
                 let timings = caches.timings;
                 let entity_count = doc.entities().count();
                 self.command_line
@@ -420,6 +445,30 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         caches.corrupt_dropped
                     ));
                 }
+        if caches.xref_dropped > 0 {
+            self.command_line.push_error(&format!(
+                "Warning: {} corrupt xref entities dropped",
+                caches.xref_dropped
+            ));
+        }
+        for info in &caches.xrefs {
+            match info.status {
+                crate::io::xref::XrefStatus::Loaded => {
+                    self.command_line
+                        .push_output(&format!("XREF  Loaded \"{}\"", info.name));
+                }
+                crate::io::xref::XrefStatus::NotFound => {
+                    self.command_line.push_error(&format!(
+                        "XREF  Not found: \"{}\" ({})",
+                        info.name, info.path
+                    ));
+                }
+                crate::io::xref::XrefStatus::Unloaded => {
+                    self.command_line
+                        .push_info(&format!("XREF  Unloaded (skipped): \"{}\"", info.name));
+                }
+            }
+        }
                 let thumbs_task = self.push_recent(path.clone());
 
                 let current_is_empty = {
@@ -472,47 +521,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     1.0
                 };
 
-                // Auto-resolve XREFs relative to the opened file's directory.
-                let mut xref_ms = 0u32;
-                let mut xref_merged = false;
-                if let Some(base_dir) = path.parent() {
-                    // xref content arrives un-purged: parser-garbage entities
-                    // inside the referenced file can trigger infinite loops in
-                    // tessellation. `resolve_xrefs` runs the corrupt-entity
-                    // guard inline as it merges each xref, so no second
-                    // full-document walk is needed here.
-                    let t_xref = Instant::now();
-                    let (xrefs, extra_dropped) =
-                        crate::io::xref::resolve_xrefs(&mut self.tabs[i].scene.document, base_dir);
-                    xref_ms = t_xref.elapsed().as_millis() as u32;
-                    if extra_dropped > 0 {
-                        self.command_line.push_error(&format!(
-                            "Warning: {extra_dropped} corrupt xref entities dropped"
-                        ));
-                    }
-                    for info in &xrefs {
-                        match info.status {
-                            crate::io::xref::XrefStatus::Loaded => {
-                                xref_merged = true;
-                                self.command_line
-                                    .push_output(&format!("XREF  Loaded \"{}\"", info.name));
-                            }
-                            crate::io::xref::XrefStatus::NotFound => {
-                                self.command_line.push_error(&format!(
-                                    "XREF  Not found: \"{}\" ({})",
-                                    info.name, info.path
-                                ));
-                            }
-                            crate::io::xref::XrefStatus::Unloaded => {
-                                self.command_line.push_info(&format!(
-                                    "XREF  Unloaded (skipped): \"{}\"",
-                                    info.name
-                                ));
-                            }
-                        }
-                    }
-                }
-
                 // Open-time breakdown so regressions are visible immediately.
                 // `total` is wall time from the Open click to here (post-xref,
                 // pre-first-frame); the phase figures are the background-thread
@@ -522,7 +530,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .unwrap_or(0);
                 self.command_line.push_info(&format!(
                     "  parse {}ms · purge {}ms · caches {}ms · xref {}ms · total {}ms",
-                    timings.parse_ms, timings.purge_ms, timings.caches_ms, xref_ms, total_ms
+                    timings.parse_ms, timings.purge_ms, timings.caches_ms, timings.xref_ms, total_ms
                 ));
 
                 // Caches were built on the background thread inside open_path().
@@ -532,18 +540,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].scene.images = caches.images;
                 self.tabs[i].scene.meshes = caches.meshes;
                 self.tabs[i].scene.block_meshes = caches.block_meshes;
+        let prepared_geometry = caches.prepared_geometry.take();
                 // Invalidate the wire cache so the new document is tessellated.
                 self.tabs[i].scene.bump_geometry();
-                // XREFs are merged into the document AFTER the background worker
-                // built the mesh caches above, so those caches contain none of
-                // the xref'd geometry. The wire pass rebuilds from the document
-                // each frame (bump_geometry covers it), but 3D-solid meshes are
-                // only tessellated by populate — run the incremental variant so
-                // the already-cached host solids are kept and only the newly
-                // merged xref solids (walls, floors, roofs) are tessellated,
-                // avoiding a full re-tessellation of the whole drawing. (#203)
-                if xref_merged {
-                    self.tabs[i].scene.populate_missing_meshes_from_document();
+                if let Some(prepared) = prepared_geometry {
+                    self.tabs[i].scene.install_prepared_open_geometry(prepared);
                 }
                 self.tabs[i].scene.selected = rustc_hash::FxHashSet::default();
                 self.tabs[i].scene.preview_wires = vec![];
@@ -625,42 +626,38 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 };
                 #[cfg(target_arch = "wasm32")]
                 let interaction_task = Task::none();
+        if let Some(opening) = &self.opening {
+            opening
+                .state
+                .set(crate::app::OPEN_PHASE_FINALIZING, 10000, 1, 1);
+        }
+        self.opening.take();
                 let pending_open_task = self.drain_pending_open();
                 Task::batch([thumbs_task, pending_open_task, interaction_task])
     }
 
-    pub(super) fn on_wblock_save_result_some(&mut self, block_name: String, path: std::path::PathBuf) -> Task<Message> {
+    pub(super) fn on_wblock_save_result_some(&mut self, block_name: String, path: std::path::PathBuf,
+    ) -> Task<Message> {
                 let i = self.active_tab;
-                let result = if block_name == "*" {
+                let document = self.tabs[i].scene.document.clone();
                     let handles: Vec<_> = self.tabs[i].scene.selected.iter().copied().collect();
+        let worker_name = block_name.clone();
+        let worker_path = path.clone();
+        background_task(
+            move || {
+                let document = if worker_name == "*" {
                     crate::modules::insert::wblock::extract_entities_to_doc(
-                        &self.tabs[i].scene.document,
+                        &document,
                         &handles,
                     )
                 } else {
                     crate::modules::insert::wblock::extract_block_to_doc(
-                        &self.tabs[i].scene.document,
-                        &block_name,
-                    )
-                };
-                match result {
-                    Ok(doc) => match crate::io::save(&doc, &path) {
-                        Ok(()) => {
-                            let fname = path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                            self.command_line.push_output(&format!(
-                                "WBLOCK  Saved \"{block_name}\" → \"{fname}\""
-                            ));
-                        }
-                        Err(e) => self
-                            .command_line
-                            .push_error(&format!("WBLOCK save failed: {e}")),
-                    },
-                    Err(e) => self.command_line.push_error(&format!("WBLOCK: {e}")),
+                        &document,
+                        &worker_name)
                 }
-                Task::none()
+                .map_err(|e| e.to_string())?; crate::io::save(&document, &worker_path).map_err(|e| e.to_string())
+                    },
+            move |result| Message::WblockWriteFinished(block_name, path, result),)
     }
 
     pub(super) fn on_stl_export_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
@@ -675,21 +672,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .values()
                     .filter_map(|s| s.lods.first().cloned())
                     .collect();
-                let mesh_refs: Vec<&crate::scene::model::mesh_model::MeshModel> = meshes.iter().collect();
-                match crate::io::stl::build_stl(&mesh_refs) {
-                    Some(bytes) => match std::fs::write(&path, bytes) {
-                        Ok(()) => self
-                            .command_line
-                            .push_output(&format!("STLOUT: exported to \"{}\"", path.display())),
-                        Err(e) => self
-                            .command_line
-                            .push_error(&format!("STLOUT: write error: {e}")),
+                let worker_path = path.clone();
+        background_task(
+            move || {
+                let mesh_refs: Vec<_> = meshes.iter().collect();
+                let bytes = crate::io::stl::build_stl(&mesh_refs)
+                    .ok_or_else(|| "no mesh data to export".to_string())?;
+                std::fs::write(&worker_path, bytes).map_err(|e| e.to_string())
                     },
-                    None => self
-                        .command_line
-                        .push_error("STLOUT: no mesh data to export."),
-                }
-                Task::none()
+            move |result| Message::StlExportFinished(path, result),)
     }
 
     pub(super) fn on_step_export_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
@@ -701,63 +692,26 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .values()
                     .filter_map(|s| s.lods.first().cloned())
                     .collect();
-                let mesh_refs: Vec<&crate::scene::model::mesh_model::MeshModel> = meshes.iter().collect();
-                match crate::io::step::build_step(&mesh_refs) {
-                    Some(text) => match std::fs::write(&path, text.as_bytes()) {
-                        Ok(()) => self
-                            .command_line
-                            .push_output(&format!("STEPOUT: exported to \"{}\"", path.display())),
-                        Err(e) => self
-                            .command_line
-                            .push_error(&format!("STEPOUT: write error: {e}")),
+                let worker_path = path.clone();
+        background_task(
+            move || {
+                let mesh_refs: Vec<_> = meshes.iter().collect();
+                let text = crate::io::step::build_step(&mesh_refs)
+                    .ok_or_else(|| "no mesh data to export".to_string())?;
+                std::fs::write(&worker_path, text.as_bytes()).map_err(|e| e.to_string())
                     },
-                    None => self
-                        .command_line
-                        .push_error("STEPOUT: no mesh data to export."),
-                }
-                Task::none()
+            move |result| Message::StepExportFinished(path, result),)
     }
 
     pub(super) fn on_obj_import_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
-                let src = match std::fs::read_to_string(&path) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        self.command_line
-                            .push_error(&format!("IMPORTOBJ: read error: {e}"));
-                        return Task::none();
-                    }
-                };
-                let color = [0.7f32, 0.7, 0.85, 1.0];
-                match crate::io::obj::parse_obj(&src, color) {
-                    None => {
-                        self.command_line
-                            .push_error("IMPORTOBJ: no usable geometry in file.");
-                    }
-                    Some(mut mesh) => {
-                        let i = self.active_tab;
-                        let file_stem = path
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "obj_mesh".into());
-                        mesh.name = file_stem.clone();
-                        self.push_undo_snapshot(i, "IMPORTOBJ");
-                        use crate::modules::insert::solid3d_cmds::empty_solid3d;
-                        let entity = empty_solid3d();
-                        let handle = self.tabs[i].scene.add_entity(entity);
-                        if !handle.is_null() {
-                            self.tabs[i]
-                                .scene
-                                .meshes
-                                .insert(handle, crate::scene::MeshLodSet::from_single(mesh));
-                            self.tabs[i].dirty = true;
-                            self.command_line.push_output(&format!(
-                                "IMPORTOBJ: imported \"{}\" as mesh.",
-                                file_stem
-                            ));
-                        }
-                    }
-                }
-                Task::none()
+                let tab_id = self.tabs[self.active_tab].id;
+        let worker_path = path.clone();
+        background_task(
+            move || {
+                let src = std::fs::read_to_string(&worker_path).map_err(|e| e.to_string())?; crate::io::obj::parse_obj(&src, [0.7, 0.7, 0.85, 1.0])
+                            .ok_or_else(|| "no usable geometry in file".to_string())
+            },
+            move |result| Message::ObjImportFinished(tab_id, path, result),)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -768,6 +722,19 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.tabs[i].scene.document.header.user_real1 =
             self.tabs[i].scene.annotation_scale as f64;
         self.sync_truck_solids_to_acis(i);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn stamp_thumbnail(&mut self, i: usize, version: acadrust::DxfVersion) {
+        let scene = &self.tabs[i].scene;
+        let preview = crate::io::thumbnail::from_snapshot(
+            &scene.entity_wires(),
+            &scene.camera.borrow(),
+            scene.bg_color,
+            version >= acadrust::DxfVersion::AC1027,
+            self.vp_size,
+        );
+        self.tabs[i].scene.document.preview = preview;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1484,7 +1451,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     _ => (paper_w, paper_h),
                 };
 
-                match crate::io::pdf_export::export_pdf(
+        let plot_style = self.active_plot_style.clone();
+        let worker_path = path.clone();
+        background_task(
+            move || {
+                crate::io::pdf_export::export_pdf(
                     &wires,
                     hatches.as_slice(),
                     wipeouts.as_slice(),
@@ -1495,23 +1466,20 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     rotation_deg,
                     1.0,
                     None,
-                    &path,
-                    self.active_plot_style.as_ref(),
-                ) {
-                    // Full path, not just the file name — when the export was
-                    // driven by EXPORTPDF <path> the user needs to see where
-                    // the file actually landed. (#369)
-                    Ok(()) => self
-                        .command_line
-                        .push_info(&format!("Exported: {}", path.display())),
-                    Err(e) => self.command_line.push_error(&format!("Export failed: {e}")),
-                }
-                Task::none()
+                    &worker_path,
+                    plot_style.as_ref(),
+                )
+                .map(|_| format!("Exported: {}", worker_path.display()))
+                .map_err(|e| format!("Export failed: {e}"))
+            },
+            |result| Message::BackgroundIoFinished(result, false),
+        )
     }
 
     /// Export the pending model-space plot window (set by PLOTWINDOW while on
     /// the Model tab) to PDF, using the chosen paper size/orientation/scale.
-    pub(super) fn on_plot_window_export_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
+    pub(super) fn on_plot_window_export_path_some(&mut self, path: std::path::PathBuf,
+    ) -> Task<Message> {
                 use crate::io::paper_sizes::{sheet_mm, window_to_sheet, PlotScale};
                 let i = self.active_tab;
                 if self.tabs[i].scene.current_layout != "Model" {
@@ -1569,7 +1537,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 // same as the wires) so the final sheet-mm rect lands at (ox, oy).
                 let clip = Some(((ox / scale) as f32, (oy / scale) as f32, win_w as f32, win_h as f32));
 
-                let res = crate::io::pdf_export::export_pdf(
+                let plot_style = self.active_plot_style.clone();
+        let worker_path = path.clone();
+        self.close_active_modal();
+        background_task(
+            move || {
+                crate::io::pdf_export::export_pdf(
                     &wires,
                     hatches.as_slice(),
                     wipeouts.as_slice(),
@@ -1580,20 +1553,18 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     0,
                     scale as f32,
                     clip,
-                    &path,
-                    self.active_plot_style.as_ref(),
-                );
-                match res {
-                    Ok(()) => {
-                        self.command_line.push_info(&format!(
+                    &worker_path,
+                    plot_style.as_ref(),
+                )
+                .map(|_| {format!(
                             "Plotted window to {}",
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        ));
-                        self.close_active_modal();
-                    }
-                    Err(e) => self.command_line.push_error(&format!("Plot failed: {e}")),
-                }
-                Task::none()
+                        worker_path
+                            .file_name().unwrap_or_default().to_string_lossy()
+                        )
+                }).map_err(|e| format!("Plot failed: {e}"))
+            },
+            |result| Message::BackgroundIoFinished(result, false),
+        )
     }
 
     /// Build the render inputs and page geometry for a full-layout plot: wires
@@ -1678,12 +1649,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             self.layout_plot_params();
         let plot_style = self.active_plot_style.clone();
         self.command_line.push_info("Sending to system printer…");
-        Task::perform(
-            async move {
+        background_task(
+            move || {
+                iced::futures::executor::block_on(
                 crate::io::print_to_printer::print_wires(
                     wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rotation_deg, plot_style,
-                )
-                .await
+                ))
             },
             Message::PrintResult,
         )
@@ -2220,16 +2191,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 };
                 let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
-                let exp = crate::io::pdf_export::export_pdf(
+                return background_task(
+                    move || {
+                        crate::io::pdf_export::export_pdf(
                     &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, 0, wscale, wclip, &tmp,
                     plot_style.as_ref(),
+                ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
+                        .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
+                    },
+                    |result| Message::BackgroundIoFinished(result, true),
                 );
-                match exp.and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp)) {
-                    Ok(()) => self.command_line.push_info("Opened plot preview."),
-                    Err(e) => self.command_line.push_error(&format!("Preview failed: {e}")),
-                }
-                self.active_modal = Some(crate::app::ModalKind::Plot);
-                return Task::none();
             }
             if d.to_file {
                 // Tested clipped export (opens a save dialog).
@@ -2244,25 +2215,27 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 return Task::none();
             };
             let tmp = std::env::temp_dir().join("open_cad_studio_print.pdf");
-            let exp = crate::io::pdf_export::export_pdf(
+            let opts = self.plot_print_options(&d);
+            return background_task(
+                move || {
+                    crate::io::pdf_export::export_pdf(
                 &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, 0, wscale, wclip, &tmp,
                 plot_style.as_ref(),
+            ).and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
+                    .map(|printer| format!("Sent to printer: {printer}"))
+                    .map_err(|e| format!("Print failed: {e}"))
+                },
+                |result| Message::BackgroundIoFinished(result, false),
             );
-            let opts = self.plot_print_options(&d);
-            match exp.and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts)) {
-                Ok(printer) => self
-                    .command_line
-                    .push_info(&format!("Sent to printer: {printer}")),
-                Err(e) => self.command_line.push_error(&format!("Print failed: {e}")),
-            }
-            return Task::none();
         }
 
         let (wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rot) = self.layout_plot_params();
 
         if preview {
             let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
-            let res = crate::io::pdf_export::export_pdf(
+            return background_task(
+                move || {
+                    crate::io::pdf_export::export_pdf(
                 &wires,
                 &hatches,
                 &wipeouts,
@@ -2275,14 +2248,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 None,
                 &tmp,
                 plot_style.as_ref(),
+            ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
+                    .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
+                },
+                |result| Message::BackgroundIoFinished(result, true),
             );
-            match res.and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp)) {
-                Ok(()) => self.command_line.push_info("Opened plot preview."),
-                Err(e) => self.command_line.push_error(&format!("Preview failed: {e}")),
-            }
-            // Preview leaves the dialog open for further tweaks.
-            self.active_modal = Some(crate::app::ModalKind::Plot);
-            return Task::none();
         }
 
         if d.to_file {
@@ -2292,12 +2262,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
         let opts = self.plot_print_options(&d);
         self.command_line.push_info("Sending to system printer…");
-        Task::perform(
-            async move {
+        background_task(
+            move || {
+                iced::futures::executor::block_on(
                 crate::io::print_to_printer::print_wires_with(
                     wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rot, plot_style, opts,
-                )
-                .await
+                ))
             },
             Message::PrintResult,
         )

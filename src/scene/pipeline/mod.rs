@@ -47,7 +47,7 @@ pub struct Pipeline {
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
     /// Layout for the per-wire `WireConst` storage buffer (group 1 of the wire /
-    /// xray pipelines). `Some` only on the fast native path; `None` in packed
+    /// xray pipelines). `Some` on native/WebGPU fast paths; `None` in packed
     /// compatibility mode. Passed to `WireGpu::from_run` / `from_batch`.
     pub(crate) wire_const_bgl: Option<wgpu::BindGroupLayout>,
     wipeout_pipeline: wgpu::RenderPipeline,
@@ -338,8 +338,8 @@ impl Pipeline {
         });
 
         // ── Wire pipeline ──────────────────────────────────────────────────
-        // Select once per device. The fast native path hoists shared constants
-        // into storage; compatibility mode keeps them in 10 packed attributes.
+        // Select once per device. Native and WebGPU hoist shared constants into
+        // storage when limits allow; WebGL2/compat keeps packed attributes.
         let wire_mode = wire_gpu::WirePipelineMode::select(device);
         let renderer_mode_name =
             if wire_mode.uses_storage() { "fast-storage" } else { "packed-compat" };
@@ -357,12 +357,9 @@ impl Pipeline {
             renderer_mode_name,
             device.limits().max_storage_buffers_per_shader_stage
         );
-        #[cfg(not(target_arch = "wasm32"))]
         let wire_const_bgl = wire_mode
             .uses_storage()
             .then(|| wire_gpu::WireConst::bind_group_layout(device));
-        #[cfg(target_arch = "wasm32")]
-        let wire_const_bgl: Option<wgpu::BindGroupLayout> = None;
         let mut wire_bgls: Vec<&wgpu::BindGroupLayout> = vec![&frame_bgl];
         if let Some(bgl) = &wire_const_bgl {
             wire_bgls.push(bgl);
@@ -379,7 +376,6 @@ impl Pipeline {
         let wire_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wire.shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(match wire_mode {
-                #[cfg(not(target_arch = "wasm32"))]
                 wire_gpu::WirePipelineMode::IndexedStorage => {
                     include_str!("../../shaders/wire_indexed.wgsl")
                 }
@@ -3157,6 +3153,14 @@ fn create_msaa_texture(
 pub struct MultiPipeline {
     pub(crate) inners: Vec<Pipeline>,
     format: wgpu::TextureFormat,
+    /// Stable viewport identity → pipeline slot map. Paper viewports used to
+    /// occupy slots by their current list position, so switching layouts or
+    /// scrolling a sheet could assign an existing viewport to a different
+    /// slot and throw away all of its GPU caches. Keep the association across
+    /// tab switches and only recycle genuinely cold slots.
+    pub(crate) slot_by_instance: rustc_hash::FxHashMap<u64, usize>,
+    slot_last_used: Vec<u64>,
+    slot_clock: u64,
     /// The resident wire batches, keyed by `wire_content_id` and shared across
     /// every slot (and every pane — one `MultiPipeline` backs all of them) that
     /// renders the same content. `prepare` builds an entry once on a cache miss
@@ -3189,7 +3193,69 @@ impl MultiPipeline {
         let n = n.max(1);
         while self.inners.len() < n {
             self.inners.push(Pipeline::new(device, queue, self.format));
+            self.slot_last_used.push(0);
         }
+    }
+
+    /// Resolve stable slots for the viewport identities in one primitive.
+    /// Thirty-two hot slots cover ordinary tiled/paper drawings. A cold slot
+    /// is recycled only after several other prepare calls, which prevents
+    /// sibling Model panes prepared in the same frame from evicting each
+    /// other. If every slot is still hot, growing is safer than a visible
+    /// rebuild hitch.
+    pub(crate) fn resolve_slots(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instance_ids: &[u64],
+    ) -> Vec<usize> {
+        const SOFT_LIMIT: usize = 32;
+        const HOT_WINDOW: u64 = 8;
+
+        self.slot_clock = self.slot_clock.wrapping_add(1).max(1);
+        let now = self.slot_clock;
+        let reserved: rustc_hash::FxHashSet<u64> = instance_ids.iter().copied().collect();
+        let mut slots = Vec::with_capacity(instance_ids.len());
+
+        for &instance_id in instance_ids {
+            let slot = if let Some(&slot) = self.slot_by_instance.get(&instance_id) {
+                slot
+            } else {
+                let vacant = self
+                    .inners
+                    .iter()
+                    .position(|inner| inner.slot_id == u64::MAX);
+                let recyclable = vacant.or_else(|| {
+                    (self.inners.len() >= SOFT_LIMIT)
+                        .then(|| {
+                            self.inners
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, inner)| !reserved.contains(&inner.slot_id))
+                                .filter(|(slot, _)| {
+                                    now.saturating_sub(self.slot_last_used[*slot]) > HOT_WINDOW
+                                })
+                                .min_by_key(|(slot, _)| self.slot_last_used[*slot])
+                                .map(|(slot, _)| slot)
+                        })
+                        .flatten()
+                });
+                let slot = recyclable.unwrap_or_else(|| {
+                    let slot = self.inners.len();
+                    self.ensure_len(device, queue, slot + 1);
+                    slot
+                });
+                let old_id = self.inners[slot].slot_id;
+                if old_id != u64::MAX {
+                    self.slot_by_instance.remove(&old_id);
+                }
+                self.slot_by_instance.insert(instance_id, slot);
+                slot
+            };
+            self.slot_last_used[slot] = now;
+            slots.push(slot);
+        }
+        slots
     }
 }
 
@@ -3227,6 +3293,9 @@ impl iced::widget::shader::Pipeline for MultiPipeline {
         Self {
             inners: vec![Pipeline::new(device, queue, format)],
             format,
+            slot_by_instance: rustc_hash::FxHashMap::default(),
+            slot_last_used: vec![0],
+            slot_clock: 0,
             wire_buffer_cache: rustc_hash::FxHashMap::default(),
         }
     }

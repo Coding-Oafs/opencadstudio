@@ -520,7 +520,7 @@ impl HistorySnapshot {
                 .saturating_add(
                     d.structure
                         .as_ref()
-                        .map_or(0, |doc| doc.objects.len().saturating_mul(192)),
+                        .map_or(0, StructureSnapshot::estimated_bytes),
                 )
                 .saturating_add(d.selected_before.len().saturating_mul(16))
                 .saturating_add(d.selected_after.len().saturating_mul(16))
@@ -546,8 +546,65 @@ pub(super) struct DeltaSnapshot {
     pub(super) dirty_after: bool,
     /// Opposite non-entity document state. `apply_delta_state` swaps this with
     /// the live structure, so the same allocation shuttles between undo/redo.
-    pub(super) structure: Option<CadDocument>,
+    pub(super) structure: Option<StructureSnapshot>,
     pub(super) label: String,
+}
+
+#[derive(Clone)]
+pub(super) enum StructureSnapshot {
+    /// Compatibility fallback for genuinely broad structural commands.
+    Full(CadDocument),
+    /// Exact layer-table entries touched by one command.
+    Layers(Vec<TableEntryDelta<acadrust::tables::Layer>>),
+    /// Exact text-style entries touched by one command.
+    TextStyles(Vec<TableEntryDelta<acadrust::tables::TextStyle>>),
+    /// Exact dimension-style entries touched by one command.
+    DimStyles(Vec<TableEntryDelta<acadrust::tables::DimStyle>>),
+    /// Exact object-map entries touched by one command. This supports commands
+    /// such as groups/dictionaries without retaining every unrelated object.
+    Objects(Vec<ObjectEntryDelta>),
+    /// The bounded set of style tables, style objects, current-style pointers,
+    /// and matching ribbon state touched by one Style Manager transaction.
+    Styles {
+        before: super::style_ops::StyleStateSnapshot,
+        after: super::style_ops::StyleStateSnapshot,
+        text_names: Vec<String>,
+        dim_names: Vec<String>,
+        object_handles: Vec<Handle>,
+    },
+}
+
+impl StructureSnapshot {
+    pub(super) fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Full(doc) => doc.objects.len().saturating_mul(192),
+            Self::Layers(entries) => entries.len().saturating_mul(256),
+            Self::TextStyles(entries) => entries.len().saturating_mul(320),
+            Self::DimStyles(entries) => entries.len().saturating_mul(1024),
+            Self::Objects(entries) => entries.len().saturating_mul(384),
+            Self::Styles { before, after, .. } => before
+                .estimated_bytes()
+                .saturating_add(after.estimated_bytes()),
+        }
+    }
+
+    pub(super) fn is_full(&self) -> bool {
+        matches!(self, Self::Full(_))
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct TableEntryDelta<T> {
+    pub(super) name: String,
+    pub(super) before: Option<T>,
+    pub(super) after: Option<T>,
+}
+
+#[derive(Clone)]
+pub(super) struct ObjectEntryDelta {
+    pub(super) handle: Handle,
+    pub(super) before: Option<acadrust::objects::ObjectType>,
+    pub(super) after: Option<acadrust::objects::ObjectType>,
 }
 
 #[derive(Default)]

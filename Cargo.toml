@@ -11,6 +11,7 @@ build = "build.rs"
 # verifies it.
 members = [
     "crates/ocs_plugin_api",
+    "crates/ocs_web_worker",
     "crates/dwg-thumbnailer",
     "crates/dwg-thumbnailer-win",
 ]
@@ -57,7 +58,7 @@ rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 # Opt-in logging via --log / RUST_LOG (surfaces wgpu / iced / winit diagnostics).
 env_logger = "0.11"
-acadrust = "0.4"
+acadrust = { version = "0.4", features = ["serde"] }
 # Shared DWG embedded-preview extraction (Start-page + file-manager thumbnails).
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
@@ -90,7 +91,11 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 
 [patch.crates-io]
 # Track the verified DWG round-trip, I/O, and unified PERF fixes.
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc", rev = "cd90c256a5e7d115f6e995275d6b3117d5775da9" }
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "bee1a58" }
+# iced_wgpu 0.14 requests WebGL2 limits on every wasm adapter, including
+# BrowserWebGpu. Keep the release source local with the one adapter-aware limit
+# fix so WebGPU can expose storage buffers while WebGL2 remains the fallback.
+iced_wgpu = { path = "crates/iced_wgpu" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).
@@ -119,6 +124,7 @@ wasm-bindgen = "0.2"
 # web font loader (#141).
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
+bincode = "1.3"
 # window.open (external URLs) + Blob/anchor file downloads (Save) + fetch()
 # (Response) for the lazy per-script web font loader (#141).
 web-sys = { version = "0.3", features = [
@@ -130,6 +136,11 @@ web-sys = { version = "0.3", features = [
     "Blob",
     "Url",
     "Response",
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
+    "MessageEvent",
+    "ErrorEvent",
     # Async clipboard read for paste into the text/MText editors (iced's own
     # clipboard read is a no-op on the web).
     "Clipboard",

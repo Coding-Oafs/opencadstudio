@@ -45,6 +45,22 @@ pub(super) struct EntityIndex {
     pub unbounded_handles: Vec<Handle>,
 }
 
+#[derive(Default)]
+struct DependencyTargets {
+    render_handles: HashSet<Handle>,
+    source_handles: HashSet<Handle>,
+    touches_block_definition: bool,
+}
+
+#[derive(Default)]
+struct SceneDependencyIndex {
+    layers: HashMap<String, DependencyTargets>,
+    text_styles: HashMap<String, DependencyTargets>,
+    dim_styles: HashMap<String, DependencyTargets>,
+    object_styles: HashMap<Handle, DependencyTargets>,
+    blocks: HashMap<String, HashSet<Handle>>,
+}
+
 fn hatch_interaction_aabb(hatch: &model::hatch_model::HatchModel) -> Option<[f64; 4]> {
     let mut aabb = [
         f64::INFINITY,
@@ -238,6 +254,21 @@ struct ResidentWireLayout {
     marker_start: usize,
 }
 
+#[derive(Clone)]
+pub struct PreparedOpenGeometry {
+    pub wires: Arc<Vec<WireModel>>,
+    pub interaction_index: Option<Arc<crate::scene::pick::interaction_index::InteractionIndex>>,
+}
+
+impl std::fmt::Debug for PreparedOpenGeometry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedOpenGeometry")
+            .field("wires", &self.wires.len())
+            .field("interaction_index", &self.interaction_index.is_some())
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct WireGpuPatch {
     pub(crate) changes: Arc<Vec<(Handle, ChangeKind)>>,
@@ -357,6 +388,15 @@ pub struct DerivedCaches {
     /// Reported back to the UI so the user knows when a file had parser-junk
     /// entities silently dropped.
     pub corrupt_dropped: usize,
+    /// Corrupt entities dropped while resolving referenced drawings.
+    pub xref_dropped: usize,
+    /// XREF resolution results produced by the loader worker. Keeping these in
+    /// the open bundle prevents parsing and merging references on the UI thread.
+    pub xrefs: Vec<crate::io::xref::XrefInfo>,
+    /// Model wire set and its spatial interaction index, prepared on the loader
+    /// thread. Installing these prevents the first visible frame from paying a
+    /// whole-drawing tessellation/index build while the progress overlay freezes.
+    pub prepared_geometry: Option<PreparedOpenGeometry>,
     /// Background-thread open-phase timings in milliseconds (parse, purge,
     /// derived-cache build). Filled in by `open_path_with_phase`; surfaced in
     /// the open-complete breakdown log so open-time regressions are visible.
@@ -369,11 +409,30 @@ pub struct OpenTimings {
     pub parse_ms: u32,
     pub purge_ms: u32,
     pub caches_ms: u32,
+    pub xref_ms: u32,
 }
 
 /// Build hatch / image / mesh caches from a document without needing `&mut Scene`.
 /// Intended to run on a background thread during file load.
 pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
+    build_derived_caches_impl(doc, None)
+}
+
+/// Build open-time caches while reporting monotonic progress in 0..=10000.
+///
+/// The callback is UI-agnostic and may run from Rayon workers. Callers should
+/// keep it cheap, normally just updating atomics.
+pub fn build_derived_caches_with_progress(
+    doc: &CadDocument,
+    progress: &(dyn Fn(u16) + Sync),
+) -> DerivedCaches {
+    build_derived_caches_impl(doc, Some(progress))
+}
+
+fn build_derived_caches_impl(
+    doc: &CadDocument,
+    progress: Option<&(dyn Fn(u16) + Sync)>,
+) -> DerivedCaches {
     // A new drawing must not inherit the previous one's resolved images — drop
     // the memoised set so each reference re-reads / re-fetches once here (and
     // stays cached across this document's later cache rebuilds).
@@ -428,7 +487,8 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     let mut image_handles: Vec<Handle> = Vec::new();
     let mut mesh_handles: Vec<Handle> = Vec::new();
     let mut centers: Vec<[f64; 3]> = Vec::new();
-    for e in doc.entities() {
+    let entity_total = doc.entity_count().max(1);
+    for (index, e) in doc.entities().enumerate() {
         let h = e.common().handle;
         match e {
             EntityType::Hatch(_) | EntityType::Solid(_) => hatch_handles.push(h),
@@ -444,6 +504,14 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
         if let Some(c) = offset_centroid(e, model_block, &prep) {
             centers.push(c);
         }
+        if index & 0x1fff == 0 {
+            if let Some(progress) = progress {
+                progress(((index as u64 * 4000) / entity_total as u64) as u16);
+            }
+        }
+    }
+    if let Some(progress) = progress {
+        progress(4000);
     }
     let (local_center, local_extent_max) = cluster_extent_from_centers(centers, &doc.header);
 
@@ -452,6 +520,19 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     // `synced_hatch_models` re-runs `render_style` per-frame anyway so
     // the per-layout adaptation kicks in later regardless).
     const LOAD_BG: [f32; 4] = [33.0 / 255.0, 40.0 / 255.0, 48.0 / 255.0, 1.0];
+
+    let detail_total = hatch_handles
+        .len()
+        .saturating_add(image_handles.len())
+        .saturating_add(mesh_handles.len())
+        .max(1);
+    let detail_done = std::sync::atomic::AtomicUsize::new(0);
+    let report_detail = |done: usize| {
+        if let Some(progress) = progress {
+            let value = 4000u64 + done as u64 * 6000 / detail_total as u64;
+            progress(value.min(10000) as u16);
+        }
+    };
 
     // hatches
     let hatches: HashMap<Handle, HatchModel> = hatch_handles
@@ -465,15 +546,23 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
                 EntityType::Solid(solid) => Some(Scene::solid_hatch_model(solid, color)),
                 _ => None,
             };
-            model.map(|m| (handle, m))
+            let result = model.map(|m| (handle, m));
+            let done = detail_done.fetch_add(1, Ordering::Relaxed) + 1;
+            if done & 0xff == 0 || done == detail_total {
+                report_detail(done);
+            }
+            result
         })
         .collect();
 
     // images
     let images: HashMap<Handle, ImageModel> = image_handles
         .par_iter()
-        .filter_map(|&handle| match doc.get_entity(handle)? {
-            EntityType::RasterImage(img) => ImageModel::from_raster_image(img).map(|m| (handle, m)),
+        .filter_map(|&handle| {
+            let result = match doc.get_entity(handle)? {
+                EntityType::RasterImage(img) => {
+                    ImageModel::from_raster_image(img).map(|m| (handle, m))
+                }
             EntityType::Ole2Frame(ole) => ImageModel::from_ole2frame(ole).map(|m| (handle, m)),
             EntityType::Underlay(u) => match doc.objects.get(&u.definition_handle) {
                 Some(acadrust::objects::ObjectType::UnderlayDefinition(def)) => {
@@ -482,6 +571,12 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
                 _ => None,
             },
             _ => None,
+            };
+            let done = detail_done.fetch_add(1, Ordering::Relaxed) + 1;
+            if done & 0xff == 0 || done == detail_total {
+                report_detail(done);
+            }
+            result
         })
         .collect();
 
@@ -511,10 +606,16 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
             let (raw, ..) = view::render::render_style_for(doc, e);
             let color = view::render::adapt_to_bg(raw, LOAD_BG);
             let top_level = layout_blocks.contains(&e.common().owner_handle);
-            crate::entities::solid3d::tessellate_volume(e, color, facet_res, isolines).map(|m| {
+            let result = crate::entities::solid3d::tessellate_volume(e, color, facet_res, isolines)
+                .map(|m| {
                 let m = if top_level { offset_mesh_lod_set(m) } else { m };
                 (handle, m, top_level)
-            })
+                });
+            let done = detail_done.fetch_add(1, Ordering::Relaxed) + 1;
+            if done & 0xff == 0 || done == detail_total {
+                report_detail(done);
+            }
+            result
         })
         .collect();
     let mut meshes: HashMap<Handle, MeshLodSet> = HashMap::default();
@@ -527,6 +628,10 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
         }
     }
 
+    if let Some(progress) = progress {
+        progress(10000);
+    }
+
     DerivedCaches {
         local_extent_max,
         local_center,
@@ -535,8 +640,52 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
         meshes,
         block_meshes,
         corrupt_dropped: 0,
+        xref_dropped: 0,
+        xrefs: Vec::new(),
+        prepared_geometry: None,
         timings: OpenTimings::default(),
     }
+}
+
+/// Prepare the expensive first Model wire set and spatial interaction index on
+/// the loader thread. The temporary `Scene` never crosses threads (it contains
+/// `Rc`/`RefCell` state); only its Send-safe document and immutable prepared
+/// geometry are returned.
+pub fn prepare_open_geometry(
+    doc: CadDocument,
+    caches: &DerivedCaches,
+    model_bg: [f32; 4],
+) -> (CadDocument, PreparedOpenGeometry) {
+    let mut scene = Scene::new();
+    scene.document = doc;
+    scene.local_extent_max = caches.local_extent_max;
+    scene.local_center = caches.local_center;
+    scene.bg_color = model_bg;
+    let cannoscale_value = scene.document.header.annotation_scale_value;
+    scene.annotation_scale = if cannoscale_value > 1e-9 {
+        (1.0 / cannoscale_value) as f32
+    } else {
+        1.0
+    };
+    scene.current_layout = "Model".to_string();
+    let camera = scene.camera.borrow().clone();
+    let wires = scene.model_tile_wires_arc(0, &camera, 1.0, 1.0);
+    let interaction_index = if scene.interaction_index_worthwhile(&wires) {
+        let index =
+            Arc::new(crate::scene::pick::interaction_index::InteractionIndex::build(&wires));
+        index.prepare_screen();
+        Some(index)
+    } else {
+        None
+    };
+    let doc = std::mem::replace(&mut scene.document, CadDocument::new());
+    (
+        doc,
+        PreparedOpenGeometry {
+            wires,
+            interaction_index,
+        },
+    )
 }
 
 /// Mirrors `cache::block_cache::SANE_EXTENT` — wire coords past this magnitude
@@ -1165,13 +1314,10 @@ pub struct Scene {
     /// filtered variants. Viewports sharing a frozen set share one entry (like
     /// the resident wire set). Empty for a viewport with no frozen layers (it
     /// reuses the unfiltered `*_arc` sets directly).
-    frozen_hatch_cache:
-        RefCell<HashMap<(String, u64), (u64, u64, Arc<Vec<HatchModel>>)>>,
-    frozen_wipeout_cache:
-        RefCell<HashMap<(String, u64), (u64, Arc<Vec<HatchModel>>)>>,
+    frozen_hatch_cache: RefCell<HashMap<(String, u64), (u64, u64, Arc<Vec<HatchModel>>)>>,
+    frozen_wipeout_cache: RefCell<HashMap<(String, u64), (u64, Arc<Vec<HatchModel>>)>>,
     frozen_image_cache: RefCell<HashMap<u64, (u64, Arc<Vec<ImageModel>>)>>,
-    frozen_mesh_cache:
-        RefCell<HashMap<(String, u64), (u64, Arc<Vec<MeshLodSet>>)>>,
+    frozen_mesh_cache: RefCell<HashMap<(String, u64), (u64, Arc<Vec<MeshLodSet>>)>>,
     /// Cached block-INSERT hatches for hit-testing, keyed by geometry_epoch.
     /// Building this explodes every model-space INSERT, so without the cache a
     /// heavy block-instanced drawing re-explodes thousands of inserts on every
@@ -1258,12 +1404,16 @@ pub struct Scene {
     /// Reverse map: entity_handle → block_record_handle, built from entity_handles lists.
     /// Keyed by geometry_epoch. Eliminates the O(B) fallback scan in belongs_to_visible_block.
     entity_block_map_cache: RefCell<Option<(u64, HashMap<Handle, Handle>)>>,
+    /// Reverse dependencies from layer/style/block definitions to the top-level
+    /// entities whose resident wire runs actually change. Kept independent from
+    /// `geometry_epoch`: a layer colour toggle can reuse the index, invalidate
+    /// only its dependants, and avoid a whole-document scan on every toggle.
+    dependency_index_cache: RefCell<Option<SceneDependencyIndex>>,
     /// Tessellated block definitions in block-local coords, keyed by render
     /// background and block epoch. Model and Paper adapt black/white colours
     /// differently; retaining both variants prevents a full block rebuild on
     /// every layout-tab switch.
-    block_defn_cache:
-        RefCell<HashMap<[u32; 4], (u64, Arc<cache::block_cache::BlockCache>)>>,
+    block_defn_cache: RefCell<HashMap<[u32; 4], (u64, Arc<cache::block_cache::BlockCache>)>>,
     /// Spatial index + always-emit list for top-level entities
     /// (Phase 2.1). Lazily rebuilt by `entity_index()` on
     /// `geometry_epoch` change. See `EntityIndex` for what each side
@@ -1455,6 +1605,7 @@ impl Scene {
             annotation_affects_wires: std::cell::Cell::new(None),
             model_extents_cache: RefCell::new(None),
             entity_block_map_cache: RefCell::new(None),
+            dependency_index_cache: RefCell::new(None),
             block_defn_cache: RefCell::new(HashMap::default()),
             entity_index_cache: RefCell::new(None),
             last_render_aspect: std::cell::Cell::new(16.0 / 9.0),
@@ -1553,6 +1704,30 @@ impl Scene {
         cache.retain(|_, (epoch, _)| *epoch == self.block_epoch);
         cache.insert(key, (self.block_epoch, Arc::clone(&arc)));
         arc
+    }
+
+    /// Install loader-thread geometry into this scene's Model resident cache.
+    ///
+    /// The target scene has a different epoch from the temporary loader scene,
+    /// so only immutable geometry is transferred and re-stamped here. The
+    /// optional interaction index is cached against the exact same `Arc`.
+    pub fn install_prepared_open_geometry(&self, prepared: PreparedOpenGeometry) {
+        let block = self.model_space_block_handle();
+        let key = Self::resident_wire_key(block, self.bg_color, None, None);
+        let gen = WIRE_CONTENT_GEN.fetch_add(1, Ordering::Relaxed);
+        self.last_model_wire_gen.set(gen);
+        self.resident_wire_sets.borrow_mut().insert(
+            key,
+            ResidentWireSet {
+                epoch: self.geometry_epoch,
+                gen,
+                wires: Arc::clone(&prepared.wires),
+                layout: None,
+            },
+        );
+        if let Some(index) = prepared.interaction_index {
+            self.cache_interaction_index(self.geometry_epoch, prepared.wires, index);
+        }
     }
 
     /// Push one delta onto the journal, evicting the oldest past the cap and
@@ -1777,6 +1952,10 @@ impl Scene {
                     }
                 }
             }
+        }
+
+        if !changes.is_empty() {
+            self.invalidate_dependency_index();
         }
 
         changes
@@ -3245,30 +3424,7 @@ impl Scene {
         } else {
             self.paper_bg_color
         };
-        let key = {
-            let mut k: u64 = 0xcbf2_9ce4_8422_2325;
-            let mut mix = |x: u64| k = k.rotate_left(17) ^ x.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            mix(block.value());
-            for c in bg {
-                mix(c.to_bits() as u64);
-            }
-            mix(anno_scale_override
-                .map(|a| a.to_bits() as u64)
-                .unwrap_or(u64::MAX));
-            match frozen_layers {
-                Some(f) => {
-                    // Order-independent fold of the frozen-layer set.
-                    let mut acc: u64 = 0;
-                    for h in f {
-                        acc ^= h.value().wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                    }
-                    mix(acc);
-                    mix(f.len() as u64);
-                }
-                None => mix(u64::MAX - 1),
-            }
-            k
-        };
+        let key = Self::resident_wire_key(block, bg, anno_scale_override, frozen_layers);
         {
             let sets = self.resident_wire_sets.borrow();
             if let Some(set) = sets.get(&key) {
@@ -3329,6 +3485,36 @@ impl Scene {
             },
         );
         arc
+    }
+
+    fn resident_wire_key(
+        block: Handle,
+        bg: [f32; 4],
+        anno_scale_override: Option<f32>,
+        frozen_layers: Option<&HashSet<Handle>>,
+    ) -> u64 {
+        let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix =
+            |value: u64| key = key.rotate_left(17) ^ value.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        mix(block.value());
+        for component in bg {
+            mix(component.to_bits() as u64);
+        }
+        mix(anno_scale_override
+            .map(|scale| scale.to_bits() as u64)
+            .unwrap_or(u64::MAX));
+        match frozen_layers {
+            Some(frozen) => {
+                let mut signature = 0u64;
+                for handle in frozen {
+                    signature ^= handle.value().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                }
+                mix(signature);
+                mix(frozen.len() as u64);
+            }
+            None => mix(u64::MAX - 1),
+        }
+        key
     }
 
     /// The GPU wire-arena handoff for a viewport whose content id is `gen`:
@@ -6373,6 +6559,253 @@ impl Scene {
         std::cell::Ref::map(self.entity_block_map_cache.borrow(), |c| {
             &c.as_ref().unwrap().1
         })
+    }
+
+    fn rebuild_dependency_index(&self) -> SceneDependencyIndex {
+        let layout_blocks: HashSet<Handle> = self
+            .document
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                acadrust::objects::ObjectType::Layout(layout) if !layout.block_record.is_null() => {
+                    Some(layout.block_record)
+                }
+                _ => None,
+            })
+            .collect();
+        let block_names: HashMap<Handle, String> = self
+            .document
+            .block_records
+            .iter()
+            .map(|record| (record.handle, record.name.to_ascii_uppercase()))
+            .collect();
+        let membership: HashMap<Handle, Handle> = self
+            .document
+            .block_records
+            .iter()
+            .flat_map(|record| {
+                record
+                    .entity_handles
+                    .iter()
+                    .copied()
+                    .map(move |handle| (handle, record.handle))
+            })
+            .collect();
+
+        let mut roots: HashMap<String, HashSet<Handle>> = HashMap::default();
+        let mut parents: HashMap<String, HashSet<String>> = HashMap::default();
+        for entity in self.document.entities() {
+            let EntityType::Insert(insert) = entity else {
+                continue;
+            };
+            let target = insert.block_name.to_ascii_uppercase();
+            let common = &insert.common;
+            let owner = if common.owner_handle.is_null() {
+                membership
+                    .get(&common.handle)
+                    .copied()
+                    .unwrap_or(Handle::NULL)
+            } else {
+                common.owner_handle
+            };
+            if owner.is_null() || layout_blocks.contains(&owner) {
+                roots.entry(target).or_default().insert(common.handle);
+            } else if let Some(parent) = block_names.get(&owner) {
+                parents.entry(target).or_default().insert(parent.clone());
+            }
+        }
+        // Propagate top-level INSERT users through nested block references.
+        // Fixed-point form is cycle-safe and block graphs are normally shallow.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (child, parent_names) in &parents {
+                let inherited: Vec<Handle> = parent_names
+                    .iter()
+                    .flat_map(|parent| roots.get(parent).into_iter().flatten().copied())
+                    .collect();
+                let entry = roots.entry(child.clone()).or_default();
+                let before = entry.len();
+                entry.extend(inherited);
+                changed |= entry.len() != before;
+            }
+        }
+
+        let mut index = SceneDependencyIndex {
+            blocks: roots.clone(),
+            ..SceneDependencyIndex::default()
+        };
+        for entity in self.document.entities() {
+            let common = entity.common();
+            let owner = if common.owner_handle.is_null() {
+                membership
+                    .get(&common.handle)
+                    .copied()
+                    .unwrap_or(Handle::NULL)
+            } else {
+                common.owner_handle
+            };
+            let inside_block = !owner.is_null() && !layout_blocks.contains(&owner);
+            let render_handles: HashSet<Handle> = if inside_block {
+                block_names
+                    .get(&owner)
+                    .and_then(|name| roots.get(name))
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                std::iter::once(common.handle).collect()
+            };
+            let add = |map: &mut HashMap<String, DependencyTargets>, name: &str| {
+                let target = map.entry(name.to_ascii_uppercase()).or_default();
+                target.render_handles.extend(render_handles.iter().copied());
+                target.source_handles.insert(common.handle);
+                target.touches_block_definition |= inside_block;
+            };
+            let add_handle = |map: &mut HashMap<Handle, DependencyTargets>,
+                              handle: Option<Handle>| {
+                let Some(handle) = handle.filter(|handle| !handle.is_null()) else {
+                    return;
+                };
+                let target = map.entry(handle).or_default();
+                target.render_handles.extend(render_handles.iter().copied());
+                target.source_handles.insert(common.handle);
+                target.touches_block_definition |= inside_block;
+            };
+            add(&mut index.layers, &common.layer);
+            match entity {
+                EntityType::Text(text) => add(&mut index.text_styles, &text.style),
+                EntityType::MText(text) => add(&mut index.text_styles, &text.style),
+                EntityType::AttributeDefinition(attribute) => {
+                    add(&mut index.text_styles, &attribute.text_style)
+                }
+                EntityType::AttributeEntity(attribute) => {
+                    add(&mut index.text_styles, &attribute.text_style)
+                }
+                EntityType::Insert(insert) => {
+                    for attribute in &insert.attributes {
+                        add(&mut index.text_styles, &attribute.text_style);
+                    }
+                }
+                EntityType::Dimension(dimension) => {
+                    add(&mut index.dim_styles, &dimension.base().style_name)
+                }
+                EntityType::Table(table) => {
+                    add_handle(&mut index.object_styles, table.table_style_handle)
+                }
+                EntityType::MultiLeader(leader) => {
+                    add_handle(&mut index.object_styles, leader.style_handle)
+                }
+                EntityType::MLine(line) => add_handle(&mut index.object_styles, line.style_handle),
+                _ => {}
+            }
+        }
+        index
+    }
+
+    fn dependency_targets(&self, kind: &str, names: &[String]) -> DependencyTargets {
+        if self.dependency_index_cache.borrow().is_none() {
+            *self.dependency_index_cache.borrow_mut() = Some(self.rebuild_dependency_index());
+        }
+        let cache = self.dependency_index_cache.borrow();
+        let index = cache.as_ref().unwrap();
+        let map = match kind {
+            "layer" => &index.layers,
+            "text" => &index.text_styles,
+            "dim" => &index.dim_styles,
+            _ => unreachable!(),
+        };
+        let mut combined = DependencyTargets::default();
+        for name in names {
+            let Some(target) = map.get(&name.to_ascii_uppercase()) else {
+                continue;
+            };
+            combined
+                .render_handles
+                .extend(target.render_handles.iter().copied());
+            combined
+                .source_handles
+                .extend(target.source_handles.iter().copied());
+            combined.touches_block_definition |= target.touches_block_definition;
+        }
+        combined
+    }
+
+    fn invalidate_dependency_targets(&mut self, targets: DependencyTargets) {
+        if targets.render_handles.is_empty() {
+            return;
+        }
+        if targets.touches_block_definition {
+            self.block_epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+        }
+        let sources: Vec<Handle> = targets.source_handles.iter().copied().collect();
+        self.recolor_meshes_for_handles(&sources);
+        let changes: Vec<(Handle, ChangeKind)> = targets
+            .render_handles
+            .into_iter()
+            .map(|handle| (handle, ChangeKind::Modified))
+            .collect();
+        self.bump_entities(&changes);
+    }
+
+    pub fn invalidate_layer_dependencies(&mut self, names: &[String]) {
+        let targets = self.dependency_targets("layer", names);
+        self.invalidate_dependency_targets(targets);
+    }
+
+    pub fn invalidate_text_style_dependencies(&mut self, name: &str) {
+        self.invalidate_text_style_dependencies_many(&[name.to_string()]);
+    }
+
+    pub fn invalidate_text_style_dependencies_many(&mut self, names: &[String]) {
+        let targets = self.dependency_targets("text", names);
+        self.invalidate_dependency_targets(targets);
+    }
+
+    pub fn invalidate_dim_style_dependencies(&mut self, name: &str) {
+        self.invalidate_dim_style_dependencies_many(&[name.to_string()]);
+    }
+
+    pub fn invalidate_dim_style_dependencies_many(&mut self, names: &[String]) {
+        let targets = self.dependency_targets("dim", names);
+        self.invalidate_dependency_targets(targets);
+    }
+
+    pub fn invalidate_object_style_dependencies(&mut self, handles: &[Handle]) {
+        if self.dependency_index_cache.borrow().is_none() {
+            *self.dependency_index_cache.borrow_mut() = Some(self.rebuild_dependency_index());
+        }
+        let mut combined = DependencyTargets::default();
+        if let Some(index) = self.dependency_index_cache.borrow().as_ref() {
+            for handle in handles {
+                let Some(target) = index.object_styles.get(handle) else {
+                    continue;
+                };
+                combined
+                    .render_handles
+                    .extend(target.render_handles.iter().copied());
+                combined
+                    .source_handles
+                    .extend(target.source_handles.iter().copied());
+                combined.touches_block_definition |= target.touches_block_definition;
+            }
+        }
+        self.invalidate_dependency_targets(combined);
+    }
+
+    pub fn block_dependency_handles(&self, name: &str) -> Vec<Handle> {
+        if self.dependency_index_cache.borrow().is_none() {
+            *self.dependency_index_cache.borrow_mut() = Some(self.rebuild_dependency_index());
+        }
+        self.dependency_index_cache
+            .borrow()
+            .as_ref()
+            .and_then(|index| index.blocks.get(&name.to_ascii_uppercase()))
+            .map(|handles| handles.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn invalidate_dependency_index(&self) {
+        self.dependency_index_cache.borrow_mut().take();
     }
 
     /// Spatial index + always-emit list for top-level entities. Lazily

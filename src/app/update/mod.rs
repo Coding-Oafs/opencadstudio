@@ -449,20 +449,26 @@ impl OpenCADStudio {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "unknown".into());
-                let phase = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+                let progress = std::sync::Arc::new(crate::io::OpenProgressState::new(
                     super::OPEN_PHASE_READING,
                 ));
                 self.opening = Some(super::OpenProgress {
                     name: name.clone(),
                     size_bytes,
-                    phase: phase.clone(),
+                    state: progress.clone(),
                     started: Instant::now(),
                 });
                 let size_label = format_size(size_bytes);
                 self.command_line
                     .push_info(&format!("Opening \"{name}\" ({size_label})…"));
+                let model_bg = self.default_bg_color.unwrap_or([
+                    33.0 / 255.0,
+                    40.0 / 255.0,
+                    48.0 / 255.0,
+                    1.0,
+                ]);
                 Task::perform(
-                    crate::io::open_path_with_phase(path, phase),
+                    crate::io::open_path_with_phase(path, progress, model_bg),
                     Message::FileOpened,
                 )
             }
@@ -579,6 +585,19 @@ impl OpenCADStudio {
 
             Message::WblockSaveResult(_, None) => Task::none(),
 
+            Message::WblockWriteFinished(block_name, path, result) => {
+                match result {
+                    Ok(()) => self.command_line.push_output(&format!(
+                        "WBLOCK  Saved \"{block_name}\" → \"{}\"",
+                        path.display()
+                    )),
+                    Err(error) => self
+                        .command_line
+                        .push_error(&format!("WBLOCK save failed: {error}")),
+                }
+                Task::none()
+            }
+
             Message::DataExtractionSave(csv) => {
                 let csv_clone = csv.clone();
                 Task::perform(
@@ -643,6 +662,16 @@ impl OpenCADStudio {
 
             Message::StlExportPath(None) => Task::none(),
 
+            Message::StlExportFinished(path, result) => {
+                match result {
+                    Ok(()) => self
+                        .command_line
+                        .push_output(&format!("STLOUT: exported to \"{}\"", path.display())),
+                    Err(error) => self.command_line.push_error(&format!("STLOUT: {error}")),
+                }
+                Task::none()
+            }
+
             // ── STEP AP203 export ─────────────────────────────────────────
             Message::StepExport => {
                 let i = self.active_tab;
@@ -670,6 +699,16 @@ impl OpenCADStudio {
 
             Message::StepExportPath(None) => Task::none(),
 
+            Message::StepExportFinished(path, result) => {
+                match result {
+                    Ok(()) => self
+                        .command_line
+                        .push_output(&format!("STEPOUT: exported to \"{}\"", path.display())),
+                    Err(error) => self.command_line.push_error(&format!("STEPOUT: {error}")),
+                }
+                Task::none()
+            }
+
             // ── OBJ import ────────────────────────────────────────────────
             Message::ObjImport => Task::perform(
                 async {
@@ -687,6 +726,38 @@ impl OpenCADStudio {
             Message::ObjImportPath(Some(path)) => self.on_obj_import_path_some(path),
 
             Message::ObjImportPath(None) => Task::none(),
+
+            Message::ObjImportFinished(tab_id, path, result) => {
+                match result {
+                    Err(error) => self.command_line.push_error(&format!("IMPORTOBJ: {error}")),
+                    Ok(mut mesh) => {
+                        let Some(i) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+                            self.command_line
+                                .push_info("IMPORTOBJ: target drawing was closed.");
+                            return Task::none();
+                        };
+                        let file_stem = path
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "obj_mesh".into());
+                        mesh.name = file_stem.clone();
+                        self.push_undo_snapshot(i, "IMPORTOBJ");
+                        let entity = crate::modules::insert::solid3d_cmds::empty_solid3d();
+                        let handle = self.tabs[i].scene.add_entity(entity);
+                        if !handle.is_null() {
+                            self.tabs[i]
+                                .scene
+                                .meshes
+                                .insert(handle, crate::scene::MeshLodSet::from_single(mesh));
+                            self.tabs[i].dirty = true;
+                            self.command_line.push_output(&format!(
+                                "IMPORTOBJ: imported \"{file_stem}\" as mesh."
+                            ));
+                        }
+                    }
+                }
+                Task::none()
+            }
 
             Message::SaveFile => self.on_save_file(),
 
@@ -1132,7 +1203,7 @@ impl OpenCADStudio {
                 let targets = self.layer_row_action_targets(i, idx);
                 if let Some(on) = on {
                     if !targets.is_empty() {
-                        self.push_undo_snapshot(i, "LAYER OFF/ON");
+                        let undo = self.begin_layer_undo(i, "LAYER OFF/ON", &targets);
                         for name in &targets {
                             if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                                 dl.flags.off = !on;
@@ -1143,8 +1214,9 @@ impl OpenCADStudio {
                                 pl.visible = on;
                             }
                         }
-                        self.tabs[i].scene.bump_geometry();
+                        self.tabs[i].scene.invalidate_layer_dependencies(&targets);
                         self.tabs[i].dirty = true;
+                        self.commit_layer_undo(i, undo);
                         self.command_line.push_output(&format!(
                             "{} layer(s) turned {}",
                             targets.len(),
@@ -1171,7 +1243,7 @@ impl OpenCADStudio {
                 let targets = self.layer_row_action_targets(i, idx);
                 if let Some(locked) = locked {
                     if !targets.is_empty() {
-                        self.push_undo_snapshot(i, "LAYER LOCK/UNLOCK");
+                        let undo = self.begin_layer_undo(i, "LAYER LOCK/UNLOCK", &targets);
                         for name in &targets {
                             if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                                 dl.flags.locked = locked;
@@ -1182,8 +1254,9 @@ impl OpenCADStudio {
                                 pl.locked = locked;
                             }
                         }
-                        self.tabs[i].scene.bump_geometry();
+                        // Lock state affects editability, not rendered geometry.
                         self.tabs[i].dirty = true;
+                        self.commit_layer_undo(i, undo);
                         self.command_line.push_output(&format!(
                             "{} layer(s) {}",
                             targets.len(),
@@ -1201,7 +1274,7 @@ impl OpenCADStudio {
                 let targets = self.layer_row_action_targets(i, idx);
                 if let Some(frozen) = frozen {
                     if !targets.is_empty() {
-                        self.push_undo_snapshot(i, "LAYER FREEZE");
+                        let undo = self.begin_layer_undo(i, "LAYER FREEZE", &targets);
                         for name in &targets {
                             if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                                 if frozen {
@@ -1216,8 +1289,9 @@ impl OpenCADStudio {
                                 pl.frozen = frozen;
                             }
                         }
-                        self.tabs[i].scene.bump_geometry();
+                        self.tabs[i].scene.invalidate_layer_dependencies(&targets);
                         self.tabs[i].dirty = true;
+                        self.commit_layer_undo(i, undo);
                         self.command_line.push_output(&format!(
                             "{} layer(s) {}",
                             targets.len(),
@@ -1321,6 +1395,7 @@ impl OpenCADStudio {
                 // Apply to every selected layer (multi-select), not just one.
                 let names = self.selected_layer_names(i);
                 if !names.is_empty() {
+                    let undo = self.begin_layer_undo(i, "LAYER COLOR", &names);
                     use crate::ui::window::layers::iced_color_from_acad;
                     let new_color = iced_color_from_acad(&AcadColor::Index(aci));
                     for name in &names {
@@ -1334,10 +1409,11 @@ impl OpenCADStudio {
                         }
                     }
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     // ByLayer color is baked into the cached wires at
                     // tessellation time, so bump the geometry epoch to
                     // invalidate the wire cache and repaint with the new color.
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
                     self.tabs[i].layers.color_picker_row = None;
                     self.tabs[i].layers.color_full_palette = false;
                     self.sync_ribbon_layers();
@@ -1349,6 +1425,7 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 let names = self.selected_layer_names(i);
                 if !names.is_empty() {
+                    let undo = self.begin_layer_undo(i, "LAYER LINETYPE", &names);
                     for name in &names {
                         if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                             dl.line_type = lt.clone();
@@ -1360,8 +1437,9 @@ impl OpenCADStudio {
                         }
                     }
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     // Linetype is baked into the cached wires; repaint.
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
                 }
                 Task::none()
             }
@@ -1370,6 +1448,7 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 let names = self.selected_layer_names(i);
                 if !names.is_empty() {
+                    let undo = self.begin_layer_undo(i, "LAYER LINEWEIGHT", &names);
                     for name in &names {
                         if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                             dl.line_weight = lw;
@@ -1381,8 +1460,9 @@ impl OpenCADStudio {
                         }
                     }
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     // Lineweight is baked into the cached wires; repaint.
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
                 }
                 Task::none()
             }
@@ -3983,6 +4063,17 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::PlotWindowExportPath(Some(path)) => self.on_plot_window_export_path_some(path),
+
+            Message::BackgroundIoFinished(result, reopen_plot) => {
+                match result {
+                    Ok(message) => self.command_line.push_info(&message),
+                    Err(error) => self.command_line.push_error(&error),
+                }
+                if reopen_plot {
+                    self.active_modal = Some(crate::app::ModalKind::Plot);
+                }
+                Task::none()
+            }
 
             // ── Print to system printer ───────────────────────────────────────
             Message::PrintToPrinter => self.on_print_to_printer(),

@@ -4,6 +4,7 @@ pub mod attedit;
 pub mod break_cmd;
 pub mod copy;
 pub mod delete;
+mod entity_index;
 pub mod explode;
 pub mod fillet;
 pub mod join;

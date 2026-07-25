@@ -1,5 +1,8 @@
 use super::{
-    document::{DeltaSnapshot, HistorySnapshot, PendingHistorySnapshot},
+    document::{
+        DeltaSnapshot, HistorySnapshot, ObjectEntryDelta, PendingHistorySnapshot,
+        StructureSnapshot, TableEntryDelta,
+    },
     OpenCADStudio,
 };
 use acadrust::{EntityType, Handle};
@@ -69,6 +72,38 @@ pub(super) struct PendingDelta {
     selected_before: Vec<Handle>,
     dirty_before: bool,
     structure_before: Option<acadrust::CadDocument>,
+}
+
+pub(super) struct PendingLayerDelta {
+    label: String,
+    current_layout: String,
+    selected_before: Vec<Handle>,
+    dirty_before: bool,
+    before: Vec<(String, Option<acadrust::tables::Layer>)>,
+}
+
+pub(super) struct PendingTextStyleDelta {
+    label: String,
+    current_layout: String,
+    selected_before: Vec<Handle>,
+    dirty_before: bool,
+    before: Vec<(String, Option<acadrust::tables::TextStyle>)>,
+}
+
+pub(super) struct PendingDimStyleDelta {
+    label: String,
+    current_layout: String,
+    selected_before: Vec<Handle>,
+    dirty_before: bool,
+    before: Vec<(String, Option<acadrust::tables::DimStyle>)>,
+}
+
+pub(super) struct PendingObjectDelta {
+    label: String,
+    current_layout: String,
+    selected_before: Vec<Handle>,
+    dirty_before: bool,
+    before: FxHashMap<Handle, acadrust::objects::ObjectType>,
 }
 
 impl OpenCADStudio {
@@ -248,7 +283,7 @@ impl OpenCADStudio {
             selected_after,
             dirty_before: pending.dirty_before,
             dirty_after,
-            structure: structure_changed.then_some(pending.structure_before),
+            structure: structure_changed.then_some(StructureSnapshot::Full(pending.structure_before)),
             label: pending.label,
         };
         self.push_undo_entry(i, HistorySnapshot::Delta(delta));
@@ -302,6 +337,263 @@ impl OpenCADStudio {
             dirty_before: self.tabs[i].dirty,
             structure_before,
         })
+    }
+
+    pub(super) fn begin_layer_undo(
+        &mut self,
+        i: usize,
+        label: impl Into<String>,
+        names: &[String],
+    ) -> PendingLayerDelta {
+        self.finish_pending_history(i);
+        PendingLayerDelta {
+            label: label.into(),
+            current_layout: self.tabs[i].scene.current_layout.clone(),
+            selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: self.tabs[i].dirty,
+            before: names
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        self.tabs[i].scene.document.layers.get(name).cloned(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn commit_layer_undo(&mut self, i: usize, pending: PendingLayerDelta) {
+        let entries: Vec<_> = pending
+            .before
+            .into_iter()
+            .filter_map(|(name, before)| {
+                let after = self.tabs[i].scene.document.layers.get(&name).cloned();
+                (before != after).then_some(TableEntryDelta {
+                    name,
+                    before,
+                    after,
+                })
+            })
+            .collect();
+        if entries.is_empty() {
+            return;
+        }
+        let selected_after = self.tabs[i].scene.selected.iter().copied().collect();
+        let delta = DeltaSnapshot {
+            entities: Vec::new(),
+            current_layout_before: pending.current_layout,
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: pending.selected_before,
+            selected_after,
+            dirty_before: pending.dirty_before,
+            dirty_after: self.tabs[i].dirty,
+            structure: Some(StructureSnapshot::Layers(entries)),
+            label: pending.label,
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
+    }
+
+    pub(super) fn begin_text_style_undo(
+        &mut self,
+        i: usize,
+        label: impl Into<String>,
+        names: &[String],
+    ) -> PendingTextStyleDelta {
+        self.finish_pending_history(i);
+        PendingTextStyleDelta {
+            label: label.into(),
+            current_layout: self.tabs[i].scene.current_layout.clone(),
+            selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: self.tabs[i].dirty,
+            before: names
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        self.tabs[i].scene.document.text_styles.get(name).cloned(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn commit_text_style_undo(&mut self, i: usize, pending: PendingTextStyleDelta) {
+        let entries: Vec<_> = pending
+            .before
+            .into_iter()
+            .filter_map(|(name, before)| {
+                let after = self.tabs[i].scene.document.text_styles.get(&name).cloned();
+                (before != after).then_some(TableEntryDelta {
+                    name,
+                    before,
+                    after,
+                })
+            })
+            .collect();
+        if entries.is_empty() {
+            return;
+        }
+        let delta = DeltaSnapshot {
+            entities: Vec::new(),
+            current_layout_before: pending.current_layout,
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: pending.selected_before,
+            selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: pending.dirty_before,
+            dirty_after: self.tabs[i].dirty,
+            structure: Some(StructureSnapshot::TextStyles(entries)),
+            label: pending.label,
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
+    }
+
+    pub(super) fn begin_dim_style_undo(
+        &mut self,
+        i: usize,
+        label: impl Into<String>,
+        names: &[String],
+    ) -> PendingDimStyleDelta {
+        self.finish_pending_history(i);
+        PendingDimStyleDelta {
+            label: label.into(),
+            current_layout: self.tabs[i].scene.current_layout.clone(),
+            selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: self.tabs[i].dirty,
+            before: names
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        self.tabs[i].scene.document.dim_styles.get(name).cloned(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn commit_dim_style_undo(&mut self, i: usize, pending: PendingDimStyleDelta) {
+        let entries: Vec<_> = pending
+            .before
+            .into_iter()
+            .filter_map(|(name, before)| {
+                let after = self.tabs[i].scene.document.dim_styles.get(&name).cloned();
+                (before != after).then_some(TableEntryDelta {
+                    name,
+                    before,
+                    after,
+                })
+            })
+            .collect();
+        if entries.is_empty() {
+            return;
+        }
+        let delta = DeltaSnapshot {
+            entities: Vec::new(),
+            current_layout_before: pending.current_layout,
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: pending.selected_before,
+            selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: pending.dirty_before,
+            dirty_after: self.tabs[i].dirty,
+            structure: Some(StructureSnapshot::DimStyles(entries)),
+            label: pending.label,
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
+    }
+
+    fn group_object_state(&self, i: usize) -> FxHashMap<Handle, acadrust::objects::ObjectType> {
+        use acadrust::objects::ObjectType;
+        let document = &self.tabs[i].scene.document;
+        let dictionary = document.header.acad_group_dict_handle;
+        document
+            .objects
+            .iter()
+            .filter(|(handle, object)| {
+                **handle == dictionary || matches!(object, ObjectType::Group(_))
+            })
+            .map(|(handle, object)| (*handle, object.clone()))
+            .collect()
+    }
+
+    pub(super) fn begin_group_undo(
+        &mut self,
+        i: usize,
+        label: impl Into<String>,
+    ) -> PendingObjectDelta {
+        self.finish_pending_history(i);
+        PendingObjectDelta {
+            label: label.into(),
+            current_layout: self.tabs[i].scene.current_layout.clone(),
+            selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: self.tabs[i].dirty,
+            before: self.group_object_state(i),
+        }
+    }
+
+    pub(super) fn commit_group_undo(&mut self, i: usize, pending: PendingObjectDelta) {
+        let after = self.group_object_state(i);
+        let mut handles: HashSet<Handle> = pending.before.keys().copied().collect();
+        handles.extend(after.keys().copied());
+        let entries: Vec<_> = handles
+            .into_iter()
+            .filter_map(|handle| {
+                let before = pending.before.get(&handle).cloned();
+                let after = after.get(&handle).cloned();
+                (before != after).then_some(ObjectEntryDelta {
+                    handle,
+                    before,
+                    after,
+                })
+            })
+            .collect();
+        if entries.is_empty() {
+            return;
+        }
+        let delta = DeltaSnapshot {
+            entities: Vec::new(),
+            current_layout_before: pending.current_layout,
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: pending.selected_before,
+            selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before: pending.dirty_before,
+            dirty_after: self.tabs[i].dirty,
+            structure: Some(StructureSnapshot::Objects(entries)),
+            label: pending.label,
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
+    }
+
+    pub(super) fn commit_style_undo(
+        &mut self,
+        i: usize,
+        before: super::style_ops::StyleStateSnapshot,
+        after: super::style_ops::StyleStateSnapshot,
+        dirty_before: bool,
+    ) {
+        if before == after {
+            return;
+        }
+        self.finish_pending_history(i);
+        let (text_names, dim_names, object_handles) = after.changed_keys(&before);
+        let delta = DeltaSnapshot {
+            entities: Vec::new(),
+            current_layout_before: self.tabs[i].scene.current_layout.clone(),
+            current_layout_after: self.tabs[i].scene.current_layout.clone(),
+            selected_before: self.tabs[i].scene.selected.iter().copied().collect(),
+            selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
+            dirty_before,
+            dirty_after: true,
+            structure: Some(StructureSnapshot::Styles {
+                before,
+                after,
+                text_names,
+                dim_names,
+                object_handles,
+            }),
+            label: "STYLE".to_string(),
+        };
+        self.push_undo_entry(i, HistorySnapshot::Delta(delta));
     }
 
     /// Copy is delta-safe only when no target is a Dimension and no complete
@@ -397,11 +689,12 @@ impl OpenCADStudio {
             .collect();
         let selected_after = self.tabs[i].scene.selected.iter().copied().collect();
         let dirty_after = self.tabs[i].dirty;
-        let mut structure = pending.structure_before;
+        let mut structure = pending.structure_before.map(StructureSnapshot::Full);
         if let Some(before_structure) = structure.as_mut() {
-            let after_structure = self.tabs[i].scene.document.snapshot_structure();
-            let added_handles: Vec<Handle> = entities
-                .iter()
+            if let StructureSnapshot::Full(before_structure) = before_structure {
+                let after_structure = self.tabs[i].scene.document.snapshot_structure();
+                let added_handles: Vec<Handle> = entities
+                    .iter()
                 .filter_map(|(handle, before, after)| {
                     (before.is_none() && after.is_some()).then_some(*handle)
                 })
@@ -413,6 +706,7 @@ impl OpenCADStudio {
             );
             if *before_structure == after_structure {
                 structure = None;
+            }
             }
         }
         let delta = DeltaSnapshot {
@@ -443,9 +737,113 @@ impl OpenCADStudio {
         // Install the chosen side of every entity image. Derived-cache, geometry
         // and UI invalidation are deferred until every requested undo/redo step
         // has been applied.
-        if let Some(structure) = d.structure.take() {
-            let inverse = self.tabs[i].scene.document.swap_structure(structure);
-            d.structure = Some(inverse);
+        if let Some(structure) = d.structure.as_mut() {
+            match structure {
+                StructureSnapshot::Full(stored) => {
+                    let inverse = self.tabs[i].scene.document.swap_structure(
+                        std::mem::replace(stored, acadrust::CadDocument::new()),
+                    );
+                    *stored = inverse;
+                    self.tabs[i].scene.invalidate_dependency_index();
+                }
+                StructureSnapshot::Layers(entries) => {
+                    let names: Vec<String> =
+                        entries.iter().map(|entry| entry.name.clone()).collect();
+                    for entry in entries {
+                        let value = if undo {
+                            entry.before.clone()
+                        } else {
+                            entry.after.clone()
+                        };
+                        if let Some(layer) = value {
+                            self.tabs[i].scene.document.layers.add_or_replace(layer);
+                        } else {
+                            self.tabs[i].scene.document.layers.remove(&entry.name);
+                        }
+                    }
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
+                }
+                StructureSnapshot::TextStyles(entries) => {
+                    let names: Vec<String> =
+                        entries.iter().map(|entry| entry.name.clone()).collect();
+                    for entry in entries {
+                        let value = if undo {
+                            entry.before.clone()
+                        } else {
+                            entry.after.clone()
+                        };
+                        if let Some(style) = value {
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .text_styles
+                                .add_or_replace(style);
+                        } else {
+                            self.tabs[i].scene.document.text_styles.remove(&entry.name);
+                        }
+                    }
+                    for name in names {
+                        self.tabs[i].scene.invalidate_text_style_dependencies(&name);
+                    }
+                }
+                StructureSnapshot::DimStyles(entries) => {
+                    let names: Vec<String> =
+                        entries.iter().map(|entry| entry.name.clone()).collect();
+                    for entry in entries {
+                        let value = if undo {
+                            entry.before.clone()
+                        } else {
+                            entry.after.clone()
+                        };
+                        if let Some(style) = value {
+                            self.tabs[i].scene.document.dim_styles.add_or_replace(style);
+                        } else {
+                            self.tabs[i].scene.document.dim_styles.remove(&entry.name);
+                        }
+                    }
+                    for name in names {
+                        self.tabs[i].scene.invalidate_dim_style_dependencies(&name);
+                    }
+                }
+                StructureSnapshot::Objects(entries) => {
+                    for entry in entries {
+                        let value = if undo {
+                            entry.before.clone()
+                        } else {
+                            entry.after.clone()
+                        };
+                        if let Some(object) = value {
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .objects
+                                .insert(entry.handle, object);
+                        } else {
+                            self.tabs[i].scene.document.objects.remove(&entry.handle);
+                        }
+                    }
+                    self.tabs[i].scene.invalidate_dependency_index();
+                }
+                StructureSnapshot::Styles {
+                    before,
+                    after,
+                    text_names,
+                    dim_names,
+                    object_handles,
+                } => {
+                    let snapshot = if undo { before } else { after };
+                    self.restore_style_state(i, snapshot);
+                    self.tabs[i]
+                        .scene
+                        .invalidate_text_style_dependencies_many(text_names);
+                    self.tabs[i]
+                        .scene
+                        .invalidate_dim_style_dependencies_many(dim_names);
+                    self.tabs[i]
+                        .scene
+                        .invalidate_object_style_dependencies(object_handles);
+                }
+            }
         }
         let changes = self.tabs[i].scene.apply_entity_delta(&d.entities, undo);
         let scene = &mut self.tabs[i].scene;
@@ -479,6 +877,7 @@ impl OpenCADStudio {
         &mut self,
         i: usize,
         had_full: bool,
+        structure_changed: bool,
         changes: &[(Handle, crate::scene::ChangeKind)],
     ) {
         self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
@@ -524,7 +923,7 @@ impl OpenCADStudio {
         self.tabs[i].active_cmd = None;
         self.tabs[i].snap_result = None;
         self.tabs[i].active_grip = None;
-        if had_full {
+        if structure_changed {
             let doc_layers = self.tabs[i].scene.document.layers.clone();
             let vp_info = self.tabs[i].scene.viewport_list();
             self.tabs[i]
@@ -555,6 +954,7 @@ impl OpenCADStudio {
 
         let mut last_label = String::new();
         let mut had_full = false;
+        let mut structure_changed = false;
         let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.undo_stack.pop() else {
@@ -566,7 +966,8 @@ impl OpenCADStudio {
                     // Symmetric: undo applies the before side, then the same
                     // delta rides to the redo stack (it still holds the after
                     // side) — no current-state capture needed.
-                    had_full |= d.structure.is_some();
+                    structure_changed |= d.structure.is_some();
+                    had_full |= d.structure.as_ref().is_some_and(StructureSnapshot::is_full);
                     changes.extend(self.apply_delta_state(i, &mut d, true));
                     self.tabs[i]
                         .history
@@ -575,7 +976,7 @@ impl OpenCADStudio {
                 }
             }
         }
-        self.finish_history_apply(i, had_full, &changes);
+        self.finish_history_apply(i, had_full, structure_changed, &changes);
         self.command_line
             .push_output(&format!("Undo: {last_label}"));
     }
@@ -592,6 +993,7 @@ impl OpenCADStudio {
 
         let mut last_label = String::new();
         let mut had_full = false;
+        let mut structure_changed = false;
         let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.redo_stack.pop() else {
@@ -600,7 +1002,8 @@ impl OpenCADStudio {
             last_label = snapshot.label().to_string();
             match snapshot {
                 HistorySnapshot::Delta(mut d) => {
-                    had_full |= d.structure.is_some();
+                    structure_changed |= d.structure.is_some();
+                    had_full |= d.structure.as_ref().is_some_and(StructureSnapshot::is_full);
                     changes.extend(self.apply_delta_state(i, &mut d, false));
                     self.tabs[i]
                         .history
@@ -609,7 +1012,7 @@ impl OpenCADStudio {
                 }
             }
         }
-        self.finish_history_apply(i, had_full, &changes);
+        self.finish_history_apply(i, had_full, structure_changed, &changes);
         self.command_line
             .push_output(&format!("Redo: {last_label}"));
     }

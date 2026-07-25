@@ -817,10 +817,15 @@ impl OpenCADStudio {
                             self.command_line
                                 .push_error(&format!("DIMSTYLE: '{}' already exists.", name));
                         } else {
+                            let undo = self.begin_dim_style_undo(
+                                i,
+                                "DIMSTYLE NEW",
+                                std::slice::from_ref(&name),
+                            );
                             let style = DimStyle::new(&name);
                             let _ = self.tabs[i].scene.document.dim_styles.add(style);
-                            self.push_undo_snapshot(i, "DIMSTYLE NEW");
                             self.tabs[i].dirty = true;
+                            self.commit_dim_style_undo(i, undo);
                             self.command_line
                                 .push_output(&format!("DIMSTYLE: '{}' created.", name));
                         }
@@ -832,6 +837,11 @@ impl OpenCADStudio {
                         let prop = parts.get(2).map(|s| s.to_lowercase()).unwrap_or_default();
                         let val_str = parts.get(3).map(|s| s.trim()).unwrap_or("");
                         if let Ok(val) = val_str.parse::<f64>() {
+                            let undo = self.begin_dim_style_undo(
+                                i,
+                                "DIMSTYLE SET",
+                                std::slice::from_ref(&style_name),
+                            );
                             if let Some(ds) =
                                 self.tabs[i].scene.document.dim_styles.get_mut(&style_name)
                             {
@@ -882,8 +892,10 @@ impl OpenCADStudio {
                                         return Some(Task::none());
                                     }
                                 }
-                                self.push_undo_snapshot(i, "DIMSTYLE SET");
                                 self.tabs[i].dirty = true;
+                                self.tabs[i].scene
+                                    .invalidate_dim_style_dependencies(&style_name);
+                                self.commit_dim_style_undo(i, undo);
                                 self.command_line.push_output(&format!(
                                     "DIMSTYLE: '{style_name}'.{prop} = {val:.3}"
                                 ));
@@ -1121,10 +1133,15 @@ impl OpenCADStudio {
                             self.command_line
                                 .push_error(&format!("{prefix}: style '{name}' already exists."));
                         } else {
+                            let undo = self.begin_text_style_undo(
+                                i,
+                                "STYLE NEW",
+                                std::slice::from_ref(&name),
+                            );
                             let style = acadrust::tables::TextStyle::new(&name);
                             let _ = self.tabs[i].scene.document.text_styles.add(style);
-                            self.push_undo_snapshot(i, "STYLE NEW");
                             self.tabs[i].dirty = true;
+                            self.commit_text_style_undo(i, undo);
                             self.command_line
                                 .push_output(&format!("{prefix}: style '{name}' created."));
                         }
@@ -1136,18 +1153,28 @@ impl OpenCADStudio {
                         if style_name.is_empty() || font.is_empty() {
                             self.command_line
                                 .push_error(&format!("Usage: {prefix} FONT <style> <font_file>"));
-                        } else if let Some(s) =
+                        } else {
+                            let undo = self.begin_text_style_undo(
+                                i,
+                                "STYLE FONT",
+                                std::slice::from_ref(&style_name),
+                            );
+                            if let Some(style) =
                             self.tabs[i].scene.document.text_styles.get_mut(&style_name)
                         {
-                            s.font_file = font.clone();
-                            self.push_undo_snapshot(i, "STYLE FONT");
+                                style.font_file = font.clone();
                             self.tabs[i].dirty = true;
+                                self.tabs[i]
+                                    .scene
+                                    .invalidate_text_style_dependencies(&style_name);
+                                self.commit_text_style_undo(i, undo);
                             self.command_line.push_output(&format!(
                                 "{prefix}: '{style_name}' font set to '{font}'."
                             ));
                         } else {
                             self.command_line
                                 .push_error(&format!("{prefix}: style '{style_name}' not found."));
+                            }
                         }
                     }
                     "WIDTH" | "W" => {
@@ -1155,12 +1182,20 @@ impl OpenCADStudio {
                         let style_name = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
                         let factor_str = parts.get(2).map(|s| s.trim()).unwrap_or("");
                         if let Ok(factor) = factor_str.parse::<f64>() {
-                            if let Some(s) =
+                            let undo = self.begin_text_style_undo(
+                                i,
+                                "STYLE WIDTH",
+                                std::slice::from_ref(&style_name),
+                            );
+                            if let Some(style) =
                                 self.tabs[i].scene.document.text_styles.get_mut(&style_name)
                             {
-                                s.width_factor = factor;
-                                self.push_undo_snapshot(i, "STYLE WIDTH");
+                                style.width_factor = factor;
                                 self.tabs[i].dirty = true;
+                                self.tabs[i]
+                                    .scene
+                                    .invalidate_text_style_dependencies(&style_name);
+                                self.commit_text_style_undo(i, undo);
                                 self.command_line.push_output(&format!(
                                     "{prefix}: '{style_name}' width factor set to {factor:.3}."
                                 ));
@@ -1179,12 +1214,20 @@ impl OpenCADStudio {
                         let style_name = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
                         let angle_str = parts.get(2).map(|s| s.trim()).unwrap_or("");
                         if let Ok(deg) = angle_str.parse::<f64>() {
-                            if let Some(s) =
+                            let undo = self.begin_text_style_undo(
+                                i,
+                                "STYLE OBLIQUE",
+                                std::slice::from_ref(&style_name),
+                            );
+                            if let Some(style) =
                                 self.tabs[i].scene.document.text_styles.get_mut(&style_name)
                             {
-                                s.oblique_angle = deg.to_radians();
-                                self.push_undo_snapshot(i, "STYLE OBLIQUE");
+                                style.oblique_angle = deg.to_radians();
                                 self.tabs[i].dirty = true;
+                                self.tabs[i]
+                                    .scene
+                                    .invalidate_text_style_dependencies(&style_name);
+                                self.commit_text_style_undo(i, undo);
                                 self.command_line.push_output(&format!(
                                     "{prefix}: '{style_name}' oblique angle set to {deg:.1}°."
                                 ));

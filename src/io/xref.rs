@@ -41,6 +41,19 @@ pub struct XrefInfo {
 /// just like the host doc, so it gets the same corrupt-entity guard. Folding
 /// it in here avoids a second full-document `entities()` walk after resolve.
 pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> (Vec<XrefInfo>, usize) {
+    resolve_xrefs_with_progress(doc, base_dir, None)
+}
+
+/// Resolve XREFs while reporting completed work units.
+///
+/// Each reference contributes 1000 parse units and 1000 merge units. Parsing
+/// progress comes directly from the DWG reader when available, so one large
+/// XREF advances smoothly instead of making the file-open bar appear frozen.
+pub fn resolve_xrefs_with_progress(
+    doc: &mut CadDocument,
+    base_dir: &Path,
+    progress: Option<std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>>,
+) -> (Vec<XrefInfo>, usize) {
     // Auto-resolve every xref — frustum + LOD culling keep GPU cost bounded.
     let xref_entries: Vec<(String, String, Handle)> = doc
         .block_records
@@ -48,6 +61,11 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> (Vec<XrefInfo>, 
         .filter(|br| (br.flags.is_xref || br.flags.is_xref_overlay) && !br.xref_path.is_empty())
         .map(|br| (br.name.clone(), br.xref_path.clone(), br.handle))
         .collect();
+    let xref_count = xref_entries.len();
+    let total_units = xref_count.saturating_mul(2000);
+    if let Some(progress) = &progress {
+        progress(0, total_units);
+    }
 
     // Phase 1 — parse every referenced file in parallel. Each `load_file`
     // reads and decodes an independent DWG/DXF and touches nothing in the host
@@ -55,11 +73,40 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> (Vec<XrefInfo>, 
     // instead of running back-to-back. (The merge in phase 2 mutates `doc`, so
     // it stays serial.) `resolve_path` is pure and `base_dir` is shared &-ref.
     use crate::par::prelude::*;
+    let parse_units: std::sync::Arc<Vec<std::sync::atomic::AtomicU16>> = std::sync::Arc::new(
+        (0..xref_count)
+            .map(|_| std::sync::atomic::AtomicU16::new(0))
+            .collect(),
+    );
     let parsed: Vec<(String, String, Handle, Option<PathBuf>, Option<CadDocument>)> = xref_entries
         .into_par_iter()
-        .map(|(block_name, raw_path, br_handle)| {
+        .enumerate()
+        .map(|(xref_index, (block_name, raw_path, br_handle))| {
             let resolved = resolve_path(&raw_path, base_dir);
-            let xref_doc = resolved.as_ref().and_then(|p| super::load_file(p).ok());
+            let units = std::sync::Arc::clone(&parse_units);
+            let nested_progress = progress.as_ref().map(|progress| {
+                let progress = std::sync::Arc::clone(progress);
+                let callback: std::sync::Arc<dyn Fn(u16) + Send + Sync> =
+                    std::sync::Arc::new(move |value| {
+                        units[xref_index]
+                            .store(value.min(1000), std::sync::atomic::Ordering::Relaxed);
+                        let completed = units
+                            .iter()
+                            .map(|unit| unit.load(std::sync::atomic::Ordering::Relaxed) as usize)
+                            .sum();
+                        progress(completed, total_units);
+                    });
+                callback
+            });
+            let xref_doc = resolved.as_ref().and_then(|p| super::load_file_with_progress(p, nested_progress).ok());
+            parse_units[xref_index].store(1000, std::sync::atomic::Ordering::Relaxed);
+            if let Some(progress) = &progress {
+                let completed = parse_units
+                    .iter()
+                    .map(|unit| unit.load(std::sync::atomic::Ordering::Relaxed) as usize)
+                    .sum();
+                progress(completed, total_units);
+            }
             (block_name, raw_path, br_handle, resolved, xref_doc)
         })
         .collect();
@@ -68,7 +115,8 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> (Vec<XrefInfo>, 
     // block order (par_iter preserves it), so handle allocation is deterministic.
     let mut result = Vec::with_capacity(parsed.len());
     let mut dropped = 0usize;
-    for (block_name, raw_path, br_handle, resolved, xref_doc) in parsed {
+    for (merge_index, (block_name, raw_path, br_handle, resolved, xref_doc)) in parsed.into_iter().enumerate()
+    {
         let status = if let Some(xref_doc) = xref_doc {
             ensure_block_entities(doc, &block_name);
             dropped += merge_xref_into_block(doc, &block_name, br_handle, xref_doc);
@@ -85,6 +133,14 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> (Vec<XrefInfo>, 
                 .unwrap_or(raw_path),
             status,
         });
+        if let Some(progress) = &progress {
+            progress(
+                xref_count
+                    .saturating_mul(1000)
+                    .saturating_add((merge_index + 1).saturating_mul(1000)),
+                total_units,
+            );
+        }
     }
 
     (result, dropped)

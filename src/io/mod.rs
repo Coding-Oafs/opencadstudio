@@ -18,20 +18,58 @@ pub mod patterns;
 pub mod update_check;
 pub mod paper_sizes;
 pub mod thumbnail;
+#[cfg(target_arch = "wasm32")]
+mod web_worker;
 
 use crate::scene::DerivedCaches;
 use acadrust::entities::EntityType;
 use acadrust::io::dwg::DwgReader;
 use acadrust::{CadDocument, DwgWriter, DxfReader, DxfWriter};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
-// Phase tags written into the shared atomic so the UI overlay can display a
-// human-readable label. Kept in sync with the constants in `crate::app`.
-const PHASE_PARSING: u8 = 1;
-const PHASE_CACHING: u8 = 2;
-const PHASE_FINALIZING: u8 = 3;
+/// Thread-safe state shared by the native loader and the open overlay.
+///
+/// `basis_points` is monotonic in 0..=10000. `completed/total` describe the
+/// current sub-stage and let diagnostics distinguish real progress from a
+/// cosmetic timer.
+#[derive(Debug)]
+pub struct OpenProgressState {
+    pub phase: AtomicU8,
+    pub basis_points: AtomicU16,
+    pub completed: AtomicU32,
+    pub total: AtomicU32,
+}
+
+impl OpenProgressState {
+    pub fn new(phase: u8) -> Self {
+        Self {
+            phase: AtomicU8::new(phase),
+            basis_points: AtomicU16::new(0),
+            completed: AtomicU32::new(0),
+            total: AtomicU32::new(1),
+        }
+    }
+
+    pub fn set(&self, phase: u8, basis_points: u16, completed: usize, total: usize) {
+        self.completed
+            .store(completed.min(u32::MAX as usize) as u32, Ordering::Relaxed);
+        self.total.store(
+            total.max(1).min(u32::MAX as usize) as u32,
+            Ordering::Relaxed,
+        );
+        self.basis_points
+            .fetch_max(basis_points.min(10000), Ordering::Relaxed);
+        self.phase.store(phase, Ordering::Release);
+    }
+
+    pub fn set_fraction(&self, phase: u8, base: u16, span: u16, completed: usize, total: usize) {
+        let denominator = total.max(1) as u64;
+        let value = base as u64 + (completed.min(total.max(1)) as u64 * span as u64 / denominator);
+        self.set(phase, value.min(10000) as u16, completed, total);
+    }
+}
 
 // ── Open ──────────────────────────────────────────────────────────────────
 
@@ -61,37 +99,103 @@ pub async fn pick_open_path() -> Option<(PathBuf, u64)> {
 /// thread runs.
 pub async fn open_path_with_phase(
     path: PathBuf,
-    phase: Arc<AtomicU8>,
+    progress: Arc<OpenProgressState>,
+    model_bg: [f32; 4],
 ) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown".into());
     let path2 = path.clone();
-    let phase2 = phase.clone();
-    let (doc, caches) = std::thread::spawn(move || -> Result<_, String> {
+    let progress2 = progress.clone();
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    std::thread::Builder::new()
+        .name("ocs-file-open".to_string())
+        .spawn(move || {
+            let result = (|| -> Result<_, String> {
         use iced::time::Instant;
-        phase2.store(PHASE_PARSING, Ordering::Relaxed);
+                progress2.set(crate::app::OPEN_PHASE_PARSING, 200, 0, 1000);
         let t_parse = Instant::now();
-        let mut doc = load_file(&path2)?;
+        let parser_progress = {
+                    let progress = Arc::clone(&progress2);
+                    let callback: Arc<dyn Fn(u16) + Send + Sync> = Arc::new(move |value| {
+                        progress.set_fraction(
+                            crate::app::OPEN_PHASE_PARSING,
+                            200,
+                            5600,
+                            value as usize,
+                            1000,
+                        );
+                    });
+                    callback
+                };
+                let mut doc = load_file_with_progress(&path2, Some(parser_progress))?;
         let parse_ms = t_parse.elapsed().as_millis() as u32;
+                progress2.set(crate::app::OPEN_PHASE_PARSING, 5800, 1000, 1000);
         let t_purge = Instant::now();
         let dropped = purge_corrupt_entities(&mut doc);
         let purge_ms = t_purge.elapsed().as_millis() as u32;
-        phase2.store(PHASE_CACHING, Ordering::Relaxed);
+                progress2.set(crate::app::OPEN_PHASE_XREF, 6000, 0, 1);
+                let t_xref = Instant::now();
+                let (xref_infos, xref_dropped) = if let Some(base_dir) = path2.parent() {
+                    let xref_progress = {
+                        let progress = Arc::clone(&progress2);
+                        let callback: Arc<dyn Fn(usize, usize) + Send + Sync> =
+                            Arc::new(move |completed, total| {
+                                progress.set_fraction(
+                                    crate::app::OPEN_PHASE_XREF,
+                                    6000,
+                                    1400,
+                                    completed,
+                                    total,
+                                );
+                            });
+                        callback
+                    };
+                    crate::io::xref::resolve_xrefs_with_progress(
+                        &mut doc,
+                        base_dir,
+                        Some(xref_progress),
+                    )
+                } else {
+                    (Vec::new(), 0)
+                };
+                let xref_ms = t_xref.elapsed().as_millis() as u32;
+                progress2.set(crate::app::OPEN_PHASE_CACHING, 7400, 0, 10000);
         let t_caches = Instant::now();
-        let mut caches = crate::scene::build_derived_caches(&doc);
+        let cache_progress = |value: u16| {
+                    progress2.set_fraction(
+                        crate::app::OPEN_PHASE_CACHING,
+                        7400,
+                        2200,
+                        value as usize,
+                        10000,
+                    );
+                };
+                let mut caches = crate::scene::build_derived_caches_with_progress(&doc, &cache_progress);
         caches.timings = crate::scene::OpenTimings {
             parse_ms,
             purge_ms,
             caches_ms: t_caches.elapsed().as_millis() as u32,
+                    xref_ms,
         };
         caches.corrupt_dropped = dropped;
-        phase2.store(PHASE_FINALIZING, Ordering::Relaxed);
+                caches.xref_dropped = xref_dropped;
+                caches.xrefs = xref_infos;
+                progress2.set(crate::app::OPEN_PHASE_FINALIZING, 9600, 0, 1);
+                let (prepared_doc, prepared_geometry) =
+                    crate::scene::prepare_open_geometry(doc, &caches, model_bg);
+                doc = prepared_doc;
+                caches.prepared_geometry = Some(prepared_geometry);
+                progress2.set(crate::app::OPEN_PHASE_FINALIZING, 9950, 1, 1);
         Ok((doc, caches))
+    })();
+            let _ = sender.send(result);
     })
-    .join()
-    .map_err(|_| "parser thread panicked".to_string())??;
+        .map_err(|error| format!("failed to start parser thread: {error}"))?;
+    let (doc, caches) = receiver
+        .await
+        .map_err(|_| "parser thread stopped without a result".to_string())??;
     Ok((name, path, doc, caches))
 }
 
@@ -102,6 +206,7 @@ pub async fn open_path_with_phase(
 /// stands in for the document path.
 #[cfg(target_arch = "wasm32")]
 pub async fn pick_and_load_web(
+    progress: Arc<OpenProgressState>,
 ) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
     let handle = crate::sys::file_dialog()
         .set_title("Open CAD file")
@@ -111,11 +216,23 @@ pub async fn pick_and_load_web(
         .await
         .ok_or_else(|| "Cancelled".to_string())?;
     let name = handle.file_name();
+    progress.set(crate::app::OPEN_PHASE_READING, 500, 1, 2);
     let bytes = handle.read().await;
-    let mut doc = load_bytes(&name, bytes)?;
+    progress.set(crate::app::OPEN_PHASE_PARSING, 1000, 0, 1);
+    let mut doc = match web_worker::parse_document(&name, bytes).await {
+        Ok(document) => document,
+        Err(error) => return Err(format!("Web parser worker: {error}")),
+    };
+    if name.to_ascii_lowercase().ends_with(".dxf") {
+        fix_dxf_dimension_rotations(&mut doc);
+    }
+    fix_viewport_status_flags(&mut doc);
+    fix_current_style_names(&mut doc);
+    progress.set(crate::app::OPEN_PHASE_CACHING, 7000, 0, 1);
     let dropped = purge_corrupt_entities(&mut doc);
     let mut caches = crate::scene::build_derived_caches(&doc);
     caches.corrupt_dropped = dropped;
+    progress.set(crate::app::OPEN_PHASE_FINALIZING, 9900, 1, 1);
     let path = PathBuf::from(&name);
     Ok((name, path, doc, caches))
 }
@@ -168,6 +285,13 @@ fn sniff_dwg_or_dxf(path: &Path) -> String {
 }
 
 pub fn load_file(path: &Path) -> Result<CadDocument, String> {
+    load_file_with_progress(path, None)
+}
+
+pub(crate) fn load_file_with_progress(
+    path: &Path,
+    _progress: Option<Arc<dyn Fn(u16) + Send + Sync>>,
+) -> Result<CadDocument, String> {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -184,10 +308,15 @@ pub fn load_file(path: &Path) -> Result<CadDocument, String> {
     match effective.as_str() {
         "dwg" => {
             #[cfg(not(target_arch = "wasm32"))]
-            let mut doc = DwgReader::from_mmap(path)
-                .map_err(|e| e.to_string())?
-                .read()
+            let mut doc = {
+                let mut reader = DwgReader::from_mmap(path)
                 .map_err(|e| e.to_string())?;
+                if let Some(progress) = _progress {
+                    reader.set_progress_callback(progress);
+                }
+                reader.read()
+                .map_err(|e| e.to_string())?
+            };
             #[cfg(target_arch = "wasm32")]
             let mut doc = DwgReader::from_file(path)
                 .map_err(|e| e.to_string())?

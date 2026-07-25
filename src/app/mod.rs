@@ -168,7 +168,6 @@ use acadrust::CadDocument;
 use iced::time::Instant;
 use iced::window;
 use iced::{mouse, Point, Task, Theme};
-use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 
 pub(super) const POLY_START_DELAY_MS: u128 = 150;
@@ -179,14 +178,15 @@ pub(super) const VARIES_LABEL: &str = "*VARIES*";
 // loader thread, read by the UI overlay on every frame.
 pub const OPEN_PHASE_READING: u8 = 0;
 pub const OPEN_PHASE_PARSING: u8 = 1;
-pub const OPEN_PHASE_CACHING: u8 = 2;
-pub const OPEN_PHASE_FINALIZING: u8 = 3;
+pub const OPEN_PHASE_XREF: u8 = 2;
+pub const OPEN_PHASE_CACHING: u8 = 3;
+pub const OPEN_PHASE_FINALIZING: u8 = 4;
 
 #[derive(Debug, Clone)]
 pub struct OpenProgress {
     pub name: String,
     pub size_bytes: u64,
-    pub phase: Arc<AtomicU8>,
+    pub state: Arc<crate::io::OpenProgressState>,
     pub started: Instant,
 }
 
@@ -2098,6 +2098,9 @@ pub enum Message {
     PlotWindowExport,
     /// Callback after the user picks (or cancels) the window-export path.
     PlotWindowExportPath(Option<std::path::PathBuf>),
+    /// Completion of a PDF/preview/print job performed outside the UI thread.
+    /// The boolean restores the Plot dialog after a preview.
+    BackgroundIoFinished(Result<String, String>, bool),
     /// Send current layout to the system printer (via lp / lpr).
     PrintToPrinter,
     /// Callback from the async printer job.
@@ -2299,6 +2302,8 @@ pub enum Message {
     WblockSave(String),
     /// Result of the WBLOCK save path dialog.
     WblockSaveResult(String, Option<std::path::PathBuf>),
+    /// Background extraction/write completion.
+    WblockWriteFinished(String, std::path::PathBuf, Result<(), String>),
     // ── DATAEXTRACTION ────────────────────────────────────────────────────
     /// Save the pre-built CSV string to a file chosen by the user.
     DataExtractionSave(String),
@@ -2309,16 +2314,23 @@ pub enum Message {
     StlExport,
     /// Callback after the user picks (or cancels) the STL save path.
     StlExportPath(Option<std::path::PathBuf>),
+    StlExportFinished(std::path::PathBuf, Result<(), String>),
     // ── STEP export ───────────────────────────────────────────────────────
     /// Trigger STEP AP203 export: show save dialog.
     StepExport,
     /// Callback after the user picks (or cancels) the STEP save path.
     StepExportPath(Option<std::path::PathBuf>),
+    StepExportFinished(std::path::PathBuf, Result<(), String>),
     // ── OBJ import ────────────────────────────────────────────────────────
     /// Trigger OBJ import: show open-file dialog.
     ObjImport,
     /// Callback after the user picks (or cancels) the OBJ file path.
     ObjImportPath(Option<std::path::PathBuf>),
+    ObjImportFinished(
+        u64,
+        std::path::PathBuf,
+        Result<crate::scene::model::mesh_model::MeshModel, String>,
+    ),
 }
 
 impl OpenCADStudio {

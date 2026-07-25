@@ -27,6 +27,8 @@ use crate::modules::draw::modify::spline_ops::{
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
 
+use super::entity_index::ModifyEntityIndex;
+
 // ── Dropdown constants ─────────────────────────────────────────────────────
 
 pub const DROPDOWN_ID: &str = "trim_extend";
@@ -267,6 +269,20 @@ enum Geo {
         handle: Handle,
         segs: Vec<([f64; 2], [f64; 2])>,
     },
+}
+
+impl Geo {
+    fn handle(&self) -> Handle {
+        match self {
+            Self::Line { handle, .. }
+            | Self::Arc { handle, .. }
+            | Self::Circle { handle, .. }
+            | Self::Ray { handle, .. }
+            | Self::InfLine { handle, .. }
+            | Self::Ellipse { handle, .. }
+            | Self::Spline { handle, .. } => *handle,
+        }
+    }
 }
 
 fn build_geos(entities: &[EntityType]) -> Vec<Geo> {
@@ -2797,6 +2813,7 @@ fn crossing_preview_wire(p1: [f64; 2], cursor: [f64; 2], name: &str) -> WireMode
 
 pub struct TrimCommand {
     all_entities: Vec<EntityType>,
+    entity_index: ModifyEntityIndex,
     geos: Vec<Geo>,
     mode: TrimMode,
     /// Cutting-edge selection; empty = every object cuts (quick mode).
@@ -2809,9 +2826,11 @@ pub struct TrimCommand {
 
 impl TrimCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let entity_index = ModifyEntityIndex::build(&all_entities);
         let geos = build_geos(&all_entities);
         Self {
             all_entities,
+            entity_index,
             geos,
             mode: TrimMode::Pick,
             edge_set: Vec::new(),
@@ -2823,6 +2842,7 @@ impl TrimCommand {
     /// Boundary geometry from the edge selection (or everything when none),
     /// with the Edge option's implied extrapolation applied on top.
     fn rebuild_geos(&mut self) {
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
         self.geos = if self.edge_set.is_empty() {
             build_geos(&self.all_entities)
         } else {
@@ -2837,6 +2857,23 @@ impl TrimCommand {
         if self.implied_edges {
             imply_edge_geos(&mut self.geos);
         }
+    }
+
+    /// Exact analytic boundaries whose boxes overlap the picked entity. The
+    /// host already narrowed the cursor pick; this second broad phase keeps
+    /// TRIM preview/intersection work local on dense drawings.
+    fn nearby_geos(&self, handle: Handle) -> Vec<Geo> {
+        if self.implied_edges {
+            return self.geos.clone();
+        }
+        let Some(handles) = self.entity_index.nearby_handles(&self.all_entities, handle) else {
+            return self.geos.clone();
+        };
+        self.geos
+            .iter()
+            .filter(|geo| handles.contains(&geo.handle()))
+            .cloned()
+            .collect()
     }
 
     fn fence_run(
@@ -2974,7 +3011,8 @@ impl CadCommand for TrimCommand {
                     pick_extend_at(&self.all_entities, &self.geos, handle, px, py)
                         .map(|e| vec![e])
                 } else {
-                    pick_trim_at(&self.all_entities, &self.geos, handle, px, py)
+                    let geos = self.nearby_geos(handle);
+                    pick_trim_at(&self.all_entities, &geos, handle, px, py)
                 };
                 if let Some(new_entities) = new_entities {
                     // Snapshot is updated in on_entity_replaced once we know
@@ -3108,10 +3146,10 @@ impl CadCommand for TrimCommand {
             return vec![];
         }
 
+        let nearby_geos = self.nearby_geos(handle);
+        let geos = nearby_geos.as_slice();
         let entity = self
-            .all_entities
-            .iter()
-            .find(|e| e.common().handle == handle);
+            .entity_index.get(&self.all_entities, handle);
 
         let mut hover_wires = match entity {
             Some(EntityType::Line(l)) => {
@@ -3119,7 +3157,7 @@ impl CadCommand for TrimCommand {
                 let ay = l.start.y;
                 let bx = l.end.x;
                 let by = l.end.y;
-                let ts = line_seg_ts(ax, ay, bx, by, handle, &self.geos);
+                let ts = line_seg_ts(ax, ay, bx, by, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
@@ -3152,7 +3190,7 @@ impl CadCommand for TrimCommand {
                 let cy = a.center.y;
                 let a0 = a.start_angle;
                 let a1 = a.end_angle;
-                let ts = arc_seg_ts(cx, cy, a.radius, a0, a1, handle, &self.geos);
+                let ts = arc_seg_ts(cx, cy, a.radius, a0, a1, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
@@ -3176,7 +3214,7 @@ impl CadCommand for TrimCommand {
             Some(EntityType::Circle(c)) => {
                 let cx = c.center.x;
                 let cy = c.center.y;
-                let ts = arc_seg_ts(cx, cy, c.radius, 0.0, TAU, handle, &self.geos);
+                let ts = arc_seg_ts(cx, cy, c.radius, 0.0, TAU, handle, geos);
                 if ts.len() < 2 {
                     return vec![];
                 }
@@ -3205,7 +3243,7 @@ impl CadCommand for TrimCommand {
                 let by = r.base_point.y;
                 let ex = bx + r.direction.x * TRIM_EXTENT;
                 let ey = by + r.direction.y * TRIM_EXTENT;
-                let ts = line_seg_ts(bx, by, ex, ey, handle, &self.geos);
+                let ts = line_seg_ts(bx, by, ex, ey, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
@@ -3245,7 +3283,7 @@ impl CadCommand for TrimCommand {
                 let ey_start = by - x.direction.y * TRIM_EXTENT;
                 let ex_end = bx + x.direction.x * TRIM_EXTENT;
                 let ey_end = by + x.direction.y * TRIM_EXTENT;
-                let ts = line_seg_ts(ex_start, ey_start, ex_end, ey_end, handle, &self.geos);
+                let ts = line_seg_ts(ex_start, ey_start, ex_end, ey_end, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
@@ -3294,7 +3332,7 @@ impl CadCommand for TrimCommand {
                     t1 += TAU;
                 }
                 let ts = ellipse_seg_ts(
-                    e.center.x, e.center.y, a, b, nx, ny, t0, t1, handle, &self.geos,
+                    e.center.x, e.center.y, a, b, nx, ny, t0, t1, handle, geos,
                 );
                 if ts.is_empty() {
                     return vec![];
@@ -3321,7 +3359,7 @@ impl CadCommand for TrimCommand {
                 out
             }
             Some(EntityType::Spline(s)) => {
-                let ts = spline_seg_ts(s, handle, &self.geos);
+                let ts = spline_seg_ts(s, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
@@ -3348,7 +3386,7 @@ impl CadCommand for TrimCommand {
                 out
             }
             Some(EntityType::LwPolyline(p)) => {
-                let Some(survivors) = trim_lwpolyline(p, pt.x as f64, pt.y as f64, &self.geos)
+                let Some(survivors) = trim_lwpolyline(p, pt.x as f64, pt.y as f64, geos)
                 else {
                     return vec![];
                 };
@@ -3371,7 +3409,7 @@ impl CadCommand for TrimCommand {
         if self.implied_edges && !hover_wires.is_empty() {
             if let (Some(orig), Some(pieces)) = (
                 entity,
-                pick_trim_at(&self.all_entities, &self.geos, handle, pt.x, pt.y),
+                pick_trim_at(&self.all_entities, geos, handle, pt.x, pt.y),
             ) {
                 let cuts = piece_cut_points(orig, &pieces);
                 hover_wires.extend(implied_cut_guides(&self.all_entities, handle, &cuts));
@@ -3477,6 +3515,7 @@ impl CadCommand for TrimCommand {
 
 pub struct ExtendCommand {
     all_entities: Vec<EntityType>,
+    entity_index: ModifyEntityIndex,
     geos: Vec<Geo>,
     mode: TrimMode,
     /// Boundary-edge selection; empty = every object is a boundary.
@@ -3489,9 +3528,11 @@ pub struct ExtendCommand {
 
 impl ExtendCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let entity_index = ModifyEntityIndex::build(&all_entities);
         let geos = build_geos(&all_entities);
         Self {
             all_entities,
+            entity_index,
             geos,
             mode: TrimMode::Pick,
             edge_set: Vec::new(),
@@ -3501,6 +3542,7 @@ impl ExtendCommand {
     }
 
     fn rebuild_geos(&mut self) {
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
         self.geos = if self.edge_set.is_empty() {
             build_geos(&self.all_entities)
         } else {
@@ -3681,18 +3723,14 @@ impl CadCommand for ExtendCommand {
                 let mut out: Vec<WireModel> = self
                     .edge_set
                     .iter()
-                    .filter_map(|h| {
-                        self.all_entities.iter().find(|e| e.common().handle == *h)
-                    })
+                    .filter_map(|h| self.entity_index.get(&self.all_entities, *h))
                     .map(|e| {
                         WireModel::solid("edge_sel".into(), entity_pts(e), OPT_YELLOW, false)
                     })
                     .collect();
                 if !handle.is_null() && !self.edge_set.contains(&handle) {
                     if let Some(e) = self
-                        .all_entities
-                        .iter()
-                        .find(|e| e.common().handle == handle)
+                        .entity_index.get(&self.all_entities, handle)
                     {
                         let mut c = OPT_YELLOW;
                         c[3] = 0.45;
@@ -3732,9 +3770,7 @@ impl CadCommand for ExtendCommand {
         }
 
         let entity = self
-            .all_entities
-            .iter()
-            .find(|e| e.common().handle == handle);
+            .entity_index.get(&self.all_entities, handle);
         match entity {
             Some(EntityType::Line(l)) => {
                 let ax = l.start.x;

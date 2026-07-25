@@ -199,6 +199,7 @@ impl Scene {
         };
 
         if !handle.is_null() {
+            self.invalidate_dependency_index();
             if let Some(model) = hatch_seed {
                 self.hatches.insert(handle, model);
             }
@@ -275,6 +276,7 @@ impl Scene {
                 }
             }
         }
+        self.invalidate_dependency_index();
         self.bump_geometry();
         true
     }
@@ -353,6 +355,7 @@ impl Scene {
             return false;
         };
         *slot = entity;
+        self.invalidate_dependency_index();
 
         // Drop stale derived caches for this handle, then reseed for the new
         // entity's type (which may differ from the old one).
@@ -2092,6 +2095,7 @@ impl Scene {
     /// Rebuild hatch / image / mesh caches after the document is modified
     /// outside the normal `add_entity` path (e.g. REFCLOSE SAVE).
     pub fn rebuild_derived_caches(&mut self) {
+        self.invalidate_dependency_index();
         self.populate_hatches_from_document_unbumped();
         self.populate_images_from_document_unbumped();
         self.populate_meshes_impl(false, false);

@@ -21,6 +21,8 @@ use crate::modules::draw::defaults;
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
 
+use super::entity_index::ModifyEntityIndex;
+
 // ── Dropdown constants ─────────────────────────────────────────────────────
 
 pub const DROPDOWN_ID: &str = "fillet_chamfer";
@@ -1204,6 +1206,7 @@ pub struct FilletCommand {
     radius: f64,
     step: FilletStep,
     all_entities: Vec<EntityType>,
+    entity_index: ModifyEntityIndex,
     /// First-object pick to restore after a radius entry made mid-selection
     /// (i.e. "R" pressed after the first object was already picked), so the
     /// command resumes at the second pick instead of restarting selection.
@@ -1212,10 +1215,12 @@ pub struct FilletCommand {
 
 impl FilletCommand {
     pub fn new(radius: f64, all_entities: Vec<EntityType>) -> Self {
+        let entity_index = ModifyEntityIndex::build(&all_entities);
         Self {
             radius: radius as f64,
             step: FilletStep::First,
             all_entities,
+            entity_index,
             resume_second: None,
         }
     }
@@ -1348,9 +1353,8 @@ impl CadCommand for FilletCommand {
             FilletStep::WaitingForRadius => return CmdResult::NeedPoint,
             FilletStep::First => {
                 let e1 = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|entity| match entity {
                         EntityType::LwPolyline(p) => {
                             Some(FilletEntity::from_lwpoly(p, handle, click))
@@ -1380,9 +1384,8 @@ impl CadCommand for FilletCommand {
                 }
 
                 let e2 = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|entity| match entity {
                         EntityType::LwPolyline(p) => {
                             Some(FilletEntity::from_lwpoly(p, handle, click))
@@ -1426,9 +1429,8 @@ impl CadCommand for FilletCommand {
             FilletStep::WaitingForRadius => vec![],
             FilletStep::First => {
                 let pts = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|e| match e {
                         EntityType::LwPolyline(p) => Some(lwpoly_seg_hover_pts(p, click)),
                         _ => FilletEntity::from_entity(e).map(|fe| entity_pts(&fe.to_entity_type())),
@@ -1449,9 +1451,8 @@ impl CadCommand for FilletCommand {
                 let e1 = e1.clone();
                 let click1 = *click1;
                 let e2 = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|entity| match entity {
                         EntityType::LwPolyline(p) => {
                             Some(FilletEntity::from_lwpoly(p, handle, click))
@@ -1583,6 +1584,7 @@ pub struct ChamferCommand {
     dist2: f64,
     step: ChamferStep,
     all_entities: Vec<EntityType>,
+    entity_index: ModifyEntityIndex,
     /// First-object pick (line or polyline segment) to restore after a
     /// distance entry made mid-selection, so the command resumes at the
     /// second pick instead of restarting selection.
@@ -1591,11 +1593,13 @@ pub struct ChamferCommand {
 
 impl ChamferCommand {
     pub fn new(dist: f64, all_entities: Vec<EntityType>) -> Self {
+        let entity_index = ModifyEntityIndex::build(&all_entities);
         Self {
             dist1: dist as f64,
             dist2: defaults::get_chamfer_dist2(),
             step: ChamferStep::First,
             all_entities,
+            entity_index,
             resume_pick: None,
         }
     }
@@ -1777,9 +1781,7 @@ impl CadCommand for ChamferCommand {
             }
             ChamferStep::First => {
                 match self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index.get(&self.all_entities, handle)
                 {
                     Some(EntityType::Line(l)) => {
                         self.step = ChamferStep::Second {
@@ -1821,9 +1823,8 @@ impl CadCommand for ChamferCommand {
                 }
 
                 let l2 = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|e| {
                         if let EntityType::Line(l) = e {
                             Some(l.clone())
@@ -1857,9 +1858,8 @@ impl CadCommand for ChamferCommand {
             ChamferStep::WaitingForDist1 | ChamferStep::WaitingForDist2 => return vec![],
             ChamferStep::First => {
                 let pts = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|e| match e {
                         EntityType::Line(l) => Some(line_pts(l)),
                         EntityType::LwPolyline(p) => Some(lwpoly_seg_hover_pts(p, click)),
@@ -1880,9 +1880,8 @@ impl CadCommand for ChamferCommand {
                 let l1 = l1.clone();
                 let click1 = *click1;
                 let l2 = self
-                    .all_entities
-                    .iter()
-                    .find(|e| e.common().handle == handle)
+                    .entity_index
+                    .get(&self.all_entities, handle)
                     .and_then(|e| {
                         if let EntityType::Line(l) = e {
                             Some(l.clone())

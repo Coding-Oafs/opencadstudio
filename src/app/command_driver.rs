@@ -1052,9 +1052,10 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
-                self.push_undo_snapshot(i, "GROUP");
+                let undo = self.begin_group_undo(i, "GROUP");
                 self.tabs[i].scene.create_group(name.clone(), handles);
                 self.tabs[i].dirty = true;
+                self.commit_group_undo(i, undo);
                 self.command_line
                     .push_info(&format!("Group \"{}\" created.", name));
             }
@@ -1062,9 +1063,10 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
-                self.push_undo_snapshot(i, "UNGROUP");
+                let undo = self.begin_group_undo(i, "UNGROUP");
                 let count = self.tabs[i].scene.delete_groups_containing(&handles);
                 self.tabs[i].dirty = true;
+                self.commit_group_undo(i, undo);
                 if count > 0 {
                     self.command_line
                         .push_info(&format!("{} group(s) dissolved.", count));

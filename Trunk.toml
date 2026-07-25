@@ -12,6 +12,11 @@ target = "index.html"
 # on the rust <link> in index.html (truck-meshalgo → lzma-sys C deps cannot
 # cross-compile to wasm).
 
+[[hooks]]
+stage = "pre_build"
+command = "sh"
+command_arguments = ["scripts/build-web-worker.sh"]
+
 [serve]
 # Cross-origin isolation headers enable SharedArrayBuffer, which wasm threads
 # (rayon) need. GitHub Pages cannot set these; a self-hosted server (e.g. the

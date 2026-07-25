@@ -17,6 +17,7 @@ name = "OpenCADStudio"
 version = "0.8.7"
 dependencies = [
  "acadrust",
+ "bincode",
  "bytemuck",
  "clap",
  "console_error_panic_hook",
@@ -74,7 +75,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.4.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc?rev=cd90c256a5e7d115f6e995275d6b3117d5775da9#cd90c256a5e7d115f6e995275d6b3117d5775da9"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=bee1a58#bee1a5857d444a32b67f98e6babc1ad6483f6865"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -2305,8 +2306,6 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff144a999b0ca0f8a10257934500060240825c42e950ec0ebee9c8ae30561c13"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -3665,6 +3664,17 @@ dependencies = [
  "rkyv",
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ocs_web_worker"
+version = "0.1.0"
+dependencies = [
+ "acadrust",
+ "bincode",
+ "getrandom 0.3.4",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

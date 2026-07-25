@@ -23,7 +23,8 @@ impl OpenCADStudio {
                         .into_iter()
                         .map(|(_, e)| e.common().layer.clone())
                         .collect();
-                    self.push_undo_snapshot(i, "LAYOFF");
+                    let names: Vec<String> = layers.iter().cloned().collect();
+                    let undo = self.begin_layer_undo(i, "LAYOFF", &names);
                     for name in &layers {
                         if name == "0" {
                             continue;
@@ -32,8 +33,9 @@ impl OpenCADStudio {
                             dl.turn_off();
                         }
                     }
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
                     self.command_line.push_info("Layer(s) turned off.");
                 }
@@ -58,7 +60,8 @@ impl OpenCADStudio {
                         .into_iter()
                         .map(|(_, e)| e.common().layer.clone())
                         .collect();
-                    self.push_undo_snapshot(i, "LAYFRZ");
+                    let names: Vec<String> = layers.iter().cloned().collect();
+                    let undo = self.begin_layer_undo(i, "LAYFRZ", &names);
                     for name in &layers {
                         if name == "0" {
                             continue;
@@ -67,8 +70,9 @@ impl OpenCADStudio {
                             dl.freeze();
                         }
                     }
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
                     self.command_line.push_info("Layer(s) frozen.");
                 }
@@ -266,10 +270,18 @@ impl OpenCADStudio {
                                 "LAYERSTATE: no saved state named \"{arg}\"."
                             ));
                         } else {
-                            self.push_undo_snapshot(i, "LAYERSTATE");
+                            let names: Vec<String> = self.tabs[i]
+                                .scene
+                                .document
+                                .layers
+                                .iter()
+                                .map(|layer| layer.name.clone())
+                                .collect();
+                            let undo = self.begin_layer_undo(i, "LAYERSTATE", &names);
                             let n = self.tabs[i].restore_layer_state(arg).unwrap_or(0);
-                            self.tabs[i].scene.bump_geometry();
+                            self.tabs[i].scene.invalidate_layer_dependencies(&names);
                             self.tabs[i].dirty = true;
+                            self.commit_layer_undo(i, undo);
                             self.refresh_layer_panel();
                             self.command_line.push_output(&format!(
                                 "LAYERSTATE: restored \"{arg}\" ({n} layer(s))."
@@ -312,14 +324,16 @@ impl OpenCADStudio {
                         .into_iter()
                         .map(|(_, e)| e.common().layer.clone())
                         .collect();
-                    self.push_undo_snapshot(i, "LAYLCK");
+                    let names: Vec<String> = layers.iter().cloned().collect();
+                    let undo = self.begin_layer_undo(i, "LAYLCK", &names);
                     for name in &layers {
                         if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                             dl.lock();
                         }
                     }
-                    self.tabs[i].scene.bump_geometry();
+                    // Layer locking changes editability only.
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
                     self.command_line.push_info("Layer(s) locked.");
                 }
@@ -359,41 +373,43 @@ impl OpenCADStudio {
             }
 
             "LAYON" => {
-                self.push_undo_snapshot(i, "LAYON");
-                for name in self.tabs[i]
+                let names = self.tabs[i]
                     .scene
                     .document
                     .layers
                     .iter()
                     .map(|l| l.name.clone())
-                    .collect::<Vec<_>>()
-                {
+                    .collect::<Vec<_>>();
+                let undo = self.begin_layer_undo(i, "LAYON", &names);
+                for name in &names {
                     if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(&name) {
                         dl.turn_on();
                     }
                 }
-                self.tabs[i].scene.bump_geometry();
+                self.tabs[i].scene.invalidate_layer_dependencies(&names);
                 self.tabs[i].dirty = true;
+                self.commit_layer_undo(i, undo);
                 self.refresh_layer_panel();
                 self.command_line.push_info("All layers turned on.");
             }
 
             "LAYTHW" => {
-                self.push_undo_snapshot(i, "LAYTHW");
-                for name in self.tabs[i]
+                let names = self.tabs[i]
                     .scene
                     .document
                     .layers
                     .iter()
                     .map(|l| l.name.clone())
-                    .collect::<Vec<_>>()
-                {
+                    .collect::<Vec<_>>();
+                let undo = self.begin_layer_undo(i, "LAYTHW", &names);
+                for name in &names {
                     if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(&name) {
                         dl.thaw();
                     }
                 }
-                self.tabs[i].scene.bump_geometry();
+                self.tabs[i].scene.invalidate_layer_dependencies(&names);
                 self.tabs[i].dirty = true;
+                self.commit_layer_undo(i, undo);
                 self.refresh_layer_panel();
                 self.command_line.push_info("All layers thawed.");
             }
@@ -417,14 +433,16 @@ impl OpenCADStudio {
                         .into_iter()
                         .map(|(_, e)| e.common().layer.clone())
                         .collect();
-                    self.push_undo_snapshot(i, "LAYULK");
+                    let names: Vec<String> = layers.iter().cloned().collect();
+                    let undo = self.begin_layer_undo(i, "LAYULK", &names);
                     for name in &layers {
                         if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                             dl.unlock();
                         }
                     }
-                    self.tabs[i].scene.bump_geometry();
+                    // Layer unlocking changes editability only.
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
                     self.command_line.push_info("Layer(s) unlocked.");
                 }
@@ -442,7 +460,6 @@ impl OpenCADStudio {
                     self.command_line
                         .push_error("LAYISO: select entities on the layers to isolate first.");
                 } else {
-                    self.push_undo_snapshot(i, "LAYISO");
                     let names: Vec<String> = self.tabs[i]
                         .scene
                         .document
@@ -450,15 +467,17 @@ impl OpenCADStudio {
                         .iter()
                         .map(|l| l.name.clone())
                         .collect();
-                    for name in names {
-                        if !sel_layers.contains(&name) {
-                            if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(&name) {
+                    let undo = self.begin_layer_undo(i, "LAYISO", &names);
+                    for name in &names {
+                        if !sel_layers.contains(name) {
+                            if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
                                 dl.turn_off();
                             }
                         }
                     }
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_layer_dependencies(&names);
                     self.tabs[i].dirty = true;
+                    self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
                     self.command_line
                         .push_info(&format!("LAYISO: isolated {} layer(s).", sel_layers.len()));
@@ -511,7 +530,6 @@ impl OpenCADStudio {
 
             // LAYUNISO — restore all layers that were turned off by LAYISO (turn all on)
             "LAYUNISO" => {
-                self.push_undo_snapshot(i, "LAYUNISO");
                 let names: Vec<String> = self.tabs[i]
                     .scene
                     .document
@@ -519,13 +537,15 @@ impl OpenCADStudio {
                     .iter()
                     .map(|l| l.name.clone())
                     .collect();
-                for name in names {
+                let undo = self.begin_layer_undo(i, "LAYUNISO", &names);
+                for name in &names {
                     if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(&name) {
                         dl.turn_on();
                     }
                 }
-                self.tabs[i].scene.bump_geometry();
+                self.tabs[i].scene.invalidate_layer_dependencies(&names);
                 self.tabs[i].dirty = true;
+                self.commit_layer_undo(i, undo);
                 self.refresh_layer_panel();
                 self.command_line
                     .push_info("LAYUNISO: all layers restored.");
@@ -587,9 +607,10 @@ impl OpenCADStudio {
                     self.command_line.push_info(&cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 } else {
-                    self.push_undo_snapshot(i, "UNGROUP");
+                    let undo = self.begin_group_undo(i, "UNGROUP");
                     let count = self.tabs[i].scene.delete_groups_containing(&handles);
                     self.tabs[i].dirty = true;
+                    self.commit_group_undo(i, undo);
                     if count > 0 {
                         self.command_line
                             .push_info(&format!("{} group(s) dissolved.", count));

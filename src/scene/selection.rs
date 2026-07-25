@@ -391,7 +391,10 @@ impl Scene {
         // Report the exact erased handles so derived caches drop just those and
         // the resident set removes only their wires (bump_entities drops them
         // from the tessellation memos too).
-        self.bump_entities(&erased);
+        if !erased.is_empty() {
+            self.invalidate_dependency_index();
+            self.bump_entities(&erased);
+        }
     }
 
     /// Restore erased Arc-backed entities without re-linking their still-present
@@ -414,6 +417,7 @@ impl Scene {
             }
         }
         if !changes.is_empty() {
+            self.invalidate_dependency_index();
             self.bump_entities(&changes);
         }
         restored
