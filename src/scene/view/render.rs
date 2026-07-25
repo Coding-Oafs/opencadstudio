@@ -239,7 +239,7 @@ impl shader::Primitive for Primitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
-        let nav_prepare_started = std::time::Instant::now();
+        let nav_prepare_started = iced::time::Instant::now();
         let phys = viewport.physical_size();
         let full_size = Size::new(phys.width, phys.height);
         let scale = viewport.scale_factor() as f32;
@@ -436,11 +436,14 @@ impl shader::Primitive for Primitive {
                 // the whole wire buffer. Only for the scissor-free, mesh-free
                 // (single-batch) Model set; scissored paper viewports and mixed
                 // 2D/3D sets fall through to the shared batched path below.
+                #[cfg(not(target_arch = "wasm32"))]
                 let mut arena_served = false;
+                #[cfg(target_arch = "wasm32")]
+                let arena_served = false;
                 #[cfg(not(target_arch = "wasm32"))]
                 let _perf = crate::perf::enabled();
                 #[cfg(not(target_arch = "wasm32"))]
-                let _t0 = std::time::Instant::now();
+                let _t0 = iced::time::Instant::now();
                 #[cfg(not(target_arch = "wasm32"))]
                 let mut _patched = false;
                 #[cfg(not(target_arch = "wasm32"))]
@@ -884,7 +887,7 @@ impl shader::Primitive for Primitive {
         target: &iced::wgpu::TextureView,
         clip: &Rectangle<u32>,
     ) {
-        let nav_render_started = std::time::Instant::now();
+        let nav_render_started = iced::time::Instant::now();
         let cw = clip.width as f32;
         let ch = clip.height as f32;
         let clip_right = clip.x + clip.width;
@@ -1403,7 +1406,7 @@ impl Scene {
         _hover_region: Option<usize>,
         show_viewcube: bool,
     ) -> Primitive {
-        let nav_build_started = std::time::Instant::now();
+        let nav_build_started = iced::time::Instant::now();
         let perf_nav = self.take_nav_perf();
         // Hover comes from the scene cell driven by the app-level
         // `CursorMoved` handler — the cube overlay sits above the shader
@@ -1463,7 +1466,7 @@ impl Scene {
         };
         let active = self.active_model_tile.get();
         let is_active = tile_idx == active;
-        let nav_build_started = std::time::Instant::now();
+        let nav_build_started = iced::time::Instant::now();
         let perf_nav = if is_active {
             self.take_nav_perf()
         } else {
@@ -1749,14 +1752,17 @@ impl Scene {
         // id so an unchanged wire set is not re-walked every frame.
         // The reuse fallback inside the gather is keyed per wire SOURCE — the
         // sheet, a Model tile, a content viewport and the implicit view carry
-        // different glyph sets even at the same geometry epoch (#403). Tiles
+        // different glyph sets even at the same geometry epoch (#403). Paper
+        // sheets must also include their layout block: switching layouts does
+        // not change the geometry epoch, and a role-only key reused the prior
+        // sheet's glyph coordinates while its wires moved correctly. Tiles
         // share the resident Model set, so they share one key; the implicit
         // view mixes in the current layout block (BEDIT swaps sets without a
         // geometry delta).
         let text_source_key: u64 = if inst.tile_idx.is_some() {
             0x1000_0000_0000_0000
         } else if inst.paper_sheet {
-            0x2000_0000_0000_0000
+            0x2000_0000_0000_0000 | self.current_layout_block_handle().value()
         } else if inst.handle == acadrust::Handle::NULL {
             0x4000_0000_0000_0000 | self.current_layout_block_handle().value()
         } else {

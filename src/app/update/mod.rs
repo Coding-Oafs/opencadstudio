@@ -3954,9 +3954,6 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             Message::SaveFinished(outcome) => self.on_save_finished(outcome),
 
-            #[cfg(target_arch = "wasm32")]
-            Message::SaveFinished(_) => Task::none(),
-
             // ── Page Setup ────────────────────────────────────────────────
             Message::UpdateCheckResult(latest) => {
                 let Some(info) = latest else {

@@ -783,7 +783,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 )
             })
         };
-        let clone_started = std::time::Instant::now();
+        let clone_started = iced::time::Instant::now();
         let mut snapshot = self.tabs[i].scene.document.clone();
         let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
         if crate::perf::enabled() {
@@ -807,7 +807,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let (result, refreshed_preview) = std::thread::spawn(move || {
                     let mut refreshed_preview = None;
                     if let Some((wires, camera, bg_color, png, viewport)) = thumbnail {
-                        let started = std::time::Instant::now();
+                        let started = iced::time::Instant::now();
                         snapshot.preview = crate::io::thumbnail::from_snapshot(
                             &wires,
                             &camera,

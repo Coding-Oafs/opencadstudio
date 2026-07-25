@@ -58,7 +58,6 @@ struct SceneDependencyIndex {
     text_styles: HashMap<String, DependencyTargets>,
     dim_styles: HashMap<String, DependencyTargets>,
     object_styles: HashMap<Handle, DependencyTargets>,
-    blocks: HashMap<String, HashSet<Handle>>,
 }
 
 fn hatch_interaction_aabb(hatch: &model::hatch_model::HatchModel) -> Option<[f64; 4]> {
@@ -270,6 +269,7 @@ impl std::fmt::Debug for PreparedOpenGeometry {
 }
 
 #[derive(Debug)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct WireGpuPatch {
     pub(crate) changes: Arc<Vec<(Handle, ChangeKind)>>,
     pub(crate) runs: Arc<HashMap<Handle, Arc<Vec<WireModel>>>>,
@@ -280,6 +280,7 @@ pub(crate) struct WireGpuPatch {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct WireIndexEdit {
     pub(crate) handle: Handle,
     pub(crate) start: usize,
@@ -414,6 +415,7 @@ pub struct OpenTimings {
 
 /// Build hatch / image / mesh caches from a document without needing `&mut Scene`.
 /// Intended to run on a background thread during file load.
+#[cfg(target_arch = "wasm32")]
 pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     build_derived_caches_impl(doc, None)
 }
@@ -6631,10 +6633,7 @@ impl Scene {
             }
         }
 
-        let mut index = SceneDependencyIndex {
-            blocks: roots.clone(),
-            ..SceneDependencyIndex::default()
-        };
+        let mut index = SceneDependencyIndex::default();
         for entity in self.document.entities() {
             let common = entity.common();
             let owner = if common.owner_handle.is_null() {
@@ -6790,18 +6789,6 @@ impl Scene {
             }
         }
         self.invalidate_dependency_targets(combined);
-    }
-
-    pub fn block_dependency_handles(&self, name: &str) -> Vec<Handle> {
-        if self.dependency_index_cache.borrow().is_none() {
-            *self.dependency_index_cache.borrow_mut() = Some(self.rebuild_dependency_index());
-        }
-        self.dependency_index_cache
-            .borrow()
-            .as_ref()
-            .and_then(|index| index.blocks.get(&name.to_ascii_uppercase()))
-            .map(|handles| handles.iter().copied().collect())
-            .unwrap_or_default()
     }
 
     pub(crate) fn invalidate_dependency_index(&self) {

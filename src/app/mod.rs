@@ -755,7 +755,9 @@ pub(super) struct OpenCADStudio {
     pending_close: Option<PendingClose>,
     /// Latest save job per stable tab id. Older completions may finish, but
     /// cannot mark a newer document state clean or redirect its path.
+    #[cfg(not(target_arch = "wasm32"))]
     active_save_jobs: std::collections::HashMap<u64, u64>,
+    #[cfg(not(target_arch = "wasm32"))]
     save_job_serial: u64,
     /// OS window for the unsaved-changes confirmation dialog.
 
@@ -866,6 +868,7 @@ pub(super) enum PendingClose {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) enum SavePurpose {
     Manual,
     SaveAs,
@@ -873,6 +876,7 @@ pub(super) enum SavePurpose {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) enum SaveContinuation {
     None,
     CloseTab,
@@ -880,6 +884,7 @@ pub(super) enum SaveContinuation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) struct ThumbnailCacheKey {
     epoch: u64,
     camera_generation: u64,
@@ -889,6 +894,7 @@ pub(super) struct ThumbnailCacheKey {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SaveOutcome {
     job_id: u64,
     tab_id: u64,
@@ -1463,6 +1469,7 @@ pub enum Message {
     /// Periodic autosave tick — write `.sv$` recovery files for dirty tabs.
     AutoSave,
     /// Native background save/autosave completed.
+    #[cfg(not(target_arch = "wasm32"))]
     SaveFinished(SaveOutcome),
     // ─────────────────────────────────────────────────────────────────────
     CommandInput(String),
@@ -2505,7 +2512,9 @@ impl OpenCADStudio {
             active_interaction_index: None,
             queued_interaction_indices: std::collections::VecDeque::new(),
             pending_close: None,
+            #[cfg(not(target_arch = "wasm32"))]
             active_save_jobs: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             save_job_serial: 0,
             save_dialog_format: "DWG 2018".to_string(),
             save_dialog_filename: "drawing.dwg".to_string(),

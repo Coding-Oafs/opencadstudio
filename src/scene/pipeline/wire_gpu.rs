@@ -224,9 +224,6 @@ impl PackedWireInstance {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-pub type WireInstance = PackedWireInstance;
-
 /// Wire and hatch pipelines switch together: the fast path uses storage
 /// buffers; the compatibility path carries wire constants in packed vertex
 /// attributes and hatch data in a texture.

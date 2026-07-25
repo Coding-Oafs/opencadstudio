@@ -310,7 +310,7 @@ impl WireArena {
     ) -> Option<Self> {
         let ranges = handle_ranges(wires)?;
         let perf = crate::perf::enabled();
-        let total_started = std::time::Instant::now();
+        let total_started = iced::time::Instant::now();
 
         // Reject an oversized batch before parallel emission allocates hundreds
         // of megabytes. `points.len() - 1` is an upper bound because NaN-break
@@ -363,7 +363,7 @@ impl WireArena {
             })
             .collect();
 
-        let pack_started = std::time::Instant::now();
+        let pack_started = iced::time::Instant::now();
         use crate::par::prelude::*;
         let packed: Vec<PackedSlab> = plans
             .par_iter()
@@ -441,7 +441,7 @@ impl WireArena {
         let const_cap = ((const_tail as u64 * HEADROOM_NUM / HEADROOM_DEN)
             .max(MIN_CONST_CAP)
             .min(MAX_CONSTS)) as u32;
-        let upload_started = std::time::Instant::now();
+        let upload_started = iced::time::Instant::now();
         let inst_buf = alloc_inst_initialized(device, inst_cap as u64, &instances);
         let const_buf = alloc_const_initialized(device, const_cap as u64, &consts_cpu);
         let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;

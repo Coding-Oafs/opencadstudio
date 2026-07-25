@@ -420,7 +420,7 @@ mod tests {
             std::thread::sleep(IO_TIMEOUT * 3);
         });
         let s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-        let start = std::time::Instant::now();
+        let start = iced::time::Instant::now();
         assert!(!handoff(s, &[PathBuf::from("/tmp/a.dwg")]));
         assert!(
             start.elapsed() < IO_TIMEOUT * 2,

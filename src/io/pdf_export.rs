@@ -49,12 +49,14 @@ pub async fn pick_pdf_path_owned(_stem: String) -> Option<std::path::PathBuf> {
 }
 
 /// mm to PDF points (1 mm = 2.834645 pt).
+#[cfg(not(target_arch = "wasm32"))]
 const MM_TO_PT: f32 = 2.834645;
 /// `wire.line_weight_px` is the on-screen pixel weight: mm × (96/25.4) × 2.0,
 /// where the ×2 is a screen-legibility boost (see render.rs). Print wants the
 /// true physical weight, so undo both the 96-dpi scaling and the boost before
 /// converting to points — otherwise weights export ~2× too heavy in pixels
 /// (and the old `× 0.35278` left them inconsistent with the physical mm).
+#[cfg(not(target_arch = "wasm32"))]
 const LW_PX_TO_PT: f32 = MM_TO_PT / ((96.0 / 25.4) * 2.0);
 
 // ── Public entry point ────────────────────────────────────────────────────

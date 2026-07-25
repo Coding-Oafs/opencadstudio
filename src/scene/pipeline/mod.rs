@@ -3219,22 +3219,40 @@ impl MultiPipeline {
         self.slot_clock = self.slot_clock.wrapping_add(1).max(1);
         let now = self.slot_clock;
         let reserved: rustc_hash::FxHashSet<u64> = instance_ids.iter().copied().collect();
+        // `inner.slot_id` is updated later in `prepare`, after this whole
+        // method returns. Without a per-call claim set, two new viewports in
+        // the same primitive both see the freshly-grown slot as `MAX` and get
+        // assigned to it. Paper then blits the final occupant's resolve texture
+        // once as the full sheet and again as the floating viewport.
+        let mut claimed: rustc_hash::FxHashSet<usize> =
+            rustc_hash::FxHashSet::default();
         let mut slots = Vec::with_capacity(instance_ids.len());
 
         for &instance_id in instance_ids {
-            let slot = if let Some(&slot) = self.slot_by_instance.get(&instance_id) {
+            let existing = self
+                .slot_by_instance
+                .get(&instance_id)
+                .copied()
+                .filter(|slot| !claimed.contains(slot));
+            let slot = if let Some(slot) = existing {
                 slot
             } else {
+                self.slot_by_instance.remove(&instance_id);
                 let vacant = self
                     .inners
                     .iter()
-                    .position(|inner| inner.slot_id == u64::MAX);
+                    .enumerate()
+                    .find(|(slot, inner)| {
+                        !claimed.contains(slot) && inner.slot_id == u64::MAX
+                    })
+                    .map(|(slot, _)| slot);
                 let recyclable = vacant.or_else(|| {
                     (self.inners.len() >= SOFT_LIMIT)
                         .then(|| {
                             self.inners
                                 .iter()
                                 .enumerate()
+                                .filter(|(slot, _)| !claimed.contains(slot))
                                 .filter(|(_, inner)| !reserved.contains(&inner.slot_id))
                                 .filter(|(slot, _)| {
                                     now.saturating_sub(self.slot_last_used[*slot]) > HOT_WINDOW
@@ -3256,6 +3274,7 @@ impl MultiPipeline {
                 self.slot_by_instance.insert(instance_id, slot);
                 slot
             };
+            claimed.insert(slot);
             self.slot_last_used[slot] = now;
             slots.push(slot);
         }

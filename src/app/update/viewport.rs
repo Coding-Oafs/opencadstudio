@@ -3639,7 +3639,7 @@ impl OpenCADStudio {
         let weak = Arc::downgrade(&wires);
         Some(Task::perform(
             async move {
-                let started = std::time::Instant::now();
+                let started = iced::time::Instant::now();
                 let index = Arc::new(
                     crate::scene::pick::interaction_index::InteractionIndex::build(&wires),
                 );

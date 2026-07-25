@@ -39,6 +39,7 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 pub(crate) const EDGE_CHORD_FRAC: f64 = 0.002;
 /// Truck's own triangulation chord tolerance for the cone faces still routed
 /// through its kernel, as a fraction of the surface radius.
+#[cfg(feature = "solid3d")]
 pub(crate) const TRUCK_CHORD_FRAC: f64 = 0.1;
 /// Boundary-loop sampling for parameter-range classification (which arc of a
 /// sphere/torus a face covers): a fine fraction so the classification is

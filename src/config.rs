@@ -31,9 +31,12 @@ pub fn config_dir() -> Option<PathBuf> {
 
 // ── Last file-dialog directory ───────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn last_dir_store() -> &'static Mutex<Option<PathBuf>> {
     static STORE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
     STORE.get_or_init(|| {
@@ -50,11 +53,13 @@ fn last_dir_store() -> &'static Mutex<Option<PathBuf>> {
 /// The directory the last file dialog picked or saved into, if it still
 /// exists — used to seed the next dialog so pickers reopen where the user
 /// left off. Persisted across runs.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn last_dialog_dir() -> Option<PathBuf> {
     last_dir_store().lock().ok()?.clone().filter(|p| p.is_dir())
 }
 
 /// Record the directory of a path a file dialog just returned.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn remember_dialog_dir(file_path: &Path) {
     let Some(dir) = file_path.parent().filter(|d| d.is_dir()) else {
         return;

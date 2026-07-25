@@ -242,6 +242,7 @@ pub async fn pick_and_load_web(
 /// a browser file picker (no filesystem path). Shares the post-load fixups with
 /// [`load_file`]; raster-image path resolution is skipped (there is no sibling
 /// directory to search on the web).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Result<CadDocument, String> {
     use std::io::Cursor;
     let ext = name.rsplit('.').next().unwrap_or_default().to_lowercase();
@@ -284,6 +285,7 @@ fn sniff_dwg_or_dxf(path: &Path) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load_file(path: &Path) -> Result<CadDocument, String> {
     load_file_with_progress(path, None)
 }
@@ -553,7 +555,7 @@ pub fn save_as_version(
     path: &Path,
     version: acadrust::DxfVersion,
 ) -> Result<(), String> {
-    let clone_started = std::time::Instant::now();
+    let clone_started = iced::time::Instant::now();
     let snapshot = doc.clone();
     let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
     save_owned_as_version_inner(snapshot, path, version, false, clone_ms)
@@ -581,12 +583,12 @@ fn save_owned_as_version_inner(
     clone_ms: f64,
 ) -> Result<(), String> {
     let perf = crate::perf::enabled();
-    let total_started = std::time::Instant::now();
+    let total_started = iced::time::Instant::now();
     doc.version = version;
-    let styles_started = std::time::Instant::now();
+    let styles_started = iced::time::Instant::now();
     sync_current_styles_on_save(&mut doc);
     let styles_ms = styles_started.elapsed().as_secs_f64() * 1000.0;
-    let dimensions_started = std::time::Instant::now();
+    let dimensions_started = iced::time::Instant::now();
     crate::modules::draw::modify::explode::bake_dimension_blocks(&mut doc);
     let dimensions_ms = dimensions_started.elapsed().as_secs_f64() * 1000.0;
     let temp_path = save_temp_path(path);
@@ -594,7 +596,7 @@ fn save_owned_as_version_inner(
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    let write_started = std::time::Instant::now();
+    let write_started = iced::time::Instant::now();
     let result = match ext.as_str() {
         "dxf" => DxfWriter::new(&doc)
             .write_to_file(&temp_path)
@@ -697,18 +699,18 @@ pub fn save_to_bytes(
     version: acadrust::DxfVersion,
 ) -> Result<Vec<u8>, String> {
     let perf = crate::perf::enabled();
-    let total_started = std::time::Instant::now();
-    let clone_started = std::time::Instant::now();
+    let total_started = iced::time::Instant::now();
+    let clone_started = iced::time::Instant::now();
     let mut doc = doc.clone();
     let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
     doc.version = version;
-    let styles_started = std::time::Instant::now();
+    let styles_started = iced::time::Instant::now();
     sync_current_styles_on_save(&mut doc);
     let styles_ms = styles_started.elapsed().as_secs_f64() * 1000.0;
-    let dimensions_started = std::time::Instant::now();
+    let dimensions_started = iced::time::Instant::now();
     crate::modules::draw::modify::explode::bake_dimension_blocks(&mut doc);
     let dimensions_ms = dimensions_started.elapsed().as_secs_f64() * 1000.0;
-    let write_started = std::time::Instant::now();
+    let write_started = iced::time::Instant::now();
     let result = match ext.to_lowercase().as_str() {
         "dxf" => DxfWriter::new(&doc).write_to_vec().map_err(|e| e.to_string()),
         _ => {

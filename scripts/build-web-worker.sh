@@ -2,9 +2,10 @@
 set -eu
 
 cargo build --release --target wasm32-unknown-unknown --package ocs_web_worker
-mkdir -p web/worker_pkg
+worker_out="${TRUNK_STAGING_DIR:?}/worker_pkg"
+mkdir -p "$worker_out"
 wasm-bindgen \
   --target web \
-  --out-dir web/worker_pkg \
+  --out-dir "$worker_out" \
   --out-name ocs_web_worker \
   target/wasm32-unknown-unknown/release/ocs_web_worker.wasm

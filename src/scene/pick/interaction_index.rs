@@ -750,7 +750,7 @@ impl InteractionIndex {
         #[cfg(not(target_arch = "wasm32"))]
         let perf = crate::perf::enabled();
         #[cfg(not(target_arch = "wasm32"))]
-        let build_started = std::time::Instant::now();
+        let build_started = iced::time::Instant::now();
         let wire_handles: Vec<Option<u64>> = wires
             .iter()
             .map(|wire| wire.name.parse::<u64>().ok())
@@ -770,7 +770,7 @@ impl InteractionIndex {
         #[cfg(not(target_arch = "wasm32"))]
         let handles_elapsed = build_started.elapsed();
         #[cfg(not(target_arch = "wasm32"))]
-        let collect_started = std::time::Instant::now();
+        let collect_started = iced::time::Instant::now();
         let mut wire_entries = Vec::with_capacity(wires.len());
         let mut unbounded_wires = Vec::new();
         let mut max_line_half_width_px = 0.0f32;
@@ -793,7 +793,7 @@ impl InteractionIndex {
         #[cfg(not(target_arch = "wasm32"))]
         let collect_elapsed = collect_started.elapsed();
         #[cfg(not(target_arch = "wasm32"))]
-        let flatten_started = std::time::Instant::now();
+        let flatten_started = iced::time::Instant::now();
         let mut segment_parts = Vec::with_capacity(per_wire.len());
         let mut snap_point_parts = Vec::with_capacity(per_wire.len());
         let mut key_vertex_parts = Vec::with_capacity(per_wire.len());
@@ -868,7 +868,7 @@ impl InteractionIndex {
         #[cfg(not(target_arch = "wasm32"))]
         let flatten_elapsed = flatten_started.elapsed();
         #[cfg(not(target_arch = "wasm32"))]
-        let spatial_started = std::time::Instant::now();
+        let spatial_started = iced::time::Instant::now();
 
         #[cfg(not(target_arch = "wasm32"))]
         let (

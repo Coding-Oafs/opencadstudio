@@ -13,7 +13,7 @@ target = "index.html"
 # cross-compile to wasm).
 
 [[hooks]]
-stage = "pre_build"
+stage = "post_build"
 command = "sh"
 command_arguments = ["scripts/build-web-worker.sh"]
 
