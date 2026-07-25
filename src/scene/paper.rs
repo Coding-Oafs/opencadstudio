@@ -2,6 +2,71 @@
 use super::*;
 
 impl Scene {
+    pub(super) fn paper_viewport_handles(
+        &self,
+    ) -> (Handle, Handle, Arc<Vec<Handle>>) {
+        {
+            let cache = self.paper_viewport_cache.borrow();
+            if let Some(cache) = cache.get(&self.current_layout) {
+                if cache.epoch == self.geometry_epoch && cache.layout == self.current_layout {
+                    return (
+                        cache.layout_block,
+                        cache.sheet,
+                        Arc::clone(&cache.content),
+                    );
+                }
+            }
+        }
+
+        let layout_block = self.current_layout_block_handle();
+        let sheet = self.current_layout_sheet_viewport_handle();
+        let is_content = |handle: Handle| {
+            let Some(EntityType::Viewport(vp)) = self.document.get_entity(handle) else {
+                return false;
+            };
+            vp.common.owner_handle == layout_block
+                && if sheet.is_valid() {
+                    handle != sheet
+                } else {
+                    Self::is_content_viewport(vp)
+                }
+        };
+        let content = if let Some(block) = self
+            .document
+            .block_records
+            .iter()
+            .find(|block| block.handle == layout_block)
+            .filter(|block| !block.entity_handles.is_empty())
+        {
+            block
+                .entity_handles
+                .iter()
+                .copied()
+                .filter(|handle| is_content(*handle))
+                .collect()
+        } else {
+            self.document
+                .entities()
+                .filter_map(|entity| {
+                    let handle = entity.common().handle;
+                    is_content(handle).then_some(handle)
+                })
+                .collect()
+        };
+        let content = Arc::new(content);
+        self.paper_viewport_cache.borrow_mut().insert(
+            self.current_layout.clone(),
+            PaperViewportCache {
+                epoch: self.geometry_epoch,
+                layout: self.current_layout.clone(),
+                layout_block,
+                sheet,
+                content: Arc::clone(&content),
+            },
+        );
+        (layout_block, sheet, content)
+    }
+
     pub fn grid_views(&self, vw: f32, vh: f32) -> Vec<(iced::Rectangle, Camera, Handle)> {
         self.active_viewports(vw, vh, acadrust::entities::ViewportRenderMode::Wireframe2D)
             .into_iter()
@@ -58,7 +123,7 @@ impl Scene {
                 })
                 .collect();
         }
-        let layout_block = self.current_layout_block_handle();
+        let (_, sheet_handle, content_handles) = self.paper_viewport_handles();
         let mut out: Vec<ViewportInstance> = Vec::new();
         // The full-canvas sheet viewport renders the paper-space entities
         // themselves — the layout's own view, drawn first so the floating
@@ -72,7 +137,7 @@ impl Scene {
         sheet_cam.projection = view::camera::Projection::Orthographic;
         let sheet_grid_on = match self
             .document
-            .get_entity(self.current_layout_sheet_viewport_handle())
+            .get_entity(sheet_handle)
         {
             Some(EntityType::Viewport(vp)) => vp.status.grid_on,
             _ => false,
@@ -92,13 +157,11 @@ impl Scene {
             grid_on: sheet_grid_on,
             paper_sheet: true,
         });
-        for e in self.document.entities() {
-            let EntityType::Viewport(vp) = e else {
+        for &handle in content_handles.iter() {
+            let Some(EntityType::Viewport(vp)) = self.document.get_entity(handle) else {
                 continue;
             };
-            if !self.is_content_viewport_in_layout(vp, layout_block)
-                || !vp.status.is_on
-            {
+            if !vp.status.is_on {
                 continue;
             }
             let h = vp.common.handle;
@@ -120,6 +183,54 @@ impl Scene {
             });
         }
         out
+    }
+
+    pub(super) fn paper_sheet_render_models(
+        &self,
+    ) -> (
+        Arc<Vec<HatchModel>>,
+        Arc<Vec<HatchModel>>,
+        Arc<Vec<ImageModel>>,
+    ) {
+        let selected = self.selected_set_sig();
+        {
+            let cache = self.paper_sheet_render_cache.borrow();
+            if let Some(cache) = cache.get(&self.current_layout) {
+                if cache.epoch == self.geometry_epoch
+                    && cache.layout == self.current_layout
+                    && cache.selected == selected
+                    && cache.paper_bg == self.paper_bg_color
+                {
+                    return (
+                        Arc::clone(&cache.hatches),
+                        Arc::clone(&cache.wipeouts),
+                        Arc::clone(&cache.images),
+                    );
+                }
+            }
+        }
+
+        let mut hatches = Vec::new();
+        if let Some(sheet) = self.paper_sheet_fill() {
+            hatches.push(sheet);
+        }
+        hatches.extend(self.paper_canvas_hatches().iter().cloned());
+        let hatches = Arc::new(hatches);
+        let wipeouts = self.paper_canvas_wipeouts();
+        let images = self.paper_sheet_images();
+        self.paper_sheet_render_cache.borrow_mut().insert(
+            self.current_layout.clone(),
+            PaperSheetRenderCache {
+                epoch: self.geometry_epoch,
+                layout: self.current_layout.clone(),
+                selected,
+                paper_bg: self.paper_bg_color,
+                hatches: Arc::clone(&hatches),
+                wipeouts: Arc::clone(&wipeouts),
+                images: Arc::clone(&images),
+            },
+        );
+        (hatches, wipeouts, images)
     }
 
     /// Convert a paper-space Viewport entity's position/size into a pixel
@@ -434,41 +545,31 @@ impl Scene {
     ) -> Arc<Vec<WireModel>> {
         use rustc_hash::FxHashSet as HSet;
 
-        // Only content-REAL per-viewport parameters remain: the viewport's own
-        // frozen-layer set and its annotation/PSLTSCALE scale. Frustum cull and
-        // zoom LOD are gone — every space (Model tiles, BEDIT, the sheet, and
-        // content viewports) shares the same un-culled, LOD-free resident
-        // infrastructure, so viewports with default parameters all reuse ONE
-        // static-hold entry (and its stable content id) instead of re-baking
-        // per viewport per zoom step.
-        let (frozen, vp_anno_scale) = match self.document.get_entity(vp_handle) {
+        // The viewport's frozen-layer set is the only resident-geometry input.
+        // Its live zoom is camera magnification, not CANNOSCALE: tying
+        // annotation geometry to view_height rebuilt the entire model on every
+        // wheel tick whenever the drawing contained one annotative object.
+        // Explicit annotation-scale changes still rebuild through
+        // `self.annotation_scale`; PSLTSCALE is a viewport GPU uniform.
+        let frozen = match self.document.get_entity(vp_handle) {
             Some(EntityType::Viewport(vp)) => {
                 let f: HSet<Handle> = vp.frozen_layers.iter().cloned().collect();
-                let vp_scale =
-                    vp_effective_scale(vp.custom_scale, vp.view_height, vp.height);
-                let anno = if vp_scale > 1e-9 {
-                    (1.0 / vp_scale) as f32
-                } else {
-                    1.0_f32
-                };
-                (f, anno)
+                f
             }
-            _ => (HSet::default(), 1.0_f32),
+            _ => HSet::default(),
         };
 
         self.resident_wires_for(
             self.model_space_block_handle(),
-            Some(vp_anno_scale),
+            Some(self.annotation_scale),
             Some(&frozen),
         )
     }
 
     /// Resident model wires for a paper content viewport. Just the unified
     /// static-hold (`resident_wires_for`) keyed on the viewport's frozen set +
-    /// annotation scale — no per-viewport height/view cache anymore: the set is
-    /// camera-independent (no cull, no LOD), so paper zoom and MSPACE frustum
-    /// changes reuse it as-is, and viewports with default parameters all share
-    /// one entry (and one stable content id).
+    /// explicit CANNOSCALE — no per-viewport height/view cache: the set is
+    /// camera-independent, so paper zoom and MSPACE zoom reuse it as-is.
     pub(crate) fn model_wires_for_viewport_arc(
         &self,
         vp_handle: Handle,

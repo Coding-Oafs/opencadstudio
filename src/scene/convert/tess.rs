@@ -352,10 +352,9 @@ pub(crate) fn tessellate_entity(
     view_aabb: Option<[f32; 4]>,
     // World units per screen pixel for LOD culling. `None` = no LOD.
     world_per_pixel: Option<f32>,
-    // True only when tessellating content shown INSIDE a paper-space viewport,
-    // where PSLTSCALE scales linetypes by the viewport scale. Model-space (and
-    // paper-sheet) rendering passes false: a drawing's annotation scale must
-    // not resize model-space linetypes (that is MSLTSCALE, off here).
+    // True only when tessellating content shown inside a paper-space viewport.
+    // Retained through recursive INSERT expansion; PSLTSCALE itself is applied
+    // by the viewport's GPU uniform so it never changes resident wire content.
     paper_space: bool,
 ) -> Vec<WireModel> {
     let h = e.common().handle;
@@ -507,19 +506,10 @@ pub(crate) fn tessellate_entity(
     let entity_color = fade_if_locked(document, e, entity_color, bg_color);
     let lt_scale = document.header.linetype_scale as f32 * e.common().linetype_scale as f32;
     let lt_name = view::render::linetype_name_for(document, e);
-    // PSLTSCALE: scale linetype dashes by the viewport scale so they appear
-    // uniform in paper space. Only applies to content shown inside a paper-space
-    // viewport (`paper_space`); model space uses LTSCALE × CELTSCALE unscaled by
-    // the annotation scale, otherwise a drawing at e.g. CANNOSCALE 10:1 draws
-    // its linetypes 10× off.
-    let pslt_factor = if paper_space && document.header.paper_space_linetype_scaling {
-        anno_scale
-    } else {
-        1.0
-    };
-    let pattern_length = pattern_length * pslt_factor;
-    let pattern = pattern.map(|v| v * pslt_factor);
-
+    // Paper-space linetype scaling belongs to the viewport uniform. Keeping
+    // resident geometry at its model-space scale prevents every MSPACE wheel
+    // tick from rebuilding and uploading the viewport's complete wire set.
+    let pslt_factor = 1.0_f32;
     // ── Proxy entity: draw its cached preview ───────────────────────────────
     //
     // An entity from an application we have no reader for (e.g. an Autodesk

@@ -497,7 +497,7 @@ impl OpenCADStudio {
             return Task::none();
         }
         let i = self.active_tab;
-        let perf_move = std::env::var_os("OCS_PERF").is_some();
+        let perf_move = crate::perf::enabled();
         let move_started = Instant::now();
 
         // UCS icon grip drag: map the cursor onto the UCS plane and
@@ -606,6 +606,9 @@ impl OpenCADStudio {
                         drop(sel);
                         self.tabs[i].scene.orbit_active_viewport(dx, dy);
                         self.tabs[i].scene.camera_generation += 1;
+                        self.tabs[i]
+                            .scene
+                            .record_nav_perf(crate::scene::NavPerfOp::Rotate, move_started);
                         self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
                         return Task::none();
                     } else if self.tabs[i].scene.current_layout == "Model" {
@@ -621,6 +624,9 @@ impl OpenCADStudio {
                         drop(sel);
                         self.tabs[i].scene.camera.borrow_mut().orbit(dx, dy, pivot);
                         self.tabs[i].scene.camera_generation += 1;
+                        self.tabs[i]
+                            .scene
+                            .record_nav_perf(crate::scene::NavPerfOp::Rotate, move_started);
                         self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
                         return Task::none();
                     }
@@ -654,6 +660,9 @@ impl OpenCADStudio {
                     // drawing as the view pans under it (#234).
                     self.reproject_box_anchor(i, vp_size.0, vp_size.1);
                 }
+                self.tabs[i]
+                    .scene
+                    .record_nav_perf(crate::scene::NavPerfOp::Pan, move_started);
                 self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
                 return Task::none();
             }
@@ -886,7 +895,7 @@ impl OpenCADStudio {
             // value and can monopolize the UI thread during a drag.
             let total_ms = grip_started.elapsed().as_secs_f64() * 1000.0;
             if perf_move && total_ms >= 50.0 {
-                eprintln!(
+                crate::perf_record!(
                     "[perf] grip-move          {:>7.1}ms setup={:.1} snap={:.1} apply={:.1} preview={:.1} grips={:.1}",
                     total_ms,
                     setup_ms,
@@ -1453,9 +1462,18 @@ impl OpenCADStudio {
 
         self.sync_dyn_fields();
         let move_ms = move_started.elapsed().as_secs_f64() * 1000.0;
-        if perf_move && self.tabs[i].active_cmd.is_some() && move_ms >= 50.0 {
-            eprintln!(
-                "[perf] pointer-move       {:>7.1}ms",
+        if perf_move
+            && (self.tabs[i].active_cmd.is_some()
+                || self.tabs[i].scene.active_viewport.is_some())
+            && move_ms >= 16.7
+        {
+            let mode = if self.tabs[i].active_cmd.is_some() {
+                "command"
+            } else {
+                "MSPACE"
+            };
+            crate::perf_record!(
+                "[perf] pointer-move mode={mode:<7} {:>7.1}ms",
                 move_ms,
             );
         }
@@ -3250,12 +3268,16 @@ impl OpenCADStudio {
         }
         if is_double {
             self.tabs[i].scene.fit_all();
+            self.tabs[i]
+                .scene
+                .record_nav_perf(crate::scene::NavPerfOp::Zoom, now);
             self.command_line.push_output("Zoom Extents");
         }
         Task::none()
     }
 
     pub(super) fn on_viewport_scroll(&mut self, delta: mouse::ScrollDelta) -> Task<Message> {
+        let nav_started = Instant::now();
         let s = match delta {
             mouse::ScrollDelta::Lines { y, .. } => y,
             mouse::ScrollDelta::Pixels { y, .. } => y * 0.01,
@@ -3310,6 +3332,9 @@ impl OpenCADStudio {
             // as the view zooms under it (#234).
             self.reproject_box_anchor(i, vw, vh);
         }
+        self.tabs[i]
+            .scene
+            .record_nav_perf(crate::scene::NavPerfOp::Zoom, nav_started);
         Task::none()
     }
 
@@ -3460,7 +3485,7 @@ impl OpenCADStudio {
         {
             return Task::none();
         }
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = crate::perf::enabled();
         let hover_started = Instant::now();
         let i = dwell.tab;
         // Re-check the gate — drag / command may have started
@@ -3564,10 +3589,10 @@ impl OpenCADStudio {
         self.hover_dwell = None;
         let hover_ms = hover_started.elapsed().as_secs_f64() * 1000.0;
         if perf && hover_ms >= 5.0 {
-            eprintln!(
+            crate::perf_record!(
                 "[perf] hover-detail       query={candidate_ms:.1} handles={handles_ms:.1} wire={wire_ms:.1} hatch={hatch_ms:.1} insert={insert_ms:.1} solid={solid_ms:.1} candidates={candidate_count}",
             );
-            eprintln!(
+            crate::perf_record!(
                 "[perf] hover-dwell        {:>7.1}ms wires={} hit={}",
                 hover_ms,
                 self.tabs[i].scene.last_tess_wires.get(),
@@ -3642,21 +3667,29 @@ impl OpenCADStudio {
             );
             return Task::none();
         }
+        let perf = crate::perf::enabled();
+        let perf_total = Instant::now();
+        let perf_from = self.tabs[i].scene.current_layout.clone();
         let going_to_paper = name != "Model";
         // Persist the camera of the layout we're leaving BEFORE switching
         // so returning to it restores where the user left off (the
         // periodic sync only fires on a tick, which may not have run
         // since the last pan/zoom).
+        let perf_phase = Instant::now();
         self.tabs[i].scene.sync_camera_to_document();
         self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+        let sync_ms = perf_phase.elapsed().as_secs_f64() * 1000.0;
         // Cancel any pending rename/context-menu and active viewport when switching.
         self.layout_rename_state = None;
         self.layout_context_menu = None;
         self.tabs[i].scene.active_viewport = None;
-        self.tabs[i].scene.set_current_layout(name);
+        let perf_phase = Instant::now();
+        self.tabs[i].scene.set_current_layout(name.clone());
         self.tabs[i].scene.deselect_all();
+        let switch_ms = perf_phase.elapsed().as_secs_f64() * 1000.0;
         // UCS follows the pane: model header UCS in the Model tab, none
         // in plain paper space (a viewport's UCS is adopted on entry).
+        let perf_phase = Instant::now();
         self.tabs[i].refresh_active_ucs();
         self.tabs[i].scene.restore_saved_camera();
         self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
@@ -3664,15 +3697,31 @@ impl OpenCADStudio {
         // sheet viewport in paper space, the model tile in model space)
         // so model and each layout keep independent grid state.
         self.adopt_view_display(i);
+        let restore_ms = perf_phase.elapsed().as_secs_f64() * 1000.0;
         // Paper-space tools live in the right-edge side toolbar now, so
         // entering/leaving a layout no longer hijacks the ribbon tab.
         let _ = going_to_paper;
         // Refresh VP freeze columns for the new layout.
+        let perf_phase = Instant::now();
         let doc_layers = self.tabs[i].scene.document.layers.clone();
         let vp_info = self.tabs[i].scene.viewport_list();
         self.tabs[i]
             .layers
             .sync_with_viewports(&doc_layers, vp_info);
+        let layers_ms = perf_phase.elapsed().as_secs_f64() * 1000.0;
+        if perf {
+            crate::perf_record!(
+                "[perf] layout-switch from={} to={} total={:.2}ms sync={:.2}ms switch={:.2}ms restore={:.2}ms layers={:.2}ms epoch={}",
+                perf_from,
+                name,
+                perf_total.elapsed().as_secs_f64() * 1000.0,
+                sync_ms,
+                switch_ms,
+                restore_ms,
+                layers_ms,
+                self.tabs[i].scene.geometry_epoch,
+            );
+        }
         Task::none()
     }
 

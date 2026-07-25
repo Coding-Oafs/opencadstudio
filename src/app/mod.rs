@@ -305,7 +305,8 @@ pub(super) struct OpenCADStudio {
     /// press-drag draws a rectangle marquee.
     pick_drag_rect: bool,
     /// Frame-budget HUD (Phase 5.3): overlays the last wire re-tessellation
-    /// cost on the active viewport. Toggled by the `PERF` command.
+    /// cost and the shared performance trace on the active viewport. Toggled
+    /// by the `PERF` command.
     perf_hud: bool,
     /// When set, the cycling list box is open: (canvas point, candidates).
     cycle_candidates: Option<(iced::Point, Vec<acadrust::Handle>)>,
@@ -1501,6 +1502,10 @@ pub enum Message {
     CommandHistoryCopy,
     /// Clear every line from the command-line history.
     CommandHistoryClear,
+    /// Copy every line currently retained by the PERF panel.
+    PerfCopy,
+    /// Clear the PERF panel's retained trace.
+    PerfClear,
     /// Text-editor action from the read-only history dropdown. Only
     /// non-editing actions (cursor moves, selection, scroll) are applied so
     /// the log stays read-only while remaining drag-selectable and copyable.

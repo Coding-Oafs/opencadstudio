@@ -15,6 +15,7 @@ mod modules;
 mod patreon;
 mod videos;
 mod plugin;
+mod perf;
 mod scene;
 mod snap;
 mod ui;

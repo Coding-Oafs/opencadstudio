@@ -434,14 +434,14 @@ impl Scene {
         py: f32,
         canvas: (f32, f32),
     ) -> Option<Handle> {
-        let layout_block = self.current_layout_block_handle();
-        self.document
-            .entities()
-            .filter_map(|e| {
-                let EntityType::Viewport(vp) = e else {
+        let (_, _, handles) = self.paper_viewport_handles();
+        handles
+            .iter()
+            .filter_map(|handle| {
+                let Some(EntityType::Viewport(vp)) = self.document.get_entity(*handle) else {
                     return None;
                 };
-                if !self.is_content_viewport_in_layout(vp, layout_block) || !vp.status.is_on {
+                if !vp.status.is_on {
                     return None;
                 }
                 let rect = self.viewport_screen_rect(vp.common.handle, canvas)?;
@@ -465,14 +465,12 @@ impl Scene {
     /// Return the handle of the first active user viewport in the current layout,
     /// or `None` if there are none.  Used by the MS command.
     pub fn first_user_viewport(&self) -> Option<Handle> {
-        let layout_block = self.current_layout_block_handle();
-        self.document.entities().find_map(|e| {
-            let EntityType::Viewport(vp) = e else {
+        let (_, _, handles) = self.paper_viewport_handles();
+        handles.iter().find_map(|handle| {
+            let Some(EntityType::Viewport(vp)) = self.document.get_entity(*handle) else {
                 return None;
             };
-            if self.is_content_viewport_in_layout(vp, layout_block)
-                && vp.status.is_on
-            {
+            if vp.status.is_on {
                 Some(vp.common.handle)
             } else {
                 None

@@ -309,7 +309,7 @@ impl WireArena {
         mesh_edge: bool,
     ) -> Option<Self> {
         let ranges = handle_ranges(wires)?;
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = crate::perf::enabled();
         let total_started = std::time::Instant::now();
 
         // Reject an oversized batch before parallel emission allocates hundreds
@@ -447,7 +447,7 @@ impl WireArena {
         let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
         let const_bind_group = make_const_bg(device, const_bgl, &const_buf);
         if perf {
-            eprintln!(
+            crate::perf_record!(
                 "[perf] arena-build-detail total={:.1}ms pack={:.1} mapped-upload={:.1} handles={} wires={} instances={} instance-bytes={} consts={}",
                 total_started.elapsed().as_secs_f64() * 1000.0,
                 pack_ms,
@@ -740,13 +740,13 @@ impl WireArena {
                 .collect();
         }
 
-        if std::env::var_os("OCS_PERF").is_some() {
+        if crate::perf::enabled() {
             let submitted: u64 = ranges
                 .iter()
                 .map(|(start, end)| (end - start) as u64)
                 .sum();
             if submitted < self.inst_tail as u64 {
-                eprintln!(
+                crate::perf_record!(
                     "[perf] wire-cull submitted={} resident={} ranges={}",
                     submitted,
                     self.inst_tail,

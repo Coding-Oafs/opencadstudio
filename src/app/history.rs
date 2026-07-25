@@ -460,9 +460,9 @@ impl OpenCADStudio {
             .filter(|h| scene.document.get_entity(*h).is_some())
             .collect();
         scene.selected = restored;
-        // Do not call set_current_layout here: it bumps geometry immediately.
-        // Entity deltas currently preserve the layout; direct assignment also
-        // keeps future widened deltas batchable.
+        // Entity deltas currently preserve the layout; direct assignment avoids
+        // clearing layout render caches between steps and keeps future widened
+        // deltas batchable.
         scene.current_layout = if undo {
             d.current_layout_before.clone()
         } else {

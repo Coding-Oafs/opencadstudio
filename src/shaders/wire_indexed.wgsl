@@ -11,7 +11,8 @@ struct Uniforms {
     lwdisplay_enable: f32,
     flat_shade: f32,
     transparency_enable: f32,
-    _pad: vec2<f32>,
+    linetype_scale: f32,
+    _pad: f32,
     view_rot:         mat4x4<f32>,
     eye_high:         vec3<f32>,
     _pad_eh:          f32,
@@ -132,10 +133,13 @@ fn resolve_hw(taper_ratio: f32, world_hw: f32, px_hw: f32) -> f32 {
     let ndc_offset = offset_px / (u.viewport_size * 0.5);
     let final_clip = clip_pos + vec4<f32>(ndc_offset * clip_pos.w, 0.0, 0.0);
 
-    var min_elem: f32 = c.pattern_length;
+    let lt_scale = u.linetype_scale;
+    var min_elem: f32 = c.pattern_length * lt_scale;
     let elems = array<f32, 8>(
-        c.pat0.x, c.pat0.y, c.pat0.z, c.pat0.w,
-        c.pat1.x, c.pat1.y, c.pat1.z, c.pat1.w,
+        c.pat0.x * lt_scale, c.pat0.y * lt_scale,
+        c.pat0.z * lt_scale, c.pat0.w * lt_scale,
+        c.pat1.x * lt_scale, c.pat1.y * lt_scale,
+        c.pat1.z * lt_scale, c.pat1.w * lt_scale,
     );
     for (var i = 0u; i < 8u; i++) {
         let e = abs(elems[i]);
@@ -152,11 +156,11 @@ fn resolve_hw(taper_ratio: f32, world_hw: f32, px_hw: f32) -> f32 {
         + ext * hw * u.world_per_pixel;
     out.cap            = vec2<f32>(which_end * seg_len + ext * hw, hw * side);
     out.cap_ends       = vec3<f32>(seg_len, hw_a, hw_b);
-    out.pattern_length = c.pattern_length;
-    out.pat0           = c.pat0;
-    out.pat1           = c.pat1;
+    out.pattern_length = c.pattern_length * lt_scale;
+    out.pat0           = c.pat0 * lt_scale;
+    out.pat1           = c.pat1 * lt_scale;
     out.min_elem       = min_elem;
-    out.align_end      = c.align_end;
+    out.align_end      = c.align_end * lt_scale;
     out.align_total    = c.align_total;
     return out;
 }

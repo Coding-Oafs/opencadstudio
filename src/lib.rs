@@ -11,6 +11,7 @@ pub mod modules;
 pub mod patreon;
 pub mod videos;
 pub mod plugin;
+pub mod perf;
 pub mod scene;
 pub mod snap;
 pub mod ui;

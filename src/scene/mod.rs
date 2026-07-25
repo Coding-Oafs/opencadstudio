@@ -265,6 +265,24 @@ struct DrawDepthCache {
     owners: HashMap<u64, Handle>,
 }
 
+struct PaperViewportCache {
+    epoch: u64,
+    layout: String,
+    layout_block: Handle,
+    sheet: Handle,
+    content: Arc<Vec<Handle>>,
+}
+
+struct PaperSheetRenderCache {
+    epoch: u64,
+    layout: String,
+    selected: u64,
+    paper_bg: [f32; 4],
+    hatches: Arc<Vec<HatchModel>>,
+    wipeouts: Arc<Vec<HatchModel>>,
+    images: Arc<Vec<ImageModel>>,
+}
+
 /// Bound on the geometry-delta ring. A consumer that fell more than this many
 /// mutations behind (or predates the oldest retained delta) can't be replayed
 /// and does a one-time full rebuild — the safe fallback, not a correctness hole.
@@ -924,6 +942,33 @@ fn transform_block_mesh_lod_set(
     out
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NavPerfOp {
+    Pan,
+    Zoom,
+    Rotate,
+}
+
+impl NavPerfOp {
+    pub(in crate::scene) fn label(self) -> &'static str {
+        match self {
+            Self::Pan => "pan",
+            Self::Zoom => "zoom",
+            Self::Rotate => "rotate",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::scene) struct NavPerfSample {
+    pub(in crate::scene) op: NavPerfOp,
+    pub(in crate::scene) space: &'static str,
+    pub(in crate::scene) mode: &'static str,
+    pub(in crate::scene) started: iced::time::Instant,
+    pub(in crate::scene) input_ms: f64,
+    pub(in crate::scene) build_ms: f64,
+}
+
 pub struct Scene {
     pub camera: Rc<RefCell<Camera>>,
     /// Model-space tiled viewport layout. One full-window tile by default;
@@ -1091,14 +1136,14 @@ pub struct Scene {
     /// Keyed by `(geometry_epoch, selection_generation)` — selected hatches
     /// are tinted, so a select/deselect must rebuild even when the geometry
     /// is unchanged (issue #71).
-    hatch_cache: RefCell<Option<(u64, u64, Arc<Vec<HatchModel>>)>>,
+    hatch_cache: RefCell<HashMap<String, (u64, u64, Arc<Vec<HatchModel>>)>>,
     /// Cached wipeout fill models, keyed by geometry_epoch. Same
     /// reasoning as `hatch_cache`.
-    wipeout_cache: RefCell<Option<(u64, Arc<Vec<HatchModel>>)>>,
+    wipeout_cache: RefCell<HashMap<String, (u64, Arc<Vec<HatchModel>>)>>,
     /// Cached image models, keyed by geometry_epoch. No camera key needed here.
     image_cache: RefCell<Option<(u64, Arc<Vec<ImageModel>>)>>,
     /// Cached mesh models, keyed by geometry_epoch.
-    mesh_cache: RefCell<Option<(u64, Arc<Vec<MeshLodSet>>)>>,
+    mesh_cache: RefCell<HashMap<String, (u64, Arc<Vec<MeshLodSet>>)>>,
     /// Picking mesh source for a non-model active space, keyed by geometry epoch
     /// and interaction block. Model/MSPACE reuse `mesh_cache` directly.
     interaction_mesh_cache: RefCell<Option<(u64, u64, Arc<Vec<MeshLodSet>>)>>,
@@ -1120,10 +1165,13 @@ pub struct Scene {
     /// filtered variants. Viewports sharing a frozen set share one entry (like
     /// the resident wire set). Empty for a viewport with no frozen layers (it
     /// reuses the unfiltered `*_arc` sets directly).
-    frozen_hatch_cache: RefCell<HashMap<u64, (u64, u64, Arc<Vec<HatchModel>>)>>,
-    frozen_wipeout_cache: RefCell<HashMap<u64, (u64, Arc<Vec<HatchModel>>)>>,
+    frozen_hatch_cache:
+        RefCell<HashMap<(String, u64), (u64, u64, Arc<Vec<HatchModel>>)>>,
+    frozen_wipeout_cache:
+        RefCell<HashMap<(String, u64), (u64, Arc<Vec<HatchModel>>)>>,
     frozen_image_cache: RefCell<HashMap<u64, (u64, Arc<Vec<ImageModel>>)>>,
-    frozen_mesh_cache: RefCell<HashMap<u64, (u64, Arc<Vec<MeshLodSet>>)>>,
+    frozen_mesh_cache:
+        RefCell<HashMap<(String, u64), (u64, Arc<Vec<MeshLodSet>>)>>,
     /// Cached block-INSERT hatches for hit-testing, keyed by geometry_epoch.
     /// Building this explodes every model-space INSERT, so without the cache a
     /// heavy block-instanced drawing re-explodes thousands of inserts on every
@@ -1132,9 +1180,18 @@ pub struct Scene {
     insert_hatch_cache: RefCell<Option<(u64, u64, Arc<HashMap<Handle, Vec<HatchModel>>>)>>,
     /// Sheet "dressing" cache over the unified resident set: the paper sheet
     /// drops its own border wire and appends the printable-area guide.
-    /// `(geometry_epoch, content gen, wires)` — the base is camera-independent
-    /// (no cull / LOD anywhere), so paper pan/zoom never re-tessellates it.
-    paper_sheet_cache: RefCell<Option<(u64, u64, Arc<Vec<WireModel>>)>>,
+    /// Per-layout `(geometry_epoch, content gen, wires)` — the base is
+    /// camera-independent, so paper pan/zoom and Model↔Paper tab switches keep
+    /// every already-visited sheet warm.
+    paper_sheet_cache: RefCell<HashMap<String, (u64, u64, Arc<Vec<WireModel>>)>>,
+    /// Layout viewport handles, collected from the owning block record once per
+    /// geometry epoch. Avoids walking every document entity on every Paper
+    /// pan/zoom frame just to rediscover the same handful of viewports.
+    paper_viewport_cache: RefCell<HashMap<String, PaperViewportCache>>,
+    /// Stable Paper sheet fill/image sources. Without this cache every camera
+    /// movement scanned the whole document for wipeouts and recreated the same
+    /// Arcs, making Paper frame construction CPU-bound on large drawings.
+    paper_sheet_render_cache: RefCell<HashMap<String, PaperSheetRenderCache>>,
     /// Per-viewport projected wire cache for paper-space content viewports.
     /// Stores projected + clipped wires in paper-space coordinates.
     /// Maps vp_handle → (geometry_epoch, Vec<WireModel>).
@@ -1191,12 +1248,9 @@ pub struct Scene {
     /// Multiplier applied to Text/MText/Dimension sizes during tessellation.
     /// 1.0 = no scaling. 50.0 = "1:50" drawing scale.
     pub annotation_scale: f32,
-    /// Cached per-epoch: does annotation/viewport scale actually change wire
-    /// output? True iff PSLTSCALE is on (linetype dashes scale with the
-    /// viewport) or the drawing has an annotative entity (text/dim/mleader
-    /// sizing). When false the per-viewport anno scale is inert, so every
-    /// content viewport collapses onto ONE shared resident set instead of a
-    /// full re-tessellation per distinct viewport scale. `(epoch, flag)`.
+    /// Cached per-epoch: does annotation scale actually change wire geometry?
+    /// PSLTSCALE is handled by a per-viewport GPU uniform, so only real
+    /// annotative entities require a scale-specific resident set.
     annotation_affects_wires: std::cell::Cell<Option<(u64, bool)>>,
     /// Cached model-space bounding box, keyed by geometry_epoch.
     /// Avoids re-tessellating all entities on every ZOOM E / auto-fit call.
@@ -1204,10 +1258,12 @@ pub struct Scene {
     /// Reverse map: entity_handle → block_record_handle, built from entity_handles lists.
     /// Keyed by geometry_epoch. Eliminates the O(B) fallback scan in belongs_to_visible_block.
     entity_block_map_cache: RefCell<Option<(u64, HashMap<Handle, Handle>)>>,
-    /// Tessellated block definitions in block-local coords, keyed by geometry_epoch.
-    /// Lets Insert tessellation transform-copy cached wires instead of
-    /// clone+explode+re-tessellate per reference.
-    block_defn_cache: RefCell<Option<(u64, Arc<cache::block_cache::BlockCache>)>>,
+    /// Tessellated block definitions in block-local coords, keyed by render
+    /// background and block epoch. Model and Paper adapt black/white colours
+    /// differently; retaining both variants prevents a full block rebuild on
+    /// every layout-tab switch.
+    block_defn_cache:
+        RefCell<HashMap<[u32; 4], (u64, Arc<cache::block_cache::BlockCache>)>>,
     /// Spatial index + always-emit list for top-level entities
     /// (Phase 2.1). Lazily rebuilt by `entity_index()` on
     /// `geometry_epoch` change. See `EntityIndex` for what each side
@@ -1246,6 +1302,9 @@ pub struct Scene {
     /// scene-render cache). See [`Scene::navigating_lod`].
     nav_last_gen: std::cell::Cell<u64>,
     nav_changed_at: std::cell::Cell<Option<iced::time::Instant>>,
+    /// Latest pan / zoom / rotate event waiting for the renderer. Present only
+    /// while PERF tracing is enabled; consumed by the active shader primitive.
+    nav_perf_pending: std::cell::Cell<Option<NavPerfSample>>,
     /// Unified static-hold wire cache — ONE infrastructure for EVERY space
     /// (Model tiles, BEDIT block editor, the paper sheet block, and paper
     /// content viewports): the FULL, un-culled, LOD-free tessellation per
@@ -1364,10 +1423,10 @@ impl Scene {
             interaction_handle_index_cache: RefCell::new(None),
             sort_cache: RefCell::new(None),
             draw_depth_cache: RefCell::new(None),
-            hatch_cache: RefCell::new(None),
-            wipeout_cache: RefCell::new(None),
+            hatch_cache: RefCell::new(HashMap::default()),
+            wipeout_cache: RefCell::new(HashMap::default()),
             image_cache: RefCell::new(None),
-            mesh_cache: RefCell::new(None),
+            mesh_cache: RefCell::new(HashMap::default()),
             interaction_mesh_cache: RefCell::new(None),
             mesh_pick_lookup_cache: RefCell::new(None),
             frozen_hatch_cache: RefCell::new(HashMap::default()),
@@ -1375,7 +1434,9 @@ impl Scene {
             frozen_image_cache: RefCell::new(HashMap::default()),
             frozen_mesh_cache: RefCell::new(HashMap::default()),
             insert_hatch_cache: RefCell::new(None),
-            paper_sheet_cache: RefCell::new(None),
+            paper_sheet_cache: RefCell::new(HashMap::default()),
+            paper_viewport_cache: RefCell::new(HashMap::default()),
+            paper_sheet_render_cache: RefCell::new(HashMap::default()),
             paper_projected_cache: RefCell::new(HashMap::default()),
             current_layout: "Model".to_string(),
             block_edit_block: None,
@@ -1394,7 +1455,7 @@ impl Scene {
             annotation_affects_wires: std::cell::Cell::new(None),
             model_extents_cache: RefCell::new(None),
             entity_block_map_cache: RefCell::new(None),
-            block_defn_cache: RefCell::new(None),
+            block_defn_cache: RefCell::new(HashMap::default()),
             entity_index_cache: RefCell::new(None),
             last_render_aspect: std::cell::Cell::new(16.0 / 9.0),
             last_world_per_pixel: std::cell::Cell::new(0.0),
@@ -1404,6 +1465,7 @@ impl Scene {
             last_model_wire_gen: std::cell::Cell::new(0),
             nav_last_gen: std::cell::Cell::new(0),
             nav_changed_at: std::cell::Cell::new(None),
+            nav_perf_pending: std::cell::Cell::new(None),
             resident_wire_sets: RefCell::new(HashMap::default()),
             split_cache: RefCell::new(HashMap::default()),
             tess_memo: RefCell::new(HashMap::default()),
@@ -1465,19 +1527,20 @@ impl Scene {
     /// Built single-threaded — recursive nested expansion makes parallelization
     /// fiddly and the cache only rebuilds when geometry actually changes.
     pub(super) fn block_cache_arc(&self) -> Arc<cache::block_cache::BlockCache> {
-        {
-            let cache = self.block_defn_cache.borrow();
-            if let Some((epoch, ref arc)) = *cache {
-                if epoch == self.block_epoch {
-                    return Arc::clone(arc);
-                }
-            }
-        }
         let bg = if self.current_layout == "Model" {
             self.bg_color
         } else {
             self.paper_bg_color
         };
+        let key = bg.map(f32::to_bits);
+        {
+            let cache = self.block_defn_cache.borrow();
+            if let Some((epoch, arc)) = cache.get(&key) {
+                if *epoch == self.block_epoch {
+                    return Arc::clone(arc);
+                }
+            }
+        }
         // Block definitions are cached at block-local size (annotation scale
         // 1.0). An annotative block scales as ONE unit at the INSERT level, so
         // its internal geometry / text / attributes must NOT be scaled
@@ -1486,7 +1549,9 @@ impl Scene {
         let built =
             cache::block_cache::BlockCache::build(&self.document, 1.0, bg, &self.draw_depth_map());
         let arc = Arc::new(built);
-        *self.block_defn_cache.borrow_mut() = Some((self.block_epoch, Arc::clone(&arc)));
+        let mut cache = self.block_defn_cache.borrow_mut();
+        cache.retain(|_, (epoch, _)| *epoch == self.block_epoch);
+        cache.insert(key, (self.block_epoch, Arc::clone(&arc)));
         arc
     }
 
@@ -1803,6 +1868,31 @@ impl Scene {
             .map_or(false, |t| t.elapsed().as_millis() < Self::NAV_SETTLE_MS)
     }
 
+    pub(crate) fn record_nav_perf(&self, op: NavPerfOp, started: iced::time::Instant) {
+        if !crate::perf::enabled() {
+            return;
+        }
+        let (space, mode) = if self.current_layout == "Model" {
+            ("Model", "MODEL")
+        } else if self.active_viewport.is_some() {
+            ("Paper", "MSPACE")
+        } else {
+            ("Paper", "PSPACE")
+        };
+        self.nav_perf_pending.set(Some(NavPerfSample {
+            op,
+            space,
+            mode,
+            started,
+            input_ms: started.elapsed().as_secs_f64() * 1000.0,
+            build_ms: 0.0,
+        }));
+    }
+
+    pub(in crate::scene) fn take_nav_perf(&self) -> Option<NavPerfSample> {
+        self.nav_perf_pending.take()
+    }
+
     /// Whether the interaction-LOD hatch suppression is enabled (env
     /// `OCS_HATCH_LOD`), read once. Default OFF: the tessellated hatch pass is
     /// cheap enough that suppression — and its zoom flicker (#258) — is not
@@ -1939,17 +2029,20 @@ impl Scene {
         }
     }
 
-    /// Switch the active layout. Bumps `geometry_epoch` so the wire cache
-    /// re-tessellates — `render_style`'s `adapt_to_bg` picks the model or
-    /// paper background depending on `current_layout`, so cached wires
-    /// from the previous layout would be coloured against the wrong bg.
-    /// Also runs `recolor_meshes` so ACIS mesh colour tracks the new bg.
+    /// Switch the active layout without pretending the document geometry
+    /// changed. Resident wire sets already key on block/background, so keeping
+    /// `geometry_epoch` stable lets Model and Paper retain their CPU/GPU data
+    /// across tab switches. Only caches whose contents genuinely depend on the
+    /// active layout or its background are dropped.
     pub fn set_current_layout(&mut self, name: String) {
         if self.current_layout != name {
             self.current_layout = name;
             self.sync_active_space_to_document();
             self.recolor_meshes();
-            self.bump_geometry();
+            *self.wire_cache.borrow_mut() = None;
+            *self.interaction_mesh_cache.borrow_mut() = None;
+            *self.mesh_pick_lookup_cache.borrow_mut() = None;
+            *self.insert_hatch_cache.borrow_mut() = None;
         }
     }
 
@@ -2031,6 +2124,17 @@ impl Scene {
             return;
         };
         if block_record.is_null() {
+            return;
+        }
+
+        // Normal files carry a valid direct Layout→Viewport link. This O(1)
+        // path is hit on every ordinary layout-tab switch.
+        if cur_vp.is_valid()
+            && matches!(
+                self.document.get_entity(cur_vp),
+                Some(EntityType::Viewport(vp)) if vp.common.owner_handle == block_record
+            )
+        {
             return;
         }
 
@@ -2781,23 +2885,17 @@ impl Scene {
         if self.current_layout == "Model" {
             return vec![];
         }
-        let layout_block = self.current_layout_block_handle();
+        let (layout_block, _, content) = self.paper_viewport_handles();
         if layout_block.is_null() {
             return vec![];
         }
-        let mut result: Vec<(acadrust::Handle, String, Vec<acadrust::Handle>)> = self
-            .document
-            .entities()
-            .filter_map(|e| {
-                if let EntityType::Viewport(vp) = e {
-                    if self.is_content_viewport_in_layout(vp, layout_block) {
-                        Some((vp.common.handle, vp.id, vp.frozen_layers.clone()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+        let mut result: Vec<(acadrust::Handle, String, Vec<acadrust::Handle>)> = content
+            .iter()
+            .filter_map(|handle| {
+                let Some(EntityType::Viewport(vp)) = self.document.get_entity(*handle) else {
+                    return None;
+                };
+                Some((vp.common.handle, vp.id, vp.frozen_layers.clone()))
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -2820,20 +2918,11 @@ impl Scene {
         if self.current_layout == "Model" {
             return 0;
         }
-        let layout_block = self.current_layout_block_handle();
+        let (layout_block, _, content) = self.paper_viewport_handles();
         if layout_block.is_null() {
             return 0;
         }
-        self.document
-            .entities()
-            .filter(|e| {
-                if let EntityType::Viewport(vp) = e {
-                    self.is_content_viewport_in_layout(vp, layout_block)
-                } else {
-                    false
-                }
-            })
-            .count()
+        content.len()
     }
 
     /// True when any entities are hidden by Isolate / Hide.
@@ -3105,10 +3194,9 @@ impl Scene {
     /// [`WIRE_CONTENT_GEN`] id per build (relayed via `last_model_wire_gen`)
     /// so the GPU upload gate and `render_signature` skip unchanged content.
     /// Whether the per-viewport annotation scale changes wire output at all
-    /// (PSLTSCALE on, or any annotative entity). Cached per geometry epoch —
-    /// the scan short-circuits on the first annotative entity. When false, a
-    /// viewport's `1/vp_scale` anno override is inert and normalized away so
-    /// all viewports reuse ONE resident tessellation.
+    /// Cached per geometry epoch; the scan short-circuits on the first
+    /// annotative entity. PSLTSCALE no longer participates because dash scaling
+    /// is applied in the wire shader from the viewport uniform.
     fn annotation_affects_wires(&self) -> bool {
         if let Some((epoch, v)) = self.annotation_affects_wires.get() {
             if epoch == self.geometry_epoch {
@@ -3128,11 +3216,10 @@ impl Scene {
                 return v;
             }
         }
-        let v = self.document.header.paper_space_linetype_scaling
-            || self
-                .document
-                .entities()
-                .any(|e| crate::scene::annotative::is_annotative(&self.document, e));
+        let v = self
+            .document
+            .entities()
+            .any(|e| crate::scene::annotative::is_annotative(&self.document, e));
         self.annotation_affects_wires
             .set(Some((self.geometry_epoch, v)));
         v
@@ -3326,7 +3413,7 @@ impl Scene {
         anno_scale_override: Option<f32>,
         frozen_layers: Option<&HashSet<Handle>>,
     ) -> Option<Arc<Vec<WireModel>>> {
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = crate::perf::enabled();
         let t_patch = iced::time::Instant::now();
         // The entry must exist, be stale, and be uniquely held so we can move
         // its wires out rather than deep-clone them.
@@ -3339,7 +3426,7 @@ impl Scene {
             let strong = Arc::strong_count(&entry.wires);
             if strong != 1 {
                 if perf {
-                    eprintln!("[perf] resident-shared strong={strong}");
+                    crate::perf_record!("[perf] resident-shared strong={strong}");
                 }
                 return None;
             }
@@ -3564,7 +3651,7 @@ impl Scene {
             },
         );
         if perf {
-            eprintln!(
+            crate::perf_record!(
                 "[perf] resident-patch {:>7.1}ms wires={} changes={}",
                 t_patch.elapsed().as_secs_f64() * 1000.0,
                 arc.len(),
@@ -3582,9 +3669,9 @@ impl Scene {
     fn paper_sheet_wires_arc(&self) -> Arc<Vec<WireModel>> {
         {
             let cache = self.paper_sheet_cache.borrow();
-            if let Some((epoch, gen, ref arc)) = *cache {
-                if epoch == self.geometry_epoch {
-                    self.last_model_wire_gen.set(gen);
+            if let Some((epoch, gen, arc)) = cache.get(&self.current_layout) {
+                if *epoch == self.geometry_epoch {
+                    self.last_model_wire_gen.set(*gen);
                     return Arc::clone(arc);
                 }
             }
@@ -3606,7 +3693,12 @@ impl Scene {
         let arc = Arc::new(wires);
         let gen = WIRE_CONTENT_GEN.fetch_add(1, Ordering::Relaxed);
         self.last_model_wire_gen.set(gen);
-        *self.paper_sheet_cache.borrow_mut() = Some((self.geometry_epoch, gen, Arc::clone(&arc)));
+        let mut cache = self.paper_sheet_cache.borrow_mut();
+        cache.retain(|_, (epoch, _, _)| *epoch == self.geometry_epoch);
+        cache.insert(
+            self.current_layout.clone(),
+            (self.geometry_epoch, gen, Arc::clone(&arc)),
+        );
         arc
     }
 
@@ -3673,7 +3765,7 @@ impl Scene {
                 }
             }
         }
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = crate::perf::enabled();
         let t_depth = iced::time::Instant::now();
 
         // Replay Add/Remove into the retained block order. This avoids rescanning
@@ -3754,7 +3846,7 @@ impl Scene {
                 cache.depths = Arc::clone(&arc);
                 *self.draw_depth_cache.borrow_mut() = Some(cache);
                 if perf {
-                    eprintln!(
+                    crate::perf_record!(
                         "[perf] draw-depth-patch {:>7.1}ms entries={} changes={}",
                         t_depth.elapsed().as_secs_f64() * 1000.0,
                         arc.len(),
@@ -3837,7 +3929,7 @@ impl Scene {
             owners,
         });
         if perf {
-            eprintln!(
+            crate::perf_record!(
                 "[perf] draw-depth     {:>7.1}ms entries={}",
                 t_depth.elapsed().as_secs_f64() * 1000.0,
                 arc.len(),
@@ -3854,15 +3946,16 @@ impl Scene {
         // drawings. Key on a signature of `selected` instead, so hover (which
         // never changes `selected`) keeps the cache warm.
         let sel_sig = self.selected_set_sig();
+        let space = self.current_layout.clone();
         {
             let reuse = {
                 let cache = self.hatch_cache.borrow();
-                match *cache {
+                match cache.get(&space) {
                     // Selection tint is baked in, so the selected set must also
                     // match; category = a changed handle that is a hatch/solid fill.
-                    Some((cached_epoch, cached_sel, ref arc))
-                        if cached_sel == sel_sig
-                            && self.category_cache_valid(cached_epoch, |h| {
+                    Some((cached_epoch, cached_sel, arc))
+                        if *cached_sel == sel_sig
+                            && self.category_cache_valid(*cached_epoch, |h| {
                                 self.hatches.contains_key(&h)
                             }) =>
                     {
@@ -3872,14 +3965,17 @@ impl Scene {
                 }
             };
             if let Some(arc) = reuse {
-                if let Some((ref mut e, _, _)) = *self.hatch_cache.borrow_mut() {
+                if let Some((e, _, _)) = self.hatch_cache.borrow_mut().get_mut(&space) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
         let arc = Arc::new(self.synced_hatch_models(None));
-        *self.hatch_cache.borrow_mut() = Some((self.geometry_epoch, sel_sig, Arc::clone(&arc)));
+        self.hatch_cache.borrow_mut().insert(
+            space,
+            (self.geometry_epoch, sel_sig, Arc::clone(&arc)),
+        );
         arc
     }
 
@@ -3895,14 +3991,15 @@ impl Scene {
     }
 
     pub(super) fn wipeout_models_arc(&self) -> Arc<Vec<HatchModel>> {
+        let space = self.current_layout.clone();
         {
             let reuse = {
                 let cache = self.wipeout_cache.borrow();
-                match *cache {
-                    Some((cached_epoch, ref arc))
+                match cache.get(&space) {
+                    Some((cached_epoch, arc))
                         // wipeout_models scans the whole document for Wipeout
                         // entities; relevance = the changed handle is a Wipeout.
-                        if self.category_cache_valid(cached_epoch, |h| {
+                        if self.category_cache_valid(*cached_epoch, |h| {
                             matches!(
                                 self.document.get_entity(h),
                                 Some(EntityType::Wipeout(_))
@@ -3915,14 +4012,16 @@ impl Scene {
                 }
             };
             if let Some(arc) = reuse {
-                if let Some((ref mut e, _)) = *self.wipeout_cache.borrow_mut() {
+                if let Some((e, _)) = self.wipeout_cache.borrow_mut().get_mut(&space) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
         let arc = Arc::new(self.wipeout_models(None));
-        *self.wipeout_cache.borrow_mut() = Some((self.geometry_epoch, Arc::clone(&arc)));
+        self.wipeout_cache
+            .borrow_mut()
+            .insert(space, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
@@ -4006,16 +4105,17 @@ impl Scene {
     }
 
     pub(super) fn meshes_arc(&self) -> Arc<Vec<MeshLodSet>> {
+        let space = self.current_layout.clone();
         {
             let reuse = {
                 let cache = self.mesh_cache.borrow();
-                match *cache {
+                match cache.get(&space) {
                     // Top-level solids seed self.meshes; the instanced_block part
                     // is driven by INSERTs, so an INSERT edit (e.g. a move) must
                     // also invalidate. Block-definition edits route through
                     // bump_geometry (a full delta) and invalidate regardless.
-                    Some((cached_epoch, ref arc))
-                        if self.category_cache_valid(cached_epoch, |h| {
+                    Some((cached_epoch, arc))
+                        if self.category_cache_valid(*cached_epoch, |h| {
                             self.meshes.contains_key(&h)
                                 || matches!(
                                     self.document.get_entity(h),
@@ -4029,14 +4129,16 @@ impl Scene {
                 }
             };
             if let Some(arc) = reuse {
-                if let Some((ref mut e, _)) = *self.mesh_cache.borrow_mut() {
+                if let Some((e, _)) = self.mesh_cache.borrow_mut().get_mut(&space) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
         let arc = Arc::new(self.mesh_models(None));
-        *self.mesh_cache.borrow_mut() = Some((self.geometry_epoch, Arc::clone(&arc)));
+        self.mesh_cache
+            .borrow_mut()
+            .insert(space, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
@@ -4248,8 +4350,9 @@ impl Scene {
             return self.hatch_models_arc();
         }
         let sig = Self::frozen_layers_sig(frozen);
+        let key = (self.current_layout.clone(), sig);
         let sel = self.selected_set_sig();
-        if let Some((e, s, arc)) = self.frozen_hatch_cache.borrow().get(&sig) {
+        if let Some((e, s, arc)) = self.frozen_hatch_cache.borrow().get(&key) {
             if *e == self.geometry_epoch && *s == sel {
                 return Arc::clone(arc);
             }
@@ -4257,7 +4360,7 @@ impl Scene {
         let arc = Arc::new(self.synced_hatch_models(Some(frozen)));
         self.frozen_hatch_cache
             .borrow_mut()
-            .insert(sig, (self.geometry_epoch, sel, Arc::clone(&arc)));
+            .insert(key, (self.geometry_epoch, sel, Arc::clone(&arc)));
         arc
     }
 
@@ -4270,7 +4373,8 @@ impl Scene {
             return self.wipeout_models_arc();
         }
         let sig = Self::frozen_layers_sig(frozen);
-        if let Some((e, arc)) = self.frozen_wipeout_cache.borrow().get(&sig) {
+        let key = (self.current_layout.clone(), sig);
+        if let Some((e, arc)) = self.frozen_wipeout_cache.borrow().get(&key) {
             if *e == self.geometry_epoch {
                 return Arc::clone(arc);
             }
@@ -4278,7 +4382,7 @@ impl Scene {
         let arc = Arc::new(self.wipeout_models(Some(frozen)));
         self.frozen_wipeout_cache
             .borrow_mut()
-            .insert(sig, (self.geometry_epoch, Arc::clone(&arc)));
+            .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
@@ -4306,7 +4410,8 @@ impl Scene {
             return self.meshes_arc();
         }
         let sig = Self::frozen_layers_sig(frozen);
-        if let Some((e, arc)) = self.frozen_mesh_cache.borrow().get(&sig) {
+        let key = (self.current_layout.clone(), sig);
+        if let Some((e, arc)) = self.frozen_mesh_cache.borrow().get(&key) {
             if *e == self.geometry_epoch {
                 return Arc::clone(arc);
             }
@@ -4314,7 +4419,7 @@ impl Scene {
         let arc = Arc::new(self.mesh_models(Some(frozen)));
         self.frozen_mesh_cache
             .borrow_mut()
-            .insert(sig, (self.geometry_epoch, Arc::clone(&arc)));
+            .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
@@ -4777,12 +4882,13 @@ impl Scene {
             // interaction index survives pan/zoom and reaches every entity.
             return self.entity_wires_arc();
         }
-        let layout_block = self.current_layout_block_handle();
         match self.active_viewport {
             None => self.paper_sheet_wires_arc(),
-            Some(vp_handle) => {
-                Arc::new(self.viewport_content_wires(layout_block, Some(vp_handle), None))
-            }
+            // MSPACE editing already uses the viewport's model camera, so its
+            // interaction source must stay in model coordinates too. The old
+            // projected-Paper copy rebuilt a large Vec/Arc and interaction
+            // index on entry even though the resident model set already exists.
+            Some(vp_handle) => self.model_wires_for_viewport_arc(vp_handle, 0.0),
         }
     }
 
@@ -5052,7 +5158,7 @@ impl Scene {
         allow_pending_empty: bool,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
-            let perf = std::env::var_os("OCS_PERF").is_some();
+            let perf = crate::perf::enabled();
             let t0 = iced::time::Instant::now();
             let keys = base.query_wire_keys_xy(aabb);
             let key_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -5076,7 +5182,7 @@ impl Scene {
             let remap_ms = t_remap.elapsed().as_secs_f64() * 1000.0;
             let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
             if perf && total_ms >= 50.0 {
-                eprintln!(
+                crate::perf_record!(
                     "[perf] interaction-overlay {:>7.1}ms keys={} wires={} query={:.1} changed={:.1} gather={:.1} remap={:.1}",
                     total_ms,
                     keys.len(),
@@ -5111,7 +5217,7 @@ impl Scene {
         allow_pending_empty: bool,
     ) -> crate::scene::pick::interaction_index::InteractionCandidates {
         if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
-            let perf = std::env::var_os("OCS_PERF").is_some();
+            let perf = crate::perf::enabled();
             let t0 = iced::time::Instant::now();
             let keys = base.query_wire_keys_screen(screen_rect, view_rot, eye, bounds);
             let key_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -5146,7 +5252,7 @@ impl Scene {
             let remap_ms = t_remap.elapsed().as_secs_f64() * 1000.0;
             let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
             if perf && total_ms >= 50.0 {
-                eprintln!(
+                crate::perf_record!(
                     "[perf] interaction-overlay {:>7.1}ms keys={} wires={} query={:.1} changed={:.1} gather={:.1} remap={:.1}",
                     total_ms,
                     keys.len(),

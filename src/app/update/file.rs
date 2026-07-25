@@ -819,8 +819,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let clone_started = std::time::Instant::now();
         let mut snapshot = self.tabs[i].scene.document.clone();
         let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
-        if std::env::var_os("OCS_PERF").is_some() {
-            eprintln!(
+        if crate::perf::enabled() {
+            crate::perf_record!(
                 "[perf] save-snapshot {:.1}ms entities={} objects={} purpose={purpose:?}",
                 clone_ms,
                 snapshot.entities().count(),
@@ -848,8 +848,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             png,
                             viewport,
                         );
-                        if std::env::var_os("OCS_PERF").is_some() {
-                            eprintln!(
+                        if crate::perf::enabled() {
+                            crate::perf_record!(
                                 "[perf] save-thumbnail {:.1}ms wires={}",
                                 started.elapsed().as_secs_f64() * 1000.0,
                                 wires.len(),

@@ -234,6 +234,7 @@ pub fn start_allowed(cmd: &str) -> bool {
             | "DONATE"
             | "WEBVERSION"
             | "HELP"
+            | "PERF"
             | "CUI"
             | "ALIASEDIT"
             | "CUILOAD"

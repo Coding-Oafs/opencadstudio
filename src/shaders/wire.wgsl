@@ -28,7 +28,8 @@ struct Uniforms {
     // Transparency-display toggle: 1.0 = honour baked alpha, 0.0 = force
     // every line opaque.
     transparency_enable: f32,
-    _pad: vec2<f32>,
+    linetype_scale: f32,
+    _pad: f32,
     // ── Relative-to-eye (double-single) ──────────────────────────────────
     // view_rot is the rotation-only view-projection; vertices subtract the eye
     // (eye_high + eye_low, two f32 emulating f64) before transforming, so the
@@ -166,10 +167,13 @@ fn resolve_hw(taper: f32, world_hw: f32, px_hw: f32) -> f32 {
     // Smallest non-zero dash / gap element, in world units. Used by
     // the fragment stage to decide when the pattern's finest feature
     // would render below one pixel and should collapse to a solid line.
-    var min_elem: f32 = in.dists.w;
+    let lt_scale = u.linetype_scale;
+    var min_elem: f32 = in.dists.w * lt_scale;
     let elems = array<f32, 8>(
-        in.pat0.x, in.pat0.y, in.pat0.z, in.pat0.w,
-        in.pat1.x, in.pat1.y, in.pat1.z, in.pat1.w,
+        in.pat0.x * lt_scale, in.pat0.y * lt_scale,
+        in.pat0.z * lt_scale, in.pat0.w * lt_scale,
+        in.pat1.x * lt_scale, in.pat1.y * lt_scale,
+        in.pat1.z * lt_scale, in.pat1.w * lt_scale,
     );
     for (var i = 0u; i < 8u; i++) {
         let e = abs(elems[i]);
@@ -186,11 +190,11 @@ fn resolve_hw(taper: f32, world_hw: f32, px_hw: f32) -> f32 {
         + ext * hw * u.world_per_pixel;
     out.cap            = vec2<f32>(which_end * seg_len + ext * hw, hw * side);
     out.cap_ends       = vec3<f32>(seg_len, hw_a, hw_b);
-    out.pattern_length = in.dists.w;
-    out.pat0           = in.pat0;
-    out.pat1           = in.pat1;
+    out.pattern_length = in.dists.w * lt_scale;
+    out.pat0           = in.pat0 * lt_scale;
+    out.pat1           = in.pat1 * lt_scale;
     out.min_elem       = min_elem;
-    out.align_end      = in.misc.y;
+    out.align_end      = in.misc.y * lt_scale;
     out.align_total    = in.misc.z;
     return out;
 }

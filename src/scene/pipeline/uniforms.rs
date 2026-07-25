@@ -21,9 +21,12 @@ pub struct Uniforms {
     /// 0.0 = force opaque). Read by the wire shader so the toggle does not
     /// require a retessellate.
     pub transparency_enable: f32,
-    /// Pads the struct to 112 B (next multiple of 16) so wgpu's uniform
-    /// alignment rules are satisfied.
-    pub _pad: [f32; 2],
+    /// Per-viewport PSLTSCALE factor. Kept in the shared frame uniform so
+    /// zooming inside MSPACE changes one scalar instead of re-tessellating and
+    /// re-uploading every dashed wire.
+    pub linetype_scale: f32,
+    /// Pads the struct to the uniform alignment required by wgpu.
+    pub _pad: f32,
 
     // ── Relative-to-eye (double-single) additions ───────────────────────────
     // Appended at the end so existing field offsets are unchanged; shaders that
@@ -54,7 +57,8 @@ impl Uniforms {
             lwdisplay_enable: if lwdisplay_enable { 1.0 } else { 0.0 },
             flat_shade: 0.0,
             transparency_enable: 1.0,
-            _pad: [0.0; 2],
+            linetype_scale: 1.0,
+            _pad: 0.0,
             view_rot: camera.view_proj_rte(bounds),
             eye_high,
             _pad_eh: 0.0,

@@ -451,7 +451,7 @@ fn save_owned_as_version_inner(
     backup: bool,
     clone_ms: f64,
 ) -> Result<(), String> {
-    let perf = std::env::var_os("OCS_PERF").is_some();
+    let perf = crate::perf::enabled();
     let total_started = std::time::Instant::now();
     doc.version = version;
     let styles_started = std::time::Instant::now();
@@ -484,7 +484,7 @@ fn save_owned_as_version_inner(
         return Err(format!("replace {}: {error}", path.display()));
     }
     if perf {
-        eprintln!(
+        crate::perf_record!(
             "[perf] save total={:.1}ms clone={:.1} styles={:.1} dimensions={:.1} write={:.1} entities={} objects={} path={}",
             total_started.elapsed().as_secs_f64() * 1000.0,
             clone_ms,
@@ -567,7 +567,7 @@ pub fn save_to_bytes(
     ext: &str,
     version: acadrust::DxfVersion,
 ) -> Result<Vec<u8>, String> {
-    let perf = std::env::var_os("OCS_PERF").is_some();
+    let perf = crate::perf::enabled();
     let total_started = std::time::Instant::now();
     let clone_started = std::time::Instant::now();
     let mut doc = doc.clone();
@@ -590,7 +590,7 @@ pub fn save_to_bytes(
     };
     if perf {
         let bytes = result.as_ref().map_or(0, Vec::len);
-        eprintln!(
+        crate::perf_record!(
             "[perf] save-bytes total={:.1}ms clone={:.1} styles={:.1} dimensions={:.1} write={:.1} bytes={} entities={} objects={}",
             total_started.elapsed().as_secs_f64() * 1000.0,
             clone_ms,

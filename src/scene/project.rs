@@ -12,18 +12,15 @@ impl Scene {
     ) -> Vec<WireModel> {
         use acadrust::entities::Viewport;
 
-        let viewports: Vec<&Viewport> = self
-            .document
-            .entities()
-            .filter_map(|e| {
-                if let EntityType::Viewport(vp) = e {
-                    Some(vp)
-                } else {
-                    None
-                }
+        let (_, _, viewport_handles) = self.paper_viewport_handles();
+        let viewports: Vec<&Viewport> = viewport_handles
+            .iter()
+            .filter_map(|handle| match self.document.get_entity(*handle) {
+                Some(EntityType::Viewport(vp)) => Some(vp),
+                _ => None,
             })
             .filter(|vp| {
-                self.is_content_viewport_in_layout(vp, paper_block)
+                vp.common.owner_handle == paper_block
                     && vp.status.is_on
                     && only_vp.map_or(true, |h| vp.common.handle == h)
                     && exclude_vp.map_or(true, |h| vp.common.handle != h)
@@ -328,12 +325,17 @@ impl Scene {
                 };
                 out.color = [r * 0.80, g * 0.80, b * 0.80, a * 0.85];
                 out.line_weight_px = wire.line_weight_px;
-                // Wire's pattern was sized for model-space coords during
-                // tessellation; we just projected points into paper coords
-                // (× scale), so rescale the dash pattern by the same factor
-                // to keep dimensional consistency in the GPU shader.
-                out.pattern_length = wire.pattern_length * scale;
-                out.pattern = wire.pattern.map(|v| v * scale);
+                // Wire patterns stay in their base model units. Projection
+                // normally scales them with the geometry; PSLTSCALE instead
+                // keeps dash sizes constant in paper units (the on-screen path
+                // applies the same factor through its viewport uniform).
+                let dash_scale = if self.document.header.paper_space_linetype_scaling {
+                    1.0
+                } else {
+                    scale
+                };
+                out.pattern_length = wire.pattern_length * dash_scale;
+                out.pattern = wire.pattern.map(|v| v * dash_scale);
                 projected.push(out);
             }
 

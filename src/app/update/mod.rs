@@ -1010,6 +1010,20 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::PerfCopy => {
+                let text = crate::perf::snapshot_text();
+                if text.is_empty() {
+                    Task::none()
+                } else {
+                    iced::clipboard::write(text)
+                }
+            }
+
+            Message::PerfClear => {
+                crate::perf::clear();
+                Task::none()
+            }
+
             Message::CommandHistoryEdit(action) => {
                 // Read-only: drop edits, keep selection / cursor / scroll so
                 // the user can still highlight and Ctrl+C the log.
@@ -1681,8 +1695,8 @@ impl OpenCADStudio {
                             epoch, source, wires, index,
                         )
                     });
-                if std::env::var_os("OCS_PERF").is_some() {
-                    eprintln!(
+                if crate::perf::enabled() {
+                    crate::perf_record!(
                         "[perf] interaction-index-bg {:>7.1}ms installed={installed}",
                         build_ms,
                     );
@@ -3729,6 +3743,8 @@ impl OpenCADStudio {
 
             Message::EnterViewport(handle) => {
                 let i = self.active_tab;
+                let perf = crate::perf::enabled();
+                let total = Instant::now();
                 // Clear paper-space selection before entering model space.
                 self.tabs[i].scene.deselect_all();
                 self.tabs[i].scene.active_viewport = Some(handle);
@@ -3736,13 +3752,32 @@ impl OpenCADStudio {
                 // centre so pan/zoom, paper↔model and the display all agree —
                 // otherwise the camera auto-fits to the model while the cursor
                 // math stays at the origin, jittering as pan toggles the two.
+                let phase = Instant::now();
                 self.tabs[i].scene.normalize_active_viewport_view();
+                let normalize_ms = phase.elapsed().as_secs_f64() * 1000.0;
                 // Grid/snap follow the entered viewport.
+                let phase = Instant::now();
                 self.adopt_view_display(i);
+                let display_ms = phase.elapsed().as_secs_f64() * 1000.0;
                 // Adopt the entered viewport's own per-viewport UCS.
+                let phase = Instant::now();
                 self.tabs[i].refresh_active_ucs();
+                let ucs_ms = phase.elapsed().as_secs_f64() * 1000.0;
+                let phase = Instant::now();
                 self.refresh_properties();
+                let properties_ms = phase.elapsed().as_secs_f64() * 1000.0;
                 self.command_line.push_output("MSPACE");
+                if perf {
+                    crate::perf_record!(
+                        "[perf] viewport-enter total={:.2}ms normalize={:.2}ms display={:.2}ms ucs={:.2}ms properties={:.2}ms handle={}",
+                        total.elapsed().as_secs_f64() * 1000.0,
+                        normalize_ms,
+                        display_ms,
+                        ucs_ms,
+                        properties_ms,
+                        handle.value(),
+                    );
+                }
                 Task::none()
             }
 

@@ -234,10 +234,11 @@ impl OpenCADStudio {
             // Toggle the per-rebuild wire-tessellation readout overlay.
             "PERF" => {
                 self.perf_hud = !self.perf_hud;
+                crate::perf::set_ui_enabled(self.perf_hud);
                 self.command_line.push_info(if self.perf_hud {
-                    "PERF HUD on — shows last wire re-tessellation cost"
+                    "PERF panel on — tracing render and interaction costs"
                 } else {
-                    "PERF HUD off"
+                    "PERF panel off"
                 });
                 return Some(Task::none());
             }

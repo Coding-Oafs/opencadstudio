@@ -748,7 +748,7 @@ impl InteractionIndex {
 
     pub fn build(wires: &[WireModel]) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        let perf = std::env::var_os("OCS_PERF").is_some();
+        let perf = crate::perf::enabled();
         #[cfg(not(target_arch = "wasm32"))]
         let build_started = std::time::Instant::now();
         let wire_handles: Vec<Option<u64>> = wires
@@ -930,7 +930,7 @@ impl InteractionIndex {
         );
         #[cfg(not(target_arch = "wasm32"))]
         if perf {
-            eprintln!(
+            crate::perf_record!(
                 "[perf] interaction-index-detail total={:.1}ms handles={:.1} collect={:.1} flatten={:.1} spatial={:.1}",
                 build_started.elapsed().as_secs_f64() * 1000.0,
                 handles_elapsed.as_secs_f64() * 1000.0,

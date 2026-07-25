@@ -14,7 +14,10 @@ use std::sync::Arc;
 use crate::scene::pipeline::viewcube::{hover_id, VIEWCUBE_PX};
 use crate::scene::pipeline::MultiPipeline;
 use crate::scene::convert::tess_util;
-use crate::scene::{HatchModel, ImageModel, MeshLodSet, Scene, Uniforms, ViewportInstance, WireModel};
+use crate::scene::{
+    vp_effective_scale, HatchModel, ImageModel, MeshLodSet, NavPerfSample, Scene, Uniforms,
+    ViewportInstance, WireModel,
+};
 
 // ── Camera hover state (shader::Program::State) ───────────────────────────
 
@@ -156,6 +159,8 @@ pub struct Primitive {
     /// `prepare` calls run before all `render` calls, so disjoint slots are
     /// safe.
     pub(in crate::scene) base_slot: usize,
+    /// One input-to-render sample, carried only when PERF tracing is enabled.
+    pub(in crate::scene) nav_perf: Option<NavPerfSample>,
 }
 
 /// Flags the render pipeline consumes, derived from
@@ -241,6 +246,7 @@ impl shader::Primitive for Primitive {
         bounds: &Rectangle,
         viewport: &Viewport,
     ) {
+        let nav_prepare_started = std::time::Instant::now();
         let phys = viewport.physical_size();
         let full_size = Size::new(phys.width, phys.height);
         let scale = viewport.scale_factor() as f32;
@@ -438,7 +444,7 @@ impl shader::Primitive for Primitive {
                 // 2D/3D sets fall through to the shared batched path below.
                 let mut arena_served = false;
                 #[cfg(not(target_arch = "wasm32"))]
-                let _perf = std::env::var_os("OCS_PERF").is_some();
+                let _perf = crate::perf::enabled();
                 #[cfg(not(target_arch = "wasm32"))]
                 let _t0 = std::time::Instant::now();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -455,7 +461,7 @@ impl shader::Primitive for Primitive {
                         });
                     let patch = vp.wire_patch.as_ref().map(|(_, patch)| patch);
                     if _perf {
-                        eprintln!(
+                        crate::perf_record!(
                             "[perf] arena-base ok={} held={} patch={:?} changes={}",
                             base_ok,
                             inner.wire_arena_id,
@@ -725,7 +731,7 @@ impl shader::Primitive for Primitive {
                     } else {
                         "arena-build"
                     };
-                    eprintln!(
+                    crate::perf_record!(
                         "[perf] wire {:>7.1}ms  {:<18} wires={} gpu_instances={}",
                         _t0.elapsed().as_secs_f64() * 1000.0,
                         outcome,
@@ -862,6 +868,19 @@ impl shader::Primitive for Primitive {
                 );
             }
         }
+        if let Some(sample) = self.nav_perf {
+            crate::perf::record(format_args!(
+                "[perf] nav-prepare op={} space={} mode={} input={:.2}ms build={:.2}ms prepare={:.2}ms elapsed={:.2}ms viewports={}",
+                sample.op.label(),
+                sample.space,
+                sample.mode,
+                sample.input_ms,
+                sample.build_ms,
+                nav_prepare_started.elapsed().as_secs_f64() * 1000.0,
+                sample.started.elapsed().as_secs_f64() * 1000.0,
+                self.viewports.len(),
+            ));
+        }
     }
 
     fn render(
@@ -871,6 +890,7 @@ impl shader::Primitive for Primitive {
         target: &iced::wgpu::TextureView,
         clip: &Rectangle<u32>,
     ) {
+        let nav_render_started = std::time::Instant::now();
         let cw = clip.width as f32;
         let ch = clip.height as f32;
         let clip_right = clip.x + clip.width;
@@ -933,6 +953,17 @@ impl shader::Primitive for Primitive {
                 };
                 inner.viewcube.render(encoder, target, vp_clip);
             }
+        }
+        if let Some(sample) = self.nav_perf {
+            crate::perf::record(format_args!(
+                "[perf] nav-render op={} space={} mode={} encode={:.2}ms elapsed={:.2}ms viewports={}",
+                sample.op.label(),
+                sample.space,
+                sample.mode,
+                nav_render_started.elapsed().as_secs_f64() * 1000.0,
+                sample.started.elapsed().as_secs_f64() * 1000.0,
+                self.viewports.len(),
+            ));
         }
     }
 }
@@ -1375,6 +1406,8 @@ impl Scene {
         _hover_region: Option<usize>,
         show_viewcube: bool,
     ) -> Primitive {
+        let nav_build_started = std::time::Instant::now();
+        let perf_nav = self.take_nav_perf();
         // Hover comes from the scene cell driven by the app-level
         // `CursorMoved` handler — the cube overlay sits above the shader
         // and would otherwise mask the move event from `Program::update`.
@@ -1396,10 +1429,19 @@ impl Scene {
             .collect();
         // Empty viewports → blit nothing; the container background (model bg
         // or the paper desk colour) stays visible.
+        let perf_nav = perf_nav.map(|mut sample| {
+            sample.build_ms = nav_build_started.elapsed().as_secs_f64() * 1000.0;
+            sample
+        });
+        // Model panes permanently own slots 0..N. Paper starts after them so
+        // its sheet/content viewports never evict the Model slot's wire arena,
+        // textures, mesh batches and render cache during a layout-tab switch.
+        let base_slot = self.model_tiles.borrow().len();
         Primitive {
             viewports,
             bg_color,
-            base_slot: 0,
+            base_slot,
+            nav_perf: perf_nav,
         }
     }
 
@@ -1425,10 +1467,17 @@ impl Scene {
                 viewports: vec![],
                 bg_color,
                 base_slot: tile_idx,
+                nav_perf: None,
             };
         };
         let active = self.active_model_tile.get();
         let is_active = tile_idx == active;
+        let nav_build_started = std::time::Instant::now();
+        let perf_nav = if is_active {
+            self.take_nav_perf()
+        } else {
+            None
+        };
         let camera = if is_active {
             self.camera.borrow().clone()
         } else {
@@ -1458,10 +1507,15 @@ impl Scene {
             .viewport_data_for(&inst, canvas, hover_region, show_viewcube)
             .into_iter()
             .collect();
+        let perf_nav = perf_nav.map(|mut sample| {
+            sample.build_ms = nav_build_started.elapsed().as_secs_f64() * 1000.0;
+            sample
+        });
         Primitive {
             viewports,
             bg_color,
             base_slot: tile_idx,
+            nav_perf: perf_nav,
         }
     }
 
@@ -1612,6 +1666,19 @@ impl Scene {
         };
         let mut uniforms =
             Uniforms::new(&inst.camera, full_bounds, self.document.header.lineweight_display);
+        if self.document.header.paper_space_linetype_scaling
+            && !inst.paper_sheet
+            && inst.tile_idx.is_none()
+            && inst.handle != Handle::NULL
+        {
+            if let Some(EntityType::Viewport(vp)) = self.document.get_entity(inst.handle) {
+                let viewport_scale =
+                    vp_effective_scale(vp.custom_scale, vp.view_height, vp.height);
+                if viewport_scale.is_finite() && viewport_scale > 1e-9 {
+                    uniforms.linetype_scale = (1.0 / viewport_scale) as f32;
+                }
+            }
+        }
         // Crop the rotation-only RTE view-projection to the visible sub-rect.
         uniforms.view_rot = crop_view_proj(uniforms.view_rot, uo, vo, us, vs);
         uniforms.viewport_size = [visible_w, visible_h];
@@ -1655,21 +1722,18 @@ impl Scene {
             rustc_hash::FxHashSet::default()
         };
 
-        let (hatches, wipeout_hatches) = if inst.paper_sheet {
-            let mut v: Vec<HatchModel> = Vec::new();
-            if let Some(sheet) = self.paper_sheet_fill() {
-                v.push(sheet);
-            }
-            v.extend(self.paper_canvas_hatches().iter().cloned());
-            (Arc::new(v), self.paper_canvas_wipeouts())
+        let (hatches, wipeout_hatches, paper_images) = if inst.paper_sheet {
+            let (hatches, wipeouts, images) = self.paper_sheet_render_models();
+            (hatches, wipeouts, Some(images))
         } else {
             (
                 self.hatch_models_for_viewport(&vp_frozen),
                 self.wipeout_models_for_viewport(&vp_frozen),
+                None,
             )
         };
-        let images = if inst.paper_sheet {
-            self.paper_sheet_images()
+        let images = if let Some(images) = paper_images {
+            images
         } else {
             self.images_for_viewport(&vp_frozen)
         };
