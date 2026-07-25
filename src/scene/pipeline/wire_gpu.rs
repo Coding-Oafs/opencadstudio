@@ -282,6 +282,7 @@ impl WirePipelineMode {
 
 // ── GPU handle ────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct WireGpu {
     pub instance_buffer: wgpu::Buffer,
     /// First instance in a shared arena buffer. Standalone buffers start at 0.
@@ -609,6 +610,55 @@ fn build_const_bind_group(
 }
 
 impl WireGpu {
+    /// Native-only equivalent of [`from_run`] for an already partitioned set
+    /// of borrowed wires. Used when one arena partition exceeds the 256 MB
+    /// buffer limit: the compatible partition stays patchable while only the
+    /// oversized side uses chunked resident buffers.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_run_refs(
+        device: &wgpu::Device,
+        wires: &[&WireModel],
+        depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
+        mesh_edge: bool,
+        const_bgl: &wgpu::BindGroupLayout,
+    ) -> Vec<Self> {
+        const MAX_INSTANCES: usize =
+            268_435_456 / std::mem::size_of::<WireInstance>();
+        use crate::par::prelude::*;
+        let per: Vec<(Vec<WireInstance>, WireConst)> = wires
+            .par_iter()
+            .enumerate()
+            .map(|(idx, &wire)| {
+                let depth = if mesh_edge {
+                    0.0
+                } else {
+                    wire_draw_depth(wire, depth_map)
+                };
+                emit_wire_native(wire, idx as u32, wire.color, depth)
+            })
+            .collect();
+        let mut instances: Vec<WireInstance> =
+            Vec::with_capacity(per.iter().map(|(items, _)| items.len()).sum());
+        let mut consts = Vec::with_capacity(per.len());
+        for (mut items, constant) in per {
+            instances.append(&mut items);
+            consts.push(constant);
+        }
+        if instances.is_empty() {
+            return Vec::new();
+        }
+        let bind_group = build_const_bind_group(device, const_bgl, &consts);
+        instances
+            .chunks(MAX_INSTANCES)
+            .map(|chunk| Self {
+                instance_buffer: instance_buffer_mapped(device, "wire.run.hybrid.ibuf", chunk),
+                first_instance: 0,
+                instance_count: chunk.len() as u32,
+                is_3d_mesh_edge: mesh_edge,
+                const_bind_group: Some(bind_group.clone()),
+            })
+            .collect()
+    }
 
     /// Merge a run of WireModels that share scissor + mesh-edge state into one
     /// (or, past the 256 MB GPU limit, a few) instance buffer(s), then stamp

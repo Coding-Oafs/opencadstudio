@@ -278,7 +278,7 @@ struct SpatialGrid {
 }
 
 impl SpatialGrid {
-    fn build<T>(entries: &[Entry3<T>]) -> Self {
+    fn build<T: Sync>(entries: &[Entry3<T>]) -> Self {
         if entries.is_empty() {
             return Self {
                 min: [0.0; 2],
@@ -314,57 +314,137 @@ impl SpatialGrid {
         let cols = (((ext_x / cell).ceil() as u64) + 1).clamp(1, MAX_AXIS_CELLS as u64) as u32;
         let rows = (((ext_y / cell).ceil() as u64) + 1).clamp(1, MAX_AXIS_CELLS as u64) as u32;
         let cell_count = cols as usize * rows as usize;
-        let mut counts = vec![0u32; cell_count];
-        let mut oversized = Vec::new();
 
         let col_of = |x: f64| (((x - min[0]) / cell).floor()).clamp(0.0, (cols - 1) as f64) as u32;
         let row_of = |y: f64| (((y - min[1]) / cell).floor()).clamp(0.0, (rows - 1) as f64) as u32;
 
-        for (idx, entry) in entries.iter().enumerate() {
-            let aabb = entry_aabb2(entry);
-            let c0 = col_of(aabb[0]);
-            let c1 = col_of(aabb[2]);
-            let r0 = row_of(aabb[1]);
-            let r1 = row_of(aabb[3]);
-            let span = (c1 - c0 + 1) as u64 * (r1 - r0 + 1) as u64;
-            if span > MAX_SPAN_CELLS {
-                oversized.push(idx as u32);
-                continue;
-            }
-            for row in r0..=r1 {
-                let base = row as usize * cols as usize;
-                for col in c0..=c1 {
-                    counts[base + col as usize] += 1;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (counts, oversized) = {
+            use crate::par::prelude::*;
+            use std::sync::atomic::{AtomicU32, Ordering};
+
+            let counts: Vec<AtomicU32> =
+                (0..cell_count).map(|_| AtomicU32::new(0)).collect();
+            let oversized: Vec<u32> = entries
+                .par_iter()
+                .enumerate()
+                .filter_map(|(idx, entry)| {
+                    let aabb = entry_aabb2(entry);
+                    let c0 = col_of(aabb[0]);
+                    let c1 = col_of(aabb[2]);
+                    let r0 = row_of(aabb[1]);
+                    let r1 = row_of(aabb[3]);
+                    let span = (c1 - c0 + 1) as u64 * (r1 - r0 + 1) as u64;
+                    if span > MAX_SPAN_CELLS {
+                        return Some(idx as u32);
+                    }
+                    for row in r0..=r1 {
+                        let base = row as usize * cols as usize;
+                        for col in c0..=c1 {
+                            counts[base + col as usize].fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    None
+                })
+                .collect();
+            (
+                counts
+                    .into_iter()
+                    .map(AtomicU32::into_inner)
+                    .collect::<Vec<u32>>(),
+                oversized,
+            )
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (counts, oversized) = {
+            let mut counts = vec![0u32; cell_count];
+            let mut oversized = Vec::new();
+            for (idx, entry) in entries.iter().enumerate() {
+                let aabb = entry_aabb2(entry);
+                let c0 = col_of(aabb[0]);
+                let c1 = col_of(aabb[2]);
+                let r0 = row_of(aabb[1]);
+                let r1 = row_of(aabb[3]);
+                let span = (c1 - c0 + 1) as u64 * (r1 - r0 + 1) as u64;
+                if span > MAX_SPAN_CELLS {
+                    oversized.push(idx as u32);
+                    continue;
+                }
+                for row in r0..=r1 {
+                    let base = row as usize * cols as usize;
+                    for col in c0..=c1 {
+                        counts[base + col as usize] += 1;
+                    }
                 }
             }
-        }
+            (counts, oversized)
+        };
         let mut cell_offsets = Vec::with_capacity(cell_count + 1);
         cell_offsets.push(0);
         for count in counts {
             cell_offsets.push(cell_offsets.last().copied().unwrap_or(0) + count);
         }
-        let mut cell_entries = vec![0u32; *cell_offsets.last().unwrap_or(&0) as usize];
-        let mut cursors = cell_offsets[..cell_count].to_vec();
-        for (idx, entry) in entries.iter().enumerate() {
-            let aabb = entry_aabb2(entry);
-            let c0 = col_of(aabb[0]);
-            let c1 = col_of(aabb[2]);
-            let r0 = row_of(aabb[1]);
-            let r1 = row_of(aabb[3]);
-            let span = (c1 - c0 + 1) as u64 * (r1 - r0 + 1) as u64;
-            if span > MAX_SPAN_CELLS {
-                continue;
-            }
-            for row in r0..=r1 {
-                let base = row as usize * cols as usize;
-                for col in c0..=c1 {
-                    let cell_idx = base + col as usize;
-                    let cursor = &mut cursors[cell_idx];
-                    cell_entries[*cursor as usize] = idx as u32;
-                    *cursor += 1;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let cell_entries = {
+            use crate::par::prelude::*;
+            use std::sync::atomic::{AtomicU32, Ordering};
+
+            let cursors: Vec<AtomicU32> = cell_offsets[..cell_count]
+                .iter()
+                .copied()
+                .map(AtomicU32::new)
+                .collect();
+            let slots: Vec<AtomicU32> = (0..*cell_offsets.last().unwrap_or(&0) as usize)
+                .map(|_| AtomicU32::new(0))
+                .collect();
+            entries.par_iter().enumerate().for_each(|(idx, entry)| {
+                let aabb = entry_aabb2(entry);
+                let c0 = col_of(aabb[0]);
+                let c1 = col_of(aabb[2]);
+                let r0 = row_of(aabb[1]);
+                let r1 = row_of(aabb[3]);
+                let span = (c1 - c0 + 1) as u64 * (r1 - r0 + 1) as u64;
+                if span > MAX_SPAN_CELLS {
+                    return;
+                }
+                for row in r0..=r1 {
+                    let base = row as usize * cols as usize;
+                    for col in c0..=c1 {
+                        let cell_idx = base + col as usize;
+                        let cursor = cursors[cell_idx].fetch_add(1, Ordering::Relaxed);
+                        slots[cursor as usize].store(idx as u32, Ordering::Relaxed);
+                    }
+                }
+            });
+            slots.into_iter().map(AtomicU32::into_inner).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let cell_entries = {
+            let mut cell_entries = vec![0u32; *cell_offsets.last().unwrap_or(&0) as usize];
+            let mut cursors = cell_offsets[..cell_count].to_vec();
+            for (idx, entry) in entries.iter().enumerate() {
+                let aabb = entry_aabb2(entry);
+                let c0 = col_of(aabb[0]);
+                let c1 = col_of(aabb[2]);
+                let r0 = row_of(aabb[1]);
+                let r1 = row_of(aabb[3]);
+                let span = (c1 - c0 + 1) as u64 * (r1 - r0 + 1) as u64;
+                if span > MAX_SPAN_CELLS {
+                    continue;
+                }
+                for row in r0..=r1 {
+                    let base = row as usize * cols as usize;
+                    for col in c0..=c1 {
+                        let cell_idx = base + col as usize;
+                        let cursor = &mut cursors[cell_idx];
+                        cell_entries[*cursor as usize] = idx as u32;
+                        *cursor += 1;
+                    }
                 }
             }
-        }
+            cell_entries
+        };
         let oversized = SpatialBvh2::build(&entries, oversized);
 
         Self {
@@ -426,7 +506,7 @@ struct SpatialSet<T> {
     xyz: std::sync::OnceLock<SpatialBvh3>,
 }
 
-impl<T: Copy + Ord> SpatialSet<T> {
+impl<T: Copy + Ord + Sync> SpatialSet<T> {
     fn build(entries: Vec<Entry3<T>>) -> Self {
         let xy = SpatialGrid::build(&entries);
         Self {
@@ -601,6 +681,19 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
     entries
 }
 
+fn flatten_entry_parts<T>(mut parts: Vec<Vec<T>>) -> Vec<T> {
+    let Some((largest, _)) = parts.iter().enumerate().max_by_key(|(_, part)| part.len()) else {
+        return Vec::new();
+    };
+    let mut output = parts.swap_remove(largest);
+    let remaining: usize = parts.iter().map(Vec::len).sum();
+    output.reserve(remaining);
+    for mut part in parts {
+        output.append(&mut part);
+    }
+    output
+}
+
 impl InteractionHandleIndex {
     pub fn build(entries: impl IntoIterator<Item = (u64, [f64; 6])>) -> Self {
         Self {
@@ -649,6 +742,10 @@ impl InteractionIndex {
     }
 
     pub fn build(wires: &[WireModel]) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let perf = std::env::var_os("OCS_PERF").is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        let build_started = std::time::Instant::now();
         let wire_handles: Vec<Option<u64>> = wires
             .iter()
             .map(|wire| wire.name.parse::<u64>().ok())
@@ -665,14 +762,11 @@ impl InteractionIndex {
                 Some(current)
             })
             .collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let handles_elapsed = build_started.elapsed();
+        #[cfg(not(target_arch = "wasm32"))]
+        let collect_started = std::time::Instant::now();
         let mut wire_entries = Vec::with_capacity(wires.len());
-        let mut segment_entries = Vec::new();
-        let mut snap_point_entries = Vec::new();
-        let mut key_vertex_entries = Vec::new();
-        let mut key_segment_entries = Vec::new();
-        let mut fill_triangle_entries = Vec::new();
-        let mut pick_triangle_entries = Vec::new();
-        let mut glyph_entries = Vec::new();
         let mut unbounded_wires = Vec::new();
         let mut max_line_half_width_px = 0.0f32;
 
@@ -691,46 +785,18 @@ impl InteractionIndex {
             .enumerate()
             .map(|(index, wire)| collect_wire_index_entries(index as u32, wire))
             .collect();
-
-        // Every per-wire worker knows its exact output sizes. Reserve the flat
-        // arrays once before draining them so a dense block drawing does not
-        // repeatedly copy already-flattened entries while the Vecs grow.
-        wire_entries.reserve(per_wire.iter().filter(|entries| entries.wire.is_some()).count());
-        unbounded_wires.reserve(per_wire.iter().filter(|entries| entries.unbounded).count());
-        segment_entries.reserve(per_wire.iter().map(|entries| entries.segments.len()).sum());
-        snap_point_entries.reserve(
-            per_wire
-                .iter()
-                .map(|entries| entries.snap_points.len())
-                .sum(),
-        );
-        key_vertex_entries.reserve(
-            per_wire
-                .iter()
-                .map(|entries| entries.key_vertices.len())
-                .sum(),
-        );
-        key_segment_entries.reserve(
-            per_wire
-                .iter()
-                .map(|entries| entries.key_segments.len())
-                .sum(),
-        );
-        fill_triangle_entries.reserve(
-            per_wire
-                .iter()
-                .map(|entries| entries.fill_triangles.len())
-                .sum(),
-        );
-        pick_triangle_entries.reserve(
-            per_wire
-                .iter()
-                .map(|entries| entries.pick_triangles.len())
-                .sum(),
-        );
-        glyph_entries.reserve(per_wire.iter().map(|entries| entries.glyphs.len()).sum());
-
-        for (wire_idx, mut entries) in per_wire.into_iter().enumerate() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let collect_elapsed = collect_started.elapsed();
+        #[cfg(not(target_arch = "wasm32"))]
+        let flatten_started = std::time::Instant::now();
+        let mut segment_parts = Vec::with_capacity(per_wire.len());
+        let mut snap_point_parts = Vec::with_capacity(per_wire.len());
+        let mut key_vertex_parts = Vec::with_capacity(per_wire.len());
+        let mut key_segment_parts = Vec::with_capacity(per_wire.len());
+        let mut fill_triangle_parts = Vec::with_capacity(per_wire.len());
+        let mut pick_triangle_parts = Vec::with_capacity(per_wire.len());
+        let mut glyph_parts = Vec::with_capacity(per_wire.len());
+        for (wire_idx, entries) in per_wire.into_iter().enumerate() {
             max_line_half_width_px =
                 max_line_half_width_px.max(entries.max_line_half_width_px);
             if let Some(entry) = entries.wire {
@@ -739,14 +805,65 @@ impl InteractionIndex {
             if entries.unbounded {
                 unbounded_wires.push(wire_idx as u32);
             }
-            segment_entries.append(&mut entries.segments);
-            snap_point_entries.append(&mut entries.snap_points);
-            key_vertex_entries.append(&mut entries.key_vertices);
-            key_segment_entries.append(&mut entries.key_segments);
-            fill_triangle_entries.append(&mut entries.fill_triangles);
-            pick_triangle_entries.append(&mut entries.pick_triangles);
-            glyph_entries.append(&mut entries.glyphs);
+            segment_parts.push(entries.segments);
+            snap_point_parts.push(entries.snap_points);
+            key_vertex_parts.push(entries.key_vertices);
+            key_segment_parts.push(entries.key_segments);
+            fill_triangle_parts.push(entries.fill_triangles);
+            pick_triangle_parts.push(entries.pick_triangles);
+            glyph_parts.push(entries.glyphs);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let (
+            ((segment_entries, snap_point_entries), (key_vertex_entries, key_segment_entries)),
+            ((fill_triangle_entries, pick_triangle_entries), glyph_entries),
+        ) = rayon::join(
+            || {
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || flatten_entry_parts(segment_parts),
+                            || flatten_entry_parts(snap_point_parts),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || flatten_entry_parts(key_vertex_parts),
+                            || flatten_entry_parts(key_segment_parts),
+                        )
+                    },
+                )
+            },
+            || {
+                let (fill, pick) = rayon::join(
+                    || flatten_entry_parts(fill_triangle_parts),
+                    || flatten_entry_parts(pick_triangle_parts),
+                );
+                ((fill, pick), flatten_entry_parts(glyph_parts))
+            },
+        );
+        #[cfg(target_arch = "wasm32")]
+        let (
+            segment_entries,
+            snap_point_entries,
+            key_vertex_entries,
+            key_segment_entries,
+            fill_triangle_entries,
+            pick_triangle_entries,
+            glyph_entries,
+        ) = (
+            flatten_entry_parts(segment_parts),
+            flatten_entry_parts(snap_point_parts),
+            flatten_entry_parts(key_vertex_parts),
+            flatten_entry_parts(key_segment_parts),
+            flatten_entry_parts(fill_triangle_parts),
+            flatten_entry_parts(pick_triangle_parts),
+            flatten_entry_parts(glyph_parts),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let flatten_elapsed = flatten_started.elapsed();
+        #[cfg(not(target_arch = "wasm32"))]
+        let spatial_started = std::time::Instant::now();
 
         #[cfg(not(target_arch = "wasm32"))]
         let (
@@ -806,6 +923,17 @@ impl InteractionIndex {
             SpatialSet::build(pick_triangle_entries),
             SpatialSet::build(glyph_entries),
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        if perf {
+            eprintln!(
+                "[perf] interaction-index-detail total={:.1}ms handles={:.1} collect={:.1} flatten={:.1} spatial={:.1}",
+                build_started.elapsed().as_secs_f64() * 1000.0,
+                handles_elapsed.as_secs_f64() * 1000.0,
+                collect_elapsed.as_secs_f64() * 1000.0,
+                flatten_elapsed.as_secs_f64() * 1000.0,
+                spatial_started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
 
         Self {
             wires,

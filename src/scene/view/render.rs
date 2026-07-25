@@ -499,28 +499,48 @@ impl shader::Primitive for Primitive {
                             );
                         }
                     }
+                    let fallback_touched = |mesh_edge: bool| {
+                        patch.map_or(true, |patch| {
+                            patch.changes.iter().any(|(handle, _)| {
+                                inner.wire_arena_fallback_handles.contains(handle)
+                                    || if mesh_edge {
+                                        mesh_changed.get(handle).is_some_and(|run| !run.is_empty())
+                                    } else {
+                                        regular_changed
+                                            .get(handle)
+                                            .is_some_and(|run| !run.is_empty())
+                                    }
+                            })
+                        })
+                    };
                     let reg_ok = base_ok
-                        && inner.wire_arena.as_mut().map_or(false, |a| {
+                        && if let Some(arena) = inner.wire_arena.as_mut() {
                             let patch = patch.unwrap();
-                            a.patch(
+                            arena.patch(
                                 queue,
                                 &patch.changes,
                                 &regular_changed,
                                 patch.new_handles_are_suffix,
                                 &vp.draw_depths,
                             )
-                        });
+                        } else {
+                            inner.wire_arena_fallback_kind == Some(false)
+                                && !fallback_touched(false)
+                        };
                     let mesh_ok = base_ok
-                        && inner.wire_arena_mesh.as_mut().map_or(false, |a| {
+                        && if let Some(arena) = inner.wire_arena_mesh.as_mut() {
                             let patch = patch.unwrap();
-                            a.patch(
+                            arena.patch(
                                 queue,
                                 &patch.changes,
                                 &mesh_changed,
                                 patch.new_handles_are_suffix,
                                 &vp.draw_depths,
                             )
-                        });
+                        } else {
+                            inner.wire_arena_fallback_kind == Some(true)
+                                && !fallback_touched(true)
+                        };
                     if !reg_ok || !mesh_ok {
                         // Initial upload or a patch that outgrew arena capacity:
                         // only then pay the full regular/mesh split.
@@ -529,14 +549,18 @@ impl shader::Primitive for Primitive {
                             .filter(|w| !w.fill_tris.is_empty() && !w.fill_tris_low.is_empty())
                             .filter_map(|w| w.name.parse::<u64>().ok())
                             .collect();
+                        let regular: Vec<&crate::scene::WireModel> = vp_wires
+                            .iter()
+                            .filter(|w| {
+                                !w.points.is_empty()
+                                    && !wire_arena::is_mesh_edge(w, &mesh_names)
+                            })
+                            .collect();
+                        let mesh: Vec<&crate::scene::WireModel> = vp_wires
+                            .iter()
+                            .filter(|w| wire_arena::is_mesh_edge(w, &mesh_names))
+                            .collect();
                         if !reg_ok {
-                            let regular: Vec<&crate::scene::WireModel> = vp_wires
-                                .iter()
-                                .filter(|w| {
-                                    !w.points.is_empty()
-                                        && !wire_arena::is_mesh_edge(w, &mesh_names)
-                                })
-                                .collect();
                             inner.wire_arena = WireArena::build(
                                 device,
                                 queue,
@@ -545,12 +569,34 @@ impl shader::Primitive for Primitive {
                                 bgl,
                                 false,
                             );
+                            if inner.wire_arena.is_none() && !regular.is_empty() {
+                                inner.wire_arena_fallback = std::sync::Arc::new(
+                                    crate::scene::pipeline::WireGpu::from_run_refs(
+                                        device,
+                                        &regular,
+                                        &vp.draw_depths,
+                                        false,
+                                        bgl,
+                                    ),
+                                );
+                                inner.wire_arena_fallback_kind = Some(false);
+                                inner.wire_arena_fallback_handles = regular
+                                    .iter()
+                                    .filter_map(|wire| {
+                                        wire.name
+                                            .parse::<u64>()
+                                            .ok()
+                                            .map(acadrust::Handle::new)
+                                    })
+                                    .collect();
+                            } else if inner.wire_arena_fallback_kind == Some(false) {
+                                inner.wire_arena_fallback =
+                                    std::sync::Arc::new(Vec::new());
+                                inner.wire_arena_fallback_kind = None;
+                                inner.wire_arena_fallback_handles.clear();
+                            }
                         }
                         if !mesh_ok {
-                            let mesh: Vec<&crate::scene::WireModel> = vp_wires
-                                .iter()
-                                .filter(|w| wire_arena::is_mesh_edge(w, &mesh_names))
-                                .collect();
                             inner.wire_arena_mesh = WireArena::build(
                                 device,
                                 queue,
@@ -559,15 +605,58 @@ impl shader::Primitive for Primitive {
                                 bgl,
                                 true,
                             );
+                            if inner.wire_arena_mesh.is_none() && !mesh.is_empty() {
+                                inner.wire_arena_fallback = std::sync::Arc::new(
+                                    crate::scene::pipeline::WireGpu::from_run_refs(
+                                        device,
+                                        &mesh,
+                                        &vp.draw_depths,
+                                        true,
+                                        bgl,
+                                    ),
+                                );
+                                inner.wire_arena_fallback_kind = Some(true);
+                                inner.wire_arena_fallback_handles = mesh
+                                    .iter()
+                                    .filter_map(|wire| {
+                                        wire.name
+                                            .parse::<u64>()
+                                            .ok()
+                                            .map(acadrust::Handle::new)
+                                    })
+                                    .collect();
+                            } else if inner.wire_arena_fallback_kind == Some(true) {
+                                inner.wire_arena_fallback =
+                                    std::sync::Arc::new(Vec::new());
+                                inner.wire_arena_fallback_kind = None;
+                                inner.wire_arena_fallback_handles.clear();
+                            }
                         }
                     }
                     _patched = reg_ok && mesh_ok;
 
-                    if let (Some(reg), Some(me)) =
-                        (inner.wire_arena.as_ref(), inner.wire_arena_mesh.as_ref())
+                    let regular_ready = inner.wire_arena.is_some()
+                        || inner.wire_arena_fallback_kind == Some(false);
+                    let mesh_ready = inner.wire_arena_mesh.is_some()
+                        || inner.wire_arena_fallback_kind == Some(true);
+                    if regular_ready
+                        && mesh_ready
+                        && (inner.wire_arena.is_some() || inner.wire_arena_mesh.is_some())
                     {
-                        let mut gpus = reg.wire_gpus();
-                        gpus.extend(me.wire_gpus());
+                        let mut gpus = if inner.wire_arena_fallback_kind == Some(false) {
+                            inner.wire_arena_fallback.as_ref().clone()
+                        } else {
+                            inner
+                                .wire_arena
+                                .as_ref()
+                                .map(WireArena::wire_gpus)
+                                .unwrap_or_default()
+                        };
+                        if inner.wire_arena_fallback_kind == Some(true) {
+                            gpus.extend(inner.wire_arena_fallback.iter().cloned());
+                        } else if let Some(arena) = inner.wire_arena_mesh.as_ref() {
+                            gpus.extend(arena.wire_gpus());
+                        }
                         inner.gpu_wires = std::sync::Arc::new(gpus);
                         if _patched {
                             wire_arena::patch_handle_index(
@@ -583,6 +672,9 @@ impl shader::Primitive for Primitive {
                     } else {
                         inner.wire_arena = None;
                         inner.wire_arena_mesh = None;
+                        inner.wire_arena_fallback = std::sync::Arc::new(Vec::new());
+                        inner.wire_arena_fallback_kind = None;
+                        inner.wire_arena_fallback_handles.clear();
                         inner.wire_arena_id = u64::MAX;
                     }
                 }
@@ -594,28 +686,31 @@ impl shader::Primitive for Primitive {
                 // `.cloned()` releases the immutable cache borrow before the
                 // miss branch takes a mutable one.
                 if !arena_served {
-                let cached = pipeline.wire_buffer_cache.get(&vp.wire_content_id).cloned();
-                let built = match cached {
-                    Some(entry) => entry,
-                    None => {
-                        let entry =
-                            inner.build_wire_buffers(device, &vp_wires[..], &vp.draw_depths);
-                        pipeline
-                            .wire_buffer_cache
-                            .insert(vp.wire_content_id, entry.clone());
-                        // Evict entries no slot still holds (only the cache
-                        // references them). An entry drawn by any pane keeps a
-                        // strong count ≥ 2, so this never drops live geometry.
-                        if pipeline.wire_buffer_cache.len() > 16 {
+                    let cached = pipeline
+                        .wire_buffer_cache
+                        .get(&vp.wire_content_id)
+                        .cloned();
+                    let built = match cached {
+                        Some(entry) => entry,
+                        None => {
+                            let entry =
+                                inner.build_wire_buffers(device, &vp_wires[..], &vp.draw_depths);
                             pipeline
                                 .wire_buffer_cache
-                                .retain(|_, (w, _)| std::sync::Arc::strong_count(w) > 1);
+                                .insert(vp.wire_content_id, entry.clone());
+                            // Evict entries no slot still holds (only the cache
+                            // references them). An entry drawn by any pane keeps a
+                            // strong count ≥ 2, so this never drops live geometry.
+                            if pipeline.wire_buffer_cache.len() > 16 {
+                                pipeline
+                                    .wire_buffer_cache
+                                    .retain(|_, (w, _)| std::sync::Arc::strong_count(w) > 1);
+                            }
+                            entry
                         }
-                        entry
-                    }
-                };
-                inner.gpu_wires = built.0;
-                inner.wire_handle_index = built.1;
+                    };
+                    inner.gpu_wires = built.0;
+                    inner.wire_handle_index = built.1;
                 } // end !arena_served
                 inner.cached_wire_id = vp.wire_content_id;
                 #[cfg(not(target_arch = "wasm32"))]
@@ -625,6 +720,8 @@ impl shader::Primitive for Primitive {
                         "shared-fullupload"
                     } else if _patched {
                         "arena-patch"
+                    } else if inner.wire_arena_fallback_kind.is_some() {
+                        "arena-hybrid"
                     } else {
                         "arena-build"
                     };
@@ -724,19 +821,25 @@ impl shader::Primitive for Primitive {
                 if inner.wire_arena_id == vp.wire_content_id
                     && inner.wire_cull_key != cull_key
                 {
-                    let mut visible = inner
-                        .wire_arena
-                        .as_ref()
-                        .map(|arena| {
-                            arena.wire_gpus_visible(
-                                view_rot,
-                                eye,
-                                clip_size.width,
-                                clip_size.height,
-                            )
-                        })
-                        .unwrap_or_default();
-                    if let Some(arena) = inner.wire_arena_mesh.as_ref() {
+                    let mut visible = if inner.wire_arena_fallback_kind == Some(false) {
+                        inner.wire_arena_fallback.as_ref().clone()
+                    } else {
+                        inner
+                            .wire_arena
+                            .as_ref()
+                            .map(|arena| {
+                                arena.wire_gpus_visible(
+                                    view_rot,
+                                    eye,
+                                    clip_size.width,
+                                    clip_size.height,
+                                )
+                            })
+                            .unwrap_or_default()
+                    };
+                    if inner.wire_arena_fallback_kind == Some(true) {
+                        visible.extend(inner.wire_arena_fallback.iter().cloned());
+                    } else if let Some(arena) = inner.wire_arena_mesh.as_ref() {
                         visible.extend(arena.wire_gpus_visible(
                             view_rot,
                             eye,

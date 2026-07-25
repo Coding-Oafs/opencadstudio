@@ -163,6 +163,14 @@ pub struct Pipeline {
     /// both patch incrementally. Shares `wire_arena_id`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_mesh: Option<wire_arena::WireArena>,
+    /// Chunked resident buffers for whichever arena partition exceeded one
+    /// GPU buffer. `Some(false)` = regular wires, `Some(true)` = mesh edges.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wire_arena_fallback: std::sync::Arc<Vec<WireGpu>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wire_arena_fallback_kind: Option<bool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wire_arena_fallback_handles: rustc_hash::FxHashSet<acadrust::Handle>,
     /// The Model content id both arenas currently mirror (`u64::MAX` = none).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_id: u64,
@@ -1454,6 +1462,12 @@ impl Pipeline {
             wire_arena: None,
             #[cfg(not(target_arch = "wasm32"))]
             wire_arena_mesh: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            wire_arena_fallback: std::sync::Arc::new(Vec::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            wire_arena_fallback_kind: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            wire_arena_fallback_handles: rustc_hash::FxHashSet::default(),
             #[cfg(not(target_arch = "wasm32"))]
             wire_arena_id: u64::MAX,
             #[cfg(not(target_arch = "wasm32"))]

@@ -865,6 +865,15 @@ pub(super) enum SaveContinuation {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ThumbnailCacheKey {
+    epoch: u64,
+    camera_generation: u64,
+    bg_color: [u32; 4],
+    png: bool,
+    viewport: [u32; 2],
+}
+
 #[derive(Debug, Clone)]
 pub struct SaveOutcome {
     job_id: u64,
@@ -877,6 +886,8 @@ pub struct SaveOutcome {
     set_current_path: bool,
     purpose: SavePurpose,
     continuation: SaveContinuation,
+    thumbnail_key: Option<ThumbnailCacheKey>,
+    refreshed_preview: Option<Option<acadrust::Preview>>,
     result: Result<(), String>,
 }
 

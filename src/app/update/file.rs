@@ -750,24 +750,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 Task::none()
     }
 
-    /// Rasterize the current drawing into the document's DWG preview image, so
-    /// a saved file shows a thumbnail in file browsers and other CAD apps.
-    /// A degenerate/empty drawing clears any stale preview.
-    /// `target` is the version the file is about to be written as — a PNG
-    /// preview (few KB vs a ~180 KB DIB) is only valid from R2013 (AC1027) on.
-    pub(super) fn stamp_thumbnail(&mut self, i: usize, target: acadrust::DxfVersion) {
-        let png = target >= acadrust::DxfVersion::AC1027;
-        // Frame the thumbnail exactly as the model pane shows it now (current
-        // pan/zoom/rotation, visible region only), so pass the pane pixel size.
-        self.tabs[i].scene.document.preview =
-            crate::io::thumbnail::from_scene(&self.tabs[i].scene, png, self.vp_size);
-        // The on-disk thumbnail will change — drop the cached Start-page handle
-        // so it re-reads the updated file on the next refresh.
-        if let Some(p) = self.tabs[i].current_path.clone() {
-            self.recent_thumbs.remove(&p);
-        }
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn prepare_native_save(&mut self, i: usize) {
         self.sync_vport_display(i);
@@ -800,17 +782,29 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let epoch = self.tabs[i].scene.geometry_epoch;
         let revision = self.tabs[i].edit_revision;
         let camera_generation = self.tabs[i].scene.camera_generation;
-        let thumbnail = if purpose == crate::app::SavePurpose::Autosave {
+        let thumbnail_key = (purpose != crate::app::SavePurpose::Autosave).then(|| {
+            let scene = &self.tabs[i].scene;
+            crate::app::ThumbnailCacheKey {
+                epoch,
+                camera_generation,
+                bg_color: scene.bg_color.map(f32::to_bits),
+                png: version >= acadrust::DxfVersion::AC1027,
+                viewport: [self.vp_size.0.to_bits(), self.vp_size.1.to_bits()],
+            }
+        });
+        let thumbnail = if thumbnail_key == self.tabs[i].thumbnail_cache_key {
             None
         } else {
-            let scene = &self.tabs[i].scene;
-            Some((
-                scene.entity_wires(),
-                scene.camera.borrow().clone(),
-                scene.bg_color,
-                version >= acadrust::DxfVersion::AC1027,
-                self.vp_size,
-            ))
+            thumbnail_key.map(|key| {
+                let scene = &self.tabs[i].scene;
+                (
+                    scene.entity_wires(),
+                    scene.camera.borrow().clone(),
+                    scene.bg_color,
+                    key.png,
+                    self.vp_size,
+                )
+            })
         };
         let clone_started = std::time::Instant::now();
         let mut snapshot = self.tabs[i].scene.document.clone();
@@ -833,7 +827,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
         Task::perform(
             async move {
-                let result = std::thread::spawn(move || {
+                let (result, refreshed_preview) = std::thread::spawn(move || {
+                    let mut refreshed_preview = None;
                     if let Some((wires, camera, bg_color, png, viewport)) = thumbnail {
                         let started = std::time::Instant::now();
                         snapshot.preview = crate::io::thumbnail::from_snapshot(
@@ -850,16 +845,18 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                                 wires.len(),
                             );
                         }
+                        refreshed_preview = Some(snapshot.preview.clone());
                     }
-                    crate::io::save_owned_as_version_atomic(
+                    let result = crate::io::save_owned_as_version_atomic(
                         snapshot,
                         &worker_path,
                         version,
                         backup,
-                    )
+                    );
+                    (result, refreshed_preview)
                 })
                 .join()
-                .unwrap_or_else(|_| Err("save worker panicked".to_string()));
+                .unwrap_or_else(|_| (Err("save worker panicked".to_string()), None));
                 crate::app::SaveOutcome {
                     job_id,
                     tab_id,
@@ -871,6 +868,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     set_current_path,
                     purpose,
                     continuation,
+                    thumbnail_key,
+                    refreshed_preview,
                     result,
                 }
             },
@@ -921,6 +920,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let snapshot_is_current = self.tabs[i].scene.geometry_epoch == outcome.epoch
             && self.tabs[i].edit_revision == outcome.revision
             && self.tabs[i].scene.camera_generation == outcome.camera_generation;
+        if snapshot_is_current && outcome.purpose != crate::app::SavePurpose::Autosave {
+            if let Some(preview) = outcome.refreshed_preview {
+                self.tabs[i].scene.document.preview = preview;
+            }
+            self.tabs[i].thumbnail_cache_key = outcome.thumbnail_key;
+        }
         let mut tasks = Vec::new();
         match outcome.purpose {
             crate::app::SavePurpose::Autosave => {

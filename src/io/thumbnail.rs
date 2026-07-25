@@ -1,6 +1,6 @@
 //! DWG preview thumbnails.
 //!
-//! - [`from_scene`] rasterizes the drawing exactly as it is framed on screen —
+//! - [`from_snapshot`] rasterizes the drawing exactly as it is framed on screen —
 //!   the live camera's pan / zoom / rotation, only the currently visible region,
 //!   not the whole extent — into a small [`acadrust::Preview`] embedded on save
 //!   so OCS drawings show a thumbnail in file browsers and other CAD apps.
@@ -14,7 +14,7 @@ use iced::Rectangle;
 use image::{ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
 
-use crate::scene::{Scene, WireModel};
+use crate::scene::WireModel;
 use crate::scene::view::camera::Camera;
 
 /// Longest edge of the generated thumbnail, in pixels.
@@ -30,13 +30,8 @@ const MAX_DIM: u32 = 256;
 /// one colour, so a **PNG** collapses to a few KB where the uncompressed
 /// **BMP/DIB** stays ~180 KB at 256². PNG previews are only valid from R2013
 /// (AC1027) on, so the caller passes `false` for older targets → BMP/DIB.
-pub fn from_scene(scene: &Scene, png: bool, viewport: (f32, f32)) -> Option<Preview> {
-    let wires = scene.entity_wires();
-    let camera = scene.camera.borrow();
-    from_snapshot(&wires, &camera, scene.bg_color, png, viewport)
-}
-
-/// Build a preview from immutable render inputs. Native background saves retain
+///
+/// Native background saves retain
 /// the resident wire `Arc` and a small camera copy, then run the point scan and
 /// image encoding on the save worker instead of blocking the UI thread.
 pub fn from_snapshot(
@@ -64,10 +59,17 @@ pub fn from_snapshot(
         width: cw as f32,
         height: ch as f32,
     };
-    rasterize(wires, cw, ch, bg_color, png, |x, y, z| {
-        camera.project(glam::DVec3::new(x, y, z), bounds)
-            .map(|s| (s.x.round() as i32, s.y.round() as i32))
-    })
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rasterize_snapshot_parallel(wires, camera, bounds, cw, ch, bg_color, png)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        rasterize(wires, cw, ch, bg_color, png, |x, y, z| {
+            camera.project(glam::DVec3::new(x, y, z), bounds)
+                .map(|s| (s.x.round() as i32, s.y.round() as i32))
+        })
+    }
 }
 
 /// Canvas dimensions for an aspect ratio, longest edge = [`MAX_DIM`].
@@ -76,6 +78,145 @@ fn canvas_dims(aspect: f64) -> (u32, u32) {
         (MAX_DIM, ((MAX_DIM as f64 / aspect).round() as u32).clamp(16, MAX_DIM))
     } else {
         (((MAX_DIM as f64 * aspect).round() as u32).clamp(16, MAX_DIM), MAX_DIM)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn rasterize_snapshot_parallel(
+    wires: &[WireModel],
+    camera: &Camera,
+    bounds: Rectangle,
+    cw: u32,
+    ch: u32,
+    bg: [f32; 4],
+    png: bool,
+) -> Option<Preview> {
+    use crate::par::prelude::*;
+
+    let total_segments: usize = wires
+        .iter()
+        .map(|wire| wire.points.len().saturating_sub(1))
+        .sum();
+    if total_segments < 100_000 {
+        return rasterize(wires, cw, ch, bg, png, |x, y, z| {
+            camera.project(glam::DVec3::new(x, y, z), bounds)
+                .map(|point| (point.x.round() as i32, point.y.round() as i32))
+        });
+    }
+
+    let task_count = (rayon::current_num_threads().max(1) * 2).min(total_segments);
+    let target_work = total_segments.div_ceil(task_count).max(1);
+    let mut tasks: Vec<Vec<(usize, usize, usize)>> = Vec::with_capacity(task_count);
+    let mut task = Vec::new();
+    let mut task_work = 0usize;
+    for (wire_index, wire) in wires.iter().enumerate() {
+        let segment_count = wire.points.len().saturating_sub(1);
+        let mut start = 0usize;
+        while start < segment_count {
+            let take = (target_work - task_work).min(segment_count - start);
+            task.push((wire_index, start, start + take));
+            task_work += take;
+            start += take;
+            if task_work == target_work {
+                tasks.push(std::mem::take(&mut task));
+                task_work = 0;
+            }
+        }
+    }
+    if !task.is_empty() {
+        tasks.push(task);
+    }
+
+    let layers: Vec<Vec<u32>> = tasks
+        .par_iter()
+        .map(|task| {
+            let mut pixels = vec![u32::MAX; (cw * ch) as usize];
+            for &(wire_index, start, end) in task {
+                let wire = &wires[wire_index];
+                let color = to_rgb(wire.color);
+                let packed =
+                    color[0] as u32 | (color[1] as u32) << 8 | (color[2] as u32) << 16;
+                let mut previous = projected_wire_point(wire, start, camera, bounds);
+                for index in start + 1..=end {
+                    let current = projected_wire_point(wire, index, camera, bounds);
+                    if let (Some(a), Some(b)) = (previous, current) {
+                        draw_line_layer(&mut pixels, cw, ch, a, b, packed);
+                    }
+                    previous = current;
+                }
+            }
+            pixels
+        })
+        .collect();
+
+    let mut image = RgbImage::from_pixel(cw, ch, Rgb(to_rgb(bg)));
+    for layer in layers {
+        for (pixel, packed) in image.pixels_mut().zip(layer) {
+            if packed != u32::MAX {
+                *pixel = Rgb([
+                    packed as u8,
+                    (packed >> 8) as u8,
+                    (packed >> 16) as u8,
+                ]);
+            }
+        }
+    }
+    encode(image, png)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn projected_wire_point(
+    wire: &WireModel,
+    index: usize,
+    camera: &Camera,
+    bounds: Rectangle,
+) -> Option<(i32, i32)> {
+    let point = wire.points.get(index)?;
+    if !point[0].is_finite() || !point[1].is_finite() {
+        return None;
+    }
+    let (x, y, z) = abs_xyz(wire, index, point);
+    camera
+        .project(glam::DVec3::new(x, y, z), bounds)
+        .map(|screen| (screen.x.round() as i32, screen.y.round() as i32))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn draw_line_layer(
+    pixels: &mut [u32],
+    width: u32,
+    height: u32,
+    (x0, y0): (i32, i32),
+    (x1, y1): (i32, i32),
+    color: u32,
+) {
+    let (width, height) = (width as i32, height as i32);
+    let Some(((mut x0, mut y0), (x1, y1))) =
+        clip_line_to_rect((x0, y0), (x1, y1), width, height)
+    else {
+        return;
+    };
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut error = dx + dy;
+    loop {
+        if x0 >= 0 && x0 < width && y0 >= 0 && y0 < height {
+            pixels[y0 as usize * width as usize + x0 as usize] = color;
+        }
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let twice = 2 * error;
+        if twice >= dy {
+            error += dy;
+            x0 += sx;
+        }
+        if twice <= dx {
+            error += dx;
+            y0 += sy;
+        }
     }
 }
 
@@ -349,7 +490,11 @@ mod tests {
 /// Bresenham line, clipped to the image bounds.
 fn draw_line(img: &mut RgbImage, (x0, y0): (i32, i32), (x1, y1): (i32, i32), col: Rgb<u8>) {
     let (w, h) = (img.width() as i32, img.height() as i32);
-    let (mut x0, mut y0) = (x0, y0);
+    let Some(((mut x0, mut y0), (x1, y1))) =
+        clip_line_to_rect((x0, y0), (x1, y1), w, h)
+    else {
+        return;
+    };
     let dx = (x1 - x0).abs();
     let dy = -(y1 - y0).abs();
     let sx = if x0 < x1 { 1 } else { -1 };
@@ -372,4 +517,48 @@ fn draw_line(img: &mut RgbImage, (x0, y0): (i32, i32), (x1, y1): (i32, i32), col
             y0 += sy;
         }
     }
+}
+
+fn clip_line_to_rect(
+    (x0, y0): (i32, i32),
+    (x1, y1): (i32, i32),
+    width: i32,
+    height: i32,
+) -> Option<((i32, i32), (i32, i32))> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let (x0, y0, x1, y1) = (x0 as f64, y0 as f64, x1 as f64, y1 as f64);
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let mut enter = 0.0f64;
+    let mut leave = 1.0f64;
+    for (p, q) in [
+        (-dx, x0),
+        (dx, width.saturating_sub(1) as f64 - x0),
+        (-dy, y0),
+        (dy, height.saturating_sub(1) as f64 - y0),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let ratio = q / p;
+        if p < 0.0 {
+            enter = enter.max(ratio);
+        } else {
+            leave = leave.min(ratio);
+        }
+        if enter > leave {
+            return None;
+        }
+    }
+    let point = |t: f64| {
+        (
+            (x0 + t * dx).round().clamp(0.0, width.saturating_sub(1) as f64) as i32,
+            (y0 + t * dy).round().clamp(0.0, height.saturating_sub(1) as f64) as i32,
+        )
+    };
+    Some((point(enter), point(leave)))
 }
