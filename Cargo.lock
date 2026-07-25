@@ -75,7 +75,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.4.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=bee1a58#bee1a5857d444a32b67f98e6babc1ad6483f6865"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=59e0224#59e0224c35c294218aae362492c7ed30685b106a"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -93,6 +93,7 @@ dependencies = [
  "ryu",
  "serde",
  "thiserror 1.0.69",
+ "web-time",
 ]
 
 [[package]]

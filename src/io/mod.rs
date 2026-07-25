@@ -477,26 +477,73 @@ pub fn dropped_on_save_count(
     target_version: acadrust::DxfVersion,
     is_dxf: bool,
 ) -> usize {
-    if !is_dxf && target_version == doc.version {
-        return 0;
-    }
     let mut n = doc
         .objects
         .values()
-        .filter(|o| {
-            matches!(
-                o,
-                acadrust::objects::ObjectType::Unknown { raw_dwg_data: Some(_), .. }
-            )
+        .filter(|object| match object {
+            acadrust::objects::ObjectType::Unknown {
+                raw_dxf_codes,
+                raw_dwg_data,
+                raw_dwg_version,
+                ..
+            } => {
+                if is_dxf {
+                    raw_dxf_codes.is_none()
+                } else {
+                    raw_dwg_data.is_none()
+                        || raw_dwg_version.is_some_and(|source| source != target_version)
+                }
+            }
+            acadrust::objects::ObjectType::GeoData(_)
+            | acadrust::objects::ObjectType::VisualStyle(_)
+            | acadrust::objects::ObjectType::Material(_)
+            | acadrust::objects::ObjectType::TableStyle(_) => !is_dxf,
+            _ => false,
         })
         .count();
     for e in doc.entities() {
-        if matches!(
-            e,
-            acadrust::EntityType::Unknown(_)
-                | acadrust::EntityType::SectionSymbol(_)
-                | acadrust::EntityType::ViewBorder(_)
-        ) {
+        let dropped = match e {
+            acadrust::EntityType::Unknown(entity) => {
+                if is_dxf {
+                    entity.raw_dxf_codes.is_none()
+                } else {
+                    entity.raw_dwg_data.is_none()
+                        || entity
+                            .dwg_source_version
+                            .is_some_and(|source| source != target_version)
+                }
+            }
+            acadrust::EntityType::Surface(entity) => {
+                is_dxf
+                    || entity.raw_dwg_data.is_none()
+                    || entity
+                        .dwg_source_version
+                        .is_some_and(|source| source != target_version)
+            }
+            acadrust::EntityType::Light(entity) => {
+                is_dxf
+                    || entity.raw_dwg_data.is_none()
+                    || entity
+                        .dwg_source_version
+                        .is_some_and(|source| source != target_version)
+            }
+            acadrust::EntityType::SectionSymbol(entity) => {
+                is_dxf
+                    || entity.raw_dwg_data.is_none()
+                    || entity
+                        .dwg_source_version
+                        .is_some_and(|source| source != target_version)
+            }
+            acadrust::EntityType::ViewBorder(entity) => {
+                is_dxf
+                    || entity.raw_dwg_data.is_none()
+                    || entity
+                        .dwg_source_version
+                        .is_some_and(|source| source != target_version)
+            }
+            _ => false,
+        };
+        if dropped {
             n += 1;
         }
     }
