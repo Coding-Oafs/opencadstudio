@@ -12,12 +12,13 @@
 // editing never mistakes them for closed topology.
 
 use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashMap;
 use std::f64::consts::TAU;
 
 use acadrust::entities::acis::types::Sense;
 use acadrust::entities::acis::{
     SabReader, SatCoedge, SatConeSurface, SatDocument, SatEdge, SatEllipseCurve, SatFace,
-    SatIntCurve, SatLoop, SatPlaneSurface, SatPoint, SatPointer, SatSphereSurface, SatToken,
+    SatIntCurve, SatLoop, SatPlaneSurface, SatPoint, SatPointer, SatSphereSurface,
     SatTorusSurface, SatVertex,
 };
 use acadrust::entities::{Body, Region, Solid3D};
@@ -127,9 +128,48 @@ fn tessellate_sat(
     let mut verts: Vec<[f64; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let face_materials: FxHashMap<i32, acadrust::Handle> = sat
+        .records
+        .iter()
+        .filter(|record| record.entity_type == "material-adesk-attrib")
+        .filter_map(|record| {
+            let owner = record.token_pointer(2)?.0;
+            let handle = record.token(3)?.as_integer()?;
+            (owner >= 0 && handle > 0)
+                .then(|| (owner, acadrust::Handle::new(handle as u64)))
+        })
+        .collect();
+    let face_colors: FxHashMap<i32, [f32; 4]> = sat
+        .records
+        .iter()
+        .filter(|record| record.entity_type == "color-adesk-attrib")
+        .filter_map(|record| {
+            let owner = record.token_pointer(2)?.0;
+            let value = record.token(3)?.as_integer()?;
+            let color_value = if (1..=255).contains(&value) {
+                Some(acadrust::Color::from_index(value as i16))
+            } else if value > 257 {
+                Some(acadrust::Color::from_true_color_value(value as i32))
+            } else {
+                None
+            }?;
+            let mut rgba =
+                crate::scene::convert::tess_util::aci_to_rgba(&color_value);
+            rgba[3] = color[3];
+            Some((owner, rgba))
+        })
+        .collect();
+    let mut triangle_material_handles: Vec<Option<acadrust::Handle>> = Vec::new();
+    let mut triangle_colors: Vec<Option<[f32; 4]>> = Vec::new();
+    let face_record_indices: Vec<i32> = sat
+        .records
+        .iter()
+        .filter(|record| record.is_a("face"))
+        .map(|record| record.index)
+        .collect();
     let mut complete = true;
 
-    for face in sat.faces() {
+    for (face, face_record_index) in sat.faces().into_iter().zip(face_record_indices) {
         let surf_ptr = face.surface();
         let Some(surf_rec) = sat.resolve(surf_ptr) else {
             complete = false;
@@ -189,7 +229,7 @@ fn tessellate_sat(
                     );
                 }
             }
-            "spline-surface" => {
+            "spline-surface" | "meshsurf-surface" | "bs3-surface" => {
                 crate::scene::convert::spline_tess::tess_spline_face(
                     sat,
                     &face,
@@ -203,13 +243,31 @@ fn tessellate_sat(
         }
         if indices.len() == before {
             complete = false;
+        } else {
+            let material = face_materials.get(&face_record_index).copied();
+            triangle_material_handles.extend(
+                std::iter::repeat(material).take((indices.len() - before) / 3),
+            );
+            let face_color = face_colors.get(&face_record_index).copied();
+            triangle_colors.extend(
+                std::iter::repeat(face_color).take((indices.len() - before) / 3),
+            );
         }
     }
     if indices.is_empty() {
         return None;
     }
     Some((
-        finalize_mesh(name, verts, normals, indices, color, xform),
+        finalize_mesh(
+            name,
+            verts,
+            normals,
+            indices,
+            triangle_material_handles,
+            triangle_colors,
+            color,
+            xform,
+        ),
         complete,
     ))
 }
@@ -937,34 +995,43 @@ fn tessellate_sat_lods(
 /// record (`<3×3> <tx ty tz> <scale> rotate reflect shear`). `None` when the
 /// document has no transform (treated as identity).
 pub(crate) fn body_transform(sat: &SatDocument) -> Option<([f64; 9], [f64; 3], f64)> {
-    let t = sat.records.iter().find(|r| r.entity_type == "transform")?;
-    // The transform record's numeric payload is its first 13 numeric values:
-    // 3×3 matrix, translation, scale. A leading book-keeping pointer (`$-1`)
-    // and the trailing rotate/reflect/shear flags aren't numeric, so
-    // collecting numeric tokens skips them — reading by raw token index would
-    // be thrown off by the leading pointer. SAT text tokenizes the payload as
-    // 13 individual floats, but the SAB reader groups the matrix rows and the
-    // translation into `Position` triplets, so those must be flattened too.
-    let mut v: Vec<f64> = Vec::with_capacity(13);
-    for tok in &t.tokens {
-        if v.len() >= 13 {
+    let transform = sat
+        .records
+        .iter()
+        .find(|record| record.entity_type == "transform")?;
+    let mut values = Vec::with_capacity(13);
+    for token in &transform.tokens {
+        if values.len() >= 13 {
             break;
         }
-        match tok {
-            SatToken::Position(x, y, z) => v.extend([*x, *y, *z]),
-            _ => {
-                if let Some(f) = tok.as_float() {
-                    v.push(f);
+        if let Some((components, len)) = token.coordinate_components() {
+            values.extend_from_slice(&components[..len]);
+        } else if let Some(value) = token.as_float() {
+            values.push(value);
+        } else if let Some(text) = token.as_string() {
+            // Some ASM SAB bodies pack the complete SAT transform payload in
+            // one long-string token instead of individual numeric tokens.
+            for word in text.split_ascii_whitespace() {
+                let Ok(value) = word.parse::<f64>() else {
+                    break;
+                };
+                values.push(value);
+                if values.len() >= 13 {
+                    break;
                 }
             }
         }
     }
-    if v.len() < 13 {
-        return None;
-    }
-    let m = [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]];
-    let tr = [v[9], v[10], v[11]];
-    Some((m, tr, v[12]))
+    (values.len() >= 13).then(|| {
+        (
+            [
+                values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+                values[7], values[8],
+            ],
+            [values[9], values[10], values[11]],
+            values[12],
+        )
+    })
 }
 
 /// Apply a body placement transform to a mesh. ACIS treats points as row
@@ -985,6 +1052,8 @@ pub(crate) fn finalize_mesh(
     verts: Vec<[f64; 3]>,
     normals: Vec<[f32; 3]>,
     indices: Vec<u32>,
+    triangle_material_handles: Vec<Option<acadrust::Handle>>,
+    triangle_colors: Vec<Option<[f32; 4]>>,
     color: [f32; 4],
     xform: Option<([f64; 9], [f64; 3], f64)>,
 ) -> MeshModel {
@@ -1031,6 +1100,8 @@ pub(crate) fn finalize_mesh(
         verts_low: lo,
         normals,
         indices,
+        triangle_material_handles,
+        triangle_colors,
         color,
         selected: false,
     }
@@ -1088,6 +1159,76 @@ fn parse_acis(
     None
 }
 
+fn remap_acis_material_bindings(
+    set: &mut MeshLodSet,
+    acis: &acadrust::entities::AcisData,
+) {
+    if acis.materials.is_empty() {
+        return;
+    }
+    for lod in &mut set.lods {
+        for handle in lod.triangle_material_handles.iter_mut().flatten() {
+            let reference = handle.value() as i32;
+            if let Some(material_handle) = acis.materials.iter().find_map(|binding| {
+                (binding.absolute_reference == reference || binding.array_index == reference)
+                    .then_some(binding.material_handle)
+                    .flatten()
+            }) {
+                *handle = material_handle;
+            }
+        }
+    }
+}
+
+fn attach_stored_silhouettes(
+    set: &mut MeshLodSet,
+    silhouettes: &[acadrust::entities::Silhouette],
+) {
+    use crate::scene::model::mesh_model::StoredSilhouette;
+    set.stored_silhouettes = silhouettes
+        .iter()
+        .filter_map(|silhouette| {
+            let mut edge_verts = Vec::new();
+            let mut edge_verts_low = Vec::new();
+            for wire in &silhouette.wires {
+                for segment in wire.points.windows(2) {
+                    for point in segment {
+                        let point = crate::entities::solid3d::wire_point(wire, point);
+                        let high = [point.x as f32, point.y as f32, point.z as f32];
+                        edge_verts.push(high);
+                        edge_verts_low.push([
+                            (point.x - high[0] as f64) as f32,
+                            (point.y - high[1] as f64) as f32,
+                            (point.z - high[2] as f64) as f32,
+                        ]);
+                    }
+                }
+            }
+            (!edge_verts.is_empty()).then_some(StoredSilhouette {
+                viewport_id: silhouette.viewport_id,
+                view_direction: [
+                    silhouette.view_direction.x as f32,
+                    silhouette.view_direction.y as f32,
+                    silhouette.view_direction.z as f32,
+                ],
+                up_vector: [
+                    silhouette.up_vector.x as f32,
+                    silhouette.up_vector.y as f32,
+                    silhouette.up_vector.z as f32,
+                ],
+                target: [
+                    silhouette.target.x as f32,
+                    silhouette.target.y as f32,
+                    silhouette.target.z as f32,
+                ],
+                is_perspective: silhouette.is_perspective,
+                edge_verts,
+                edge_verts_low,
+            })
+        })
+        .collect();
+}
+
 /// Tessellate a `Region` entity (2D planar ACIS body) at all three LOD levels.
 pub fn tessellate_region(
     region: &Region,
@@ -1101,7 +1242,10 @@ pub fn tessellate_region(
         &region.acis_data.sab_data,
     )?;
     let name = region.common.handle.value().to_string();
-    tessellate_acis(&sat, name, color, facet_res, isolines)
+    let mut set = tessellate_acis(&sat, name, color, facet_res, isolines)?;
+    remap_acis_material_bindings(&mut set, &region.acis_data);
+    attach_stored_silhouettes(&mut set, &region.silhouettes);
+    Some(set)
 }
 
 /// Tessellate a `Body` entity (3D ACIS body) at all three LOD levels.
@@ -1117,7 +1261,10 @@ pub fn tessellate_body(
         &body.acis_data.sab_data,
     )?;
     let name = body.common.handle.value().to_string();
-    tessellate_acis(&sat, name, color, facet_res, isolines)
+    let mut set = tessellate_acis(&sat, name, color, facet_res, isolines)?;
+    remap_acis_material_bindings(&mut set, &body.acis_data);
+    attach_stored_silhouettes(&mut set, &body.silhouettes);
+    Some(set)
 }
 
 /// Tessellate a `Surface` entity (ACAD_SURFACE family) at all three LOD
@@ -1136,7 +1283,12 @@ pub fn tessellate_surface(
         &surface.acis_data.sab_data,
     )?;
     let name = surface.common.handle.value().to_string();
-    tessellate_acis(&sat, name, color, facet_res, isolines)
+    let surface_isolines = usize::from(surface.u_isolines.max(surface.v_isolines).max(0) as u16);
+    let mut set =
+        tessellate_acis(&sat, name, color, facet_res, surface_isolines.max(isolines))?;
+    remap_acis_material_bindings(&mut set, &surface.acis_data);
+    attach_stored_silhouettes(&mut set, &surface.silhouettes);
+    Some(set)
 }
 
 /// Tessellate a `Solid3D` entity at all three LOD levels.
@@ -1156,7 +1308,10 @@ pub fn tessellate_solid3d(
         &solid.acis_data.sab_data,
     )?;
     let name = solid.common.handle.value().to_string();
-    tessellate_acis(&sat, name, color, facet_res, isolines)
+    let mut set = tessellate_acis(&sat, name, color, facet_res, isolines)?;
+    remap_acis_material_bindings(&mut set, &solid.acis_data);
+    attach_stored_silhouettes(&mut set, &solid.silhouettes);
+    Some(set)
 }
 
 // ── Topology helpers ──────────────────────────────────────────────────────────

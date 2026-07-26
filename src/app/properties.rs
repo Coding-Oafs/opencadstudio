@@ -10,6 +10,50 @@ use acadrust::{EntityType, Handle};
 /// shows a count-only summary instead. Bulk edits still go through the ribbon.
 const MAX_PROP_AGGREGATE: usize = 2_000;
 
+fn material_color_text(color: &acadrust::objects::MaterialColor) -> String {
+    let rgb = color
+        .rgb
+        .map(|value| format!("#{:06X}", value as u32 & 0x00ff_ffff))
+        .unwrap_or_else(|| "Object".to_string());
+    format!("{rgb}, factor {:.3}", color.factor)
+}
+
+fn material_map_text(map: &acadrust::objects::MaterialMap) -> String {
+    let source = match map.source {
+        1 => {
+            if map.file_name.trim().is_empty() {
+                "File".to_string()
+            } else {
+                map.file_name.clone()
+            }
+        }
+        2 => format!(
+            "Procedural {}",
+            map.texture.as_ref().map_or(0, |texture| texture.mode)
+        ),
+        _ => "None".to_string(),
+    };
+    format!(
+        "{source}; blend {:.3}; projection {}; tiling {}; auto {}",
+        map.blend_factor, map.projection, map.tiling, map.auto_transform
+    )
+}
+
+fn visual_style_properties_text(style: &acadrust::objects::VisualStyle) -> String {
+    style
+        .properties
+        .iter()
+        .enumerate()
+        .map(|(index, property)| {
+            format!(
+                "{}: {:?} (enabled {})",
+                index, property.value, property.enabled
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl OpenCADStudio {
     /// Rebuild the PropertiesPanel from the current entity selection.
     /// Preserves UI state (open pickers, edit buffer) across refreshes.
@@ -93,7 +137,12 @@ impl OpenCADStudio {
             let mut panel = match selected.len() {
                 0 => ui::PropertiesPanel::empty(),
                 1 => {
-                    let (handle, entity) = selected[0];
+                    let (handle, source_entity) = selected[0];
+                    let contextual = crate::scene::annotative::entity_for_active_context(
+                        &self.tabs[i].scene.document,
+                        source_entity,
+                    );
+                    let entity = contextual.as_ref();
                     let group_names = self.tabs[i].scene.group_names_for_entity(handle);
                     let mut sections =
                         dispatch::properties_sectioned(handle, entity, &text_style_names);
@@ -139,6 +188,329 @@ impl OpenCADStudio {
                                     options: options.clone(),
                                 };
                             }
+                        }
+                        let effective_handle = match common.material_flags {
+                            3 => common.material_handle,
+                            0 => doc
+                                .layers
+                                .get(&common.layer)
+                                .map(|layer| layer.material)
+                                .filter(|handle| handle.is_valid()),
+                            _ => None,
+                        };
+                        if let Some(acadrust::objects::ObjectType::Material(material)) =
+                            effective_handle.and_then(|handle| doc.objects.get(&handle))
+                        {
+                            use crate::entities::common::ro_prop;
+                            sections.push(crate::scene::model::object::PropSection {
+                                title: "Material Details".to_string(),
+                                props: vec![
+                                    ro_prop("Name", "mat_name", material.name.clone()),
+                                    ro_prop(
+                                        "Description",
+                                        "mat_description",
+                                        material.description.clone(),
+                                    ),
+                                    ro_prop(
+                                        "Ambient",
+                                        "mat_ambient",
+                                        material_color_text(&material.ambient_color),
+                                    ),
+                                    ro_prop(
+                                        "Diffuse",
+                                        "mat_diffuse",
+                                        material_color_text(&material.diffuse_color),
+                                    ),
+                                    ro_prop(
+                                        "Specular",
+                                        "mat_specular",
+                                        material_color_text(&material.specular_color),
+                                    ),
+                                    ro_prop(
+                                        "Gloss",
+                                        "mat_gloss",
+                                        format!("{:.3}", material.specular_gloss_factor),
+                                    ),
+                                    ro_prop(
+                                        "Opacity",
+                                        "mat_opacity",
+                                        format!("{:.3}", material.opacity_percent),
+                                    ),
+                                    ro_prop(
+                                        "Reflectivity",
+                                        "mat_reflectivity",
+                                        format!("{:.3}", material.reflectivity),
+                                    ),
+                                    ro_prop(
+                                        "Translucence",
+                                        "mat_translucence",
+                                        format!("{:.3}", material.translucence),
+                                    ),
+                                    ro_prop(
+                                        "Refraction",
+                                        "mat_refraction",
+                                        format!("{:.3}", material.refraction_index),
+                                    ),
+                                    ro_prop(
+                                        "Self Illumination",
+                                        "mat_self_illumination",
+                                        format!("{:.3}", material.self_illumination),
+                                    ),
+                                    ro_prop(
+                                        "Luminance",
+                                        "mat_luminance",
+                                        format!(
+                                            "{:.3} (mode {})",
+                                            material.luminance, material.luminance_mode
+                                        ),
+                                    ),
+                                    ro_prop(
+                                        "Diffuse Map",
+                                        "mat_diffuse_map",
+                                        material_map_text(&material.diffuse_map),
+                                    ),
+                                    ro_prop(
+                                        "Specular Map",
+                                        "mat_specular_map",
+                                        material_map_text(&material.specular_map),
+                                    ),
+                                    ro_prop(
+                                        "Reflection Map",
+                                        "mat_reflection_map",
+                                        material_map_text(&material.reflection_map),
+                                    ),
+                                    ro_prop(
+                                        "Opacity Map",
+                                        "mat_opacity_map",
+                                        material_map_text(&material.opacity_map),
+                                    ),
+                                    ro_prop(
+                                        "Bump Map",
+                                        "mat_bump_map",
+                                        material_map_text(&material.bump_map),
+                                    ),
+                                    ro_prop(
+                                        "Refraction Map",
+                                        "mat_refraction_map",
+                                        material_map_text(&material.refraction_map),
+                                    ),
+                                    ro_prop(
+                                        "Normal Map",
+                                        "mat_normal_map",
+                                        material_map_text(&material.normal_map),
+                                    ),
+                                    ro_prop(
+                                        "Render Flags",
+                                        "mat_render_flags",
+                                        format!(
+                                            "illumination {}; channels {}; mode {}; two-sided {}",
+                                            material.illumination_model,
+                                            material.channel_flags,
+                                            material.mode,
+                                            material.two_sided_material
+                                        ),
+                                    ),
+                                    ro_prop(
+                                        "Advanced",
+                                        "mat_advanced",
+                                        format!(
+                                            "normal {:.3}; bump {:.3}; reflect {:.3}; transmit {:.3}",
+                                            material.normal_map_strength,
+                                            material.indirect_bump_scale,
+                                            material.reflectance_scale,
+                                            material.transmittance_scale
+                                        ),
+                                    ),
+                                ],
+                            });
+                        }
+                    }
+
+                    {
+                        let doc = &self.tabs[i].scene.document;
+                        let common = entity.common();
+                        if let Some(acadrust::objects::ObjectType::BookColor(book)) = common
+                            .color_book_handle
+                            .filter(|handle| handle.is_valid())
+                            .and_then(|handle| doc.objects.get(&handle))
+                        {
+                            for section in sections.iter_mut() {
+                                if let Some(row) =
+                                    section.props.iter_mut().find(|row| row.field == "color")
+                                {
+                                    row.value =
+                                        crate::scene::model::object::PropValue::ColorChoice(
+                                            book.color,
+                                        );
+                                }
+                            }
+                            use crate::entities::common::ro_prop;
+                            sections.push(crate::scene::model::object::PropSection {
+                                title: "Color Book".to_string(),
+                                props: vec![
+                                    ro_prop("Book", "book_color_book", book.book_name.clone()),
+                                    ro_prop(
+                                        "Color Name",
+                                        "book_color_name",
+                                        book.color_name.clone(),
+                                    ),
+                                    ro_prop(
+                                        "Color",
+                                        "book_color_value",
+                                        format!("{:?}", book.color),
+                                    ),
+                                ],
+                            });
+                        }
+
+                        let style_handles = [
+                            ("Full", common.full_visual_style_handle),
+                            ("Face", common.face_visual_style_handle),
+                            ("Edge", common.edge_visual_style_handle),
+                        ];
+                        for (scope, handle) in style_handles {
+                            let Some((handle, style)) = handle
+                                .filter(|handle| handle.is_valid())
+                                .and_then(|handle| {
+                                    doc.objects.get(&handle).and_then(|object| match object {
+                                        acadrust::objects::ObjectType::VisualStyle(style) => {
+                                            Some((handle, style))
+                                        }
+                                        _ => None,
+                                    })
+                                })
+                            else {
+                                continue;
+                            };
+                            use crate::entities::common::ro_prop;
+                            sections.push(crate::scene::model::object::PropSection {
+                                title: format!("{scope} Visual Style"),
+                                props: vec![
+                                    ro_prop(
+                                        "Handle",
+                                        "vs_handle",
+                                        format!("{:X}", handle.value()),
+                                    ),
+                                    ro_prop(
+                                        "Description",
+                                        "vs_description",
+                                        style.description.clone(),
+                                    ),
+                                    ro_prop(
+                                        "Type",
+                                        "vs_type",
+                                        style.style_type.to_string(),
+                                    ),
+                                    ro_prop(
+                                        "Face",
+                                        "vs_face",
+                                        format!(
+                                            "lighting {}; quality {}; color {}; modifiers {}",
+                                            style.face_lighting_model,
+                                            style.face_lighting_quality,
+                                            style.face_color_mode,
+                                            style.face_modifier
+                                        ),
+                                    ),
+                                    ro_prop(
+                                        "Edges",
+                                        "vs_edges",
+                                        format!(
+                                            "model {}; style {}",
+                                            style.edge_model, style.edge_style
+                                        ),
+                                    ),
+                                    ro_prop(
+                                        "Extended Lighting",
+                                        "vs_extended_lighting",
+                                        style.extended_lighting_model.to_string(),
+                                    ),
+                                    ro_prop(
+                                        "Internal",
+                                        "vs_internal",
+                                        style.internal_use_only.to_string(),
+                                    ),
+                                    ro_prop(
+                                        "Property Bag",
+                                        "vs_properties",
+                                        visual_style_properties_text(style),
+                                    ),
+                                ],
+                            });
+                        }
+                    }
+
+                    if matches!(
+                        entity,
+                        acadrust::EntityType::Solid3D(_)
+                            | acadrust::EntityType::Region(_)
+                            | acadrust::EntityType::Body(_)
+                            | acadrust::EntityType::Surface(_)
+                            | acadrust::EntityType::Mesh(_)
+                            | acadrust::EntityType::PolygonMesh(_)
+                            | acadrust::EntityType::PolyfaceMesh(_)
+                    ) {
+                        if let Some(mesh) = self.tabs[i]
+                            .scene
+                            .meshes
+                            .get(&handle)
+                            .or_else(|| self.tabs[i].scene.block_meshes.get(&handle))
+                        {
+                            use crate::entities::common::ro_prop;
+                            let metrics = mesh.metrics;
+                            let mut props = vec![
+                                ro_prop(
+                                    "Vertices",
+                                    "mesh_vertices",
+                                    metrics.vertices.to_string(),
+                                ),
+                                ro_prop(
+                                    "Triangles",
+                                    "mesh_triangles",
+                                    metrics.triangles.to_string(),
+                                ),
+                                ro_prop(
+                                    "Surface Area",
+                                    "mesh_surface_area",
+                                    format!("{:.6}", metrics.surface_area),
+                                ),
+                                ro_prop(
+                                    "Centroid",
+                                    "mesh_centroid",
+                                    format!(
+                                        "{:.6}, {:.6}, {:.6}",
+                                        metrics.centroid[0],
+                                        metrics.centroid[1],
+                                        metrics.centroid[2]
+                                    ),
+                                ),
+                                ro_prop(
+                                    "Tessellation",
+                                    "mesh_complete",
+                                    if mesh.complete { "Complete" } else { "Partial" },
+                                ),
+                            ];
+                            if mesh.complete
+                                && matches!(
+                                    entity,
+                                    acadrust::EntityType::Solid3D(_)
+                                        | acadrust::EntityType::Region(_)
+                                        | acadrust::EntityType::Body(_)
+                                )
+                            {
+                                props.insert(
+                                    3,
+                                    ro_prop(
+                                        "Volume",
+                                        "mesh_volume",
+                                        format!("{:.6}", metrics.volume),
+                                    ),
+                                );
+                            }
+                            sections.push(crate::scene::model::object::PropSection {
+                                title: "Mass Properties".to_string(),
+                                props,
+                            });
                         }
                     }
 
@@ -1090,7 +1462,11 @@ impl OpenCADStudio {
             let selected = self.tabs[i].scene.selected_entities();
             if selected.len() == 1 {
                 let (handle, entity) = selected[0];
-                let grips = dispatch::grips(entity)
+                let contextual = crate::scene::annotative::entity_for_active_context(
+                    &self.tabs[i].scene.document,
+                    entity,
+                );
+                let grips = dispatch::grips(contextual.as_ref())
                     .into_iter()
                     .map(|mut g| {
                         // Subtract in f64: at UTM magnitudes an f32 cast before
@@ -1124,11 +1500,20 @@ impl OpenCADStudio {
     }
 
     pub(super) fn invalidate_property_targets(&mut self, i: usize, handles: &[Handle]) {
+        let mut context_object_changed = false;
         for &handle in handles {
+            context_object_changed |=
+                crate::scene::annotative::sync_active_context_from_entity(
+                    &mut self.tabs[i].scene.document,
+                    handle,
+                );
             // Hatch / SOLID fills render from prebuilt cached models; rebuild
             // them or pattern edits (scale, background, …) stay invisible
             // (#415).
             self.tabs[i].scene.refresh_fill_model(handle);
+        }
+        if context_object_changed {
+            self.tabs[i].scene.poison_undo_recording();
         }
         // Solid (ACIS) meshes bake their colour into the mesh, so a colour /
         // layer change needs an explicit recolour — re-tessellating wires

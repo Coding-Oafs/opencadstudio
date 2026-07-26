@@ -491,6 +491,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 };
 
                 self.tabs[i].current_path = Some(path.clone());
+                self.tabs[i].scene.material_base_dir =
+                    path.parent().map(std::path::Path::to_path_buf);
                 self.tabs[i].scene.document = doc;
                 // A file saved without the built-in Standard styles (foreign
                 // or damaged) gets them re-seeded so nothing dangles (#366).

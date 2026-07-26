@@ -768,7 +768,7 @@ impl shader::Primitive for Primitive {
                 .as_ref()
                 .map_or(true, |source| !Arc::ptr_eq(source, &vp.meshes))
             {
-                inner.upload_mesh_batch(device, &vp.meshes[..]);
+                inner.upload_mesh_batch(device, queue, &vp.meshes[..]);
                 inner.cached_mesh_source = Some(Arc::clone(&vp.meshes));
                 inner.cached_mesh_batch_epoch = vp.geometry_epoch;
             }
@@ -1132,7 +1132,16 @@ pub(in crate::scene) fn render_style_for(
 ) -> ([f32; 4], f32, [f32; 8], f32, u8) {
     let layer_name = &e.common().layer;
     let (entity_color, aci) = {
-        let ec = &e.common().color;
+        let common = e.common();
+        let book_color = common
+            .color_book_handle
+            .filter(|handle| handle.is_valid())
+            .and_then(|handle| document.objects.get(&handle))
+            .and_then(|object| match object {
+                acadrust::objects::ObjectType::BookColor(book) => Some(&book.color),
+                _ => None,
+            });
+        let ec = book_color.unwrap_or(&common.color);
         let resolved = if *ec == AcadColor::ByLayer {
             document
                 .layers
@@ -1174,6 +1183,14 @@ pub(in crate::scene) fn render_style_for(
     };
 
     (entity_color, pattern_length, pattern, line_weight_px, aci)
+}
+
+pub(crate) fn has_resolved_book_color(document: &CadDocument, e: &EntityType) -> bool {
+    e.common()
+        .color_book_handle
+        .filter(|handle| handle.is_valid())
+        .and_then(|handle| document.objects.get(&handle))
+        .is_some_and(|object| matches!(object, acadrust::objects::ObjectType::BookColor(_)))
 }
 
 /// Resolved render style used as the inheritance source for a block child's
@@ -1254,9 +1271,10 @@ pub(crate) fn render_style_for_block_sub(
     let common = e.common();
     let on_l0 = is_effective_layer_zero(&common.layer);
 
-    let final_color = if common.color == AcadColor::ByBlock {
+    let has_book_color = has_resolved_book_color(document, e);
+    let final_color = if !has_book_color && common.color == AcadColor::ByBlock {
         insert_color
-    } else if on_l0 && common.color == AcadColor::ByLayer {
+    } else if !has_book_color && on_l0 && common.color == AcadColor::ByLayer {
         // Inherit the insert layer's RGB but keep the child's own transparency.
         [l0.color[0], l0.color[1], l0.color[2], color[3]]
     } else {

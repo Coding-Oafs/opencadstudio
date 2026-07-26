@@ -310,9 +310,12 @@ impl Scene {
         };
         let mut models: Vec<HatchModel> = Vec::new();
         for (&handle, model) in self.hatches.iter() {
-            let Some(entity) = self.document.get_entity(handle) else {
+            let Some(source) = self.document.get_entity(handle) else {
                 continue;
             };
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, source);
+            let entity = contextual.as_ref();
             let c = entity.common();
             if c.invisible || layer_hidden(&c.layer) {
                 continue;
@@ -320,7 +323,19 @@ impl Scene {
             if !self.belongs_to_visible_block(handle, c.owner_handle, layout_block) {
                 continue;
             }
-            let mut m = model.clone();
+            let mut m = match entity {
+                EntityType::Hatch(dxf)
+                    if crate::scene::annotative::active_object_context(
+                        &self.document,
+                        handle,
+                    )
+                    .is_some() =>
+                {
+                    Self::hatch_model_from_dxf(dxf, model.color)
+                        .unwrap_or_else(|| model.clone())
+                }
+                _ => model.clone(),
+            };
             m.color = self.render_style(entity).0;
             if let EntityType::Hatch(dxf) = entity {
                 // Only re-apply pattern_scale/angle for catalog-derived patterns

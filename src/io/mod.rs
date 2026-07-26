@@ -172,7 +172,11 @@ pub async fn open_path_with_phase(
                         10000,
                     );
                 };
-                let mut caches = crate::scene::build_derived_caches_with_progress(&doc, &cache_progress);
+                let mut caches = crate::scene::build_derived_caches_with_progress(
+                    &doc,
+                    &cache_progress,
+                    path2.parent(),
+                );
         caches.timings = crate::scene::OpenTimings {
             parse_ms,
             purge_ms,

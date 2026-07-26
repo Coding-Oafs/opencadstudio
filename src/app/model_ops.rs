@@ -671,6 +671,8 @@ impl super::OpenCADStudio {
             verts_low,
             normals,
             indices,
+            triangle_material_handles: Vec::new(),
+            triangle_colors: Vec::new(),
             color,
             selected: false,
         };

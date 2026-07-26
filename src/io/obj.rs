@@ -106,6 +106,8 @@ pub fn parse_obj(src: &str, color: [f32; 4]) -> Option<MeshModel> {
         verts_low: Vec::new(),
         normals: norms,
         indices,
+        triangle_material_handles: Vec::new(),
+        triangle_colors: Vec::new(),
         color,
         selected: false,
     })

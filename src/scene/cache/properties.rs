@@ -124,13 +124,41 @@ pub fn visualization_section(entity: &EntityType) -> Option<PropSection> {
         1 => "ByBlock",
         _ => "Custom",
     };
+    let mut props = vec![Property {
+        label: "Material".into(),
+        field: "material",
+        value: PropValue::ReadOnly(material.into()),
+    }];
+    let handle_text = |handle: Option<acadrust::Handle>| {
+        handle
+            .filter(|handle| handle.is_valid())
+            .map_or_else(|| "None".to_string(), |handle| format!("{:X}", handle.value()))
+    };
+    props.extend([
+        Property {
+            label: "Visual style".into(),
+            field: "visual_style",
+            value: PropValue::ReadOnly(handle_text(common.full_visual_style_handle)),
+        },
+        Property {
+            label: "Face style".into(),
+            field: "face_visual_style",
+            value: PropValue::ReadOnly(handle_text(common.face_visual_style_handle)),
+        },
+        Property {
+            label: "Edge style".into(),
+            field: "edge_visual_style",
+            value: PropValue::ReadOnly(handle_text(common.edge_visual_style_handle)),
+        },
+        Property {
+            label: "Shadow flags".into(),
+            field: "shadow_flags",
+            value: PropValue::ReadOnly(common.shadow_flags.to_string()),
+        },
+    ]);
     Some(PropSection {
         title: "3D Visualization".into(),
-        props: vec![Property {
-            label: "Material".into(),
-            field: "material",
-            value: PropValue::ReadOnly(material.into()),
-        }],
+        props,
     })
 }
 
@@ -144,4 +172,3 @@ pub fn fallback_properties(_handle: Handle, entity: &EntityType) -> PropSection 
         }],
     }
 }
-

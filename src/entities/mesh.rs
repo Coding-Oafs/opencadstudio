@@ -2,10 +2,10 @@ use acadrust::entities::{mesh::Mesh, polygon_mesh::PolygonMesh, Face3D, Polyface
 use glam::Vec3;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{ro_prop as ro, square_grip};
+use crate::entities::common::{parse_f64, ro_prop as ro, square_grip};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
-use crate::scene::model::object::{GripApply, GripDef, PropSection};
+use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
 
 /// Triangulate a planar (possibly concave) polygon into a flat triangle-soup
@@ -319,63 +319,13 @@ impl TruckConvertible for PolygonMesh {
             return None;
         }
 
-        let closed_m = self
-            .flags
-            .contains(acadrust::entities::PolygonMeshFlags::CLOSED_M);
-        let closed_n = self
-            .flags
-            .contains(acadrust::entities::PolygonMeshFlags::CLOSED_N);
-
-        let pt = |i: usize, j: usize| -> [f64; 3] {
-            let v = &self.vertices[i * n + j];
-            [v.location.x, v.location.y, v.location.z]
-        };
-
-        let mut pts: Vec<[f64; 3]> = Vec::new();
-        let mut fill_tris: Vec<[f64; 3]> = Vec::new();
-
-        // Rows (M direction).
-        for i in 0..m {
-            pts.push([f64::NAN; 3]);
-            for j in 0..n {
-                pts.push(pt(i, j));
-            }
-            if closed_n {
-                pts.push(pt(i, 0));
-            }
-        }
-
-        // Columns (N direction).
-        for j in 0..n {
-            pts.push([f64::NAN; 3]);
-            for i in 0..m {
-                pts.push(pt(i, j));
-            }
-            if closed_m {
-                pts.push(pt(0, j));
-            }
-        }
-
-        // Fill: triangulate each grid quad (two triangles per cell).
-        let mi = if closed_m { m } else { m - 1 };
-        let ni = if closed_n { n } else { n - 1 };
-        for i in 0..mi {
-            for j in 0..ni {
-                let p00 = pt(i, j);
-                let p10 = pt((i + 1) % m, j);
-                let p01 = pt(i, (j + 1) % n);
-                let p11 = pt((i + 1) % m, (j + 1) % n);
-                fill_tris.extend_from_slice(&[p00, p10, p11, p00, p11, p01]);
-            }
-        }
-
         Some(TruckEntity {
             pick_tris: Vec::new(),
-            object: TruckObject::Lines(pts),
+            object: TruckObject::Lines(Vec::new()),
             snap_pts: vec![],
             tangent_geoms: vec![],
             key_vertices: vec![],
-            fill_tris,
+            fill_tris: vec![],
         })
     }
 }
@@ -491,47 +441,13 @@ impl TruckConvertible for PolyfaceMesh {
             return None;
         }
 
-        let get_v = |idx: i16| -> Option<[f64; 3]> {
-            let i = (idx.abs() as usize).checked_sub(1)?;
-            let v = self.vertices.get(i)?;
-            Some([v.location.x, v.location.y, v.location.z])
-        };
-
-        let mut pts: Vec<[f64; 3]> = Vec::new();
-        let mut fill_tris: Vec<[f64; 3]> = Vec::new();
-
-        for face in &self.faces {
-            // Indices: 0 means unused. Negative = invisible edge (still render for wireframe).
-            let indices = [face.index1, face.index2, face.index3, face.index4];
-            let verts: Vec<[f64; 3]> = indices
-                .iter()
-                .filter(|&&i| i != 0)
-                .filter_map(|&i| get_v(i))
-                .collect();
-
-            if verts.len() < 2 {
-                continue;
-            }
-            pts.push([f64::NAN; 3]);
-            for &p in &verts {
-                pts.push(p);
-            }
-            // Close the face polygon.
-            pts.push(verts[0]);
-
-            // Ear-clip the face for solid fill (handles concave faces).
-            if verts.len() >= 3 {
-                fill_tris.extend(triangulate_planar(&verts));
-            }
-        }
-
         Some(TruckEntity {
             pick_tris: Vec::new(),
-            object: TruckObject::Lines(pts),
+            object: TruckObject::Lines(Vec::new()),
             snap_pts: vec![],
             tangent_geoms: vec![],
             key_vertices: vec![],
-            fill_tris,
+            fill_tris: vec![],
         })
     }
 }
@@ -637,52 +553,526 @@ impl Transformable for PolyfaceMesh {
 // ── Mesh (SubD mesh) ──────────────────────────────────────────────────────────
 //
 // Modern subdivision mesh — distinct from PolygonMesh. The render path emits
-// the file's per-edge wireframe and triangulates each face into fill_tris so
-// solid views still draw a shaded surface. Subdivision-level smoothing is
-// honoured only as metadata; we don't run a Catmull-Clark refinement pass
-// here yet.
+// the refined per-edge wireframe and triangulates each face into fill_tris so
+// solid views draw the same Catmull-Clark surface described by the DWG.
+
+#[derive(Clone)]
+struct RefinedMesh {
+    vertices: Vec<[f64; 3]>,
+    faces: Vec<Vec<usize>>,
+    creases: std::collections::HashMap<(usize, usize), f64>,
+}
+
+fn edge_key(a: usize, b: usize) -> (usize, usize) {
+    if a < b { (a, b) } else { (b, a) }
+}
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn mul3(a: [f64; 3], scale: f64) -> [f64; 3] {
+    [a[0] * scale, a[1] * scale, a[2] * scale]
+}
+
+fn mix3(a: [f64; 3], b: [f64; 3], amount: f64) -> [f64; 3] {
+    add3(mul3(a, 1.0 - amount), mul3(b, amount))
+}
+
+fn mean_points<'a>(points: impl Iterator<Item = &'a [f64; 3]>) -> [f64; 3] {
+    let mut sum = [0.0; 3];
+    let mut count = 0usize;
+    for point in points {
+        sum = add3(sum, *point);
+        count += 1;
+    }
+    if count == 0 {
+        sum
+    } else {
+        mul3(sum, 1.0 / count as f64)
+    }
+}
+
+fn base_refined_mesh(mesh: &Mesh) -> RefinedMesh {
+    let vertices: Vec<[f64; 3]> = mesh.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
+    let faces = mesh
+        .faces
+        .iter()
+        .filter_map(|face| {
+            let valid: Vec<usize> = face
+                .vertices
+                .iter()
+                .copied()
+                .filter(|&index| index < vertices.len())
+                .collect();
+            (valid.len() >= 3).then_some(valid)
+        })
+        .collect();
+    let creases = mesh
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let sharpness = edge.crease?;
+            (edge.start < vertices.len() && edge.end < vertices.len() && sharpness > 0.0)
+                .then_some((edge_key(edge.start, edge.end), sharpness))
+        })
+        .collect();
+    RefinedMesh {
+        vertices,
+        faces,
+        creases,
+    }
+}
+
+fn subdivide_catmull_clark(mesh: &RefinedMesh, blend_crease: bool) -> RefinedMesh {
+    use std::collections::{HashMap, HashSet};
+
+    if mesh.faces.is_empty() {
+        return mesh.clone();
+    }
+
+    let face_points: Vec<[f64; 3]> = mesh
+        .faces
+        .iter()
+        .map(|face| mean_points(face.iter().filter_map(|&index| mesh.vertices.get(index))))
+        .collect();
+
+    let mut edge_faces: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    let mut vertex_faces: Vec<Vec<usize>> = vec![Vec::new(); mesh.vertices.len()];
+    let mut vertex_edges: Vec<HashSet<(usize, usize)>> = vec![HashSet::new(); mesh.vertices.len()];
+    for (face_index, face) in mesh.faces.iter().enumerate() {
+        for &vertex in face {
+            if let Some(faces) = vertex_faces.get_mut(vertex) {
+                faces.push(face_index);
+            }
+        }
+        for corner in 0..face.len() {
+            let a = face[corner];
+            let b = face[(corner + 1) % face.len()];
+            if a == b {
+                continue;
+            }
+            let key = edge_key(a, b);
+            edge_faces.entry(key).or_default().push(face_index);
+            if let Some(edges) = vertex_edges.get_mut(a) {
+                edges.insert(key);
+            }
+            if let Some(edges) = vertex_edges.get_mut(b) {
+                edges.insert(key);
+            }
+        }
+    }
+
+    let mut vertex_points = Vec::with_capacity(mesh.vertices.len());
+    for (vertex_index, &point) in mesh.vertices.iter().enumerate() {
+        let incident_edges = &vertex_edges[vertex_index];
+        let incident_faces = &vertex_faces[vertex_index];
+        if incident_edges.is_empty() || incident_faces.is_empty() {
+            vertex_points.push(point);
+            continue;
+        }
+
+        let face_average =
+            mean_points(incident_faces.iter().filter_map(|&index| face_points.get(index)));
+        let edge_midpoints: Vec<[f64; 3]> = incident_edges
+            .iter()
+            .filter_map(|&(a, b)| {
+                let other = if a == vertex_index { b } else { a };
+                mesh.vertices
+                    .get(other)
+                    .map(|&p| mul3(add3(point, p), 0.5))
+            })
+            .collect();
+        let edge_average = mean_points(edge_midpoints.iter());
+        let n = incident_faces.len() as f64;
+        let smooth = mul3(
+            add3(add3(face_average, mul3(edge_average, 2.0)), mul3(point, n - 3.0)),
+            1.0 / n,
+        );
+
+        let mut sharp_neighbours: Vec<(f64, [f64; 3])> = incident_edges
+            .iter()
+            .filter_map(|&key| {
+                let boundary = edge_faces.get(&key).is_some_and(|faces| faces.len() == 1);
+                let sharpness = if boundary {
+                    f64::INFINITY
+                } else {
+                    mesh.creases.get(&key).copied().unwrap_or(0.0)
+                };
+                if sharpness <= 0.0 {
+                    return None;
+                }
+                let other = if key.0 == vertex_index { key.1 } else { key.0 };
+                mesh.vertices.get(other).copied().map(|p| (sharpness, p))
+            })
+            .collect();
+        sharp_neighbours.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        let crease_point = match sharp_neighbours.as_slice() {
+            [(_, first), (_, second), ..] => mul3(
+                add3(add3(mul3(point, 6.0), *first), *second),
+                1.0 / 8.0,
+            ),
+            _ => smooth,
+        };
+        let corner_point = if sharp_neighbours.len() >= 3 {
+            point
+        } else {
+            crease_point
+        };
+        let sharpness = sharp_neighbours
+            .get(1)
+            .map(|item| item.0)
+            .unwrap_or(0.0);
+        let amount = if blend_crease {
+            sharpness.clamp(0.0, 1.0)
+        } else if sharpness > 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        vertex_points.push(mix3(smooth, corner_point, amount));
+    }
+
+    let mut edge_point_indices = HashMap::with_capacity(edge_faces.len());
+    let mut vertices = vertex_points;
+    for (&key, adjacent_faces) in &edge_faces {
+        let Some((&a, &b)) = mesh.vertices.get(key.0).zip(mesh.vertices.get(key.1)) else {
+            continue;
+        };
+        let midpoint = mul3(add3(a, b), 0.5);
+        let smooth = if adjacent_faces.len() == 2 {
+            let f0 = face_points[adjacent_faces[0]];
+            let f1 = face_points[adjacent_faces[1]];
+            mul3(add3(add3(a, b), add3(f0, f1)), 0.25)
+        } else {
+            midpoint
+        };
+        let boundary = adjacent_faces.len() != 2;
+        let sharpness = mesh.creases.get(&key).copied().unwrap_or(0.0);
+        let amount = if boundary {
+            1.0
+        } else if blend_crease {
+            sharpness.clamp(0.0, 1.0)
+        } else if sharpness > 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        edge_point_indices.insert(key, vertices.len());
+        vertices.push(mix3(smooth, midpoint, amount));
+    }
+
+    let face_point_start = vertices.len();
+    vertices.extend(face_points.iter().copied());
+    let mut faces = Vec::new();
+    let mut creases = HashMap::new();
+    for (face_index, face) in mesh.faces.iter().enumerate() {
+        for corner in 0..face.len() {
+            let vertex = face[corner];
+            let next_key = edge_key(vertex, face[(corner + 1) % face.len()]);
+            let prev_key = edge_key(face[(corner + face.len() - 1) % face.len()], vertex);
+            let (Some(&next_edge), Some(&prev_edge)) = (
+                edge_point_indices.get(&next_key),
+                edge_point_indices.get(&prev_key),
+            ) else {
+                continue;
+            };
+            faces.push(vec![
+                vertex,
+                next_edge,
+                face_point_start + face_index,
+                prev_edge,
+            ]);
+        }
+    }
+
+    for (&key, &sharpness) in &mesh.creases {
+        let Some(&edge_point) = edge_point_indices.get(&key) else {
+            continue;
+        };
+        let child_sharpness = (sharpness - 1.0).max(0.0);
+        if child_sharpness > 0.0 {
+            creases.insert(edge_key(key.0, edge_point), child_sharpness);
+            creases.insert(edge_key(edge_point, key.1), child_sharpness);
+        }
+    }
+
+    RefinedMesh {
+        vertices,
+        faces,
+        creases,
+    }
+}
+
+fn display_mesh(mesh: &Mesh) -> RefinedMesh {
+    let mut refined = base_refined_mesh(mesh);
+    for _ in 0..mesh.subdivision_level.clamp(0, 4) {
+        refined = subdivide_catmull_clark(&refined, mesh.blend_crease);
+    }
+    refined
+}
+
+fn face_triangle_indices(
+    vertices: &[[f64; 3]],
+    faces: &[Vec<usize>],
+) -> (Vec<u32>, Vec<usize>) {
+    let mut indices = Vec::new();
+    let mut triangle_faces = Vec::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        let polygon: Vec<[f64; 3]> = face
+            .iter()
+            .filter_map(|&index| vertices.get(index).copied())
+            .collect();
+        if polygon.len() < 3 {
+            continue;
+        }
+        for triangle in triangulate_planar(&polygon).chunks_exact(3) {
+            let mut mapped = [0u32; 3];
+            let mut valid = true;
+            for corner in 0..3 {
+                let Some(local) = polygon.iter().position(|point| *point == triangle[corner]) else {
+                    valid = false;
+                    break;
+                };
+                mapped[corner] = face[local] as u32;
+            }
+            if valid && mapped[0] != mapped[1] && mapped[1] != mapped[2] && mapped[2] != mapped[0] {
+                indices.extend(mapped);
+                triangle_faces.push(face_index);
+            }
+        }
+    }
+    (indices, triangle_faces)
+}
+
+fn vertex_normals(vertices: &[[f64; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+    let mut normals = vec![[0.0f64; 3]; vertices.len()];
+    for triangle in indices.chunks_exact(3) {
+        let (Some(&a), Some(&b), Some(&c)) = (
+            vertices.get(triangle[0] as usize),
+            vertices.get(triangle[1] as usize),
+            vertices.get(triangle[2] as usize),
+        ) else {
+            continue;
+        };
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let normal = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        for &index in triangle {
+            if let Some(sum) = normals.get_mut(index as usize) {
+                *sum = add3(*sum, normal);
+            }
+        }
+    }
+    normals
+        .into_iter()
+        .map(|normal| {
+            let length =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            if length > 1e-15 {
+                [
+                    (normal[0] / length) as f32,
+                    (normal[1] / length) as f32,
+                    (normal[2] / length) as f32,
+                ]
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        })
+        .collect()
+}
+
+fn append_feature_edge(
+    edge_verts: &mut Vec<[f32; 3]>,
+    edge_verts_low: &mut Vec<[f32; 3]>,
+    vertices: &[[f64; 3]],
+    a: usize,
+    b: usize,
+) {
+    for index in [a, b] {
+        let Some(&[x, y, z]) = vertices.get(index) else {
+            continue;
+        };
+        let high = [x as f32, y as f32, z as f32];
+        edge_verts.push(high);
+        edge_verts_low.push([
+            (x - high[0] as f64) as f32,
+            (y - high[1] as f64) as f32,
+            (z - high[2] as f64) as f32,
+        ]);
+    }
+}
+
+fn make_mesh_lod_set(
+    name: String,
+    color: [f32; 4],
+    vertices: Vec<[f64; 3]>,
+    faces: Vec<Vec<usize>>,
+    visible_edges: std::collections::HashSet<(usize, usize)>,
+    face_colors: &[Option<[f32; 4]>],
+) -> Option<crate::scene::model::mesh_model::MeshLodSet> {
+    let (indices, triangle_faces) = face_triangle_indices(&vertices, &faces);
+    if indices.is_empty() {
+        return None;
+    }
+    let normals = vertex_normals(&vertices, &indices);
+    let triangle_colors = triangle_faces
+        .iter()
+        .map(|&face| face_colors.get(face).copied().flatten())
+        .collect();
+    let model = crate::scene::convert::solid3d_tess::finalize_mesh(
+        name,
+        vertices.clone(),
+        normals,
+        indices,
+        Vec::new(),
+        triangle_colors,
+        color,
+        None,
+    );
+    let mut set = crate::scene::model::mesh_model::MeshLodSet::from_lods(vec![model]);
+    for (a, b) in visible_edges {
+        append_feature_edge(
+            &mut set.edge_verts,
+            &mut set.edge_verts_low,
+            &vertices,
+            a,
+            b,
+        );
+    }
+    Some(set)
+}
+
+/// Convert every standard DWG mesh family to the material-aware shaded mesh
+/// pipeline. The retained wire entity carries snaps/grips only; fill, normals,
+/// depth, materials and face colours live in `MeshLodSet`.
+pub(crate) fn tessellate_shaded_mesh(
+    entity: &acadrust::EntityType,
+    color: [f32; 4],
+) -> Option<crate::scene::model::mesh_model::MeshLodSet> {
+    use std::collections::HashSet;
+
+    match entity {
+        acadrust::EntityType::Mesh(mesh) => {
+            let display = display_mesh(mesh);
+            let mut edges = HashSet::new();
+            for face in &display.faces {
+                for corner in 0..face.len() {
+                    edges.insert(edge_key(face[corner], face[(corner + 1) % face.len()]));
+                }
+            }
+            make_mesh_lod_set(
+                mesh.common.handle.value().to_string(),
+                color,
+                display.vertices,
+                display.faces,
+                edges,
+                &[],
+            )
+        }
+        acadrust::EntityType::PolygonMesh(mesh) => {
+            let m = mesh.m_vertex_count.max(0) as usize;
+            let n = mesh.n_vertex_count.max(0) as usize;
+            if m == 0 || n == 0 || mesh.vertices.len() < m.saturating_mul(n) {
+                return None;
+            }
+            let vertices: Vec<[f64; 3]> = mesh
+                .vertices
+                .iter()
+                .take(m * n)
+                .map(|vertex| {
+                    [
+                        vertex.location.x,
+                        vertex.location.y,
+                        vertex.location.z,
+                    ]
+                })
+                .collect();
+            let closed_m = mesh.is_closed_m();
+            let closed_n = mesh.is_closed_n();
+            let m_cells = if closed_m { m } else { m.saturating_sub(1) };
+            let n_cells = if closed_n { n } else { n.saturating_sub(1) };
+            let mut faces = Vec::with_capacity(m_cells.saturating_mul(n_cells));
+            let mut edges = HashSet::new();
+            for i in 0..m_cells {
+                for j in 0..n_cells {
+                    let face = vec![
+                        i * n + j,
+                        ((i + 1) % m) * n + j,
+                        ((i + 1) % m) * n + (j + 1) % n,
+                        i * n + (j + 1) % n,
+                    ];
+                    for corner in 0..4 {
+                        edges.insert(edge_key(face[corner], face[(corner + 1) % 4]));
+                    }
+                    faces.push(face);
+                }
+            }
+            make_mesh_lod_set(
+                mesh.common.handle.value().to_string(),
+                color,
+                vertices,
+                faces,
+                edges,
+                &[],
+            )
+        }
+        acadrust::EntityType::PolyfaceMesh(mesh) => {
+            let vertices: Vec<[f64; 3]> = mesh
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    [
+                        vertex.location.x,
+                        vertex.location.y,
+                        vertex.location.z,
+                    ]
+                })
+                .collect();
+            let mut faces = Vec::new();
+            let mut face_colors = Vec::new();
+            let mut edges = HashSet::new();
+            for face in &mesh.faces {
+                let raw = [face.index1, face.index2, face.index3, face.index4];
+                let indices: Vec<usize> = raw
+                    .iter()
+                    .filter(|&&index| index != 0)
+                    .filter_map(|&index| (index.unsigned_abs() as usize).checked_sub(1))
+                    .filter(|&index| index < vertices.len())
+                    .collect();
+                if indices.len() < 3 {
+                    continue;
+                }
+                for corner in 0..indices.len() {
+                    if raw[corner] > 0 {
+                        edges.insert(edge_key(indices[corner], indices[(corner + 1) % indices.len()]));
+                    }
+                }
+                faces.push(indices);
+                face_colors.push(face.color.as_ref().map(crate::scene::convert::tess_util::aci_to_rgba));
+            }
+            make_mesh_lod_set(
+                mesh.common.handle.value().to_string(),
+                color,
+                vertices,
+                faces,
+                edges,
+                &face_colors,
+            )
+        }
+        _ => None,
+    }
+}
 
 impl TruckConvertible for Mesh {
     fn to_truck(&self, _document: &acadrust::CadDocument) -> Option<TruckEntity> {
         if self.vertices.is_empty() {
             return None;
-        }
-        let get = |i: usize| -> Option<[f64; 3]> { self.vertices.get(i).map(|v| [v.x, v.y, v.z]) };
-
-        let mut pts: Vec<[f64; 3]> = Vec::new();
-        if !self.edges.is_empty() {
-            for edge in &self.edges {
-                if let (Some(a), Some(b)) = (get(edge.start), get(edge.end)) {
-                    pts.push([f64::NAN; 3]);
-                    pts.push(a);
-                    pts.push(b);
-                }
-            }
-        } else {
-            for face in &self.faces {
-                if face.vertices.len() < 2 {
-                    continue;
-                }
-                pts.push([f64::NAN; 3]);
-                for &vi in &face.vertices {
-                    if let Some(p) = get(vi) {
-                        pts.push(p);
-                    }
-                }
-                if let Some(first) = face.vertices.first().and_then(|&i| get(i)) {
-                    pts.push(first);
-                }
-            }
-        }
-
-        // Ear-clip each face into fill_tris so shaded views render the mesh as
-        // a solid surface (fan triangulation spills outside concave faces).
-        let mut fill_tris: Vec<[f64; 3]> = Vec::new();
-        for face in &self.faces {
-            let verts: Vec<[f64; 3]> = face.vertices.iter().filter_map(|&vi| get(vi)).collect();
-            if verts.len() >= 3 {
-                fill_tris.extend(triangulate_planar(&verts));
-            }
         }
 
         // Per-vertex snap tables cost ~56 B/vertex and are retained in every
@@ -705,11 +1095,11 @@ impl TruckConvertible for Mesh {
 
         Some(TruckEntity {
             pick_tris: Vec::new(),
-            object: TruckObject::Lines(pts),
+            object: TruckObject::Lines(Vec::new()),
             snap_pts,
             tangent_geoms: vec![],
             key_vertices,
-            fill_tris,
+            fill_tris: vec![],
         })
     }
 }
@@ -761,12 +1151,36 @@ impl PropertyEditable for Mesh {
         vec![PropSection {
             title: "Geometry".into(),
             props: vec![
-                ro(
-                    "Level of Smoothness",
-                    "msh_subdiv",
-                    self.subdivision_level.to_string(),
-                ),
+                Property {
+                    label: "Level of Smoothness".into(),
+                    field: "msh_subdiv_edit",
+                    value: PropValue::EditText(self.subdivision_level.to_string()),
+                },
+                Property {
+                    label: "Blend Creases".into(),
+                    field: "msh_blend_crease",
+                    value: PropValue::BoolToggle {
+                        field: "msh_blend_crease",
+                        value: self.blend_crease,
+                    },
+                },
                 ro("Number of Faces", "msh_f", self.faces.len().to_string()),
+                ro("Number of Vertices", "msh_v", self.vertices.len().to_string()),
+                ro("Number of Edges", "msh_e", self.edges.len().to_string()),
+                ro(
+                    "Creased Edges",
+                    "msh_creased",
+                    self.edges
+                        .iter()
+                        .filter(|edge| edge.crease.is_some_and(|value| value > 0.0))
+                        .count()
+                        .to_string(),
+                ),
+                ro(
+                    "Override Option",
+                    "msh_override",
+                    self.override_option.to_string(),
+                ),
                 ro("Number of Grips", "msh_grips", self.vertices.len().to_string()),
                 ro(
                     "Watertight",
@@ -777,7 +1191,24 @@ impl PropertyEditable for Mesh {
         }]
     }
 
-    fn apply_geom_prop(&mut self, _field: &str, _value: &str) {}
+    fn apply_geom_prop(&mut self, field: &str, value: &str) {
+        match field {
+            "msh_subdiv_edit" => {
+                if let Some(value) = parse_f64(value) {
+                    self.subdivision_level = (value.round() as i32).clamp(0, 4);
+                }
+            }
+            "msh_blend_crease" => {
+                self.blend_crease = match value {
+                    "toggle" => !self.blend_crease,
+                    "On" | "Yes" | "true" | "1" => true,
+                    "Off" | "No" | "false" | "0" => false,
+                    _ => self.blend_crease,
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Transformable for Mesh {
@@ -787,42 +1218,5 @@ impl Transformable for Mesh {
                 crate::scene::view::transform::reflect_xy_point(&mut v.x, &mut v.y, p1, p2);
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod triangulate_tests {
-    use super::triangulate_planar;
-
-    fn poly_area2d(p: &[[f64; 2]]) -> f64 {
-        let n = p.len();
-        let mut a = 0.0;
-        for i in 0..n {
-            let b = p[(i + 1) % n];
-            a += p[i][0] * b[1] - b[0] * p[i][1];
-        }
-        (a * 0.5).abs()
-    }
-    fn tri_area(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
-        // area in XY plane (test polygons are in Z=0)
-        (((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) * 0.5).abs()
-    }
-
-    #[test]
-    fn concave_l_shape_no_spillover() {
-        // L-shaped hexagon (concave at the inner corner).
-        let poly: Vec<[f64; 3]> = vec![
-            [0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 2.0, 0.0],
-            [2.0, 2.0, 0.0], [2.0, 4.0, 0.0], [0.0, 4.0, 0.0],
-        ];
-        let p2: Vec<[f64; 2]> = poly.iter().map(|p| [p[0], p[1]]).collect();
-        let want = poly_area2d(&p2); // = 12.0
-        let tris = triangulate_planar(&poly);
-        assert_eq!(tris.len() % 3, 0);
-        assert_eq!(tris.len() / 3, poly.len() - 2, "expected n-2 triangles");
-        let got: f64 = tris.chunks(3).map(|t| tri_area(t[0], t[1], t[2])).sum();
-        eprintln!("concave L: want_area={want} got_area={got} tris={}", tris.len() / 3);
-        // Fan would overshoot (triangles outside the L). Ear clip = exact.
-        assert!((got - want).abs() < 1e-6, "triangle area {got} != polygon area {want} (spillover)");
     }
 }

@@ -8,10 +8,11 @@
 
 use acadrust::entities::{EntityCommon, EntityType};
 use acadrust::objects::{
-    Dictionary, MTextContext, ObjectContextData, ObjectContextKind, ObjectType,
+    Dictionary, HatchScaleContext, MTextContext, ObjectContextData, ObjectContextKind, ObjectType,
 };
 use acadrust::types::{Vector2, Vector3};
 use acadrust::{CadDocument, Handle};
+use std::borrow::Cow;
 
 /// Resolve a handle to a `Dictionary` object, if it is one.
 pub fn as_dict(doc: &CadDocument, handle: Handle) -> Option<&Dictionary> {
@@ -344,6 +345,566 @@ fn annotation_scales_dict(doc: &CadDocument, entity: Handle) -> Option<Handle> {
     as_dict(doc, mgr).and_then(|d| d.get("ACDB_ANNOTATIONSCALES"))
 }
 
+/// Resolve the representation leaf used by the drawing's current annotation
+/// scale. Broken scale handles are ignored. When the current named scale is
+/// absent, the leaf explicitly marked as the native/default representation is
+/// preferred, followed by the first valid leaf.
+pub fn active_object_context(
+    doc: &CadDocument,
+    entity: Handle,
+) -> Option<&ObjectContextData> {
+    let coll_h = annotation_scales_dict(doc, entity)?;
+    let coll = as_dict(doc, coll_h)?;
+    let mut default = None;
+    let mut first = None;
+    for (_, leaf_h) in &coll.entries {
+        let Some(ObjectType::ObjectContextData(leaf)) = doc.objects.get(leaf_h) else {
+            continue;
+        };
+        first.get_or_insert(leaf);
+        if leaf.is_default {
+            default = Some(leaf);
+        }
+        let Some(ObjectType::Scale(scale)) = doc.objects.get(&leaf.scale) else {
+            continue;
+        };
+        if scale
+            .name
+            .eq_ignore_ascii_case(&doc.header.current_annotation_scale)
+        {
+            return Some(leaf);
+        }
+    }
+    default.or(first)
+}
+
+fn text_horizontal(value: i16) -> acadrust::entities::TextHorizontalAlignment {
+    use acadrust::entities::TextHorizontalAlignment;
+    match value {
+        1 => TextHorizontalAlignment::Center,
+        2 => TextHorizontalAlignment::Right,
+        3 => TextHorizontalAlignment::Aligned,
+        4 => TextHorizontalAlignment::Middle,
+        5 => TextHorizontalAlignment::Fit,
+        _ => TextHorizontalAlignment::Left,
+    }
+}
+
+fn mtext_attachment(value: i32) -> acadrust::entities::AttachmentPoint {
+    use acadrust::entities::AttachmentPoint;
+    match value {
+        2 => AttachmentPoint::TopCenter,
+        3 => AttachmentPoint::TopRight,
+        4 => AttachmentPoint::MiddleLeft,
+        5 => AttachmentPoint::MiddleCenter,
+        6 => AttachmentPoint::MiddleRight,
+        7 => AttachmentPoint::BottomLeft,
+        8 => AttachmentPoint::BottomCenter,
+        9 => AttachmentPoint::BottomRight,
+        _ => AttachmentPoint::TopLeft,
+    }
+}
+
+fn apply_mtext_context(entity: &mut acadrust::entities::MText, context: &MTextContext) {
+    entity.attachment_point = mtext_attachment(context.attachment);
+    entity.insertion_point = context.insertion;
+    entity.rectangle_width = context.rect_width;
+    entity.rectangle_height = (context.rect_height > 0.0).then_some(context.rect_height);
+    entity.extents_width = context.extents_width;
+    entity.extents_height = context.extents_height;
+    entity.rotation = context.x_axis_dir.y.atan2(context.x_axis_dir.x);
+    entity.dwg_x_direction = Some(context.x_axis_dir);
+    if let Some(columns) = &context.columns {
+        entity.column_data.column_type = context.column_type as i16;
+        entity.column_data.column_count = columns.num_heights;
+        entity.column_data.width = columns.width;
+        entity.column_data.gutter = columns.gutter;
+        entity.column_data.auto_height = columns.auto_height;
+        entity.column_data.flow_reversed = columns.flow_reversed;
+        entity.column_data.heights.clone_from(&columns.heights);
+    } else {
+        entity.column_data.column_type = context.column_type as i16;
+        entity.column_data.column_count = 0;
+        entity.column_data.heights.clear();
+    }
+}
+
+fn apply_dimension_context(
+    dimension: &mut acadrust::entities::Dimension,
+    context: &acadrust::objects::DimContext,
+    doc: &CadDocument,
+) {
+    use acadrust::entities::Dimension;
+    use acadrust::objects::DimSubtype;
+
+    {
+        let base = dimension.base_mut();
+        base.text_middle_point.x = context.def_pt.x;
+        base.text_middle_point.y = context.def_pt.y;
+        base.text_rotation = context.text_rotation;
+        base.text_user_positioned = context.is_def_textloc;
+        base.flip_arrow1 = context.flip_arrow1;
+        base.flip_arrow2 = context.flip_arrow2;
+        if let Some(record) = doc.block_records.iter().find(|r| r.handle == context.block) {
+            base.block_name.clone_from(&record.name);
+        }
+    }
+
+    match (&context.subtype, dimension) {
+        (DimSubtype::Aligned { dimline_pt }, Dimension::Aligned(dim)) => {
+            dim.definition_point = *dimline_pt;
+            dim.base.definition_point = *dimline_pt;
+        }
+        (DimSubtype::Aligned { dimline_pt }, Dimension::Linear(dim)) => {
+            dim.definition_point = *dimline_pt;
+            dim.base.definition_point = *dimline_pt;
+        }
+        (DimSubtype::Angular { arc_pt }, Dimension::Angular2Ln(dim)) => {
+            dim.dimension_arc = *arc_pt;
+            dim.base.definition_point = *arc_pt;
+        }
+        (DimSubtype::Angular { arc_pt }, Dimension::Angular3Pt(dim)) => {
+            dim.definition_point = *arc_pt;
+            dim.base.definition_point = *arc_pt;
+        }
+        (
+            DimSubtype::Diametric {
+                first_arc_pt,
+                def_pt,
+            },
+            Dimension::Diameter(dim),
+        ) => {
+            dim.angle_vertex = *first_arc_pt;
+            dim.definition_point = *def_pt;
+            dim.base.definition_point = *def_pt;
+        }
+        (DimSubtype::Radial { first_arc_pt }, Dimension::Radius(dim)) => {
+            dim.definition_point = *first_arc_pt;
+            dim.base.definition_point = *first_arc_pt;
+        }
+        (
+            DimSubtype::RadialLarge {
+                ovr_center,
+                jog_point,
+            },
+            Dimension::LargeRadial(dim),
+        ) => {
+            dim.override_center = *ovr_center;
+            dim.jog_point = *jog_point;
+        }
+        (
+            DimSubtype::Ordinate {
+                feature_location_pt,
+                leader_endpt,
+            },
+            Dimension::Ordinate(dim),
+        ) => {
+            dim.feature_location = *feature_location_pt;
+            dim.leader_endpoint = *leader_endpt;
+        }
+        _ => {}
+    }
+}
+
+fn apply_attribute_context(
+    insertion_point: &mut Vector3,
+    alignment_point: &mut Vector3,
+    rotation: &mut f64,
+    horizontal_alignment: &mut acadrust::entities::HorizontalAlignment,
+    embedded_mtext: &mut Option<Box<acadrust::entities::MText>>,
+    context: &acadrust::objects::MTextAttributeContext,
+) {
+    insertion_point.x = context.insertion.x;
+    insertion_point.y = context.insertion.y;
+    alignment_point.x = context.alignment.x;
+    alignment_point.y = context.alignment.y;
+    *rotation = context.rotation;
+    *horizontal_alignment =
+        acadrust::entities::HorizontalAlignment::from_value(context.horizontal_mode);
+    if context.enable_context {
+        if let (Some(embedded), Some(mtext)) = (&context.context, embedded_mtext.as_mut()) {
+            apply_mtext_context(mtext, &embedded.mtext);
+        }
+    }
+}
+
+fn apply_hatch_context(hatch: &mut acadrust::entities::Hatch, context: &HatchScaleContext) {
+    hatch.pattern.lines.clone_from(&context.pattern_lines);
+    hatch.pattern_scale = context.pattern_scale;
+    for line in &mut hatch.pattern.lines {
+        line.base_point.x += context.pattern_base.x;
+        line.base_point.y += context.pattern_base.y;
+    }
+    for (path, bits) in hatch.paths.iter_mut().zip(&context.loop_types) {
+        path.flags = acadrust::entities::BoundaryPathFlags::from_bits(*bits as u32);
+    }
+}
+
+/// Return an ephemeral entity representation with the active scale leaf
+/// overlaid on its base geometry. The source document remains unchanged, which
+/// keeps save/round-trip data intact while render, picking and block expansion
+/// all see the scale-specific placement.
+pub fn entity_for_active_context<'a>(
+    doc: &'a CadDocument,
+    entity: &'a EntityType,
+) -> Cow<'a, EntityType> {
+    let Some(context) = active_object_context(doc, entity.common().handle) else {
+        return Cow::Borrowed(entity);
+    };
+    let mut placed = entity.clone();
+    match (&context.kind, &mut placed) {
+        (
+            ObjectContextKind::BlkRef {
+                rotation,
+                insertion,
+                scale_factor,
+            },
+            EntityType::Insert(insert),
+        ) => {
+            insert.rotation = *rotation;
+            insert.insert_point = *insertion;
+            insert.set_x_scale(scale_factor.x);
+            insert.set_y_scale(scale_factor.y);
+            insert.set_z_scale(scale_factor.z);
+        }
+        (
+            ObjectContextKind::Text {
+                horizontal_mode,
+                rotation,
+                insertion,
+                alignment,
+            },
+            EntityType::Text(text),
+        ) => {
+            text.horizontal_alignment = text_horizontal(*horizontal_mode);
+            text.rotation = *rotation;
+            text.insertion_point.x = insertion.x;
+            text.insertion_point.y = insertion.y;
+            let point = text.alignment_point.get_or_insert(Vector3::ZERO);
+            point.x = alignment.x;
+            point.y = alignment.y;
+        }
+        (ObjectContextKind::MText(value), EntityType::MText(mtext)) => {
+            apply_mtext_context(mtext, value);
+        }
+        (ObjectContextKind::Dim(value), EntityType::Dimension(dimension)) => {
+            apply_dimension_context(dimension, value, doc);
+        }
+        (ObjectContextKind::MLeader(value), EntityType::MultiLeader(mleader)) => {
+            mleader.context.clone_from(value);
+        }
+        (
+            ObjectContextKind::MTextAttribute(value),
+            EntityType::AttributeEntity(attribute),
+        ) => {
+            apply_attribute_context(
+                &mut attribute.insertion_point,
+                &mut attribute.alignment_point,
+                &mut attribute.rotation,
+                &mut attribute.horizontal_alignment,
+                &mut attribute.embedded_mtext,
+                value,
+            );
+        }
+        (
+            ObjectContextKind::MTextAttribute(value),
+            EntityType::AttributeDefinition(attribute),
+        ) => {
+            apply_attribute_context(
+                &mut attribute.insertion_point,
+                &mut attribute.alignment_point,
+                &mut attribute.rotation,
+                &mut attribute.horizontal_alignment,
+                &mut attribute.embedded_mtext,
+                value,
+            );
+        }
+        (ObjectContextKind::Leader(value), EntityType::Leader(leader)) => {
+            leader.vertices = value
+                .points
+                .iter()
+                .map(|point| *point + value.insertion_offset)
+                .collect();
+            leader.horizontal_direction = value.x_direction;
+            leader.annotation_offset = value.endpoint_projection;
+        }
+        (
+            ObjectContextKind::Fcf {
+                location,
+                horizontal_direction,
+            },
+            EntityType::Tolerance(tolerance),
+        ) => {
+            tolerance.insertion_point = *location;
+            tolerance.direction = *horizontal_direction;
+        }
+        (ObjectContextKind::HatchScale(value), EntityType::Hatch(hatch)) => {
+            apply_hatch_context(hatch, value);
+        }
+        (ObjectContextKind::HatchView(value), EntityType::Hatch(hatch)) => {
+            apply_hatch_context(hatch, &value.hatch);
+            hatch.normal = value.view_normal;
+            hatch.pattern_angle += value.view_rotation;
+        }
+        _ => {}
+    }
+    Cow::Owned(placed)
+}
+
+fn sync_mtext_context(context: &mut MTextContext, entity: &acadrust::entities::MText) {
+    context.attachment = entity.attachment_point as i32;
+    context.x_axis_dir = entity.dwg_x_direction.unwrap_or_else(|| {
+        Vector3::new(entity.rotation.cos(), entity.rotation.sin(), 0.0)
+    });
+    context.insertion = entity.insertion_point;
+    context.rect_width = entity.rectangle_width;
+    context.rect_height = entity.rectangle_height.unwrap_or(0.0);
+    context.extents_width = entity.extents_width;
+    context.extents_height = entity.extents_height;
+    context.column_type = entity.column_data.column_type as i32;
+    if context.column_type == 0 {
+        context.columns = None;
+    } else {
+        let columns = context
+            .columns
+            .get_or_insert_with(|| acadrust::objects::MTextColumns {
+                num_heights: 0,
+                width: 0.0,
+                gutter: 0.0,
+                auto_height: false,
+                flow_reversed: false,
+                heights: Vec::new(),
+            });
+        columns.num_heights = entity.column_data.column_count;
+        columns.width = entity.column_data.width;
+        columns.gutter = entity.column_data.gutter;
+        columns.auto_height = entity.column_data.auto_height;
+        columns.flow_reversed = entity.column_data.flow_reversed;
+        columns.heights.clone_from(&entity.column_data.heights);
+    }
+}
+
+fn sync_dimension_context(
+    context: &mut acadrust::objects::DimContext,
+    dimension: &acadrust::entities::Dimension,
+    block_handle: Option<Handle>,
+) {
+    use acadrust::entities::Dimension;
+    use acadrust::objects::DimSubtype;
+
+    let base = dimension.base();
+    context.def_pt = Vector2::new(base.text_middle_point.x, base.text_middle_point.y);
+    context.is_def_textloc = base.text_user_positioned;
+    context.text_rotation = base.text_rotation;
+    context.flip_arrow1 = base.flip_arrow1;
+    context.flip_arrow2 = base.flip_arrow2;
+    if let Some(handle) = block_handle {
+        context.block = handle;
+    }
+    match (&mut context.subtype, dimension) {
+        (DimSubtype::Aligned { dimline_pt }, Dimension::Aligned(dim)) => {
+            *dimline_pt = dim.definition_point;
+        }
+        (DimSubtype::Aligned { dimline_pt }, Dimension::Linear(dim)) => {
+            *dimline_pt = dim.definition_point;
+        }
+        (DimSubtype::Angular { arc_pt }, Dimension::Angular2Ln(dim)) => {
+            *arc_pt = dim.dimension_arc;
+        }
+        (DimSubtype::Angular { arc_pt }, Dimension::Angular3Pt(dim)) => {
+            *arc_pt = dim.definition_point;
+        }
+        (
+            DimSubtype::Diametric {
+                first_arc_pt,
+                def_pt,
+            },
+            Dimension::Diameter(dim),
+        ) => {
+            *first_arc_pt = dim.angle_vertex;
+            *def_pt = dim.definition_point;
+        }
+        (DimSubtype::Radial { first_arc_pt }, Dimension::Radius(dim)) => {
+            *first_arc_pt = dim.definition_point;
+        }
+        (
+            DimSubtype::RadialLarge {
+                ovr_center,
+                jog_point,
+            },
+            Dimension::LargeRadial(dim),
+        ) => {
+            *ovr_center = dim.override_center;
+            *jog_point = dim.jog_point;
+        }
+        (
+            DimSubtype::Ordinate {
+                feature_location_pt,
+                leader_endpt,
+            },
+            Dimension::Ordinate(dim),
+        ) => {
+            *feature_location_pt = dim.feature_location;
+            *leader_endpt = dim.leader_endpoint;
+        }
+        _ => {}
+    }
+}
+
+/// Copy an edited entity's placement back into its active per-scale leaf.
+/// Geometry edits therefore remain visible at the current annotation scale and
+/// round-trip as genuine `AcDb*ObjectContextData`, while the base entity stays
+/// usable as the default representation.
+pub fn sync_active_context_from_entity(
+    doc: &mut CadDocument,
+    entity_handle: Handle,
+) -> bool {
+    let Some(leaf_handle) = active_object_context(doc, entity_handle).map(|leaf| leaf.handle)
+    else {
+        return false;
+    };
+    let Some(entity) = doc.get_entity(entity_handle).cloned() else {
+        return false;
+    };
+    let dim_block_handle = match &entity {
+        EntityType::Dimension(dimension) => doc
+            .block_records
+            .iter()
+            .find(|record| record.name.eq_ignore_ascii_case(&dimension.base().block_name))
+            .map(|record| record.handle),
+        _ => None,
+    };
+    let Some(ObjectType::ObjectContextData(leaf)) = doc.objects.get_mut(&leaf_handle) else {
+        return false;
+    };
+    match (&entity, &mut leaf.kind) {
+        (
+            EntityType::Insert(insert),
+            ObjectContextKind::BlkRef {
+                rotation,
+                insertion,
+                scale_factor,
+            },
+        ) => {
+            *rotation = insert.rotation;
+            *insertion = insert.insert_point;
+            *scale_factor =
+                Vector3::new(insert.x_scale(), insert.y_scale(), insert.z_scale());
+        }
+        (
+            EntityType::Text(text),
+            ObjectContextKind::Text {
+                horizontal_mode,
+                rotation,
+                insertion,
+                alignment,
+            },
+        ) => {
+            *horizontal_mode = match text.horizontal_alignment {
+                acadrust::entities::TextHorizontalAlignment::Left => 0,
+                acadrust::entities::TextHorizontalAlignment::Center => 1,
+                acadrust::entities::TextHorizontalAlignment::Right => 2,
+                acadrust::entities::TextHorizontalAlignment::Aligned => 3,
+                acadrust::entities::TextHorizontalAlignment::Middle => 4,
+                acadrust::entities::TextHorizontalAlignment::Fit => 5,
+            };
+            *rotation = text.rotation;
+            *insertion = Vector2::new(text.insertion_point.x, text.insertion_point.y);
+            let point = text.alignment_point.unwrap_or(Vector3::ZERO);
+            *alignment = Vector2::new(point.x, point.y);
+        }
+        (EntityType::MText(mtext), ObjectContextKind::MText(context)) => {
+            sync_mtext_context(context, mtext);
+        }
+        (EntityType::Dimension(dimension), ObjectContextKind::Dim(context)) => {
+            sync_dimension_context(context, dimension, dim_block_handle);
+        }
+        (EntityType::MultiLeader(mleader), ObjectContextKind::MLeader(context)) => {
+            context.clone_from(&mleader.context);
+        }
+        (
+            EntityType::AttributeEntity(attribute),
+            ObjectContextKind::MTextAttribute(context),
+        ) => {
+            context.horizontal_mode = attribute.horizontal_alignment.to_value();
+            context.rotation = attribute.rotation;
+            context.insertion =
+                Vector2::new(attribute.insertion_point.x, attribute.insertion_point.y);
+            context.alignment =
+                Vector2::new(attribute.alignment_point.x, attribute.alignment_point.y);
+            if let (Some(embedded), Some(mtext)) =
+                (&mut context.context, &attribute.embedded_mtext)
+            {
+                sync_mtext_context(&mut embedded.mtext, mtext);
+            }
+        }
+        (
+            EntityType::AttributeDefinition(attribute),
+            ObjectContextKind::MTextAttribute(context),
+        ) => {
+            context.horizontal_mode = attribute.horizontal_alignment.to_value();
+            context.rotation = attribute.rotation;
+            context.insertion =
+                Vector2::new(attribute.insertion_point.x, attribute.insertion_point.y);
+            context.alignment =
+                Vector2::new(attribute.alignment_point.x, attribute.alignment_point.y);
+            if let (Some(embedded), Some(mtext)) =
+                (&mut context.context, &attribute.embedded_mtext)
+            {
+                sync_mtext_context(&mut embedded.mtext, mtext);
+            }
+        }
+        (EntityType::Leader(leader), ObjectContextKind::Leader(context)) => {
+            context.points = leader
+                .vertices
+                .iter()
+                .map(|point| *point - context.insertion_offset)
+                .collect();
+            context.x_direction = leader.horizontal_direction;
+            context.endpoint_projection = leader.annotation_offset;
+        }
+        (
+            EntityType::Tolerance(tolerance),
+            ObjectContextKind::Fcf {
+                location,
+                horizontal_direction,
+            },
+        ) => {
+            *location = tolerance.insertion_point;
+            *horizontal_direction = tolerance.direction;
+        }
+        (EntityType::Hatch(hatch), ObjectContextKind::HatchScale(context)) => {
+            context.pattern_lines.clone_from(&hatch.pattern.lines);
+            for line in &mut context.pattern_lines {
+                line.base_point.x -= context.pattern_base.x;
+                line.base_point.y -= context.pattern_base.y;
+            }
+            context.pattern_scale = hatch.pattern_scale;
+            context.loop_types = hatch
+                .paths
+                .iter()
+                .map(|path| path.flags.bits() as i32)
+                .collect();
+        }
+        (EntityType::Hatch(hatch), ObjectContextKind::HatchView(context)) => {
+            context.hatch.pattern_lines.clone_from(&hatch.pattern.lines);
+            for line in &mut context.hatch.pattern_lines {
+                line.base_point.x -= context.hatch.pattern_base.x;
+                line.base_point.y -= context.hatch.pattern_base.y;
+            }
+            context.hatch.pattern_scale = hatch.pattern_scale;
+            context.hatch.loop_types = hatch
+                .paths
+                .iter()
+                .map(|path| path.flags.bits() as i32)
+                .collect();
+            context.view_normal = hatch.normal;
+        }
+        _ => {}
+    }
+    true
+}
+
 /// Get the child dictionary stored under `key` in `parent_h`, creating an empty
 /// one (owned by `parent_h`) and registering the entry when absent.
 fn get_or_create_child_dict(doc: &mut CadDocument, parent_h: Handle, key: &str) -> Handle {
@@ -489,4 +1050,3 @@ pub fn is_annotative(doc: &CadDocument, entity: &EntityType) -> bool {
         _ => false,
     }
 }
-

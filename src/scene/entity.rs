@@ -140,7 +140,13 @@ impl Scene {
         let isolines = self.document.header.isolines.max(0) as usize;
         let mesh_seed = if matches!(
             &entity,
-            EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_)
+            EntityType::Solid3D(_)
+                | EntityType::Region(_)
+                | EntityType::Body(_)
+                | EntityType::Surface(_)
+                | EntityType::Mesh(_)
+                | EntityType::PolygonMesh(_)
+                | EntityType::PolyfaceMesh(_)
         ) {
             let color = self.render_style(&entity).0;
             crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines)
@@ -206,7 +212,28 @@ impl Scene {
             if let Some(model) = image_seed {
                 self.images.insert(handle, model);
             }
-            if let Some(model) = mesh_seed {
+            if let Some(mut model) = mesh_seed {
+                if let Some(entity) = self.document.get_entity(handle) {
+                    let color = self.render_style(entity).0;
+                    let material =
+                        crate::scene::model::material_model::resolve_material_with_base(
+                            &self.document,
+                            entity,
+                            color,
+                            None,
+                            self.material_base_dir.as_deref(),
+                        );
+                    material.apply_to_with_face_overrides(
+                        &mut model,
+                        &self.document,
+                        self.material_base_dir.as_deref(),
+                    );
+                    crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                        &mut model,
+                        &self.document,
+                        entity,
+                    );
+                }
                 self.meshes.insert(handle, model);
             }
             // Delta-undo: the new handle's before-image is "nothing" (it did not
@@ -330,7 +357,13 @@ impl Scene {
         let isolines = self.document.header.isolines.max(0) as usize;
         let mesh_seed = if matches!(
             &entity,
-            EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_)
+            EntityType::Solid3D(_)
+                | EntityType::Region(_)
+                | EntityType::Body(_)
+                | EntityType::Surface(_)
+                | EntityType::Mesh(_)
+                | EntityType::PolygonMesh(_)
+                | EntityType::PolyfaceMesh(_)
         ) {
             let color = self.render_style(&entity).0;
             crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines)
@@ -369,7 +402,28 @@ impl Scene {
         if let Some(model) = image_seed {
             self.images.insert(handle, model);
         }
-        if let Some(model) = mesh_seed {
+        if let Some(mut model) = mesh_seed {
+            if let Some(entity) = self.document.get_entity(handle) {
+                let color = self.render_style(entity).0;
+                let material =
+                    crate::scene::model::material_model::resolve_material_with_base(
+                        &self.document,
+                        entity,
+                        color,
+                        None,
+                        self.material_base_dir.as_deref(),
+                    );
+                material.apply_to_with_face_overrides(
+                    &mut model,
+                    &self.document,
+                    self.material_base_dir.as_deref(),
+                );
+                crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                    &mut model,
+                    &self.document,
+                    entity,
+                );
+            }
             self.meshes.insert(handle, model);
         }
 
@@ -448,6 +502,9 @@ impl Scene {
                         | EntityType::Region(_)
                         | EntityType::Body(_)
                         | EntityType::Surface(_)
+                        | EntityType::Mesh(_)
+                        | EntityType::PolygonMesh(_)
+                        | EntityType::PolyfaceMesh(_)
                 ) {
                     return None;
                 }
@@ -473,7 +530,24 @@ impl Scene {
                     facet_res,
                     isolines,
                 )
-                .map(|mesh| {
+                .map(|mut mesh| {
+                    crate::scene::model::material_model::resolve_material_with_base(
+                        &self.document,
+                        entity.as_ref(),
+                        color,
+                        None,
+                        self.material_base_dir.as_deref(),
+                    )
+                    .apply_to_with_face_overrides(
+                        &mut mesh,
+                        &self.document,
+                        self.material_base_dir.as_deref(),
+                    );
+                    crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                        &mut mesh,
+                        &self.document,
+                        entity.as_ref(),
+                    );
                     let mesh = if top_level {
                         offset_mesh_lod_set(mesh)
                     } else {
@@ -758,8 +832,29 @@ impl Scene {
                         ))
             })
             .flat_map(|(&handle, model)| {
-                let entity = self.document.get_entity(handle);
-                let mut m = model.clone();
+                let contextual = self
+                    .document
+                    .get_entity(handle)
+                    .map(|entity| {
+                        crate::scene::annotative::entity_for_active_context(
+                            &self.document,
+                            entity,
+                        )
+                    });
+                let entity = contextual.as_deref();
+                let mut m = match entity {
+                    Some(EntityType::Hatch(dxf))
+                        if crate::scene::annotative::active_object_context(
+                            &self.document,
+                            handle,
+                        )
+                        .is_some() =>
+                    {
+                        Self::hatch_model_from_dxf(dxf, model.color)
+                            .unwrap_or_else(|| model.clone())
+                    }
+                    _ => model.clone(),
+                };
                 // Optional solid backdrop drawn behind the pattern/gradient when
                 // the hatch carries a HATCHBACKGROUNDCOLOR. Same draw_depth +
                 // emitted first so LessEqual layering keeps it underneath.
@@ -958,7 +1053,9 @@ impl Scene {
             out
         }
         for entity in self.document.entities() {
-            let EntityType::Insert(ins) = entity else {
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, entity);
+            let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
             if ins.common.invisible || layer_hidden(&ins.common.layer) {
@@ -1034,6 +1131,10 @@ impl Scene {
             )> = explode_including_dims(ins, &self.document)
                 .into_iter()
                 .filter(|e| !offscale(e))
+                .map(|e| {
+                    crate::scene::annotative::entity_for_active_context(&self.document, &e)
+                        .into_owned()
+                })
                 .map(|e| (normalize(e), 0usize, ins_color, l0, (base_depth, half_gap)))
                 .collect();
             while let Some((sub, depth, sub_ins_color, sub_l0, (d_base, d_half))) = stack.pop() {
@@ -1050,14 +1151,25 @@ impl Scene {
                         let on_l0 = crate::scene::view::render::is_effective_layer_zero(
                             &nins.common.layer,
                         );
-                        let child_ins_color = if nins.common.color == Color::ByBlock {
+                        let nested_entity = EntityType::Insert(nins.clone());
+                        let has_book_color =
+                            crate::scene::view::render::has_resolved_book_color(
+                                &self.document,
+                                &nested_entity,
+                            );
+                        let child_ins_color = if !has_book_color
+                            && nins.common.color == Color::ByBlock
+                        {
                             sub_ins_color
-                        } else if on_l0 && nins.common.color == Color::ByLayer {
+                        } else if !has_book_color
+                            && on_l0
+                            && nins.common.color == Color::ByLayer
+                        {
                             sub_l0.color
                         } else {
                             crate::scene::view::render::render_style_for(
                                 &self.document,
-                                &EntityType::Insert(nins.clone()),
+                                &nested_entity,
                             )
                             .0
                         };
@@ -1081,6 +1193,12 @@ impl Scene {
                             if offscale(&e) {
                                 continue;
                             }
+                            let e =
+                                crate::scene::annotative::entity_for_active_context(
+                                    &self.document,
+                                    &e,
+                                )
+                                .into_owned();
                             stack.push((
                                 normalize(e),
                                 depth + 1,
@@ -1235,7 +1353,9 @@ impl Scene {
         // apply_rotation) rather than through Insert::explode — the latter
         // double-scales the u/v basis.
         for entity in self.document.entities() {
-            let EntityType::Insert(ins) = entity else {
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, entity);
+            let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
             let c = &ins.common;
@@ -1927,7 +2047,13 @@ impl Scene {
     /// at load, so a pattern-scale / background / boundary edit stays
     /// invisible until the cached model is refreshed (#415).
     pub fn refresh_fill_model(&mut self, handle: Handle) {
-        let new_model = match self.document.get_entity(handle) {
+        let contextual = self
+            .document
+            .get_entity(handle)
+            .map(|entity| {
+                crate::scene::annotative::entity_for_active_context(&self.document, entity)
+            });
+        let new_model = match contextual.as_deref() {
             Some(EntityType::Hatch(dxf)) => {
                 let color = convert::tess_util::aci_to_rgba(&dxf.common.color);
                 Self::hatch_model_from_dxf(dxf, color)
@@ -1955,7 +2081,11 @@ impl Scene {
             .document
             .entities()
             .filter_map(|e| match e {
-                EntityType::Hatch(h) => Some((h.common.handle, e.clone())),
+                EntityType::Hatch(h) => Some((
+                    h.common.handle,
+                    crate::scene::annotative::entity_for_active_context(&self.document, e)
+                        .into_owned(),
+                )),
                 EntityType::Solid(s) => Some((s.common.handle, e.clone())),
                 _ => None,
             })
@@ -2047,7 +2177,13 @@ impl Scene {
             .document
             .entities()
             .filter_map(|e| match e {
-                EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_) => {
+                EntityType::Solid3D(_)
+                | EntityType::Region(_)
+                | EntityType::Body(_)
+                | EntityType::Surface(_)
+                | EntityType::Mesh(_)
+                | EntityType::PolygonMesh(_)
+                | EntityType::PolyfaceMesh(_) => {
                     let handle = e.common().handle;
                     // Incremental (post-xref) pass: leave already-tessellated
                     // host solids untouched, only build the newly merged ones.
@@ -2073,9 +2209,26 @@ impl Scene {
         let built: Vec<(Handle, MeshLodSet, bool)> = entries
             .into_par_iter()
             .filter_map(|(handle, entity, color, top_level)| {
-                crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines).map(|m| {
-                    let m = if top_level { offset_mesh_lod_set(m) } else { m };
-                    (handle, m, top_level)
+                crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines).map(|mut mesh| {
+                    let material = crate::scene::model::material_model::resolve_material_with_base(
+                        &self.document,
+                        &entity,
+                        color,
+                        None,
+                        self.material_base_dir.as_deref(),
+                    );
+                    material.apply_to_with_face_overrides(
+                        &mut mesh,
+                        &self.document,
+                        self.material_base_dir.as_deref(),
+                    );
+                    crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                        &mut mesh,
+                        &self.document,
+                        &entity,
+                    );
+                    let mesh = if top_level { offset_mesh_lod_set(mesh) } else { mesh };
+                    (handle, mesh, top_level)
                 })
             })
             .collect();

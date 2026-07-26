@@ -1723,7 +1723,8 @@ fn solid_wire_fallback(entity: &EntityType) -> Vec<[f64; 3]> {
             continue;
         }
         for v in &wire.points {
-            pts.push([v.x, v.y, v.z]);
+            let transformed = crate::entities::solid3d::wire_point(wire, v);
+            pts.push([transformed.x, transformed.y, transformed.z]);
         }
         // NaN sentinel separates distinct wire segments.
         pts.push([f64::NAN, f64::NAN, f64::NAN]);

@@ -417,7 +417,7 @@ pub struct OpenTimings {
 /// Intended to run on a background thread during file load.
 #[cfg(target_arch = "wasm32")]
 pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
-    build_derived_caches_impl(doc, None)
+    build_derived_caches_impl(doc, None, None)
 }
 
 /// Build open-time caches while reporting monotonic progress in 0..=10000.
@@ -427,13 +427,15 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
 pub fn build_derived_caches_with_progress(
     doc: &CadDocument,
     progress: &(dyn Fn(u16) + Sync),
+    material_base_dir: Option<&std::path::Path>,
 ) -> DerivedCaches {
-    build_derived_caches_impl(doc, Some(progress))
+    build_derived_caches_impl(doc, Some(progress), material_base_dir)
 }
 
 fn build_derived_caches_impl(
     doc: &CadDocument,
     progress: Option<&(dyn Fn(u16) + Sync)>,
+    material_base_dir: Option<&std::path::Path>,
 ) -> DerivedCaches {
     // A new drawing must not inherit the previous one's resolved images — drop
     // the memoised set so each reference re-reads / re-fetches once here (and
@@ -500,7 +502,10 @@ fn build_derived_caches_impl(
             EntityType::Solid3D(_)
             | EntityType::Region(_)
             | EntityType::Body(_)
-            | EntityType::Surface(_) => mesh_handles.push(h),
+            | EntityType::Surface(_)
+            | EntityType::Mesh(_)
+            | EntityType::PolygonMesh(_)
+            | EntityType::PolyfaceMesh(_) => mesh_handles.push(h),
             _ => {}
         }
         if let Some(c) = offset_centroid(e, model_block, &prep) {
@@ -540,7 +545,9 @@ fn build_derived_caches_impl(
     let hatches: HashMap<Handle, HatchModel> = hatch_handles
         .par_iter()
         .filter_map(|&handle| {
-            let e = doc.get_entity(handle)?;
+            let source = doc.get_entity(handle)?;
+            let contextual = annotative::entity_for_active_context(doc, source);
+            let e = contextual.as_ref();
             let (raw, ..) = view::render::render_style_for(doc, e);
             let color = view::render::adapt_to_bg(raw, LOAD_BG);
             let model = match e {
@@ -607,11 +614,28 @@ fn build_derived_caches_impl(
             let e = doc.get_entity(handle)?;
             let (raw, ..) = view::render::render_style_for(doc, e);
             let color = view::render::adapt_to_bg(raw, LOAD_BG);
+            let material = crate::scene::model::material_model::resolve_material_with_base(
+                doc,
+                e,
+                color,
+                None,
+                material_base_dir,
+            );
             let top_level = layout_blocks.contains(&e.common().owner_handle);
             let result = crate::entities::solid3d::tessellate_volume(e, color, facet_res, isolines)
-                .map(|m| {
-                let m = if top_level { offset_mesh_lod_set(m) } else { m };
-                (handle, m, top_level)
+                .map(|mut mesh| {
+                material.apply_to_with_face_overrides(
+                    &mut mesh,
+                    doc,
+                    material_base_dir,
+                );
+                crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                    &mut mesh,
+                    doc,
+                    e,
+                );
+                let mesh = if top_level { offset_mesh_lod_set(mesh) } else { mesh };
+                (handle, mesh, top_level)
                 });
             let done = detail_done.fetch_add(1, Ordering::Relaxed) + 1;
             if done & 0xff == 0 || done == detail_total {
@@ -1007,12 +1031,104 @@ fn transform_block_mesh_lod_set(
 ) -> MeshLodSet {
     use acadrust::types::Vector3;
     let mut out = set.clone();
-    // Silhouette generators are world-space and untransformed here, so a block
-    // instance would silhouette against the block-local pose. Drop them: a
-    // block-internal solid keeps its baked isolines and feature edges, just not
-    // the per-frame silhouette (deferred until the generators track the INSTANCE
-    // transform).
-    out.curved_gens.clear();
+    let transform_direction = |direction: [f32; 3]| {
+        let transformed = xform.apply_rotation(Vector3::new(
+            direction[0] as f64,
+            direction[1] as f64,
+            direction[2] as f64,
+        ));
+        let length = transformed.length();
+        if length > 1e-12 {
+            [
+                (transformed.x / length) as f32,
+                (transformed.y / length) as f32,
+                (transformed.z / length) as f32,
+            ]
+        } else {
+            direction
+        }
+    };
+    let scale_x = xform.apply_rotation(Vector3::UNIT_X).length();
+    let scale_y = xform.apply_rotation(Vector3::UNIT_Y).length();
+    let scale_z = xform.apply_rotation(Vector3::UNIT_Z).length();
+    let uniform_scale = (scale_x + scale_y + scale_z) / 3.0;
+    let is_uniform = (scale_x - uniform_scale).abs() <= uniform_scale.abs().max(1.0) * 1e-8
+        && (scale_y - uniform_scale).abs() <= uniform_scale.abs().max(1.0) * 1e-8
+        && (scale_z - uniform_scale).abs() <= uniform_scale.abs().max(1.0) * 1e-8;
+    if is_uniform {
+        let transform_split = |high: &mut [f32; 3], low: &mut [f32; 3]| {
+            let transformed = xform.apply(Vector3::new(
+                high[0] as f64 + low[0] as f64,
+                high[1] as f64 + low[1] as f64,
+                high[2] as f64 + low[2] as f64,
+            ));
+            *high = [
+                transformed.x as f32,
+                transformed.y as f32,
+                transformed.z as f32,
+            ];
+            *low = [
+                (transformed.x - high[0] as f64) as f32,
+                (transformed.y - high[1] as f64) as f32,
+                (transformed.z - high[2] as f64) as f32,
+            ];
+        };
+        for generator in &mut out.curved_gens {
+            match generator {
+                crate::scene::model::mesh_model::CurvedGen::Cone {
+                    base,
+                    base_low,
+                    axis,
+                    u_dir,
+                    v_dir,
+                    radius,
+                    h_max,
+                    ..
+                } => {
+                    transform_split(base, base_low);
+                    *axis = transform_direction(*axis);
+                    *u_dir = transform_direction(*u_dir);
+                    *v_dir = transform_direction(*v_dir);
+                    *radius *= uniform_scale as f32;
+                    *h_max *= uniform_scale as f32;
+                }
+                crate::scene::model::mesh_model::CurvedGen::Sphere {
+                    center,
+                    center_low,
+                    pole,
+                    u_dir,
+                    v_dir,
+                    radius,
+                    ..
+                } => {
+                    transform_split(center, center_low);
+                    *pole = transform_direction(*pole);
+                    *u_dir = transform_direction(*u_dir);
+                    *v_dir = transform_direction(*v_dir);
+                    *radius *= uniform_scale as f32;
+                }
+                crate::scene::model::mesh_model::CurvedGen::Torus {
+                    center,
+                    center_low,
+                    axis,
+                    u_dir,
+                    v_dir,
+                    major,
+                    minor,
+                    ..
+                } => {
+                    transform_split(center, center_low);
+                    *axis = transform_direction(*axis);
+                    *u_dir = transform_direction(*u_dir);
+                    *v_dir = transform_direction(*v_dir);
+                    *major *= uniform_scale as f32;
+                    *minor *= uniform_scale as f32;
+                }
+            }
+        }
+    } else {
+        out.curved_gens.clear();
+    }
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -1086,6 +1202,41 @@ fn transform_block_mesh_lod_set(
             ];
         }
     }
+    for silhouette in &mut out.stored_silhouettes {
+        silhouette.view_direction = transform_direction(silhouette.view_direction);
+        silhouette.up_vector = transform_direction(silhouette.up_vector);
+        let target = xform.apply(Vector3::new(
+            silhouette.target[0] as f64,
+            silhouette.target[1] as f64,
+            silhouette.target[2] as f64,
+        ));
+        silhouette.target = [target.x as f32, target.y as f32, target.z as f32];
+        let count = silhouette.edge_verts.len();
+        if silhouette.edge_verts_low.len() != count {
+            silhouette.edge_verts_low = vec![[0.0; 3]; count];
+        }
+        for (high, low) in silhouette
+            .edge_verts
+            .iter_mut()
+            .zip(silhouette.edge_verts_low.iter_mut())
+        {
+            let transformed = xform.apply(Vector3::new(
+                high[0] as f64 + low[0] as f64,
+                high[1] as f64 + low[1] as f64,
+                high[2] as f64 + low[2] as f64,
+            ));
+            *high = [
+                transformed.x as f32,
+                transformed.y as f32,
+                transformed.z as f32,
+            ];
+            *low = [
+                (transformed.x - high[0] as f64) as f32,
+                (transformed.y - high[1] as f64) as f32,
+                (transformed.z - high[2] as f64) as f32,
+            ];
+        }
+    }
     if min_x.is_finite() {
         out.world_aabb = [min_x, min_y, max_x, max_y];
     }
@@ -1118,6 +1269,14 @@ pub(in crate::scene) struct NavPerfSample {
     pub(in crate::scene) started: iced::time::Instant,
     pub(in crate::scene) input_ms: f64,
     pub(in crate::scene) build_ms: f64,
+}
+
+#[derive(Clone)]
+struct BlockMeshInherit {
+    insert_color: [f32; 4],
+    layer0_color: [f32; 4],
+    insert_material: crate::scene::model::material_model::MeshMaterial,
+    layer0_material: crate::scene::model::material_model::MeshMaterial,
 }
 
 pub struct Scene {
@@ -1362,6 +1521,9 @@ pub struct Scene {
     /// Top-level (layout-owned) solids only, stored in the offset-relative
     /// render frame and drawn flat.
     pub meshes: HashMap<Handle, MeshLodSet>,
+    /// Directory of the opened drawing, used to resolve relative AcDbMaterial
+    /// bitmap maps. `None` for unsaved drawings and browser uploads.
+    pub material_base_dir: Option<std::path::PathBuf>,
     /// Meshes of block-definition solids, kept in *block-local* coordinates
     /// (no world_offset). They are not drawn directly; each INSERT of the
     /// owning block emits a transformed instance so a block placed at an
@@ -1595,6 +1757,7 @@ impl Scene {
             viewcube_ucs: glam::Mat4::IDENTITY,
             hatches: HashMap::default(),
             meshes: HashMap::default(),
+            material_base_dir: None,
             block_meshes: HashMap::default(),
             solid_models: HashMap::default(),
             images: HashMap::default(),
@@ -2100,12 +2263,30 @@ impl Scene {
     /// in the same offset-relative frame the mesh pipeline uses, so the mesh is
     /// stored as-is (Model-tab geometry is authored at world_offset 0).
     pub fn register_solid_model(&mut self, handle: Handle, solid: truck_modeling::Solid) {
-        let color = self
-            .document
-            .get_entity(handle)
+        let entity = self.document.get_entity(handle);
+        let color = entity
             .map(|e| self.render_style(e).0)
             .unwrap_or([0.8, 0.8, 0.85, 1.0]);
-        if let Some(set) = crate::scene::model::solid_model::mesh_from_solid(&solid, color) {
+        if let Some(mut set) = crate::scene::model::solid_model::mesh_from_solid(&solid, color) {
+            if let Some(entity) = entity {
+                crate::scene::model::material_model::resolve_material_with_base(
+                    &self.document,
+                    entity,
+                    color,
+                    None,
+                    self.material_base_dir.as_deref(),
+                )
+                .apply_to_with_face_overrides(
+                    &mut set,
+                    &self.document,
+                    self.material_base_dir.as_deref(),
+                );
+                crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                    &mut set,
+                    &self.document,
+                    entity,
+                );
+            }
             self.meshes.insert(handle, set);
         }
         self.solid_models.insert(handle, solid);
@@ -2125,27 +2306,47 @@ impl Scene {
         // (instanced per INSERT), so a solid recolours wherever it lives.
         // During REFEDIT, solids outside the edited set render faded.
         let bg = self.bg_color;
-        let colors: HashMap<Handle, [f32; 4]> = self
+        let materials: HashMap<Handle, crate::scene::model::material_model::MeshMaterial> = self
             .meshes
             .keys()
             .chain(self.block_meshes.keys())
             .filter_map(|&h| {
                 self.document.get_entity(h).map(|e| {
-                    let mut c = self.render_style(e).0;
+                    let color = self.render_style(e).0;
+                    let mut material =
+                        crate::scene::model::material_model::resolve_material_with_base(
+                        &self.document,
+                        e,
+                        color,
+                        None,
+                        self.material_base_dir.as_deref(),
+                    );
                     if let Some(keep) = &self.refedit_keep {
                         if !keep.contains(&h) {
-                            c = crate::scene::cache::block_cache::fade_toward_bg(c, bg);
+                            material.diffuse = crate::scene::cache::block_cache::fade_toward_bg(
+                                material.diffuse,
+                                bg,
+                            );
                         }
                     }
-                    (h, c)
+                    (h, material)
                 })
             })
             .collect();
         for (h, set) in self.meshes.iter_mut().chain(self.block_meshes.iter_mut()) {
-            if let Some(&c) = colors.get(h) {
-                for lod in &mut set.lods {
-                    lod.color = c;
-                }
+            if let Some(material) = materials.get(h) {
+                material.apply_to_with_face_overrides(
+                    set,
+                    &self.document,
+                    self.material_base_dir.as_deref(),
+                );
+            }
+            if let Some(entity) = self.document.get_entity(*h) {
+                crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                    set,
+                    &self.document,
+                    entity,
+                );
             }
         }
     }
@@ -2153,33 +2354,62 @@ impl Scene {
     /// Recolour only the named cached solids after a property edit.
     pub fn recolor_meshes_for_handles(&mut self, handles: &[Handle]) {
         let bg = self.bg_color;
-        let colors: HashMap<Handle, [f32; 4]> = handles
+        let materials: HashMap<Handle, crate::scene::model::material_model::MeshMaterial> = handles
             .iter()
             .filter_map(|&handle| {
                 self.document.get_entity(handle).map(|entity| {
-                    let mut color = self.render_style(entity).0;
+                    let color = self.render_style(entity).0;
+                    let mut material =
+                        crate::scene::model::material_model::resolve_material_with_base(
+                        &self.document,
+                        entity,
+                        color,
+                        None,
+                        self.material_base_dir.as_deref(),
+                    );
                     if self
                         .refedit_keep
                         .as_ref()
                         .is_some_and(|keep| !keep.contains(&handle))
                     {
-                        color = crate::scene::cache::block_cache::fade_toward_bg(color, bg);
+                        material.diffuse = crate::scene::cache::block_cache::fade_toward_bg(
+                            material.diffuse,
+                            bg,
+                        );
                     }
-                    (handle, color)
+                    (handle, material)
                 })
             })
             .collect();
         for handle in handles {
-            let Some(color) = colors.get(handle) else {
+            let Some(material) = materials.get(handle) else {
                 continue;
             };
             if let Some(set) = self.meshes.get_mut(handle) {
-                for lod in &mut set.lods {
-                    lod.color = *color;
+                material.apply_to_with_face_overrides(
+                    set,
+                    &self.document,
+                    self.material_base_dir.as_deref(),
+                );
+                if let Some(entity) = self.document.get_entity(*handle) {
+                    crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                        set,
+                        &self.document,
+                        entity,
+                    );
                 }
             } else if let Some(set) = self.block_meshes.get_mut(handle) {
-                for lod in &mut set.lods {
-                    lod.color = *color;
+                material.apply_to_with_face_overrides(
+                    set,
+                    &self.document,
+                    self.material_base_dir.as_deref(),
+                );
+                if let Some(entity) = self.document.get_entity(*handle) {
+                    crate::scene::model::visual_style_model::apply_mesh_visual_style(
+                        set,
+                        &self.document,
+                        entity,
+                    );
                 }
             }
         }
@@ -3996,6 +4226,9 @@ impl Scene {
                                     | EntityType::Region(_)
                                     | EntityType::Body(_)
                                     | EntityType::Surface(_)
+                                    | EntityType::Mesh(_)
+                                    | EntityType::PolygonMesh(_)
+                                    | EntityType::PolyfaceMesh(_)
                             ) {
                                 continue;
                             }
@@ -4073,6 +4306,9 @@ impl Scene {
                     | EntityType::Region(_)
                     | EntityType::Body(_)
                     | EntityType::Surface(_)
+                    | EntityType::Mesh(_)
+                    | EntityType::PolygonMesh(_)
+                    | EntityType::PolyfaceMesh(_)
             ) {
                 continue;
             }
@@ -4677,7 +4913,10 @@ impl Scene {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for e in self.document.entities() {
+        for source in self.document.entities() {
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, source);
+            let e = contextual.as_ref();
             if e.common().owner_handle != layout_block {
                 continue;
             }
@@ -4704,12 +4943,31 @@ impl Scene {
                     .color,
                     bg,
                 );
+                let inherit = BlockMeshInherit {
+                    insert_color: ins_color,
+                    layer0_color: l0,
+                    insert_material:
+                        crate::scene::model::material_model::resolve_material_with_base(
+                            &self.document,
+                            e,
+                            ins_color,
+                            None,
+                            self.material_base_dir.as_deref(),
+                        ),
+                    layer0_material:
+                        crate::scene::model::material_model::resolve_layer_material_with_base(
+                            &self.document,
+                            &ins.common.layer,
+                            l0,
+                            self.material_base_dir.as_deref(),
+                        ),
+                };
                 let start = out.len();
                 self.expand_block_meshes(
                     &ins.block_name,
                     &ins.get_transform(),
                     0,
-                    Some((ins_color, l0)),
+                    Some(inherit),
                     &mut out,
                 );
                 // Tag the instanced meshes with the parent INSERT handle so the
@@ -4734,10 +4992,9 @@ impl Scene {
         accum: &acadrust::types::Transform,
         depth: usize,
         // Block-child colour inheritance sources, bg-adapted:
-        // `(insert_color, insert_layer_color)`. `Some` only on the render path;
-        // pick paths pass `None` (colour irrelevant). Drives the ByBlock /
-        // layer-0 overrides for block-internal solids (#221).
-        inherit: Option<([f32; 4], [f32; 4])>,
+        // `Some` only on the render path; pick paths pass `None`. Carries both
+        // colour and AcDbMaterial inheritance for ByBlock/layer-0 children.
+        inherit: Option<BlockMeshInherit>,
         out: &mut Vec<MeshLodSet>,
     ) {
         if depth > 16 {
@@ -4748,9 +5005,12 @@ impl Scene {
         };
         let handles: Vec<Handle> = br.entity_handles.clone();
         for h in handles {
-            let Some(e) = self.document.get_entity(h) else {
+            let Some(source) = self.document.get_entity(h) else {
                 continue;
             };
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, source);
+            let e = contextual.as_ref();
             // A block-internal solid / nested INSERT on an off/frozen layer
             // (or flagged invisible) must not render, same as a top-level one.
             if !self.mesh_entity_visible(h) {
@@ -4758,7 +5018,9 @@ impl Scene {
             }
             if let EntityType::Insert(ins) = e {
                 let composed = ins.get_transform().then(accum);
-                let child = inherit.map(|(pc, pl0)| self.chain_mesh_inherit(ins, pc, pl0));
+                let child = inherit
+                    .as_ref()
+                    .map(|parent| self.chain_mesh_inherit(ins, parent));
                 self.expand_block_meshes(&ins.block_name, &composed, depth + 1, child, out);
             } else if let Some(set) = self.block_meshes.get(&h) {
                 // The solid's own transparency (baked into the cached colour).
@@ -4767,10 +5029,26 @@ impl Scene {
                 // Re-resolve colour against the INSERT context: a block-internal
                 // solid that is ByBlock or on layer "0" + ByLayer can't be
                 // coloured at cache-build time (no insert context there). (#221)
-                if let Some(c) = self.block_mesh_override_color(e, h, inherit, own_alpha) {
+                if let Some(c) =
+                    self.block_mesh_override_color(e, h, inherit.as_ref(), own_alpha)
+                {
                     for lod in &mut ts.lods {
                         lod.color = c;
                     }
+                    if let Some(material) = ts.material.as_mut() {
+                        if material.handle.is_none() {
+                            material.diffuse = c;
+                        }
+                    }
+                }
+                if let Some(material) =
+                    self.block_mesh_override_material(e, inherit.as_ref())
+                {
+                    material.apply_to_with_face_overrides(
+                        &mut ts,
+                        &self.document,
+                        self.material_base_dir.as_deref(),
+                    );
                 }
                 out.push(ts);
             }
@@ -4793,16 +5071,21 @@ impl Scene {
     fn chain_mesh_inherit(
         &self,
         ins: &acadrust::entities::Insert,
-        parent_ins_color: [f32; 4],
-        parent_l0: [f32; 4],
-    ) -> ([f32; 4], [f32; 4]) {
+        parent: &BlockMeshInherit,
+    ) -> BlockMeshInherit {
         use acadrust::types::Color;
         let bg = self.current_bg();
         let on_l0 = crate::scene::view::render::is_effective_layer_zero(&ins.common.layer);
-        let child_ins_color = if ins.common.color == Color::ByBlock {
-            parent_ins_color
-        } else if on_l0 && ins.common.color == Color::ByLayer {
-            parent_l0
+        let insert_entity = EntityType::Insert(ins.clone());
+        let has_book_color =
+            crate::scene::view::render::has_resolved_book_color(
+                &self.document,
+                &insert_entity,
+            );
+        let child_ins_color = if !has_book_color && ins.common.color == Color::ByBlock {
+            parent.insert_color
+        } else if !has_book_color && on_l0 && ins.common.color == Color::ByLayer {
+            parent.layer0_color
         } else {
             crate::scene::view::render::adapt_to_bg(
                 crate::scene::view::render::render_style_for(
@@ -4814,7 +5097,7 @@ impl Scene {
             )
         };
         let child_l0 = if on_l0 {
-            parent_l0
+            parent.layer0_color
         } else {
             crate::scene::view::render::adapt_to_bg(
                 crate::scene::view::render::layer_render_style(&self.document, &ins.common.layer)
@@ -4822,7 +5105,35 @@ impl Scene {
                 bg,
             )
         };
-        (child_ins_color, child_l0)
+        let child_insert_material = if ins.common.material_flags == 1 {
+            parent.insert_material.clone()
+        } else if on_l0 && ins.common.material_flags == 0 {
+            parent.layer0_material.clone()
+        } else {
+            crate::scene::model::material_model::resolve_material_with_base(
+                &self.document,
+                &insert_entity,
+                child_ins_color,
+                Some(&parent.insert_material),
+                self.material_base_dir.as_deref(),
+            )
+        };
+        let child_l0_material = if on_l0 {
+            parent.layer0_material.clone()
+        } else {
+            crate::scene::model::material_model::resolve_layer_material_with_base(
+                &self.document,
+                &ins.common.layer,
+                child_l0,
+                self.material_base_dir.as_deref(),
+            )
+        };
+        BlockMeshInherit {
+            insert_color: child_ins_color,
+            layer0_color: child_l0,
+            insert_material: child_insert_material,
+            layer0_material: child_l0_material,
+        }
     }
 
     /// Per-instance colour override for a block-internal solid mesh: ByBlock →
@@ -4833,19 +5144,26 @@ impl Scene {
         &self,
         e: &EntityType,
         h: Handle,
-        inherit: Option<([f32; 4], [f32; 4])>,
+        inherit: Option<&BlockMeshInherit>,
         own_alpha: f32,
     ) -> Option<[f32; 4]> {
-        let (ins_color, l0_color) = inherit?;
+        let inherit = inherit?;
         use acadrust::types::Color;
         let common = e.common();
         let on_l0 = crate::scene::view::render::is_effective_layer_zero(&common.layer);
-        let mut c = if common.color == Color::ByBlock {
-            ins_color
-        } else if on_l0 && common.color == Color::ByLayer {
+        let has_book_color =
+            crate::scene::view::render::has_resolved_book_color(&self.document, e);
+        let mut c = if !has_book_color && common.color == Color::ByBlock {
+            inherit.insert_color
+        } else if !has_book_color && on_l0 && common.color == Color::ByLayer {
             // Inherit the insert layer's RGB but keep the solid's own alpha,
             // matching the wire/hatch path (render_style_for_block_sub).
-            [l0_color[0], l0_color[1], l0_color[2], own_alpha]
+            [
+                inherit.layer0_color[0],
+                inherit.layer0_color[1],
+                inherit.layer0_color[2],
+                own_alpha,
+            ]
         } else {
             return None;
         };
@@ -4855,6 +5173,24 @@ impl Scene {
             }
         }
         Some(c)
+    }
+
+    fn block_mesh_override_material(
+        &self,
+        entity: &EntityType,
+        inherit: Option<&BlockMeshInherit>,
+    ) -> Option<crate::scene::model::material_model::MeshMaterial> {
+        let inherit = inherit?;
+        let common = entity.common();
+        if common.material_flags == 1 {
+            Some(inherit.insert_material.clone())
+        } else if common.material_flags == 0
+            && crate::scene::view::render::is_effective_layer_zero(&common.layer)
+        {
+            Some(inherit.layer0_material.clone())
+        } else {
+            None
+        }
     }
 
     /// Hatches eligible for click / box / lasso hit-testing in the current
@@ -5015,7 +5351,9 @@ impl Scene {
         let mut hatch_memo: std::collections::HashMap<String, bool> =
             std::collections::HashMap::new();
         for entity in self.document.entities() {
-            let EntityType::Insert(ins) = entity else {
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, entity);
+            let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
             if ins.common.invisible
@@ -5037,6 +5375,13 @@ impl Scene {
             for sub in ins
                 .explode_from_document(&self.document)
                 .into_iter()
+                .map(|sub| {
+                    crate::scene::annotative::entity_for_active_context(
+                        &self.document,
+                        &sub,
+                    )
+                    .into_owned()
+                })
                 .map(crate::modules::draw::modify::explode::normalize_insert_entity)
             {
                 let EntityType::Hatch(dxf) = sub else {
@@ -5803,6 +6148,9 @@ impl Scene {
                     | Some(EntityType::Region(_))
                     | Some(EntityType::Body(_))
                     | Some(EntityType::Surface(_))
+                    | Some(EntityType::Mesh(_))
+                    | Some(EntityType::PolygonMesh(_))
+                    | Some(EntityType::PolyfaceMesh(_))
             )
         })
     }

@@ -27,11 +27,51 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> u: Uniforms;
 
+struct MaterialMaps {
+    blends0:  vec4<f32>,
+    present0: vec4<u32>,
+    blends1:  vec4<f32>,
+    present1: vec4<u32>,
+};
+
+@group(1) @binding(0) var diffuse_map: texture_2d<f32>;
+@group(1) @binding(1) var specular_map: texture_2d<f32>;
+@group(1) @binding(2) var reflection_map: texture_2d<f32>;
+@group(1) @binding(3) var opacity_map: texture_2d<f32>;
+@group(1) @binding(4) var bump_map: texture_2d<f32>;
+@group(1) @binding(5) var refraction_map: texture_2d<f32>;
+@group(1) @binding(6) var normal_map: texture_2d<f32>;
+@group(1) @binding(7) var diffuse_sampler: sampler;
+@group(1) @binding(8) var specular_sampler: sampler;
+@group(1) @binding(9) var reflection_sampler: sampler;
+@group(1) @binding(10) var opacity_sampler: sampler;
+@group(1) @binding(11) var bump_sampler: sampler;
+@group(1) @binding(12) var refraction_sampler: sampler;
+@group(1) @binding(13) var normal_sampler: sampler;
+@group(1) @binding(14) var<uniform> maps: MaterialMaps;
+
 struct VertexIn {
     @location(0) position:     vec3<f32>,
     @location(1) normal:       vec3<f32>,
     @location(2) color:        vec4<f32>,
     @location(3) position_low: vec3<f32>,
+    // gloss, reflectivity, self illumination, luminance
+    @location(4) material:     vec4<f32>,
+    // specular RGB, refraction index
+    @location(5) specular:     vec4<f32>,
+    @location(6) uv_diffuse:   vec2<f32>,
+    // ambient RGB, translucence
+    @location(7) ambient:      vec4<f32>,
+    // normal strength, bump scale, reflectance scale, transmittance scale
+    @location(8) advanced:     vec4<f32>,
+    // illumination model, channel flags, material mode, luminance mode
+    @location(9) flags:        vec4<u32>,
+    @location(10) uv_specular:   vec2<f32>,
+    @location(11) uv_reflection: vec2<f32>,
+    @location(12) uv_opacity:    vec2<f32>,
+    @location(13) uv_bump:       vec2<f32>,
+    @location(14) uv_refraction: vec2<f32>,
+    @location(15) uv_normal:     vec2<f32>,
 };
 
 struct VertexOut {
@@ -39,6 +79,19 @@ struct VertexOut {
     @location(0)       color:     vec4<f32>,
     @location(1)       normal:    vec3<f32>,
     @location(2)       world_pos: vec3<f32>,
+    @location(3)       material:  vec4<f32>,
+    @location(4)       specular:  vec4<f32>,
+    @location(5)       eye_vec:   vec3<f32>,
+    @location(6)       uv_diffuse: vec2<f32>,
+    @location(7)       ambient:   vec4<f32>,
+    @location(8)       advanced:  vec4<f32>,
+    @location(9) @interpolate(flat) flags: vec4<u32>,
+    @location(10)      uv_specular:   vec2<f32>,
+    @location(11)      uv_reflection: vec2<f32>,
+    @location(12)      uv_opacity:    vec2<f32>,
+    @location(13)      uv_bump:       vec2<f32>,
+    @location(14)      uv_refraction: vec2<f32>,
+    @location(15)      uv_normal:     vec2<f32>,
 };
 
 @vertex
@@ -48,7 +101,20 @@ fn vs_main(v: VertexIn) -> VertexOut {
     out.clip_pos  = u.view_rot * vec4<f32>(rel, 1.0);
     out.color     = v.color;
     out.normal    = v.normal;
-    out.world_pos = v.position;
+    out.world_pos = rel;
+    out.material  = v.material;
+    out.specular  = v.specular;
+    out.eye_vec   = -rel;
+    out.uv_diffuse = v.uv_diffuse;
+    out.ambient   = v.ambient;
+    out.advanced  = v.advanced;
+    out.flags     = v.flags;
+    out.uv_specular = v.uv_specular;
+    out.uv_reflection = v.uv_reflection;
+    out.uv_opacity = v.uv_opacity;
+    out.uv_bump = v.uv_bump;
+    out.uv_refraction = v.uv_refraction;
+    out.uv_normal = v.uv_normal;
     return out;
 }
 
@@ -64,6 +130,37 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         n = normalize(in.normal);
     }
 
+    // Build a derivative tangent frame from the generated material UVs. This
+    // works for planar/box/cylindrical/spherical AcDbMaterial projections and
+    // does not require ACIS to carry explicit texture-coordinate vertices.
+    let dp1 = dpdx(in.world_pos);
+    let dp2 = dpdy(in.world_pos);
+    let tangent_uv = select(in.uv_bump, in.uv_normal, maps.present1.z != 0u);
+    let duv1 = dpdx(tangent_uv);
+    let duv2 = dpdy(tangent_uv);
+    let det = duv1.x * duv2.y - duv1.y * duv2.x;
+    var tangent = normalize(dp1);
+    var bitangent = normalize(cross(n, tangent));
+    if (abs(det) > 1e-8) {
+        tangent = normalize((dp1 * duv2.y - dp2 * duv1.y) / det);
+        bitangent = normalize((-dp1 * duv2.x + dp2 * duv1.x) / det);
+    }
+    if (maps.present1.z != 0u) {
+        let sampled = textureSample(normal_map, normal_sampler, in.uv_normal).xyz * 2.0 - 1.0;
+        let mapped = normalize(
+            tangent * sampled.x + bitangent * sampled.y + n * sampled.z
+        );
+        let strength = maps.blends1.z * max(in.advanced.x, 0.0);
+        n = normalize(mix(n, mapped, clamp(strength, 0.0, 1.0)));
+    } else if (maps.present1.x != 0u) {
+        let height = dot(
+            textureSample(bump_map, bump_sampler, in.uv_bump).rgb,
+            vec3<f32>(0.2126, 0.7152, 0.0722),
+        );
+        let slope = tangent * dpdx(height) + bitangent * dpdy(height);
+        n = normalize(n - slope * maps.blends1.x * max(in.advanced.y, 0.0) * 4.0);
+    }
+
     // Three-point-ish lighting (world space) plus ambient. Spread directions
     // keep every face — and the back faces seen through an open surface — lit
     // from at least one source, so the model never reads as a flat dark mass.
@@ -71,13 +168,69 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let l0 = normalize(vec3<f32>( 0.5,  0.8,  0.6)); // key (upper front)
     let l1 = normalize(vec3<f32>(-0.7,  0.3,  0.4)); // fill (left)
     let l2 = normalize(vec3<f32>( 0.2, -0.6, -0.8)); // back/under
-    let ambient = 0.35;
-    let diff = ambient
-        + 0.45 * abs(dot(n, l0))
+    let diff = 0.45 * abs(dot(n, l0))
         + 0.30 * abs(dot(n, l1))
         + 0.25 * abs(dot(n, l2));
-    let rgb = in.color.rgb * clamp(diff, 0.0, 1.0);
-    return vec4<f32>(rgb, in.color.a);
+    let view = normalize(in.eye_vec);
+    let half_vec = normalize(l0 + view);
+    let gloss_exp = mix(2.0, 128.0, clamp(in.material.x, 0.0, 1.0));
+    let fresnel0 = pow(
+        (max(in.specular.w, 1.0) - 1.0) / (max(in.specular.w, 1.0) + 1.0),
+        2.0,
+    );
+    let fresnel = fresnel0
+        + (1.0 - fresnel0) * pow(1.0 - abs(dot(n, view)), 5.0);
+    let specular_strength = clamp(0.08 + in.material.y + fresnel, 0.0, 1.5);
+    var specular_color = in.specular.rgb;
+    if (maps.present0.y != 0u) {
+        let texel = textureSample(specular_map, specular_sampler, in.uv_specular).rgb;
+        specular_color = mix(specular_color, texel, clamp(maps.blends0.y, 0.0, 1.0));
+    }
+    let specular = specular_color
+        * pow(max(abs(dot(n, half_vec)), 0.0), gloss_exp)
+        * specular_strength
+        * max(in.advanced.z, 0.0);
+    var albedo = in.color.rgb;
+    if (maps.present0.x != 0u) {
+        let texel = textureSample(diffuse_map, diffuse_sampler, in.uv_diffuse).rgb;
+        albedo = mix(albedo, texel, clamp(maps.blends0.x, 0.0, 1.0));
+    }
+    let ambient_light = albedo * clamp(in.ambient.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    var lit = ambient_light + albedo * clamp(diff, 0.0, 1.0) + specular;
+    if (maps.present0.z != 0u) {
+        let reflected = textureSample(
+            reflection_map,
+            reflection_sampler,
+            in.uv_reflection,
+        ).rgb;
+        lit = mix(
+            lit,
+            reflected,
+            clamp(maps.blends0.z * in.material.y * max(in.advanced.z, 0.0), 0.0, 1.0),
+        );
+    }
+    if (maps.present1.y != 0u) {
+        let transmitted = textureSample(
+            refraction_map,
+            refraction_sampler,
+            in.uv_refraction,
+        ).rgb;
+        lit = mix(
+            lit,
+            transmitted,
+            clamp(maps.blends1.y * in.ambient.a * max(in.advanced.w, 0.0), 0.0, 1.0),
+        );
+    }
+    let emission = clamp(in.material.z + in.material.w, 0.0, 1.0);
+    let rgb = mix(lit, albedo, emission);
+    var material_alpha = in.color.a;
+    if (maps.present0.w != 0u) {
+        let opacity = textureSample(opacity_map, opacity_sampler, in.uv_opacity).r;
+        material_alpha *= mix(1.0, opacity, clamp(maps.blends0.w, 0.0, 1.0));
+    }
+    material_alpha *= 1.0 - clamp(in.ambient.a * max(in.advanced.w, 0.0), 0.0, 0.95);
+    let alpha = select(1.0, material_alpha, u.transparency_enable > 0.5);
+    return vec4<f32>(rgb, alpha);
 }
 
 // Edge fragment (LineList): flat entity colour, no lighting. Used for the

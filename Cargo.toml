@@ -90,8 +90,8 @@ lyon_tessellation = "1.0.20"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [patch.crates-io]
-# Track the verified DWG round-trip, I/O, and unified PERF fixes.
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "de8d6b5" }
+# Track standard DWG entity data used by the scene integration.
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "7aaea11" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).

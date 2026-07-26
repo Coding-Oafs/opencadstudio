@@ -200,6 +200,14 @@ impl Scene {
                 }
             }
         }
+        for &h in handles {
+            if crate::scene::annotative::sync_active_context_from_entity(
+                &mut self.document,
+                h,
+            ) {
+                self.poison_undo_recording();
+            }
+        }
         // Move the baked dimension-block sub-entities too (collected above).
         // These are entities not named in the reported change set, so a delta
         // must capture their before-images here or a dimension move won't undo.
@@ -438,6 +446,12 @@ impl Scene {
         if let Some(entity) = self.document.get_entity_mut(handle) {
             view::dispatch::apply_grip(entity, grip_id, apply);
         }
+        if crate::scene::annotative::sync_active_context_from_entity(
+            &mut self.document,
+            handle,
+        ) {
+            self.poison_undo_recording();
+        }
         // A dimension loaded from a file renders through its baked *D block;
         // the grip only moved a definition point, so the baked graphics are
         // stale — drop them so tessellation falls back to the live geometry
@@ -452,21 +466,83 @@ impl Scene {
                 .and_then(crate::entities::solid3d::point_of_reference)
                 .map(|p| [p.x, p.y, p.z]);
             if let Some(new) = new_por {
-                let dx = (new[0] - old[0]) as f32;
-                let dy = (new[1] - old[1]) as f32;
-                let dz = (new[2] - old[2]) as f32;
+                let delta = [new[0] - old[0], new[1] - old[1], new[2] - old[2]];
                 if let Some(set) = self.meshes.get_mut(&handle) {
+                    let translate_split =
+                        |high: &mut [f32; 3], low: &mut [f32; 3]| {
+                            let absolute = [
+                                high[0] as f64 + low[0] as f64 + delta[0],
+                                high[1] as f64 + low[1] as f64 + delta[1],
+                                high[2] as f64 + low[2] as f64 + delta[2],
+                            ];
+                            *high = [
+                                absolute[0] as f32,
+                                absolute[1] as f32,
+                                absolute[2] as f32,
+                            ];
+                            *low = [
+                                (absolute[0] - high[0] as f64) as f32,
+                                (absolute[1] - high[1] as f64) as f32,
+                                (absolute[2] - high[2] as f64) as f32,
+                            ];
+                        };
                     for lod in &mut set.lods {
-                        for v in &mut lod.verts {
-                            v[0] += dx;
-                            v[1] += dy;
-                            v[2] += dz;
+                        if lod.verts_low.len() != lod.verts.len() {
+                            lod.verts_low = vec![[0.0; 3]; lod.verts.len()];
+                        }
+                        for (high, low) in lod.verts.iter_mut().zip(lod.verts_low.iter_mut()) {
+                            translate_split(high, low);
                         }
                     }
-                    set.world_aabb[0] += dx;
-                    set.world_aabb[1] += dy;
-                    set.world_aabb[2] += dx;
-                    set.world_aabb[3] += dy;
+                    if set.edge_verts_low.len() != set.edge_verts.len() {
+                        set.edge_verts_low = vec![[0.0; 3]; set.edge_verts.len()];
+                    }
+                    for (high, low) in set
+                        .edge_verts
+                        .iter_mut()
+                        .zip(set.edge_verts_low.iter_mut())
+                    {
+                        translate_split(high, low);
+                    }
+                    for generator in &mut set.curved_gens {
+                        match generator {
+                            crate::scene::model::mesh_model::CurvedGen::Cone {
+                                base,
+                                base_low,
+                                ..
+                            } => translate_split(base, base_low),
+                            crate::scene::model::mesh_model::CurvedGen::Sphere {
+                                center,
+                                center_low,
+                                ..
+                            }
+                            | crate::scene::model::mesh_model::CurvedGen::Torus {
+                                center,
+                                center_low,
+                                ..
+                            } => translate_split(center, center_low),
+                        }
+                    }
+                    for silhouette in &mut set.stored_silhouettes {
+                        silhouette.target[0] += delta[0] as f32;
+                        silhouette.target[1] += delta[1] as f32;
+                        silhouette.target[2] += delta[2] as f32;
+                        if silhouette.edge_verts_low.len() != silhouette.edge_verts.len() {
+                            silhouette.edge_verts_low =
+                                vec![[0.0; 3]; silhouette.edge_verts.len()];
+                        }
+                        for (high, low) in silhouette
+                            .edge_verts
+                            .iter_mut()
+                            .zip(silhouette.edge_verts_low.iter_mut())
+                        {
+                            translate_split(high, low);
+                        }
+                    }
+                    set.metrics.centroid[0] += delta[0];
+                    set.metrics.centroid[1] += delta[1];
+                    set.metrics.centroid[2] += delta[2];
+                    set.recompute_aabb();
                 }
             }
         }

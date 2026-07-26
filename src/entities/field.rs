@@ -53,6 +53,14 @@ pub fn resolve(document: &CadDocument, host: Handle) -> Option<String> {
     acadrust::fields::resolve(document, host, &OcsFieldContext)
 }
 
+pub fn resolve_handle(
+    document: &CadDocument,
+    field: Handle,
+    host: Handle,
+) -> Option<String> {
+    acadrust::fields::resolve_handle(document, field, host, &OcsFieldContext)
+}
+
 /// Seconds since the Unix epoch. Native uses the system clock; wasm uses the JS
 /// `Date` clock. This platform-specific read stays in the app, not the library.
 fn epoch_secs() -> i64 {

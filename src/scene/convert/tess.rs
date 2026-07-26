@@ -357,6 +357,8 @@ pub(crate) fn tessellate_entity(
     // by the viewport's GPU uniform so it never changes resident wire content.
     paper_space: bool,
 ) -> Vec<WireModel> {
+    let contextual = crate::scene::annotative::entity_for_active_context(document, e);
+    let e = contextual.as_ref();
     let h = e.common().handle;
     let sel = selected.contains(&h);
 
@@ -518,9 +520,22 @@ pub(crate) fn tessellate_entity(
     // blob, the vector preview its author cached for exactly this case. AutoCAD
     // draws that when the object enabler is missing; draw it too, so the entity
     // occupies its real place instead of silently disappearing.
-    if let EntityType::Unknown(_) = e {
-        if let Some(blob) = e.common().graphic_data.as_ref() {
-            let dec = convert::proxy_graphics::decode(blob);
+    let proxy_blob: Option<std::borrow::Cow<'_, [u8]>> = match e {
+        EntityType::Unknown(_) => e
+            .common()
+            .graphic_data
+            .as_deref()
+            .map(std::borrow::Cow::Borrowed),
+        EntityType::Extended(entity) => match &entity.data {
+            acadrust::entities::ExtendedEntityData::Proxy(proxy) => {
+                Some(std::borrow::Cow::Owned(proxy.graphics.data()))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(blob) = proxy_blob {
+            let dec = convert::proxy_graphics::decode(blob.as_ref());
             if !dec.polylines.is_empty() || !dec.texts.is_empty() {
                 use crate::scene::convert::proxy_graphics::ProxyColor;
                 use std::collections::BTreeMap;
@@ -618,7 +633,6 @@ pub(crate) fn tessellate_entity(
                     return wires;
                 }
             }
-        }
     }
 
     // ── Section symbol (AcDbSectionSymbol): draw the "A-A" cut mark ──────────
@@ -744,10 +758,13 @@ pub(crate) fn tessellate_entity(
                         // Sub-entities inside *D### / DIMBLOCK## blocks
                         // typically use ByBlock color/linetype/lineweight —
                         // they should inherit from the Dimension entity.
-                        let sub_color_is_byblock =
-                            sub.common().color == acadrust::types::Color::ByBlock;
+                        let has_book_color =
+                            view::render::has_resolved_book_color(document, sub);
+                        let sub_color_is_byblock = !has_book_color
+                            && sub.common().color == acadrust::types::Color::ByBlock;
                         let sub_is_l0_bylayer =
-                            view::render::is_effective_layer_zero(&sub.common().layer)
+                            !has_book_color
+                            && view::render::is_effective_layer_zero(&sub.common().layer)
                             && sub.common().color == acadrust::types::Color::ByLayer;
                         let sub_wires = tessellate_entity(
                             document,
@@ -898,10 +915,13 @@ pub(crate) fn tessellate_entity(
                         let Some(sub) = document.get_entity(eh) else {
                             continue;
                         };
-                        let sub_color_is_byblock =
-                            sub.common().color == acadrust::types::Color::ByBlock;
+                        let has_book_color =
+                            view::render::has_resolved_book_color(document, sub);
+                        let sub_color_is_byblock = !has_book_color
+                            && sub.common().color == acadrust::types::Color::ByBlock;
                         let sub_is_l0_bylayer =
-                            view::render::is_effective_layer_zero(&sub.common().layer)
+                            !has_book_color
+                            && view::render::is_effective_layer_zero(&sub.common().layer)
                             && sub.common().color == acadrust::types::Color::ByLayer;
                         let mut placed = sub.clone();
                         {
@@ -976,6 +996,22 @@ pub(crate) fn tessellate_entity(
             line_weight_px,
             table_anno,
         );
+        for insert in
+            crate::entities::table::block_cell_inserts(tab, document, table_anno)
+        {
+            wires.extend(tessellate_entity(
+                document,
+                selected,
+                active_viewport,
+                bg_color,
+                1.0,
+                &EntityType::Insert(insert),
+                block_cache,
+                view_aabb,
+                world_per_pixel,
+                paper_space,
+            ));
+        }
         if !wires.is_empty() {
             let aabb = entity_aabb(e);
             for w in &mut wires {

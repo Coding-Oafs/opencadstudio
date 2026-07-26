@@ -34,6 +34,7 @@ use crate::scene::convert::solid3d_tess::{
     TRUCK_CHORD_FRAC,
 };
 use crate::scene::model::mesh_model::MeshLodSet;
+use rustc_hash::FxHashMap;
 
 /// Slightly over 2π so revolution builders close the loop.
 const FULL: f64 = std::f64::consts::TAU + 0.2;
@@ -91,9 +92,53 @@ pub fn tessellate_sat_truck(
     let mut verts: Vec<[f64; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let face_materials: FxHashMap<i32, acadrust::Handle> = sat
+        .records
+        .iter()
+        .filter(|record| record.entity_type == "material-adesk-attrib")
+        .filter_map(|record| {
+            let owner = record.token_pointer(2)?.0;
+            let handle = record.token(3)?.as_integer()?;
+            (owner >= 0 && handle > 0)
+                .then(|| (owner, acadrust::Handle::new(handle as u64)))
+        })
+        .collect();
+    let face_colors: FxHashMap<i32, [f32; 4]> = sat
+        .records
+        .iter()
+        .filter(|record| record.entity_type == "color-adesk-attrib")
+        .filter_map(|record| {
+            let owner = record.token_pointer(2)?.0;
+            let value = record.token(3)?.as_integer()?;
+            let face_color = if (1..=255).contains(&value) {
+                acadrust::Color::from_index(value as i16)
+            } else if value > 257 {
+                acadrust::Color::from_true_color_value(value as i32)
+            } else {
+                return None;
+            };
+            Some((
+                owner,
+                {
+                    let mut rgba =
+                        crate::scene::convert::tess_util::aci_to_rgba(&face_color);
+                    rgba[3] = color[3];
+                    rgba
+                },
+            ))
+        })
+        .collect();
+    let mut triangle_material_handles: Vec<Option<acadrust::Handle>> = Vec::new();
+    let mut triangle_colors: Vec<Option<[f32; 4]>> = Vec::new();
+    let face_record_indices: Vec<i32> = sat
+        .records
+        .iter()
+        .filter(|record| record.is_a("face"))
+        .map(|record| record.index)
+        .collect();
     let mut complete = true;
 
-    for face in sat.faces().into_iter() {
+    for (face, face_record_index) in sat.faces().into_iter().zip(face_record_indices) {
         let Some(surf_rec) = sat.resolve(face.surface()) else {
             complete = false;
             continue;
@@ -121,6 +166,15 @@ pub fn tessellate_sat_truck(
         }
         if !appended {
             complete = false;
+        } else {
+            let material = face_materials.get(&face_record_index).copied();
+            triangle_material_handles.extend(
+                std::iter::repeat(material).take((indices.len() - before) / 3),
+            );
+            let face_color = face_colors.get(&face_record_index).copied();
+            triangle_colors.extend(
+                std::iter::repeat(face_color).take((indices.len() - before) / 3),
+            );
         }
     }
 
@@ -128,7 +182,16 @@ pub fn tessellate_sat_truck(
         return None;
     }
 
-    let mesh = finalize_mesh(name, verts, normals, indices, color, body_transform(sat));
+    let mesh = finalize_mesh(
+        name,
+        verts,
+        normals,
+        indices,
+        triangle_material_handles,
+        triangle_colors,
+        color,
+        body_transform(sat),
+    );
     let mut set = MeshLodSet::from_lods(vec![mesh]);
     set.complete = complete;
     Some(set)
@@ -166,7 +229,7 @@ fn bespoke_face(
                 tess_torus_face(sat, face, &t, LodConfig::HIGH, v, n, i);
             }
         }
-        "spline-surface" => {
+        "spline-surface" | "meshsurf-surface" | "bs3-surface" => {
             crate::scene::convert::spline_tess::tess_spline_face(
                 sat,
                 face,

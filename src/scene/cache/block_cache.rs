@@ -358,9 +358,12 @@ fn build_defn(
     let cap = br.entity_handles.len();
     let mut subs: Vec<LocalSub> = Vec::with_capacity(cap);
     for &eh in &br.entity_handles {
-        let Some(entity) = doc.get_entity(eh) else {
+        let Some(source_entity) = doc.get_entity(eh) else {
             continue;
         };
+        let contextual =
+            crate::scene::annotative::entity_for_active_context(doc, source_entity);
+        let entity = contextual.as_ref();
         // Skip entities flagged invisible. Dynamic blocks (e.g. a visibility-
         // state parametric block) keep the geometry for every state in one
         // anonymous block and mark all but the active state's entities
@@ -468,7 +471,9 @@ fn build_defn(
                 let tblk = tab
                     .block_record_handle
                     .and_then(|h| doc.block_records.iter().find(|br| br.handle == h));
+                let mut used_baked = false;
                 if let Some(tblk) = tblk {
+                    used_baked = !tblk.entity_handles.is_empty();
                     let ins = tab.insertion_point;
                     let angle = tab.horizontal_direction.y.atan2(tab.horizontal_direction.x);
                     for &teh in &tblk.entity_handles {
@@ -505,6 +510,25 @@ fn build_defn(
                         }
                     }
                 }
+                if !used_baked {
+                    for lw in
+                        tessellate_sub_local(doc, entity, anno_scale, bg_color, depth_map)
+                    {
+                        subs.push(LocalSub::Wire(lw));
+                    }
+                    for insert in crate::entities::table::block_cell_inserts(
+                        tab,
+                        doc,
+                        anno_scale,
+                    ) {
+                        subs.push(LocalSub::Nested(build_nested_ref(
+                            &insert,
+                            doc,
+                            bg_color,
+                            depth_map,
+                        )));
+                    }
+                }
             }
             _ => {
                 // A wide polyline inside a block carries its `world_width` on
@@ -539,6 +563,9 @@ fn build_nested_ref(
     // children (raw colour; adapted at emit like `ins_color`).
     let l0 = crate::scene::view::render::layer_render_style(doc, &nested_ins.common.layer);
     let _ = bg_color;
+    let nested_entity = EntityType::Insert(nested_ins.clone());
+    let has_book_color =
+        crate::scene::view::render::has_resolved_book_color(doc, &nested_entity);
 
     // Bake the XCLIP boundary (parent-defn-local) so the nested insert keeps
     // its clip when the parent block is expanded — the spatial filter object
@@ -553,10 +580,10 @@ fn build_nested_ref(
         ins_pat_len,
         ins_pat,
         ins_lw_px,
-        color_is_byblock: nested_ins.common.color == AcadColor::ByBlock,
+        color_is_byblock: !has_book_color && nested_ins.common.color == AcadColor::ByBlock,
         lt_is_byblock: nested_ins.common.linetype.eq_ignore_ascii_case("byblock"),
         lw_is_byblock: matches!(nested_ins.common.line_weight, LineWeight::ByBlock),
-        color_is_bylayer: nested_ins.common.color == AcadColor::ByLayer,
+        color_is_bylayer: !has_book_color && nested_ins.common.color == AcadColor::ByLayer,
         lt_is_bylayer: {
             let lt = &nested_ins.common.linetype;
             lt.is_empty() || lt.eq_ignore_ascii_case("bylayer")
@@ -601,7 +628,10 @@ fn tessellate_sub_local(
     let (sub_color, pat_len, pat, lw_px, aci) = crate::scene::view::render::render_style_for(doc, sub);
     let _ = bg_color;
 
-    let color_is_byblock = sub.common().color == AcadColor::ByBlock;
+    let has_book_color =
+        crate::scene::view::render::has_resolved_book_color(doc, sub);
+    let color_is_byblock =
+        !has_book_color && sub.common().color == AcadColor::ByBlock;
     let lt_is_byblock = sub.common().linetype.eq_ignore_ascii_case("byblock");
     let lw_is_byblock = matches!(sub.common().line_weight, LineWeight::ByBlock);
 
@@ -609,7 +639,8 @@ fn tessellate_sub_local(
     // INSERT's layer at expand time. Flag each ByLayer property so emit_wire
     // can override the cached (layer-0-resolved) value with the insert layer's.
     let on_l0 = crate::scene::view::render::is_effective_layer_zero(&sub.common().layer);
-    let color_l0 = on_l0 && sub.common().color == AcadColor::ByLayer;
+    let color_l0 =
+        !has_book_color && on_l0 && sub.common().color == AcadColor::ByLayer;
     let lt_l0 = on_l0 && {
         let lt = &sub.common().linetype;
         lt.is_empty() || lt.eq_ignore_ascii_case("bylayer")

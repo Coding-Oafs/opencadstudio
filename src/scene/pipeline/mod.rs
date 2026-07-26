@@ -78,6 +78,8 @@ pub struct Pipeline {
     /// writes, writes depth). Used in HiddenLine mode so 3D solids
     /// occlude wires behind them without painting visible pixels.
     mesh_depth_pipeline: wgpu::RenderPipeline,
+    mesh_material_bgl: wgpu::BindGroupLayout,
+    mesh_default_material_bind_group: wgpu::BindGroup,
     face3d_pipeline: wgpu::RenderPipeline,
     /// Depth-only variant of the face3d pipeline (no color writes,
     /// writes depth). Paired with `mesh_depth_pipeline` for HiddenLine.
@@ -839,9 +841,144 @@ impl Pipeline {
             ))),
         });
 
+        let mesh_material_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("mesh.material.bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let mesh_default_material_bind_group = mesh_gpu::create_material_bind_group(
+            device,
+            queue,
+            &mesh_material_bgl,
+            None,
+        );
+
         let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh.pipeline_layout"),
-            bind_group_layouts: &[&frame_bgl],
+            bind_group_layouts: &[&frame_bgl, &mesh_material_bgl],
             push_constant_ranges: &[],
         });
 
@@ -1437,6 +1574,8 @@ impl Pipeline {
             mesh_wireframe_pipeline,
             mesh_edge_black_pipeline,
             mesh_depth_pipeline,
+            mesh_material_bgl,
+            mesh_default_material_bind_group,
             face3d_pipeline,
             face3d_depth_pipeline,
             uniform_buffer,
@@ -1757,6 +1896,18 @@ impl Pipeline {
                         (w.y - hy as f64) as f32,
                         (w.z - hz as f64) as f32,
                     ],
+                    material: [0.5, 0.0, 0.0, 0.0],
+                    specular: [1.0, 1.0, 1.0, 1.0],
+                    uv_diffuse: [0.0; 2],
+                    ambient: [0.3, 0.3, 0.3, 0.0],
+                    advanced: [1.0; 4],
+                    flags: [0, 127, 0, 0],
+                    uv_specular: [0.0; 2],
+                    uv_reflection: [0.0; 2],
+                    uv_opacity: [0.0; 2],
+                    uv_bump: [0.0; 2],
+                    uv_refraction: [0.0; 2],
+                    uv_normal: [0.0; 2],
                 }
             };
             for g in &set.curved_gens {
@@ -1860,6 +2011,28 @@ impl Pipeline {
                                 prev[k] = Some(p);
                             }
                         }
+                    }
+                }
+            }
+            if set.curved_gens.is_empty() || !set.complete {
+                let best = set.stored_silhouettes.iter().max_by(|left, right| {
+                    let score = |silhouette: &crate::scene::model::mesh_model::StoredSilhouette| {
+                        let direction = d3(silhouette.view_direction)
+                            .normalize_or(glam::DVec3::NEG_Z);
+                        direction.dot(view).abs()
+                    };
+                    score(left)
+                        .partial_cmp(&score(right))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                if let Some(silhouette) = best {
+                    for (index, high) in silhouette.edge_verts.iter().copied().enumerate() {
+                        let low = silhouette
+                            .edge_verts_low
+                            .get(index)
+                            .copied()
+                            .unwrap_or([0.0; 3]);
+                        verts.push(mk(lo(high, low)));
                     }
                 }
             }
@@ -2020,8 +2193,21 @@ impl Pipeline {
     /// set, drawn in a handful of calls). Selection/hover tint is intentionally
     /// not applied here — the batch is geometry-only and stays resident across
     /// camera moves and pick changes.
-    pub fn upload_mesh_batch(&mut self, device: &wgpu::Device, meshes: &[MeshLodSet]) {
-        let (chunks, _tris) = mesh_gpu::build_mesh_batch(device, meshes);
+    pub fn upload_mesh_batch(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        meshes: &[MeshLodSet],
+    ) {
+        let (mut chunks, _tris) = mesh_gpu::build_mesh_batch(device, meshes);
+        for chunk in &mut chunks {
+            chunk.material_bind_group = Some(mesh_gpu::create_material_bind_group(
+                device,
+                queue,
+                &self.mesh_material_bgl,
+                chunk.material.as_ref(),
+            ));
+        }
         self.gpu_mesh_batch = chunks;
     }
 
@@ -2051,7 +2237,7 @@ impl Pipeline {
                 Some(h) if Some(h) == hover => Highlight::Hover,
                 _ => continue,
             };
-            out.push(MeshGpu::new(device, m, mode));
+            out.push(MeshGpu::new(device, m, set.material.as_ref(), mode));
         }
         self.gpu_mesh_highlight = out;
     }
@@ -2377,6 +2563,13 @@ impl Pipeline {
                 // so both the opaque and the transparent tris write depth here.
                 pass.set_pipeline(&self.mesh_depth_pipeline);
                 for c in &self.gpu_mesh_batch {
+                    pass.set_bind_group(
+                        1,
+                        c.material_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.mesh_default_material_bind_group),
+                        &[],
+                    );
                     pass.set_vertex_buffer(0, c.vertex_buffer.slice(..));
                     if c.index_count != 0 {
                         pass.set_index_buffer(
@@ -2395,6 +2588,13 @@ impl Pipeline {
                 }
                 pass.set_pipeline(&self.mesh_wireframe_pipeline);
                 for c in &self.gpu_mesh_batch {
+                    pass.set_bind_group(
+                        1,
+                        c.material_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.mesh_default_material_bind_group),
+                        &[],
+                    );
                     // Plain-mesh triangulation edges.
                     if c.wire_index_count != 0 {
                         pass.set_vertex_buffer(0, c.vertex_buffer.slice(..));
@@ -2419,6 +2619,13 @@ impl Pipeline {
                 if mesh_wireframe {
                     pass.set_pipeline(&self.mesh_wireframe_pipeline);
                     for c in &self.gpu_mesh_batch {
+                        pass.set_bind_group(
+                            1,
+                            c.material_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.mesh_default_material_bind_group),
+                            &[],
+                        );
                         if c.wire_index_count != 0 {
                             pass.set_vertex_buffer(0, c.vertex_buffer.slice(..));
                             pass.set_index_buffer(
@@ -2441,6 +2648,13 @@ impl Pipeline {
                     // Opaque fills first (they write depth).
                     pass.set_pipeline(&self.mesh_pipeline);
                     for c in &self.gpu_mesh_batch {
+                        pass.set_bind_group(
+                            1,
+                            c.material_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.mesh_default_material_bind_group),
+                            &[],
+                        );
                         if c.index_count == 0 {
                             continue;
                         }
@@ -2453,6 +2667,13 @@ impl Pipeline {
                     // culling it via the depth buffer.
                     pass.set_pipeline(&self.mesh_transparent_pipeline);
                     for c in &self.gpu_mesh_batch {
+                        pass.set_bind_group(
+                            1,
+                            c.material_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.mesh_default_material_bind_group),
+                            &[],
+                        );
                         if c.transp_index_count == 0 {
                             continue;
                         }
@@ -2469,6 +2690,7 @@ impl Pipeline {
                 // the tint shows on top even when the solid is behind others.
                 if !self.gpu_mesh_highlight.is_empty() {
                     pass.set_pipeline(&self.mesh_highlight_pipeline);
+                    pass.set_bind_group(1, &self.mesh_default_material_bind_group, &[]);
                     for g in &self.gpu_mesh_highlight {
                         if g.index_count == 0 {
                             continue;
@@ -2484,6 +2706,13 @@ impl Pipeline {
                 if want_solid_with_edges {
                     pass.set_pipeline(&self.mesh_edge_black_pipeline);
                     for c in &self.gpu_mesh_batch {
+                        pass.set_bind_group(
+                            1,
+                            c.material_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.mesh_default_material_bind_group),
+                            &[],
+                        );
                         if c.wire_index_count != 0 {
                             pass.set_vertex_buffer(0, c.vertex_buffer.slice(..));
                             pass.set_index_buffer(

@@ -1967,6 +1967,7 @@ impl OpenCADStudio {
                 self.scale_popup_open = false;
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                     tab.scene.annotation_scale = scale;
+                    util::sync_annotation_scale_header(&mut tab.scene);
                     tab.scene.bump_geometry();
                 }
                 Task::none()

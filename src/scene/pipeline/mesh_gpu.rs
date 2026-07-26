@@ -20,6 +20,23 @@ pub struct MeshVertex {
     pub normal: [f32; 3],
     pub color: [f32; 4],
     pub position_low: [f32; 3],
+    /// gloss, reflectivity, self-illumination, luminance
+    pub material: [f32; 4],
+    /// specular RGB and refraction index
+    pub specular: [f32; 4],
+    pub uv_diffuse: [f32; 2],
+    /// ambient RGB and translucence
+    pub ambient: [f32; 4],
+    /// normal strength, bump scale, reflectance scale, transmittance scale
+    pub advanced: [f32; 4],
+    /// illumination model, channel flags, material mode, luminance mode
+    pub flags: [u32; 4],
+    pub uv_specular: [f32; 2],
+    pub uv_reflection: [f32; 2],
+    pub uv_opacity: [f32; 2],
+    pub uv_bump: [f32; 2],
+    pub uv_refraction: [f32; 2],
+    pub uv_normal: [f32; 2],
 }
 
 impl MeshVertex {
@@ -44,6 +61,66 @@ impl MeshVertex {
                 offset: std::mem::offset_of!(MeshVertex, position_low) as u64,
                 shader_location: 3,
                 format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, material) as u64,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, specular) as u64,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_diffuse) as u64,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, ambient) as u64,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, advanced) as u64,
+                shader_location: 8,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, flags) as u64,
+                shader_location: 9,
+                format: wgpu::VertexFormat::Uint32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_specular) as u64,
+                shader_location: 10,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_reflection) as u64,
+                shader_location: 11,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_opacity) as u64,
+                shader_location: 12,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_bump) as u64,
+                shader_location: 13,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_refraction) as u64,
+                shader_location: 14,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, uv_normal) as u64,
+                shader_location: 15,
+                format: wgpu::VertexFormat::Float32x2,
             },
         ];
         wgpu::VertexBufferLayout {
@@ -128,6 +205,8 @@ pub struct MeshBatchChunk {
     /// buffer (pairs of endpoints), drawn non-indexed. Empty for plain meshes.
     pub edge_vertex_buffer: wgpu::Buffer,
     pub edge_vertex_count: u32,
+    pub material: Option<crate::scene::model::material_model::MeshMaterial>,
+    pub material_bind_group: Option<wgpu::BindGroup>,
 }
 
 fn make_chunk(
@@ -137,6 +216,7 @@ fn make_chunk(
     transp_indices: &[u32],
     wire_indices: &[u32],
     edge_verts: &[MeshVertex],
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
 ) -> MeshBatchChunk {
     // `create_buffer_init` with an empty slice yields a zero-sized buffer that
     // some backends reject for INDEX usage; a chunk can legitimately hold only
@@ -157,6 +237,18 @@ fn make_chunk(
             normal: [0.0, 1.0, 0.0],
             color: [0.0; 4],
             position_low: [0.0; 3],
+            material: [0.0; 4],
+            specular: [1.0, 1.0, 1.0, 1.0],
+            uv_diffuse: [0.0; 2],
+            ambient: [0.3, 0.3, 0.3, 0.0],
+            advanced: [1.0; 4],
+            flags: [0, 127, 0, 0],
+            uv_specular: [0.0; 2],
+            uv_reflection: [0.0; 2],
+            uv_opacity: [0.0; 2],
+            uv_bump: [0.0; 2],
+            uv_refraction: [0.0; 2],
+            uv_normal: [0.0; 2],
         }];
         let src = if data.is_empty() { &stub[..] } else { data };
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -175,7 +267,409 @@ fn make_chunk(
         wire_index_count: wire_indices.len() as u32,
         edge_vertex_buffer: mk_vertex(edge_verts, "mesh.batch.edge_vbuf"),
         edge_vertex_count: edge_verts.len() as u32,
+        material: material.cloned(),
+        material_bind_group: None,
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct MaterialMapParams {
+    /// diffuse, specular, reflection and opacity blend factors.
+    blends0: [f32; 4],
+    /// Presence bits for the same four maps.
+    present0: [u32; 4],
+    /// bump, refraction, normal and reserved blend factors.
+    blends1: [f32; 4],
+    /// Presence bits for the same four maps.
+    present1: [u32; 4],
+}
+
+fn upload_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &'static str,
+    image: Option<&crate::scene::model::material_model::MaterialImage>,
+    fallback: [u8; 4],
+    srgb: bool,
+) -> wgpu::TextureView {
+    let (width, height, pixels) = image.map_or((1, 1, fallback.as_slice()), |image| {
+        (image.width, image.height, image.rgba.as_slice())
+    });
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: if srgb {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        },
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+pub fn create_material_bind_group(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
+) -> wgpu::BindGroup {
+    let diffuse = material.and_then(|material| material.diffuse_map.image.as_deref());
+    let specular = material.and_then(|material| material.specular_map.image.as_deref());
+    let reflection = material.and_then(|material| material.reflection_map.image.as_deref());
+    let opacity = material.and_then(|material| material.opacity_map.image.as_deref());
+    let bump = material.and_then(|material| material.bump_map.image.as_deref());
+    let refraction = material.and_then(|material| material.refraction_map.image.as_deref());
+    let normal = material.and_then(|material| material.normal_map.image.as_deref());
+    let diffuse_view =
+        upload_rgba_texture(device, queue, "mesh.material.diffuse", diffuse, [255; 4], true);
+    let specular_view =
+        upload_rgba_texture(device, queue, "mesh.material.specular", specular, [255; 4], true);
+    let reflection_view =
+        upload_rgba_texture(device, queue, "mesh.material.reflection", reflection, [0, 0, 0, 255], true);
+    let opacity_view =
+        upload_rgba_texture(device, queue, "mesh.material.opacity", opacity, [255; 4], false);
+    let bump_view =
+        upload_rgba_texture(device, queue, "mesh.material.bump", bump, [128, 128, 128, 255], false);
+    let refraction_view =
+        upload_rgba_texture(device, queue, "mesh.material.refraction", refraction, [255; 4], true);
+    let normal_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.normal",
+        normal,
+        [128, 128, 255, 255],
+        false,
+    );
+    let sampler = |label: &'static str, tiling: u8| {
+        let address = match tiling {
+            1 => wgpu::AddressMode::Repeat,
+            4 => wgpu::AddressMode::MirrorRepeat,
+            _ => wgpu::AddressMode::ClampToEdge,
+        };
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(label),
+            address_mode_u: address,
+            address_mode_v: address,
+            address_mode_w: address,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        })
+    };
+    let tiling = |channel: usize| {
+        material.map_or(1, |material| {
+            [
+                material.diffuse_map.tiling,
+                material.specular_map.tiling,
+                material.reflection_map.tiling,
+                material.opacity_map.tiling,
+                material.bump_map.tiling,
+                material.refraction_map.tiling,
+                material.normal_map.tiling,
+            ][channel]
+        })
+    };
+    let diffuse_sampler = sampler("mesh.material.diffuse_sampler", tiling(0));
+    let specular_sampler = sampler("mesh.material.specular_sampler", tiling(1));
+    let reflection_sampler = sampler("mesh.material.reflection_sampler", tiling(2));
+    let opacity_sampler = sampler("mesh.material.opacity_sampler", tiling(3));
+    let bump_sampler = sampler("mesh.material.bump_sampler", tiling(4));
+    let refraction_sampler = sampler("mesh.material.refraction_sampler", tiling(5));
+    let normal_sampler = sampler("mesh.material.normal_sampler", tiling(6));
+    let params = MaterialMapParams {
+        blends0: material.map_or([0.0; 4], |material| {
+            [
+                material.diffuse_map.blend_factor,
+                material.specular_map.blend_factor,
+                material.reflection_map.blend_factor,
+                material.opacity_map.blend_factor,
+            ]
+        }),
+        present0: material.map_or([0; 4], |material| {
+            [
+                material.diffuse_map.image.is_some() as u32,
+                material.specular_map.image.is_some() as u32,
+                material.reflection_map.image.is_some() as u32,
+                material.opacity_map.image.is_some() as u32,
+            ]
+        }),
+        blends1: material.map_or([0.0; 4], |material| {
+            [
+                material.bump_map.blend_factor,
+                material.refraction_map.blend_factor,
+                material.normal_map.blend_factor,
+                0.0,
+            ]
+        }),
+        present1: material.map_or([0; 4], |material| {
+            [
+                material.bump_map.image.is_some() as u32,
+                material.refraction_map.image.is_some() as u32,
+                material.normal_map.image.is_some() as u32,
+                0,
+            ]
+        }),
+    };
+    let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("mesh.material.params"),
+        contents: bytemuck::bytes_of(&params),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("mesh.material.bind_group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&diffuse_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&specular_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&reflection_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&opacity_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&bump_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&refraction_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&normal_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::Sampler(&specular_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::Sampler(&reflection_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: wgpu::BindingResource::Sampler(&opacity_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: wgpu::BindingResource::Sampler(&bump_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::Sampler(&refraction_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: wgpu::BindingResource::Sampler(&normal_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 14,
+                resource: params_buffer.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialBatchKey([u32; 16]);
+
+fn material_key(
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
+    color: [f32; 4],
+) -> MaterialBatchKey {
+    let Some(material) = material else {
+        return MaterialBatchKey([
+            0,
+            0,
+            color[0].to_bits(),
+            color[1].to_bits(),
+            color[2].to_bits(),
+            color[3].to_bits(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]);
+    };
+    let handle = material.handle.map_or(0, |handle| handle.value());
+    MaterialBatchKey([
+        handle as u32,
+        (handle >> 32) as u32,
+        material.diffuse[0].to_bits(),
+        material.diffuse[1].to_bits(),
+        material.diffuse[2].to_bits(),
+        material.diffuse[3].to_bits(),
+        material.specular[0].to_bits(),
+        material.specular[1].to_bits(),
+        material.specular[2].to_bits(),
+        material.gloss.to_bits(),
+        material.reflectivity.to_bits(),
+        material.self_illumination.to_bits(),
+        material.luminance.to_bits(),
+        material.refraction_index.to_bits(),
+        material.diffuse_map.projection as u32,
+        material.diffuse_map.tiling as u32,
+    ])
+}
+
+struct MeshBatchPart<'a> {
+    set: &'a MeshLodSet,
+    mesh: &'a MeshModel,
+    material: Option<&'a crate::scene::model::material_model::MeshMaterial>,
+    color: [f32; 4],
+    indices: Vec<u32>,
+    include_faces: bool,
+    include_edges: bool,
+}
+
+fn material_map_uv(
+    map: &crate::scene::model::material_model::MeshTextureMap,
+    position: [f32; 3],
+    normal: [f32; 3],
+) -> [f32; 2] {
+    let m = &map.transform;
+    let p = [
+        position[0] * m[0] + position[1] * m[1] + position[2] * m[2] + m[3],
+        position[0] * m[4] + position[1] * m[5] + position[2] * m[6] + m[7],
+        position[0] * m[8] + position[1] * m[9] + position[2] * m[10] + m[11],
+    ];
+    match map.projection {
+        3 => [
+            p[1].atan2(p[0]) / std::f32::consts::TAU + 0.5,
+            p[2],
+        ],
+        4 => {
+            let radius = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            if radius <= f32::EPSILON {
+                [0.0; 2]
+            } else {
+                [
+                    p[1].atan2(p[0]) / std::f32::consts::TAU + 0.5,
+                    (p[2] / radius).clamp(-1.0, 1.0).acos() / std::f32::consts::PI,
+                ]
+            }
+        }
+        2 => {
+            let n = [normal[0].abs(), normal[1].abs(), normal[2].abs()];
+            if n[0] >= n[1] && n[0] >= n[2] {
+                [p[1], p[2]]
+            } else if n[1] >= n[2] {
+                [p[0], p[2]]
+            } else {
+                [p[0], p[1]]
+            }
+        }
+        _ => [p[0], p[1]],
+    }
+}
+
+fn material_uvs(
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
+    position: [f32; 3],
+    normal: [f32; 3],
+) -> [[f32; 2]; 7] {
+    let Some(material) = material else {
+        return [[0.0; 2]; 7];
+    };
+    [
+        material_map_uv(&material.diffuse_map, position, normal),
+        material_map_uv(&material.specular_map, position, normal),
+        material_map_uv(&material.reflection_map, position, normal),
+        material_map_uv(&material.opacity_map, position, normal),
+        material_map_uv(&material.bump_map, position, normal),
+        material_map_uv(&material.refraction_map, position, normal),
+        material_map_uv(&material.normal_map, position, normal),
+    ]
+}
+
+fn material_vertex_params(
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
+) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [u32; 4]) {
+    let Some(material) = material else {
+        return (
+            [0.5, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.3, 0.3, 0.3, 0.0],
+            [1.0; 4],
+            [0, 127, 0, 0],
+        );
+    };
+    (
+        [
+            material.gloss,
+            material.reflectivity,
+            material.self_illumination,
+            material.luminance,
+        ],
+        [
+            material.specular[0],
+            material.specular[1],
+            material.specular[2],
+            material.refraction_index,
+        ],
+        [
+            material.ambient[0],
+            material.ambient[1],
+            material.ambient[2],
+            material.translucence,
+        ],
+        [
+            material.normal_map_strength,
+            material.indirect_bump_scale,
+            material.reflectance_scale,
+            material.transmittance_scale,
+        ],
+        [
+            material.illumination_model as u32,
+            material.channel_flags as u32,
+            material.mode as u32,
+            material.luminance_mode as u32,
+        ],
+    )
 }
 
 /// Concatenate every set's first non-empty LOD into a few large GPU buffers.
@@ -202,34 +696,181 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
     let mut wire_indices: Vec<u32> = Vec::new();
     let mut edge_verts: Vec<MeshVertex> = Vec::new();
     let mut total_tris = 0u64;
+    let mut ordered: Vec<MeshBatchPart<'_>> = Vec::new();
     for set in sets {
-        let Some(mesh) = set.lods.iter().find(|m| !m.indices.is_empty()) else {
+        let Some(mesh) = set.lods.iter().find(|mesh| !mesh.indices.is_empty()) else {
             continue;
         };
+        let triangle_count = mesh.indices.len() / 3;
+        let has_face_materials = mesh.triangle_material_handles.len() == triangle_count
+            && !set.face_materials.is_empty();
+        let has_face_colors = mesh.triangle_colors.len() == triangle_count
+            && mesh.triangle_colors.iter().any(Option::is_some);
+        let include_faces = set
+            .visual_style
+            .as_ref()
+            .map_or(true, |style| style.face_visible());
+        let include_edges = set
+            .visual_style
+            .as_ref()
+            .map_or(true, |style| style.edges_visible());
+        if !has_face_materials && !has_face_colors {
+            let base_color =
+                set.material.as_ref().map_or(mesh.color, |material| material.diffuse);
+            let color = set
+                .visual_style
+                .as_ref()
+                .map_or(base_color, |style| style.face_color(base_color));
+            ordered.push(MeshBatchPart {
+                set,
+                mesh,
+                material: set.material.as_ref(),
+                color,
+                indices: mesh.indices.clone(),
+                include_faces,
+                include_edges,
+            });
+            continue;
+        }
+        let mut groups: std::collections::BTreeMap<
+            MaterialBatchKey,
+            (
+                Option<&crate::scene::model::material_model::MeshMaterial>,
+                [f32; 4],
+                Vec<u32>,
+            ),
+        > = std::collections::BTreeMap::new();
+        for (triangle, indices) in mesh.indices.chunks_exact(3).enumerate() {
+            let material = if has_face_materials {
+                mesh.triangle_material_handles[triangle]
+                    .and_then(|handle| set.face_materials.get(&handle))
+                    .or(set.material.as_ref())
+            } else {
+                set.material.as_ref()
+            };
+            let base_color = material.map_or(mesh.color, |material| material.diffuse);
+            let base_color = if has_face_colors {
+                mesh.triangle_colors[triangle].unwrap_or(base_color)
+            } else {
+                base_color
+            };
+            let color = set
+                .visual_style
+                .as_ref()
+                .map_or(base_color, |style| style.face_color(base_color));
+            groups
+                .entry(material_key(material, color))
+                .or_insert_with(|| (material, color, Vec::new()))
+                .2
+                .extend_from_slice(indices);
+        }
+        for (part_index, (_, (material, color, indices))) in groups.into_iter().enumerate() {
+            ordered.push(MeshBatchPart {
+                set,
+                mesh,
+                material,
+                color,
+                indices,
+                include_faces,
+                include_edges: include_edges && part_index == 0,
+            });
+        }
+    }
+    ordered.sort_by_key(|part| {
+        material_key(part.material, part.color)
+    });
+    let mut active_key: Option<MaterialBatchKey> = None;
+    let mut active_material: Option<&crate::scene::model::material_model::MeshMaterial> = None;
+    for part in ordered {
+        let set = part.set;
+        let mesh = part.mesh;
+        let material = part.material;
+        let part_color = part.color;
+        let key = material_key(material, part_color);
+        if active_key.is_some_and(|active| active != key)
+            && (!verts.is_empty() || !edge_verts.is_empty())
+        {
+            chunks.push(make_chunk(
+                device,
+                &verts,
+                &indices,
+                &transp_indices,
+                &wire_indices,
+                &edge_verts,
+                active_material,
+            ));
+            verts.clear();
+            indices.clear();
+            transp_indices.clear();
+            wire_indices.clear();
+            edge_verts.clear();
+        }
+        active_key = Some(key);
+        active_material = material;
         let has_normals = mesh.normals.len() == mesh.verts.len();
-        let vtx = |vi: usize| MeshVertex {
-            position: mesh.verts[vi],
-            normal: if has_normals { mesh.normals[vi] } else { [0.0, 1.0, 0.0] },
-            color: mesh.color,
-            position_low: mesh.verts_low.get(vi).copied().unwrap_or([0.0; 3]),
+        let (material_params, specular, ambient, advanced, flags) =
+            material_vertex_params(material);
+        let edge_color = set
+            .visual_style
+            .as_ref()
+            .map_or(mesh.color, |style| style.edge_color(mesh.color));
+        let vtx = |vi: usize| {
+            let normal = if has_normals {
+                mesh.normals[vi]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            let uv = material_uvs(material, mesh.verts[vi], normal);
+            MeshVertex {
+                position: mesh.verts[vi],
+                normal,
+                color: part_color,
+                position_low: mesh.verts_low.get(vi).copied().unwrap_or([0.0; 3]),
+                material: material_params,
+                specular,
+                uv_diffuse: uv[0],
+                ambient,
+                advanced,
+                flags,
+                uv_specular: uv[1],
+                uv_reflection: uv[2],
+                uv_opacity: uv[3],
+                uv_bump: uv[4],
+                uv_refraction: uv[5],
+                uv_normal: uv[6],
+            }
         };
         // A solid whose baked colour is not fully opaque routes into the
         // transparent index stream so it is drawn last, without depth writes.
-        let is_transp = mesh.color[3] < 0.999;
-        let mesh_tris = mesh.indices.len() / 3;
-        total_tris += mesh_tris as u64;
+        let is_transp = part_color[3] < 0.999;
+        let mesh_tris = part.indices.len() / 3;
+        if part.include_faces {
+            total_tris += mesh_tris as u64;
+        }
 
         // Feature edges present (ACIS solid) → emit the B-rep edges as a line
         // list and skip the triangulation wireframe. Absent (plain mesh) → keep
         // the triangle edges so the mesh still shows a wireframe.
         let has_feat = !set.edge_verts.is_empty();
-        if has_feat {
+        if has_feat && part.include_edges {
             for i in 0..set.edge_verts.len() {
                 edge_verts.push(MeshVertex {
                     position: set.edge_verts[i],
                     normal: [0.0, 1.0, 0.0],
-                    color: mesh.color,
+                    color: edge_color,
                     position_low: set.edge_verts_low.get(i).copied().unwrap_or([0.0; 3]),
+                    material: material_params,
+                    specular,
+                    uv_diffuse: [0.0; 2],
+                    ambient,
+                    advanced,
+                    flags,
+                    uv_specular: [0.0; 2],
+                    uv_reflection: [0.0; 2],
+                    uv_opacity: [0.0; 2],
+                    uv_bump: [0.0; 2],
+                    uv_refraction: [0.0; 2],
+                    uv_normal: [0.0; 2],
                 });
             }
         }
@@ -245,6 +886,7 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
                     &transp_indices,
                     &wire_indices,
                     &edge_verts,
+                    active_material,
                 ));
                 verts.clear();
                 indices.clear();
@@ -258,22 +900,40 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
                 let end = (t + tris_per).min(mesh_tris);
                 let (mut sv, mut si, mut swi) = (Vec::new(), Vec::new(), Vec::new());
                 for tri in t..end {
-                    let ix = &mesh.indices[tri * 3..tri * 3 + 3];
+                    let ix = &part.indices[tri * 3..tri * 3 + 3];
                     let b = sv.len() as u32;
                     sv.push(vtx(ix[0] as usize));
                     sv.push(vtx(ix[1] as usize));
                     sv.push(vtx(ix[2] as usize));
-                    si.extend_from_slice(&[b, b + 1, b + 2]);
-                    if !has_feat {
+                    if part.include_faces {
+                        si.extend_from_slice(&[b, b + 1, b + 2]);
+                    }
+                    if part.include_edges && !has_feat {
                         swi.extend_from_slice(&[b, b + 1, b + 1, b + 2, b + 2, b]);
                     }
                 }
                 // The whole mesh shares one colour, so a sub-chunk is entirely
                 // opaque or entirely transparent.
                 if is_transp {
-                    chunks.push(make_chunk(device, &sv, &[], &si, &swi, &[]));
+                    chunks.push(make_chunk(
+                        device,
+                        &sv,
+                        &[],
+                        &si,
+                        &swi,
+                        &[],
+                        active_material,
+                    ));
                 } else {
-                    chunks.push(make_chunk(device, &sv, &si, &[], &swi, &[]));
+                    chunks.push(make_chunk(
+                        device,
+                        &sv,
+                        &si,
+                        &[],
+                        &swi,
+                        &[],
+                        active_material,
+                    ));
                 }
                 t = end;
             }
@@ -293,6 +953,7 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
                 &transp_indices,
                 &wire_indices,
                 &edge_verts,
+                active_material,
             ));
             verts.clear();
             indices.clear();
@@ -304,18 +965,24 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
         for i in 0..mesh.verts.len() {
             verts.push(vtx(i));
         }
-        let fill = if is_transp { &mut transp_indices } else { &mut indices };
-        for &idx in &mesh.indices {
-            fill.push(base + idx);
+        if part.include_faces {
+            let fill = if is_transp { &mut transp_indices } else { &mut indices };
+            for &idx in &part.indices {
+                fill.push(base + idx);
+            }
         }
-        if !has_feat {
-            for tri in mesh.indices.chunks_exact(3) {
+        if part.include_edges && !has_feat {
+            for tri in part.indices.chunks_exact(3) {
                 let (a, b, c) = (base + tri[0], base + tri[1], base + tri[2]);
                 wire_indices.extend_from_slice(&[a, b, b, c, c, a]);
             }
         }
     }
-    if !indices.is_empty() || !transp_indices.is_empty() || !edge_verts.is_empty() {
+    if !indices.is_empty()
+        || !transp_indices.is_empty()
+        || !wire_indices.is_empty()
+        || !edge_verts.is_empty()
+    {
         chunks.push(make_chunk(
             device,
             &verts,
@@ -323,6 +990,7 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
             &transp_indices,
             &wire_indices,
             &edge_verts,
+            active_material,
         ));
     }
     (chunks, total_tris)
@@ -336,7 +1004,7 @@ impl MeshLodGpu {
                 .lods
                 .iter()
                 .filter(|m| !m.indices.is_empty())
-                .map(|m| MeshGpu::new(device, m, highlight))
+                .map(|m| MeshGpu::new(device, m, set.material.as_ref(), highlight))
                 .collect(),
             world_aabb: set.world_aabb,
         }
@@ -344,7 +1012,12 @@ impl MeshLodGpu {
 }
 
 impl MeshGpu {
-    pub fn new(device: &wgpu::Device, mesh: &MeshModel, highlight: Highlight) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        mesh: &MeshModel,
+        material: Option<&crate::scene::model::material_model::MeshMaterial>,
+        highlight: Highlight,
+    ) -> Self {
         let has_normals = mesh.normals.len() == mesh.verts.len();
         // Blend the base colour toward the highlight so a selected / hovered
         // solid reads clearly while keeping some shape shading.
@@ -358,6 +1031,8 @@ impl MeshGpu {
             }
             None => mesh.color,
         };
+        let (material_params, specular, ambient, advanced, flags) =
+            material_vertex_params(material);
         let vertices: Vec<MeshVertex> = mesh
             .verts
             .iter()
@@ -368,11 +1043,24 @@ impl MeshGpu {
                 } else {
                     [0.0, 1.0, 0.0]
                 };
+                let uv = material_uvs(material, pos, normal);
                 MeshVertex {
                     position: pos,
                     normal,
                     color,
                     position_low: mesh.verts_low.get(i).copied().unwrap_or([0.0; 3]),
+                    material: material_params,
+                    specular,
+                    uv_diffuse: uv[0],
+                    ambient,
+                    advanced,
+                    flags,
+                    uv_specular: uv[1],
+                    uv_reflection: uv[2],
+                    uv_opacity: uv[3],
+                    uv_bump: uv[4],
+                    uv_refraction: uv[5],
+                    uv_normal: uv[6],
                 }
             })
             .collect();

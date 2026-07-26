@@ -1224,6 +1224,102 @@ use crate::scene::convert::tessellate::{
 };
 use crate::scene::model::wire_model::{SnapHint, WireModel};
 
+fn apply_dimension_breaks(
+    document: &CadDocument,
+    dimension: Handle,
+    lines: &mut Vec<[f32; 3]>,
+) {
+    let references: Vec<_> = document
+        .objects
+        .values()
+        .filter_map(|object| {
+            let acadrust::objects::ObjectType::DataObject(object) = object else {
+                return None;
+            };
+            let acadrust::objects::DataObjectData::BreakData(data) = &object.data
+            else {
+                return None;
+            };
+            (data.dimension_reference == dimension).then_some(&data.point_references)
+        })
+        .flatten()
+        .filter(|reference| {
+            let points = [reference.first_point, reference.second_point];
+            points.iter().all(|point| {
+                point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
+            })
+        })
+        .collect();
+    if references.is_empty() || lines.len() < 2 {
+        return;
+    }
+
+    let mut output = Vec::with_capacity(lines.len() + references.len() * 3);
+    for run in lines.split(|point| point[0].is_nan()) {
+        for segment in run.windows(2) {
+            let a = Vec3::from_array(segment[0]);
+            let b = Vec3::from_array(segment[1]);
+            let direction = b - a;
+            let length_squared = direction.length_squared();
+            if length_squared <= 1e-12 {
+                continue;
+            }
+            let mut intervals = vec![(0.0f32, 1.0f32)];
+            for reference in &references {
+                let first = vec3_local(reference.first_point);
+                let second = vec3_local(reference.second_point);
+                let t1 = (first - a).dot(direction) / length_squared;
+                let t2 = (second - a).dot(direction) / length_squared;
+                let closest1 = a + direction * t1.clamp(0.0, 1.0);
+                let closest2 = a + direction * t2.clamp(0.0, 1.0);
+                let requested_gap = (second - first).length();
+                let tolerance = (requested_gap * 0.25)
+                    .max(direction.length() * 1e-5)
+                    .max(1e-4);
+                if (first - closest1).length() > tolerance
+                    || (second - closest2).length() > tolerance
+                {
+                    continue;
+                }
+                let half_point_gap = if requested_gap <= 1e-6 {
+                    (tolerance / direction.length()).min(0.1)
+                } else {
+                    0.0
+                };
+                let cut_start = (t1.min(t2) - half_point_gap).clamp(0.0, 1.0);
+                let cut_end = (t1.max(t2) + half_point_gap).clamp(0.0, 1.0);
+                if cut_end <= cut_start {
+                    continue;
+                }
+                let mut remaining = Vec::new();
+                for (start, end) in intervals {
+                    if cut_end <= start || cut_start >= end {
+                        remaining.push((start, end));
+                        continue;
+                    }
+                    if cut_start > start {
+                        remaining.push((start, cut_start));
+                    }
+                    if cut_end < end {
+                        remaining.push((cut_end, end));
+                    }
+                }
+                intervals = remaining;
+            }
+            for (start, end) in intervals {
+                if end - start > 1e-6 {
+                    add_segment(
+                        &mut output,
+                        a + direction * start,
+                        a + direction * end,
+                    );
+                }
+            }
+        }
+    }
+    *lines = output;
+}
+
 pub trait DimensionTess {
     fn tessellate(
         &self,
@@ -1464,6 +1560,7 @@ fn tessellate_dimension_inner(
         // supersedes it. Read but not honoured.
         let _ = s.dimunit;
     }
+    apply_dimension_breaks(document, handle, &mut geom.dim_lines);
     // Dimension entity fields that the render path doesn't yet use but are
     // preserved on save:
     //   - base.insertion_point: legacy anchor reference; render uses

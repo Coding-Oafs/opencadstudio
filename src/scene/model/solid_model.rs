@@ -180,6 +180,8 @@ pub fn mesh_from_solid(solid: &Solid, color: [f32; 4]) -> Option<MeshLodSet> {
                 verts_low,
                 normals,
                 indices,
+                triangle_material_handles: Vec::new(),
+                triangle_colors: Vec::new(),
                 color,
                 selected: false,
             };
