@@ -15,8 +15,8 @@ use crate::scene::pipeline::viewcube::{hover_id, VIEWCUBE_PX};
 use crate::scene::pipeline::MultiPipeline;
 use crate::scene::convert::tess_util;
 use crate::scene::{
-    vp_effective_scale, HatchModel, ImageModel, MeshLodSet, NavPerfSample, Scene, Uniforms,
-    ViewportInstance, WireModel,
+    vp_effective_scale, HatchModel, ImageModel, MeshLodSet, NavPerfSample, Scene, SceneLight,
+    Uniforms, ViewportInstance, WireModel,
 };
 
 // ── Camera hover state (shader::Program::State) ───────────────────────────
@@ -1077,6 +1077,260 @@ fn crop_view_proj(view_proj: glam::Mat4, uo: f32, vo: f32, us: f32, vs: f32) -> 
 // ── Render-style helpers (impl Scene) ────────────────────────────────────
 
 impl Scene {
+    fn build_lighting_cache(&self) -> Vec<SceneLight> {
+        use acadrust::objects::{ClassObjectData, ObjectType};
+
+        fn normalized(value: [f64; 3], fallback: [f32; 3]) -> [f32; 3] {
+            let length =
+                (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+            if length <= 1e-12 {
+                fallback
+            } else {
+                [
+                    (value[0] / length) as f32,
+                    (value[1] / length) as f32,
+                    (value[2] / length) as f32,
+                ]
+            }
+        }
+
+        fn solar_direction(
+            sun: &acadrust::objects::Sun,
+            geo: &acadrust::objects::GeoData,
+        ) -> Option<[f32; 3]> {
+            if sun.julian_day < 1_000_000 {
+                return None;
+            }
+            let daylight_ms = if sun.is_daylight_savings_on {
+                3_600_000.0
+            } else {
+                0.0
+            };
+            let jd = sun.julian_day as f64
+                + (sun.milliseconds as f64 - daylight_ms) / 86_400_000.0;
+            let days = jd - 2_451_545.0;
+            let mean_longitude = (280.460 + 0.985_647_4 * days).to_radians();
+            let mean_anomaly = (357.528 + 0.985_600_3 * days).to_radians();
+            let ecliptic_longitude = mean_longitude
+                + (1.915 * mean_anomaly.sin()
+                    + 0.020 * (2.0 * mean_anomaly).sin())
+                    .to_radians();
+            let obliquity = (23.439 - 0.000_000_4 * days).to_radians();
+            let right_ascension = (obliquity.cos() * ecliptic_longitude.sin())
+                .atan2(ecliptic_longitude.cos());
+            let declination =
+                (obliquity.sin() * ecliptic_longitude.sin()).asin();
+            let local_sidereal = (280.460_618_37
+                + 360.985_647_366_29 * days
+                + geo.reference_point.x)
+                .to_radians();
+            let hour_angle = (local_sidereal - right_ascension + std::f64::consts::PI)
+                .rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            let latitude = geo.reference_point.y.to_radians();
+            let east_component = -declination.cos() * hour_angle.sin();
+            let north_component = declination.sin() * latitude.cos()
+                - declination.cos() * hour_angle.cos() * latitude.sin();
+            let up_component = declination.sin() * latitude.sin()
+                + declination.cos() * hour_angle.cos() * latitude.cos();
+            if up_component <= 0.0 {
+                return None;
+            }
+            let north = normalized(
+                [geo.north_direction.x, geo.north_direction.y, 0.0],
+                [0.0, 1.0, 0.0],
+            );
+            let east = [north[1], -north[0], 0.0];
+            let up = normalized(
+                [geo.up_direction.x, geo.up_direction.y, geo.up_direction.z],
+                [0.0, 0.0, 1.0],
+            );
+            Some(normalized(
+                [
+                    -(east[0] as f64 * east_component
+                        + north[0] as f64 * north_component
+                        + up[0] as f64 * up_component),
+                    -(east[1] as f64 * east_component
+                        + north[1] as f64 * north_component
+                        + up[1] as f64 * up_component),
+                    -(east[2] as f64 * east_component
+                        + north[2] as f64 * north_component
+                        + up[2] as f64 * up_component),
+                ],
+                [0.0, 0.0, -1.0],
+            ))
+        }
+
+        fn converted(scene: &Scene, light: &acadrust::entities::Light) -> Option<SceneLight> {
+            if !light.status {
+                return None;
+            }
+            let direction = normalized(
+                [
+                    light.target.x - light.position.x,
+                    light.target.y - light.position.y,
+                    light.target.z - light.position.z,
+                ],
+                [0.0, 0.0, -1.0],
+            );
+            let color_layer = if light.light_color.rgb().is_some() {
+                None
+            } else {
+                Some(light.common.layer.clone())
+            };
+            let rgba = if color_layer.is_none() {
+                tess_util::aci_to_rgba(&light.light_color)
+            } else {
+                scene.layer_color(&light.common.layer)
+            };
+            Some(SceneLight {
+                handle: light.common.handle,
+                color_layer,
+                light_type: light.light_type as f32,
+                position: [light.position.x, light.position.y, light.position.z],
+                direction,
+                color: [rgba[0], rgba[1], rgba[2]],
+                intensity: light.intensity.max(0.0) as f32,
+                hotspot_cos: if light.hotspot_angle > 0.0 {
+                    (light.hotspot_angle * 0.5).cos() as f32
+                } else {
+                    1.0
+                },
+                falloff_cos: if light.falloff_angle > 0.0 {
+                    (light.falloff_angle * 0.5).cos() as f32
+                } else {
+                    -1.0
+                },
+                attenuation_type: light.attenuation_type as f32,
+                attenuation_start: if light.use_attenuation_limits {
+                    light.attenuation_start_limit as f32
+                } else {
+                    0.0
+                },
+                attenuation_end: if light.use_attenuation_limits {
+                    light.attenuation_end_limit as f32
+                } else {
+                    0.0
+                },
+            })
+        }
+
+        let mut lights = Vec::new();
+        for &handle in crate::entities::object_data::light_entities(
+            &self.object_data_cache,
+        ) {
+            if lights.len() >= 4 {
+                break;
+            }
+            if let Some(EntityType::Light(light)) = self.document.get_entity(handle) {
+                if let Some(light) = converted(self, light) {
+                    lights.push(light);
+                }
+            }
+        }
+
+        if lights.len() < 4 {
+            let geo = crate::entities::object_data::geo_objects(
+                &self.object_data_cache,
+            )
+            .iter()
+            .find_map(|handle| match self.document.objects.get(handle) {
+                Some(ObjectType::GeoData(value))
+                    if value.coordinate_type == 3
+                        && value.reference_point.x.is_finite()
+                        && value.reference_point.y.is_finite()
+                        && value.reference_point.x.abs() <= 180.0
+                        && value.reference_point.y.abs() <= 90.0 => Some(value),
+                _ => None,
+            });
+            for handle in crate::entities::object_data::sun_objects(
+                &self.object_data_cache,
+            ) {
+                let Some(ObjectType::ClassObject(value)) =
+                    self.document.objects.get(handle)
+                else {
+                    continue;
+                };
+                let ClassObjectData::Sun(sun) = &value.data else {
+                    continue;
+                };
+                if !sun.is_on {
+                    continue;
+                }
+                let Some(geo) = geo else {
+                    break;
+                };
+                let Some(direction) = solar_direction(sun, geo) else {
+                    break;
+                };
+                let rgba = tess_util::aci_to_rgba(&sun.color);
+                lights.push(SceneLight {
+                    handle: value.handle,
+                    color_layer: None,
+                    light_type: 1.0,
+                    position: [0.0; 3],
+                    direction,
+                    color: [rgba[0], rgba[1], rgba[2]],
+                    intensity: sun.intensity.max(0.0) as f32,
+                    hotspot_cos: 1.0,
+                    falloff_cos: -1.0,
+                    attenuation_type: 0.0,
+                    attenuation_start: 0.0,
+                    attenuation_end: 0.0,
+                });
+                break;
+            }
+        }
+        lights
+    }
+
+    fn apply_document_lighting(&self, uniforms: &mut Uniforms) {
+        if self.lighting_cache.borrow().is_none() {
+            let lights = self.build_lighting_cache();
+            *self.lighting_cache.borrow_mut() = Some(lights);
+        }
+        let cache = self.lighting_cache.borrow();
+        let lights = cache.as_deref().unwrap_or_default();
+        let eye = [
+            uniforms.eye_high[0] as f64 + uniforms.eye_low[0] as f64,
+            uniforms.eye_high[1] as f64 + uniforms.eye_low[1] as f64,
+            uniforms.eye_high[2] as f64 + uniforms.eye_low[2] as f64,
+        ];
+        uniforms.lighting[0] = lights.len().min(4) as f32;
+        for (index, light) in lights.iter().take(4).enumerate() {
+            let color = light
+                .color_layer
+                .as_deref()
+                .map(|layer| self.layer_color(layer))
+                .map(|rgba| [rgba[0], rgba[1], rgba[2]])
+                .unwrap_or(light.color);
+            uniforms.light_position_type[index] = [
+                (light.position[0] - eye[0]) as f32,
+                (light.position[1] - eye[1]) as f32,
+                (light.position[2] - eye[2]) as f32,
+                light.light_type,
+            ];
+            uniforms.light_direction_intensity[index] = [
+                light.direction[0],
+                light.direction[1],
+                light.direction[2],
+                light.intensity,
+            ];
+            uniforms.light_color_hotspot[index] = [
+                color[0],
+                color[1],
+                color[2],
+                light.hotspot_cos,
+            ];
+            uniforms.light_attenuation[index] = [
+                light.attenuation_type,
+                light.attenuation_start,
+                light.attenuation_end,
+                light.falloff_cos,
+            ];
+        }
+    }
+
     /// Returns (entity_color, pattern_length, pattern, line_weight_px, aci).
     pub(in crate::scene) fn render_style(&self, e: &EntityType) -> ([f32; 4], f32, [f32; 8], f32, u8) {
         let (color, pl, pat, lw, aci) = render_style_for(&self.document, e);
@@ -1695,6 +1949,7 @@ impl Scene {
         uniforms.viewport_size = [visible_w, visible_h];
         uniforms.flat_shade = if flags.flat_shade { 1.0 } else { 0.0 };
         uniforms.transparency_enable = if self.transparency_display { 1.0 } else { 0.0 };
+        self.apply_document_lighting(&mut uniforms);
 
         // `screen_rect` carries the *visible* sub-rectangle in normalized
         // canvas coords — that's what `Pipeline::prepare` uses to size

@@ -19,6 +19,7 @@ pub mod mline;
 pub mod mtext;
 pub mod multileader;
 pub mod names;
+pub mod object_data;
 pub mod ole2frame;
 pub mod point;
 pub mod polyline;

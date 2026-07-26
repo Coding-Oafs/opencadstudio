@@ -59,6 +59,12 @@ impl OpenCADStudio {
     /// Preserves UI state (open pickers, edit buffer) across refreshes.
     pub(super) fn refresh_properties(&mut self) {
         let i = self.active_tab;
+        if !crate::entities::object_data::cache_is_prepared(
+            &self.tabs[i].scene.object_data_cache,
+        ) {
+            self.tabs[i].scene.object_data_cache =
+                crate::entities::object_data::build_cache(&self.tabs[i].scene.document);
+        }
         // Note: the color-picker dropdown is intentionally NOT carried over — a
         // rebuild means the selection (or a property) changed, so the dropdown
         // closes, matching the deselect / reselect / click-away expectation.
@@ -135,7 +141,27 @@ impl OpenCADStudio {
         let new_panel = {
             let selected = self.tabs[i].scene.selected_entities();
             let mut panel = match selected.len() {
-                0 => ui::PropertiesPanel::empty(),
+                0 => {
+                    let sections = crate::entities::object_data::cached_document_sections(
+                        &self.tabs[i].scene.object_data_cache,
+                    );
+                    ui::PropertiesPanel {
+                        title: "Drawing".to_string(),
+                        sections,
+                        layer_combo: iced::widget::combo_box::State::new(layer_names.clone()),
+                        linetype_combo: iced::widget::combo_box::State::new(
+                            linetype_items.clone(),
+                        ),
+                        lineweight_combo: iced::widget::combo_box::State::new(
+                            ui::properties::lw_options(),
+                        ),
+                        hatch_pattern_combo: iced::widget::combo_box::State::new(
+                            crate::scene::model::hatch_patterns::names(),
+                        ),
+                        linetype_items,
+                        ..Default::default()
+                    }
+                }
                 1 => {
                     let (handle, source_entity) = selected[0];
                     let contextual = crate::scene::annotative::entity_for_active_context(
@@ -513,6 +539,13 @@ impl OpenCADStudio {
                             });
                         }
                     }
+
+                    sections.extend(crate::entities::object_data::sections(
+                        &self.tabs[i].scene.document,
+                        &self.tabs[i].scene.object_data_cache,
+                        handle,
+                        entity,
+                    ));
 
                     // Uniform-scale checkbox for block references (#427):
                     // while the three scale factors are equal (and the user

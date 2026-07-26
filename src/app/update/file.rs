@@ -542,6 +542,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].scene.images = caches.images;
                 self.tabs[i].scene.meshes = caches.meshes;
                 self.tabs[i].scene.block_meshes = caches.block_meshes;
+                self.tabs[i].scene.object_data_cache = caches.object_data;
         let prepared_geometry = caches.prepared_geometry.take();
                 // Invalidate the wire cache so the new document is tessellated.
                 self.tabs[i].scene.bump_geometry();

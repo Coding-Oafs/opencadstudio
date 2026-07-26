@@ -385,6 +385,10 @@ pub struct DerivedCaches {
     pub meshes: HashMap<Handle, MeshLodSet>,
     /// Block-definition solid meshes, block-local frame (instanced per INSERT). (#123)
     pub block_meshes: HashMap<Handle, MeshLodSet>,
+    /// Non-graphical DWG object relationships and Drawing-property rows.
+    /// Prepared during file open so entity selection/deselection never scans
+    /// the complete object store on the UI thread.
+    pub object_data: crate::entities::object_data::ObjectDataCache,
     /// Number of entities removed by the corrupt-entity guard during load.
     /// Reported back to the UI so the user knows when a file had parser-junk
     /// entities silently dropped.
@@ -441,6 +445,7 @@ fn build_derived_caches_impl(
     // the memoised set so each reference re-reads / re-fetches once here (and
     // stays cached across this document's later cache rebuilds).
     crate::scene::model::image_model::clear_image_cache();
+    let object_data = crate::entities::object_data::build_cache(doc);
     // model-space block handle (same logic as Scene::model_space_block_handle)
     let model_block = doc
         .objects
@@ -665,6 +670,7 @@ fn build_derived_caches_impl(
         images,
         meshes,
         block_meshes,
+        object_data,
         corrupt_dropped: 0,
         xref_dropped: 0,
         xrefs: Vec::new(),
@@ -1279,6 +1285,23 @@ struct BlockMeshInherit {
     layer0_material: crate::scene::model::material_model::MeshMaterial,
 }
 
+#[derive(Clone)]
+struct SceneLight {
+    handle: Handle,
+    /// Present when `color` must follow the current ByLayer color.
+    color_layer: Option<String>,
+    light_type: f32,
+    position: [f64; 3],
+    direction: [f32; 3],
+    color: [f32; 3],
+    intensity: f32,
+    hotspot_cos: f32,
+    falloff_cos: f32,
+    attenuation_type: f32,
+    attenuation_start: f32,
+    attenuation_end: f32,
+}
+
 pub struct Scene {
     pub camera: Rc<RefCell<Camera>>,
     /// Model-space tiled viewport layout. One full-window tile by default;
@@ -1325,6 +1348,12 @@ pub struct Scene {
     pub selection: Rc<RefCell<SelectionState>>,
     /// The CAD document — single source of truth for all entities.
     pub document: CadDocument,
+    /// File-open-prepared index for non-graphical semantic object lookups.
+    pub(crate) object_data_cache: crate::entities::object_data::ObjectDataCache,
+    /// Native AcDbLight/Sun inputs. Built once after document load, then
+    /// invalidated only when a light entity changes; ordinary geometry edits
+    /// never rescan a million-entity drawing just to rediscover its lights.
+    lighting_cache: RefCell<Option<Vec<SceneLight>>>,
     /// Currently selected entity handles.
     pub selected: HashSet<Handle>,
     /// Entity handles hidden by Isolate / Hide. Empty = nothing hidden.
@@ -1716,6 +1745,8 @@ impl Scene {
             model_panes: iced::widget::pane_grid::State::new(0).0,
             selection: Rc::new(RefCell::new(SelectionState::default())),
             document: CadDocument::new(),
+            object_data_cache: crate::entities::object_data::ObjectDataCache::default(),
+            lighting_cache: RefCell::new(None),
             selected: HashSet::default(),
             hidden: HashSet::default(),
             refedit_keep: None,
@@ -2093,6 +2124,16 @@ impl Scene {
         entities: &[(Handle, Option<Arc<EntityType>>, Option<Arc<EntityType>>)],
         undo: bool,
     ) -> Vec<(Handle, ChangeKind)> {
+        if entities.iter().any(|(_, before, after)| {
+            before
+                .as_deref()
+                .is_some_and(|entity| matches!(entity, EntityType::Light(_)))
+                || after
+                    .as_deref()
+                    .is_some_and(|entity| matches!(entity, EntityType::Light(_)))
+        }) {
+            *self.lighting_cache.borrow_mut() = None;
+        }
         let mut changes: Vec<(Handle, ChangeKind)> = Vec::with_capacity(entities.len());
         for (h, before, after) in entities {
             let target = if undo { before } else { after };
@@ -2127,6 +2168,30 @@ impl Scene {
     }
 
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        let cached_light_changed = self.lighting_cache.borrow().as_ref().is_some_and(|lights| {
+            changes
+                .iter()
+                .any(|(handle, _)| lights.iter().any(|light| light.handle == *handle))
+        });
+        let live_light_changed = changes.iter().any(|(handle, _)| {
+            self.document
+                .get_entity(*handle)
+                .is_some_and(|entity| matches!(entity, EntityType::Light(_)))
+        });
+        if cached_light_changed || live_light_changed {
+            for (handle, _) in changes {
+                let exists = self
+                    .document
+                    .get_entity(*handle)
+                    .is_some_and(|entity| matches!(entity, EntityType::Light(_)));
+                crate::entities::object_data::update_light_entity(
+                    &mut self.object_data_cache,
+                    *handle,
+                    exists,
+                );
+            }
+            *self.lighting_cache.borrow_mut() = None;
+        }
         let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.geometry_epoch = epoch;
         {

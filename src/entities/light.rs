@@ -13,10 +13,12 @@ use acadrust::entities::Light;
 use acadrust::EntityType;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{center_grip, edit_prop as edit, ro_prop, square_grip};
+use crate::entities::common::{
+    center_grip, edit_angle_prop, edit_prop as edit, ro_prop, square_grip,
+};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
-use crate::scene::model::object::{GripApply, GripDef, PropSection};
+use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
 
 /// On-screen glyph radius in pixels for the screen-relative path.
@@ -271,13 +273,189 @@ impl PropertyEditable for Light {
             props.push(edit("Target Y", "li_ty", self.target.y));
             props.push(edit("Target Z", "li_tz", self.target.z));
         }
-        vec![PropSection {
-            title: "Geometry".into(),
-            props,
-        }]
+        let mut sections = vec![
+            PropSection {
+                title: "Geometry".into(),
+                props,
+            },
+            PropSection {
+                title: "Light".into(),
+                props: vec![
+                    Property {
+                        label: "On".into(),
+                        field: "li_status",
+                        value: PropValue::BoolToggle {
+                            field: "li_status",
+                            value: self.status,
+                        },
+                    },
+                    Property {
+                        label: "Plot Glyph".into(),
+                        field: "li_plot_glyph",
+                        value: PropValue::BoolToggle {
+                            field: "li_plot_glyph",
+                            value: self.plot_glyph,
+                        },
+                    },
+                    ro_prop("Color", "li_color", format!("{:?}", self.light_color)),
+                    edit("Intensity", "li_intensity", self.intensity),
+                    Property {
+                        label: "Attenuation".into(),
+                        field: "li_attenuation",
+                        value: PropValue::Choice {
+                            selected: match self.attenuation_type {
+                                1 => "Inverse Linear",
+                                2 => "Inverse Square",
+                                _ => "None",
+                            }
+                            .to_string(),
+                            options: vec![
+                                "None".to_string(),
+                                "Inverse Linear".to_string(),
+                                "Inverse Square".to_string(),
+                            ],
+                        },
+                    },
+                    Property {
+                        label: "Use Limits".into(),
+                        field: "li_use_limits",
+                        value: PropValue::BoolToggle {
+                            field: "li_use_limits",
+                            value: self.use_attenuation_limits,
+                        },
+                    },
+                    edit("Start Limit", "li_start", self.attenuation_start_limit),
+                    edit("End Limit", "li_end", self.attenuation_end_limit),
+                    edit_angle_prop(
+                        "Hotspot Angle",
+                        "li_hotspot",
+                        self.hotspot_angle.to_degrees(),
+                    ),
+                    edit_angle_prop(
+                        "Falloff Angle",
+                        "li_falloff",
+                        self.falloff_angle.to_degrees(),
+                    ),
+                ],
+            },
+            PropSection {
+                title: "Shadows".into(),
+                props: vec![
+                    Property {
+                        label: "Cast Shadows".into(),
+                        field: "li_shadows",
+                        value: PropValue::BoolToggle {
+                            field: "li_shadows",
+                            value: self.cast_shadows,
+                        },
+                    },
+                    ro_prop("Type", "li_shadow_type", self.shadow_type.to_string()),
+                    ro_prop("Map Size", "li_shadow_size", self.shadow_map_size.to_string()),
+                    ro_prop(
+                        "Softness",
+                        "li_shadow_softness",
+                        self.shadow_map_softness.to_string(),
+                    ),
+                ],
+            },
+        ];
+        if let Some(photo) = &self.photometric_data {
+            sections.push(PropSection {
+                title: "Photometric".into(),
+                props: vec![
+                    ro_prop("Web File", "li_web_file", photo.web_file.clone()),
+                    ro_prop(
+                        "Physical Method",
+                        "li_physical_method",
+                        photo.physical_intensity_method.to_string(),
+                    ),
+                    edit(
+                        "Physical Intensity",
+                        "li_physical_intensity",
+                        photo.physical_intensity,
+                    ),
+                    edit(
+                        "Illuminance Distance",
+                        "li_illuminance_distance",
+                        photo.illuminance_distance,
+                    ),
+                    edit(
+                        "Color Temperature",
+                        "li_color_temperature",
+                        photo.lamp_color_temperature,
+                    ),
+                    ro_prop(
+                        "Lamp Preset",
+                        "li_lamp_preset",
+                        photo.lamp_color_preset.to_string(),
+                    ),
+                    ro_prop(
+                        "Shape",
+                        "li_shape",
+                        format!(
+                            "{} · {:.6} × {:.6} · radius {:.6}",
+                            photo.extended_light_shape,
+                            photo.extended_light_length,
+                            photo.extended_light_width,
+                            photo.extended_light_radius
+                        ),
+                    ),
+                    ro_prop(
+                        "Web",
+                        "li_web",
+                        format!(
+                            "type {}; symmetry {}; flux {:.6}; angles {:?}; rotation {:.6},{:.6},{:.6}",
+                            photo.web_file_type,
+                            photo.web_symmetry,
+                            photo.web_flux,
+                            photo.web_angles,
+                            photo.web_rotation.x,
+                            photo.web_rotation.y,
+                            photo.web_rotation.z
+                        ),
+                    ),
+                ],
+            });
+        }
+        sections
     }
 
     fn apply_geom_prop(&mut self, field: &str, value: &str) {
+        match field {
+            "li_status" => {
+                if let Ok(value) = value.parse::<bool>() {
+                    self.status = value;
+                }
+                return;
+            }
+            "li_plot_glyph" => {
+                if let Ok(value) = value.parse::<bool>() {
+                    self.plot_glyph = value;
+                }
+                return;
+            }
+            "li_use_limits" => {
+                if let Ok(value) = value.parse::<bool>() {
+                    self.use_attenuation_limits = value;
+                }
+                return;
+            }
+            "li_shadows" => {
+                if let Ok(value) = value.parse::<bool>() {
+                    self.cast_shadows = value;
+                }
+                return;
+            }
+            "li_attenuation" => {
+                self.attenuation_type = match value {
+                    "Inverse Linear" => 1,
+                    "Inverse Square" => 2,
+                    _ => 0,
+                };
+                return;
+            }
+            _ => {}
+        }
         let Ok(v) = value.trim().parse::<f64>() else {
             return;
         };
@@ -288,6 +466,26 @@ impl PropertyEditable for Light {
             "li_tx" => self.target.x = v,
             "li_ty" => self.target.y = v,
             "li_tz" => self.target.z = v,
+            "li_intensity" => self.intensity = v.max(0.0),
+            "li_start" => self.attenuation_start_limit = v,
+            "li_end" => self.attenuation_end_limit = v,
+            "li_hotspot" => self.hotspot_angle = v.to_radians(),
+            "li_falloff" => self.falloff_angle = v.to_radians(),
+            "li_physical_intensity" => {
+                if let Some(photo) = self.photometric_data.as_mut() {
+                    photo.physical_intensity = v;
+                }
+            }
+            "li_illuminance_distance" => {
+                if let Some(photo) = self.photometric_data.as_mut() {
+                    photo.illuminance_distance = v;
+                }
+            }
+            "li_color_temperature" => {
+                if let Some(photo) = self.photometric_data.as_mut() {
+                    photo.lamp_color_temperature = v;
+                }
+            }
             _ => {}
         }
     }

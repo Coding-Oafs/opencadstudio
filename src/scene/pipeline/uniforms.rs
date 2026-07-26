@@ -40,6 +40,21 @@ pub struct Uniforms {
     pub _pad_eh: f32,
     pub eye_low: [f32; 3],
     pub _pad_el: f32,
+
+    // Up to four native AcDbLight/Sun sources. Positions are uploaded relative
+    // to the current eye, preserving large-coordinate precision without
+    // changing mesh buffers.
+    /// xyz = eye-relative source position, w = light type (1 distant, 2 point,
+    /// 3 spot).
+    pub light_position_type: [[f32; 4]; 4],
+    /// xyz = source-to-target direction, w = intensity.
+    pub light_direction_intensity: [[f32; 4]; 4],
+    /// rgb = source colour, w = cosine of hotspot angle.
+    pub light_color_hotspot: [[f32; 4]; 4],
+    /// x = attenuation mode, y/z = start/end limits, w = cosine of falloff.
+    pub light_attenuation: [[f32; 4]; 4],
+    /// x = active light count, y = fallback ambient strength.
+    pub lighting: [f32; 4],
 }
 
 impl Uniforms {
@@ -64,6 +79,11 @@ impl Uniforms {
             _pad_eh: 0.0,
             eye_low,
             _pad_el: 0.0,
+            light_position_type: [[0.0; 4]; 4],
+            light_direction_intensity: [[0.0; 4]; 4],
+            light_color_hotspot: [[0.0; 4]; 4],
+            light_attenuation: [[0.0; 4]; 4],
+            lighting: [0.0, 0.18, 0.0, 0.0],
         }
     }
 }
