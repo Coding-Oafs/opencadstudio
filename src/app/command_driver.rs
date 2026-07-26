@@ -1750,6 +1750,22 @@ impl OpenCADStudio {
                                     stretched |= mv(&mut d.feature_location);
                                     stretched |= mv(&mut d.leader_endpoint);
                                 }
+                                Dimension::Arc(d) => {
+                                    stretched |= mv(&mut d.definition_point);
+                                    stretched |= mv(&mut d.first_extension_point);
+                                    stretched |= mv(&mut d.second_extension_point);
+                                    stretched |= mv(&mut d.center_point);
+                                    if d.has_leader {
+                                        stretched |= mv(&mut d.first_leader_point);
+                                        stretched |= mv(&mut d.second_leader_point);
+                                    }
+                                }
+                                Dimension::LargeRadial(d) => {
+                                    stretched |= mv(&mut d.definition_point);
+                                    stretched |= mv(&mut d.chord_point);
+                                    stretched |= mv(&mut d.override_center);
+                                    stretched |= mv(&mut d.jog_point);
+                                }
                             }
                             // Pinned text follows too; the zero sentinel means
                             // "auto placement" and must not be captured by a

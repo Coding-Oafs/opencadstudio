@@ -116,6 +116,7 @@ const COLOR_OPTIONS: &[&str] = &[
 pub fn color_label(c: AcadColor) -> String {
     match c {
         AcadColor::ByLayer => "ByLayer".into(),
+        AcadColor::None => "None".into(),
         AcadColor::ByBlock => "ByBlock".into(),
         AcadColor::Index(1) => "Red".into(),
         AcadColor::Index(2) => "Yellow".into(),

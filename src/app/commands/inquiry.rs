@@ -1323,6 +1323,8 @@ fn add_selected_verb(entity: &acadrust::EntityType) -> Option<&'static str> {
                 DimensionType::Diameter => "DIMDIAMETER",
                 DimensionType::Radius => "DIMRADIUS",
                 DimensionType::Ordinate => "DIMORDINATE",
+                DimensionType::ArcLength => "DIMARC",
+                DimensionType::LargeRadial => "DIMJOGGED",
             }
         }
         _ => return None,

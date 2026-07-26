@@ -97,7 +97,7 @@ pub trait TextContent {
 /// Human-readable variant name used by Quick Select / Select Similar
 /// filtering. Stable across releases — the strings here are the canonical
 /// type identifiers throughout the UI.
-pub fn entity_type_name(et: &EntityType) -> &'static str {
+pub fn entity_type_name(et: &EntityType) -> &str {
     match et {
         EntityType::Point(_) => "Point",
         EntityType::Line(_) => "Line",
@@ -145,6 +145,7 @@ pub fn entity_type_name(et: &EntityType) -> &'static str {
         EntityType::Light(_) => "Light",
         EntityType::SectionSymbol(_) => "SectionSymbol",
         EntityType::ViewBorder(_) => "ViewBorder",
+        EntityType::Extended(entity) => entity.class_name(),
         EntityType::Unknown(_) => "Unknown",
     }
 }

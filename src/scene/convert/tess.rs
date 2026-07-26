@@ -37,7 +37,7 @@ fn section_arrow_dir_from_views(
     s: &acadrust::entities::SectionSymbol,
 ) -> Option<[f64; 2]> {
     use acadrust::types::Handle as AHandle;
-    if s.view_rep_handle == 0 {
+    if s.view_rep_handle.is_null() {
         return None;
     }
     // A view's active viewport, via its border entity among the ViewRep refs.
@@ -47,7 +47,7 @@ fn section_arrow_dir_from_views(
             _ => None,
         }
     };
-    let parent_vr = AHandle::from(s.view_rep_handle);
+    let parent_vr = s.view_rep_handle;
     let parent_refs = document.view_rep_refs.get(&parent_vr)?;
     let parent_vp_h = parent_refs.iter().find_map(border_vp)?;
     let sect_vr = parent_refs

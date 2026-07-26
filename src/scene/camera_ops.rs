@@ -62,33 +62,31 @@ impl Scene {
         let eye_dir = cam.rotation * glam::Vec3::Z;
         let height = cam.ortho_size() * 2.0;
         let width = height; // caller can adjust; rough square
-        acadrust::tables::View {
-            handle: acadrust::types::Handle::NULL,
-            name: name.to_string(),
-            center: Vector3 {
-                x: cam.target.x as f64,
-                y: cam.target.y as f64,
-                z: 0.0,
-            },
-            target: Vector3 {
-                x: cam.target.x as f64,
-                y: cam.target.y as f64,
-                z: cam.target.z as f64,
-            },
-            direction: Vector3 {
-                x: eye_dir.x as f64,
-                y: eye_dir.y as f64,
-                z: eye_dir.z as f64,
-            },
-            height: height as f64,
-            width: width as f64,
-            lens_length: 50.0,
-            front_clip: 0.0,
-            back_clip: 0.0,
-            twist_angle: 0.0,
-            // OCS saves an orthographic model view, not a perspective camera.
-            perspective: false,
-        }
+        let mut view = acadrust::tables::View::new(name);
+        view.center = Vector3 {
+            x: cam.target.x as f64,
+            y: cam.target.y as f64,
+            z: 0.0,
+        };
+        view.target = Vector3 {
+            x: cam.target.x as f64,
+            y: cam.target.y as f64,
+            z: cam.target.z as f64,
+        };
+        view.direction = Vector3 {
+            x: eye_dir.x as f64,
+            y: eye_dir.y as f64,
+            z: eye_dir.z as f64,
+        };
+        view.height = height as f64;
+        view.width = width as f64;
+        view.lens_length = 50.0;
+        view.front_clip = 0.0;
+        view.back_clip = 0.0;
+        view.twist_angle = 0.0;
+        // OCS saves an orthographic model view, not a perspective camera.
+        view.perspective = false;
+        view
     }
 
     /// Zoom the model-space camera in/out by a percentage.

@@ -1,6 +1,7 @@
 use acadrust::entities::{
-    Dimension, DimensionAligned, DimensionAngular2Ln, DimensionAngular3Pt, DimensionBase,
-    DimensionDiameter, DimensionLinear, DimensionOrdinate, DimensionRadius,
+    Dimension, DimensionAligned, DimensionAngular2Ln, DimensionAngular3Pt, DimensionArc,
+    DimensionBase, DimensionDiameter, DimensionLargeRadial, DimensionLinear, DimensionOrdinate,
+    DimensionRadius,
 };
 use acadrust::Entity;
 use glam::{DVec3, Vec3};
@@ -127,6 +128,47 @@ fn properties(dim: &Dimension) -> Vec<PropSection> {
                 "ordinate_type",
                 if d.is_ordinate_type_x { "X" } else { "Y" },
             ));
+        }
+        Dimension::Arc(d) => {
+            props.extend(angular_props(
+                d.center_point,
+                d.first_extension_point,
+                d.second_extension_point,
+                d.definition_point,
+            ));
+            props.push(edit(
+                "Arc Start (deg)",
+                "arc_start_parameter",
+                d.arc_start_parameter.to_degrees(),
+            ));
+            props.push(edit(
+                "Arc End (deg)",
+                "arc_end_parameter",
+                d.arc_end_parameter.to_degrees(),
+            ));
+            props.push(ro("Partial", "is_partial", d.is_partial.to_string()));
+            props.push(ro("Has Leader", "has_leader", d.has_leader.to_string()));
+            props.push(edit("Leader 1 X", "leader1_x", d.first_leader_point.x));
+            props.push(edit("Leader 1 Y", "leader1_y", d.first_leader_point.y));
+            props.push(edit("Leader 1 Z", "leader1_z", d.first_leader_point.z));
+            props.push(edit("Leader 2 X", "leader2_x", d.second_leader_point.x));
+            props.push(edit("Leader 2 Y", "leader2_y", d.second_leader_point.y));
+            props.push(edit("Leader 2 Z", "leader2_z", d.second_leader_point.z));
+        }
+        Dimension::LargeRadial(d) => {
+            props.push(edit("Center X", "definition_x", d.definition_point.x));
+            props.push(edit("Center Y", "definition_y", d.definition_point.y));
+            props.push(edit("Center Z", "definition_z", d.definition_point.z));
+            props.push(edit("Chord X", "chord_x", d.chord_point.x));
+            props.push(edit("Chord Y", "chord_y", d.chord_point.y));
+            props.push(edit("Chord Z", "chord_z", d.chord_point.z));
+            props.push(edit("Override Center X", "override_x", d.override_center.x));
+            props.push(edit("Override Center Y", "override_y", d.override_center.y));
+            props.push(edit("Override Center Z", "override_z", d.override_center.z));
+            props.push(edit("Jog X", "jog_x", d.jog_point.x));
+            props.push(edit("Jog Y", "jog_y", d.jog_point.y));
+            props.push(edit("Jog Z", "jog_z", d.jog_point.z));
+            props.push(edit_angle("Jog Angle", "jog_angle", d.jog_angle.to_degrees()));
         }
     }
     vec![PropSection {
@@ -259,6 +301,8 @@ fn apply_geom_prop(dim: &mut Dimension, field: &str, value: &str) {
         Dimension::Angular2Ln(d) => apply_angular2_fields(d, field, value),
         Dimension::Angular3Pt(d) => apply_angular3_fields(d, field, value),
         Dimension::Ordinate(d) => apply_ordinate_fields(d, field, value),
+        Dimension::Arc(d) => apply_arc_fields(d, field, value),
+        Dimension::LargeRadial(d) => apply_large_radial_fields(d, field, value),
     }
     dim.base_mut().actual_measurement = dim.measurement();
 }
@@ -495,6 +539,89 @@ fn apply_ordinate_fields(d: &mut DimensionOrdinate, field: &str, value: &str) {
     }
 }
 
+fn apply_arc_fields(d: &mut DimensionArc, field: &str, value: &str) {
+    apply_angular_common(
+        &mut d.center_point,
+        &mut d.first_extension_point,
+        &mut d.second_extension_point,
+        &mut d.definition_point,
+        field,
+        value,
+    );
+    match field {
+        "arc_start_parameter" => {
+            let _ = assign_deg(value, &mut d.arc_start_parameter);
+        }
+        "arc_end_parameter" => {
+            let _ = assign_deg(value, &mut d.arc_end_parameter);
+        }
+        "leader1_x" => {
+            let _ = assign_f64(value, &mut d.first_leader_point.x);
+        }
+        "leader1_y" => {
+            let _ = assign_f64(value, &mut d.first_leader_point.y);
+        }
+        "leader1_z" => {
+            let _ = assign_f64(value, &mut d.first_leader_point.z);
+        }
+        "leader2_x" => {
+            let _ = assign_f64(value, &mut d.second_leader_point.x);
+        }
+        "leader2_y" => {
+            let _ = assign_f64(value, &mut d.second_leader_point.y);
+        }
+        "leader2_z" => {
+            let _ = assign_f64(value, &mut d.second_leader_point.z);
+        }
+        _ => {}
+    }
+}
+
+fn apply_large_radial_fields(d: &mut DimensionLargeRadial, field: &str, value: &str) {
+    match field {
+        "definition_x" => {
+            let _ = assign_f64(value, &mut d.definition_point.x);
+        }
+        "definition_y" => {
+            let _ = assign_f64(value, &mut d.definition_point.y);
+        }
+        "definition_z" => {
+            let _ = assign_f64(value, &mut d.definition_point.z);
+        }
+        "chord_x" => {
+            let _ = assign_f64(value, &mut d.chord_point.x);
+        }
+        "chord_y" => {
+            let _ = assign_f64(value, &mut d.chord_point.y);
+        }
+        "chord_z" => {
+            let _ = assign_f64(value, &mut d.chord_point.z);
+        }
+        "override_x" => {
+            let _ = assign_f64(value, &mut d.override_center.x);
+        }
+        "override_y" => {
+            let _ = assign_f64(value, &mut d.override_center.y);
+        }
+        "override_z" => {
+            let _ = assign_f64(value, &mut d.override_center.z);
+        }
+        "jog_x" => {
+            let _ = assign_f64(value, &mut d.jog_point.x);
+        }
+        "jog_y" => {
+            let _ = assign_f64(value, &mut d.jog_point.y);
+        }
+        "jog_z" => {
+            let _ = assign_f64(value, &mut d.jog_point.z);
+        }
+        "jog_angle" => {
+            let _ = assign_deg(value, &mut d.jog_angle);
+        }
+        _ => {}
+    }
+}
+
 fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
     match t {
         EntityTransform::Translate(d) => dim.translate(acadrust::types::Vector3::new(
@@ -555,6 +682,22 @@ where
             f(&mut d.definition_point);
             f(&mut d.feature_location);
             f(&mut d.leader_endpoint);
+        }
+        Dimension::Arc(d) => {
+            f(&mut d.definition_point);
+            f(&mut d.first_extension_point);
+            f(&mut d.second_extension_point);
+            f(&mut d.center_point);
+            if d.has_leader {
+                f(&mut d.first_leader_point);
+                f(&mut d.second_leader_point);
+            }
+        }
+        Dimension::LargeRadial(d) => {
+            f(&mut d.definition_point);
+            f(&mut d.chord_point);
+            f(&mut d.override_center);
+            f(&mut d.jog_point);
         }
     }
 }
@@ -677,6 +820,29 @@ impl Grippable for Dimension {
                 center_grip(2, dv3(&d.leader_endpoint)),
                 center_grip(3, text),
             ],
+            Dimension::Arc(d) => {
+                let mut grips = vec![
+                    square_grip(0, dv3(&d.center_point)),
+                    center_grip(1, dv3(&d.first_extension_point)),
+                    center_grip(2, dv3(&d.second_extension_point)),
+                    center_grip(3, dv3(&d.definition_point)),
+                ];
+                if d.has_leader {
+                    grips.push(center_grip(4, dv3(&d.first_leader_point)));
+                    grips.push(center_grip(5, dv3(&d.second_leader_point)));
+                    grips.push(center_grip(6, text));
+                } else {
+                    grips.push(center_grip(4, text));
+                }
+                grips
+            }
+            Dimension::LargeRadial(d) => vec![
+                square_grip(0, dv3(&d.definition_point)),
+                center_grip(1, dv3(&d.chord_point)),
+                center_grip(2, dv3(&d.override_center)),
+                center_grip(3, dv3(&d.jog_point)),
+                center_grip(4, text),
+            ],
         }
     }
 
@@ -687,6 +853,8 @@ impl Grippable for Dimension {
             Dimension::Radius(_) | Dimension::Diameter(_) => 2,
             Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => 4,
             Dimension::Ordinate(_) => 3,
+            Dimension::Arc(d) => if d.has_leader { 6 } else { 4 },
+            Dimension::LargeRadial(_) => 4,
         };
         if grip_id == text_grip {
             apply_to_v3(&mut self.base_mut().text_middle_point, &apply);
@@ -739,6 +907,22 @@ impl Grippable for Dimension {
                 2 => apply_to_v3(&mut d.leader_endpoint, &apply),
                 _ => {}
             },
+            Dimension::Arc(d) => match grip_id {
+                0 => apply_to_v3(&mut d.center_point, &apply),
+                1 => apply_to_v3(&mut d.first_extension_point, &apply),
+                2 => apply_to_v3(&mut d.second_extension_point, &apply),
+                3 => apply_to_v3(&mut d.definition_point, &apply),
+                4 => apply_to_v3(&mut d.first_leader_point, &apply),
+                5 => apply_to_v3(&mut d.second_leader_point, &apply),
+                _ => {}
+            },
+            Dimension::LargeRadial(d) => match grip_id {
+                0 => apply_to_v3(&mut d.definition_point, &apply),
+                1 => apply_to_v3(&mut d.chord_point, &apply),
+                2 => apply_to_v3(&mut d.override_center, &apply),
+                3 => apply_to_v3(&mut d.jog_point, &apply),
+                _ => {}
+            },
         }
         self.base_mut().actual_measurement = self.measurement();
     }
@@ -750,6 +934,8 @@ impl Grippable for Dimension {
             Dimension::Radius(_) | Dimension::Diameter(_) => (1, 2),
             Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => (3, 4),
             Dimension::Ordinate(_) => (0, 3),
+            Dimension::Arc(d) => (3, if d.has_leader { 6 } else { 4 }),
+            Dimension::LargeRadial(_) => (3, 4),
         };
         if grip_id == text_grip {
             vec![
@@ -816,6 +1002,8 @@ impl Grippable for Dimension {
             Dimension::Radius(_) | Dimension::Diameter(_) => (1, 2),
             Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => (3, 4),
             Dimension::Ordinate(_) => (0, 3),
+            Dimension::Arc(d) => (3, if d.has_leader { 6 } else { 4 }),
+            Dimension::LargeRadial(_) => (3, 4),
         };
         match action {
             A::ResetText if grip_id == text_grip => {
@@ -1860,6 +2048,7 @@ fn dimension_geometry(
                 lv(d.dimension_arc),
                 arrow1,
                 arrow2,
+                None,
             );
         }
         Dimension::Angular3Pt(d) => {
@@ -1871,6 +2060,7 @@ fn dimension_geometry(
                 lv(d.definition_point),
                 arrow1,
                 arrow2,
+                None,
             );
         }
         Dimension::Ordinate(d) => {
@@ -1885,8 +2075,72 @@ fn dimension_geometry(
                 lv(d.leader_endpoint),
             );
         }
+        Dimension::Arc(d) => {
+            append_angular_dimension(
+                &mut g,
+                lv(d.center_point),
+                lv(d.first_extension_point),
+                lv(d.second_extension_point),
+                lv(d.definition_point),
+                arrow1,
+                arrow2,
+                d.is_partial.then_some((
+                    d.arc_start_parameter as f32,
+                    d.arc_end_parameter as f32,
+                )),
+            );
+            if d.has_leader {
+                add_segment(
+                    &mut g.dim_lines,
+                    lv(d.first_leader_point),
+                    lv(d.second_leader_point),
+                );
+            }
+        }
+        Dimension::LargeRadial(d) => {
+            let chord = lv(d.chord_point);
+            let jog = lv(d.jog_point);
+            let override_center = lv(d.override_center);
+            let (near, far) =
+                jogged_radial_break(chord, jog, override_center, d.jog_angle as f32);
+            add_segment(&mut g.dim_lines, chord, near);
+            add_segment(&mut g.dim_lines, near, far);
+            add_segment(&mut g.dim_lines, far, override_center);
+            append_arrow(
+                &mut g,
+                chord,
+                normalized_or(near - chord, Vec3::X),
+                arrow1,
+            );
+        }
     }
     g
+}
+
+fn jogged_radial_break(
+    chord: Vec3,
+    jog: Vec3,
+    override_center: Vec3,
+    jog_angle: f32,
+) -> (Vec3, Vec3) {
+    let radial = normalized_or(chord - override_center, Vec3::X);
+    let (sin, cos) = jog_angle.sin_cos();
+    let transverse = normalized_or(
+        Vec3::new(
+            radial.x * cos - radial.y * sin,
+            radial.x * sin + radial.y * cos,
+            0.0,
+        ),
+        Vec3::Y,
+    );
+    let half = ((chord - override_center).length() * 0.04).max(1e-3);
+    let first = jog - transverse * half;
+    let second = jog + transverse * half;
+    if chord.distance_squared(first) <= chord.distance_squared(second) {
+        (first, second)
+    } else {
+        (second, first)
+    }
 }
 
 fn append_linear_dimension(
@@ -2058,6 +2312,7 @@ fn append_angular_dimension(
     arc_point: Vec3,
     arrow1: &ArrowKind,
     arrow2: &ArrowKind,
+    explicit_sweep: Option<(f32, f32)>,
 ) {
     let radius = vertex.distance(arc_point);
     if radius <= 1e-6 {
@@ -2067,18 +2322,19 @@ fn append_angular_dimension(
     }
     // Extension lines run from each measured point out to the dimension arc so
     // there is no gap between a ray and its arc endpoint. (#181 / DIM-027)
-    let dir1 = normalized_or(first - vertex, Vec3::X);
-    let dir2 = normalized_or(second - vertex, Vec3::X);
+    let measured_start = (first.y - vertex.y).atan2(first.x - vertex.x);
+    let measured_end = (second.y - vertex.y).atan2(second.x - vertex.x);
+    let (start, mut end) = explicit_sweep.unwrap_or((measured_start, measured_end));
+    let dir1 = Vec3::new(start.cos(), start.sin(), 0.0);
+    let dir2 = Vec3::new(end.cos(), end.sin(), 0.0);
     add_segment(&mut g.ext_lines, first, vertex + dir1 * radius);
     add_segment(&mut g.ext_lines, second, vertex + dir2 * radius);
 
-    let start = (first.y - vertex.y).atan2(first.x - vertex.x);
-    let mut end = (second.y - vertex.y).atan2(second.x - vertex.x);
     let mut delta = end - start;
     while delta <= 0.0 {
         delta += std::f32::consts::TAU;
     }
-    if delta > std::f32::consts::PI {
+    if explicit_sweep.is_none() && delta > std::f32::consts::PI {
         end -= std::f32::consts::TAU;
         delta = end - start;
     }
@@ -2141,6 +2397,25 @@ fn dimension_snap_pts(dim: &Dimension) -> Vec<(glam::DVec3, SnapHint)> {
             node(d.definition_point),
             node(d.feature_location),
             node(d.leader_endpoint),
+        ],
+        Dimension::Arc(d) => {
+            let mut points = vec![
+                node(d.center_point),
+                node(d.first_extension_point),
+                node(d.second_extension_point),
+                node(d.definition_point),
+            ];
+            if d.has_leader {
+                points.push(node(d.first_leader_point));
+                points.push(node(d.second_leader_point));
+            }
+            points
+        }
+        Dimension::LargeRadial(d) => vec![
+            node(d.definition_point),
+            node(d.chord_point),
+            node(d.override_center),
+            node(d.jog_point),
         ],
     }
 }
@@ -2383,7 +2658,7 @@ fn dimension_text_parts(
     } else {
         let v = format_linear_value(dim.measurement(), style);
         match dim {
-            Dimension::Radius(_) => format!("R{}", v),
+            Dimension::Radius(_) | Dimension::LargeRadial(_) => format!("R{}", v),
             Dimension::Diameter(_) => format!("Ø{}", v),
             _ => v,
         }
@@ -2858,6 +3133,8 @@ fn dimension_text_position(dim: &Dimension) -> Vec3 {
         Dimension::Angular2Ln(d) => lv(d.dimension_arc),
         Dimension::Angular3Pt(d) => lv(d.definition_point),
         Dimension::Ordinate(d) => lv(d.leader_endpoint),
+        Dimension::Arc(d) => lv(d.definition_point),
+        Dimension::LargeRadial(d) => lv(d.jog_point),
     }
 }
 
@@ -3037,6 +3314,8 @@ fn dimension_text_pos_f64(
                 Dimension::Angular2Ln(d) => d.dimension_arc,
                 Dimension::Angular3Pt(d) => d.definition_point,
                 Dimension::Ordinate(d) => d.leader_endpoint,
+                Dimension::Arc(d) => d.definition_point,
+                Dimension::LargeRadial(d) => d.jog_point,
                 _ => base.text_middle_point,
             };
             Vector3::new(mid.x, mid.y + perp_off * perp_sign_default(), mid.z)

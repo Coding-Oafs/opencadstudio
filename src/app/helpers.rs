@@ -383,6 +383,7 @@ pub(super) fn entity_type_key(entity: &acadrust::EntityType) -> String {
         Light(_) => "light",
         SectionSymbol(_) => "sectionsymbol",
         ViewBorder(_) => "viewborder",
+        Extended(entity) => return entity.class_name().to_ascii_lowercase(),
         Seqend(_) => "seqend",
         Unknown(_) => "unknown",
     }

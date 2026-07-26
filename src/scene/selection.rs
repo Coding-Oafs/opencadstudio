@@ -55,7 +55,7 @@ impl Scene {
         if self.selected.is_empty() {
             return 0;
         }
-        let pairs: rustc_hash::FxHashSet<(&'static str, String)> = self
+        let pairs: rustc_hash::FxHashSet<(&str, String)> = self
             .selected
             .iter()
             .filter_map(|h| self.document.get_entity(*h))
@@ -182,13 +182,13 @@ impl Scene {
     /// Returns the sorted set of entity-type names present in the active
     /// layout. Used to populate the Quick Select "Object type" dropdown
     /// with only the types that actually exist in the drawing.
-    pub fn entity_type_names_in_layout(&self) -> Vec<&'static str> {
+    pub fn entity_type_names_in_layout(&self) -> Vec<String> {
         use crate::entities::traits::entity_type_name;
-        let mut names: std::collections::BTreeSet<&'static str> =
+        let mut names: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
         for h in self.current_layout_entity_handles() {
             if let Some(e) = self.document.get_entity(h) {
-                names.insert(entity_type_name(e));
+                names.insert(entity_type_name(e).to_string());
             }
         }
         names.into_iter().collect()
@@ -311,6 +311,7 @@ impl Scene {
         use acadrust::types::Color;
         match c {
             Color::ByLayer => "ByLayer".to_string(),
+            Color::None => "None".to_string(),
             Color::ByBlock => "ByBlock".to_string(),
             Color::Index(i) => i.to_string(),
             Color::Rgb { r, g, b } => format!("{},{},{}", r, g, b),

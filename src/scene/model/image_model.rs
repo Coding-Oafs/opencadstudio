@@ -298,7 +298,8 @@ impl ImageModel {
     /// the frame is degenerate or nothing in the blob decodes, so the caller
     /// falls back to the frame placeholder.
     pub fn from_ole2frame(ole: &acadrust::entities::Ole2Frame) -> Option<Self> {
-        let (pixels, width, height) = super::ole_pres::decode(&ole.binary_data)?;
+        let payload = ole.encoded_payload();
+        let (pixels, width, height) = super::ole_pres::decode(&payload)?;
 
         // Frame rectangle in WCS. `upper_left`/`lower_right` name the diagonal;
         // normalise to left/right/top/bottom so the bitmap sits upright.

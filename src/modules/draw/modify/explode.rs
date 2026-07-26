@@ -502,12 +502,23 @@ fn dim_arc_segs(
     while sweep <= -PI {
         sweep += 2.0 * PI;
     }
+    dim_arc_segs_with_sweep(center, radius, a1, sweep, common)
+}
+
+fn dim_arc_segs_with_sweep(
+    center: Vector3,
+    radius: f64,
+    start: f64,
+    sweep: f64,
+    common: &acadrust::entities::EntityCommon,
+) -> Vec<EntityType> {
+    use std::f64::consts::PI;
     let steps = 12usize.max((sweep.abs() / (PI / 36.0)).ceil() as usize);
     let pt = |a: f64| Vector3::new(center.x + radius * a.cos(), center.y + radius * a.sin(), center.z);
     let mut out = Vec::new();
-    let mut prev = pt(a1);
+    let mut prev = pt(start);
     for i in 1..=steps {
-        let cur = pt(a1 + sweep * (i as f64 / steps as f64));
+        let cur = pt(start + sweep * (i as f64 / steps as f64));
         out.push(dim_seg(prev, cur, common));
         prev = cur;
     }
@@ -631,10 +642,12 @@ fn angular_block_segs(
     met: &DimMetrics,
     ext_c: &acadrust::entities::EntityCommon,
     dim_c: &acadrust::entities::EntityCommon,
+    explicit_sweep: Option<(f64, f64)>,
 ) -> Vec<EntityType> {
     use std::f64::consts::PI;
-    let a1 = (p1.y - vertex.y).atan2(p1.x - vertex.x);
-    let a2 = (p2.y - vertex.y).atan2(p2.x - vertex.x);
+    let measured_a1 = (p1.y - vertex.y).atan2(p1.x - vertex.x);
+    let measured_a2 = (p2.y - vertex.y).atan2(p2.x - vertex.x);
+    let (a1, a2) = explicit_sweep.unwrap_or((measured_a1, measured_a2));
     let radius = ((arc_loc.x - vertex.x).powi(2) + (arc_loc.y - vertex.y).powi(2)).sqrt();
     let mut out = Vec::new();
     if radius < 1e-9 {
@@ -647,19 +660,77 @@ fn angular_block_segs(
     let e2 = Vector3::new(vertex.x + a2.cos() * radius, vertex.y + a2.sin() * radius, vertex.z);
     out.push(dim_seg(p1, e1, ext_c));
     out.push(dim_seg(p2, e2, ext_c));
-    out.extend(dim_arc_segs(vertex, radius, a1, a2, dim_c));
-    // Terminators tangent to the arc at each end, pointing along the sweep.
     let mut sweep = a2 - a1;
-    while sweep > PI {
-        sweep -= 2.0 * PI;
+    if explicit_sweep.is_some() {
+        while sweep <= 0.0 {
+            sweep += 2.0 * PI;
+        }
+        out.extend(dim_arc_segs_with_sweep(
+            vertex,
+            radius,
+            a1,
+            sweep,
+            dim_c,
+        ));
+    } else {
+        out.extend(dim_arc_segs(vertex, radius, a1, a2, dim_c));
     }
-    while sweep <= -PI {
-        sweep += 2.0 * PI;
+    // Terminators tangent to the arc at each end, pointing along the sweep.
+    if explicit_sweep.is_none() {
+        while sweep > PI {
+            sweep -= 2.0 * PI;
+        }
+        while sweep <= -PI {
+            sweep += 2.0 * PI;
+        }
     }
     let sgn = if sweep >= 0.0 { 1.0 } else { -1.0 };
     out.extend(dim_terminator(e1, -a1.sin() * sgn, a1.cos() * sgn, &met.arrow1, dim_c));
     out.extend(dim_terminator(e2, a2.sin() * sgn, -a2.cos() * sgn, &met.arrow2, dim_c));
     out
+}
+
+fn jogged_radial_break(
+    chord: Vector3,
+    jog: Vector3,
+    override_center: Vector3,
+    jog_angle: f64,
+) -> (Vector3, Vector3) {
+    let radial = norm2(
+        chord.x - override_center.x,
+        chord.y - override_center.y,
+        1.0,
+        0.0,
+    );
+    let (sin, cos) = jog_angle.sin_cos();
+    let transverse = (
+        radial.0 * cos - radial.1 * sin,
+        radial.0 * sin + radial.1 * cos,
+    );
+    let length = ((chord.x - override_center.x).powi(2)
+        + (chord.y - override_center.y).powi(2))
+    .sqrt();
+    let half = (length * 0.04).max(1e-6);
+    let first = Vector3::new(
+        jog.x - transverse.0 * half,
+        jog.y - transverse.1 * half,
+        jog.z,
+    );
+    let second = Vector3::new(
+        jog.x + transverse.0 * half,
+        jog.y + transverse.1 * half,
+        jog.z,
+    );
+    let distance_squared = |point: Vector3| {
+        (point.x - chord.x).powi(2)
+            + (point.y - chord.y).powi(2)
+            + (point.z - chord.z).powi(2)
+    };
+    if distance_squared(first) <= distance_squared(second) {
+        (first, second)
+    } else {
+        (second, first)
+    }
 }
 
 /// The text anchor for a radial leader: the saved text middle point when set,
@@ -902,6 +973,7 @@ fn explode_dimension(dim: &Dimension, doc: &CadDocument) -> Vec<EntityType> {
                 &met,
                 &ext_c,
                 &dim_c,
+                None,
             ));
         }
         Dimension::Angular3Pt(d) => {
@@ -913,11 +985,56 @@ fn explode_dimension(dim: &Dimension, doc: &CadDocument) -> Vec<EntityType> {
                 &met,
                 &ext_c,
                 &dim_c,
+                None,
             ));
         }
         Dimension::Ordinate(d) => {
             result.push(make_seg(&d.feature_location, &d.definition_point, &dim_c));
             result.push(make_seg(&d.definition_point, &d.leader_endpoint, &dim_c));
+        }
+        Dimension::Arc(d) => {
+            result.extend(angular_block_segs(
+                d.center_point,
+                d.first_extension_point,
+                d.second_extension_point,
+                d.definition_point,
+                &met,
+                &ext_c,
+                &dim_c,
+                d.is_partial.then_some((
+                    d.arc_start_parameter,
+                    d.arc_end_parameter,
+                )),
+            ));
+            if d.has_leader {
+                result.push(make_seg(
+                    &d.first_leader_point,
+                    &d.second_leader_point,
+                    &dim_c,
+                ));
+            }
+        }
+        Dimension::LargeRadial(d) => {
+            let (near, far) = jogged_radial_break(
+                d.chord_point,
+                d.jog_point,
+                d.override_center,
+                d.jog_angle,
+            );
+            result.push(make_seg(&d.chord_point, &near, &dim_c));
+            result.push(make_seg(&near, &far, &dim_c));
+            result.push(make_seg(&far, &d.override_center, &dim_c));
+            let len = ((near.x - d.chord_point.x).powi(2)
+                + (near.y - d.chord_point.y).powi(2))
+            .sqrt()
+            .max(1e-12);
+            result.extend(dim_terminator(
+                d.chord_point,
+                (near.x - d.chord_point.x) / len,
+                (near.y - d.chord_point.y) / len,
+                &met.arrow1,
+                &dim_c,
+            ));
         }
     }
 
@@ -963,6 +1080,8 @@ fn sync_dimension_base_points_and_collect_pending(doc: &mut CadDocument) -> Vec<
                 Dimension::Diameter(value) => Some(value.definition_point),
                 Dimension::Ordinate(value) => Some(value.definition_point),
                 Dimension::Angular3Pt(value) => Some(value.definition_point),
+                Dimension::Arc(value) => Some(value.definition_point),
+                Dimension::LargeRadial(value) => Some(value.definition_point),
                 Dimension::Angular2Ln(_) => None,
             };
             let base = dimension.base();

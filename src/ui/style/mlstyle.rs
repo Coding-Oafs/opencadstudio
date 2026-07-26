@@ -38,6 +38,7 @@ pub fn view_window<'a>(
             .map(|(idx, e)| {
                 let color_str = match &e.color {
                     acadrust::types::Color::ByLayer => "ByLayer".into(),
+                    acadrust::types::Color::None => "None".into(),
                     acadrust::types::Color::ByBlock => "ByBlock".into(),
                     acadrust::types::Color::Index(i) => format!("ACI {i}"),
                     acadrust::types::Color::Rgb { r, g, b } => format!("#{r:02X}{g:02X}{b:02X}"),

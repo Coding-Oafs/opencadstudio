@@ -45,6 +45,7 @@ pub fn color_to_aci_string(c: AcadColor) -> String {
     match c {
         AcadColor::ByBlock => "0".to_string(),
         AcadColor::ByLayer => "256".to_string(),
+        AcadColor::None => "257".to_string(),
         AcadColor::Index(i) => i.to_string(),
         AcadColor::Rgb { .. } => "256".to_string(),
     }
@@ -55,6 +56,7 @@ pub fn aci_string_to_color(s: &str) -> AcadColor {
     match s.trim().parse::<i16>().unwrap_or(256) {
         0 => AcadColor::ByBlock,
         256 => AcadColor::ByLayer,
+        257 => AcadColor::None,
         n if (1..=255).contains(&n) => AcadColor::Index(n as u8),
         _ => AcadColor::ByLayer,
     }

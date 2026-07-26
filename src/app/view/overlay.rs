@@ -1117,7 +1117,7 @@ const QSELECT_ANY_PROP: &str = "(Any property)";
 /// fields (Start X, Length, Radius, …) so type-specific filtering works.
 pub(super) fn qselect_overlay<'a>(
     state: &'a crate::app::QSelectState,
-    types: &[&'static str],
+    types: &[String],
     properties: &[(String, String)],
 ) -> Element<'a, Message> {
     use iced::widget::{checkbox, pick_list};
@@ -1165,7 +1165,7 @@ pub(super) fn qselect_overlay<'a>(
     };
 
     let mut type_options: Vec<String> = vec![QSELECT_ANY_TYPE.to_string()];
-    type_options.extend(types.iter().map(|s| (*s).to_string()));
+    type_options.extend(types.iter().cloned());
 
     let mut prop_options: Vec<crate::app::QSelectPropertyChoice> =
         vec![crate::app::QSelectPropertyChoice {
@@ -1337,4 +1337,3 @@ pub(super) fn qselect_overlay<'a>(
 
     stack![catcher, centered].into()
 }
-

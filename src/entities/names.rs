@@ -57,6 +57,7 @@ pub fn ui_name(e: &EntityType) -> &'static str {
         EntityType::Light(_) => "Light",
         EntityType::SectionSymbol(_) => "Section Symbol",
         EntityType::ViewBorder(_) => "View Border",
+        EntityType::Extended(_) => "Extended Entity",
         EntityType::Seqend(_) => "Seqend",
         EntityType::Unknown(_) => "Unknown",
     }
@@ -68,6 +69,9 @@ pub fn ui_name(e: &EntityType) -> &'static str {
 /// defers to [`ui_name`]. Falls back to "Unknown" for a class we couldn't name
 /// (the numeric `DWG_TYPE_<n>` placeholder).
 pub fn ui_name_or_class(e: &EntityType) -> String {
+    if let EntityType::Extended(entity) = e {
+        return entity.class_name().to_string();
+    }
     if let EntityType::Unknown(u) = e {
         let n = u.dxf_name.trim();
         if !n.is_empty() && !n.starts_with("DWG_TYPE_") {

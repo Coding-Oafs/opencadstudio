@@ -1356,6 +1356,7 @@ fn picker_text_btn(label: &str, msg: Message) -> Element<'_, Message> {
 /// Returns an (iced::Color swatch_bg, display_label) pair for an AcadColor.
 pub fn acad_color_display(c: AcadColor) -> (Color, &'static str) {
     match c {
+        AcadColor::None => (Color::TRANSPARENT, "None"),
         AcadColor::ByLayer => (
             Color {
                 r: 0.35,

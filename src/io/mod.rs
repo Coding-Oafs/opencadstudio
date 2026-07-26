@@ -527,20 +527,6 @@ pub fn dropped_on_save_count(
                         .dwg_source_version
                         .is_some_and(|source| source != target_version)
             }
-            acadrust::EntityType::SectionSymbol(entity) => {
-                is_dxf
-                    || entity.raw_dwg_data.is_none()
-                    || entity
-                        .dwg_source_version
-                        .is_some_and(|source| source != target_version)
-            }
-            acadrust::EntityType::ViewBorder(entity) => {
-                is_dxf
-                    || entity.raw_dwg_data.is_none()
-                    || entity
-                        .dwg_source_version
-                        .is_some_and(|source| source != target_version)
-            }
             _ => false,
         };
         if dropped {
