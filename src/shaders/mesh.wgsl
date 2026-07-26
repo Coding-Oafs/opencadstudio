@@ -55,6 +55,19 @@ struct MaterialMaps {
 @group(1) @binding(13) var normal_sampler: sampler;
 @group(1) @binding(14) var<uniform> maps: MaterialMaps;
 
+struct MeshInstance {
+    model_row_0:     vec4<f32>,
+    model_row_1:     vec4<f32>,
+    model_row_2:     vec4<f32>,
+    translation_low: vec4<f32>,
+    normal_row_0:    vec4<f32>,
+    normal_row_1:    vec4<f32>,
+    normal_row_2:    vec4<f32>,
+};
+
+@group(1) @binding(15)
+var<storage, read> mesh_instances: array<MeshInstance>;
+
 struct VertexIn {
     @location(0) position:     vec3<f32>,
     @location(1) normal:       vec3<f32>,
@@ -100,12 +113,30 @@ struct VertexOut {
 };
 
 @vertex
-fn vs_main(v: VertexIn) -> VertexOut {
+fn vs_main(
+    v: VertexIn,
+    @builtin(instance_index) instance_index: u32,
+) -> VertexOut {
     var out: VertexOut;
-    let rel = (v.position - u.eye_high) + (v.position_low - u.eye_low);
+    let instance = mesh_instances[instance_index];
+    let world_high = vec3<f32>(
+        dot(instance.model_row_0.xyz, v.position) + instance.model_row_0.w,
+        dot(instance.model_row_1.xyz, v.position) + instance.model_row_1.w,
+        dot(instance.model_row_2.xyz, v.position) + instance.model_row_2.w,
+    );
+    let world_low = vec3<f32>(
+        dot(instance.model_row_0.xyz, v.position_low),
+        dot(instance.model_row_1.xyz, v.position_low),
+        dot(instance.model_row_2.xyz, v.position_low),
+    ) + instance.translation_low.xyz;
+    let rel = (world_high - u.eye_high) + (world_low - u.eye_low);
     out.clip_pos  = u.view_rot * vec4<f32>(rel, 1.0);
     out.color     = v.color;
-    out.normal    = v.normal;
+    out.normal    = normalize(vec3<f32>(
+        dot(instance.normal_row_0.xyz, v.normal),
+        dot(instance.normal_row_1.xyz, v.normal),
+        dot(instance.normal_row_2.xyz, v.normal),
+    ));
     out.world_pos = rel;
     out.material  = v.material;
     out.specular  = v.specular;
@@ -305,4 +336,20 @@ fn fs_edge(in: VertexOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_edge_black(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_highlight_selected(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(
+        mix(in.color.rgb, vec3<f32>(0.15, 0.55, 1.0), 0.60),
+        0.90,
+    );
+}
+
+@fragment
+fn fs_highlight_hover(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(
+        mix(in.color.rgb, vec3<f32>(0.95, 0.55, 0.10), 0.35),
+        0.82,
+    );
 }

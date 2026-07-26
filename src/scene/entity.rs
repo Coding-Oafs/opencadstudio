@@ -557,10 +557,11 @@ impl Scene {
                 })
             })
             .collect();
-        for (handle, mesh, top_level) in built {
+        for (handle, mut mesh, top_level) in built {
             if top_level {
                 self.meshes.insert(handle, mesh);
             } else {
+                mesh.prepare_instance_source(handle);
                 self.block_meshes.insert(handle, mesh);
             }
         }
@@ -2232,10 +2233,11 @@ impl Scene {
                 })
             })
             .collect();
-        for (handle, m, top_level) in built {
+        for (handle, mut m, top_level) in built {
             if top_level {
                 self.meshes.insert(handle, m);
             } else {
+                m.prepare_instance_source(handle);
                 self.block_meshes.insert(handle, m);
             }
         }

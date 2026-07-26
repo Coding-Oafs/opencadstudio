@@ -651,10 +651,11 @@ fn build_derived_caches_impl(
         .collect();
     let mut meshes: HashMap<Handle, MeshLodSet> = HashMap::default();
     let mut block_meshes: HashMap<Handle, MeshLodSet> = HashMap::default();
-    for (handle, m, top_level) in built {
+    for (handle, mut m, top_level) in built {
         if top_level {
             meshes.insert(handle, m);
         } else {
+            m.prepare_instance_source(handle);
             block_meshes.insert(handle, m);
         }
     }
@@ -1037,6 +1038,7 @@ fn transform_block_mesh_lod_set(
 ) -> MeshLodSet {
     use acadrust::types::Vector3;
     let mut out = set.clone();
+    out.instance_transform = Some(*xform);
     let transform_direction = |direction: [f32; 3]| {
         let transformed = xform.apply_rotation(Vector3::new(
             direction[0] as f64,

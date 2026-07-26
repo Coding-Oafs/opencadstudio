@@ -167,6 +167,19 @@ pub struct MeshLodSet {
     /// triangle). `verts` carry only the high half of the double-single
     /// position, so the bound is f32-precise — fine for a conservative cull.
     pub z_aabb: [f32; 2],
+    /// Immutable block-local geometry shared by every INSERT instance of this
+    /// block entity. Top-level meshes leave this empty.
+    pub instance_source: Option<std::sync::Arc<MeshInstanceSource>>,
+    /// Accumulated block-local → world transform for this rendered instance.
+    pub instance_transform: Option<acadrust::types::Transform>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MeshInstanceSource {
+    pub handle: acadrust::Handle,
+    pub lods: Vec<MeshModel>,
+    pub edge_verts: Vec<[f32; 3]>,
+    pub edge_verts_low: Vec<[f32; 3]>,
 }
 
 /// 3D bounds of every LOD's vertices: `([min_x, min_y, max_x, max_y], [min_z, max_z])`.
@@ -279,6 +292,8 @@ impl MeshLodSet {
             metrics,
             world_aabb,
             z_aabb,
+            instance_source: None,
+            instance_transform: None,
         }
     }
 
@@ -296,5 +311,15 @@ impl MeshLodSet {
         let (xy, z) = compute_mesh_aabb(&self.lods);
         self.world_aabb = xy;
         self.z_aabb = z;
+    }
+
+    pub fn prepare_instance_source(&mut self, handle: acadrust::Handle) {
+        self.instance_source = Some(std::sync::Arc::new(MeshInstanceSource {
+            handle,
+            lods: self.lods.clone(),
+            edge_verts: self.edge_verts.clone(),
+            edge_verts_low: self.edge_verts_low.clone(),
+        }));
+        self.instance_transform = None;
     }
 }

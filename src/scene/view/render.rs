@@ -262,7 +262,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_epoch = (u64::MAX, u64::MAX, u64::MAX);
                 inner.cached_wire_id = u64::MAX;
                 inner.cached_selection = (u64::MAX, u64::MAX);
-                inner.cached_mesh_key = (u64::MAX, u64::MAX);
+                inner.cached_mesh_content_id = u64::MAX;
                 inner.cached_face3d_key = (u64::MAX, false);
                 inner.cached_hatch_source = None;
                 inner.cached_wipeout_source = None;
@@ -768,10 +768,21 @@ impl shader::Primitive for Primitive {
                 .as_ref()
                 .map_or(true, |source| !Arc::ptr_eq(source, &vp.meshes))
             {
-                inner.upload_mesh_batch(device, queue, &vp.meshes[..]);
+                let patched = vp.wire_patch.as_ref().is_some_and(|(previous, patch)| {
+                    *previous == inner.cached_mesh_content_id
+                        && inner.patch_mesh_batch(
+                            device,
+                            queue,
+                            &vp.meshes[..],
+                            &patch.changes,
+                        )
+                });
+                if !patched {
+                    inner.upload_mesh_batch(device, queue, &vp.meshes[..]);
+                }
                 inner.cached_mesh_source = Some(Arc::clone(&vp.meshes));
-                inner.cached_mesh_batch_epoch = vp.geometry_epoch;
             }
+            inner.cached_mesh_content_id = vp.wire_content_id;
             // Selection / hover highlight overlay — tinted copies of just the
             // picked solids, rebuilt only when the highlight set (or geometry)
             // changes. Drawn over the static batch so the base never re-packs.
@@ -780,12 +791,7 @@ impl shader::Primitive for Primitive {
                 vp.selection_generation,
             );
             if hl_key != inner.cached_highlight_key {
-                inner.upload_mesh_highlight(
-                    device,
-                    &vp.meshes[..],
-                    &vp.selected_handles,
-                    vp.hover_handle,
-                );
+                inner.update_mesh_highlight(&vp.selected_handles, vp.hover_handle);
                 inner.cached_highlight_key = hl_key;
             }
             // Live overlay (command preview / interim / grip drag) — small and
@@ -812,7 +818,13 @@ impl shader::Primitive for Primitive {
             inner.upload_clip_boundary(device, &vp.clip_boundary_ndc);
             inner.compute_hatch_lod(queue, view_rot, eye, clip_size.width, clip_size.height);
             inner.compute_wipeout_lod(view_rot, eye, clip_size.width, clip_size.height);
-            inner.compute_mesh_lod(view_rot, eye, clip_size.width, clip_size.height);
+            inner.compute_mesh_lod(
+                queue,
+                view_rot,
+                eye,
+                clip_size.width,
+                clip_size.height,
+            );
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let cull_key = (
