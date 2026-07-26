@@ -853,25 +853,73 @@ pub fn build_mesh_batch(device: &wgpu::Device, sets: &[MeshLodSet]) -> (Vec<Mesh
         // the triangle edges so the mesh still shows a wireframe.
         let has_feat = !set.edge_verts.is_empty();
         if has_feat && part.include_edges {
-            for i in 0..set.edge_verts.len() {
-                edge_verts.push(MeshVertex {
-                    position: set.edge_verts[i],
-                    normal: [0.0, 1.0, 0.0],
-                    color: edge_color,
-                    position_low: set.edge_verts_low.get(i).copied().unwrap_or([0.0; 3]),
-                    material: material_params,
-                    specular,
-                    uv_diffuse: [0.0; 2],
-                    ambient,
-                    advanced,
-                    flags,
-                    uv_specular: [0.0; 2],
-                    uv_reflection: [0.0; 2],
-                    uv_opacity: [0.0; 2],
-                    uv_bump: [0.0; 2],
-                    uv_refraction: [0.0; 2],
-                    uv_normal: [0.0; 2],
-                });
+            // Feature edges use their own vertex buffer, so they need their
+            // own cap. Large ACIS models can have relatively few faces but
+            // millions of B-rep edge vertices; only checking `mesh.verts`
+            // allowed `edge_vbuf` to exceed wgpu's max_buffer_size.
+            let mut edge_start = 0;
+            let edge_end = set.edge_verts.len() & !1usize;
+            while edge_start < edge_end {
+                let available = max_verts.saturating_sub(edge_verts.len());
+                // LineList consumes pairs. Never split a segment between
+                // chunks even when the vertex budget is odd.
+                let take = available
+                    .min(edge_end - edge_start)
+                    & !1usize;
+                if take == 0 {
+                    chunks.push(make_chunk(
+                        device,
+                        &verts,
+                        &indices,
+                        &transp_indices,
+                        &wire_indices,
+                        &edge_verts,
+                        active_material,
+                    ));
+                    verts.clear();
+                    indices.clear();
+                    transp_indices.clear();
+                    wire_indices.clear();
+                    edge_verts.clear();
+                    continue;
+                }
+                for i in edge_start..edge_start + take {
+                    edge_verts.push(MeshVertex {
+                        position: set.edge_verts[i],
+                        normal: [0.0, 1.0, 0.0],
+                        color: edge_color,
+                        position_low: set.edge_verts_low.get(i).copied().unwrap_or([0.0; 3]),
+                        material: material_params,
+                        specular,
+                        uv_diffuse: [0.0; 2],
+                        ambient,
+                        advanced,
+                        flags,
+                        uv_specular: [0.0; 2],
+                        uv_reflection: [0.0; 2],
+                        uv_opacity: [0.0; 2],
+                        uv_bump: [0.0; 2],
+                        uv_refraction: [0.0; 2],
+                        uv_normal: [0.0; 2],
+                    });
+                }
+                edge_start += take;
+                if edge_start < edge_end {
+                    chunks.push(make_chunk(
+                        device,
+                        &verts,
+                        &indices,
+                        &transp_indices,
+                        &wire_indices,
+                        &edge_verts,
+                        active_material,
+                    ));
+                    verts.clear();
+                    indices.clear();
+                    transp_indices.clear();
+                    wire_indices.clear();
+                    edge_verts.clear();
+                }
             }
         }
 
