@@ -36,6 +36,11 @@ jobs:
         with:
           tool: trunk
 
+      - name: Install wasm-bindgen CLI
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.126
+
       # The rust <link> in index.html sets `data-cargo-no-default-features`,
       # so this drops the `solid3d` feature (truck-meshalgo → lzma-sys C deps
       # that can't cross-compile to wasm). `--public-url` matches the project
