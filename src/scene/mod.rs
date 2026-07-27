@@ -153,6 +153,29 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Session-only object visibility used by ISOLATEOBJECTS / HIDEOBJECTS.
+///
+/// This is deliberately separate from `EntityCommon::invisible`: that DXF
+/// property belongs to the drawing (and dynamic-block visibility states),
+/// whereas object isolation must never be serialized.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectIsolationState {
+    /// Objects explicitly hidden with HIDEOBJECTS.
+    pub hidden: HashSet<Handle>,
+    /// Objects retained by ISOLATEOBJECTS. `None` means no isolate filter.
+    pub keep: Option<HashSet<Handle>>,
+}
+
+impl ObjectIsolationState {
+    fn hides(&self, handle: Handle) -> bool {
+        self.hidden.contains(&handle)
+    }
+
+    fn is_active(&self) -> bool {
+        !self.hidden.is_empty() || self.keep.is_some()
+    }
+}
+
 /// Global counter so every Scene and every geometry mutation gets a
 /// process-wide unique epoch. This prevents two different tabs (Scenes)
 /// from ever sharing the same epoch value, which would cause the shared
@@ -1359,10 +1382,13 @@ pub struct Scene {
     lighting_cache: RefCell<Option<Vec<SceneLight>>>,
     /// Currently selected entity handles.
     pub selected: HashSet<Handle>,
-    /// Entity handles hidden by Isolate / Hide. Empty = nothing hidden.
-    /// `tessellate_block`'s visibility test skips these, so they neither
-    /// render nor hit-test until isolation ends.
-    pub hidden: HashSet<Handle>,
+    /// Session-only ISOLATEOBJECTS / HIDEOBJECTS state. Never written to DWG/DXF.
+    pub object_isolation: ObjectIsolationState,
+    /// Entity handles temporarily removed from the base render while an
+    /// interactive preview (currently grip drag) draws their live replacement.
+    /// Separate from object isolation so a grip can never activate the
+    /// isolation status or be captured in its undo state.
+    pub preview_hidden: HashSet<Handle>,
     /// During in-place block edit (REFEDIT), the handles of the entities being
     /// edited. Everything else is rendered faded toward the background so the
     /// edited geometry stands out while the surrounding drawing stays visible
@@ -1751,7 +1777,8 @@ impl Scene {
             object_data_cache: crate::entities::object_data::ObjectDataCache::default(),
             lighting_cache: RefCell::new(None),
             selected: HashSet::default(),
-            hidden: HashSet::default(),
+            object_isolation: ObjectIsolationState::default(),
+            preview_hidden: HashSet::default(),
             refedit_keep: None,
             hover_highlight: None,
             transparency_display: true,
@@ -3475,9 +3502,15 @@ impl Scene {
         content.len()
     }
 
-    /// True when any entities are hidden by Isolate / Hide.
+    /// True when ISOLATEOBJECTS or HIDEOBJECTS has an active session filter.
     pub fn is_isolation_active(&self) -> bool {
-        !self.hidden.is_empty()
+        self.object_isolation.is_active()
+    }
+
+    /// True when a top-level entity must be omitted for a session-only object
+    /// visibility command or an interactive replacement preview.
+    fn entity_temporarily_hidden(&self, handle: Handle) -> bool {
+        self.object_isolation.hides(handle) || self.preview_hidden.contains(&handle)
     }
 
     /// Set (or clear) the previewed entity that renders with the selection
@@ -3499,80 +3532,63 @@ impl Scene {
         }
     }
 
-    /// Hide every drawable entity except the current selection (Isolate).
+    /// Keep the current selection visible and temporarily filter every other
+    /// top-level object. Block-definition children are intentionally not added
+    /// here: an isolated INSERT remains a complete visible block instance.
     pub fn isolate_selected(&mut self) {
         if self.selected.is_empty() {
             return;
         }
         let keep = self.selected.clone();
+        let active_block = self.interaction_block_handle();
         let hide: Vec<Handle> = self
             .document
             .entities()
-            .map(|e| e.common().handle)
-            .filter(|h| !h.is_null() && !keep.contains(h))
+            .filter(|entity| {
+                let common = entity.common();
+                !common.handle.is_null()
+                    && !keep.contains(&common.handle)
+                    && self.belongs_to_visible_block(
+                        common.handle,
+                        common.owner_handle,
+                        active_block,
+                    )
+            })
+            .map(|entity| entity.common().handle)
             .collect();
-        // Persist the hidden state on each entity (DXF code 60) so it survives
-        // save/reopen — the renderer already skips `invisible` entities.
-        self.set_invisible(&hide, true);
-        self.hidden = hide.into_iter().collect();
-        self.selected.clear();
-        self.bump_geometry();
+        self.object_isolation.hidden.extend(hide);
+        self.object_isolation.keep = Some(keep);
+        self.bump_geometry_no_blocks();
     }
 
-    /// Hide the current selection (Hide Objects).
+    /// Temporarily hide the current selection without changing any entity
+    /// property in the document.
     pub fn hide_selected(&mut self) {
         if self.selected.is_empty() {
             return;
         }
-        let sel: Vec<Handle> = self.selected.iter().copied().collect();
-        for h in sel.iter().copied() {
-            self.hidden.insert(h);
-        }
-        self.set_invisible(&sel, true);
+        self.object_isolation
+            .hidden
+            .extend(self.selected.iter().copied());
         self.selected.clear();
-        // Only the hidden entities changed visibility — report just those so the
-        // resident set drops them instead of re-tessellating the whole drawing.
-        let changes: Vec<(Handle, ChangeKind)> =
-            sel.iter().map(|&h| (h, ChangeKind::Modified)).collect();
-        self.bump_entities(&changes);
+        self.bump_geometry_no_blocks();
     }
 
-    /// Clear isolation — bring every hidden entity back (End Isolation),
-    /// clearing the persisted invisible flag too so the reveal is saved.
+    /// Clear every session-only object visibility filter.
     pub fn end_isolation(&mut self) {
-        if self.hidden.is_empty() {
+        if !self.object_isolation.is_active() {
             return;
         }
-        let restore: Vec<Handle> = self.hidden.iter().copied().collect();
-        self.set_invisible(&restore, false);
-        self.hidden.clear();
-        // Re-reveal just the previously hidden entities (bounded to that set).
-        let changes: Vec<(Handle, ChangeKind)> =
-            restore.iter().map(|&h| (h, ChangeKind::Modified)).collect();
-        self.bump_entities(&changes);
+        self.object_isolation = ObjectIsolationState::default();
+        self.bump_geometry_no_blocks();
     }
 
-    /// Set the persisted visibility flag (DXF code 60) on each handle.
-    fn set_invisible(&mut self, handles: &[Handle], invisible: bool) {
-        for &h in handles {
-            if let Some(e) = self.document.get_entity_mut(h) {
-                e.common_mut().invisible = invisible;
-            }
-        }
-    }
-
-    /// Rebuild the Isolate/Hide set (`hidden`) from the entities the document
-    /// currently marks invisible (DXF code 60). Call after loading a file or
-    /// restoring an undo/redo snapshot so the session set matches the persisted
-    /// per-entity visibility (and End Isolation stays available).
-    pub fn sync_hidden_from_invisible(&mut self) {
-        self.hidden = self
-            .document
-            .entities()
-            .filter(|e| e.common().invisible)
-            .map(|e| e.common().handle)
-            .filter(|h| !h.is_null())
-            .collect();
+    /// A newly opened/replaced document starts with no session visibility.
+    /// Persisted `EntityCommon::invisible` values stay untouched and continue
+    /// to serve file/dynamic-block visibility.
+    pub fn reset_transient_visibility(&mut self) {
+        self.object_isolation = ObjectIsolationState::default();
+        self.preview_hidden.clear();
     }
 
     /// True if any currently selected entity is a Viewport.
@@ -4624,16 +4640,14 @@ impl Scene {
         self.images
             .iter()
             .filter_map(|(handle, model)| {
-                if frozen.is_some() {
-                    let layer = self
-                        .document
-                        .get_entity(*handle)
-                        .map(|e| e.common().layer.clone());
-                    if let Some(layer) = layer {
-                        if self.layer_frozen_in(&layer, frozen) {
-                            return None;
-                        }
-                    }
+                let entity = self.document.get_entity(*handle)?;
+                let common = entity.common();
+                if common.invisible
+                    || self.entity_temporarily_hidden(*handle)
+                    || self.layer_hidden(&common.layer)
+                    || self.layer_frozen_in(&common.layer, frozen)
+                {
+                    return None;
                 }
                 let mut m = model.clone();
                 m.draw_depth = depth_map.get(&handle.value()).map_or(0.0, |d| d[0]);
@@ -4655,6 +4669,8 @@ impl Scene {
                     let entity = self.document.get_entity(handle)?;
                     let c = entity.common();
                     if c.invisible
+                        || self.entity_temporarily_hidden(handle)
+                        || self.layer_hidden(&c.layer)
                         || !self.belongs_to_visible_block(handle, c.owner_handle, layout_block)
                     {
                         return None;
@@ -5012,20 +5028,29 @@ impl Scene {
         locked.then_some(name)
     }
 
-    /// Visibility test for a solid mesh entity, mirroring the 2D wire path:
-    /// honour the invisible flag, the isolate/hide set, and the layer's
-    /// off/frozen state.
-    fn mesh_entity_visible(&self, handle: Handle) -> bool {
+    /// File-backed visibility shared by top-level and block-definition meshes.
+    /// Object isolation is intentionally absent: a retained INSERT must retain
+    /// every visible child of its block definition.
+    fn mesh_definition_entity_visible(&self, handle: Handle) -> bool {
         let Some(c) = self.document.get_entity(handle).map(|e| e.common()) else {
             return false;
         };
         if c.invisible {
             return false;
         }
-        if !self.hidden.is_empty() && self.hidden.contains(&handle) {
+        !self.layer_hidden(&c.layer)
+    }
+
+    /// Visibility test for a top-level solid mesh entity, mirroring the direct
+    /// 2D wire path.
+    fn mesh_entity_visible(&self, handle: Handle) -> bool {
+        if !self.mesh_definition_entity_visible(handle) {
             return false;
         }
-        !self.layer_hidden(&c.layer)
+        if self.entity_temporarily_hidden(handle) {
+            return false;
+        }
+        true
     }
 
     fn mesh_visible_for_interaction(&self, handle: Handle) -> bool {
@@ -5152,7 +5177,7 @@ impl Scene {
             let e = contextual.as_ref();
             // A block-internal solid / nested INSERT on an off/frozen layer
             // (or flagged invisible) must not render, same as a top-level one.
-            if !self.mesh_entity_visible(h) {
+            if !self.mesh_definition_entity_visible(h) {
                 continue;
             }
             if let EntityType::Insert(ins) = e {
@@ -5371,7 +5396,7 @@ impl Scene {
             return false;
         };
         if common.invisible
-            || (!self.hidden.is_empty() && self.hidden.contains(&handle))
+            || self.entity_temporarily_hidden(handle)
             || self.layer_hidden(&common.layer)
             || self.interaction_layer_frozen(&common.layer)
         {
@@ -5496,7 +5521,7 @@ impl Scene {
                 continue;
             };
             if ins.common.invisible
-                || (!self.hidden.is_empty() && self.hidden.contains(&ins.common.handle))
+                || self.entity_temporarily_hidden(ins.common.handle)
                 || layer_hidden(&ins.common.layer)
             {
                 continue;
@@ -6638,8 +6663,8 @@ impl Scene {
         if c.invisible {
             return false;
         }
-        // Isolate / Hide: skip entities the user has hidden.
-        if !self.hidden.is_empty() && self.hidden.contains(&c.handle) {
+        // Session-only Isolate / Hide and interactive replacement previews.
+        if self.entity_temporarily_hidden(c.handle) {
             return false;
         }
         // Block/BlockEnd are block-defn sentinels, not drawable geometry.
@@ -7544,7 +7569,10 @@ impl Scene {
                     }
                     // 3D solids render as meshes, not wires, so fold their
                     // XY AABBs in too — otherwise ZOOM EXTENTS ignores them.
-                    for set in self.meshes.values() {
+                    for (&handle, set) in &self.meshes {
+                        if !self.mesh_entity_visible(handle) {
+                            continue;
+                        }
                         let [ax, ay, bx, by] = set.world_aabb;
                         let lo = glam::Vec3::new(ax, ay, 0.0);
                         let hi = glam::Vec3::new(bx, by, 0.0);
@@ -7570,7 +7598,10 @@ impl Scene {
         // wrong location on UTM-scale drawings.
         for entity in self.document.entities() {
             let c = entity.common();
-            if c.owner_handle != model_block || c.invisible {
+            if c.owner_handle != model_block
+                || c.invisible
+                || self.entity_temporarily_hidden(c.handle)
+            {
                 continue;
             }
             for wire in self.tessellate_one(entity) {
@@ -7588,7 +7619,10 @@ impl Scene {
             }
         }
         // Same mesh inclusion for the tessellate fallback path.
-        for set in self.meshes.values() {
+        for (&handle, set) in &self.meshes {
+            if !self.mesh_entity_visible(handle) {
+                continue;
+            }
             let [ax, ay, bx, by] = set.world_aabb;
             let lo = glam::Vec3::new(ax, ay, 0.0);
             let hi = glam::Vec3::new(bx, by, 0.0);

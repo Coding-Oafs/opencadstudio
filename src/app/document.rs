@@ -4,7 +4,7 @@ use crate::modules::draw::modify::block_edit::BlockEditSession;
 use crate::modules::draw::modify::refedit::RefEditSession;
 use crate::scene::pick::grip::GripEdit;
 use crate::scene::GripDef;
-use crate::scene::Scene;
+use crate::scene::{ObjectIsolationState, Scene};
 use crate::snap::SnapResult;
 use crate::ui::{LayerPanel, PropertiesPanel};
 use acadrust::tables::Ucs;
@@ -518,12 +518,14 @@ impl DocumentTab {
 #[derive(Clone)]
 pub(super) enum HistorySnapshot {
     Delta(DeltaSnapshot),
+    ObjectVisibility(ObjectVisibilitySnapshot),
 }
 
 impl HistorySnapshot {
     pub(super) fn label(&self) -> &str {
         match self {
             HistorySnapshot::Delta(d) => &d.label,
+            HistorySnapshot::ObjectVisibility(v) => &v.label,
         }
     }
 
@@ -544,8 +546,40 @@ impl HistorySnapshot {
                 .saturating_add(d.selected_before.len().saturating_mul(16))
                 .saturating_add(d.selected_after.len().saturating_mul(16))
                 .saturating_add(d.label.len()),
+            HistorySnapshot::ObjectVisibility(v) => v
+                .before
+                .hidden
+                .len()
+                .saturating_add(
+                    v.before
+                        .keep
+                        .as_ref()
+                        .map_or(0, rustc_hash::FxHashSet::len),
+                )
+                .saturating_add(v.after.hidden.len())
+                .saturating_add(
+                    v.after
+                        .keep
+                        .as_ref()
+                        .map_or(0, rustc_hash::FxHashSet::len),
+                )
+                .saturating_add(v.selected_before.len())
+                .saturating_add(v.selected_after.len())
+                .saturating_mul(16)
+                .saturating_add(v.label.len()),
         }
     }
+}
+
+/// Symmetric undo/redo image for session-only object visibility. It contains
+/// no document entity data and therefore can never make isolation serializable.
+#[derive(Clone)]
+pub(super) struct ObjectVisibilitySnapshot {
+    pub(super) before: ObjectIsolationState,
+    pub(super) after: ObjectIsolationState,
+    pub(super) selected_before: Vec<Handle>,
+    pub(super) selected_after: Vec<Handle>,
+    pub(super) label: String,
 }
 
 /// A transactional undo entry: for each touched handle, its before-image and

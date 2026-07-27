@@ -821,10 +821,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             .unwrap_or_else(|| "Model".to_string()),
                     };
                 }
-                // Rebuild the Isolate/Hide set from the entities the file itself
-                // marks invisible (DXF code 60), so hidden objects stay hidden on
-                // reopen and End Isolation can bring them back.
-                self.tabs[i].scene.sync_hidden_from_invisible();
+                // Object isolation is session-only. A newly opened drawing must
+                // not inherit the previous tab's filter, and persisted entity
+                // visibility remains independent (not an isolation session).
+                self.tabs[i].scene.reset_transient_visibility();
                 crate::io::linetypes::populate_document(&mut self.tabs[i].scene.document);
                 self.tabs[i].properties = PropertiesPanel::empty();
                 // Seed the current table / multileader style from the file's

@@ -161,7 +161,11 @@ impl Scene {
             let Some(EntityType::Viewport(vp)) = self.document.get_entity(handle) else {
                 continue;
             };
-            if !vp.status.is_on {
+            if !vp.status.is_on
+                || vp.common.invisible
+                || self.entity_temporarily_hidden(handle)
+                || self.layer_hidden(&vp.common.layer)
+            {
                 continue;
             }
             let h = vp.common.handle;
@@ -317,7 +321,10 @@ impl Scene {
                 crate::scene::annotative::entity_for_active_context(&self.document, source);
             let entity = contextual.as_ref();
             let c = entity.common();
-            if c.invisible || layer_hidden(&c.layer) {
+            if c.invisible
+                || self.entity_temporarily_hidden(handle)
+                || layer_hidden(&c.layer)
+            {
                 continue;
             }
             if !self.belongs_to_visible_block(handle, c.owner_handle, layout_block) {
@@ -382,7 +389,9 @@ impl Scene {
             let EntityType::Wipeout(wo) = entity else {
                 continue;
             };
-            if wo.common.invisible {
+            if wo.common.invisible
+                || self.entity_temporarily_hidden(wo.common.handle)
+            {
                 continue;
             }
             if self

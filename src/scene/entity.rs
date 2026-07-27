@@ -812,7 +812,10 @@ impl Scene {
                     return true;
                 };
                 let c = entity.common();
-                if c.invisible || layer_hidden(&c.layer) {
+                if c.invisible
+                    || self.entity_temporarily_hidden(handle)
+                    || layer_hidden(&c.layer)
+                {
                     return false;
                 }
                 // Per-viewport layer freeze: a content viewport that freezes
@@ -1059,7 +1062,10 @@ impl Scene {
             let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
-            if ins.common.invisible || layer_hidden(&ins.common.layer) {
+            if ins.common.invisible
+                || self.entity_temporarily_hidden(ins.common.handle)
+                || layer_hidden(&ins.common.layer)
+            {
                 continue;
             }
             // Per-viewport freeze: an INSERT on a layer frozen in this content
@@ -1291,7 +1297,9 @@ impl Scene {
             let EntityType::Wipeout(wo) = entity else {
                 continue;
             };
-            if entity.common().invisible {
+            if entity.common().invisible
+                || self.entity_temporarily_hidden(wo.common.handle)
+            {
                 continue;
             }
             // Reject block-defn-only wipeouts (owned by a BLOCK record that is
@@ -1361,6 +1369,7 @@ impl Scene {
             };
             let c = &ins.common;
             if c.invisible
+                || self.entity_temporarily_hidden(c.handle)
                 || self
                     .document
                     .layers

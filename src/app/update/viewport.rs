@@ -742,11 +742,11 @@ impl OpenCADStudio {
             // the whole model on every move.
             if self.grip_preview_handle != Some(grip.handle) {
                 if let Some(prev) = self.grip_preview_handle.take() {
-                    self.tabs[i].scene.hidden.remove(&prev);
+                    self.tabs[i].scene.preview_hidden.remove(&prev);
                 }
                 // Back up the original geometry so Esc can cancel the drag.
                 self.grip_original = self.tabs[i].scene.document.get_entity(grip.handle).cloned();
-                self.tabs[i].scene.hidden.insert(grip.handle);
+                self.tabs[i].scene.preview_hidden.insert(grip.handle);
                 // Hiding changes exactly one resident run. Publishing a full
                 // delta here made the first grip move rebuild every wire.
                 self.tabs[i]
@@ -2016,7 +2016,7 @@ impl OpenCADStudio {
                 }
                 self.grip_text_verts = Vec::new();
                 self.grip_text_slide = false;
-                self.tabs[i].scene.hidden.remove(&h);
+                self.tabs[i].scene.preview_hidden.remove(&h);
                 self.tabs[i].scene.clear_preview_wire();
                 // Only the dragged entity changed — re-tessellate just it.
                 self.tabs[i]

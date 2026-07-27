@@ -444,12 +444,22 @@ impl OpenCADStudio {
                 });
 
                 self.tabs[i].scene.deselect_all();
+                // The first click of a double-click selects the model-space
+                // INSERT and populates the cached grip overlay. Clearing only
+                // Scene::selected leaves that INSERT's grips active inside the
+                // block editor, where dragging one moves the outer reference
+                // instead of block-local geometry (#517).
+                self.tabs[i].active_grip = None;
+                self.grip_hover = None;
+                self.grip_popup = None;
+                self.visibility_popup = None;
                 self.tabs[i].scene.bump_geometry();
                 // Frame the camera on the block's own geometry (block-local, near
                 // origin) — fit_all() goes through current_layout_block_handle so
                 // it already scopes to the edited block. Without this the view
                 // stays wherever model/paper space was. (#261)
                 self.tabs[i].scene.fit_all();
+                self.refresh_properties();
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].dirty = true;
                 self.command_line.push_info(&format!(
@@ -470,11 +480,16 @@ impl OpenCADStudio {
                 // Edits are live on the block record — just leave the block space.
                 self.tabs[i].scene.block_edit_block = None;
                 self.tabs[i].scene.deselect_all();
+                self.tabs[i].active_grip = None;
+                self.grip_hover = None;
+                self.grip_popup = None;
+                self.visibility_popup = None;
                 self.tabs[i].scene.set_current_layout(session.return_layout.clone());
                 // Return the view to where it was when BEDIT began (#425).
                 *self.tabs[i].scene.camera.borrow_mut() = session.return_camera.clone();
                 self.tabs[i].scene.camera_generation += 1;
                 self.tabs[i].scene.rebuild_derived_caches();
+                self.refresh_properties();
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
                     "BEDIT: Block \"{}\" saved. All references updated.",
@@ -521,11 +536,16 @@ impl OpenCADStudio {
                 }
                 self.tabs[i].scene.block_edit_block = None;
                 self.tabs[i].scene.deselect_all();
+                self.tabs[i].active_grip = None;
+                self.grip_hover = None;
+                self.grip_popup = None;
+                self.visibility_popup = None;
                 self.tabs[i].scene.set_current_layout(session.return_layout.clone());
                 // Return the view to where it was when BEDIT began (#425).
                 *self.tabs[i].scene.camera.borrow_mut() = session.return_camera.clone();
                 self.tabs[i].scene.camera_generation += 1;
                 self.tabs[i].scene.rebuild_derived_caches();
+                self.refresh_properties();
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
                     "BEDIT: Block \"{}\" edit discarded.",

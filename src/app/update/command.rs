@@ -549,7 +549,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 *e = orig;
                             }
                         }
-                        self.tabs[i].scene.hidden.remove(&h);
+                        self.tabs[i].scene.preview_hidden.remove(&h);
                         self.tabs[i].scene.clear_preview_wire();
                         // Geometry restored to the backup — re-tessellate just it.
                         self.tabs[i]

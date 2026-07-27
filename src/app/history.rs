@@ -1,10 +1,11 @@
 use super::{
     document::{
-        DeltaSnapshot, HistorySnapshot, ObjectEntryDelta, PendingHistorySnapshot,
-        StructureSnapshot, TableEntryDelta,
+        DeltaSnapshot, HistorySnapshot, ObjectEntryDelta, ObjectVisibilitySnapshot,
+        PendingHistorySnapshot, StructureSnapshot, TableEntryDelta,
     },
     OpenCADStudio,
 };
+use crate::scene::ObjectIsolationState;
 use acadrust::{EntityType, Handle};
 use rustc_hash::{FxHashMap, FxHashSet as HashSet};
 use std::sync::Arc;
@@ -155,6 +156,32 @@ impl OpenCADStudio {
         self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
         self.clear_redo_history(i);
         self.trim_history(i);
+    }
+
+    pub(super) fn push_object_visibility_history(
+        &mut self,
+        i: usize,
+        label: impl Into<String>,
+        before: ObjectIsolationState,
+        selected_before: Vec<Handle>,
+    ) {
+        self.finish_pending_history(i);
+        let after = self.tabs[i].scene.object_isolation.clone();
+        let selected_after: Vec<Handle> =
+            self.tabs[i].scene.selected.iter().copied().collect();
+        if before == after && selected_before == selected_after {
+            return;
+        }
+        self.push_undo_entry(
+            i,
+            HistorySnapshot::ObjectVisibility(ObjectVisibilitySnapshot {
+                before,
+                after,
+                selected_before,
+                selected_after,
+                label: label.into(),
+            }),
+        );
     }
 
     pub(super) fn push_single_entity_history(
@@ -870,6 +897,27 @@ impl OpenCADStudio {
         changes
     }
 
+    fn apply_object_visibility_state(
+        &mut self,
+        i: usize,
+        snapshot: &ObjectVisibilitySnapshot,
+        undo: bool,
+    ) {
+        let (state, selected) = if undo {
+            (&snapshot.before, &snapshot.selected_before)
+        } else {
+            (&snapshot.after, &snapshot.selected_after)
+        };
+        let scene = &mut self.tabs[i].scene;
+        scene.object_isolation = state.clone();
+        scene.selected = selected
+            .iter()
+            .copied()
+            .filter(|handle| scene.document.get_entity(*handle).is_some())
+            .collect();
+        scene.bump_geometry_no_blocks();
+    }
+
     /// Perform the one expensive cache/UI synchronization required after a
     /// batch of history steps. Intermediate states are never rendered, so
     /// rebuilding them only multiplies latency.
@@ -888,7 +936,6 @@ impl OpenCADStudio {
                 // for the final state. Unlike the old path, decoded images stay
                 // cached instead of being immediately cleared.
                 scene.rebuild_derived_caches();
-                scene.sync_hidden_from_invisible();
             } else if !changes.is_empty() {
                 use crate::scene::ChangeKind::{Added, Modified, Removed};
                 let mut net: FxHashMap<Handle, crate::scene::ChangeKind> = FxHashMap::default();
@@ -974,6 +1021,13 @@ impl OpenCADStudio {
                         .redo_stack
                         .push(HistorySnapshot::Delta(d));
                 }
+                HistorySnapshot::ObjectVisibility(v) => {
+                    self.apply_object_visibility_state(i, &v, true);
+                    self.tabs[i]
+                        .history
+                        .redo_stack
+                        .push(HistorySnapshot::ObjectVisibility(v));
+                }
             }
         }
         self.finish_history_apply(i, had_full, structure_changed, &changes);
@@ -1009,6 +1063,13 @@ impl OpenCADStudio {
                         .history
                         .undo_stack
                         .push(HistorySnapshot::Delta(d));
+                }
+                HistorySnapshot::ObjectVisibility(v) => {
+                    self.apply_object_visibility_state(i, &v, false);
+                    self.tabs[i]
+                        .history
+                        .undo_stack
+                        .push(HistorySnapshot::ObjectVisibility(v));
                 }
             }
         }
