@@ -806,6 +806,8 @@ pub enum CmdResult {
     Preview(WireModel),
     /// Commit an acadrust entity to the document; keep the command active.
     CommitEntity(EntityType),
+    /// Commit several acadrust entities in one undo step; keep the command active.
+    CommitEntities(Vec<EntityType>),
     /// Commit an acadrust entity to the document and end the command.
     CommitAndExit(EntityType),
     /// Commit a Model-tab 3D solid: the acadrust entity (for selection /

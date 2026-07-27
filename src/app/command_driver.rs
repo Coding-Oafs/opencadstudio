@@ -366,6 +366,24 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
+            CmdResult::CommitEntities(entities) => {
+                let label = self.history_label_from_active_cmd(i, "ENTITY");
+                let delta_safe = entities
+                    .iter()
+                    .all(|entity| self.delta_add_safe(i, entity));
+                let pending = self.begin_undo(i, label, entities.len(), delta_safe);
+                for entity in entities {
+                    self.commit_entity(entity);
+                }
+                self.tabs[i].dirty = true;
+                let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
+                if let Some(p) = prompt {
+                    self.command_line.push_info(&p);
+                }
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
             CmdResult::TransformSelected(handles, transform) => {
                 let label = self.history_label_from_active_cmd(i, "MOVE");
                 // A move/rotate/scale/mirror mutates only the selected entities

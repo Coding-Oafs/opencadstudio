@@ -7,7 +7,8 @@
 //   Steps:
 //     1. Text input: "Specify offset distance <last>:" → enter float or Enter for default
 //     2. Pick object to offset (Line, Arc, Circle, LwPolyline)
-//     3. Pick a point on the side to offset toward
+//     3. Pick a point on the side to offset toward, or choose Multiple
+//        to keep offsetting the newly created result at the same distance
 
 use std::f64::consts::TAU;
 
@@ -687,6 +688,9 @@ enum Step {
         /// True when the targets came from the pre-selection: the commit ends
         /// the command instead of looping back for another pick.
         from_selection: bool,
+        /// Keep the side-pick step active and use each new result as the source
+        /// for the next offset.
+        multiple: bool,
     },
 }
 
@@ -747,6 +751,7 @@ impl OffsetCommand {
                 targets: std::mem::take(&mut self.preselected),
                 locked,
                 from_selection: true,
+                multiple: false,
             };
         }
         CmdResult::NeedPoint
@@ -767,15 +772,28 @@ impl CadCommand for OffsetCommand {
             Step::SelectObject { .. } => {
                 "OFFSET  Select object to offset (Enter to finish):".into()
             }
-            Step::PickSide { targets, locked, .. } => {
+            Step::PickSide {
+                targets,
+                locked,
+                multiple,
+                ..
+            } => {
                 let n = if targets.len() > 1 {
                     format!(" ({} objects)", targets.len())
                 } else {
                     String::new()
                 };
-                match locked {
-                    Some(d) => format!("OFFSET{n}  Click side  [distance {d:.4}]:"),
-                    None => format!("OFFSET{n}  Click through point:"),
+                match (locked, multiple) {
+                    (Some(d), false) => {
+                        format!("OFFSET{n}  Click side or [Multiple]  [distance {d:.4}]:")
+                    }
+                    (Some(d), true) => {
+                        format!("OFFSET{n} Multiple  Click next side [distance {d:.4}]:")
+                    }
+                    (None, false) => {
+                        format!("OFFSET{n}  Click through point or [Multiple]:")
+                    }
+                    (None, true) => format!("OFFSET{n} Multiple  Click next through point:"),
                 }
             }
         }
@@ -790,6 +808,9 @@ impl CadCommand for OffsetCommand {
                     defaults::get_offset_dist()
                 )),
             ],
+            Step::PickSide {
+                multiple: false, ..
+            } => vec![crate::command::CmdOption::new("Multiple", "M")],
             _ => Vec::new(),
         }
     }
@@ -819,6 +840,7 @@ impl CadCommand for OffsetCommand {
                     targets: vec![e],
                     locked,
                     from_selection: false,
+                    multiple: false,
                 };
                 CmdResult::NeedPoint
             }
@@ -866,7 +888,15 @@ impl CadCommand for OffsetCommand {
                 }
                 Some(CmdResult::NeedPoint)
             }
-            Step::PickSide { locked, .. } => {
+            Step::PickSide {
+                locked,
+                multiple,
+                ..
+            } => {
+                if t.eq_ignore_ascii_case("m") || t.eq_ignore_ascii_case("multiple") {
+                    *multiple = true;
+                    return Some(CmdResult::NeedPoint);
+                }
                 if !t.is_empty() {
                     if let Ok(d) = t.parse::<f64>() {
                         let d = d.abs().max(1e-9);
@@ -902,12 +932,13 @@ impl CadCommand for OffsetCommand {
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        let (locked, targets, from_selection) = match &self.step {
+        let (locked, targets, from_selection, multiple) = match &self.step {
             Step::PickSide {
                 locked,
                 targets,
                 from_selection,
-            } => (*locked, targets.clone(), *from_selection),
+                multiple,
+            } => (*locked, targets.clone(), *from_selection, *multiple),
             _ => return CmdResult::NeedPoint,
         };
         // Each target offsets by its own through-distance (or the locked
@@ -924,6 +955,22 @@ impl CadCommand for OffsetCommand {
         }
         if news.is_empty() {
             return CmdResult::NeedPoint;
+        }
+        if multiple {
+            // Multiple mode chains from the result just created, matching
+            // OFFSET's repeated fixed-distance behavior (parallel/concentric
+            // series instead of duplicate copies at the first offset).
+            self.step = Step::PickSide {
+                targets: news.clone(),
+                locked,
+                from_selection,
+                multiple: true,
+            };
+            return if news.len() == 1 {
+                CmdResult::CommitEntity(news.pop().unwrap())
+            } else {
+                CmdResult::CommitEntities(news)
+            };
         }
         if from_selection {
             // Pre-selection commit ends the command in one undo step.
