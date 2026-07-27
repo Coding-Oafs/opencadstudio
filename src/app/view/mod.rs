@@ -2607,32 +2607,59 @@ pub(super) fn start_page_view<'a>(
         b: 0.085,
         a: 1.0,
     };
-    // Three parts — Recent Files · Welcome · Supporters. They sit side by side
-    // while they fit; when the page is too narrow it becomes a tab bar with the
-    // Welcome tab open by default.
+    // Collapse side panels one at a time as width shrinks: Tutorials first,
+    // then Supporters, and Recent Documents last. The previous all-or-nothing
+    // threshold reserved a videos-sized empty margin on both sides of the
+    // centred Welcome block and hid every panel around 1664 px.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StartLayout {
+        AllPanels,
+        WithoutVideos,
+        RecentAndWelcome,
+        Compact,
+    }
     let recent_w = 280.0f32;
     let videos_w = 300.0f32;
     let sup_w = 240.0f32;
-    let welcome_min = 480.0f32;
+    let welcome_wide_min = 360.0f32;
     let avail = (avail_w - 16.0).max(0.0); // minus the page's l/r padding
-    // The videos rail overlays the welcome column's left side, and the welcome
-    // content is CENTRED in that column — so side-by-side only works while the
-    // centred `welcome_min` block still leaves a rail-sized gap on its left:
-    // the column must fit welcome_min plus a videos_w + spacing margin on BOTH
-    // sides (centring is symmetric). Below that, the centre content would
-    // slide over the rail — switch to the tabbed layout instead.
-    let fits_all = avail
-        >= recent_w + sup_w + 2.0 * 16.0 + welcome_min + 2.0 * (videos_w + 16.0);
+    let panel_widths = [recent_w, videos_w, sup_w];
+    let mut panel_visible = [true, true, true];
+    let required_width = |visible: &[bool; 3]| {
+        let visible_panels = visible.iter().filter(|&&shown| shown).count();
+        welcome_wide_min
+            + panel_widths
+                .iter()
+                .zip(visible)
+                .filter_map(|(width, shown)| shown.then_some(*width))
+                .sum::<f32>()
+            + visible_panels as f32 * 16.0
+    };
+    // Re-measure after every collapse. There are no independent breakpoints:
+    // the available width and the panels' preferred widths decide the state.
+    for panel in [1usize, 2, 0] {
+        if required_width(&panel_visible) <= avail {
+            break;
+        }
+        panel_visible[panel] = false;
+    }
+    let start_layout = match panel_visible {
+        [true, true, true] => StartLayout::AllPanels,
+        [true, false, true] => StartLayout::WithoutVideos,
+        [true, false, false] => StartLayout::RecentAndWelcome,
+        _ => StartLayout::Compact,
+    };
 
     let recent = recent_files_panel(
         recents,
         thumbs,
         recent_limit,
         recent_limit_input,
-        if fits_all {
-            iced::Length::Fixed(recent_w)
-        } else {
-            iced::Length::Fill
+        match start_layout {
+            StartLayout::AllPanels
+            | StartLayout::WithoutVideos
+            | StartLayout::RecentAndWelcome => iced::Length::Fixed(recent_w),
+            StartLayout::Compact => iced::Length::Fill,
         },
     );
     let welcome = container(content).width(Fill).height(Fill);
@@ -2723,10 +2750,11 @@ pub(super) fn start_page_view<'a>(
             Space::new().height(iced::Length::Fixed(12.0)),
             playlist_btn,
         ])
-        .width(if fits_all {
-            iced::Length::Fixed(videos_w)
-        } else {
-            iced::Length::Fill
+        .width(match start_layout {
+            StartLayout::AllPanels => iced::Length::Fixed(videos_w),
+            StartLayout::WithoutVideos
+            | StartLayout::RecentAndWelcome
+            | StartLayout::Compact => iced::Length::Fill,
         })
         .height(Fill)
         .padding(16)
@@ -2806,10 +2834,12 @@ pub(super) fn start_page_view<'a>(
             Space::new().height(iced::Length::Fixed(12.0)),
             support_btn,
         ])
-        .width(if fits_all {
-            iced::Length::Fixed(sup_w)
-        } else {
-            iced::Length::Fill
+        .width(match start_layout {
+            StartLayout::AllPanels | StartLayout::WithoutVideos => {
+                iced::Length::Fixed(sup_w)
+            }
+            StartLayout::RecentAndWelcome
+            | StartLayout::Compact => iced::Length::Fill,
         })
         .height(Fill)
         .padding(20)
@@ -2825,91 +2855,101 @@ pub(super) fn start_page_view<'a>(
         .into()
     };
 
-    let body: Element<'a, Message> = if fits_all {
-        // The videos rail OVERLAYS the welcome column's empty left side
-        // instead of participating in the row: the welcome content keeps the
-        // same width and centre as before, so the action buttons don't move.
-        let base = iced::widget::row![recent, welcome, supporters].spacing(16);
-        let rail = container(videos_panel)
-            .padding(iced::Padding {
-                left: recent_w + 16.0,
-                ..iced::Padding::ZERO
-            })
-            .height(Fill);
-        iced::widget::stack![base, rail].into()
-    } else {
-        let tab_btn = |label: &'static str, section: super::StartSection| {
-            let is_active = active == section;
-            button(text(label).size(14))
-                .on_press(Message::StartSectionSelect(section))
-                .padding([8, 18])
-                .style(move |_: &Theme, status| button::Style {
-                    background: Some(Background::Color(match (is_active, status) {
-                        (true, _) => Color {
-                            r: 0.18,
-                            g: 0.18,
-                            b: 0.20,
-                            a: 1.0,
-                        },
-                        (false, button::Status::Hovered) => Color {
-                            r: 0.14,
-                            g: 0.14,
-                            b: 0.16,
-                            a: 1.0,
-                        },
-                        _ => Color::TRANSPARENT,
-                    })),
-                    text_color: if is_active {
-                        TEXT
-                    } else {
-                        Color {
-                            r: 0.62,
-                            g: 0.62,
-                            b: 0.62,
-                            a: 1.0,
-                        }
-                    },
-                    border: Border {
-                        color: if is_active { BRAND } else { Color::TRANSPARENT },
-                        width: if is_active { 1.0 } else { 0.0 },
-                        radius: 6.0.into(),
-                    },
-                    ..Default::default()
-                })
-        };
-        let tab_bar = iced::widget::row![
-            tab_btn("Recent Files", super::StartSection::Recent),
-            tab_btn("Videos", super::StartSection::Videos),
-            tab_btn("Welcome", super::StartSection::Welcome),
-            tab_btn("Supporters", super::StartSection::Supporters),
+    let body: Element<'a, Message> = match start_layout {
+        StartLayout::AllPanels => iced::widget::row![
+            recent,
+            videos_panel,
+            welcome,
+            supporters,
         ]
-        .spacing(6);
-        let section_body: Element<'a, Message> = match active {
-            super::StartSection::Recent => container(recent)
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .into(),
-            super::StartSection::Videos => container(videos_panel)
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .into(),
-            super::StartSection::Welcome => welcome.into(),
-            super::StartSection::Supporters => container(supporters)
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .into(),
-        };
-        column![
-            container(tab_bar).center_x(Fill),
-            Space::new().height(iced::Length::Fixed(12.0)),
-            section_body,
-        ]
-        .width(Fill)
+        .spacing(16)
         .height(Fill)
-        .into()
+        .into(),
+        StartLayout::WithoutVideos => {
+            iced::widget::row![recent, welcome, supporters]
+                .spacing(16)
+                .height(Fill)
+                .into()
+        }
+        StartLayout::RecentAndWelcome => iced::widget::row![recent, welcome]
+            .spacing(16)
+            .height(Fill)
+            .into(),
+        StartLayout::Compact => {
+            let tab_btn = |label: &'static str, section: super::StartSection| {
+                let is_active = active == section;
+                button(text(label).size(14))
+                    .on_press(Message::StartSectionSelect(section))
+                    .padding([8, 18])
+                    .style(move |_: &Theme, status| button::Style {
+                        background: Some(Background::Color(match (is_active, status) {
+                            (true, _) => Color {
+                                r: 0.18,
+                                g: 0.18,
+                                b: 0.20,
+                                a: 1.0,
+                            },
+                            (false, button::Status::Hovered) => Color {
+                                r: 0.14,
+                                g: 0.14,
+                                b: 0.16,
+                                a: 1.0,
+                            },
+                            _ => Color::TRANSPARENT,
+                        })),
+                        text_color: if is_active {
+                            TEXT
+                        } else {
+                            Color {
+                                r: 0.62,
+                                g: 0.62,
+                                b: 0.62,
+                                a: 1.0,
+                            }
+                        },
+                        border: Border {
+                            color: if is_active { BRAND } else { Color::TRANSPARENT },
+                            width: if is_active { 1.0 } else { 0.0 },
+                            radius: 6.0.into(),
+                        },
+                        ..Default::default()
+                    })
+            };
+            let tab_bar = WrapFlow::new(vec![
+                tab_btn("Recent Files", super::StartSection::Recent).into(),
+                tab_btn("Videos", super::StartSection::Videos).into(),
+                tab_btn("Welcome", super::StartSection::Welcome).into(),
+                tab_btn("Supporters", super::StartSection::Supporters).into(),
+            ])
+            .spacing_x(6.0)
+            .row_h(38.0);
+            let section_body: Element<'a, Message> = match active {
+                super::StartSection::Recent => container(recent)
+                    .width(Fill)
+                    .height(Fill)
+                    .center_x(Fill)
+                    .into(),
+                super::StartSection::Videos => container(videos_panel)
+                    .width(Fill)
+                    .height(Fill)
+                    .center_x(Fill)
+                    .into(),
+                super::StartSection::Welcome => welcome.into(),
+                super::StartSection::Supporters => container(supporters)
+                    .width(Fill)
+                    .height(Fill)
+                    .center_x(Fill)
+                    .into(),
+            };
+            column![
+                container(tab_bar).center_x(Fill),
+                Space::new().height(iced::Length::Fixed(12.0)),
+                section_body,
+            ]
+            .width(Fill)
+            .height(Fill)
+            .into()
+        }
     };
 
     container(body)
