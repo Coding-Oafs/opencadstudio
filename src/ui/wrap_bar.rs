@@ -8,8 +8,9 @@
 //!   • one row  → `lead` at the left; `trail` packed after it (`justify_end`
 //!                false) or flush to the right edge (`justify_end` true);
 //!                an optional Fill `middle` stretches through the gap.
-//!   • two rows → `lead` (+ `middle` filling the rest) on row 1; `trail` on
-//!                row 2, left- or right-aligned per `justify_end`.
+//!   • wrapped  → `trail` first uses free space on `lead`'s final row; only
+//!                when it does not fit is another row added. Alignment follows
+//!                `justify_end`.
 //!
 //! The measured total height is written to `height_out` (if set) so callers can
 //! anchor overlays below the possibly-taller bar.
@@ -201,7 +202,8 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapBar<'a> {
             total_h = row_h + trail_sz.height;
         } else {
             // 2-slot dual-wrap: lead and trail each wrap within their OWN row
-            // band, stacked so a wrapped lead item never lands on a trail row.
+            // band. When the lead itself wrapped, first try the unused space on
+            // its final row before adding another row for the trail.
             lead_node =
                 self.lead
                     .as_widget_mut()
@@ -209,19 +211,58 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapBar<'a> {
             lead_sz = lead_node.size();
             let lead_h = lead_sz.height.max(self.min_row_h);
 
-            trail_node = self.trail.as_widget_mut().layout(
-                &mut tree.children[trail_idx],
-                renderer,
-                &bounded,
-            );
-            trail_sz = trail_node.size();
-            let trail_h = trail_sz.height.max(self.min_row_h);
-
             lead_pos = Point::new(0.0, (lead_h - lead_sz.height) / 2.0);
-            trail_pos = Point::new(0.0, lead_h + (trail_h - trail_sz.height) / 2.0);
             middle_x = 0.0;
             middle_gap = 0.0;
-            total_h = lead_h + trail_h;
+
+            let shared_last_row = if self.justify_end && trail_sz.width <= width {
+                let mut last_center: Option<f32> = None;
+                for child in lead_node.children() {
+                    let bounds = child.bounds();
+                    let center = bounds.y + bounds.height / 2.0;
+                    last_center = Some(last_center.map_or(center, |value| value.max(center)));
+                }
+                last_center.and_then(|center| {
+                    let last_right = lead_node
+                        .children()
+                        .iter()
+                        .filter_map(|child| {
+                            let bounds = child.bounds();
+                            let child_center = bounds.y + bounds.height / 2.0;
+                            ((child_center - center).abs() < 0.5)
+                                .then_some(bounds.x + bounds.width)
+                        })
+                        .fold(0.0f32, f32::max);
+                    let trail_x = (width - trail_sz.width).max(0.0);
+                    (last_right + self.spacing <= trail_x).then_some((
+                        trail_x,
+                        lead_pos.y + center - trail_sz.height / 2.0,
+                    ))
+                })
+            } else {
+                None
+            };
+
+            if let Some((trail_x, trail_y)) = shared_last_row {
+                trail_pos = Point::new(trail_x, trail_y);
+                total_h = lead_h.max(trail_y + trail_sz.height);
+            } else {
+                trail_node = self.trail.as_widget_mut().layout(
+                    &mut tree.children[trail_idx],
+                    renderer,
+                    &bounded,
+                );
+                trail_sz = trail_node.size();
+                let trail_h = trail_sz.height.max(self.min_row_h);
+                let trail_x = if self.justify_end {
+                    (width - trail_sz.width).max(0.0)
+                } else {
+                    0.0
+                };
+                trail_pos =
+                    Point::new(trail_x, lead_h + (trail_h - trail_sz.height) / 2.0);
+                total_h = lead_h + trail_h;
+            }
         }
 
         let mut children: Vec<layout::Node> = Vec::with_capacity(3);
@@ -436,6 +477,8 @@ pub struct WrapFlow<'a> {
     min_spacing_x: f32,
     spacing_y: f32,
     row_h: f32,
+    /// Align every wrapped row to the right edge of the available width.
+    justify_end: bool,
 }
 
 impl<'a> WrapFlow<'a> {
@@ -446,6 +489,7 @@ impl<'a> WrapFlow<'a> {
             min_spacing_x: f32::INFINITY,
             spacing_y: 0.0,
             row_h: 28.0,
+            justify_end: false,
         }
     }
 
@@ -463,6 +507,11 @@ impl<'a> WrapFlow<'a> {
 
     pub fn row_h(mut self, h: f32) -> Self {
         self.row_h = h;
+        self
+    }
+
+    pub fn justify_end(mut self, justify: bool) -> Self {
+        self.justify_end = justify;
         self
     }
 }
@@ -514,29 +563,50 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
             }
         }
 
-        let mut nodes: Vec<layout::Node> = Vec::with_capacity(n);
+        let mut positioned: Vec<(layout::Node, f32, f32, usize)> =
+            Vec::with_capacity(n);
+        let mut row_widths = vec![0.0f32];
         let mut x = 0.0f32;
         let mut y = 0.0f32;
-        let mut used_w = 0.0f32;
+        let mut row_index = 0usize;
 
         for node in measured {
             let sz = node.size();
             if x > 0.0 && x + sz.width > max_w {
                 x = 0.0;
                 y += self.row_h + self.spacing_y;
+                row_index += 1;
+                row_widths.push(0.0);
             }
             let cy = y + ((self.row_h - sz.height) / 2.0).max(0.0);
-            nodes.push(node.move_to(Point::new(x, cy)));
+            positioned.push((node, x, cy, row_index));
+            row_widths[row_index] = x + sz.width;
             x += sz.width + eff_gap;
-            used_w = used_w.max(x - eff_gap);
         }
 
+        let used_w = row_widths.iter().copied().fold(0.0f32, f32::max);
+        let flow_w = if self.justify_end && max_w.is_finite() {
+            max_w.max(0.0)
+        } else {
+            used_w
+        };
+        let nodes = positioned
+            .into_iter()
+            .map(|(node, x, cy, row)| {
+                let offset = if self.justify_end {
+                    (flow_w - row_widths[row]).max(0.0)
+                } else {
+                    0.0
+                };
+                node.move_to(Point::new(x + offset, cy))
+            })
+            .collect();
         let total_h = if self.items.is_empty() {
             self.row_h
         } else {
             y + self.row_h
         };
-        layout::Node::with_children(Size::new(used_w.max(0.0), total_h), nodes)
+        layout::Node::with_children(Size::new(flow_w.max(0.0), total_h), nodes)
     }
 
     fn update(

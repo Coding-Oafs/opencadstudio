@@ -363,12 +363,15 @@ impl StatusBar {
             )
             .into(),
         );
-        let right_status = WrapFlow::new(pills).spacing_x(2.0).row_h(30.0);
+        let right_status = WrapFlow::new(pills)
+            .spacing_x(2.0)
+            .row_h(30.0)
+            .justify_end(true);
 
         // Left area: hamburger menu + Model/layout tabs in a flex-wrap flow, so
         // they spill onto lower rows when narrow (no scroll arrows). The pills
-        // wrap in their own flow; WrapBar stacks the two areas so a wrapped tab
-        // never shares a row with a pill.
+        // use the remaining space on the final tab row when they fit; otherwise
+        // WrapBar adds another right-aligned row.
         let mut left: Vec<Element<'_, Message>> = Vec::new();
         left.push(PosReport::new(SB_LAYOUTLIST_ID, menu_btn).into());
         if show_layout_tabs {
