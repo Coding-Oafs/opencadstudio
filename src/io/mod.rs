@@ -231,6 +231,7 @@ pub async fn pick_and_load_web(
     };
     if name.to_ascii_lowercase().ends_with(".dxf") {
         fix_dxf_dimension_rotations(&mut doc);
+        fix_dxf_layout_plot_settings(&mut doc);
     }
     fix_viewport_status_flags(&mut doc);
     fix_current_style_names(&mut doc);
@@ -267,6 +268,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Result<CadDocument, String> {
                 .read()
                 .map_err(|e| e.to_string())?;
             fix_dxf_dimension_rotations(&mut doc);
+            fix_dxf_layout_plot_settings(&mut doc);
             fix_viewport_status_flags(&mut doc);
             fix_current_style_names(&mut doc);
             Ok(doc)
@@ -342,6 +344,7 @@ pub(crate) fn load_file_with_progress(
                 .read()
                 .map_err(|e| e.to_string())?;
             fix_dxf_dimension_rotations(&mut doc);
+            fix_dxf_layout_plot_settings(&mut doc);
             fix_viewport_status_flags(&mut doc);
             fix_current_style_names(&mut doc);
             resolve_raster_image_paths(&mut doc, path.parent());
@@ -1306,6 +1309,70 @@ fn fix_dxf_dimension_rotations(doc: &mut CadDocument) {
                 s.rotation = s.rotation.to_radians();
             }
             _ => {}
+        }
+    }
+}
+
+/// Recover integer-valued AcDbPlotSettings fields that acadrust can leave at
+/// their defaults when a DXF writer right-aligns the value with leading spaces.
+/// The raw pairs are preserved on Layout, so trim and parse those authoritative
+/// values after loading. In particular, losing code 73 turns a 90°/270° sheet
+/// back to 0° and makes a landscape layout render as portrait (#505).
+fn fix_dxf_layout_plot_settings(doc: &mut CadDocument) {
+    use acadrust::objects::{ObjectType, PlotFlags};
+
+    for object in doc.objects.values_mut() {
+        let ObjectType::Layout(layout) = object else {
+            continue;
+        };
+        let Some(codes) = layout.raw_plot_settings_codes.as_ref() else {
+            continue;
+        };
+
+        for (code, value) in codes {
+            match *code {
+                70 => {
+                    if let Ok(value) = value.trim().parse::<i32>() {
+                        layout.plot_flags = PlotFlags::from_bits(value);
+                    }
+                }
+                72 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.plot_paper_units = value;
+                    }
+                }
+                73 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.plot_rotation = value;
+                    }
+                }
+                74 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.plot_type = value;
+                    }
+                }
+                75 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.plot_scale_type = value;
+                    }
+                }
+                76 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.shade_plot_mode = value;
+                    }
+                }
+                77 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.shade_plot_resolution = value;
+                    }
+                }
+                78 => {
+                    if let Ok(value) = value.trim().parse::<i16>() {
+                        layout.shade_plot_dpi = value;
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }
