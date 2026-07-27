@@ -8,6 +8,7 @@ use iced::widget::{
     button, container, mouse_area, row, text, text_input, tooltip,
 };
 use iced::{Background, Border, Color, Element, Length, Theme};
+use std::sync::Arc;
 
 /// Scrollable id of the status-bar layout-tab strip (retained so the existing
 /// `Message::ScrollLayoutTabs` handler still resolves; the strip now flex-wraps
@@ -58,6 +59,7 @@ impl StatusBar {
         dyn_input: bool,
         otrack: bool,
         layouts: Vec<String>,
+        reorderable_layouts: Vec<String>,
         current_layout: String,
         // Start/welcome view has no drawing to own layouts.
         is_start: bool,
@@ -375,12 +377,22 @@ impl StatusBar {
         let mut left: Vec<Element<'_, Message>> = Vec::new();
         left.push(PosReport::new(SB_LAYOUTLIST_ID, menu_btn).into());
         if show_layout_tabs {
+            let reorderable_layouts: Arc<[String]> = reorderable_layouts.into();
             for name in layouts {
                 let is_active = name == current_layout;
                 let renaming = rename_state
                     .filter(|(orig, _)| *orig == name)
                     .map(|(_, edit)| edit.as_str());
-                left.push(space_tab(name, is_active, renaming, !is_start).into());
+                left.push(
+                    space_tab(
+                        name,
+                        is_active,
+                        renaming,
+                        !is_start,
+                        reorderable_layouts.clone(),
+                    )
+                    .into(),
+                );
             }
             left.push(add_btn.into());
         }
@@ -668,6 +680,7 @@ fn space_tab<'a>(
     is_active: bool,
     rename_edit: Option<&'a str>,
     enabled: bool,
+    reorderable_layouts: Arc<[String]>,
 ) -> Element<'a, Message> {
     let bg = move |is_active: bool, hovered: bool| {
         if is_active {
@@ -791,11 +804,23 @@ fn space_tab<'a>(
         // PosReport records the tab's screen bounds so the context menu can
         // anchor next to the clicked tab instead of the screen's left edge
         // (#428).
+        let tab = mouse_area(display)
+            .on_press(switch_msg)
+            .on_right_press(ctx_msg);
+        let tab: Element<'a, Message> = if reorderable_layouts.contains(&label) {
+            crate::ui::wrap_bar::ReorderTab::layout(
+                label.clone(),
+                reorderable_layouts,
+                tab,
+            )
+            .into()
+        } else {
+            tab.into()
+        };
+
         crate::ui::wrap_bar::PosReport::owned(
             format!("SB_LAYOUT_TAB:{label}"),
-            mouse_area(display)
-                .on_press(switch_msg)
-                .on_right_press(ctx_msg),
+            tab,
         )
         .into()
     }

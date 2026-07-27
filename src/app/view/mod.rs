@@ -1424,6 +1424,11 @@ impl OpenCADStudio {
                     let last_coord = self.last_point.map(to_readout);
                     let coords_mode = tab.scene.document.header.coords_mode;
                     let picking = tab.active_cmd.is_some();
+                    let layout_names = tab.scene.layout_names();
+                    let mut displayed_layouts = layout_names.clone();
+                    if let Some(be) = &tab.block_edit {
+                        displayed_layouts.push(be.block_name.clone());
+                    }
                     self.status_bar.view(
                         &self.snapper,
                         self.snap_popup_open,
@@ -1433,15 +1438,8 @@ impl OpenCADStudio {
                         self.polar_popup_open,
                         self.dyn_input,
                         self.snapper.otrack_enabled,
-                        {
-                            // In a BEDIT block editor, show the block as an extra
-                            // active space tab alongside Model/layouts. (#261)
-                            let mut names = tab.scene.layout_names();
-                            if let Some(be) = &tab.block_edit {
-                                names.push(be.block_name.clone());
-                            }
-                            names
-                        },
+                        displayed_layouts,
+                        layout_names.into_iter().skip(1).collect(),
                         tab.block_edit
                             .as_ref()
                             .map(|be| be.block_name.clone())
@@ -2096,6 +2094,12 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
     // Document tabs live in a flex-wrap flow so they spill onto lower rows when
     // there are more tabs than the width can hold on one line.
     let mut items: Vec<Element<'_, Message>> = Vec::new();
+    let drag_targets: std::sync::Arc<[usize]> = tabs
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, tab)| (!tab.is_start).then_some(idx))
+        .collect::<Vec<_>>()
+        .into();
 
     for (idx, tab) in tabs.iter().enumerate() {
         let is_active = idx == active_tab;
@@ -2147,6 +2151,16 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
                 shadow: iced::Shadow::default(),
                 snap: false,
             });
+        let title_btn: Element<'_, Message> = if tab.is_start {
+            title_btn.into()
+        } else {
+            crate::ui::wrap_bar::ReorderTab::document(
+                idx,
+                drag_targets.clone(),
+                title_btn,
+            )
+            .into()
+        };
 
         // Start tab is fixed — no close button. Every other tab gets a close.
         let row_inner: Row<'_, Message> = if tab.is_start {

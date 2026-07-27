@@ -1497,6 +1497,12 @@ pub enum Message {
     TabNew,
     /// Switch to the given tab index.
     TabSwitch(usize),
+    /// Move a drawing tab before/after another drawing tab.
+    TabReorder {
+        from: usize,
+        to: usize,
+        after: bool,
+    },
     /// Close the given tab index.
     TabClose(usize),
     /// Open/close the right-click menu for a drawing tab.
@@ -1934,6 +1940,12 @@ pub enum Message {
     PspaceCommand,
     /// Switch to a named layout ("Model" or paper space layout name).
     LayoutSwitch(String),
+    /// Move a paper layout before/after another paper layout.
+    LayoutReorder {
+        from: String,
+        to: String,
+        after: bool,
+    },
     /// Create a new paper space layout.
     LayoutCreate,
     /// Delete the named paper space layout (Model cannot be deleted).

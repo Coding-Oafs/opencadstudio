@@ -22,9 +22,12 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use iced::advanced::layout::{self, Layout};
-use iced::advanced::widget::{self, Widget};
-use iced::advanced::{mouse, overlay, renderer, Clipboard, Shell};
-use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::advanced::widget::{self, tree, Widget};
+use iced::advanced::{mouse, overlay, renderer, Clipboard, Renderer as _, Shell};
+use iced::{
+    Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size,
+    Theme, Vector,
+};
 
 use crate::app::Message;
 
@@ -1082,6 +1085,313 @@ impl<'a> Widget<Message, Theme, Renderer> for PosReport<'a> {
 
 impl<'a> From<PosReport<'a>> for Element<'a, Message> {
     fn from(w: PosReport<'a>) -> Self {
+        Element::new(w)
+    }
+}
+
+// ── Drag-to-reorder tabs ─────────────────────────────────────────────────
+
+#[derive(Clone)]
+enum ReorderSource {
+    Document {
+        from: usize,
+        targets: Arc<[usize]>,
+    },
+    Layout {
+        from: String,
+        targets: Arc<[String]>,
+    },
+}
+
+#[derive(Default)]
+struct ReorderState {
+    pressed_at: Option<Point>,
+    dragging: bool,
+}
+
+/// Transparent title wrapper that turns a normal tab into a drag source.
+///
+/// `PosReport` remains outside this wrapper and records the full target bounds.
+/// Keeping this wrapper on the title only means a document tab's close button
+/// can never accidentally start a reorder.
+pub struct ReorderTab<'a> {
+    source: ReorderSource,
+    child: Element<'a, Message>,
+}
+
+impl<'a> ReorderTab<'a> {
+    pub fn document(
+        from: usize,
+        targets: Arc<[usize]>,
+        child: impl Into<Element<'a, Message>>,
+    ) -> Self {
+        Self {
+            source: ReorderSource::Document { from, targets },
+            child: child.into(),
+        }
+    }
+
+    pub fn layout(
+        from: String,
+        targets: Arc<[String]>,
+        child: impl Into<Element<'a, Message>>,
+    ) -> Self {
+        Self {
+            source: ReorderSource::Layout { from, targets },
+            child: child.into(),
+        }
+    }
+
+    fn drop_target(&self, point: Point) -> Option<(Message, Rectangle, bool)> {
+        match &self.source {
+            ReorderSource::Document { from, targets } => {
+                targets.iter().find_map(|&to| {
+                    if to == *from {
+                        return None;
+                    }
+                    let bounds = dropdown_bounds(&format!("DOC_TAB:{to}"))?;
+                    bounds.contains(point).then(|| {
+                        let after = point.x >= bounds.x + bounds.width / 2.0;
+                        (
+                            Message::TabReorder {
+                                from: *from,
+                                to,
+                                after,
+                            },
+                            bounds,
+                            after,
+                        )
+                    })
+                })
+            }
+            ReorderSource::Layout { from, targets } => {
+                targets.iter().find_map(|to| {
+                    if to == from {
+                        return None;
+                    }
+                    let bounds = dropdown_bounds(&format!("SB_LAYOUT_TAB:{to}"))?;
+                    bounds.contains(point).then(|| {
+                        let after = point.x >= bounds.x + bounds.width / 2.0;
+                        (
+                            Message::LayoutReorder {
+                                from: from.clone(),
+                                to: to.clone(),
+                                after,
+                            },
+                            bounds,
+                            after,
+                        )
+                    })
+                })
+            }
+        }
+    }
+}
+
+impl<'a> Widget<Message, Theme, Renderer> for ReorderTab<'a> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<ReorderState>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(ReorderState::default())
+    }
+
+    fn children(&self) -> Vec<widget::Tree> {
+        vec![widget::Tree::new(&self.child)]
+    }
+
+    fn diff(&self, tree: &mut widget::Tree) {
+        tree.diff_children(&[self.child.as_widget()]);
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.child.as_widget().size()
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.child.as_widget().size_hint()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.child
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        const START_DISTANCE_SQUARED: f32 = 16.0;
+        let state = tree.state.downcast_mut::<ReorderState>();
+
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if cursor.is_over(layout.bounds()) =>
+            {
+                state.pressed_at = cursor.position();
+                state.dragging = false;
+            }
+            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                if let Some(start) = state.pressed_at {
+                    let dx = position.x - start.x;
+                    let dy = position.y - start.y;
+                    if state.dragging || dx * dx + dy * dy >= START_DISTANCE_SQUARED {
+                        state.dragging = true;
+                        shell.capture_event();
+                        shell.request_redraw();
+                        return;
+                    }
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                let was_dragging = state.dragging;
+                state.pressed_at = None;
+                state.dragging = false;
+                if was_dragging {
+                    if let Some(point) = cursor.position() {
+                        if let Some((message, _, _)) = self.drop_target(point) {
+                            shell.publish(message);
+                        }
+                    }
+                    shell.capture_event();
+                    shell.request_redraw();
+                    return;
+                }
+            }
+            _ => {}
+        }
+
+        self.child.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let state = tree.state.downcast_ref::<ReorderState>();
+        if state.dragging {
+            return mouse::Interaction::Grabbing;
+        }
+        if cursor.is_over(layout.bounds()) {
+            return mouse::Interaction::Grab;
+        }
+        self.child
+            .as_widget()
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.child
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.child.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+
+        let state = tree.state.downcast_ref::<ReorderState>();
+        if state.dragging {
+            if let Some(point) = cursor.position() {
+                if let Some((_, bounds, after)) = self.drop_target(point) {
+                    let x = if after {
+                        bounds.x + bounds.width - 1.0
+                    } else {
+                        bounds.x - 1.0
+                    };
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: Rectangle {
+                                x,
+                                y: bounds.y + 2.0,
+                                width: 2.0,
+                                height: (bounds.height - 4.0).max(1.0),
+                            },
+                            border: Border::default(),
+                            shadow: Shadow::default(),
+                            snap: true,
+                        },
+                        Background::Color(Color {
+                            r: 0.20,
+                            g: 0.55,
+                            b: 0.90,
+                            a: 1.0,
+                        }),
+                    );
+                }
+            }
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        self.child.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+impl<'a> From<ReorderTab<'a>> for Element<'a, Message> {
+    fn from(w: ReorderTab<'a>) -> Self {
         Element::new(w)
     }
 }

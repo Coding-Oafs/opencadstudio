@@ -57,6 +57,17 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+fn reorder_insertion_index(from: usize, to: usize, after: bool, len: usize) -> Option<usize> {
+    if from >= len || to >= len || from == to {
+        return None;
+    }
+    let mut insertion = to + usize::from(after);
+    if from < insertion {
+        insertion -= 1;
+    }
+    (insertion != from).then_some(insertion)
+}
+
 mod command;
 mod dialog;
 mod dynamic;
@@ -959,6 +970,28 @@ impl OpenCADStudio {
                         self.tabs[idx].scene.bump_geometry();
                     }
                 }
+                Task::none()
+            }
+
+            Message::TabReorder { from, to, after } => {
+                let Some(insertion) =
+                    reorder_insertion_index(from, to, after, self.tabs.len())
+                else {
+                    return Task::none();
+                };
+                if self.tabs.get(from).is_some_and(|tab| tab.is_start)
+                    || self.tabs.get(to).is_some_and(|tab| tab.is_start)
+                {
+                    return Task::none();
+                }
+
+                let active_id = self.tabs[self.active_tab].id;
+                let moved = self.tabs.remove(from);
+                self.tabs.insert(insertion, moved);
+                if let Some(index) = self.tabs.iter().position(|tab| tab.id == active_id) {
+                    self.active_tab = index;
+                }
+                self.doc_tab_context_menu = None;
                 Task::none()
             }
 
@@ -3323,6 +3356,38 @@ impl OpenCADStudio {
             Message::LayoutSwitch(name) => {
                 self.layout_list_open = false;
                 self.on_layout_switch(name)
+            }
+
+            Message::LayoutReorder { from, to, after } => {
+                let i = self.active_tab;
+                if self.tabs[i].is_start {
+                    return Task::none();
+                }
+                let mut paper: Vec<String> = self.tabs[i]
+                    .scene
+                    .layout_names()
+                    .into_iter()
+                    .skip(1)
+                    .collect();
+                let Some(from_index) = paper.iter().position(|name| name == &from) else {
+                    return Task::none();
+                };
+                let Some(to_index) = paper.iter().position(|name| name == &to) else {
+                    return Task::none();
+                };
+                let Some(insertion) =
+                    reorder_insertion_index(from_index, to_index, after, paper.len())
+                else {
+                    return Task::none();
+                };
+
+                let moved = paper.remove(from_index);
+                paper.insert(insertion, moved);
+                self.push_undo_snapshot(i, "LAYOUT REORDER");
+                self.tabs[i].scene.set_layout_tab_order(&paper);
+                self.tabs[i].dirty = true;
+                self.layout_context_menu = None;
+                Task::none()
             }
 
             Message::LayoutCreate => self.on_layout_create(),

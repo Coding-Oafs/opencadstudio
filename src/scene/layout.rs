@@ -123,6 +123,21 @@ impl Scene {
         }
     }
 
+    /// Apply a complete paper-layout tab order. Model remains fixed at zero.
+    pub fn set_layout_tab_order(&mut self, ordered_names: &[String]) {
+        for obj in self.document.objects.values_mut() {
+            if let ObjectType::Layout(layout) = obj {
+                if layout.name == "Model" {
+                    layout.tab_order = 0;
+                } else if let Some(index) =
+                    ordered_names.iter().position(|name| name == &layout.name)
+                {
+                    layout.tab_order = index as i16 + 1;
+                }
+            }
+        }
+    }
+
     /// Rebuild the `pane_grid` layout from the current `model_tiles` rects
     /// (each pane value = its tile index) — used after loading a tiled config
     /// from the VPort table so the panes match the restored tiles.
