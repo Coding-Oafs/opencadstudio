@@ -692,9 +692,9 @@ impl OpenCADStudio {
                 self.command_line.push_output("Zoom Out");
             }
 
-            // ZOOM ALL — fit all entities (same as EXTENTS for now)
+            // ZOOM ALL — fit the configured drawing limits.
             "ZOOM ALL" | "ZOOM A" | "ZA" => {
-                self.tabs[i].scene.fit_all();
+                self.tabs[i].scene.fit_all_with_limits();
                 self.command_line.push_output("Zoom All");
             }
 

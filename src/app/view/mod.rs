@@ -238,6 +238,7 @@ impl OpenCADStudio {
                         ),
                         origin,
                         axes,
+                        limits: tab.scene.grid_limits_for_viewport(handle),
                     }
                 })
                 .collect();

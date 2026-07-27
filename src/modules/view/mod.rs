@@ -4,6 +4,7 @@ mod cascade;
 mod file_tabs;
 mod hidden;
 mod layout_tabs;
+pub mod limits;
 mod orbit;
 mod ortho;
 mod pan;

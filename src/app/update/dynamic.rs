@@ -484,6 +484,9 @@ impl OpenCADStudio {
                 {
                     if let Some(dist) = crate::app::expr_eval::eval_number(text.trim()) {
                         let pt = base + dir * dist;
+                        if !self.command_point_allowed(i, pt) {
+                            return Some(Task::none());
+                        }
                         self.last_point = Some(pt);
                         for f in self.tabs[i].dyn_fields.iter_mut() {
                             f.buffer = None;
@@ -547,6 +550,9 @@ impl OpenCADStudio {
             });
         }
         let pt = self.dyn_resolve_point()?;
+        if !self.command_point_allowed(i, pt) {
+            return Some(Task::none());
+        }
         self.last_point = Some(pt);
         self.dyn_user_reshaped = false;
         self.sync_dyn_fields();

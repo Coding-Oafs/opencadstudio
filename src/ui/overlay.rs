@@ -52,6 +52,9 @@ pub struct GridParams {
     /// `(ZERO, X, Y, Z)`.
     pub origin: glam::DVec3,
     pub axes: (Vec3, Vec3, Vec3),
+    /// WCS XY drawing limits. When present, grid lines stop at this rectangle
+    /// instead of extending across the full viewport.
+    pub limits: Option<(glam::DVec2, glam::DVec2)>,
 }
 
 /// Compute the adaptive grid step size (world units) from camera zoom.
@@ -191,7 +194,7 @@ impl canvas::Program<Message> for GridCanvas {
                 height: cy1 - cy0,
             };
             frame.with_clip(clip, |f| {
-                draw_grid(f, g.view_rot, g.eye, gb, g.step, g.origin, g.axes)
+                draw_grid(f, g.view_rot, g.eye, gb, g.step, g.origin, g.axes, g.limits)
             });
         }
 
@@ -1163,6 +1166,7 @@ fn draw_grid(
     step: f32,
     grid_origin: glam::DVec3,
     grid_axes: (Vec3, Vec3, Vec3),
+    limits: Option<(glam::DVec2, glam::DVec2)>,
 ) {
     if bounds.width <= 0.0 || bounds.height <= 0.0 {
         return;
@@ -1557,6 +1561,94 @@ fn draw_grid(
         });
         frame.stroke(&path, st.clone());
     };
+
+    // A finite LIMITS rectangle replaces the usual viewport/horizon extent.
+    // Clip each UCS grid line analytically against the WCS XY rectangle, then
+    // project only that finite segment. This keeps the grid bounded even when
+    // the active UCS is rotated.
+    if let Some((limit_min, limit_max)) = limits {
+        let corners = [
+            glam::DVec3::new(limit_min.x, limit_min.y, grid_origin.z),
+            glam::DVec3::new(limit_max.x, limit_min.y, grid_origin.z),
+            glam::DVec3::new(limit_max.x, limit_max.y, grid_origin.z),
+            glam::DVec3::new(limit_min.x, limit_max.y, grid_origin.z),
+        ];
+        let coordinate_range = |axis: Vec3| {
+            corners
+                .iter()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), corner| {
+                    let value = (*corner - grid_origin).as_vec3().dot(axis);
+                    (min.min(value), max.max(value))
+                })
+        };
+        let clip_world_line = |family: usize, value: f32| -> Option<(Point, Point)> {
+            let (base, direction) = if family == 0 {
+                (grid_origin + (axis1 * value).as_dvec3(), axis2.as_dvec3())
+            } else {
+                (grid_origin + (axis2 * value).as_dvec3(), axis1.as_dvec3())
+            };
+            let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+            let mut clip_axis = |origin: f64, delta: f64, low: f64, high: f64| {
+                if delta.abs() < 1e-12 {
+                    return origin >= low && origin <= high;
+                }
+                let a = (low - origin) / delta;
+                let b = (high - origin) / delta;
+                t0 = t0.max(a.min(b));
+                t1 = t1.min(a.max(b));
+                t0 <= t1
+            };
+            if !clip_axis(base.x, direction.x, limit_min.x, limit_max.x)
+                || !clip_axis(base.y, direction.y, limit_min.y, limit_max.y)
+                || !t0.is_finite()
+                || !t1.is_finite()
+            {
+                return None;
+            }
+            let p0 = project(base + direction * t0)?;
+            let p1 = project(base + direction * t1)?;
+            let local_bounds = iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: bounds.width,
+                height: bounds.height,
+            };
+            clip_seg(p0, p1, local_bounds).map(|(p0, p1)| {
+                (
+                    Point::new(p0.x + bounds.x, p0.y + bounds.y),
+                    Point::new(p1.x + bounds.x, p1.y + bounds.y),
+                )
+            })
+        };
+
+        let (min1, max1) = coordinate_range(axis1);
+        let (min2, max2) = coordinate_range(axis2);
+        let mut segments = Vec::new();
+        if let Some((_, anchor_world, gap)) = best_anchor(0) {
+            if gap >= MIN_HORIZON_GRID_PX {
+                let anchor = (anchor_world - grid_origin).as_vec3().dot(axis1);
+                let (start, end) = line_range(min1, max1, anchor);
+                for index in start..=end {
+                    if let Some(segment) = clip_world_line(0, index as f32 * s) {
+                        segments.push(segment);
+                    }
+                }
+            }
+        }
+        if let Some((_, anchor_world, gap)) = best_anchor(1) {
+            if gap >= MIN_HORIZON_GRID_PX {
+                let anchor = (anchor_world - grid_origin).as_vec3().dot(axis2);
+                let (start, end) = line_range(min2, max2, anchor);
+                for index in start..=end {
+                    if let Some(segment) = clip_world_line(1, index as f32 * s) {
+                        segments.push(segment);
+                    }
+                }
+            }
+        }
+        draw_segments(frame, &segments);
+        return;
+    }
 
     let mut axis_extent = 0.0_f32;
 

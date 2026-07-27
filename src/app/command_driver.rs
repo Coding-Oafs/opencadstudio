@@ -4,6 +4,22 @@ use acadrust::Handle;
 use iced::Task;
 
 impl OpenCADStudio {
+    /// Apply LIMCHECK/PLIMCHECK to a point before an interactive command
+    /// consumes it. LIMITS itself must be able to redefine a rectangle beyond
+    /// the old boundary, so it is the sole bypass.
+    pub(super) fn command_point_allowed(&mut self, i: usize, point: glam::DVec3) -> bool {
+        let checks_limits = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .is_some_and(|command| command.name() != "LIMITS")
+            && self.tabs[i].scene.drawing_limit_check_enabled();
+        if checks_limits && !self.tabs[i].scene.point_inside_drawing_limits(point) {
+            self.command_line.push_error("Outside limits.");
+            return false;
+        }
+        true
+    }
+
     /// Drive the active command's step machine with one [`StepInput`], then
     /// apply the result. This is the single entry point every input source
     /// (command line, headless, dynamic input, plugin API, viewport) funnels
@@ -19,6 +35,11 @@ impl OpenCADStudio {
             }
         }
         let i = self.active_tab;
+        if let StepInput::Point(point) = &input {
+            if !self.command_point_allowed(i, *point) {
+                return Task::none();
+            }
+        }
         let ctrl = self.ctrl_down;
         let shift = self.shift_down;
         let result: Option<CmdResult> = {
@@ -229,6 +250,9 @@ impl OpenCADStudio {
                     None => coord,
                 },
             };
+            if !self.command_point_allowed(i, wcs) {
+                return;
+            }
             self.last_point = Some(wcs);
             self.push_ucs_to_cmd(i);
             let _ = self.feed_command(StepInput::Point(wcs));

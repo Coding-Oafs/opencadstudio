@@ -241,6 +241,7 @@ Status of every standard CAD command in Open CAD Studio:
 | Command | Alias | Description | Status |
 |---|---|---|---|
 | `ZOOM` | Z | Zoom | ✅ |
+| `LIMITS` | — | Drawing/grid limits and point checking | ✅ |
 | `PAN` | P | Pan | ✅ |
 | `ORBIT` | 3DO | 3D orbit | ✅ |
 | `VPORTS` | — | Viewport configuration | ✅ |
@@ -356,11 +357,11 @@ Status of every standard CAD command in Open CAD Studio:
 | Layer | 19 | 17 | 0 | 2 |
 | Block & Reference | 23 | 18 | 2 | 3 |
 | 3D Modeling | 27 | 25 | 0 | 2 |
-| View & Navigation | 32 | 15 | 8 | 9 |
+| View & Navigation | 33 | 16 | 8 | 9 |
 | Inquiry | 12 | 12 | 0 | 0 |
 | File & Plot | 17 | 16 | 0 | 1 |
 | Manage & Customize | 22 | 13 | 3 | 6 |
-| **Total** | **262** | **219** | **15** | **28** |
+| **Total** | **263** | **220** | **15** | **28** |
 
 > Counts include commands listed under more than one category (e.g. `SLICE`, `HELIX`,
 > `MINSERT`, `SUBTRACT`/`UNION`/`INTERSECT` appear in both their 2D and 3D groups).

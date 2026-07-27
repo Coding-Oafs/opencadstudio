@@ -323,6 +323,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     if let Some((base, dir)) = self.otrack_active {
                         if let Some(dist) = crate::app::expr_eval::eval_number(text.trim()) {
                             let pt = base + dir * dist;
+                            if !self.command_point_allowed(i, pt) {
+                                return Task::none();
+                            }
                             self.last_point = Some(pt);
                             self.dyn_user_reshaped = false;
                             self.sync_dyn_fields();
@@ -365,6 +368,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 }
                             }
                         };
+                        if !self.command_point_allowed(i, wcs_pt) {
+                            return Task::none();
+                        }
                         self.last_point = Some(wcs_pt);
                         self.dyn_user_reshaped = false;
                         self.sync_dyn_fields();

@@ -142,6 +142,62 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::ToggleViewCube));
             }
 
+            // ── LIMITS — drawing/grid boundary for the active space ─────────────
+            "LIMITS" => {
+                use crate::modules::view::limits::LimitsCommand;
+                let (min, max) = self.tabs[i]
+                    .scene
+                    .current_drawing_limits()
+                    .unwrap_or((glam::DVec2::ZERO, glam::DVec2::new(12.0, 9.0)));
+                let command = LimitsCommand::new(min, max);
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+            "LIMITS ON" | "LIMITS OFF" => {
+                let enabled = cmd.ends_with("ON");
+                if self.tabs[i].scene.drawing_limit_check_enabled() != enabled {
+                    self.push_undo_snapshot(i, "LIMITS");
+                    self.tabs[i].scene.set_drawing_limit_check(enabled);
+                    self.tabs[i].dirty = true;
+                }
+                self.command_line.push_output(if enabled {
+                    "Limits checking ON."
+                } else {
+                    "Limits checking OFF."
+                });
+            }
+            cmd if cmd.starts_with("LIMITS SET ") => {
+                let tokens: Vec<&str> = cmd["LIMITS SET ".len()..].split_whitespace().collect();
+                let values: Result<Vec<f64>, _> =
+                    tokens.iter().map(|value| value.parse()).collect();
+                let Ok(values) = values else {
+                    self.command_line
+                        .push_error("LIMITS: four numeric coordinates required.");
+                    return Some(Task::none());
+                };
+                if tokens.len() != 4 || !values.iter().all(|value| value.is_finite()) {
+                    self.command_line
+                        .push_error("LIMITS: four finite numeric coordinates required.");
+                } else {
+                    let first = glam::DVec2::new(values[0], values[1]);
+                    let opposite = glam::DVec2::new(values[2], values[3]);
+                    let min = first.min(opposite);
+                    let max = first.max(opposite);
+                    if min.x == max.x || min.y == max.y {
+                        self.command_line
+                            .push_error("LIMITS: corners must define a non-zero area.");
+                    } else {
+                        self.push_undo_snapshot(i, "LIMITS");
+                        self.tabs[i].scene.set_current_drawing_limits(min, max);
+                        self.tabs[i].dirty = true;
+                        self.command_line.push_output(&format!(
+                            "Drawing limits: {:.4},{:.4} to {:.4},{:.4}.",
+                            min.x, min.y, max.x, max.y
+                        ));
+                    }
+                }
+            }
+
             // ── PROPERTIES — toggle Properties panel visibility ──────────────────
             "PROPERTIES" | "PROPS" => {
                 return Some(Task::done(Message::ToggleProperties));

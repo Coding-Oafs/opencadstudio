@@ -90,8 +90,14 @@ impl OpenCADStudio {
             .borrow_mut()
             .right_click_entered = false;
         // A fresh command starts at the polar/cartesian default — clear
-        // any `,`-driven reshape from a previous command (#35).
+        // any `,`-driven reshape and locked dynamic-input values from a
+        // previous command. Otherwise a bare Enter on the first point prompt
+        // can commit that stale coordinate instead of accepting the command's
+        // default (LIMITS then compares an unintended lower-left point with
+        // the displayed default upper-right).
         self.dyn_user_reshaped = false;
+        self.tabs[i].dyn_fields.clear();
+        self.tabs[i].dyn_active = 0;
 
         if let Some(path_str) = cmd.strip_prefix("OPEN_RECENT:") {
             let path = PathBuf::from(path_str);
@@ -208,6 +214,7 @@ impl OpenCADStudio {
         let i = self.active_tab;
         if self.tabs[i].active_cmd.is_some() {
             self.tabs[i].last_cmd = Some(cmd.to_string());
+            self.sync_dyn_fields();
             self.focus_cmd_input()
         } else {
             Task::none()

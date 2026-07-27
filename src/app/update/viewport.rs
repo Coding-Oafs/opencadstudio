@@ -2383,6 +2383,8 @@ impl OpenCADStudio {
                     self.command_line.push_info("Select a tangent object.");
                     None
                 }
+            } else if !self.command_point_allowed(i, world_pt) {
+                None
             } else {
                 // A scalar typed into the dynamic-input box but not
                 // yet confirmed with Enter is applied before the
