@@ -295,6 +295,9 @@ pub(super) struct OpenCADStudio {
     isolate_popup_open: bool,
     /// True while the selection-filter type picker is open.
     selection_filter_popup_open: bool,
+    /// Hide a status-menu tooltip after its root is clicked; reset when the
+    /// pointer leaves the root for the opened menu.
+    status_menu_tooltip_hidden: bool,
     /// Clean-screen mode: hide ribbon and side panels for a full canvas.
     clean_screen: bool,
     /// Quick Properties: show a compact floating property panel on selection.
@@ -2177,6 +2180,8 @@ pub enum Message {
     OsWindowClosed(window::Id),
     /// No-op — used as a fallback when a TabEvent has no host mapping.
     Noop,
+    /// Suppress menu-root tooltips between clicking the root and leaving it.
+    StatusMenuTooltipHidden(bool),
     /// GitHub releases API returned a result. `Some(version)` means a
     /// newer release exists; we open the update-notice window.
     UpdateCheckResult(Option<crate::io::update_check::UpdateInfo>),
@@ -2501,6 +2506,7 @@ impl OpenCADStudio {
             units_popup_open: false,
             isolate_popup_open: false,
             selection_filter_popup_open: false,
+            status_menu_tooltip_hidden: false,
             statusbar_config: crate::ui::statusbar::statusbar_config::StatusBarConfig::default(),
             last_saved_config: None,
             otrack_active: None,

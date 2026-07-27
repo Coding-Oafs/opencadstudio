@@ -2098,12 +2098,9 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::TogglePolarPopup => {
-                self.polar_popup_open ^= true;
-                if self.polar_popup_open {
-                    // Start the custom field empty each time; picking a preset or
-                    // typing a value is what actually enables polar tracking.
-                    self.polar_custom_input.clear();
-                }
+                // MenuBar owns its open state. Reset only the transient field
+                // whenever the caret starts a fresh interaction.
+                self.polar_custom_input.clear();
                 Task::none()
             }
             Message::ClosePolarPopup => {
@@ -4169,6 +4166,13 @@ impl OpenCADStudio {
             }
 
             Message::Noop => Task::none(),
+            Message::StatusMenuTooltipHidden(hidden) => {
+                self.status_menu_tooltip_hidden = hidden;
+                if hidden {
+                    self.polar_custom_input.clear();
+                }
+                Task::none()
+            }
 
             // ── Unsaved-changes dialog ────────────────────────────────────
             Message::UnsavedDialogCancel => {

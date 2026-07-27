@@ -1,25 +1,21 @@
-//! Selection-filter type picker — choose which entity types are selectable.
+//! Selection-filter status menu — choose which entity types are selectable.
 //! A checked row means that type can be picked; unchecking it excludes the
 //! type from interactive selection. Opened from the FILTER status pill.
 
 use rustc_hash::FxHashSet as HashSet;
 
-use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Background, Border, Color, Element, Fill, Length, Rectangle, Theme};
+use iced::widget::{button, container, row, text};
+use iced::{Background, Border, Color, Element, Fill, Theme};
 
 use crate::app::Message;
+use crate::ui::statusbar::status_menu::Entry;
 
-/// Full-screen overlay: transparent click-catcher + type list pinned
-/// bottom-right, above the status bar.
-///
 /// - `types`: entity-type names present in the current layout.
 /// - `excluded`: types currently filtered out (unchecked).
-pub fn selection_filter_popup_overlay(
+pub fn menu_entries(
     types: Vec<String>,
     excluded: &HashSet<String>,
-    pill: Option<Rectangle>,
-    win: (f32, f32),
-) -> Element<'static, Message> {
+) -> Vec<Entry<'static>> {
     // "Select All / Clear All" header, mirroring the OSNAP popup: Select All
     // clears every exclusion, Clear All excludes every present type.
     let has_types = !types.is_empty();
@@ -48,35 +44,21 @@ pub fn selection_filter_popup_overlay(
         .width(Fill)
         .padding([0, 4]);
 
-    let rows: Vec<Element<'static, Message>> = if types.is_empty() {
-        vec![empty_row()]
+    let rows: Vec<Entry<'static>> = if types.is_empty() {
+        vec![Entry::stay(empty_row())]
     } else {
         types
             .into_iter()
             .map(|name| {
                 let included = !excluded.contains(&name);
-                type_row(name, included)
+                Entry::stay(type_row(name, included))
             })
             .collect()
     };
 
-    let panel = container(column![header, divider, column(rows)])
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
-            border: Border {
-                color: PANEL_BORDER,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(180.0));
-
-    let positioned = super::position_statusbar_popup(panel.into(), pill, win, 180.0, true);
-
-    mouse_area(positioned)
-        .on_press(Message::CloseSelectionFilterPopup)
-        .into()
+    let mut entries = vec![Entry::stay(header), Entry::stay(divider)];
+    entries.extend(rows);
+    entries
 }
 
 fn type_row(name: String, included: bool) -> Element<'static, Message> {
@@ -134,12 +116,6 @@ fn header_btn(label: &str, msg: Message, enabled: bool) -> Element<'_, Message> 
 
 // ── Colours ───────────────────────────────────────────────────────────────
 
-const PANEL_BG: Color = Color {
-    r: 0.15,
-    g: 0.15,
-    b: 0.15,
-    a: 1.0,
-};
 const PANEL_BORDER: Color = Color {
     r: 0.32,
     g: 0.32,

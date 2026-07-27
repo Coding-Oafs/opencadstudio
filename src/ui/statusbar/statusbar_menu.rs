@@ -1,85 +1,33 @@
-//! Status-bar customization menu — a checkmark list of every toggle pill,
-//! opened from the bar's far-right handle. Rendered as a floating overlay
-//! above the status bar, same pattern as the scale picker.
+//! Status-bar customization and layout-list menu entries.
 
-use iced::widget::{button, column, container, mouse_area, row, scrollable, text};
-use iced::{Background, Border, Color, Element, Fill, Length, Rectangle, Theme};
+use iced::widget::{button, row, text};
+use iced::{Background, Color, Element, Fill, Theme};
 
 use crate::app::Message;
 use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
+use crate::ui::statusbar::status_menu::Entry;
 
-/// Full-screen overlay: transparent click-catcher + the menu panel pinned to
-/// the bottom-right, just above the status bar.
-pub fn statusbar_menu_overlay(
-    config: &StatusBarConfig,
-    pill: Option<Rectangle>,
-    win: (f32, f32),
-) -> Element<'static, Message> {
-    let rows: Vec<Element<'static, Message>> = StatusPill::ALL
+pub fn customization_entries(config: &StatusBarConfig) -> Vec<Entry<'static>> {
+    StatusPill::ALL
         .iter()
         .map(|&pill| {
-            menu_row(
+            Entry::stay(menu_row(
                 pill.label(),
                 config.is_visible(pill),
                 Message::ToggleStatusPill(pill),
-            )
+            ))
         })
-        .collect();
-
-    let panel = container(column(rows))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
-            border: Border {
-                color: PANEL_BORDER,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(200.0));
-
-    let positioned =
-        crate::ui::popup::position_statusbar_popup(panel.into(), pill, win, 200.0, true);
-
-    mouse_area(positioned)
-        .on_press(Message::CloseStatusBarMenu)
-        .into()
+        .collect()
 }
 
-/// Dropdown listing Model + every paper layout, opened from the leftmost
-/// hamburger. Pinned bottom-left just above the status bar; a click selects a
-/// layout (and closes), an outside click just closes.
-pub fn layout_list_overlay<'a>(
+pub fn layout_entries<'a>(
     layouts: &[String],
     current: &str,
-    pill: Option<Rectangle>,
-    win: (f32, f32),
-) -> Element<'a, Message> {
-    let rows: Vec<Element<'a, Message>> = layouts
+) -> Vec<Entry<'a>> {
+    layouts
         .iter()
-        .map(|name| layout_row(name.clone(), name == current))
-        .collect();
-
-    let panel = container(scrollable(column(rows)))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
-            border: Border {
-                color: PANEL_BORDER,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(200.0))
-        .max_height(360.0);
-
-    // Hamburger is on the left → prefer left-aligned (grows right).
-    let positioned =
-        crate::ui::popup::position_statusbar_popup(panel.into(), pill, win, 200.0, false);
-
-    mouse_area(positioned)
-        .on_press(Message::CloseLayoutList)
-        .into()
+        .map(|name| Entry::close(layout_row(name.clone(), name == current)))
+        .collect()
 }
 
 fn layout_row<'a>(name: String, is_current: bool) -> Element<'a, Message> {
@@ -131,18 +79,6 @@ fn menu_row(label: &'static str, checked: bool, msg: Message) -> Element<'static
 
 // ── Colours ───────────────────────────────────────────────────────────────
 
-const PANEL_BG: Color = Color {
-    r: 0.15,
-    g: 0.15,
-    b: 0.15,
-    a: 1.0,
-};
-const PANEL_BORDER: Color = Color {
-    r: 0.32,
-    g: 0.32,
-    b: 0.32,
-    a: 1.0,
-};
 const ROW_HOVER: Color = Color {
     r: 0.22,
     g: 0.22,

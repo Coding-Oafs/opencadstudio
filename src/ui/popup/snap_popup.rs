@@ -1,27 +1,16 @@
-//! OpenCADStudio-style OSNAP dropdown popup panel.
-//!
-//! Rendered as a floating overlay above the status bar.  The popup is only
-//! inserted into the view stack when `snap_popup_open` is true.
+//! OpenCADStudio-style OSNAP status menu.
 
-use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Background, Border, Color, Element, Fill, Length, Rectangle, Theme};
+use iced::widget::{button, container, row, text};
+use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 
 use crate::app::Message;
 use crate::snap::{SnapType, Snapper, ALL_SNAP_MODES};
+use crate::ui::statusbar::status_menu::Entry;
 
-/// Returns a full-screen overlay element:
-///   - a transparent click-catcher that closes the popup on outside click
-///   - the popup panel pinned to the bottom-right (above the status bar)
-pub fn snap_popup_overlay<'a>(
-    snapper: &'a Snapper,
-    pill: Option<Rectangle>,
-    win: (f32, f32),
-) -> Element<'a, Message> {
-    // ── Panel content ─────────────────────────────────────────────────────
+pub fn menu_entries<'a>(snapper: &'a Snapper) -> Vec<Entry<'a>> {
     let all_on = snapper.all_on();
     let none_on = snapper.none_on();
 
-    // "Select All / Clear All" header row
     let header = row![
         header_btn("Select All", Message::SnapSelectAll, !all_on),
         header_btn("Clear All", Message::SnapClearAll, !none_on),
@@ -38,34 +27,15 @@ pub fn snap_popup_overlay<'a>(
         .width(Fill)
         .padding([0, 4]);
 
-    // Snap mode rows
-    let mut rows: Vec<Element<'_, Message>> = Vec::new();
+    let mut entries = vec![Entry::stay(header), Entry::stay(divider)];
     for &(snap_type, _glyph, label) in ALL_SNAP_MODES {
-        rows.push(snap_row(snap_type, label, snapper.is_on(snap_type)));
+        entries.push(Entry::stay(snap_row(
+            snap_type,
+            label,
+            snapper.is_on(snap_type),
+        )));
     }
-
-    let panel_content = column![header, divider, column(rows)];
-
-    const PANEL_W: f32 = 210.0;
-    let panel = container(panel_content)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
-            border: Border {
-                color: PANEL_BORDER,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        })
-        .width(Length::Fixed(PANEL_W));
-
-    // Anchored just above its pill, flipping horizontally to stay on screen.
-    let positioned = super::position_statusbar_popup(panel.into(), pill, win, PANEL_W, true);
-
-    // ── Click-catcher: closes popup on any outside click ──────────────────
-    mouse_area(positioned)
-        .on_press(Message::CloseSnapPopup)
-        .into()
+    entries
 }
 
 // ── Individual snap row ───────────────────────────────────────────────────
@@ -140,12 +110,6 @@ fn header_btn(label: &str, msg: Message, enabled: bool) -> Element<'_, Message> 
 
 // ── Colours ───────────────────────────────────────────────────────────────
 
-const PANEL_BG: Color = Color {
-    r: 0.16,
-    g: 0.16,
-    b: 0.16,
-    a: 0.98,
-};
 const PANEL_BORDER: Color = Color {
     r: 0.32,
     g: 0.32,
@@ -171,11 +135,11 @@ const BTN_BG: Color = Color {
     a: 1.0,
 };
 const CHECK_COLOR: Color = Color {
-    r: 0.20,
+    r: 0.35,
     g: 0.75,
-    b: 0.35,
+    b: 1.00,
     a: 1.0,
-}; // green ✓
+};
 const ICON_COLOR: Color = Color {
     r: 0.25,
     g: 0.75,
@@ -194,4 +158,3 @@ const LABEL_OFF: Color = Color {
     b: 0.52,
     a: 1.0,
 };
-

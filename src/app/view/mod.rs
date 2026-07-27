@@ -1429,13 +1429,26 @@ impl OpenCADStudio {
                     if let Some(be) = &tab.block_edit {
                         displayed_layouts.push(be.block_name.clone());
                     }
+                    let status_menu_data = crate::ui::statusbar::StatusMenuData {
+                        layout_names: layout_names.clone(),
+                        polar_custom_input: &self.polar_custom_input,
+                        scale_is_model: is_model,
+                        scale_list: tab.scene.scale_list(),
+                        has_selection: !tab.scene.selected.is_empty(),
+                        selection_types: tab
+                            .scene
+                            .entity_type_names_in_layout()
+                            .into_iter()
+                            .map(|name| name.to_string())
+                            .collect(),
+                        selection_filter: &tab.scene.selection_filter,
+                        tooltip_hidden: self.status_menu_tooltip_hidden,
+                    };
                     self.status_bar.view(
                         &self.snapper,
-                        self.snap_popup_open,
                         self.ortho_mode,
                         self.polar_mode,
                         self.polar_increment_deg,
-                        self.polar_popup_open,
                         self.dyn_input,
                         self.snapper.otrack_enabled,
                         displayed_layouts,
@@ -1451,7 +1464,6 @@ impl OpenCADStudio {
                         tab.scene.active_viewport.is_some(),
                         self.show_layout_tabs,
                         tab.scene.annotation_scale,
-                        self.scale_popup_open,
                         scale_pill_enabled,
                         tab.scene.document.header.lineweight_display,
                         cursor_coord,
@@ -1460,13 +1472,13 @@ impl OpenCADStudio {
                         picking,
                         self.clean_screen,
                         tab.scene.document.header.insertion_units,
-                        self.units_popup_open,
                         tab.scene.is_isolation_active(),
                         tab.scene.transparency_display,
                         self.quick_properties,
                         tab.scene.selection_filter_active(),
                         self.selection_cycling,
                         &self.statusbar_config,
+                        status_menu_data,
                     )
                 })
                 .width(Fill)
@@ -1485,101 +1497,6 @@ impl OpenCADStudio {
         .height(Fill);
 
         let win = self.win_size;
-        let sb_pill = crate::ui::wrap_bar::dropdown_bounds;
-
-        let snap_layer: Element<'_, Message> = if self.snap_popup_open {
-            crate::ui::popup::snap_popup::snap_popup_overlay(
-                &self.snapper,
-                sb_pill(crate::ui::statusbar::SB_OSNAP_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let scale_layer: Element<'_, Message> = if self.scale_popup_open {
-            let is_model = tab.scene.current_layout == "Model";
-            crate::ui::popup::scale_popup::scale_popup_overlay(
-                is_model,
-                tab.scene.annotation_scale,
-                tab.scene.first_viewport_scale(),
-                tab.scene.scale_list(),
-                sb_pill(crate::ui::statusbar::SB_SCALE_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let polar_layer: Element<'_, Message> = if self.polar_popup_open {
-            crate::ui::popup::polar_popup::polar_popup_overlay(
-                self.polar_increment_deg,
-                &self.polar_custom_input,
-                sb_pill(crate::ui::statusbar::SB_POLAR_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let statusbar_menu_layer: Element<'_, Message> = if self.statusbar_menu_open {
-            crate::ui::statusbar::statusbar_menu::statusbar_menu_overlay(
-                &self.statusbar_config,
-                sb_pill(crate::ui::statusbar::SB_MENU_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let layout_list_layer: Element<'_, Message> = if self.layout_list_open && !tab.is_start {
-            crate::ui::statusbar::statusbar_menu::layout_list_overlay(
-                &tab.scene.layout_names(),
-                &tab.scene.current_layout,
-                sb_pill(crate::ui::statusbar::SB_LAYOUTLIST_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let units_layer: Element<'_, Message> = if self.units_popup_open {
-            crate::ui::popup::units_popup::units_popup_overlay(
-                tab.scene.document.header.insertion_units,
-                sb_pill(crate::ui::statusbar::SB_UNITS_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let isolate_layer: Element<'_, Message> = if self.isolate_popup_open {
-            crate::ui::popup::isolate_popup::isolate_popup_overlay(
-                !tab.scene.selected.is_empty(),
-                tab.scene.is_isolation_active(),
-                sb_pill(crate::ui::statusbar::SB_ISOLATE_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let sel_filter_layer: Element<'_, Message> = if self.selection_filter_popup_open {
-            let types: Vec<String> = tab
-                .scene
-                .entity_type_names_in_layout()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect();
-            crate::ui::popup::selection_filter_popup::selection_filter_popup_overlay(
-                types,
-                &tab.scene.selection_filter,
-                sb_pill(crate::ui::statusbar::SB_FILTER_ID),
-                win,
-            )
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
 
         let dropdown_layer: Element<'_, Message> = self
             .ribbon
@@ -1640,14 +1557,6 @@ impl OpenCADStudio {
 
         let composed = stack![
             main_ui,
-            snap_layer,
-            scale_layer,
-            polar_layer,
-            statusbar_menu_layer,
-            layout_list_layer,
-            units_layer,
-            isolate_layer,
-            sel_filter_layer,
             dropdown_layer,
             layout_ctx_layer,
             doc_tab_ctx_layer,
