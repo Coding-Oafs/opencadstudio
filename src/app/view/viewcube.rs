@@ -1,10 +1,9 @@
 use super::super::Message;
 use crate::scene::{VIEWCUBE_PX, VIEWCUBE_REGION_PX};
 use iced::widget::{
-    button, column, container, mouse_area, pick_list, row, stack,
-    Space,
+    button, container, mouse_area, pick_list, stack, Space,
 };
-use iced::{Background, Border, Color, Element, Fill, Theme};
+use iced::{Background, Border, Color, Element, Theme};
 
 // ── Render-mode picker ──────────────────────────────────────────────────────
 
@@ -15,15 +14,9 @@ use iced::{Background, Border, Color, Element, Fill, Theme};
 /// state and emit `ToggleGrid` / `ToggleGridSnap`.
 // ── ViewCube navigation controls (home / roll / nudge / UCS) ───────────────
 
-/// Place `el` at pixel offset (x, y) inside a Fill layer (top-left origin).
+/// Place `el` at pixel offset (x, y) inside a fill layer (top-left origin).
 fn vc_place<'a>(x: f32, y: f32, el: Element<'a, Message>) -> Element<'a, Message> {
-    column![
-        Space::new().height(iced::Length::Fixed(y.max(0.0))),
-        row![Space::new().width(iced::Length::Fixed(x.max(0.0))), el],
-    ]
-    .width(Fill)
-    .height(Fill)
-    .into()
+    crate::ui::pin_at(iced::Point::new(x, y), el)
 }
 
 /// Borderless square icon button used by the ViewCube nav controls.
@@ -198,4 +191,3 @@ pub(super) fn viewcube_ucs_picker<'a>(current: String, names: Vec<String>) -> El
         })
         .into()
 }
-

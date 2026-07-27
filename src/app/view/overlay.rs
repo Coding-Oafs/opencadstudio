@@ -9,18 +9,7 @@ pub(super) fn position_canvas_overlay<'a>(
     anchor: iced::Point,
     panel: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let ax = anchor.x.max(0.0);
-    let ay = anchor.y.max(0.0);
-    column![
-        Space::new().height(iced::Length::Fixed(ay)),
-        row![
-            Space::new().width(iced::Length::Fixed(ax)),
-            iced::widget::opaque(panel),
-        ],
-    ]
-    .width(Fill)
-    .height(Fill)
-    .into()
+    crate::ui::pin_at(anchor, iced::widget::opaque(panel))
 }
 
 // ── In-place MText editor overlay ───────────────────────────────────────────

@@ -2,7 +2,7 @@
 //! two or more overlapping objects. Each row names a candidate; clicking it
 //! adds that object to the current selection. Clicking outside dismisses it.
 
-use iced::widget::{button, column, container, mouse_area, opaque, row, text, Space};
+use iced::widget::{button, column, container, mouse_area, opaque, text};
 use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 
 use crate::app::Message;
@@ -30,15 +30,7 @@ pub fn cycle_popup_overlay(
         })
         .width(Length::Fixed(150.0));
 
-    let positioned = column![
-        Space::new().height(Length::Fixed(anchor.y.max(0.0))),
-        row![
-            Space::new().width(Length::Fixed(anchor.x.max(0.0))),
-            opaque(panel),
-        ],
-    ]
-    .width(Fill)
-    .height(Fill);
+    let positioned = crate::ui::pin_at(anchor, opaque(panel));
 
     mouse_area(positioned).on_press(Message::CycleCancel).into()
 }

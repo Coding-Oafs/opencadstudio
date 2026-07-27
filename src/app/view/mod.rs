@@ -742,18 +742,12 @@ impl OpenCADStudio {
             ])
             .report_width0(self.render_bar_w.clone())
             .into();
-            // Position the bar at the active model tile's top-left corner so it
-            // follows the active panel in a tiled layout (full canvas when a
-            // single tile fills the window). Leading Spaces offset it.
-            let bar_layer = column![
-                Space::new().height(iced::Length::Fixed(rect.y.max(0.0))),
-                row![
-                    Space::new().width(iced::Length::Fixed(rect.x.max(0.0))),
-                    container(adaptive).width(iced::Length::Fixed(rect.width.max(1.0))),
-                ],
-            ]
-            .width(Fill)
-            .height(Fill);
+            // Pin the bar to the active model tile's top-left corner so it
+            // follows the active panel in a tiled layout.
+            let bar_layer = crate::ui::pin_at(
+                iced::Point::new(rect.x, rect.y),
+                container(adaptive).width(iced::Length::Fixed(rect.width.max(1.0))),
+            );
             viewport_stack = viewport_stack.push(bar_layer);
         }
 
@@ -802,12 +796,7 @@ impl OpenCADStudio {
                 },
                 ..Default::default()
             });
-            let border_layer = column![
-                Space::new().height(iced::Length::Fixed(y)),
-                row![Space::new().width(iced::Length::Fixed(x)), border_frame,],
-            ]
-            .width(Fill)
-            .height(Fill);
+            let border_layer = crate::ui::pin_at(iced::Point::new(x, y), border_frame);
             viewport_stack = viewport_stack.push(border_layer);
 
             let vp_mode = tab
@@ -833,15 +822,10 @@ impl OpenCADStudio {
             ])
             .report_width0(self.render_bar_w.clone())
             .into();
-            let picker_layer = column![
-                Space::new().height(iced::Length::Fixed(y + 4.0)),
-                row![
-                    Space::new().width(iced::Length::Fixed(x + 4.0)),
-                    container(adaptive).width(iced::Length::Fixed(rect.width.max(1.0))),
-                ],
-            ]
-            .width(Fill)
-            .height(Fill);
+            let picker_layer = crate::ui::pin_at(
+                iced::Point::new(x + 4.0, y + 4.0),
+                container(adaptive).width(iced::Length::Fixed(rect.width.max(1.0))),
+            );
             viewport_stack = viewport_stack.push(picker_layer);
 
             // Hide the ViewCube first — before the render bar — when they collide.
@@ -849,15 +833,10 @@ impl OpenCADStudio {
                 let cube_x = (rect.x + rect.width - VIEWCUBE_HIT_SIZE - VIEWCUBE_PAD).max(0.0);
                 let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
 
-                let controls = column![
-                    Space::new().height(iced::Length::Fixed(cube_y)),
-                    row![
-                        Space::new().width(iced::Length::Fixed(cube_x)),
-                        viewcube_nav_controls(),
-                    ],
-                ]
-                .width(Fill)
-                .height(Fill);
+                let controls = crate::ui::pin_at(
+                    iced::Point::new(cube_x, cube_y),
+                    viewcube_nav_controls(),
+                );
                 viewport_stack = viewport_stack.push(controls);
 
                 let ucs_current = tab
@@ -873,16 +852,13 @@ impl OpenCADStudio {
                     .map(|u| u.name.clone())
                     .filter(|n| !n.is_empty())
                     .collect();
-                let picker = column![
-                    Space::new().height(iced::Length::Fixed(cube_y + VIEWCUBE_HIT_SIZE + 6.0)),
-                    row![
-                        Space::new()
-                            .width(iced::Length::Fixed(cube_x + VIEWCUBE_HIT_SIZE * 0.5 - UCS_PICKER_W * 0.5)),
-                        iced::widget::opaque(viewcube_ucs_picker(ucs_current, ucs_names)),
-                    ],
-                ]
-                .width(Fill)
-                .height(Fill);
+                let picker = crate::ui::pin_at(
+                    iced::Point::new(
+                        cube_x + VIEWCUBE_HIT_SIZE * 0.5 - UCS_PICKER_W * 0.5,
+                        cube_y + VIEWCUBE_HIT_SIZE + 6.0,
+                    ),
+                    iced::widget::opaque(viewcube_ucs_picker(ucs_current, ucs_names)),
+                );
                 viewport_stack = viewport_stack.push(picker);
             }
         }
@@ -897,15 +873,10 @@ impl OpenCADStudio {
             let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
 
             // Cube hit area + nav controls (home / roll / nudge) as one layer.
-            let controls = column![
-                Space::new().height(iced::Length::Fixed(cube_y)),
-                row![
-                    Space::new().width(iced::Length::Fixed(cube_x)),
-                    viewcube_nav_controls(),
-                ],
-            ]
-            .width(Fill)
-            .height(Fill);
+            let controls = crate::ui::pin_at(
+                iced::Point::new(cube_x, cube_y),
+                viewcube_nav_controls(),
+            );
             viewport_stack = viewport_stack.push(controls);
 
             // WCS / named-UCS selector under the cube.
@@ -922,15 +893,13 @@ impl OpenCADStudio {
                 .map(|u| u.name.clone())
                 .filter(|n| !n.is_empty())
                 .collect();
-            let picker = column![
-                Space::new().height(iced::Length::Fixed(cube_y + VIEWCUBE_HIT_SIZE + 6.0)),
-                row![
-                    Space::new().width(iced::Length::Fixed(cube_x + VIEWCUBE_HIT_SIZE * 0.5 - UCS_PICKER_W * 0.5)),
-                    iced::widget::opaque(viewcube_ucs_picker(ucs_current, ucs_names)),
-                ],
-            ]
-            .width(Fill)
-            .height(Fill);
+            let picker = crate::ui::pin_at(
+                iced::Point::new(
+                    cube_x + VIEWCUBE_HIT_SIZE * 0.5 - UCS_PICKER_W * 0.5,
+                    cube_y + VIEWCUBE_HIT_SIZE + 6.0,
+                ),
+                iced::widget::opaque(viewcube_ucs_picker(ucs_current, ucs_names)),
+            );
             viewport_stack = viewport_stack.push(picker);
         }
 
