@@ -1,4 +1,3 @@
-use crate::ui::overlay::GridPlane;
 use acadrust::tables::Ucs;
 
 // ── Coordinate parsing ─────────────────────────────────────────────────────
@@ -158,22 +157,6 @@ pub(super) fn ucs_rotated_z(origin: glam::DVec3, angle_z: f32) -> Ucs {
     ucs.x_axis = acadrust::types::Vector3::new(cos, sin, 0.0);
     ucs.y_axis = acadrust::types::Vector3::new(-sin, cos, 0.0);
     ucs
-}
-
-// ── Grid plane detection ───────────────────────────────────────────────────
-
-/// Choose the grid plane whose normal is most aligned with the camera view direction.
-pub(super) fn grid_plane_from_camera(pitch: f32, yaw: f32) -> GridPlane {
-    let fz = pitch.sin().abs();
-    let fy = (pitch.cos() * yaw.cos()).abs();
-    let fx = (pitch.cos() * yaw.sin()).abs();
-    if fz >= fy && fz >= fx {
-        GridPlane::Xy
-    } else if fy >= fx {
-        GridPlane::Xz
-    } else {
-        GridPlane::Yz
-    }
 }
 
 // ── Drawing constraint helpers ─────────────────────────────────────────────

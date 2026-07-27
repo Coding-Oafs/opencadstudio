@@ -962,15 +962,23 @@ impl OpenCADStudio {
             // content), so snap / hit-test / preview run exactly like the
             // main model view — no paper projection, tracks pan/zoom/twist.
             let cursor_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-            let (view_rot, eye) = match &edit_cam {
-                Some(cam) => (cam.view_proj_rte(bounds), cam.eye()),
+            let (view_rot, eye, grid_spacing) = match &edit_cam {
+                Some(cam) => (
+                    cam.view_proj_rte(bounds),
+                    cam.eye(),
+                    crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                ),
                 None => {
                     let cam = self.tabs[i].scene.camera.borrow();
-                    (cam.view_proj_rte(bounds), cam.eye())
+                    (
+                        cam.view_proj_rte(bounds),
+                        cam.eye(),
+                        crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                    )
                 }
             };
             // Sync grid-snap spacing to the adaptive spacing of the visible grid.
-            self.snapper.grid_spacing = crate::ui::overlay::compute_grid_step(view_rot, bounds);
+            self.snapper.grid_spacing = grid_spacing;
             // Cursor and wires are model-space; the snap result is model.
             let snap_cursor = cursor_world;
 
@@ -1590,11 +1598,19 @@ impl OpenCADStudio {
         // Object/grid snap, same path as an entity grip or command drag: the
         // dragged UCS point sticks to endpoints/midpoints/grid under the cursor,
         // and the snap marker is published via `snap_result`.
-        let (view_rot, eye) = match &edit_cam {
-            Some(cam) => (cam.view_proj_rte(bounds), cam.eye()),
+        let (view_rot, eye, grid_spacing) = match &edit_cam {
+            Some(cam) => (
+                cam.view_proj_rte(bounds),
+                cam.eye(),
+                crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+            ),
             None => {
                 let cam = self.tabs[i].scene.camera.borrow();
-                (cam.view_proj_rte(bounds), cam.eye())
+                (
+                    cam.view_proj_rte(bounds),
+                    cam.eye(),
+                    crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                )
             }
         };
         let all_wires = if let (Some(_), Some(h)) = (&edit_cam, self.tabs[i].scene.active_viewport)
@@ -1613,7 +1629,7 @@ impl OpenCADStudio {
             bounds,
             self.snapper.osnap_radius_px,
         );
-        self.snapper.grid_spacing = crate::ui::overlay::compute_grid_step(view_rot, bounds);
+        self.snapper.grid_spacing = grid_spacing;
         // No rubber-band origin (perp/extension feet don't apply to a free drag).
         self.snapper.from_point = None;
         let (go, gr) = self.tabs[i].ucs_grid_basis();

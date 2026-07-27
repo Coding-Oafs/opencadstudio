@@ -34,17 +34,6 @@ pub struct GripMarker {
 
 // ── Grid display params ───────────────────────────────────────────────────
 
-/// Which world-space plane the grid is drawn on — switches with camera angle.
-#[derive(Clone, Copy, PartialEq)]
-pub enum GridPlane {
-    /// Horizontal XY plane (Z = 0).  Default top-down view (Z-up).
-    Xy,
-    /// Vertical XZ plane (Y = 0).  Front/back view.
-    Xz,
-    /// Vertical YZ plane (X = 0).  Side view.
-    Yz,
-}
-
 /// Passed to the canvas when the GRID display is active.
 #[derive(Clone)]
 pub struct GridParams {
@@ -55,20 +44,22 @@ pub struct GridParams {
     /// Camera eye in absolute world f64 — subtracted from each grid point.
     pub eye: glam::DVec3,
     pub bounds: iced::Rectangle,
-    pub plane: GridPlane,
+    /// Adaptive world-space spacing derived from camera zoom at its pivot.
+    /// Rotation does not affect this value, so orbiting cannot rescale the grid.
+    pub step: f32,
     /// Grid origin in absolute world f64 and the active UCS axis directions.
-    /// The grid rules along these instead of world X/Y/Z, so it aligns to the
-    /// user's coordinate system. Plain WCS passes `(ZERO, X, Y, Z)`.
+    /// The grid always lies on the active UCS XY plane. Plain WCS passes
+    /// `(ZERO, X, Y, Z)`.
     pub origin: glam::DVec3,
     pub axes: (Vec3, Vec3, Vec3),
 }
 
-/// Compute the adaptive grid step size (world units) that the grid renderer
-/// would use for a given view-projection matrix and viewport bounds.
+/// Compute the adaptive grid step size (world units) from camera zoom.
 ///
 /// Returns the smallest power-of-5 multiple of 1.0 that places grid lines at
-/// least `MIN_GRID_PX` pixels apart.  This matches exactly what `draw_grid`
-/// renders, so callers can sync snap spacing to the visible grid.
+/// least `MIN_GRID_PX` pixels apart at the camera pivot. Both orthographic and
+/// perspective cameras have the same vertical scale there. Camera rotation is
+/// intentionally absent so orbiting cannot rescale the visible grid or snap.
 /// Clip the screen segment `p0`→`p1` to `bounds` (Liang–Barsky), returning the
 /// visible part, or `None` when it misses entirely.
 ///
@@ -115,27 +106,12 @@ fn clip_seg(p0: Point, p1: Point, bounds: iced::Rectangle) -> Option<(Point, Poi
     ))
 }
 
-pub fn compute_grid_step(view_rot: Mat4, bounds: iced::Rectangle) -> f32 {
-    use glam::Vec3;
-    // Only the per-unit screen scale is needed; project small eye-relative
-    // offsets (0 / X / Y) through the rotation-only matrix so this stays correct
-    // and precise at any absolute coordinate (no eye term required).
-    let w2s = |world: Vec3| {
-        let ndc = view_rot.project_point3(world);
-        glam::Vec2::new(
-            (ndc.x + 1.0) * 0.5 * bounds.width,
-            (1.0 - ndc.y) * 0.5 * bounds.height,
-        )
-    };
-    let o = w2s(Vec3::ZERO);
-    let a1 = w2s(Vec3::X);
-    let a2 = w2s(Vec3::Y);
-    let d1 = (a1 - o).length();
-    let d2 = (a2 - o).length();
-    let px_per_unit = d1.max(d2);
-    if px_per_unit < 1e-6 {
+pub fn compute_grid_step(distance: f32, fov_y: f32, bounds: iced::Rectangle) -> f32 {
+    let half_height = distance * (fov_y * 0.5).tan();
+    if !half_height.is_finite() || half_height <= 1e-9 || bounds.height <= 0.0 {
         return 1.0;
     }
+    let px_per_unit = bounds.height / (2.0 * half_height);
     let mut s = 1.0_f32;
     while s * px_per_unit < MIN_GRID_PX {
         s *= 5.0;
@@ -215,7 +191,7 @@ impl canvas::Program<Message> for GridCanvas {
                 height: cy1 - cy0,
             };
             frame.with_clip(clip, |f| {
-                draw_grid(f, g.view_rot, g.eye, g.plane, gb, g.origin, g.axes)
+                draw_grid(f, g.view_rot, g.eye, gb, g.step, g.origin, g.axes)
             });
         }
 
@@ -229,6 +205,7 @@ pub fn selection_overlay<'a>(
     snap_ext_base: Option<Point>,
     snap_ext_base2: Option<Point>,
     grips: Vec<GripMarker>,
+    grip_clip: Option<iced::Rectangle>,
     ucs_icons: Vec<UcsIconParams>,
     ost_points: Vec<OstTrackPoint>,
     otrack_line: Option<(Point, Point)>,
@@ -247,6 +224,7 @@ pub fn selection_overlay<'a>(
         snap_ext_base,
         snap_ext_base2,
         grips,
+        grip_clip,
         ucs_icons,
         ost_points,
         otrack_line,
@@ -274,6 +252,9 @@ struct SelectionCanvas {
     /// both crossing extensions stay drawn when the crossing is caught. (#247, #259)
     snap_ext_base2: Option<Point>,
     grips: Vec<GripMarker>,
+    /// Active 3D pane / floating viewport rectangle. Grip markers are clipped
+    /// here so orbiting cannot leak them into paper space or adjacent panes.
+    grip_clip: Option<iced::Rectangle>,
     /// One UCS icon per Model pane (each viewport shows its own at its origin);
     /// a single entry for paper / floating-viewport. Only the active pane's
     /// entry carries hover/selected (grips).
@@ -306,6 +287,82 @@ struct SelectionCanvas {
     /// The entity under the crosshair is on a locked layer — draw a small lock
     /// badge by the cursor so the user knows it can't be selected/edited.
     hover_locked: bool,
+}
+
+fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker) {
+    let sp = grip.pos;
+    let h = crate::scene::pick::grip::GRIP_HALF_PX;
+    let path = match grip.shape {
+        GripShape::Square => canvas::Path::rectangle(
+            Point::new(sp.x - h, sp.y - h),
+            Size::new(h * 2.0, h * 2.0),
+        ),
+        GripShape::Rectangle => {
+            // Mid-segment stretch handle: small box, longer along the segment
+            // direction so the affordance reads as "stretch perpendicular".
+            let half_long = h * 1.4;
+            let half_short = h * 0.7;
+            let (cos_t, sin_t) = match grip.dir {
+                Some([dx, dy]) if (dx * dx + dy * dy) > 1e-12 => {
+                    let n = (dx * dx + dy * dy).sqrt();
+                    (dx / n, -dy / n)
+                }
+                _ => (1.0, 0.0),
+            };
+            let ax = (cos_t * half_long, sin_t * half_long);
+            let ay = (-sin_t * half_short, cos_t * half_short);
+            canvas::Path::new(|b| {
+                b.move_to(Point::new(sp.x + ax.0 + ay.0, sp.y + ax.1 + ay.1));
+                b.line_to(Point::new(sp.x + ax.0 - ay.0, sp.y + ax.1 - ay.1));
+                b.line_to(Point::new(sp.x - ax.0 - ay.0, sp.y - ax.1 - ay.1));
+                b.line_to(Point::new(sp.x - ax.0 + ay.0, sp.y - ax.1 + ay.1));
+                b.close();
+            })
+        }
+        GripShape::Triangle => canvas::Path::new(|b| {
+            b.move_to(Point::new(sp.x, sp.y - h));
+            b.line_to(Point::new(sp.x + h, sp.y + h));
+            b.line_to(Point::new(sp.x - h, sp.y + h));
+            b.close();
+        }),
+        GripShape::Circle => canvas::Path::circle(Point::new(sp.x, sp.y), h),
+    };
+
+    if grip.is_hot {
+        frame.fill(
+            &path,
+            Color {
+                r: 1.0,
+                g: 0.15,
+                b: 0.10,
+                a: 1.0,
+            },
+        );
+    } else {
+        let color = Color {
+            r: 0.10,
+            g: 0.45,
+            b: 0.90,
+            a: 1.0,
+        };
+        frame.fill(
+            &path,
+            Color {
+                r: 0.10,
+                g: 0.10,
+                b: 0.20,
+                a: 0.7,
+            },
+        );
+        frame.stroke(
+            &path,
+            canvas::Stroke {
+                width: 1.5,
+                style: canvas::Style::Solid(color),
+                ..Default::default()
+            },
+        );
+    }
 }
 
 impl SelectionCanvas {
@@ -593,84 +650,23 @@ impl canvas::Program<Message> for SelectionCanvas {
         }
 
         // ── Grip markers ──────────────────────────────────────────────────
-        for grip in &self.grips {
-            let sp = grip.pos;
-            let h = crate::scene::pick::grip::GRIP_HALF_PX;
-            let path = match grip.shape {
-                GripShape::Square => canvas::Path::rectangle(
-                    Point::new(sp.x - h, sp.y - h),
-                    Size::new(h * 2.0, h * 2.0),
-                ),
-                GripShape::Rectangle => {
-                    // Mid-segment stretch handle: small box, longer along
-                    // the segment direction so the affordance reads as
-                    // "stretch perpendicular to the segment". `dir` is a
-                    // world-XY direction vector; project it onto the
-                    // screen-X / screen-Y axes implied by the grip's
-                    // 2-D screen position to compute the in-plane angle.
-                    let half_long = h * 1.4;
-                    let half_short = h * 0.7;
-                    let (cos_t, sin_t) = match grip.dir {
-                        Some([dx, dy]) if (dx * dx + dy * dy) > 1e-12 => {
-                            let n = (dx * dx + dy * dy).sqrt();
-                            // Screen Y is inverted vs world Y → flip sin.
-                            (dx / n, -dy / n)
-                        }
-                        _ => (1.0, 0.0),
-                    };
-                    let ax = (cos_t * half_long, sin_t * half_long);
-                    let ay = (-sin_t * half_short, cos_t * half_short);
-                    canvas::Path::new(|b| {
-                        b.move_to(Point::new(sp.x + ax.0 + ay.0, sp.y + ax.1 + ay.1));
-                        b.line_to(Point::new(sp.x + ax.0 - ay.0, sp.y + ax.1 - ay.1));
-                        b.line_to(Point::new(sp.x - ax.0 - ay.0, sp.y - ax.1 - ay.1));
-                        b.line_to(Point::new(sp.x - ax.0 + ay.0, sp.y - ax.1 + ay.1));
-                        b.close();
-                    })
-                }
-                GripShape::Triangle => canvas::Path::new(|b| {
-                    b.move_to(Point::new(sp.x, sp.y - h));
-                    b.line_to(Point::new(sp.x + h, sp.y + h));
-                    b.line_to(Point::new(sp.x - h, sp.y + h));
-                    b.close();
-                }),
-                GripShape::Circle => canvas::Path::circle(Point::new(sp.x, sp.y), h),
+        let grip_bounds = self.grip_clip.unwrap_or(bounds);
+        let grip_x0 = grip_bounds.x.max(0.0);
+        let grip_y0 = grip_bounds.y.max(0.0);
+        let grip_x1 = (grip_bounds.x + grip_bounds.width).min(bounds.width);
+        let grip_y1 = (grip_bounds.y + grip_bounds.height).min(bounds.height);
+        if grip_x1 > grip_x0 && grip_y1 > grip_y0 {
+            let grip_clip = iced::Rectangle {
+                x: grip_x0,
+                y: grip_y0,
+                width: grip_x1 - grip_x0,
+                height: grip_y1 - grip_y0,
             };
-
-            if grip.is_hot {
-                // Hot grip: filled red marker
-                let color = Color {
-                    r: 1.0,
-                    g: 0.15,
-                    b: 0.10,
-                    a: 1.0,
-                };
-                frame.fill(&path, color);
-            } else {
-                // Normal grip: hollow blue marker
-                let color = Color {
-                    r: 0.10,
-                    g: 0.45,
-                    b: 0.90,
-                    a: 1.0,
-                };
-                let stroke = canvas::Stroke {
-                    width: 1.5,
-                    style: canvas::Style::Solid(color),
-                    ..Default::default()
-                };
-                // Fill with semi-transparent background then stroke
-                frame.fill(
-                    &path,
-                    Color {
-                        r: 0.10,
-                        g: 0.10,
-                        b: 0.20,
-                        a: 0.7,
-                    },
-                );
-                frame.stroke(&path, stroke);
-            }
+            frame.with_clip(grip_clip, |frame| {
+                for grip in &self.grips {
+                    draw_grip_marker(frame, grip);
+                }
+            });
         }
 
         // ── Snap marker ───────────────────────────────────────────────────
@@ -1156,91 +1152,154 @@ impl canvas::Program<Message> for SelectionCanvas {
 
 /// Minimum pixel gap between adjacent grid lines before stepping up to next spacing.
 const MIN_GRID_PX: f32 = 20.0;
+/// Stop an infinite perspective grid before adjacent lines merge at the horizon.
+const MIN_HORIZON_GRID_PX: f32 = 5.0;
 
 fn draw_grid(
     frame: &mut canvas::Frame,
     view_rot: Mat4,
     eye: glam::DVec3,
-    plane: GridPlane,
     bounds: iced::Rectangle,
+    step: f32,
     grid_origin: glam::DVec3,
     grid_axes: (Vec3, Vec3, Vec3),
 ) {
-    // World → canvas screen via relative-to-eye: subtract the f64 eye first so
-    // grid points near the camera stay precise at UTM-scale absolute coords.
-    let w2s = |world: glam::DVec3| -> Point {
-        let rel = (world - eye).as_vec3();
-        let ndc = view_rot.project_point3(rel);
-        Point::new(
-            bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
-            bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
-        )
-    };
-
-    // Plane-tangent axes: axis1 and axis2 span the grid plane, taken from the
-    // active UCS basis so the grid aligns to the user's coordinate system.
-    let (gx, gy, gz) = grid_axes;
-    let (axis1, axis2) = match plane {
-        GridPlane::Xz => (gx, gz),
-        GridPlane::Xy => (gx, gy),
-        GridPlane::Yz => (gy, gz),
-    };
-
-    // Adaptive spacing: measure pixels per 1-unit step along each axis,
-    // then find the smallest power-of-5 multiple that gives ≥ MIN_GRID_PX.
-    let o = w2s(grid_origin);
-    let a1s = w2s(grid_origin + axis1.as_dvec3());
-    let a2s = w2s(grid_origin + axis2.as_dvec3());
-    let px1 = ((a1s.x - o.x).powi(2) + (a1s.y - o.y).powi(2)).sqrt();
-    let px2 = ((a2s.x - o.x).powi(2) + (a2s.y - o.y).powi(2)).sqrt();
-    let px_per_unit = px1.max(px2);
-    if px_per_unit < 1e-6 {
+    if bounds.width <= 0.0 || bounds.height <= 0.0 {
         return;
     }
 
-    let mut s = 1.0_f32;
-    while s * px_per_unit < MIN_GRID_PX {
-        s *= 5.0;
-        if s > 1e9 {
-            return;
+    // World → viewport-local screen via relative-to-eye: subtract the f64 eye
+    // first so grid points near the camera stay precise at UTM-scale coords.
+    // Reject points on/behind the perspective eye plane before dividing by W.
+    let project = |world: glam::DVec3| -> Option<Point> {
+        let rel = (world - eye).as_vec3();
+        let clip = view_rot * rel.extend(1.0);
+        if !clip.is_finite() || clip.w <= 1e-7 {
+            return None;
         }
-    }
+        let ndc = clip.truncate() / clip.w;
+        let screen = Point::new(
+            (ndc.x + 1.0) * 0.5 * bounds.width,
+            (1.0 - ndc.y) * 0.5 * bounds.height,
+        );
+        (screen.x.is_finite() && screen.y.is_finite()).then_some(screen)
+    };
 
-    // Visible world extent: unproject screen corners (mid-depth approximation)
-    // and project them onto the grid axes.
+    // Grid is intentionally restricted to the active UCS XY plane.
+    let (gx, gy, gz) = grid_axes;
+    let axis1 = gx.normalize_or(Vec3::X);
+    let axis2 = gy.normalize_or(Vec3::Y);
     let inv = view_rot.inverse();
-    let unproject = |sx: f32, sy: f32| -> glam::DVec3 {
+    let plane_normal = axis1.cross(axis2).normalize_or(Vec3::Z);
+    let plane_rel = (grid_origin - eye).as_vec3();
+
+    // Intersect a viewport-local screen ray with the real XY plane. Unlike the
+    // old mid-depth approximation, this covers the complete viewport after an
+    // orbit and also tells us when a ray crosses the perspective horizon.
+    let unproject = |sx: f32, sy: f32| -> Option<glam::DVec3> {
         let ndc_x = (sx / bounds.width) * 2.0 - 1.0;
         let ndc_y = 1.0 - (sy / bounds.height) * 2.0;
-        // Unproject in eye-relative space, then add the f64 eye back.
-        eye + inv.project_point3(Vec3::new(ndc_x, ndc_y, 0.5)).as_dvec3()
+        let near = inv.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));
+        let far = inv.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
+        let ray = far - near;
+        let denom = ray.dot(plane_normal);
+        if !near.is_finite()
+            || !far.is_finite()
+            || !denom.is_finite()
+            || denom.abs() < 1e-7
+        {
+            return None;
+        }
+        let t = (plane_rel - near).dot(plane_normal) / denom;
+        // `far` defines only the unprojection line direction. Its parameter
+        // sign is not a reliable front/behind test after the WGPU depth
+        // conversion and was cutting the near side during zoom/orbit. The
+        // homogeneous clip-W check in `project` is the canonical eye-plane
+        // test and also keeps the infinite grid independent of near/far depth.
+        if !t.is_finite() {
+            return None;
+        }
+        let hit = near + ray * t;
+        if !hit.is_finite() {
+            return None;
+        }
+        let world = eye + hit.as_dvec3();
+        project(world).map(|_| world)
     };
-    let corners = [
-        unproject(0.0, 0.0),
-        unproject(bounds.width, 0.0),
-        unproject(0.0, bounds.height),
-        unproject(bounds.width, bounds.height),
-    ];
-    let range = |ax: Vec3| -> (f32, f32) {
-        let vals: Vec<f32> = corners
-            .iter()
-            .map(|p| (*p - grid_origin).as_vec3().dot(ax))
-            .collect();
-        (
-            vals.iter().cloned().fold(f32::INFINITY, f32::min),
-            vals.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
-        )
-    };
-    let (min1, max1) = range(axis1);
-    let (min2, max2) = range(axis2);
 
-    let n1_s = (min1 / s).floor() as i32 - 1;
-    let n1_e = (max1 / s).ceil() as i32 + 1;
-    let n2_s = (min2 / s).floor() as i32 - 1;
-    let n2_e = (max2 / s).ceil() as i32 + 1;
-    if (n1_e - n1_s) > 500 || (n2_e - n2_s) > 500 {
+    // Perpendicular screen gap between the two neighbouring lines of each
+    // family at a point on the grid. Measuring the perpendicular component,
+    // rather than point-to-point distance, remains correct for a skewed
+    // perspective grid.
+    let grid_gaps = |world: glam::DVec3, step: f32| -> Option<(f32, f32)> {
+        let p = project(world)?;
+        let projected_deltas = |axis: Vec3, amount: f32| {
+            [amount, -amount].map(|signed_step| {
+                project(world + (axis * signed_step).as_dvec3())
+                    .map(|next| glam::Vec2::new(next.x - p.x, next.y - p.y))
+            })
+        };
+        let neighbours1 = projected_deltas(axis1, step);
+        let neighbours2 = projected_deltas(axis2, step);
+        // A full grid step is needed to measure adjacent-line distance, but it
+        // is too large for the line's local tangent near the eye. A small
+        // derivative keeps the tangent measurable without crossing the eye.
+        let tangent_step = (step * 0.01).max(1e-4);
+        let tangents1 = projected_deltas(axis1, tangent_step);
+        let tangents2 = projected_deltas(axis2, tangent_step);
+
+        // At the near side of a perspective plane a large +step neighbour may
+        // cross behind the eye while the -step neighbour remains perfectly
+        // visible (or vice versa). Requiring only +X/+Y cut away that entire
+        // near side after zoom-out. Use whichever visible neighbour gives the
+        // readable separation for each line family.
+        let mut gap1 = 0.0_f32;
+        let mut gap2 = 0.0_f32;
+        for neighbour in neighbours1.into_iter().flatten() {
+            for tangent in tangents2.into_iter().flatten() {
+                let tangent_len = tangent.length();
+                if tangent_len > 1e-6 {
+                    let area =
+                        (neighbour.x * tangent.y - neighbour.y * tangent.x).abs();
+                    gap1 = gap1.max(area / tangent_len);
+                }
+            }
+        }
+        for neighbour in neighbours2.into_iter().flatten() {
+            for tangent in tangents1.into_iter().flatten() {
+                let tangent_len = tangent.length();
+                if tangent_len > 1e-6 {
+                    let area =
+                        (neighbour.x * tangent.y - neighbour.y * tangent.x).abs();
+                    gap2 = gap2.max(area / tangent_len);
+                }
+            }
+        }
+        (gap1.is_finite() && gap2.is_finite()).then_some((gap1, gap2))
+    };
+
+    // Use several interior points because the UCS origin may be off-screen or
+    // arbitrarily close to the perspective horizon.
+    const SAMPLE_FRACTIONS: [f32; 5] = [0.02, 0.25, 0.5, 0.75, 0.98];
+    let mut samples = Vec::with_capacity(SAMPLE_FRACTIONS.len().pow(2));
+    for fy in SAMPLE_FRACTIONS {
+        for fx in SAMPLE_FRACTIONS {
+            let screen = glam::Vec2::new(bounds.width * fx, bounds.height * fy);
+            if let Some(world) = unproject(screen.x, screen.y) {
+                samples.push((screen, world));
+            }
+        }
+    }
+    if samples.is_empty() {
+        return;
+    };
+
+    // Step follows camera zoom only. The previous visible-sample calculation
+    // changed depth while orbiting and made the grid jump 1 → 5 → 25.
+    if !step.is_finite() || step <= 0.0 {
         return;
     }
+    let s = step;
 
     let gc = Color {
         r: 0.28,
@@ -1254,36 +1313,304 @@ fn draw_grid(
         ..Default::default()
     };
 
-    // Lines parallel to axis2 (varying axis1 position)
-    for i in n1_s..=n1_e {
-        let v = i as f32 * s;
-        let p0 = w2s(grid_origin + (axis1 * v + axis2 * (min2 - s)).as_dvec3());
-        let p1 = w2s(grid_origin + (axis1 * v + axis2 * (max2 + s)).as_dvec3());
-        frame.stroke(
-            &canvas::Path::new(|b| {
-                b.move_to(p0);
-                b.line_to(p1);
-            }),
-            st.clone(),
-        );
+    // Trace a family-specific visible region around the viewport perimeter.
+    // When a boundary ray points through the horizon, binary-search back toward
+    // a readable anchor and stop where neighbouring lines reach the minimum gap.
+    let collect_extent = |
+        family: usize,
+        anchor_screen: glam::Vec2,
+        anchor_world: glam::DVec3,
+    | -> Vec<glam::DVec3> {
+        let visible_at = |screen: glam::Vec2| -> Option<glam::DVec3> {
+            let world = unproject(screen.x, screen.y)?;
+            let gaps = grid_gaps(world, s)?;
+            let gap = if family == 0 { gaps.0 } else { gaps.1 };
+            (gap >= MIN_HORIZON_GRID_PX).then_some(world)
+        };
+
+        const EDGE_STEPS: usize = 12;
+        const SEARCH_STEPS: usize = 16;
+        let mut hits = vec![anchor_world];
+        for i in 0..=EDGE_STEPS {
+            let f = i as f32 / EDGE_STEPS as f32;
+            let targets = [
+                glam::Vec2::new(bounds.width * f, 0.0),
+                glam::Vec2::new(bounds.width * f, bounds.height),
+                glam::Vec2::new(0.0, bounds.height * f),
+                glam::Vec2::new(bounds.width, bounds.height * f),
+            ];
+            for target in targets {
+                if let Some(world) = visible_at(target) {
+                    hits.push(world);
+                    continue;
+                }
+                let mut near_screen = anchor_screen;
+                let mut far_screen = target;
+                let mut near_world = anchor_world;
+                for _ in 0..SEARCH_STEPS {
+                    let middle = (near_screen + far_screen) * 0.5;
+                    if let Some(world) = visible_at(middle) {
+                        near_screen = middle;
+                        near_world = world;
+                    } else {
+                        far_screen = middle;
+                    }
+                }
+                hits.push(near_world);
+            }
+        }
+        hits
+    };
+
+    let best_anchor = |family: usize| -> Option<(glam::Vec2, glam::DVec3, f32)> {
+        let mut best = None;
+        for (screen, world) in &samples {
+            let Some(gaps) = grid_gaps(*world, s) else {
+                continue;
+            };
+            let gap = if family == 0 { gaps.0 } else { gaps.1 };
+            if best.map_or(true, |(_, _, best_gap)| gap > best_gap) {
+                best = Some((*screen, *world, gap));
+            }
+        }
+        best
+    };
+    let axis_range = |hits: &[glam::DVec3], axis: Vec3| -> Option<(f32, f32)> {
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for world in hits {
+            let value = (*world - grid_origin).as_vec3().dot(axis);
+            if value.is_finite() {
+                min = min.min(value);
+                max = max.max(value);
+            }
+        }
+        (min <= max).then_some((min, max))
+    };
+    let line_range = |min: f32, max: f32, anchor: f32| -> (i32, i32) {
+        let mut start = (min / s).floor() as i32;
+        let mut end = (max / s).ceil() as i32;
+        // The pixel-gap cut-off naturally bounds this by viewport resolution. Keep
+        // malformed projection data from creating an unbounded CPU loop.
+        let limit = ((bounds.width + bounds.height).ceil() as i32 + 64).max(128);
+        let center = (anchor / s).round() as i32;
+        start = start.max(center.saturating_sub(limit));
+        end = end.min(center.saturating_add(limit));
+        (start, end)
+    };
+    // Project an infinite world-grid line to its exact screen-space line and
+    // intersect it with the viewport rectangle. This remains valid across the
+    // perspective horizon; projecting a finite world-space bounding rectangle
+    // is only correct for the perpendicular/top view.
+    let grid_clip_origin = view_rot * (grid_origin - eye).as_vec3().extend(1.0);
+    let grid_clip_axis1 = view_rot * axis1.extend(0.0);
+    let grid_clip_axis2 = view_rot * axis2.extend(0.0);
+    let project_line = |family: usize, value: f32| -> Option<(glam::Vec2, glam::Vec2)> {
+        let (base, direction) = if family == 0 {
+            (
+                grid_clip_origin + grid_clip_axis1 * value,
+                grid_clip_axis2,
+            )
+        } else {
+            (
+                grid_clip_origin + grid_clip_axis2 * value,
+                grid_clip_axis1,
+            )
+        };
+        let screen_h = |clip: glam::Vec4| {
+            glam::Vec3::new(
+                (clip.x + clip.w) * 0.5 * bounds.width,
+                (-clip.y + clip.w) * 0.5 * bounds.height,
+                clip.w,
+            )
+        };
+        let line = screen_h(base).cross(screen_h(base + direction));
+        if !line.is_finite() || line.x.abs() + line.y.abs() < 1e-8 {
+            return None;
+        }
+
+        const EDGE_EPS: f32 = 0.5;
+        let mut points = Vec::with_capacity(4);
+        let mut add_point = |point: glam::Vec2| {
+            if !point.is_finite()
+                || point.x < -EDGE_EPS
+                || point.x > bounds.width + EDGE_EPS
+                || point.y < -EDGE_EPS
+                || point.y > bounds.height + EDGE_EPS
+            {
+                return;
+            }
+            let point = glam::Vec2::new(
+                point.x.clamp(0.0, bounds.width),
+                point.y.clamp(0.0, bounds.height),
+            );
+            if points.iter().all(|p: &glam::Vec2| p.distance_squared(point) > 1e-4) {
+                points.push(point);
+            }
+        };
+        if line.y.abs() > 1e-8 {
+            add_point(glam::Vec2::new(0.0, -line.z / line.y));
+            add_point(glam::Vec2::new(
+                bounds.width,
+                -(line.x * bounds.width + line.z) / line.y,
+            ));
+        }
+        if line.x.abs() > 1e-8 {
+            add_point(glam::Vec2::new(-line.z / line.x, 0.0));
+            add_point(glam::Vec2::new(
+                -(line.y * bounds.height + line.z) / line.x,
+                bounds.height,
+            ));
+        }
+        if points.len() < 2 {
+            return None;
+        }
+
+        let mut best = (points[0], points[1]);
+        let mut best_distance = best.0.distance_squared(best.1);
+        for i in 0..points.len() {
+            for j in i + 1..points.len() {
+                let distance = points[i].distance_squared(points[j]);
+                if distance > best_distance {
+                    best = (points[i], points[j]);
+                    best_distance = distance;
+                }
+            }
+        }
+        Some(best)
+    };
+
+    // Keep only the parts of one projected line where its neighbouring line is
+    // at least the configured physical-pixel gap away. The visible interval is found in screen
+    // space, so oblique/trapezoidal views no longer inherit rectangular world
+    // bounds from the top view.
+    let trim_line = |
+        family: usize,
+        p0: glam::Vec2,
+        p1: glam::Vec2,
+    | -> Vec<(Point, Point)> {
+        let visible = |t: f32| {
+            let screen = p0.lerp(p1, t);
+            let Some(world) = unproject(screen.x, screen.y) else {
+                return false;
+            };
+            let Some(gaps) = grid_gaps(world, s) else {
+                return false;
+            };
+            let gap = if family == 0 { gaps.0 } else { gaps.1 };
+            gap >= MIN_HORIZON_GRID_PX
+        };
+        let find_transition = |mut low: f32, mut high: f32, low_visible: bool| {
+            for _ in 0..14 {
+                let middle = (low + high) * 0.5;
+                if visible(middle) == low_visible {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            (low + high) * 0.5
+        };
+
+        const LINE_SAMPLES: usize = 16;
+        let mut result = Vec::with_capacity(2);
+        let mut previous_t = 0.0_f32;
+        let mut previous_visible = visible(previous_t);
+        let mut run_start = previous_visible.then_some(previous_t);
+        for i in 1..=LINE_SAMPLES {
+            let t = i as f32 / LINE_SAMPLES as f32;
+            let is_visible = visible(t);
+            if is_visible != previous_visible {
+                let boundary = find_transition(previous_t, t, previous_visible);
+                if is_visible {
+                    run_start = Some(boundary);
+                } else if let Some(start) = run_start.take() {
+                    let a = p0.lerp(p1, start);
+                    let b = p0.lerp(p1, boundary);
+                    result.push((
+                        Point::new(a.x + bounds.x, a.y + bounds.y),
+                        Point::new(b.x + bounds.x, b.y + bounds.y),
+                    ));
+                }
+            }
+            previous_t = t;
+            previous_visible = is_visible;
+        }
+        if let Some(start) = run_start {
+            let a = p0.lerp(p1, start);
+            result.push((
+                Point::new(a.x + bounds.x, a.y + bounds.y),
+                Point::new(p1.x + bounds.x, p1.y + bounds.y),
+            ));
+        }
+        result
+    };
+    let draw_segments = |frame: &mut canvas::Frame, segments: &[(Point, Point)]| {
+        if segments.is_empty() {
+            return;
+        }
+        let path = canvas::Path::new(|builder| {
+            for (p0, p1) in segments {
+                builder.move_to(*p0);
+                builder.line_to(*p1);
+            }
+        });
+        frame.stroke(&path, st.clone());
+    };
+
+    let mut axis_extent = 0.0_f32;
+
+    // Lines parallel to axis2 (varying axis1 position).
+    if let Some((anchor_screen, anchor_world, gap)) = best_anchor(0) {
+        if gap >= MIN_HORIZON_GRID_PX {
+            let hits = collect_extent(0, anchor_screen, anchor_world);
+            if let (Some((min1, max1)), Some((min2, max2))) =
+                (axis_range(&hits, axis1), axis_range(&hits, axis2))
+            {
+                let anchor1 = (anchor_world - grid_origin).as_vec3().dot(axis1);
+                let (start, end) = line_range(min1, max1, anchor1);
+                let mut segments = Vec::with_capacity((end - start + 1).max(0) as usize);
+                for i in start..=end {
+                    let value = i as f32 * s;
+                    if let Some((p0, p1)) = project_line(0, value) {
+                        segments.extend(trim_line(0, p0, p1));
+                    }
+                }
+                draw_segments(frame, &segments);
+                axis_extent =
+                    axis_extent.max(min1.abs().max(max1.abs()).max(min2.abs()).max(max2.abs()));
+            }
+        }
     }
-    // Lines parallel to axis1 (varying axis2 position)
-    for i in n2_s..=n2_e {
-        let v = i as f32 * s;
-        let p0 = w2s(grid_origin + (axis2 * v + axis1 * (min1 - s)).as_dvec3());
-        let p1 = w2s(grid_origin + (axis2 * v + axis1 * (max1 + s)).as_dvec3());
-        frame.stroke(
-            &canvas::Path::new(|b| {
-                b.move_to(p0);
-                b.line_to(p1);
-            }),
-            st.clone(),
-        );
+
+    // Lines parallel to axis1 (varying axis2 position).
+    if let Some((anchor_screen, anchor_world, gap)) = best_anchor(1) {
+        if gap >= MIN_HORIZON_GRID_PX {
+            let hits = collect_extent(1, anchor_screen, anchor_world);
+            if let (Some((min1, max1)), Some((min2, max2))) =
+                (axis_range(&hits, axis1), axis_range(&hits, axis2))
+            {
+                let anchor2 = (anchor_world - grid_origin).as_vec3().dot(axis2);
+                let (start, end) = line_range(min2, max2, anchor2);
+                let mut segments = Vec::with_capacity((end - start + 1).max(0) as usize);
+                for i in start..=end {
+                    let value = i as f32 * s;
+                    if let Some((p0, p1)) = project_line(1, value) {
+                        segments.extend(trim_line(1, p0, p1));
+                    }
+                }
+                draw_segments(frame, &segments);
+                axis_extent =
+                    axis_extent.max(min1.abs().max(max1.abs()).max(min2.abs()).max(max2.abs()));
+            }
+        }
     }
 
     // Coloured axes drawn on top of the grid lines, along the same UCS basis.
-    let extent = (min1.abs().max(max1.abs()).max(min2.abs()).max(max2.abs()) + s) * 1.5;
-    draw_axes(frame, view_rot, eye, bounds, extent.max(10.0), grid_origin, grid_axes);
+    if axis_extent > 0.0 {
+        let extent = (axis_extent + s) * 1.5;
+        draw_axes(frame, view_rot, eye, bounds, extent.max(10.0), grid_origin, (gx, gy, gz));
+    }
 }
 
 // ── Coloured UCS axes ──────────────────────────────────────────────────────

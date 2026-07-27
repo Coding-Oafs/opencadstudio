@@ -1,6 +1,5 @@
 use super::document::DocumentTab;
 use super::document::DynComponent;
-use super::helpers::grid_plane_from_camera;
 use super::history::history_dropdown_labels;
 use super::{Message, OpenCADStudio};
 use crate::scene::pick::grip::{grips_to_screen, grips_to_screen_paper, grips_to_screen_rte};
@@ -228,12 +227,15 @@ impl OpenCADStudio {
                     } else {
                         model_basis
                     };
-                    let plane = grid_plane_from_camera(cam.pitch, cam.yaw);
                     crate::ui::overlay::GridParams {
                         view_rot: cam.view_proj_rte(bounds),
                         eye: cam.eye(),
                         bounds,
-                        plane,
+                        step: crate::ui::overlay::compute_grid_step(
+                            cam.distance,
+                            cam.fov_y,
+                            bounds,
+                        ),
                         origin,
                         axes,
                     }
@@ -326,6 +328,17 @@ impl OpenCADStudio {
                 } else {
                     vec![]
                 };
+            let grip_clip = if grips.is_empty() {
+                None
+            } else {
+                let (vw, vh) = tab.scene.selection.borrow().vp_size;
+                Some(
+                    tab.scene
+                        .viewport_edit_frame((vw, vh))
+                        .map(|(_, bounds)| bounds)
+                        .unwrap_or_else(|| tab.scene.active_model_tile_bounds(vw, vh)),
+                )
+            };
 
             let (vw, vh) = tab.scene.selection.borrow().vp_size;
             // Active tile rectangle (canvas-offset included) so grid / UCS
@@ -508,6 +521,7 @@ impl OpenCADStudio {
                 snap_ext_base,
                 snap_ext_base2,
                 grips,
+                grip_clip,
                 ucs_icons,
                 ost_points,
                 otrack_line,
