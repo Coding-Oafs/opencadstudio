@@ -178,7 +178,6 @@ impl OpenCADStudio {
             .map(|c| c.to_string())
             .unwrap_or_default();
         self.mls_description = s.description.clone();
-        self.mls_line_weight = s.line_weight.value().to_string();
         self.mls_align_space = format!("{:.4}", s.align_space);
         self.mls_block_color = s
             .block_content_color
@@ -699,7 +698,6 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     "line_color" => self.mls_line_color = value,
                     "text_color" => self.mls_text_color = value,
                     "description" => self.mls_description = value,
-                    "line_weight" => self.mls_line_weight = value,
                     "align_space" => self.mls_align_space = value,
                     "block_color" => self.mls_block_color = value,
                     "block_rotation" => self.mls_block_rotation = value,
@@ -863,7 +861,6 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     self.mls_text_color.parse::<i16>().ok(),
                 );
                 let desc = self.mls_description.clone();
-                let lw = self.mls_line_weight.parse::<i16>().ok();
                 let align = self.mls_align_space.parse::<f64>().ok();
                 let bclr = self.mls_block_color.parse::<i16>().ok();
                 let brot = self.mls_block_rotation.parse::<f64>().ok();
@@ -906,9 +903,6 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                         s.text_color = acadrust::types::Color::from_index(v);
                     }
                     s.description = desc;
-                    if let Some(v) = lw {
-                        s.line_weight = acadrust::types::LineWeight::from_value(v);
-                    }
                     if let Some(v) = align {
                         s.align_space = v;
                     }

@@ -83,7 +83,6 @@ pub struct MLeaderStyleView<'a> {
     pub line_color: &'a str,
     pub text_color: &'a str,
     pub description: &'a str,
-    pub line_weight: &'a str,
     pub align_space: &'a str,
     pub block_color: &'a str,
     pub block_rotation: &'a str,
@@ -176,6 +175,23 @@ fn enum_row<'a>(
     .into()
 }
 
+fn lineweight_row<'a>(selected: acadrust::types::LineWeight) -> Element<'a, Message> {
+    let selected = crate::ui::properties::LwItem(selected);
+    row![
+        text("Line weight:").size(11).color(DIM).width(150),
+        pick_list(
+            crate::ui::properties::lw_options(),
+            Some(selected),
+            |item| Message::MLeaderStyleLineWeightChanged(item.0)
+        )
+        .text_size(11)
+        .width(190),
+    ]
+    .spacing(8)
+    .align_y(iced::Center)
+    .into()
+}
+
 /// The 11 horizontal text-attachment variants (debug names).
 const ATTACH_OPTS: [&str; 11] = [
     "TopOfTopLine",
@@ -245,7 +261,7 @@ pub fn view_window<'a>(v: MLeaderStyleView<'a>) -> Element<'a, Message> {
                     "path_type"
                 ),
                 color_row("Line color (ACI):", v.line_color, "line_color", v.color_open == Some("line_color")),
-                num_row("Line weight:", "-2", v.line_weight, "line_weight"),
+                lineweight_row(s.line_weight),
                 handle_row(
                     "Line type:",
                     v.lt_opts.clone(),

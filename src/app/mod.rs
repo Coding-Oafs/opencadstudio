@@ -630,7 +630,6 @@ pub(super) struct OpenCADStudio {
     mls_line_color: String,
     mls_text_color: String,
     mls_description: String,
-    mls_line_weight: String,
     mls_align_space: String,
     mls_block_color: String,
     mls_block_rotation: String,
@@ -2336,6 +2335,7 @@ pub enum Message {
         field: &'static str,
         value: String,
     },
+    MLeaderStyleLineWeightChanged(LineWeight),
     /// Set an Option<Handle> field (linetype / arrowhead / text style / block)
     /// from a dropdown of record names ("None" clears it).
     MLeaderStyleSetHandle {
@@ -2677,7 +2677,6 @@ impl OpenCADStudio {
             mls_line_color: String::new(),
             mls_text_color: String::new(),
             mls_description: String::new(),
-            mls_line_weight: String::new(),
             mls_align_space: String::new(),
             mls_block_color: String::new(),
             mls_block_rotation: String::new(),

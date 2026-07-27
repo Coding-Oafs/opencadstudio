@@ -393,7 +393,6 @@ impl OpenCADStudio {
                         line_color: &self.mls_line_color,
                         text_color: &self.mls_text_color,
                         description: &self.mls_description,
-                        line_weight: &self.mls_line_weight,
                         align_space: &self.mls_align_space,
                         block_color: &self.mls_block_color,
                         block_rotation: &self.mls_block_rotation,

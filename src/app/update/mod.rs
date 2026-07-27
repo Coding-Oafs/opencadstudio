@@ -4809,6 +4809,13 @@ impl OpenCADStudio {
             Message::MLeaderStyleSetEnum { field, value } => {
                 self.on_mleader_style_set_enum(field, value)
             }
+            Message::MLeaderStyleLineWeightChanged(line_weight) => {
+                let i = self.active_tab;
+                if let Some(s) = self.mleaderstyle_mut(i) {
+                    s.line_weight = line_weight;
+                }
+                Task::none()
+            }
             Message::MLeaderStyleSetHandle { field, value } => {
                 self.on_mleader_style_set_handle(field, value)
             }
