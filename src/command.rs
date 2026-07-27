@@ -918,6 +918,8 @@ pub enum CmdResult {
         boundary: Option<EntityType>,
         boundary_handle: Handle,
     },
+    /// Create a wipeout from an existing closed polyline in the active space.
+    WipeoutFromPolyline(Handle),
     /// Temporarily switch between paper and Model while MVIEW defines a new
     /// model-space window, keeping the command active.
     MviewSwitchLayout(String),

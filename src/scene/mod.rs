@@ -2725,6 +2725,22 @@ impl Scene {
         )
     }
 
+    /// True when an entity belongs to the space receiving newly drawn
+    /// entities: BEDIT's block, paper space, or model space (including MSPACE).
+    pub(crate) fn entity_belongs_to_active_space(&self, handle: Handle) -> bool {
+        let Some(entity) = self.document.get_entity(handle) else {
+            return false;
+        };
+        let block = if let Some(block) = self.block_edit_block {
+            block
+        } else if self.current_layout != "Model" && self.active_viewport.is_none() {
+            self.current_layout_block_handle()
+        } else {
+            self.model_space_block_handle()
+        };
+        self.belongs_to_visible_block(handle, entity.common().owner_handle, block)
+    }
+
     /// Returns the block-record handle for `current_layout`.
     ///
     /// Primary path: the Layout object's `block_record` field (set correctly

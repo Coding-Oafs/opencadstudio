@@ -25,10 +25,10 @@ impl OpenCADStudio {
                     .split_once(' ')
                     .map(|(_, r)| r.trim().to_uppercase())
                     .unwrap_or_default();
-                let wo_cmd = if args == "P" || args == "POLYGONAL" {
-                    WipeoutCommand::new_polygonal()
-                } else {
-                    WipeoutCommand::new_rectangular()
+                let wo_cmd = match args.as_str() {
+                    "P" | "POLYLINE" => WipeoutCommand::new_polyline(),
+                    "R" | "RECTANGULAR" => WipeoutCommand::new_rectangular(),
+                    _ => WipeoutCommand::new_polygonal(),
                 };
                 self.command_line.push_info(&wo_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(wo_cmd));

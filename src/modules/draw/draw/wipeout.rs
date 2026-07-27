@@ -1,15 +1,11 @@
-// WIPEOUT command — create a rectangular or polygonal masking area.
-//
-// Modes:
-//   WIPEOUT (default): two-corner rectangular wipeout
-//   WIPEOUT P:         polygonal wipeout (pick corners, Enter to close)
+// WIPEOUT command — draw a polygonal mask or derive one from a closed polyline.
 
-use acadrust::entities::Wipeout;
-use acadrust::types::Vector3;
-use acadrust::EntityType;
+use acadrust::entities::{Wipeout, WipeoutClipType};
+use acadrust::types::{Vector2, Vector3};
+use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdOption, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 
@@ -27,28 +23,52 @@ pub fn tool() -> ToolDef {
 pub struct WipeoutCommand {
     mode: WipeoutMode,
     first: Option<DVec3>,
-    poly_pts: Vec<DVec3>,
+    points: Vec<DVec3>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
 enum WipeoutMode {
+    Draw,
+    Polyline,
     Rectangular,
-    Polygonal,
 }
 
 impl WipeoutCommand {
+    pub fn new_polygonal() -> Self {
+        Self {
+            mode: WipeoutMode::Draw,
+            first: None,
+            points: Vec::new(),
+        }
+    }
+
+    pub fn new_polyline() -> Self {
+        Self {
+            mode: WipeoutMode::Polyline,
+            first: None,
+            points: Vec::new(),
+        }
+    }
+
+    /// Kept for the legacy `WIPEOUT RECTANGULAR` command-line form.
     pub fn new_rectangular() -> Self {
         Self {
             mode: WipeoutMode::Rectangular,
             first: None,
-            poly_pts: vec![],
+            points: Vec::new(),
         }
     }
-    pub fn new_polygonal() -> Self {
-        Self {
-            mode: WipeoutMode::Polygonal,
-            first: None,
-            poly_pts: vec![],
+
+    fn finish_draw(&self) -> CmdResult {
+        match make_poly_wipeout(&self.points) {
+            Some(entity) => CmdResult::CommitAndExit(entity),
+            None => CmdResult::NeedPoint,
         }
+    }
+
+    fn undo_point(&mut self) -> CmdResult {
+        self.points.pop();
+        CmdResult::NeedPoint
     }
 }
 
@@ -58,161 +78,408 @@ impl CadCommand for WipeoutCommand {
     }
 
     fn prompt(&self) -> String {
-        match &self.mode {
-            WipeoutMode::Rectangular => {
-                if self.first.is_none() {
-                    "WIPEOUT  Specify first corner:".into()
-                } else {
-                    "WIPEOUT  Specify opposite corner:".into()
-                }
+        match self.mode {
+            WipeoutMode::Draw if self.points.is_empty() => {
+                "WIPEOUT  Specify first point or [Polyline]:".into()
             }
-            WipeoutMode::Polygonal => {
-                if self.poly_pts.is_empty() {
-                    "WIPEOUT (Polygon)  Specify first point:".into()
-                } else {
-                    format!(
-                        "WIPEOUT (Polygon)  Specify next point ({} pts, Enter to close):",
-                        self.poly_pts.len()
-                    )
-                }
+            WipeoutMode::Draw => format!(
+                "WIPEOUT  Specify next point or [Undo/Close] ({} points):",
+                self.points.len()
+            ),
+            WipeoutMode::Polyline => {
+                "WIPEOUT Polyline  Select a closed planar polyline:".into()
+            }
+            WipeoutMode::Rectangular if self.first.is_none() => {
+                "WIPEOUT Rectangular  Specify first corner:".into()
+            }
+            WipeoutMode::Rectangular => {
+                "WIPEOUT Rectangular  Specify opposite corner:".into()
             }
         }
     }
 
-    fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        match &self.mode {
+    fn options(&self) -> Vec<CmdOption> {
+        match self.mode {
+            WipeoutMode::Draw if self.points.is_empty() => {
+                vec![CmdOption::new("Polyline", "P")]
+            }
+            WipeoutMode::Draw => vec![
+                CmdOption::new("Undo", "U"),
+                CmdOption::new("Close", "C"),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    fn on_point(&mut self, point: DVec3) -> CmdResult {
+        match self.mode {
+            WipeoutMode::Draw => {
+                if let Some(first) = self.points.first() {
+                    let distance_squared =
+                        (point.x - first.x).powi(2) + (point.y - first.y).powi(2);
+                    if self.points.len() >= 3 && distance_squared < 1e-12 {
+                        return self.finish_draw();
+                    }
+                }
+                self.points.push(point);
+                CmdResult::NeedPoint
+            }
             WipeoutMode::Rectangular => {
-                if let Some(p1) = self.first {
-                    let entity = make_rect_wipeout(p1, pt);
-                    CmdResult::CommitAndExit(entity)
+                if let Some(first) = self.first {
+                    CmdResult::CommitAndExit(make_rect_wipeout(first, point))
                 } else {
-                    self.first = Some(pt);
+                    self.first = Some(point);
                     CmdResult::NeedPoint
                 }
             }
-            WipeoutMode::Polygonal => {
-                self.poly_pts.push(pt);
-                CmdResult::NeedPoint
-            }
+            WipeoutMode::Polyline => CmdResult::NeedPoint,
         }
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        match &self.mode {
-            WipeoutMode::Polygonal if self.poly_pts.len() >= 3 => {
-                let entity = make_poly_wipeout(&self.poly_pts);
-                CmdResult::CommitAndExit(entity)
-            }
+        match self.mode {
+            WipeoutMode::Draw if self.points.len() >= 3 => self.finish_draw(),
             _ => CmdResult::Cancel,
         }
     }
 
-    fn window_corner_pick(&self) -> bool {
-        // Rectangular mode picks free window corners — exempt from Ortho/Polar
-        // (#363/#291 class). Polygon points keep the constraints (axis-aligned
-        // polygon edges are a legitimate use).
-        matches!(self.mode, WipeoutMode::Rectangular)
+    fn on_escape(&mut self) -> CmdResult {
+        CmdResult::Cancel
     }
 
-    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
-        match &self.mode {
+    fn needs_entity_pick(&self) -> bool {
+        self.mode == WipeoutMode::Polyline
+    }
+
+    fn on_entity_pick(&mut self, handle: Handle, _point: DVec3) -> CmdResult {
+        if handle.is_null() {
+            CmdResult::NeedPoint
+        } else {
+            CmdResult::WipeoutFromPolyline(handle)
+        }
+    }
+
+    fn wants_text_input(&self) -> bool {
+        self.mode == WipeoutMode::Draw
+    }
+
+    fn point_step_accepts_keywords(&self) -> bool {
+        self.mode == WipeoutMode::Draw
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        if self.mode != WipeoutMode::Draw {
+            return None;
+        }
+        match text.trim().to_ascii_uppercase().as_str() {
+            "P" | "POLYLINE" if self.points.is_empty() => {
+                self.mode = WipeoutMode::Polyline;
+                Some(CmdResult::NeedPoint)
+            }
+            "U" | "UNDO" if !self.points.is_empty() => {
+                Some(self.undo_point())
+            }
+            "C" | "CLOSE" if self.points.len() >= 3 => {
+                Some(self.finish_draw())
+            }
+            _ => None,
+        }
+    }
+
+    fn on_undo_step(&mut self) -> Option<CmdResult> {
+        if self.mode == WipeoutMode::Draw && !self.points.is_empty() {
+            Some(self.undo_point())
+        } else {
+            None
+        }
+    }
+
+    fn window_corner_pick(&self) -> bool {
+        self.mode == WipeoutMode::Rectangular
+    }
+
+    fn window_first_corner(&self) -> Option<DVec3> {
+        (self.mode == WipeoutMode::Rectangular)
+            .then_some(self.first)
+            .flatten()
+    }
+
+    fn on_mouse_move(&mut self, point: DVec3) -> Option<WireModel> {
+        match self.mode {
+            WipeoutMode::Draw => {
+                let first = *self.points.first()?;
+                let mut preview = self.points.clone();
+                preview.push(point);
+                preview.push(first);
+                Some(WireModel::solid_f64(
+                    "wipeout_preview".into(),
+                    preview
+                        .iter()
+                        .map(|point| [point.x, point.y, point.z])
+                        .collect(),
+                    WireModel::CYAN,
+                    false,
+                ))
+            }
             WipeoutMode::Rectangular => {
-                let p1 = self.first?.as_vec3();
-                let min = p1.min(pt);
-                let max = p1.max(pt);
-                Some(WireModel {
-                    taper_widths: Vec::new(),
-                    world_width: 0.0,
-                    depth_override: None,
-                    fill_is_3d: false,
-                    pick_tris: Vec::new(),
-                    pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
-                    name: "wipeout_preview".into(),
-                    points: vec![
-                        [min.x, min.y, min.z],
-                        [max.x, min.y, min.z],
-                        [max.x, max.y, max.z],
-                        [min.x, max.y, max.z],
-                        [min.x, min.y, min.z],
+                let first = self.first?;
+                Some(WireModel::solid_f64(
+                    "wipeout_preview".into(),
+                    vec![
+                        [first.x, first.y, first.z],
+                        [point.x, first.y, first.z],
+                        [point.x, point.y, first.z],
+                        [first.x, point.y, first.z],
+                        [first.x, first.y, first.z],
                     ],
-                    points_low: Vec::new(),
-                    color: WireModel::CYAN,
-                    selected: false,
-                    pattern_length: 0.0,
-                    pattern: [0.0; 8],
-                    line_weight_px: 1.0,
-                    snap_pts: vec![],
-                    tangent_geoms: vec![],
-                    aci: 0,
-                    key_vertices: vec![],
-                    aabb: WireModel::UNBOUNDED_AABB,
-                    plinegen: true,
-                    fill_tris: vec![],
-                    fill_tris_low: Vec::new(),
-                })
+                    WireModel::CYAN,
+                    false,
+                ))
             }
-            WipeoutMode::Polygonal => {
-                if self.poly_pts.is_empty() {
-                    return None;
-                }
-                let mut pts: Vec<[f32; 3]> = self
-                    .poly_pts
-                    .iter()
-                    .map(|p| [p.x as f32, p.y as f32, p.z as f32])
-                    .collect();
-                pts.push([pt.x, pt.y, pt.z]);
-                pts.push([
-                    self.poly_pts[0].x as f32,
-                    self.poly_pts[0].y as f32,
-                    self.poly_pts[0].z as f32,
-                ]);
-                Some(WireModel {
-                    taper_widths: Vec::new(),
-                    world_width: 0.0,
-                    depth_override: None,
-                    fill_is_3d: false,
-                    pick_tris: Vec::new(),
-                    pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
-                    name: "wipeout_poly_preview".into(),
-                    points: pts,
-                    points_low: Vec::new(),
-                    color: WireModel::CYAN,
-                    selected: false,
-                    pattern_length: 0.0,
-                    pattern: [0.0; 8],
-                    line_weight_px: 1.0,
-                    snap_pts: vec![],
-                    tangent_geoms: vec![],
-                    aci: 0,
-                    key_vertices: vec![],
-                    aabb: WireModel::UNBOUNDED_AABB,
-                    plinegen: true,
-                    fill_tris: vec![],
-                    fill_tris_low: Vec::new(),
-                })
-            }
+            WipeoutMode::Polyline => None,
         }
     }
 }
 
-fn make_rect_wipeout(p1: DVec3, p2: DVec3) -> EntityType {
-    // Drawing plane is world XY (z = elevation).
-    let c1 = Vector3::new(p1.x.min(p2.x), p1.y.min(p2.y), p1.z);
-    let c2 = Vector3::new(p1.x.max(p2.x), p1.y.max(p2.y), p1.z);
-    EntityType::Wipeout(Wipeout::from_corners(c1, c2))
+fn make_rect_wipeout(first: DVec3, second: DVec3) -> EntityType {
+    let corner1 = Vector3::new(
+        first.x.min(second.x),
+        first.y.min(second.y),
+        first.z,
+    );
+    let corner2 = Vector3::new(
+        first.x.max(second.x),
+        first.y.max(second.y),
+        first.z,
+    );
+    EntityType::Wipeout(Wipeout::from_corners(corner1, corner2))
 }
 
-fn make_poly_wipeout(pts: &[DVec3]) -> EntityType {
-    use acadrust::types::Vector2;
-    let z = pts[0].z;
-    let verts: Vec<Vector2> = pts.iter().map(|p| Vector2::new(p.x, p.y)).collect();
-    EntityType::Wipeout(Wipeout::polygonal(&verts, z))
+fn same_point(first: DVec3, second: DVec3) -> bool {
+    (first - second).length_squared() < 1e-18
+}
+
+fn clean_boundary(points: &[DVec3]) -> Vec<DVec3> {
+    let mut clean = Vec::with_capacity(points.len());
+    for point in points.iter().copied().filter(|point| point.is_finite()) {
+        if clean.last().is_none_or(|last| !same_point(*last, point)) {
+            clean.push(point);
+        }
+    }
+    if clean.len() > 1 && same_point(clean[0], *clean.last().unwrap()) {
+        clean.pop();
+    }
+    clean
+}
+
+fn make_poly_wipeout(points: &[DVec3]) -> Option<EntityType> {
+    let points = clean_boundary(points);
+    if points.len() < 3 {
+        return None;
+    }
+    let z = points[0].z;
+    if points.iter().any(|point| (point.z - z).abs() > 1e-7) {
+        return None;
+    }
+
+    let mut min_x = points[0].x;
+    let mut min_y = points[0].y;
+    let mut max_x = points[0].x;
+    let mut max_y = points[0].y;
+    for point in points.iter().skip(1) {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+    if width < 1e-9 || height < 1e-9 {
+        return None;
+    }
+
+    // Stable signed area around a local origin rejects collinear boundaries
+    // without losing precision on large world coordinates.
+    let origin = points[0];
+    let mut twice_area = 0.0;
+    for index in 0..points.len() {
+        let a = points[index] - origin;
+        let b = points[(index + 1) % points.len()] - origin;
+        twice_area += a.x * b.y - b.x * a.y;
+    }
+    if twice_area.abs() <= width * height * 1e-10 {
+        return None;
+    }
+
+    // Wipeout clip vertices use image-pixel coordinates centred on the image:
+    // X grows right, Y grows up while the stored V vector points down.
+    let clip_boundary_vertices = points
+        .iter()
+        .map(|point| {
+            let normalized_x = (point.x - min_x) / width;
+            let normalized_y = (point.y - min_y) / height;
+            Vector2::new(normalized_x - 0.5, 0.5 - normalized_y)
+        })
+        .collect();
+    let mut wipeout = Wipeout::new();
+    wipeout.insertion_point = Vector3::new(min_x, min_y, z);
+    wipeout.u_vector = Vector3::new(width, 0.0, 0.0);
+    wipeout.v_vector = Vector3::new(0.0, height, 0.0);
+    wipeout.size = Vector2::new(1.0, 1.0);
+    wipeout.clip_type = WipeoutClipType::Polygonal;
+    wipeout.clip_boundary_vertices = clip_boundary_vertices;
+    wipeout.clipping_enabled = true;
+    Some(EntityType::Wipeout(wipeout))
+}
+
+fn explicitly_closed(points: &[DVec3]) -> bool {
+    points.len() >= 4 && same_point(points[0], *points.last().unwrap())
+}
+
+fn sample_2d_polyline(
+    vertices: &[([f64; 2], f64)],
+    elevation: f64,
+    normal: (f64, f64, f64),
+) -> Vec<DVec3> {
+    if vertices.len() < 3 {
+        return Vec::new();
+    }
+    let to_wcs = |point: [f64; 2]| {
+        let point = crate::scene::view::transform::ocs_point_to_wcs(
+            (point[0], point[1], elevation),
+            normal,
+        );
+        DVec3::new(point.0, point.1, point.2)
+    };
+    let mut points = vec![to_wcs(vertices[0].0)];
+    for index in 0..vertices.len() {
+        let (start, bulge) = vertices[index];
+        let end_index = (index + 1) % vertices.len();
+        let end = vertices[end_index].0;
+        if let Some(arc) =
+            crate::entities::common::BulgeArc::from_bulge(start, end, bulge)
+        {
+            let steps = ((arc.sweep.abs() / std::f64::consts::TAU * 64.0).ceil()
+                as usize)
+                .clamp(4, 64);
+            for step in 1..=steps {
+                if end_index == 0 && step == steps {
+                    break;
+                }
+                points.push(to_wcs(arc.sample(step as f64 / steps as f64)));
+            }
+        } else if end_index != 0 {
+            points.push(to_wcs(end));
+        }
+    }
+    points
+}
+
+/// Build a wipeout boundary from a picked closed polyline without consuming
+/// the source entity. Bulged 2D segments are sampled into the polygonal mask.
+pub(crate) fn wipeout_from_polyline(entity: &EntityType) -> Option<EntityType> {
+    let points = match entity {
+        EntityType::LwPolyline(polyline) => {
+            let raw: Vec<DVec3> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| DVec3::new(vertex.location.x, vertex.location.y, polyline.elevation))
+                .collect();
+            if !polyline.is_closed && !explicitly_closed(&raw) {
+                return None;
+            }
+            let vertices: Vec<([f64; 2], f64)> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    (
+                        [vertex.location.x, vertex.location.y],
+                        vertex.bulge,
+                    )
+                })
+                .collect();
+            sample_2d_polyline(
+                &vertices,
+                polyline.elevation,
+                (
+                    polyline.normal.x,
+                    polyline.normal.y,
+                    polyline.normal.z,
+                ),
+            )
+        }
+        EntityType::Polyline2D(polyline) => {
+            let raw: Vec<DVec3> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    DVec3::new(
+                        vertex.location.x,
+                        vertex.location.y,
+                        polyline.elevation,
+                    )
+                })
+                .collect();
+            if !polyline.is_closed() && !explicitly_closed(&raw) {
+                return None;
+            }
+            let vertices: Vec<([f64; 2], f64)> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    (
+                        [vertex.location.x, vertex.location.y],
+                        vertex.bulge,
+                    )
+                })
+                .collect();
+            sample_2d_polyline(
+                &vertices,
+                polyline.elevation,
+                (
+                    polyline.normal.x,
+                    polyline.normal.y,
+                    polyline.normal.z,
+                ),
+            )
+        }
+        EntityType::Polyline(polyline) => {
+            let points: Vec<DVec3> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    DVec3::new(
+                        vertex.location.x,
+                        vertex.location.y,
+                        vertex.location.z,
+                    )
+                })
+                .collect();
+            if !polyline.is_closed() && !explicitly_closed(&points) {
+                return None;
+            }
+            points
+        }
+        EntityType::Polyline3D(polyline) => {
+            let points: Vec<DVec3> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    DVec3::new(
+                        vertex.position.x,
+                        vertex.position.y,
+                        vertex.position.z,
+                    )
+                })
+                .collect();
+            if !polyline.flags.closed && !explicitly_closed(&points) {
+                return None;
+            }
+            points
+        }
+        _ => return None,
+    };
+    make_poly_wipeout(&points)
 }
 
 // ── Autocomplete registry ─────────────────────────────────

@@ -587,6 +587,29 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pending);
                 }
             }
+            CmdResult::WipeoutFromPolyline(handle) => {
+                let wipeout = {
+                    let scene = &self.tabs[i].scene;
+                    scene
+                        .entity_belongs_to_active_space(handle)
+                        .then(|| scene.document.get_entity(handle))
+                        .flatten()
+                        .and_then(
+                            crate::modules::draw::draw::wipeout::wipeout_from_polyline,
+                        )
+                };
+                if let Some(wipeout) = wipeout {
+                    return self.apply_cmd_result(CmdResult::CommitAndExit(wipeout));
+                }
+                self.command_line.push_error(
+                    "WIPEOUT Polyline: select a closed planar polyline with at least 3 vertices.",
+                );
+                if let Some(prompt) =
+                    self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
+                {
+                    self.command_line.push_info(&prompt);
+                }
+            }
             CmdResult::MviewSwitchLayout(layout) => {
                 let task = self.on_layout_switch(layout);
                 if let Some(prompt) =
