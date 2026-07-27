@@ -870,9 +870,18 @@ impl PropertiesPanel {
         } else {
             Some(current.to_string())
         };
+        // iced hides `selected` while the combo has focus and shows its
+        // placeholder instead. Use the real pattern name for a single hatch;
+        // a fixed VARIES placeholder made a correct ANSI31 value look mixed as
+        // soon as the dropdown opened (#476).
+        let placeholder = if current == VARIES_LABEL {
+            VARIES_LABEL
+        } else {
+            current
+        };
         let combo = combo_box(
             &self.hatch_pattern_combo,
-            VARIES_LABEL,
+            placeholder,
             selected.as_ref(),
             Message::PropHatchPatternChanged,
         )

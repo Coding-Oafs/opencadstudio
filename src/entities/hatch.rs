@@ -99,6 +99,67 @@ fn boundary_centroid(h: &Hatch) -> Option<(f64, f64)> {
     (n > 0.0).then(|| (sx / n, sy / n))
 }
 
+/// Scale the stored, final hatch-pattern geometry around the pattern origin.
+/// Pattern lines loaded from DXF/DWG are rendered prebaked, so their metadata
+/// scale is not applied again by the renderer.
+pub(crate) fn scale_pattern_geometry(
+    pattern: &mut acadrust::entities::HatchPattern,
+    factor: f64,
+) {
+    let (origin_x, origin_y) = pattern
+        .lines
+        .first()
+        .map(|line| (line.base_point.x, line.base_point.y))
+        .unwrap_or((0.0, 0.0));
+    for line in pattern.lines.iter_mut() {
+        line.base_point.x = origin_x + (line.base_point.x - origin_x) * factor;
+        line.base_point.y = origin_y + (line.base_point.y - origin_y) * factor;
+        line.offset.x *= factor;
+        line.offset.y *= factor;
+        for dash in line.dash_lengths.iter_mut() {
+            *dash *= factor;
+        }
+    }
+}
+
+/// Rotate the stored, final hatch-pattern geometry around the pattern origin.
+/// This keeps the line angle, base point and world-space offset in sync.
+pub(crate) fn rotate_pattern_geometry(
+    pattern: &mut acadrust::entities::HatchPattern,
+    angle: f64,
+) {
+    let (sin, cos) = angle.sin_cos();
+    let (origin_x, origin_y) = pattern
+        .lines
+        .first()
+        .map(|line| (line.base_point.x, line.base_point.y))
+        .unwrap_or((0.0, 0.0));
+    for line in pattern.lines.iter_mut() {
+        line.angle += angle;
+        let (x, y) = (
+            line.base_point.x - origin_x,
+            line.base_point.y - origin_y,
+        );
+        line.base_point.x = origin_x + x * cos - y * sin;
+        line.base_point.y = origin_y + x * sin + y * cos;
+        let (x, y) = (line.offset.x, line.offset.y);
+        line.offset.x = x * cos - y * sin;
+        line.offset.y = x * sin + y * cos;
+    }
+}
+
+/// Move every stored line by the same amount, preserving the pattern phase.
+pub(crate) fn translate_pattern_geometry(
+    pattern: &mut acadrust::entities::HatchPattern,
+    dx: f64,
+    dy: f64,
+) {
+    for line in pattern.lines.iter_mut() {
+        line.base_point.x += dx;
+        line.base_point.y += dy;
+    }
+}
+
 /// Read the hatch background colour from its `HATCHBACKGROUNDCOLOR` extended
 /// data (group 1071, packed true colour: high byte = colour method, low three =
 /// RGB). `None` when unset or not a true-colour value.
@@ -483,8 +544,16 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
         return;
     };
     match field {
-        "pattern_angle" if h.gradient_color.enabled => h.gradient_color.angle = v.to_radians(),
-        "pattern_angle" => h.pattern_angle = v.to_radians(),
+        "pattern_angle" if h.gradient_color.enabled => {
+            h.gradient_color.angle = v.to_radians();
+            h.pattern_angle = v.to_radians();
+        }
+        "pattern_angle" => {
+            let angle = v.to_radians();
+            let delta = angle - h.pattern_angle;
+            rotate_pattern_geometry(&mut h.pattern, delta);
+            h.pattern_angle = angle;
+        }
         // The stored pattern lines are the FINAL rendered geometry (offsets,
         // base points and dashes in world units — see the prebaked path in
         // hatch_model_from_dxf), so changing the scale must rescale them by
@@ -493,15 +562,7 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
             let old = h.pattern_scale;
             if old > 1e-12 {
                 let k = v / old;
-                for line in h.pattern.lines.iter_mut() {
-                    line.base_point.x *= k;
-                    line.base_point.y *= k;
-                    line.offset.x *= k;
-                    line.offset.y *= k;
-                    for d in line.dash_lengths.iter_mut() {
-                        *d *= k;
-                    }
-                }
+                scale_pattern_geometry(&mut h.pattern, k);
             }
             h.pattern_scale = v;
         }
@@ -817,10 +878,17 @@ impl Grippable for Hatch {
         use crate::scene::model::object::GripMenuAction as A;
         match action {
             A::HatchAngle => {
-                self.pattern_angle = value.to_radians();
+                let angle = value.to_radians();
+                let delta = angle - self.pattern_angle;
+                rotate_pattern_geometry(&mut self.pattern, delta);
+                self.pattern_angle = angle;
             }
             A::HatchScale => {
                 if value > 0.0 {
+                    if self.pattern_scale > 1e-12 {
+                        let factor = value / self.pattern_scale;
+                        scale_pattern_geometry(&mut self.pattern, factor);
+                    }
                     self.pattern_scale = value;
                 }
             }
