@@ -906,6 +906,7 @@ impl OpenCADStudio {
             }
 
             Message::TabSwitch(idx) => {
+                self.doc_tab_context_menu = None;
                 if idx < self.tabs.len() {
                     if idx != self.active_tab {
                         // The attribute editor is tab-scoped; leaving its tab
@@ -940,7 +941,116 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::TabClose(idx) => self.on_tab_close(idx),
+            Message::TabClose(idx) => {
+                self.doc_tab_context_menu = None;
+                self.on_tab_close(idx)
+            }
+
+            Message::DocTabContextMenu(idx) => {
+                if self.tabs.get(idx).is_some_and(|tab| !tab.is_start) {
+                    self.layout_context_menu = None;
+                    self.doc_tab_context_menu = Some(idx);
+                }
+                Task::none()
+            }
+
+            Message::DocTabContextMenuClose => {
+                self.doc_tab_context_menu = None;
+                Task::none()
+            }
+
+            Message::DocTabSaveAll => {
+                self.doc_tab_context_menu = None;
+                self.dispatch_command("SAVEALL")
+            }
+
+            Message::DocTabCloseAll => {
+                self.doc_tab_context_menu = None;
+                let ids = self
+                    .tabs
+                    .iter()
+                    .filter(|tab| !tab.is_start)
+                    .map(|tab| tab.id)
+                    .collect();
+                self.begin_tab_close_queue(ids)
+            }
+
+            Message::DocTabCloseOthers(idx) => {
+                self.doc_tab_context_menu = None;
+                let Some(keep_id) = self.tabs.get(idx).filter(|tab| !tab.is_start).map(|t| t.id)
+                else {
+                    return Task::none();
+                };
+                let switch = self.update(Message::TabSwitch(idx));
+                let ids = self
+                    .tabs
+                    .iter()
+                    .filter(|tab| !tab.is_start && tab.id != keep_id)
+                    .map(|tab| tab.id)
+                    .collect();
+                Task::batch([switch, self.begin_tab_close_queue(ids)])
+            }
+
+            Message::DocTabCopyFullPath(idx) => {
+                self.doc_tab_context_menu = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let Some(path) = self.tabs.get(idx).and_then(|tab| tab.current_path.clone())
+                    else {
+                        self.command_line
+                            .push_error("Save the drawing before copying its file path.");
+                        return Task::none();
+                    };
+                    let full_path = path.canonicalize().unwrap_or_else(|_| {
+                        if path.is_absolute() {
+                            path
+                        } else {
+                            std::env::current_dir()
+                                .map(|dir| dir.join(&path))
+                                .unwrap_or(path)
+                        }
+                    });
+                    self.command_line
+                        .push_output(&format!("Copied path: {}", full_path.display()));
+                    return iced::clipboard::write(full_path.to_string_lossy().into_owned());
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = idx;
+                    self.command_line
+                        .push_error("Full file paths are unavailable in the web application.");
+                    Task::none()
+                }
+            }
+
+            Message::DocTabOpenFileLocation(idx) => {
+                self.doc_tab_context_menu = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let Some(path) = self.tabs.get(idx).and_then(|tab| tab.current_path.clone())
+                    else {
+                        self.command_line
+                            .push_error("Save the drawing before opening its file location.");
+                        return Task::none();
+                    };
+                    match crate::sys::reveal_in_file_manager(&path) {
+                        Ok(()) => self
+                            .command_line
+                            .push_output(&format!("Opened file location: {}", path.display())),
+                        Err(error) => self
+                            .command_line
+                            .push_error(&format!("Could not open file location: {error}")),
+                    }
+                    Task::none()
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = idx;
+                    self.command_line
+                        .push_error("File locations are unavailable in the web application.");
+                    Task::none()
+                }
+            }
 
             Message::CommandInput(s) => {
                 // Space submits (acts like Enter) so a command advances
@@ -3227,6 +3337,7 @@ impl OpenCADStudio {
                     .map(|be| be.block_name == name)
                     .unwrap_or(false);
                 if name != "Model" && !is_block_tab {
+                    self.doc_tab_context_menu = None;
                     self.layout_context_menu = Some(name);
                 }
                 Task::none()
@@ -3936,6 +4047,7 @@ impl OpenCADStudio {
             // ── Unsaved-changes dialog ────────────────────────────────────
             Message::UnsavedDialogCancel => {
                 self.pending_close = None;
+                self.pending_tab_closes.clear();
                 self.close_unsaved_dialog_window()
             }
 

@@ -711,6 +711,132 @@ pub(super) fn mtext_editor_overlay<'a>(
     )
 }
 
+// ── Drawing-tab right-click context menu ───────────────────────────────────
+
+/// Right-click menu for a drawing tab. The scope deliberately contains only
+/// the actions approved in issue #493.
+pub(super) fn doc_tab_context_menu_overlay(
+    tab_idx: usize,
+    current_path: Option<&std::path::Path>,
+    has_other_drawings: bool,
+    win: (f32, f32),
+) -> Element<'_, Message> {
+    const MENU_W: f32 = 210.0;
+    const MENU_H: f32 = 136.0;
+    const MENU_BG: Color = Color {
+        r: 0.17,
+        g: 0.17,
+        b: 0.17,
+        a: 1.0,
+    };
+    const MENU_BORDER: Color = Color {
+        r: 0.35,
+        g: 0.35,
+        b: 0.35,
+        a: 1.0,
+    };
+    const ITEM_HOVER: Color = Color {
+        r: 0.25,
+        g: 0.45,
+        b: 0.70,
+        a: 1.0,
+    };
+    const TEXT_COLOR: Color = Color {
+        r: 0.88,
+        g: 0.88,
+        b: 0.88,
+        a: 1.0,
+    };
+    const DISABLED_TEXT: Color = Color {
+        r: 0.43,
+        g: 0.43,
+        b: 0.43,
+        a: 1.0,
+    };
+
+    let item = |label: &'static str, msg: Option<Message>| {
+        let enabled = msg.is_some();
+        let mut item = button(text(label).size(12).color(if enabled {
+            TEXT_COLOR
+        } else {
+            DISABLED_TEXT
+        }))
+        .style(move |_: &Theme, status| button::Style {
+            background: Some(Background::Color(if enabled {
+                match status {
+                    button::Status::Hovered | button::Status::Pressed => ITEM_HOVER,
+                    _ => Color::TRANSPARENT,
+                }
+            } else {
+                Color::TRANSPARENT
+            })),
+            text_color: if enabled { TEXT_COLOR } else { DISABLED_TEXT },
+            border: Border::default(),
+            shadow: iced::Shadow::default(),
+            snap: false,
+        })
+        .padding([4, 12])
+        .width(Fill);
+        if let Some(msg) = msg {
+            item = item.on_press(msg);
+        }
+        item
+    };
+
+    let native_path_actions = cfg!(not(target_arch = "wasm32")) && current_path.is_some();
+    let menu = container(
+        column![
+            item("Save All", Some(Message::DocTabSaveAll)),
+            item("Close All", Some(Message::DocTabCloseAll)),
+            item(
+                "Close All Other Drawings",
+                has_other_drawings.then_some(Message::DocTabCloseOthers(tab_idx)),
+            ),
+            item(
+                "Copy Full File Path",
+                native_path_actions.then_some(Message::DocTabCopyFullPath(tab_idx)),
+            ),
+            item(
+                "Open File Location",
+                native_path_actions.then_some(Message::DocTabOpenFileLocation(tab_idx)),
+            ),
+        ]
+        .spacing(0)
+        .width(MENU_W),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(MENU_BG)),
+        border: Border {
+            color: MENU_BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .padding([4, 0])
+    .width(iced::Length::Fixed(MENU_W));
+
+    let catcher = mouse_area(
+        container(Space::new().width(Fill).height(Fill))
+            .width(Fill)
+            .height(Fill),
+    )
+    .on_press(Message::DocTabContextMenuClose)
+    .on_right_press(Message::DocTabContextMenuClose);
+
+    let bounds = crate::ui::wrap_bar::dropdown_bounds(&format!("DOC_TAB:{tab_idx}"));
+    let pos = bounds
+        .map(|b| {
+            iced::Point::new(
+                b.x.clamp(0.0, (win.0 - MENU_W).max(0.0)),
+                (b.y + b.height).clamp(0.0, (win.1 - MENU_H).max(0.0)),
+            )
+        })
+        .unwrap_or(iced::Point::new(4.0, 30.0));
+
+    stack![catcher, position_canvas_overlay(pos, menu.into())].into()
+}
+
 // ── Viewport right-click context menu ──────────────────────────────────────
 
 pub(super) fn viewport_context_menu_overlay(

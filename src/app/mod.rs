@@ -568,6 +568,8 @@ pub(super) struct OpenCADStudio {
     text_inline: Option<text_inline::TextInlineState>,
     /// Which layout tab has its context menu open (None = closed).
     layout_context_menu: Option<String>,
+    /// Which drawing tab has its context menu open (None = closed).
+    doc_tab_context_menu: Option<usize>,
     /// Cursor-anchored one-shot snap override menu (Shift+RMB): the canvas
     /// point it opened at, or `None` when closed (#337).
     snap_override_popup: Option<iced::Point>,
@@ -753,6 +755,10 @@ pub(super) struct OpenCADStudio {
     // ── Unsaved-changes dialog ────────────────────────────────────────────
     /// Set when the user tries to close a tab or quit while there are unsaved changes.
     pending_close: Option<PendingClose>,
+    /// Stable document ids waiting to be closed by "Close All" or
+    /// "Close All Other Drawings". Dirty drawings pause this queue at the
+    /// existing unsaved-changes dialog and resume after Save or Discard.
+    pending_tab_closes: std::collections::VecDeque<u64>,
     /// Latest save job per stable tab id. Older completions may finish, but
     /// cannot mark a newer document state clean or redirect its path.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1452,6 +1458,19 @@ pub enum Message {
     TabSwitch(usize),
     /// Close the given tab index.
     TabClose(usize),
+    /// Open/close the right-click menu for a drawing tab.
+    DocTabContextMenu(usize),
+    DocTabContextMenuClose,
+    /// Save every drawing that already has a file path.
+    DocTabSaveAll,
+    /// Close every non-Start drawing tab.
+    DocTabCloseAll,
+    /// Close every non-Start drawing tab except the given one.
+    DocTabCloseOthers(usize),
+    /// Copy the saved drawing's absolute path to the system clipboard.
+    DocTabCopyFullPath(usize),
+    /// Reveal the saved drawing in the platform file manager.
+    DocTabOpenFileLocation(usize),
     // ── Unsaved-changes confirmation dialog ───────────────────────────────
     /// User clicked "Save" in the unsaved-changes dialog.
     UnsavedDialogSave,
@@ -2493,6 +2512,7 @@ impl OpenCADStudio {
             mtext_editor: None,
             text_inline: None,
             layout_context_menu: None,
+            doc_tab_context_menu: None,
             snap_override_popup: None,
             axis_lock_dir: None,
             layout_rename_state: None,
@@ -2512,6 +2532,7 @@ impl OpenCADStudio {
             active_interaction_index: None,
             queued_interaction_indices: std::collections::VecDeque::new(),
             pending_close: None,
+            pending_tab_closes: std::collections::VecDeque::new(),
             #[cfg(not(target_arch = "wasm32"))]
             active_save_jobs: std::collections::HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]

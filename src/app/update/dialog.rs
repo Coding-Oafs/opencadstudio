@@ -214,7 +214,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         // last selection. #21.
                         self.sync_ribbon_layers();
                         self.sync_ribbon_from_selection();
-                        return close_win;
+                        return Task::batch([close_win, self.continue_tab_close_queue()]);
                     }
                     Some(crate::app::PendingClose::Quit) => {
                         if let Some(idx) = self.tabs.iter().position(|t| t.dirty) {

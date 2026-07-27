@@ -23,6 +23,34 @@ use iced::{mouse, Point, Task};
 
 
 impl OpenCADStudio {
+pub(super) fn begin_tab_close_queue(&mut self, tab_ids: Vec<u64>) -> Task<Message> {
+                self.pending_tab_closes.clear();
+                self.pending_tab_closes.extend(tab_ids);
+                self.continue_tab_close_queue()
+    }
+
+    /// Close queued drawings until a dirty tab requires confirmation. Queue
+    /// entries use stable document ids because removing an earlier tab changes
+    /// every later vector index.
+    pub(super) fn continue_tab_close_queue(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        while let Some(tab_id) = self.pending_tab_closes.pop_front() {
+            let Some(idx) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+                continue;
+            };
+            if self.tabs[idx].is_start {
+                continue;
+            }
+            if self.tabs[idx].dirty {
+                self.pending_close = Some(crate::app::PendingClose::Tab(idx));
+                tasks.push(self.open_unsaved_dialog_window());
+                break;
+            }
+            tasks.push(self.on_tab_close(idx));
+        }
+        Task::batch(tasks)
+    }
+
 pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // Start tab is fixed — close requests on it are no-ops.
                 if self.tabs.get(idx).map_or(false, |t| t.is_start) {
@@ -541,6 +569,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 if self.layout_rename_state.take().is_some()
                     || self.layout_context_menu.take().is_some()
+                    || self.doc_tab_context_menu.take().is_some()
                 {
                     return Task::none();
                 }

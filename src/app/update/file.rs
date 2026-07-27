@@ -937,6 +937,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.pending_close = None;
                 tasks.push(self.close_unsaved_dialog_window());
                 tasks.push(self.update(Message::TabClose(i)));
+                tasks.push(self.continue_tab_close_queue());
             }
             crate::app::SaveContinuation::Quit if snapshot_is_current => {
                 self.pending_close = None;
@@ -1084,19 +1085,32 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.stamp_header_sysvars(i);
                     self.sync_truck_solids_to_acis(i);
                     self.stamp_thumbnail(i, version);
-                    match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
+                    let saved =
+                        match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
                         Ok(bytes) => {
                             crate::sys::download_bytes(&filename, &bytes);
                             self.tabs[i].dirty = false;
                             self.command_line.push_output(&format!("Saved: {filename}"));
+                            true
                         }
-                        Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
-                    }
+                        Err(e) => {
+                            self.command_line.push_error(&format!("Save failed: {e}"));
+                            false
+                        }
+                    };
                     // Continue a pending tab close.
                     if self.save_dialog_for_unsaved {
-                        if let Some(crate::app::PendingClose::Tab(idx)) = self.pending_close.take() {
-                            let cont = self.update(Message::TabClose(idx));
-                            return Task::batch([close, cont]);
+                        if saved {
+                            if let Some(crate::app::PendingClose::Tab(idx)) =
+                                self.pending_close.take()
+                            {
+                                let cont = self.update(Message::TabClose(idx));
+                                let rest = self.continue_tab_close_queue();
+                                return Task::batch([close, cont, rest]);
+                            }
+                        } else if self.pending_close.is_some() {
+                            let retry = self.open_unsaved_dialog_window();
+                            return Task::batch([close, retry]);
                         }
                     }
                     close

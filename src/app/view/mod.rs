@@ -21,8 +21,8 @@ mod viewcube;
 
 use controls::{dyn_component_value, viewport_controls};
 use overlay::{
-    layout_context_menu_overlay, mtext_editor_overlay, position_canvas_overlay, qselect_overlay,
-    text_inline_overlay, viewport_context_menu_overlay,
+    doc_tab_context_menu_overlay, layout_context_menu_overlay, mtext_editor_overlay,
+    position_canvas_overlay, qselect_overlay, text_inline_overlay, viewport_context_menu_overlay,
 };
 use viewcube::{viewcube_nav_controls, viewcube_ucs_picker, UCS_PICKER_W};
 
@@ -1596,6 +1596,27 @@ impl OpenCADStudio {
             iced::widget::Space::new().width(0).height(0).into()
         };
 
+        let doc_tab_ctx_layer: Element<'_, Message> =
+            if let Some(idx) = self.doc_tab_context_menu {
+                if let Some(context_tab) = self.tabs.get(idx) {
+                    let has_other_drawings = self
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .any(|(other_idx, tab)| other_idx != idx && !tab.is_start);
+                    doc_tab_context_menu_overlay(
+                        idx,
+                        context_tab.current_path.as_deref(),
+                        has_other_drawings,
+                        win,
+                    )
+                } else {
+                    iced::widget::Space::new().width(0).height(0).into()
+                }
+            } else {
+                iced::widget::Space::new().width(0).height(0).into()
+            };
+
         let snap_override_layer: Element<'_, Message> =
             if let Some(pos) = self.snap_override_popup {
                 overlay::snap_override_overlay(pos)
@@ -1629,6 +1650,7 @@ impl OpenCADStudio {
             sel_filter_layer,
             dropdown_layer,
             layout_ctx_layer,
+            doc_tab_ctx_layer,
             qselect_layer,
             snap_override_layer,
             open_progress_layer,
@@ -2156,22 +2178,29 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
             row![title_btn, close_btn].spacing(0).align_y(iced::Center)
         };
 
-        items.push(
-            container(row_inner)
-                .style(move |_: &Theme| container::Style {
-                    border: Border {
-                        color: if is_active {
-                            BORDER_COLOR
-                        } else {
-                            Color::TRANSPARENT
-                        },
-                        width: if is_active { 1.0 } else { 0.0 },
-                        radius: 0.0.into(),
-                    },
-                    ..Default::default()
-                })
-                .into(),
-        );
+        let tab_container = container(row_inner).style(move |_: &Theme| container::Style {
+            border: Border {
+                color: if is_active {
+                    BORDER_COLOR
+                } else {
+                    Color::TRANSPARENT
+                },
+                width: if is_active { 1.0 } else { 0.0 },
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        });
+
+        let tab_element: Element<'_, Message> = if tab.is_start {
+            tab_container.into()
+        } else {
+            crate::ui::wrap_bar::PosReport::owned(
+                format!("DOC_TAB:{idx}"),
+                mouse_area(tab_container).on_right_press(Message::DocTabContextMenu(idx)),
+            )
+            .into()
+        };
+        items.push(tab_element);
     }
 
     let new_btn = button(text("+").size(14).color(Color {
