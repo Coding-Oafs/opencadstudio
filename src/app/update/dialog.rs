@@ -272,6 +272,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     crate::app::SavePurpose::Manual,
                     continuation,
                     false,
+                    true,
                 );
                 return Task::batch([close, save]);
             }

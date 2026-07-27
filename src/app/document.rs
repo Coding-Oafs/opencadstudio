@@ -162,6 +162,17 @@ pub(super) struct DocumentTab {
     pub(super) id: u64,
     pub(super) scene: Scene,
     pub(super) current_path: Option<PathBuf>,
+    /// Persistent native edit lease for the drawing currently at
+    /// `current_path`. The sidecar portion survives atomic file replacement.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) edit_lease: Option<crate::io::edit_lock::EditLease>,
+    /// True when another editor owns the drawing lease. Direct Save stays
+    /// blocked until Retry acquires it or the user chooses Save As.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) edit_lock_conflict: bool,
+    /// Disk state observed after open or the latest successful save.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) disk_fingerprint: Option<crate::io::edit_lock::FileFingerprint>,
     pub(super) dirty: bool,
     /// Monotonic committed-edit/undo/redo revision. Background save completion
     /// uses it with scene epochs so an older snapshot never clears newer work.
@@ -429,6 +440,12 @@ impl DocumentTab {
             id: NEXT_DOCUMENT_TAB_ID.fetch_add(1, Ordering::Relaxed),
             scene,
             current_path: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            edit_lease: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            edit_lock_conflict: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            disk_fingerprint: None,
             dirty: false,
             edit_revision: 0,
             prev_selection: Vec::new(),

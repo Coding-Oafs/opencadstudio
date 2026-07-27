@@ -350,9 +350,14 @@ impl OpenCADStudio {
                 let Some(path) = path else {
                     return err("save: no \"path\" and the document has none");
                 };
-                match crate::io::save(&self.tabs[i].scene.document, &path) {
+                #[cfg(not(target_arch = "wasm32"))]
+                let result =
+                    self.save_tab_synchronously_protected(i, path.clone(), true);
+                #[cfg(target_arch = "wasm32")]
+                let result = crate::io::save(&self.tabs[i].scene.document, &path)
+                    .map_err(crate::io::SaveFailure::other);
+                match result {
                     Ok(()) => {
-                        self.tabs[i].current_path = Some(path.clone());
                         json!({ "ok": true, "saved": path.to_string_lossy() })
                     }
                     Err(e) => err(format!("save: {e}")),

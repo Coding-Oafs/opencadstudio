@@ -202,6 +202,22 @@ impl CommandLine {
     pub fn push_error(&mut self, msg: &str) {
         self.push(EntryKind::Error, format!("*Invalid*  {msg}"));
     }
+    /// Append an error unless it is already the latest history line. Repeated
+    /// retry failures should refresh the concise message, not flood history
+    /// with identical copies (#498).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn push_error_once(&mut self, msg: &str) {
+        let text = format!("*Invalid*  {msg}");
+        if let Some(last) = self
+            .history
+            .last_mut()
+            .filter(|entry| entry.kind == EntryKind::Error && entry.text == text)
+        {
+            last.created_at = Instant::now();
+            return;
+        }
+        self.push(EntryKind::Error, text);
+    }
     pub fn push_info(&mut self, msg: &str) {
         self.push(EntryKind::Info, msg.to_string());
     }
@@ -850,7 +866,7 @@ const INFO_COLOR: Color = Color {
 
 #[cfg(test)]
 mod tests {
-    use super::ranked_matches;
+    use super::{ranked_matches, CommandLine};
     use rustc_hash::FxHashMap;
 
     fn aliases(pairs: &[(&str, &str)]) -> FxHashMap<String, String> {
@@ -900,5 +916,13 @@ mod tests {
         let m = ranked_matches("L", &[], &a);
         assert_eq!(m.first().map(String::as_str), Some("LINE"), "got {m:?}");
     }
-}
 
+    #[test]
+    fn issue_498_repeated_save_error_is_not_duplicated() {
+        let mut line = CommandLine::new();
+        let initial_len = line.history.len();
+        line.push_error_once("Unable to save: file is in use.");
+        line.push_error_once("Unable to save: file is in use.");
+        assert_eq!(line.history.len(), initial_len + 1);
+    }
+}

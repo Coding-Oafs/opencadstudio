@@ -1722,6 +1722,10 @@ impl OpenCADStudio {
             AssocPrompt => (440, 210),
             Unsaved => (420, 160),
             AecDropWarning => (480, 230),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileInUse => (560, 250),
+            #[cfg(not(target_arch = "wasm32"))]
+            ExternalChange => (620, 250),
             #[cfg(target_arch = "wasm32")]
             SaveDialog => (420, 200),
             #[cfg(not(target_arch = "wasm32"))]

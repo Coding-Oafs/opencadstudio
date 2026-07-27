@@ -188,6 +188,10 @@ pub struct OpenProgress {
     pub size_bytes: u64,
     pub state: Arc<crate::io::OpenProgressState>,
     pub started: Instant,
+    /// Disk state captured before parsing starts. If another editor changes the
+    /// file while it loads, the first Save must not silently overwrite it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fingerprint: Option<crate::io::edit_lock::FileFingerprint>,
 }
 
 // ── Application state ──────────────────────────────────────────────────────
@@ -765,6 +769,16 @@ pub(super) struct OpenCADStudio {
     active_save_jobs: std::collections::HashMap<u64, u64>,
     #[cfg(not(target_arch = "wasm32"))]
     save_job_serial: u64,
+    /// Destination leases held while Save As workers are active.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_save_leases:
+        std::collections::HashMap<u64, crate::io::edit_lock::EditLease>,
+    /// Locked-file failure currently shown in the recovery dialog.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_save_failure: Option<PendingSaveFailure>,
+    /// Save stopped because the drawing changed outside this editor.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_external_change: Option<PendingExternalChange>,
     /// OS window for the unsaved-changes confirmation dialog.
 
     // ── Custom Save-As dialog ─────────────────────────────────────────────
@@ -889,6 +903,29 @@ pub(super) enum SaveContinuation {
     Quit,
 }
 
+#[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct PendingSaveFailure {
+    tab_id: u64,
+    path: PathBuf,
+    version: acadrust::DxfVersion,
+    purpose: SavePurpose,
+    continuation: SaveContinuation,
+    set_current_path: bool,
+    error: String,
+}
+
+#[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct PendingExternalChange {
+    tab_id: u64,
+    path: PathBuf,
+    version: acadrust::DxfVersion,
+    purpose: SavePurpose,
+    continuation: SaveContinuation,
+    set_current_path: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct ThumbnailCacheKey {
@@ -908,13 +945,14 @@ pub struct SaveOutcome {
     revision: u64,
     camera_generation: u64,
     path: PathBuf,
+    version: acadrust::DxfVersion,
     previous_autosave: Option<PathBuf>,
     set_current_path: bool,
     purpose: SavePurpose,
     continuation: SaveContinuation,
     thumbnail_key: Option<ThumbnailCacheKey>,
     refreshed_preview: Option<Option<acadrust::Preview>>,
-    result: Result<(), String>,
+    result: Result<(), crate::io::SaveFailure>,
 }
 
 /// Where a colour chosen in the standalone palette window should be applied.
@@ -1262,6 +1300,10 @@ pub enum ModalKind {
     Unsaved,
     SaveDialog,
     AecDropWarning,
+    #[cfg(not(target_arch = "wasm32"))]
+    FileInUse,
+    #[cfg(not(target_arch = "wasm32"))]
+    ExternalChange,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     AssocPrompt,
     PointStyle,
@@ -1490,6 +1532,27 @@ pub enum Message {
     /// Native background save/autosave completed.
     #[cfg(not(target_arch = "wasm32"))]
     SaveFinished(SaveOutcome),
+    /// Retry the failed save after the other application releases the file.
+    #[cfg(not(target_arch = "wasm32"))]
+    SaveFileInUseRetry,
+    /// Choose a different destination for the failed save.
+    #[cfg(not(target_arch = "wasm32"))]
+    SaveFileInUseSaveAs,
+    /// Cancel the failed save and any pending close/quit continuation.
+    #[cfg(not(target_arch = "wasm32"))]
+    SaveFileInUseCancel,
+    /// Reload the externally changed drawing and discard local edits.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExternalChangeReload,
+    /// Keep local edits but choose a different destination.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExternalChangeSaveAs,
+    /// Replace the externally changed disk copy with the local drawing.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExternalChangeOverwrite,
+    /// Cancel the conflicted save and any pending close/quit continuation.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExternalChangeCancel,
     // ─────────────────────────────────────────────────────────────────────
     CommandInput(String),
     CommandSubmit,
@@ -2537,6 +2600,12 @@ impl OpenCADStudio {
             active_save_jobs: std::collections::HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             save_job_serial: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_save_leases: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_save_failure: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_external_change: None,
             save_dialog_format: "DWG 2018".to_string(),
             save_dialog_filename: "drawing.dwg".to_string(),
             save_dialog_for_unsaved: false,

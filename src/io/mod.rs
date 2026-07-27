@@ -4,6 +4,8 @@
 // Default save format: DWG (AC1032 / R2018+).
 
 pub mod file_association;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod edit_lock;
 pub mod obj;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod single_instance;
@@ -550,6 +552,125 @@ pub fn write_backup(path: &std::path::Path) {
     }
 }
 
+/// Structured native-save failure. The UI needs the OS error category after
+/// the worker completes so file-sharing violations can offer recovery actions
+/// instead of being flattened into an opaque command-line string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveFailure {
+    pub message: String,
+    pub file_in_use: bool,
+    pub externally_modified: bool,
+}
+
+impl SaveFailure {
+    pub fn other(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            file_in_use: false,
+            externally_modified: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn file_in_use(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            file_in_use: true,
+            externally_modified: false,
+        }
+    }
+
+    fn replacing(path: &Path, error: std::io::Error) -> Self {
+        Self {
+            message: format!("replace {}: {error}", path.display()),
+            file_in_use: replace_error_is_file_in_use(&error),
+            externally_modified: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn externally_modified(path: &Path) -> Self {
+        Self {
+            message: format!(
+                "{} changed on disk after it was opened",
+                path.display()
+            ),
+            file_in_use: false,
+            externally_modified: true,
+        }
+    }
+}
+
+impl std::fmt::Display for SaveFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SaveFailure {}
+
+fn replace_error_is_file_in_use(error: &std::io::Error) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION. ReplaceFileW returns
+        // 32 for the common case where AutoCAD holds the DWG open (#498).
+        windows_replace_error_is_file_in_use(error.raw_os_error())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Advisory locks normally do not block rename on Unix, but filesystems
+        // may still report EBUSY or ETXTBSY for an active destination.
+        matches!(error.raw_os_error(), Some(16 | 26))
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_replace_error_is_file_in_use(raw_os_error: Option<i32>) -> bool {
+    matches!(raw_os_error, Some(32 | 33))
+}
+
+#[cfg(test)]
+mod save_failure_tests {
+    use super::windows_replace_error_is_file_in_use;
+
+    #[test]
+    fn issue_498_recognizes_windows_file_sharing_errors() {
+        assert!(windows_replace_error_is_file_in_use(Some(32)));
+        assert!(windows_replace_error_is_file_in_use(Some(33)));
+        assert!(!windows_replace_error_is_file_in_use(Some(5)));
+        assert!(!windows_replace_error_is_file_in_use(None));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn external_change_prevents_atomic_replace() {
+        let path = std::env::temp_dir().join(format!(
+            "ocs_external_change_{}_{}.dwg",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"old").unwrap();
+        let expected = super::edit_lock::FileFingerprint::capture(&path).unwrap();
+        std::fs::write(&path, b"new").unwrap();
+
+        let error = super::save_owned_as_version_atomic(
+            acadrust::CadDocument::new(),
+            &path,
+            acadrust::DxfVersion::AC1032,
+            false,
+            Some(expected),
+        )
+        .unwrap_err();
+
+        assert!(error.externally_modified);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 // ── Plot Style Table ──────────────────────────────────────────────────────
 
 /// Show a file-open dialog and load the selected CTB or STB file.
@@ -595,30 +716,44 @@ pub fn save_as_version(
     let clone_started = iced::time::Instant::now();
     let snapshot = doc.clone();
     let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
-    save_owned_as_version_inner(snapshot, path, version, false, clone_ms)
+    save_owned_as_version_inner(snapshot, path, version, false, clone_ms, |_| Ok(()))
+        .map_err(|error| error.to_string())
 }
 
 /// Save an owned document snapshot. Preparation, serialization, compression and
 /// disk I/O can therefore run on a worker without borrowing live editor state.
 /// Output is written beside the destination and atomically renamed only after a
 /// complete file exists, so a failed save cannot truncate the previous drawing.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save_owned_as_version_atomic(
     doc: CadDocument,
     path: &Path,
     version: acadrust::DxfVersion,
     backup: bool,
-) -> Result<(), String> {
-    save_owned_as_version_inner(doc, path, version, backup, 0.0)
+    expected_fingerprint: Option<edit_lock::FileFingerprint>,
+) -> Result<(), SaveFailure> {
+    save_owned_as_version_inner(doc, path, version, backup, 0.0, move |path| {
+        let Some(expected) = expected_fingerprint else {
+            return Ok(());
+        };
+        match edit_lock::FileFingerprint::capture(path) {
+            Ok(current) if current == expected => Ok(()),
+            _ => Err(SaveFailure::externally_modified(path)),
+        }
+    })
 }
 
-fn save_owned_as_version_inner(
+fn save_owned_as_version_inner<F>(
     mut doc: CadDocument,
     path: &Path,
     version: acadrust::DxfVersion,
     backup: bool,
     clone_ms: f64,
-) -> Result<(), String> {
+    before_replace: F,
+) -> Result<(), SaveFailure>
+where
+    F: FnOnce(&Path) -> Result<(), SaveFailure>,
+{
     let perf = crate::perf::enabled();
     let total_started = iced::time::Instant::now();
     doc.version = version;
@@ -637,10 +772,15 @@ fn save_owned_as_version_inner(
     let result = match ext.as_str() {
         "dxf" => DxfWriter::new(&doc)
             .write_to_file(&temp_path)
-            .map_err(|e| e.to_string()),
-        _ => DwgWriter::write_to_file(&temp_path, &doc).map_err(|e| e.to_string()),
+            .map_err(|e| SaveFailure::other(e.to_string())),
+        _ => DwgWriter::write_to_file(&temp_path, &doc)
+            .map_err(|e| SaveFailure::other(e.to_string())),
     };
     if let Err(error) = result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    if let Err(error) = before_replace(path) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(error);
     }
@@ -649,7 +789,7 @@ fn save_owned_as_version_inner(
     }
     if let Err(error) = replace_save_file(&temp_path, path) {
         let _ = std::fs::remove_file(&temp_path);
-        return Err(format!("replace {}: {error}", path.display()));
+        return Err(SaveFailure::replacing(path, error));
     }
     if perf {
         crate::perf_record!(

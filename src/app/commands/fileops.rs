@@ -22,13 +22,24 @@ impl OpenCADStudio {
                         if self.tabs[t].is_start {
                             continue;
                         }
-                        self.sync_vport_display(t);
                         if let Some(path) = self.tabs[t].current_path.clone() {
-                            self.tabs[t].scene.document.header.user_real1 =
-                                self.tabs[t].scene.annotation_scale as f64;
-                            match crate::io::save(&self.tabs[t].scene.document, &path) {
+                            if self
+                                .active_save_jobs
+                                .contains_key(&self.tabs[t].id)
+                            {
+                                self.command_line.push_info(&format!(
+                                    "SAVEALL: {} already has a save running",
+                                    path.display()
+                                ));
+                                skipped += 1;
+                                continue;
+                            }
+                            match self.save_tab_synchronously_protected(
+                                t,
+                                path.clone(),
+                                false,
+                            ) {
                                 Ok(()) => {
-                                    self.tabs[t].dirty = false;
                                     saved += 1;
                                 }
                                 Err(e) => self.command_line.push_error(&format!(

@@ -26,6 +26,10 @@ impl OpenCADStudio {
             Some(K::DimStyle) => "Dimension Style Manager",
             Some(K::AssocPrompt) => "Default Application",
             Some(K::AecDropWarning) => "Save Warning",
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(K::FileInUse) => "Unable to Save Drawing",
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(K::ExternalChange) => "Drawing Changed on Disk",
             Some(K::LayerDeleteWarning) => "Delete Layer",
             Some(K::Unsaved) => "Unsaved Changes",
             Some(K::PointStyle) => "Point Style",
@@ -583,6 +587,29 @@ impl OpenCADStudio {
                     230,
                 )
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            super::super::ModalKind::FileInUse => {
+                let (path, error) = self
+                    .pending_save_failure
+                    .as_ref()
+                    .map(|failure| {
+                        (
+                            failure.path.display().to_string(),
+                            failure.error.clone(),
+                        )
+                    })
+                    .unwrap_or_default();
+                sized(file_in_use_dialog_window(&path, &error), 560, 250)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            super::super::ModalKind::ExternalChange => {
+                let path = self
+                    .pending_external_change
+                    .as_ref()
+                    .map(|conflict| conflict.path.display().to_string())
+                    .unwrap_or_default();
+                sized(external_change_dialog_window(&path), 620, 250)
+            }
             super::super::ModalKind::LayerDeleteWarning => {
                 let (names, count) = self
                     .layer_delete_pending
@@ -922,6 +949,278 @@ fn unsaved_changes_dialog_window(name: &str) -> Element<'static, Message> {
     .into()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn file_in_use_dialog_window(path: &str, error: &str) -> Element<'static, Message> {
+    const BG: Color = Color {
+        r: 0.18,
+        g: 0.18,
+        b: 0.20,
+        a: 1.0,
+    };
+    const BORDER_COL: Color = Color {
+        r: 0.38,
+        g: 0.38,
+        b: 0.42,
+        a: 1.0,
+    };
+    const TEXT_COL: Color = Color {
+        r: 0.90,
+        g: 0.90,
+        b: 0.90,
+        a: 1.0,
+    };
+    const DIM_COL: Color = Color {
+        r: 0.62,
+        g: 0.62,
+        b: 0.66,
+        a: 1.0,
+    };
+    const BTN_PRIMARY: Color = Color {
+        r: 0.20,
+        g: 0.46,
+        b: 0.80,
+        a: 1.0,
+    };
+    const BTN_PRIMARY_HOVER: Color = Color {
+        r: 0.26,
+        g: 0.55,
+        b: 0.92,
+        a: 1.0,
+    };
+    const BTN_SECONDARY: Color = Color {
+        r: 0.28,
+        g: 0.28,
+        b: 0.30,
+        a: 1.0,
+    };
+    const BTN_SECONDARY_HOVER: Color = Color {
+        r: 0.36,
+        g: 0.36,
+        b: 0.40,
+        a: 1.0,
+    };
+
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Drawing".to_string());
+    let heading = format!("\"{file_name}\" could not be saved.");
+    let path_line = format!("Path: {path}");
+    let details = format!("Details: {error}");
+    let btn = |label: &'static str, msg: Message, base: Color, hover: Color| {
+        button(text(label).size(13).color(TEXT_COL))
+            .on_press(msg)
+            .style(move |_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hover,
+                    _ => base,
+                })),
+                text_color: TEXT_COL,
+                border: Border {
+                    color: BORDER_COL,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            })
+            .padding([6, 18])
+    };
+
+    container(
+        column![
+            text(heading).size(14).color(TEXT_COL),
+            Space::new().height(8),
+            text(
+                "The file is open or being used by another application. \
+                 Close it there and retry, or save this drawing under a different name."
+            )
+            .size(13)
+            .color(TEXT_COL)
+            .width(Fill),
+            Space::new().height(12),
+            text(path_line).size(11).color(DIM_COL).width(Fill),
+            Space::new().height(4),
+            text(details).size(11).color(DIM_COL).width(Fill),
+            Space::new().height(18),
+            row![
+                btn(
+                    "Retry",
+                    Message::SaveFileInUseRetry,
+                    BTN_PRIMARY,
+                    BTN_PRIMARY_HOVER
+                ),
+                Space::new().width(8),
+                btn(
+                    "Save As",
+                    Message::SaveFileInUseSaveAs,
+                    BTN_SECONDARY,
+                    BTN_SECONDARY_HOVER
+                ),
+                Space::new().width(8),
+                btn(
+                    "Cancel",
+                    Message::SaveFileInUseCancel,
+                    BTN_SECONDARY,
+                    BTN_SECONDARY_HOVER
+                ),
+            ],
+        ]
+        .spacing(0),
+    )
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(BG)),
+        ..Default::default()
+    })
+    .padding([18, 20])
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn external_change_dialog_window(path: &str) -> Element<'static, Message> {
+    const BG: Color = Color {
+        r: 0.18,
+        g: 0.18,
+        b: 0.20,
+        a: 1.0,
+    };
+    const BORDER_COL: Color = Color {
+        r: 0.38,
+        g: 0.38,
+        b: 0.42,
+        a: 1.0,
+    };
+    const TEXT_COL: Color = Color {
+        r: 0.90,
+        g: 0.90,
+        b: 0.90,
+        a: 1.0,
+    };
+    const DIM_COL: Color = Color {
+        r: 0.62,
+        g: 0.62,
+        b: 0.66,
+        a: 1.0,
+    };
+    const BTN_PRIMARY: Color = Color {
+        r: 0.20,
+        g: 0.46,
+        b: 0.80,
+        a: 1.0,
+    };
+    const BTN_PRIMARY_HOVER: Color = Color {
+        r: 0.26,
+        g: 0.55,
+        b: 0.92,
+        a: 1.0,
+    };
+    const BTN_SECONDARY: Color = Color {
+        r: 0.28,
+        g: 0.28,
+        b: 0.30,
+        a: 1.0,
+    };
+    const BTN_SECONDARY_HOVER: Color = Color {
+        r: 0.36,
+        g: 0.36,
+        b: 0.40,
+        a: 1.0,
+    };
+    const BTN_DANGER: Color = Color {
+        r: 0.62,
+        g: 0.31,
+        b: 0.14,
+        a: 1.0,
+    };
+    const BTN_DANGER_HOVER: Color = Color {
+        r: 0.78,
+        g: 0.39,
+        b: 0.17,
+        a: 1.0,
+    };
+
+    let file_name = std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Drawing".to_string());
+    let heading = format!("\"{file_name}\" was changed by another application.");
+    let path_line = format!("Path: {path}");
+    let btn = |label: &'static str, msg: Message, base: Color, hover: Color| {
+        button(text(label).size(13).color(TEXT_COL))
+            .on_press(msg)
+            .style(move |_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hover,
+                    _ => base,
+                })),
+                text_color: TEXT_COL,
+                border: Border {
+                    color: BORDER_COL,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            })
+            .padding([6, 14])
+    };
+
+    container(
+        column![
+            text(heading).size(14).color(TEXT_COL),
+            Space::new().height(8),
+            text(
+                "Saving now could destroy those external changes. Reload the disk copy, \
+                 save your local work elsewhere, or explicitly overwrite it."
+            )
+            .size(13)
+            .color(TEXT_COL)
+            .width(Fill),
+            Space::new().height(12),
+            text(path_line).size(11).color(DIM_COL).width(Fill),
+            Space::new().height(18),
+            row![
+                btn(
+                    "Reload from Disk",
+                    Message::ExternalChangeReload,
+                    BTN_PRIMARY,
+                    BTN_PRIMARY_HOVER
+                ),
+                Space::new().width(8),
+                btn(
+                    "Save As",
+                    Message::ExternalChangeSaveAs,
+                    BTN_SECONDARY,
+                    BTN_SECONDARY_HOVER
+                ),
+                Space::new().width(8),
+                btn(
+                    "Overwrite",
+                    Message::ExternalChangeOverwrite,
+                    BTN_DANGER,
+                    BTN_DANGER_HOVER
+                ),
+                Space::new().width(8),
+                btn(
+                    "Cancel",
+                    Message::ExternalChangeCancel,
+                    BTN_SECONDARY,
+                    BTN_SECONDARY_HOVER
+                ),
+            ],
+        ]
+        .spacing(0),
+    )
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(BG)),
+        ..Default::default()
+    })
+    .padding([18, 20])
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
 /// Warning shown before a lossy Save-As: the drawing carries unsupported
 /// (AEC / application) objects that survive only as verbatim source-version
 /// bytes, so saving to a different version or to DXF would drop them. Offers to
@@ -1148,4 +1447,3 @@ fn default_assoc_dialog_window() -> Element<'static, Message> {
     .padding([24, 28])
     .into()
 }
-

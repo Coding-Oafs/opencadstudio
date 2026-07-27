@@ -80,6 +80,16 @@ impl OpenCADStudio {
         if self.active_modal == Some(ScaleManager) {
             self.scale_stage_discard();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.active_modal == Some(FileInUse) {
+            self.pending_save_failure = None;
+            self.pending_close = None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.active_modal == Some(ExternalChange) {
+            self.pending_external_change = None;
+            self.pending_close = None;
+        }
         match self.active_modal {
             // Dismissing these via ✕ is the cancel/decline path.
             Some(Unsaved) => self.pending_close = None,
@@ -457,6 +467,9 @@ impl OpenCADStudio {
                     size_bytes,
                     state: progress.clone(),
                     started: Instant::now(),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fingerprint:
+                        crate::io::edit_lock::FileFingerprint::capture(&path).ok(),
                 });
                 let size_label = format_size(size_bytes);
                 self.command_line
@@ -4066,6 +4079,33 @@ impl OpenCADStudio {
 
             #[cfg(not(target_arch = "wasm32"))]
             Message::SaveFinished(outcome) => self.on_save_finished(outcome),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SaveFileInUseRetry => self.on_save_file_in_use_retry(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SaveFileInUseSaveAs => self.on_save_file_in_use_save_as(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SaveFileInUseCancel => {
+                self.close_active_modal();
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ExternalChangeReload => self.on_external_change_reload(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ExternalChangeSaveAs => self.on_external_change_save_as(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ExternalChangeOverwrite => self.on_external_change_overwrite(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ExternalChangeCancel => {
+                self.close_active_modal();
+                Task::none()
+            }
 
             // ── Page Setup ────────────────────────────────────────────────
             Message::UpdateCheckResult(latest) => {
