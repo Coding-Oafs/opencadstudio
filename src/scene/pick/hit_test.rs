@@ -861,6 +861,29 @@ fn projected_wire_triangle(
     }))
 }
 
+fn projected_text_quad(
+    wire: &WireModel,
+    start: usize,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Option<[Point; 6]> {
+    let vertices = wire.text_verts.get(start..start + 6)?;
+    Some(std::array::from_fn(|offset| {
+        let vertex = vertices[offset];
+        world_to_screen(
+            glam::DVec3::new(
+                vertex.pos[0] as f64 + vertex.pos_low[0] as f64,
+                vertex.pos[1] as f64 + vertex.pos_low[1] as f64,
+                vertex.pos[2] as f64 + vertex.pos_low[2] as f64,
+            ),
+            view_rot,
+            eye,
+            bounds,
+        )
+    }))
+}
+
 fn triangle_crosses_box(triangle: [Point; 3], corners: [Point; 4]) -> bool {
     let min_x = corners[0].x;
     let min_y = corners[0].y;
@@ -973,23 +996,11 @@ fn indexed_box_crossing_hits<'a, W: WireSource + ?Sized>(
         if seen.contains(wire.name.as_str()) {
             continue;
         }
-        let start = glyph.start as usize;
-        let Some(vertices) = wire.text_verts.get(start..start + 6) else {
+        let Some(screen) =
+            projected_text_quad(wire, glyph.start as usize, view_rot, eye, bounds)
+        else {
             continue;
         };
-        let screen: [Point; 6] = std::array::from_fn(|offset| {
-            let vertex = vertices[offset];
-            world_to_screen(
-                glam::DVec3::new(
-                    vertex.pos[0] as f64 + vertex.pos_low[0] as f64,
-                    vertex.pos[1] as f64 + vertex.pos_low[1] as f64,
-                    vertex.pos[2] as f64 + vertex.pos_low[2] as f64,
-                ),
-                view_rot,
-                eye,
-                bounds,
-            )
-        });
         if [0usize, 3].into_iter().any(|offset| {
             triangle_crosses_box(
                 [screen[offset], screen[offset + 1], screen[offset + 2]],
@@ -1097,23 +1108,11 @@ fn indexed_polygon_crossing_hits<'a, W: WireSource + ?Sized>(
         if seen.contains(wire.name.as_str()) {
             continue;
         }
-        let start = glyph.start as usize;
-        let Some(vertices) = wire.text_verts.get(start..start + 6) else {
+        let Some(screen) =
+            projected_text_quad(wire, glyph.start as usize, view_rot, eye, bounds)
+        else {
             continue;
         };
-        let screen: [Point; 6] = std::array::from_fn(|offset| {
-            let vertex = vertices[offset];
-            world_to_screen(
-                glam::DVec3::new(
-                    vertex.pos[0] as f64 + vertex.pos_low[0] as f64,
-                    vertex.pos[1] as f64 + vertex.pos_low[1] as f64,
-                    vertex.pos[2] as f64 + vertex.pos_low[2] as f64,
-                ),
-                view_rot,
-                eye,
-                bounds,
-            )
-        });
         if [0usize, 3].into_iter().any(|offset| {
             triangle_crosses_polygon(
                 [screen[offset], screen[offset + 1], screen[offset + 2]],
@@ -1184,10 +1183,11 @@ pub fn box_hit<'a, W: WireSource + ?Sized>(
     let box_tr = Point { x: max_x, y: min_y };
     let box_bl = Point { x: min_x, y: max_y };
     let box_br = Point { x: max_x, y: max_y };
+    let box_corners = [box_tl, box_tr, box_br, box_bl];
     if crossing && wires.segments().is_some() {
         return indexed_box_crossing_hits(
             wires,
-            [box_tl, box_tr, box_br, box_bl],
+            box_corners,
             view_rot,
             eye,
             bounds,
@@ -1202,8 +1202,11 @@ pub fn box_hit<'a, W: WireSource + ?Sized>(
             // only fill_tris) treat the AABB rectangle as the hit-test shape
             // so low-LOD text stays selectable. See #19.
             let aabb_pts: Vec<[f32; 3]>;
+            let empty_pts: [[f32; 3]; 0] = [];
             let pts: &[[f32; 3]] = if !wire.points.is_empty() {
                 &wire.points
+            } else if !wire.text_verts.is_empty() {
+                &empty_pts
             } else if wire.aabb != WireModel::UNBOUNDED_AABB {
                 let [ax, ay, bx, by] = wire.aabb;
                 aabb_pts = vec![
@@ -1255,10 +1258,33 @@ pub fn box_hit<'a, W: WireSource + ?Sized>(
                 prev = Some(sp);
             }
 
+            let glyphs_present = !wire.text_verts.is_empty();
+            let mut glyph_crosses = false;
+            let mut glyphs_inside = true;
+            for start in (0..wire.text_verts.len()).step_by(6) {
+                let Some(screen) = projected_text_quad(wire, start, view_rot, eye, bounds) else {
+                    continue;
+                };
+                if crossing {
+                    if [0usize, 3].into_iter().any(|offset| {
+                        triangle_crosses_box(
+                            [screen[offset], screen[offset + 1], screen[offset + 2]],
+                            box_corners,
+                        )
+                    }) {
+                        glyph_crosses = true;
+                        break;
+                    }
+                } else if !screen.iter().copied().all(inside) {
+                    glyphs_inside = false;
+                    break;
+                }
+            }
+
             let result = if crossing {
-                hit
+                hit || glyph_crosses
             } else {
-                all_inside && prev.is_some()
+                all_inside && glyphs_inside && (prev.is_some() || glyphs_present)
             };
             if result {
                 Some(wire.name.as_str())
@@ -1300,8 +1326,11 @@ pub fn poly_hit<'a, W: WireSource + ?Sized>(
             // AABB rectangle as the hit-test shape so low-LOD text stays
             // selectable. See #19.
             let aabb_pts: Vec<[f32; 3]>;
+            let empty_pts: [[f32; 3]; 0] = [];
             let pts: &[[f32; 3]] = if !wire.points.is_empty() {
                 &wire.points
+            } else if !wire.text_verts.is_empty() {
+                &empty_pts
             } else if wire.aabb != WireModel::UNBOUNDED_AABB {
                 let [ax, ay, bx, by] = wire.aabb;
                 aabb_pts = vec![
@@ -1357,10 +1386,39 @@ pub fn poly_hit<'a, W: WireSource + ?Sized>(
                 prev = Some(sp);
             }
 
+            let glyphs_present = !wire.text_verts.is_empty();
+            let mut glyph_crosses = false;
+            let mut glyphs_inside = true;
+            for start in (0..wire.text_verts.len()).step_by(6) {
+                let Some(screen) = projected_text_quad(wire, start, view_rot, eye, bounds) else {
+                    continue;
+                };
+                if crossing {
+                    if [0usize, 3].into_iter().any(|offset| {
+                        triangle_crosses_polygon(
+                            [screen[offset], screen[offset + 1], screen[offset + 2]],
+                            poly,
+                        )
+                    }) {
+                        glyph_crosses = true;
+                        break;
+                    }
+                } else if !screen.iter().copied().all(|point| {
+                    point.x >= 0.0
+                        && point.x <= bounds.width
+                        && point.y >= 0.0
+                        && point.y <= bounds.height
+                        && point_in_polygon(point, poly)
+                }) {
+                    glyphs_inside = false;
+                    break;
+                }
+            }
+
             let result = if crossing {
-                hit
+                hit || glyph_crosses
             } else {
-                all_inside && prev.is_some()
+                all_inside && glyphs_inside && (prev.is_some() || glyphs_present)
             };
             if result {
                 Some(wire.name.as_str())
@@ -1911,6 +1969,68 @@ mod aabb_reject_tests {
         assert_eq!(
             click_hit(cursor, &[far, near], vp, eye, bounds, true),
             Some("5")
+        );
+    }
+
+    #[test]
+    fn crossing_hits_glyphs_batched_with_distant_block_geometry() {
+        use crate::scene::pipeline::text_gpu::TextVertex;
+
+        let vertex = |x, y| TextVertex {
+            pos: [x, y, 0.0],
+            pos_low: [0.0; 3],
+            uv: [0.0; 2],
+            color: [1.0; 4],
+            draw_depth: 0.0,
+        };
+        let mut block = wire(
+            "479",
+            vec![[0.75, 0.75, 0.0], [0.9, 0.75, 0.0]],
+            [-0.1, -0.1, 0.9, 0.75],
+        );
+        block.text_verts = vec![
+            vertex(-0.1, -0.1),
+            vertex(0.1, -0.1),
+            vertex(0.1, 0.1),
+            vertex(-0.1, -0.1),
+            vertex(0.1, 0.1),
+            vertex(-0.1, 0.1),
+        ];
+
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        let wires = std::slice::from_ref(&block);
+        assert_eq!(
+            box_hit(
+                Point::new(85.0, 85.0),
+                Point::new(115.0, 115.0),
+                true,
+                wires,
+                Mat4::IDENTITY,
+                glam::DVec3::ZERO,
+                bounds,
+            ),
+            vec!["479"],
+        );
+        assert_eq!(
+            poly_hit(
+                &[
+                    Point::new(85.0, 85.0),
+                    Point::new(115.0, 85.0),
+                    Point::new(115.0, 115.0),
+                    Point::new(85.0, 115.0),
+                ],
+                true,
+                wires,
+                Mat4::IDENTITY,
+                glam::DVec3::ZERO,
+                bounds,
+            ),
+            vec!["479"],
         );
     }
 }
