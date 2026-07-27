@@ -906,6 +906,23 @@ pub enum CmdResult {
     },
     /// Set the plot window on the active layout's PlotSettings.
     SetPlotWindow { p1: DVec3, p2: DVec3 },
+    /// Create a paper-space viewport. `preserve_view` keeps an explicitly
+    /// selected/defined view instead of applying the normal model-extents fit.
+    MviewCreate {
+        viewport: acadrust::entities::Viewport,
+        preserve_view: bool,
+    },
+    /// Create a viewport clipped by either a new polygon boundary or an
+    /// existing closed paper-space entity.
+    MviewCreateClipped {
+        boundary: Option<EntityType>,
+        boundary_handle: Handle,
+    },
+    /// Temporarily switch between paper and Model while MVIEW defines a new
+    /// model-space window, keeping the command active.
+    MviewSwitchLayout(String),
+    /// Cancel MVIEW's temporary Model-space step and return to its layout.
+    MviewCancelToLayout(String),
     /// Quick-print the bounding box of the given selected entities to a PDF.
     QuickPrint(Vec<Handle>),
     /// Replace the text content of a Text/MText entity in-place.

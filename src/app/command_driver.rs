@@ -384,6 +384,225 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
+            CmdResult::MviewCreate {
+                viewport,
+                preserve_view,
+            } => {
+                let saved_view = preserve_view.then(|| {
+                    (
+                        viewport.view_target.clone(),
+                        viewport.view_direction.clone(),
+                        viewport.view_center.clone(),
+                        viewport.view_height,
+                        viewport.custom_scale,
+                        viewport.lens_length,
+                        viewport.twist_angle,
+                        viewport.status.perspective,
+                    )
+                });
+                let label = self.history_label_from_active_cmd(i, "MVIEW");
+                let pending = self.begin_undo(i, label, 1, false);
+                let handle = self.commit_entity_handle(
+                    acadrust::EntityType::Viewport(viewport),
+                );
+                if let (Some(handle), Some(saved)) = (handle, saved_view) {
+                    if let Some(acadrust::EntityType::Viewport(viewport)) =
+                        self.tabs[i].scene.document.get_entity_mut(handle)
+                    {
+                        viewport.view_target = saved.0;
+                        viewport.view_direction = saved.1;
+                        viewport.view_center = saved.2;
+                        viewport.view_height = saved.3;
+                        viewport.custom_scale = saved.4;
+                        viewport.lens_length = saved.5;
+                        viewport.twist_angle = saved.6;
+                        viewport.status.perspective = saved.7;
+                    }
+                    self.tabs[i].scene.camera_generation += 1;
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                if let Some(pending) = pending {
+                    self.commit_undo_delta(i, pending);
+                }
+            }
+            CmdResult::MviewCreateClipped {
+                boundary,
+                boundary_handle,
+            } => {
+                if boundary.is_none() {
+                    let scene = &self.tabs[i].scene;
+                    let valid = scene
+                        .entity_belongs_to_current_layout(boundary_handle)
+                        && scene
+                        .document
+                        .get_entity(boundary_handle)
+                        .is_some_and(|entity| {
+                            match entity {
+                                acadrust::EntityType::Circle(_) => true,
+                                acadrust::EntityType::Ellipse(ellipse) => ellipse.is_full(),
+                                acadrust::EntityType::LwPolyline(polyline) => {
+                                    polyline.is_closed
+                                }
+                                acadrust::EntityType::Polyline(polyline) => {
+                                    polyline.is_closed()
+                                }
+                                acadrust::EntityType::Polyline2D(polyline) => {
+                                    polyline.is_closed()
+                                }
+                                acadrust::EntityType::Polyline3D(polyline) => {
+                                    polyline.flags.closed
+                                }
+                                _ => false,
+                            }
+                        });
+                    if !valid {
+                        self.command_line.push_error(
+                            "MVIEW Object: select a closed paper-space circle, ellipse, or polyline.",
+                        );
+                        if let Some(prompt) =
+                            self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
+                        {
+                            self.command_line.push_info(&prompt);
+                        }
+                        return Task::none();
+                    }
+                }
+
+                let created_boundary = boundary.is_some();
+                let touched = 2;
+                let label = self.history_label_from_active_cmd(i, "MVIEW");
+                let pending = self.begin_undo(i, label, touched, false);
+                let clip_handle = match boundary {
+                    Some(mut boundary) => {
+                        // A non-rectangular viewport owns a helper boundary
+                        // entity through `clip_boundary_handle`. Keep that
+                        // helper in the document for DWG compatibility and
+                        // stencil clipping, but do not expose it as a separate
+                        // selectable polyline.
+                        boundary.common_mut().invisible = true;
+                        match self.commit_entity_handle(boundary) {
+                            Some(handle) => handle,
+                            None => {
+                                self.tabs[i].active_cmd = None;
+                                if let Some(pending) = pending {
+                                    self.commit_undo_delta(i, pending);
+                                }
+                                return Task::none();
+                            }
+                        }
+                    }
+                    None => boundary_handle,
+                };
+                let polygon = self.tabs[i]
+                    .scene
+                    .clip_boundary_polygon(clip_handle, 0.0);
+                let bounds: Option<(f64, f64, f64, f64)> =
+                    polygon.iter().fold(None, |bounds, point| {
+                        if !point[0].is_finite() || !point[1].is_finite() {
+                            return bounds;
+                        }
+                        Some(match bounds {
+                            Some((min_x, min_y, max_x, max_y)) => (
+                                min_x.min(point[0] as f64),
+                                min_y.min(point[1] as f64),
+                                max_x.max(point[0] as f64),
+                                max_y.max(point[1] as f64),
+                            ),
+                            None => (
+                                point[0] as f64,
+                                point[1] as f64,
+                                point[0] as f64,
+                                point[1] as f64,
+                            ),
+                        })
+                    });
+                let Some((min_x, min_y, max_x, max_y)) = bounds else {
+                    self.command_line
+                        .push_error("MVIEW: the clipping boundary has no usable area.");
+                    self.tabs[i].active_cmd = None;
+                    if let Some(pending) = pending {
+                        self.commit_undo_delta(i, pending);
+                    }
+                    return Task::none();
+                };
+                if max_x - min_x < 1e-6 || max_y - min_y < 1e-6 {
+                    self.command_line
+                        .push_error("MVIEW: the clipping boundary has no usable area.");
+                    self.tabs[i].active_cmd = None;
+                    if let Some(pending) = pending {
+                        self.commit_undo_delta(i, pending);
+                    }
+                    return Task::none();
+                }
+
+                let mut viewport = acadrust::entities::Viewport::new();
+                viewport.center = acadrust::types::Vector3::new(
+                    (min_x + max_x) / 2.0,
+                    (min_y + max_y) / 2.0,
+                    0.0,
+                );
+                viewport.width = max_x - min_x;
+                viewport.height = max_y - min_y;
+                viewport.id = 2;
+                viewport.clip_boundary_handle = clip_handle;
+                let viewport_handle = self.commit_entity_handle(
+                    acadrust::EntityType::Viewport(viewport),
+                );
+                if let Some(viewport_handle) = viewport_handle {
+                    if !created_boundary {
+                        let before = self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(clip_handle)
+                            .cloned()
+                            .map(std::sync::Arc::new);
+                        self.tabs[i]
+                            .scene
+                            .record_undo_before(clip_handle, before);
+                    }
+                    if let Some(boundary) =
+                        self.tabs[i].scene.document.get_entity_mut(clip_handle)
+                    {
+                        let common = boundary.common_mut();
+                        common.invisible = true;
+                        if !common.reactors.contains(&viewport_handle) {
+                            common.reactors.push(viewport_handle);
+                        }
+                    }
+                    self.tabs[i].scene.bump_entities(&[(
+                        clip_handle,
+                        crate::scene::ChangeKind::Modified,
+                    )]);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                if let Some(pending) = pending {
+                    self.commit_undo_delta(i, pending);
+                }
+            }
+            CmdResult::MviewSwitchLayout(layout) => {
+                let task = self.on_layout_switch(layout);
+                if let Some(prompt) =
+                    self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
+                {
+                    self.command_line.push_info(&prompt);
+                }
+                return task;
+            }
+            CmdResult::MviewCancelToLayout(layout) => {
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                return self.on_layout_switch(layout);
+            }
             CmdResult::TransformSelected(handles, transform) => {
                 let label = self.history_label_from_active_cmd(i, "MOVE");
                 // A move/rotate/scale/mirror mutates only the selected entities

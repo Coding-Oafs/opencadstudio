@@ -138,7 +138,7 @@ impl PlineCommand {
 
 /// Compute the bulge for the arc from `a` to `b` that is tangent to `tangent` at `a`.
 /// Returns 0.0 if the points are coincident or the tangent is parallel to the chord.
-fn compute_bulge(a: DVec2, tangent: DVec2, b: DVec2) -> f64 {
+pub(crate) fn compute_bulge(a: DVec2, tangent: DVec2, b: DVec2) -> f64 {
     let d = b - a;
     let len_sq = d.length_squared();
     if len_sq < 1e-10 {
@@ -178,7 +178,7 @@ fn compute_bulge(a: DVec2, tangent: DVec2, b: DVec2) -> f64 {
 /// the chord direction rotated by half the arc sweep (the chord bisects the
 /// entry/exit tangents of a bulge arc). Used to restore tangent continuity
 /// after Undo pops a segment.
-fn seg_exit_tangent(a: DVec3, b: DVec3, bulge: f64) -> Option<Vec2> {
+pub(crate) fn seg_exit_tangent(a: DVec3, b: DVec3, bulge: f64) -> Option<Vec2> {
     let d = DVec2::new(b.x - a.x, b.y - a.y);
     if d.length_squared() < 1e-10 {
         return None;
@@ -189,7 +189,7 @@ fn seg_exit_tangent(a: DVec3, b: DVec3, bulge: f64) -> Option<Vec2> {
 }
 
 /// Update `tangent` after an arc segment described by `bulge` from `a` to `b`.
-fn update_tangent_after_arc(tangent: &mut Option<Vec2>, bulge: f64) {
+pub(crate) fn update_tangent_after_arc(tangent: &mut Option<Vec2>, bulge: f64) {
     let Some(t) = *tangent else {
         return;
     };
@@ -203,7 +203,7 @@ fn update_tangent_after_arc(tangent: &mut Option<Vec2>, bulge: f64) {
 
 /// Sample a circular arc defined by bulge into `n` line-segment points.
 /// Returns the sampled [x, y, z] points (uses `z` from `a`).
-fn arc_sample_points(a: Vec3, bulge: f64, b: Vec3, n: usize) -> Vec<[f32; 3]> {
+pub(crate) fn arc_sample_points(a: Vec3, bulge: f64, b: Vec3, n: usize) -> Vec<[f32; 3]> {
     let ax = a.x as f64;
     let ay = a.y as f64;
     let bx = b.x as f64;

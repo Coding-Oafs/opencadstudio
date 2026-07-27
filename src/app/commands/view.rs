@@ -412,7 +412,14 @@ impl OpenCADStudio {
                         .push_error("MVIEW: switch to a paper space layout first.");
                 } else {
                     use crate::modules::layout::mview::MviewCommand;
-                    let new_cmd = MviewCommand::new();
+                    let scene = &self.tabs[i].scene;
+                    let layout = scene.current_layout.clone();
+                    let paper_bounds = scene
+                        .printable_area_limits()
+                        .or_else(|| scene.paper_limits())
+                        .unwrap_or(((0.0, 0.0), (297.0, 210.0)));
+                    let views = scene.document.views.iter().cloned().collect();
+                    let new_cmd = MviewCommand::new(layout, paper_bounds, views);
                     self.command_line.push_info(&new_cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 }

@@ -2710,6 +2710,21 @@ impl Scene {
         self.current_layout_block_handle()
     }
 
+    /// True when an entity belongs to the active layout, including imported
+    /// DXF entities whose owner handle is NULL but whose BlockRecord still
+    /// lists the entity. Keep command validation aligned with the same
+    /// ownership fallback used by rendering and hit-testing.
+    pub(crate) fn entity_belongs_to_current_layout(&self, handle: Handle) -> bool {
+        let Some(entity) = self.document.get_entity(handle) else {
+            return false;
+        };
+        self.belongs_to_visible_block(
+            handle,
+            entity.common().owner_handle,
+            self.current_layout_block_handle(),
+        )
+    }
+
     /// Returns the block-record handle for `current_layout`.
     ///
     /// Primary path: the Layout object's `block_record` field (set correctly
@@ -3064,6 +3079,46 @@ impl Scene {
                 }
             })
             .or(Some(((0.0, 0.0), (297.0, 210.0))))
+    }
+
+    /// Printable rectangle of the current paper layout, in paper-space units.
+    /// Falls back to the whole sheet when the layout has no usable margins.
+    pub fn printable_area_limits(&self) -> Option<((f64, f64), (f64, f64))> {
+        let ((x0, y0), (x1, y1)) = self.paper_limits()?;
+        let margins = self.document.objects.values().find_map(|object| {
+            if let ObjectType::Layout(layout) = object {
+                if layout.name == self.current_layout {
+                    return Some((
+                        layout.plot_margin_left,
+                        layout.plot_margin_bottom,
+                        layout.plot_margin_right,
+                        layout.plot_margin_top,
+                        layout.plot_rotation,
+                    ));
+                }
+            }
+            None
+        });
+        let Some((left, bottom, right, top, rotation)) = margins else {
+            return Some(((x0, y0), (x1, y1)));
+        };
+        let (left, bottom, right, top) = match rotation {
+            1 | 3 => (bottom, left, top, right),
+            2 => (right, top, left, bottom),
+            _ => (left, bottom, right, top),
+        };
+        let factor = self.paper_space_unit_factor();
+        let printable = (
+            (x0 + left * factor, y0 + bottom * factor),
+            (x1 - right * factor, y1 - top * factor),
+        );
+        if printable.1.0 - printable.0.0 < 1e-6
+            || printable.1.1 - printable.0.1 < 1e-6
+        {
+            Some(((x0, y0), (x1, y1)))
+        } else {
+            Some(printable)
+        }
     }
 
     /// Scale of the first user viewport (id > 1) in the current paper layout,

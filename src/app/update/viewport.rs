@@ -3675,7 +3675,7 @@ impl OpenCADStudio {
         ))
     }
 
-    pub(super) fn on_layout_switch(&mut self, name: String) -> Task<Message> {
+    pub(crate) fn on_layout_switch(&mut self, name: String) -> Task<Message> {
         let i = self.active_tab;
         if self.tabs[i].is_start {
             self.command_line

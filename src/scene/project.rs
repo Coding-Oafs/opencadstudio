@@ -418,63 +418,178 @@ impl Scene {
     }
 
     /// Tessellated outline of a non-rectangular viewport / XCLIP clip-boundary
-    /// entity, in paper coordinates, by reusing the entity's own `to_truck`
-    /// tessellation (Lines). NaN segment breaks are dropped so the result is a
-    /// single ordered ring suitable for a stencil triangle-fan.
-    pub(super) fn clip_boundary_polygon(&self, handle: Handle, z: f32) -> Vec<[f32; 3]> {
-        use std::f64::consts::TAU;
-        let Some(entity) = self
-            .document
-            .entities()
-            .find(|e| e.common().handle == handle)
-        else {
-            return vec![];
-        };
-        // Circles and ellipses tessellate directly — their `to_truck` returns a
-        // parametric TruckObject (not `Lines`), so extracting a polygon there
-        // would come back empty. Everything else (splines, polylines, …) reuses
-        // the entity's own `Lines` tessellation.
-        const N: usize = 64;
-        match entity {
-            EntityType::Circle(c) => (0..N)
+    /// entity, in paper coordinates. Closed polylines are sampled directly
+    /// because their normal tessellation is a `Contour`, not `Lines`.
+    pub(crate) fn clip_boundary_polygon(&self, handle: Handle, z: f32) -> Vec<[f32; 3]> {
+        clip_boundary_polygon_for_document(&self.document, handle, z)
+    }
+}
+
+pub(crate) fn clip_boundary_polygon_for_document(
+    document: &CadDocument,
+    handle: Handle,
+    z: f32,
+) -> Vec<[f32; 3]> {
+    use std::f64::consts::TAU;
+    let Some(entity) = document
+        .entities()
+        .find(|e| e.common().handle == handle)
+    else {
+        return vec![];
+    };
+    // Circles and ellipses tessellate directly — their `to_truck` returns a
+    // parametric TruckObject (not `Lines`), so extracting a polygon there
+    // would come back empty. Everything else (splines, polylines, …) reuses
+    // the entity's own `Lines` tessellation.
+    const N: usize = 64;
+    match entity {
+        EntityType::Circle(c) => (0..N)
+            .map(|i| {
+                let a = i as f64 * TAU / N as f64;
+                [
+                    (c.center.x + a.cos() * c.radius) as f32,
+                    (c.center.y + a.sin() * c.radius) as f32,
+                    z,
+                ]
+            })
+            .collect(),
+        EntityType::Ellipse(el) => {
+            // major_axis = center → major endpoint; minor = perp(major) × ratio.
+            let (mx, my) = (el.major_axis.x, el.major_axis.y);
+            let r = el.minor_axis_ratio;
+            (0..N)
                 .map(|i| {
-                    let a = i as f64 * TAU / N as f64;
-                    [
-                        (c.center.x + a.cos() * c.radius) as f32,
-                        (c.center.y + a.sin() * c.radius) as f32,
-                        z,
-                    ]
+                    let t = i as f64 * TAU / N as f64;
+                    let px = mx * t.cos() - my * r * t.sin();
+                    let py = my * t.cos() + mx * r * t.sin();
+                    [(el.center.x + px) as f32, (el.center.y + py) as f32, z]
                 })
-                .collect(),
-            EntityType::Ellipse(el) => {
-                // major_axis = center → major endpoint; minor = perp(major) × ratio.
-                let (mx, my) = (el.major_axis.x, el.major_axis.y);
-                let r = el.minor_axis_ratio;
-                (0..N)
-                    .map(|i| {
-                        let t = i as f64 * TAU / N as f64;
-                        let px = mx * t.cos() - my * r * t.sin();
-                        let py = my * t.cos() + mx * r * t.sin();
-                        [(el.center.x + px) as f32, (el.center.y + py) as f32, z]
-                    })
+                .collect()
+        }
+        EntityType::LwPolyline(polyline) if polyline.is_closed => {
+            let vertices: Vec<([f64; 2], f64)> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    (
+                        [vertex.location.x, vertex.location.y],
+                        vertex.bulge,
+                    )
+                })
+                .collect();
+            sample_polyline_clip_boundary(
+                &vertices,
+                polyline.elevation,
+                (
+                    polyline.normal.x,
+                    polyline.normal.y,
+                    polyline.normal.z,
+                ),
+                z,
+            )
+        }
+        EntityType::Polyline2D(polyline) if polyline.is_closed() => {
+            let vertices: Vec<([f64; 2], f64)> = polyline
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    (
+                        [vertex.location.x, vertex.location.y],
+                        vertex.bulge,
+                    )
+                })
+                .collect();
+            sample_polyline_clip_boundary(
+                &vertices,
+                polyline.elevation,
+                (
+                    polyline.normal.x,
+                    polyline.normal.y,
+                    polyline.normal.z,
+                ),
+                z,
+            )
+        }
+        EntityType::Polyline(polyline) if polyline.is_closed() => polyline
+            .vertices
+            .iter()
+            .map(|vertex| {
+                [
+                    vertex.location.x as f32,
+                    vertex.location.y as f32,
+                    z,
+                ]
+            })
+            .collect(),
+        EntityType::Polyline3D(polyline) if polyline.flags.closed => polyline
+            .vertices
+            .iter()
+            .map(|vertex| {
+                [
+                    vertex.position.x as f32,
+                    vertex.position.y as f32,
+                    z,
+                ]
+            })
+            .collect(),
+        _ => {
+            use crate::entities::traits::EntityTypeOps;
+            let Some(te) = entity.to_truck_entity(document) else {
+                return vec![];
+            };
+            if let crate::scene::convert::acad_to_truck::TruckObject::Lines(pts) = te.object {
+                pts.into_iter()
+                    .filter(|p| p[0].is_finite() && p[1].is_finite())
+                    .map(|p| [p[0] as f32, p[1] as f32, z])
                     .collect()
-            }
-            _ => {
-                use crate::entities::traits::EntityTypeOps;
-                let Some(te) = entity.to_truck_entity(&self.document) else {
-                    return vec![];
-                };
-                if let crate::scene::convert::acad_to_truck::TruckObject::Lines(pts) = te.object {
-                    pts.into_iter()
-                        .filter(|p| p[0].is_finite() && p[1].is_finite())
-                        .map(|p| [p[0] as f32, p[1] as f32, z])
-                        .collect()
-                } else {
-                    vec![]
-                }
+            } else {
+                vec![]
             }
         }
     }
+}
+
+fn sample_polyline_clip_boundary(
+    vertices: &[([f64; 2], f64)],
+    elevation: f64,
+    normal: (f64, f64, f64),
+    z: f32,
+) -> Vec<[f32; 3]> {
+    if vertices.len() < 3 {
+        return Vec::new();
+    }
+    let to_wcs = |point: [f64; 2]| {
+        crate::scene::view::transform::ocs_point_to_wcs(
+            (point[0], point[1], elevation),
+            normal,
+        )
+    };
+    let mut output = Vec::new();
+    let first = to_wcs(vertices[0].0);
+    output.push([first.0 as f32, first.1 as f32, z]);
+    for index in 0..vertices.len() {
+        let (start, bulge) = vertices[index];
+        let end_index = (index + 1) % vertices.len();
+        let end = vertices[end_index].0;
+        if let Some(arc) =
+            crate::entities::common::BulgeArc::from_bulge(start, end, bulge)
+        {
+            let steps = ((arc.sweep.abs() / std::f64::consts::TAU * 64.0).ceil()
+                as usize)
+                .clamp(4, 64);
+            for step in 1..=steps {
+                if end_index == 0 && step == steps {
+                    break;
+                }
+                let point = to_wcs(arc.sample(step as f64 / steps as f64));
+                output.push([point.0 as f32, point.1 as f32, z]);
+            }
+        } else if end_index != 0 {
+            let point = to_wcs(end);
+            output.push([point.0 as f32, point.1 as f32, z]);
+        }
+    }
+    output
 }
 
 // ── Paper boundary wire ────────────────────────────────────────────────────

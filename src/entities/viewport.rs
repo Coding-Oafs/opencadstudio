@@ -458,6 +458,12 @@ impl crate::entities::traits::FallbackTess for Viewport {
     fn fallback_geometry(
         &self,
     ) -> crate::scene::convert::tess_util::FallbackGeometry {
+        // A clipped viewport uses its linked boundary entity as its visible
+        // frame. Drawing the viewport's rectangular extents as well leaves an
+        // incorrect box around polygonal/Object MVIEW results.
+        if !self.clip_boundary_handle.is_null() {
+            return (vec![], vec![], vec![], vec![]);
+        }
         let cx = self.center.x;
         let cy = self.center.y;
         let cz = self.center.z;
