@@ -343,7 +343,11 @@ impl PropertiesPanel {
         // into one clickable summary row; clicking expands the components.
         let mut idx = 0;
         while idx < section.props.len() {
-            let group_len = coord_group_len(&section.props, idx);
+            let group_len = if section.title == "View" {
+                0
+            } else {
+                coord_group_len(&section.props, idx)
+            };
             if group_len >= 2 {
                 let base = coord_base(&section.props[idx].label);
                 let key = format!("{}:{}", section.title, base);

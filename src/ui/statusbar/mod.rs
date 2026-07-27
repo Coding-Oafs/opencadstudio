@@ -59,6 +59,8 @@ impl StatusBar {
         otrack: bool,
         layouts: Vec<String>,
         current_layout: String,
+        // Start/welcome view has no drawing to own layouts.
+        is_start: bool,
         // If `Some((original, edit_value))`, the named tab shows a text input.
         rename_state: Option<&'a (String, String)>,
         // Scale of the first user viewport in the active paper layout.
@@ -107,8 +109,11 @@ impl StatusBar {
     ) -> Element<'a, Message> {
         // Leftmost hamburger: opens a dropdown listing Model + every layout, so
         // a layout can be picked directly even when the tab strip is scrolled.
-        let menu_btn = button(crate::ui::icons::tinted(crate::ui::icons::MENU, 16.0, ICON_COLOR))
-            .on_press(Message::ToggleLayoutList)
+        let menu_button = button(crate::ui::icons::tinted(
+            crate::ui::icons::MENU,
+            16.0,
+            if is_start { DISABLED_COLOR } else { ICON_COLOR },
+        ))
             .style(|_: &Theme, status| button::Style {
                 background: Some(Background::Color(match status {
                     button::Status::Hovered => PILL_BG,
@@ -121,14 +126,33 @@ impl StatusBar {
                 ..Default::default()
             })
             .padding([4, 8]);
+        let menu_btn = if is_start {
+            tip(
+                menu_button.into(),
+                "Open or create a drawing to manage layouts.",
+            )
+        } else {
+            menu_button.on_press(Message::ToggleLayoutList).into()
+        };
 
-        let add_btn = button(text("+").size(12).color(ICON_COLOR))
-            .on_press(Message::LayoutCreate)
+        let add_button = button(text("+").size(12).color(if is_start {
+            DISABLED_COLOR
+        } else {
+            ICON_COLOR
+        }))
             .style(|_: &Theme, _| button::Style {
                 background: Some(Background::Color(Color::TRANSPARENT)),
                 ..Default::default()
             })
             .padding([4, 8]);
+        let add_btn = if is_start {
+            tip(
+                add_button.into(),
+                "Open or create a drawing to add a layout.",
+            )
+        } else {
+            add_button.on_press(Message::LayoutCreate).into()
+        };
 
         // ── Right side ────────────────────────────────────────────────────
         let osnap_active = snapper.is_active();
@@ -353,7 +377,7 @@ impl StatusBar {
                 let renaming = rename_state
                     .filter(|(orig, _)| *orig == name)
                     .map(|(_, edit)| edit.as_str());
-                left.push(space_tab(name, is_active, renaming).into());
+                left.push(space_tab(name, is_active, renaming, !is_start).into());
             }
             left.push(add_btn.into());
         }
@@ -640,6 +664,7 @@ fn space_tab<'a>(
     label: String,
     is_active: bool,
     rename_edit: Option<&'a str>,
+    enabled: bool,
 ) -> Element<'a, Message> {
     let bg = move |is_active: bool, hovered: bool| {
         if is_active {
@@ -661,7 +686,9 @@ fn space_tab<'a>(
         radius: 2.0.into(),
     };
 
-    let text_color = if is_active {
+    let text_color = if !enabled {
+        DISABLED_COLOR
+    } else if is_active {
         Color::WHITE
     } else {
         Color {
@@ -672,7 +699,23 @@ fn space_tab<'a>(
         }
     };
 
-    if let Some(edit_val) = rename_edit {
+    if !enabled {
+        let display = container(text(label.clone()).size(12).color(text_color))
+            .style(move |_: &Theme| container::Style {
+                background: Some(Background::Color(bg(is_active, false))),
+                border,
+                ..Default::default()
+            })
+            .padding([4, 10]);
+        crate::ui::wrap_bar::PosReport::owned(
+            format!("SB_LAYOUT_TAB:{label}"),
+            tip(
+                display.into(),
+                "Open or create a drawing to switch layouts.",
+            ),
+        )
+        .into()
+    } else if let Some(edit_val) = rename_edit {
         // Inline rename text input with a cancel (✕) button.
         let input = text_input("", edit_val)
             .id(iced::widget::Id::new(LAYOUT_RENAME_INPUT_ID))
@@ -868,6 +911,12 @@ const ICON_COLOR: Color = Color {
     r: 0.70,
     g: 0.70,
     b: 0.70,
+    a: 1.0,
+};
+const DISABLED_COLOR: Color = Color {
+    r: 0.35,
+    g: 0.35,
+    b: 0.35,
     a: 1.0,
 };
 const ACCENT: Color = Color {

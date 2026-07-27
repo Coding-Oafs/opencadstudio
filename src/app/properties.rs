@@ -142,11 +142,198 @@ impl OpenCADStudio {
             let selected = self.tabs[i].scene.selected_entities();
             let mut panel = match selected.len() {
                 0 => {
-                    let sections = crate::entities::object_data::cached_document_sections(
-                        &self.tabs[i].scene.object_data_cache,
-                    );
+                    use crate::scene::model::object::{PropSection, PropValue, Property};
+
+                    let tab = &self.tabs[i];
+                    let scene = &tab.scene;
+                    let doc = &scene.document;
+                    let header = &doc.header;
+                    let camera = scene.camera.borrow();
+                    let (viewport_width, viewport_height) = scene.selection.borrow().vp_size;
+                    let aspect = if viewport_height > 0.0 {
+                        viewport_width as f64 / viewport_height as f64
+                    } else {
+                        1.0
+                    };
+                    let view_height = camera.ortho_size() as f64 * 2.0;
+                    let view_width = view_height * aspect;
+                    let format_length = crate::entities::common::format_length;
+                    let read_only = |label: &str, value: String| Property {
+                        label: label.to_string(),
+                        field: "drawing_property",
+                        value: PropValue::ReadOnly(value),
+                    };
+                    let current_layer = if header.current_layer_name.is_empty() {
+                        tab.active_layer.clone()
+                    } else {
+                        header.current_layer_name.clone()
+                    };
+                    let current_linetype = if !header.current_linetype_name.is_empty() {
+                        header.current_linetype_name.clone()
+                    } else if !header.current_linetype_handle.is_null() {
+                        doc.line_types
+                            .iter()
+                            .find(|line_type| {
+                                line_type.handle == header.current_linetype_handle
+                            })
+                            .map(|line_type| line_type.name.clone())
+                            .unwrap_or_else(|| "ByLayer".to_string())
+                    } else {
+                        "ByLayer".to_string()
+                    };
+                    let material = if header.current_material_handle.is_null() {
+                        "ByLayer".to_string()
+                    } else {
+                        doc.objects
+                            .get(&header.current_material_handle)
+                            .and_then(|object| match object {
+                                acadrust::objects::ObjectType::Material(material) => {
+                                    Some(material.name.clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| "ByLayer".to_string())
+                    };
+                    let plot_style = match header.current_plotstyle_type {
+                        1 => "ByBlock",
+                        2 => "ByColor",
+                        3 => "ByObject",
+                        _ => "ByLayer",
+                    };
+                    let layout_plot_table = doc.objects.values().find_map(|object| {
+                        let acadrust::objects::ObjectType::Layout(layout) = object else {
+                            return None;
+                        };
+                        (layout.name == scene.current_layout
+                            && !layout.plot_style_sheet.trim().is_empty())
+                        .then(|| layout.plot_style_sheet.clone())
+                    });
+                    let plot_table = layout_plot_table
+                        .or_else(|| {
+                            (!header.stylesheet.trim().is_empty())
+                                .then(|| header.stylesheet.clone())
+                        })
+                        .unwrap_or_else(|| "None".to_string());
+                    let ucs_per_viewport = scene
+                        .active_viewport
+                        .and_then(|handle| doc.get_entity(handle))
+                        .and_then(|entity| match entity {
+                            acadrust::EntityType::Viewport(viewport) => {
+                                Some(viewport.ucs_per_viewport)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(false);
+                    let ucs_name = tab
+                        .active_ucs
+                        .as_ref()
+                        .map(|ucs| ucs.name.trim())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or("World")
+                        .to_string();
+                    let annotation_scale = if header.current_annotation_scale.trim().is_empty() {
+                        "1:1".to_string()
+                    } else {
+                        header.current_annotation_scale.clone()
+                    };
+                    let sections = vec![
+                        PropSection {
+                            title: "General".to_string(),
+                            props: vec![
+                                read_only("AC Version", doc.version.as_str().to_string()),
+                                Property {
+                                    label: "Color".to_string(),
+                                    field: "color",
+                                    value: PropValue::ColorChoice(header.current_entity_color),
+                                },
+                                Property {
+                                    label: "Layer".to_string(),
+                                    field: "layer",
+                                    value: PropValue::LayerChoice(current_layer),
+                                },
+                                Property {
+                                    label: "Linetype".to_string(),
+                                    field: "linetype",
+                                    value: PropValue::LinetypeChoice(current_linetype),
+                                },
+                                read_only(
+                                    "Linetype scale",
+                                    format_length(header.current_entity_linetype_scale),
+                                ),
+                                Property {
+                                    label: "Lineweight".to_string(),
+                                    field: "line_weight",
+                                    value: PropValue::LwChoice(
+                                        acadrust::types::LineWeight::from_value(
+                                            header.current_line_weight,
+                                        ),
+                                    ),
+                                },
+                                read_only("Transparency", "ByLayer".to_string()),
+                                read_only("Thickness", format_length(header.thickness)),
+                            ],
+                        },
+                        PropSection {
+                            title: "3D Visualization".to_string(),
+                            props: vec![read_only("Material", material)],
+                        },
+                        PropSection {
+                            title: "Plot style".to_string(),
+                            props: vec![
+                                read_only("Plot style", plot_style.to_string()),
+                                read_only("Plot style table", plot_table.clone()),
+                                read_only(
+                                    "Plot table attached to",
+                                    if plot_table == "None" {
+                                        "None".to_string()
+                                    } else {
+                                        scene.current_layout.clone()
+                                    },
+                                ),
+                                read_only(
+                                    "Plot table type",
+                                    if header.plotstyle_mode {
+                                        "Named plot styles".to_string()
+                                    } else {
+                                        "Color-dependent plot styles".to_string()
+                                    },
+                                ),
+                            ],
+                        },
+                        PropSection {
+                            title: "View".to_string(),
+                            props: vec![
+                                read_only("Center X", format_length(camera.target.x)),
+                                read_only("Center Y", format_length(camera.target.y)),
+                                read_only("Center Z", format_length(camera.target.z)),
+                                read_only("Height", format_length(view_height)),
+                                read_only("Width", format_length(view_width)),
+                            ],
+                        },
+                        PropSection {
+                            title: "Misc".to_string(),
+                            props: vec![
+                                read_only("Annotation scale", annotation_scale),
+                                read_only(
+                                    "UCS icon On",
+                                    if self.show_ucs_icon { "Yes" } else { "No" }.to_string(),
+                                ),
+                                read_only(
+                                    "UCS icon at origin",
+                                    if self.ucs_icon_at_origin { "Yes" } else { "No" }
+                                        .to_string(),
+                                ),
+                                read_only(
+                                    "UCS per viewport",
+                                    if ucs_per_viewport { "Yes" } else { "No" }.to_string(),
+                                ),
+                                read_only("UCS Name", ucs_name),
+                                read_only("Visual Style", tab.visual_style.clone()),
+                            ],
+                        },
+                    ];
                     ui::PropertiesPanel {
-                        title: "Drawing".to_string(),
+                        title: "No selection".to_string(),
                         sections,
                         layer_combo: iced::widget::combo_box::State::new(layer_names.clone()),
                         linetype_combo: iced::widget::combo_box::State::new(

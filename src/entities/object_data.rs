@@ -67,10 +67,6 @@ pub fn build_cache(document: &CadDocument) -> ObjectDataCache {
     }
 }
 
-pub fn cached_document_sections(cache: &ObjectDataCache) -> Vec<PropSection> {
-    cache.document_sections.as_ref().clone()
-}
-
 pub fn cache_is_prepared(cache: &ObjectDataCache) -> bool {
     !cache.document_sections.is_empty()
 }

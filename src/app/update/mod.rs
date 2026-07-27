@@ -920,6 +920,9 @@ impl OpenCADStudio {
 
             Message::TabSwitch(idx) => {
                 self.doc_tab_context_menu = None;
+                self.layout_list_open = false;
+                self.layout_context_menu = None;
+                self.layout_rename_state = None;
                 if idx < self.tabs.len() {
                     if idx != self.active_tab {
                         // The attribute editor is tab-scoped; leaving its tab
@@ -931,6 +934,11 @@ impl OpenCADStudio {
                         self.stamp_header_sysvars(prev);
                     }
                     self.active_tab = idx;
+                    if self.tabs[idx].is_start
+                        && self.active_modal == Some(super::ModalKind::LayoutManager)
+                    {
+                        self.close_active_modal();
+                    }
                     self.sync_ribbon_layers();
                     self.sync_ribbon_styles();
                     // #21: also re-seed ribbon Color / Linetype / Lineweight
@@ -2334,6 +2342,10 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::ToggleLayoutList => {
+                if self.tabs[self.active_tab].is_start {
+                    self.layout_list_open = false;
+                    return Task::none();
+                }
                 self.layout_list_open ^= true;
                 Task::none()
             }
@@ -2919,74 +2931,89 @@ impl OpenCADStudio {
             Message::PropLayerChanged(layer) => {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
-                if !handles.is_empty() {
-                    self.push_undo_snapshot(i, "CHPROP");
-                    for &handle in &handles {
-                        if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                            crate::scene::view::dispatch::apply_common_prop(
-                                entity, "layer", &layer,
-                            );
-                        }
-                    }
-                    self.invalidate_property_targets(i, &handles);
-                    self.tabs[i].dirty = true;
+                if handles.is_empty() {
+                    let task = self.on_ribbon_layer_changed(layer);
                     self.refresh_properties();
+                    return task;
                 }
+                self.push_undo_snapshot(i, "CHPROP");
+                for &handle in &handles {
+                    if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                        crate::scene::view::dispatch::apply_common_prop(
+                            entity, "layer", &layer,
+                        );
+                    }
+                }
+                self.invalidate_property_targets(i, &handles);
+                self.tabs[i].dirty = true;
+                self.refresh_properties();
                 Task::none()
             }
 
             Message::PropColorChanged(color) => {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
-                if !handles.is_empty() {
-                    self.push_undo_snapshot(i, "CHPROP");
-                    for &handle in &handles {
-                        if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                            crate::scene::view::dispatch::apply_color(entity, color);
-                        }
-                    }
-                    self.invalidate_property_targets(i, &handles);
-                    self.tabs[i].properties.color_picker_open = false;
+                if handles.is_empty() {
                     self.tabs[i].properties.color_palette_open = false;
-                    self.tabs[i].dirty = true;
+                    let task = self.on_ribbon_color_changed(color);
                     self.refresh_properties();
+                    return task;
                 }
+                self.push_undo_snapshot(i, "CHPROP");
+                for &handle in &handles {
+                    if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                        crate::scene::view::dispatch::apply_color(entity, color);
+                    }
+                }
+                self.invalidate_property_targets(i, &handles);
+                self.tabs[i].properties.color_picker_open = false;
+                self.tabs[i].properties.color_palette_open = false;
+                self.tabs[i].dirty = true;
+                self.refresh_properties();
                 Task::none()
             }
 
             Message::PropLwChanged(lw) => {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
-                if !handles.is_empty() {
-                    self.push_undo_snapshot(i, "CHPROP");
-                    for &handle in &handles {
-                        if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                            crate::scene::view::dispatch::apply_line_weight(entity, lw);
-                        }
-                    }
-                    self.invalidate_property_targets(i, &handles);
+                if handles.is_empty() {
+                    self.tabs[i].scene.document.header.current_line_weight = lw.value();
                     self.tabs[i].dirty = true;
+                    self.ribbon.active_lineweight = lw;
                     self.refresh_properties();
+                    return Task::none();
                 }
+                self.push_undo_snapshot(i, "CHPROP");
+                for &handle in &handles {
+                    if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                        crate::scene::view::dispatch::apply_line_weight(entity, lw);
+                    }
+                }
+                self.invalidate_property_targets(i, &handles);
+                self.tabs[i].dirty = true;
+                self.refresh_properties();
                 Task::none()
             }
 
             Message::PropLinetypeChanged(lt) => {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
-                if !handles.is_empty() {
-                    self.push_undo_snapshot(i, "CHPROP");
-                    for &handle in &handles {
-                        if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                            crate::scene::view::dispatch::apply_common_prop(
-                                entity, "linetype", &lt,
-                            );
-                        }
-                    }
-                    self.invalidate_property_targets(i, &handles);
-                    self.tabs[i].dirty = true;
+                if handles.is_empty() {
+                    let task = self.on_ribbon_linetype_changed(lt);
                     self.refresh_properties();
+                    return task;
                 }
+                self.push_undo_snapshot(i, "CHPROP");
+                for &handle in &handles {
+                    if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                        crate::scene::view::dispatch::apply_common_prop(
+                            entity, "linetype", &lt,
+                        );
+                    }
+                }
+                self.invalidate_property_targets(i, &handles);
+                self.tabs[i].dirty = true;
+                self.refresh_properties();
                 Task::none()
             }
 
@@ -3364,6 +3391,11 @@ impl OpenCADStudio {
             // ── Layout Manager Panel ──────────────────────────────────────────
             Message::LayoutManagerOpen => {
                 let i = self.active_tab;
+                if self.tabs[i].is_start {
+                    self.command_line
+                        .push_info("Open or create a drawing to manage layouts.");
+                    return Task::none();
+                }
                 let current = self.tabs[i].scene.current_layout.clone();
                 self.layout_manager_selected = current.clone();
                 self.layout_manager_rename_buf = if current == "Model" {
@@ -3417,6 +3449,11 @@ impl OpenCADStudio {
             }
             Message::LayoutManagerNew => {
                 let i = self.active_tab;
+                if self.tabs[i].is_start {
+                    self.command_line
+                        .push_info("Open or create a drawing to add a layout.");
+                    return Task::none();
+                }
                 let existing = self.tabs[i].scene.layout_names();
                 let n = (1usize..)
                     .find(|n| !existing.contains(&format!("Layout{n}")))

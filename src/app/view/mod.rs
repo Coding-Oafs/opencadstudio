@@ -1446,6 +1446,7 @@ impl OpenCADStudio {
                             .as_ref()
                             .map(|be| be.block_name.clone())
                             .unwrap_or_else(|| tab.scene.current_layout.clone()),
+                        tab.is_start,
                         self.layout_rename_state.as_ref(),
                         tab.scene.first_viewport_scale(),
                         tab.scene.viewport_count(),

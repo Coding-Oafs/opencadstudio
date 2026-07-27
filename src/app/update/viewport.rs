@@ -3677,6 +3677,11 @@ impl OpenCADStudio {
 
     pub(super) fn on_layout_switch(&mut self, name: String) -> Task<Message> {
         let i = self.active_tab;
+        if self.tabs[i].is_start {
+            self.command_line
+                .push_info("Open or create a drawing to switch layouts.");
+            return Task::none();
+        }
         // A BEDIT block editor locks the active space; finish it with
         // Save Block or Discard before switching spaces. (#261)
         if self.tabs[i].block_edit.is_some() {
@@ -3745,6 +3750,11 @@ impl OpenCADStudio {
 
     pub(super) fn on_layout_create(&mut self) -> Task<Message> {
         let i = self.active_tab;
+        if self.tabs[i].is_start {
+            self.command_line
+                .push_info("Open or create a drawing to add a layout.");
+            return Task::none();
+        }
         // Find a unique name (e.g. Layout2, Layout3, ...).
         let existing = self.tabs[i].scene.layout_names();
         let mut idx = existing.len();

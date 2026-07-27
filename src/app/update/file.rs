@@ -864,7 +864,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
                 self.tabs[i].dirty = false;
                 self.tabs[i].history = crate::app::document::HistoryState::default();
-                self.refresh_selected_grips();
+                self.refresh_properties();
                 #[cfg(not(target_arch = "wasm32"))]
                 let interaction_task = {
                     let wires = self.tabs[i].scene.hit_test_wires();
