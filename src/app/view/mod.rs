@@ -1708,6 +1708,7 @@ impl OpenCADStudio {
         let (w, h) = match self.active_modal? {
             About => (440, 360),
             Shortcuts => (720, 520),
+            Options => (480, 190),
             PluginManager => (520, 460),
             UpdateNotice => (560, 460),
             Layers => (900, 360),
@@ -2524,6 +2525,7 @@ pub(super) fn start_page_view<'a>(
             },
         )
         .into(),
+        outline_btn("Options", Message::OptionsOpen).into(),
         outline_btn("Plugins", Message::PluginManagerOpen).into(),
     ];
     // The web build is already in the browser, so only the desktop offers a

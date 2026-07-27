@@ -3663,7 +3663,18 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            // ── About window ──────────────────────────────────────────────
+            // ── Options / About windows ───────────────────────────────────
+            Message::OptionsOpen => {
+                self.active_modal = Some(super::ModalKind::Options);
+                Task::none()
+            }
+
+            Message::DefaultSaveFormatChanged(format) => {
+                self.default_save_format =
+                    crate::io::canonical_save_format(&format).to_string();
+                Task::none()
+            }
+
             Message::AboutOpen => {
                 self.active_modal = Some(super::ModalKind::About);
                 Task::none()

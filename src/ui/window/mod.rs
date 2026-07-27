@@ -6,5 +6,6 @@ pub mod shortcuts;
 pub mod layers;
 pub mod update_notice;
 pub mod open_progress;
+pub mod options;
 pub mod attribute_editor;
 pub mod alias_editor;

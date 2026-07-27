@@ -118,6 +118,7 @@ impl OpenCADStudio {
             backup_on_save: self.backup_on_save,
             file_assoc_enabled: self.file_assoc_enabled,
             savetime_min: self.savetime_min,
+            default_save_format: self.default_save_format.clone(),
             pick_add: self.pick_add,
             pick_drag_rect: self.pick_drag_rect,
             bg_color: self.default_bg_color.map(f4_to_u3),
@@ -145,6 +146,8 @@ impl OpenCADStudio {
         self.backup_on_save = s.backup_on_save;
         self.file_assoc_enabled = s.file_assoc_enabled;
         self.savetime_min = s.savetime_min;
+        self.default_save_format =
+            crate::io::canonical_save_format(&s.default_save_format).to_string();
         self.pick_add = s.pick_add;
         self.pick_drag_rect = s.pick_drag_rect;
         self.default_bg_color = s.bg_color.map(u3_to_f4);
@@ -1307,6 +1310,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 }
                 if outcome.set_current_path {
                     self.tabs[i].current_path = Some(outcome.path.clone());
+                    self.tabs[i].scene.document.version = outcome.version;
                     tasks.push(self.push_recent(outcome.path.clone()));
                 }
                 self.refresh_native_edit_guard_after_save(
@@ -1528,22 +1532,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     );
                 }
                 self.save_dialog_for_unsaved = false;
-                self.save_default_dwg2018(i)
+                self.save_with_default_format(i)
     }
 
-    /// Save without the version picker: default to DWG 2018 and go straight to
+    /// Save without the version picker: use the configured default and go straight to
     /// the native destination dialog (native) or the browser download (web).
     /// Used by plain Save (QSAVE) on an as-yet-unsaved drawing and by the
     /// save-before-close flow — the version picker is reserved for Save As.
-    pub(in crate::app) fn save_default_dwg2018(&mut self, tab_idx: usize) -> Task<Message> {
+    pub(in crate::app) fn save_with_default_format(&mut self, tab_idx: usize) -> Task<Message> {
         self.active_tab = tab_idx;
-        self.save_dialog_format = "DWG 2018".to_string();
+        self.save_dialog_format = self.default_save_format.clone();
+        let (ext, _) = crate::io::parse_save_format(&self.save_dialog_format);
         self.save_dialog_filename = self.tabs[tab_idx]
             .current_path
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| format!("{}.dwg", self.tabs[tab_idx].tab_display_name()));
+            .unwrap_or_else(|| format!("{}.{ext}", self.tabs[tab_idx].tab_display_name()));
         self.aec_drop_acknowledged = false;
         self.on_save_dialog_confirm()
     }
@@ -1625,6 +1630,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
                         Ok(bytes) => {
                             crate::sys::download_bytes(&filename, &bytes);
+                            self.tabs[i].scene.document.version = version;
                             self.tabs[i].dirty = false;
                             self.command_line.push_output(&format!("Saved: {filename}"));
                             true
@@ -1700,12 +1706,24 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     /// AEC-drop warning → "Save in source version": switch the target to the
-    /// document's own DWG version (where the unsupported objects round-trip as
-    /// verbatim bytes), then save.
+    /// document's source type and version, then save.
     pub(super) fn on_aec_drop_same_version(&mut self) -> Task<Message> {
-        let src = self.tabs[self.active_tab].scene.document.version;
-        self.save_dialog_format = crate::io::format_for_version(src, false);
-        // Strip any extension (e.g. .dxf) so the confirm path appends .dwg.
+        let tab = &self.tabs[self.active_tab];
+        let is_dxf = tab
+            .current_path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("dxf"))
+            .unwrap_or(false);
+        let document = &tab.scene.document;
+        let src = if is_dxf {
+            document.version
+        } else {
+            document.dwg_source_version.unwrap_or(document.version)
+        };
+        self.save_dialog_format = crate::io::format_for_version(src, is_dxf);
+        // Strip the old extension so the confirm path appends the source type.
         let stem = std::path::Path::new(&self.save_dialog_filename)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())

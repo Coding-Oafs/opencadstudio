@@ -432,6 +432,21 @@ pub(crate) fn resolve_image_file(raw: &str, base_dir: Option<&Path>) -> Option<S
 
 // ── Save ──────────────────────────────────────────────────────────────────
 
+pub const DEFAULT_SAVE_FORMAT: &str = "DWG 2018";
+
+pub const SAVE_FORMAT_OPTIONS: &[&str] = &[
+    "DWG 2018", "DWG 2013", "DWG 2010", "DWG 2007", "DWG 2004", "DWG 2000", "DWG R14", "DXF 2018",
+    "DXF 2013", "DXF 2010", "DXF 2007", "DXF 2004", "DXF 2000", "DXF R14",
+];
+
+pub fn canonical_save_format(format: &str) -> &'static str {
+    SAVE_FORMAT_OPTIONS
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(format))
+        .unwrap_or(DEFAULT_SAVE_FORMAT)
+}
+
 /// Parse a format string like "DWG 2013" or "DXF 2007" into
 /// `(extension, DxfVersion)`.  Falls back to ("dwg", AC1032) for unknown strings.
 pub fn parse_save_format(format: &str) -> (&'static str, acadrust::DxfVersion) {
@@ -486,6 +501,10 @@ pub fn dropped_on_save_count(
     target_version: acadrust::DxfVersion,
     is_dxf: bool,
 ) -> usize {
+    if !is_dxf && doc.dwg_source_version == Some(target_version) {
+        return 0;
+    }
+
     let mut n = doc
         .objects
         .values()
@@ -503,10 +522,6 @@ pub fn dropped_on_save_count(
                         || raw_dwg_version.is_some_and(|source| source != target_version)
                 }
             }
-            acadrust::objects::ObjectType::GeoData(_)
-            | acadrust::objects::ObjectType::VisualStyle(_)
-            | acadrust::objects::ObjectType::Material(_)
-            | acadrust::objects::ObjectType::TableStyle(_) => !is_dxf,
             _ => false,
         })
         .count();
@@ -521,20 +536,6 @@ pub fn dropped_on_save_count(
                             .dwg_source_version
                             .is_some_and(|source| source != target_version)
                 }
-            }
-            acadrust::EntityType::Surface(entity) => {
-                is_dxf
-                    || entity.raw_dwg_data.is_none()
-                    || entity
-                        .dwg_source_version
-                        .is_some_and(|source| source != target_version)
-            }
-            acadrust::EntityType::Light(entity) => {
-                is_dxf
-                    || entity.raw_dwg_data.is_none()
-                    || entity
-                        .dwg_source_version
-                        .is_some_and(|source| source != target_version)
             }
             _ => false,
         };

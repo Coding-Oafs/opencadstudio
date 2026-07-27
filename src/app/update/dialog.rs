@@ -26,18 +26,24 @@ impl OpenCADStudio {
         // Default the format dropdown to the loaded file's own format — its
         // DWG-vs-DXF kind (from the extension) and its version (from the parsed
         // document) — so Save-As round-trips the format instead of silently
-        // re-targeting the latest. A new/unsaved drawing has no path, so it
-        // keeps its document default version and DWG. The user can still pick
-        // any other version explicitly.
-        let is_dxf = self.tabs[tab_idx]
-            .current_path
-            .as_ref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("dxf"))
-            .unwrap_or(false);
-        let version = self.tabs[tab_idx].scene.document.version;
-        self.save_dialog_format = crate::io::format_for_version(version, is_dxf);
+        // re-targeting it. A new/unsaved drawing has no source format, so it
+        // uses the application-wide default chosen in Options (#529).
+        self.save_dialog_format = if let Some(path) = &self.tabs[tab_idx].current_path {
+            let is_dxf = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("dxf"))
+                .unwrap_or(false);
+            let document = &self.tabs[tab_idx].scene.document;
+            let version = if is_dxf {
+                document.version
+            } else {
+                document.dwg_source_version.unwrap_or(document.version)
+            };
+            crate::io::format_for_version(version, is_dxf)
+        } else {
+            self.default_save_format.clone()
+        };
 
         // Pre-fill the default file name from the current path or the tab name;
         // the destination folder comes from the native OS dialog that follows.
@@ -280,7 +286,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             self.active_tab = idx;
             self.save_dialog_for_unsaved = true;
             let close = self.close_unsaved_dialog_window();
-            let save = self.save_default_dwg2018(idx);
+            let save = self.save_with_default_format(idx);
             return Task::batch([close, save]);
         }
 
@@ -291,7 +297,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     self.pending_close = Some(crate::app::PendingClose::Tab(idx));
                     self.save_dialog_for_unsaved = true;
                     let close = self.close_unsaved_dialog_window();
-                    let save = self.save_default_dwg2018(idx);
+                    let save = self.save_with_default_format(idx);
                     Task::batch([close, save])
                 }
                 Some(crate::app::PendingClose::Quit) => {
@@ -300,7 +306,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.pending_close = Some(crate::app::PendingClose::Quit);
                         self.save_dialog_for_unsaved = true;
                         let close = self.close_unsaved_dialog_window();
-                        let save = self.save_default_dwg2018(idx);
+                        let save = self.save_with_default_format(idx);
                         Task::batch([close, save])
                     } else {
                         Task::batch([

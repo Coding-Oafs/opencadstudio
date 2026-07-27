@@ -789,6 +789,8 @@ pub(super) struct OpenCADStudio {
     save_dialog_filename: String,
     /// True when triggered from the unsaved-changes flow.
     save_dialog_for_unsaved: bool,
+    /// User preference for the first save of a new/unsaved drawing.
+    default_save_format: String,
 
     // ── DimStyle Dialog ───────────────────────────────────────────────────
     /// Name of the style currently shown in the dialog.
@@ -1298,6 +1300,7 @@ pub enum ModalKind {
     DimStyle,
     Unsaved,
     SaveDialog,
+    Options,
     AecDropWarning,
     #[cfg(not(target_arch = "wasm32"))]
     FileInUse,
@@ -1468,6 +1471,10 @@ pub enum Message {
     SaveDialogCancel,
     /// Destination picked in the native OS save dialog (`None` = cancelled).
     SaveDialogPathPicked(Option<std::path::PathBuf>),
+    /// Open the application-wide Options dialog.
+    OptionsOpen,
+    /// Set the default type/version used when first saving a new drawing.
+    DefaultSaveFormatChanged(String),
     ClearScene,
     SetWireframe(bool),
     /// Set the active tab's render mode (one of acadrust's seven visual
@@ -2618,9 +2625,10 @@ impl OpenCADStudio {
             pending_save_failure: None,
             #[cfg(not(target_arch = "wasm32"))]
             pending_external_change: None,
-            save_dialog_format: "DWG 2018".to_string(),
+            save_dialog_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             save_dialog_filename: "drawing.dwg".to_string(),
             save_dialog_for_unsaved: false,
+            default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             // Plot style
             active_plot_style: None,
             // Color scheme (default: dark CAD-style)

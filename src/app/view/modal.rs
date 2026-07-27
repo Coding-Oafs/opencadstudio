@@ -11,6 +11,7 @@ impl OpenCADStudio {
             Some(K::About) => "About",
             Some(K::Shortcuts) => "Keyboard Shortcuts",
             Some(K::Aliases) => "Command Aliases",
+            Some(K::Options) => "Options",
             Some(K::PluginManager) => "Plugin Manager",
             Some(K::UpdateNotice) => "Update Available",
             Some(K::Layers) => "Layer Manager",
@@ -61,6 +62,11 @@ impl OpenCADStudio {
             super::super::ModalKind::Aliases => {
                 sized(crate::ui::window::alias_editor::view_window(&self.alias_editor_rows), 480, 520)
             }
+            super::super::ModalKind::Options => sized(
+                crate::ui::window::options::view_window(&self.default_save_format),
+                480,
+                190,
+            ),
             super::super::ModalKind::PluginManager => sized(
                 crate::ui::window::plugin_manager::view_window(
                     &self.disabled_plugins,
@@ -574,7 +580,24 @@ impl OpenCADStudio {
                 let src_label = self
                     .tabs
                     .get(self.active_tab)
-                    .map(|t| crate::io::format_for_version(t.scene.document.version, false))
+                    .map(|t| {
+                        let is_dxf = t
+                            .current_path
+                            .as_ref()
+                            .and_then(|path| path.extension())
+                            .and_then(|extension| extension.to_str())
+                            .map(|extension| extension.eq_ignore_ascii_case("dxf"))
+                            .unwrap_or(false);
+                        let version = if is_dxf {
+                            t.scene.document.version
+                        } else {
+                            t.scene
+                                .document
+                                .dwg_source_version
+                                .unwrap_or(t.scene.document.version)
+                        };
+                        crate::io::format_for_version(version, is_dxf)
+                    })
                     .unwrap_or_else(|| "DWG".to_string());
                 sized(
                     aec_drop_dialog_window(
@@ -689,11 +712,6 @@ impl OpenCADStudio {
     }
 }
 
-const SAVE_FORMAT_OPTIONS: &[&str] = &[
-    "DWG 2018", "DWG 2013", "DWG 2010", "DWG 2007", "DWG 2004", "DWG 2000", "DWG R14", "DXF 2018",
-    "DXF 2013", "DXF 2010", "DXF 2007", "DXF 2004", "DXF 2000", "DXF R14",
-];
-
 /// Compact Save-As options dialog: pick the format/version and a default file
 /// name. The destination folder and overwrite confirmation come from the
 /// native OS save dialog (native) or the browser download (web) that follows.
@@ -769,7 +787,10 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
             .padding([4, 12])
     };
 
-    let sel_fmt = SAVE_FORMAT_OPTIONS.iter().copied().find(|&s| s == format);
+    let sel_fmt = crate::io::SAVE_FORMAT_OPTIONS
+        .iter()
+        .copied()
+        .find(|&s| s == format);
     let label = |s: &'static str| text(s).size(11).color(DIM);
 
     let mut items: Vec<Element<'a, Message>> = Vec::new();
@@ -826,7 +847,7 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
     items.push(
         row![
             label("Format:").width(70),
-            pick_list(SAVE_FORMAT_OPTIONS, sel_fmt, |s: &str| {
+            pick_list(crate::io::SAVE_FORMAT_OPTIONS, sel_fmt, |s: &str| {
                 Message::SaveDialogFormatChanged(s.to_string())
             })
             .width(Fill),

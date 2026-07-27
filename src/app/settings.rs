@@ -135,6 +135,9 @@ pub struct UserSettings {
     /// Minutes between autosaves to a `.sv$` recovery file (SAVETIME command).
     /// 0 disables autosave.
     pub savetime_min: i32,
+    /// File type and version used when a new/unsaved drawing is first saved.
+    /// Existing drawings keep their own type and version.
+    pub default_save_format: String,
     /// PICKADD (#226): `true` (default) = a plain click ADDS to the selection
     /// (Shift removes); `false` = OS-style — a click REPLACES the selection
     /// and Shift+click toggles membership.
@@ -169,6 +172,7 @@ impl Default for UserSettings {
             backup_on_save: true,
             file_assoc_enabled: true,
             savetime_min: 10,
+            default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             pick_add: true,
             pick_drag_rect: false,
             bg_color: None,
