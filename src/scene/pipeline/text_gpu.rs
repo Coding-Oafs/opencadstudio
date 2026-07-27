@@ -250,16 +250,17 @@ impl TextAtlasGpu {
 
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
-/// Build the text render pipeline. Mirrors the image pipeline: alpha blending,
-/// `LessEqual` depth with write, 4x MSAA. `frame_bgl` is group 0 (shared
-/// uniforms), `atlas_bgl` is group 1 (the atlas).
-pub fn create_pipeline(
+/// Build the base and highlight text pipelines. The base mirrors the image
+/// pipeline (`LessEqual` depth with write); the highlight variant always draws
+/// without changing depth, matching the selected-wire xray overlay.
+/// `frame_bgl` is group 0 (shared uniforms), `atlas_bgl` is group 1 (the atlas).
+pub fn create_pipelines(
     device: &wgpu::Device,
     frame_bgl: &wgpu::BindGroupLayout,
     atlas_bgl: &wgpu::BindGroupLayout,
     color_format: wgpu::TextureFormat,
     sample_count: u32,
-) -> wgpu::RenderPipeline {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text.wgsl"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/text.wgsl").into()),
@@ -269,44 +270,54 @@ pub fn create_pipeline(
         bind_group_layouts: &[frame_bgl, atlas_bgl],
         push_constant_ranges: &[],
     });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("text.pipeline"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[TextVertex::layout()],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: color_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth24PlusStencil8,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::LessEqual,
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: sample_count,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        multiview: None,
-        cache: None,
-    })
+    let create = |label, depth_write_enabled, depth_compare| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[TextVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled,
+                depth_compare,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        })
+    };
+    (
+        create("text.pipeline", true, wgpu::CompareFunction::LessEqual),
+        create(
+            "text.highlight.pipeline",
+            false,
+            wgpu::CompareFunction::Always,
+        ),
+    )
 }
 
 /// Upload a finished vertex list; `None` if empty.

@@ -102,6 +102,8 @@ pub struct Pipeline {
     /// SDF text-quad pipeline (Phase 2b): draws per-glyph quads sampling the
     /// shared glyph atlas. Fed only when `OCS_TEXT_SDF` is set (else no verts).
     text_pipeline: wgpu::RenderPipeline,
+    /// Depth-independent variant used by selection / rollover highlighting.
+    text_highlight_pipeline: wgpu::RenderPipeline,
     mesh_pipeline: wgpu::RenderPipeline,
     /// Depth-write-disabled variant of `mesh_pipeline` for non-opaque solids.
     mesh_transparent_pipeline: wgpu::RenderPipeline,
@@ -1602,8 +1604,8 @@ impl Pipeline {
 
         // ── Text (SDF glyph quads) ─────────────────────────────────────────
         let text_atlas_bgl = text_gpu::TextAtlasGpu::bind_group_layout(device);
-        let text_pipeline =
-            text_gpu::create_pipeline(device, &frame_bgl, &text_atlas_bgl, format, MSAA_SAMPLES);
+        let (text_pipeline, text_highlight_pipeline) =
+            text_gpu::create_pipelines(device, &frame_bgl, &text_atlas_bgl, format, MSAA_SAMPLES);
 
         let viewcube = ViewCubePipeline::new(device, queue, format);
 
@@ -1745,6 +1747,7 @@ impl Pipeline {
             hatch_compat_pipeline,
             image_pipeline,
             text_pipeline,
+            text_highlight_pipeline,
             text_atlas_bgl,
             text_atlas_gpu: None,
             text_vbuf: None,
@@ -3619,14 +3622,13 @@ impl Pipeline {
         }
 
         // ── Pass 5c: SDF text quads (drawn over wires) ────────────────────
-        // The highlight buffer (selected / hovered text, tinted) is drawn in
-        // the same pass right after the base text so it recolours those glyphs.
+        // Selection / rollover text is drawn later with the selected-wire xray
+        // overlay, after wipeouts, so normal text cannot hide its own tint.
         if let Some(atlas) = &self.text_atlas_gpu {
             let have_base = self.text_vbuf.is_some() && self.text_vcount > 0;
-            let have_hl = self.text_highlight_vbuf.is_some() && self.text_highlight_vcount > 0;
             let have_preview =
                 self.text_preview_vbuf.is_some() && self.text_preview_vcount > 0;
-            if have_base || have_hl || have_preview {
+            if have_base || have_preview {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("text.render_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3658,12 +3660,6 @@ impl Pipeline {
                     if self.text_vcount > 0 {
                         pass.set_vertex_buffer(0, vbuf.slice(..));
                         pass.draw(0..self.text_vcount, 0..1);
-                    }
-                }
-                if let Some(hlbuf) = &self.text_highlight_vbuf {
-                    if self.text_highlight_vcount > 0 {
-                        pass.set_vertex_buffer(0, hlbuf.slice(..));
-                        pass.draw(0..self.text_highlight_vcount, 0..1);
                     }
                 }
                 // Grip-drag / command-preview glyphs, drawn over the base text.
@@ -3714,12 +3710,14 @@ impl Pipeline {
             }
         }
 
-        // ── Pass 7: selected wire overlay pass ───────────────────────────
-        // Redraws selected wires with depth_compare=Always so they appear on
-        // top of all other geometry at full brightness.
-        if !self.gpu_selected_wires.is_empty() {
+        // ── Pass 7: selection overlay pass ───────────────────────────────
+        // Redraws selected wires and text with depth_compare=Always so both
+        // appear on top of all other geometry at full brightness.
+        let have_text_highlight =
+            self.text_highlight_vbuf.is_some() && self.text_highlight_vcount > 0;
+        if !self.gpu_selected_wires.is_empty() || have_text_highlight {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("wire_xray.render_pass"),
+                label: Some("selection_xray.render_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: msaa,
                     depth_slice: None,
@@ -3741,19 +3739,31 @@ impl Pipeline {
                 occlusion_query_set: None,
             });
             pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
-            pass.set_pipeline(&self.wire_xray_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
-            for wire in &self.gpu_selected_wires {
-                if wire.instance_count > 0 {
-                    if let Some(bg) = &wire.const_bind_group {
-                        pass.set_bind_group(1, bg.as_ref(), &[]);
+            if !self.gpu_selected_wires.is_empty() {
+                pass.set_pipeline(&self.wire_xray_pipeline);
+                for wire in &self.gpu_selected_wires {
+                    if wire.instance_count > 0 {
+                        if let Some(bg) = &wire.const_bind_group {
+                            pass.set_bind_group(1, bg.as_ref(), &[]);
+                        }
+                        pass.set_vertex_buffer(0, wire.instance_buffer.slice(..));
+                        pass.draw(
+                            0..6,
+                            wire.first_instance..wire.first_instance + wire.instance_count,
+                        );
                     }
-                    pass.set_vertex_buffer(0, wire.instance_buffer.slice(..));
-                    pass.draw(
-                        0..6,
-                        wire.first_instance..wire.first_instance + wire.instance_count,
-                    );
+                }
+            }
+            if let (Some(atlas), Some(hlbuf)) =
+                (&self.text_atlas_gpu, &self.text_highlight_vbuf)
+            {
+                if self.text_highlight_vcount > 0 {
+                    pass.set_pipeline(&self.text_highlight_pipeline);
+                    pass.set_bind_group(1, &atlas.bind_group, &[]);
+                    pass.set_vertex_buffer(0, hlbuf.slice(..));
+                    pass.draw(0..self.text_highlight_vcount, 0..1);
                 }
             }
         }
