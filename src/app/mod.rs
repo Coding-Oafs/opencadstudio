@@ -573,10 +573,6 @@ pub(super) struct OpenCADStudio {
     mtext_editor: Option<mtext_editor::MTextEditorState>,
     /// Open in-place single-line TEXT editor (plain text-entry box), if any.
     text_inline: Option<text_inline::TextInlineState>,
-    /// Which layout tab has its context menu open (None = closed).
-    layout_context_menu: Option<String>,
-    /// Which drawing tab has its context menu open (None = closed).
-    doc_tab_context_menu: Option<usize>,
     /// Cursor-anchored one-shot snap override menu (Shift+RMB): the canvas
     /// point it opened at, or `None` when closed (#337).
     snap_override_popup: Option<iced::Point>,
@@ -1515,9 +1511,6 @@ pub enum Message {
     },
     /// Close the given tab index.
     TabClose(usize),
-    /// Open/close the right-click menu for a drawing tab.
-    DocTabContextMenu(usize),
-    DocTabContextMenuClose,
     /// Save every drawing that already has a file path.
     DocTabSaveAll,
     /// Close every non-Start drawing tab.
@@ -1968,10 +1961,6 @@ pub enum Message {
     LayoutRenameCommit,
     /// Cancel an in-progress rename (Escape).
     LayoutRenameCancel,
-    /// Open the right-click context menu for the given layout tab.
-    LayoutContextMenu(String),
-    /// Close the layout context menu.
-    LayoutContextMenuClose,
     // ── Layout Manager Panel ────────────────────────────────────────────
     LayoutManagerOpen,
     #[allow(dead_code)]
@@ -2599,8 +2588,6 @@ impl OpenCADStudio {
             cont_anchor: None,
             mtext_editor: None,
             text_inline: None,
-            layout_context_menu: None,
-            doc_tab_context_menu: None,
             snap_override_popup: None,
             axis_lock_dir: None,
             layout_rename_state: None,

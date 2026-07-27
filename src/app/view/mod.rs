@@ -13,6 +13,7 @@ use iced::widget::{
 };
 use iced::window;
 use iced::{keyboard, Background, Border, Color, Element, Fill, Subscription, Task, Theme};
+use iced_aw::ContextMenu;
 
 mod controls;
 mod modal;
@@ -21,8 +22,8 @@ mod viewcube;
 
 use controls::{dyn_component_value, viewport_controls};
 use overlay::{
-    doc_tab_context_menu_overlay, layout_context_menu_overlay, mtext_editor_overlay,
-    position_canvas_overlay, qselect_overlay, text_inline_overlay, viewport_context_menu_overlay,
+    mtext_editor_overlay, position_canvas_overlay, qselect_overlay, text_inline_overlay,
+    viewport_context_menu_overlay,
 };
 use viewcube::{viewcube_nav_controls, viewcube_ucs_picker, UCS_PICKER_W};
 
@@ -1465,8 +1466,6 @@ impl OpenCADStudio {
         .width(Fill)
         .height(Fill);
 
-        let win = self.win_size;
-
         let dropdown_layer: Element<'_, Message> = self
             .ribbon
             .dropdown_overlay(
@@ -1475,33 +1474,6 @@ impl OpenCADStudio {
                 self.win_size,
             )
             .unwrap_or_else(|| iced::widget::Space::new().width(0).height(0).into());
-
-        let layout_ctx_layer: Element<'_, Message> = if let Some(name) = &self.layout_context_menu {
-            layout_context_menu_overlay(name, win)
-        } else {
-            iced::widget::Space::new().width(0).height(0).into()
-        };
-
-        let doc_tab_ctx_layer: Element<'_, Message> =
-            if let Some(idx) = self.doc_tab_context_menu {
-                if let Some(context_tab) = self.tabs.get(idx) {
-                    let has_other_drawings = self
-                        .tabs
-                        .iter()
-                        .enumerate()
-                        .any(|(other_idx, tab)| other_idx != idx && !tab.is_start);
-                    doc_tab_context_menu_overlay(
-                        idx,
-                        context_tab.current_path.as_deref(),
-                        has_other_drawings,
-                        win,
-                    )
-                } else {
-                    iced::widget::Space::new().width(0).height(0).into()
-                }
-            } else {
-                iced::widget::Space::new().width(0).height(0).into()
-            };
 
         let snap_override_layer: Element<'_, Message> =
             if let Some(pos) = self.snap_override_popup {
@@ -1527,8 +1499,6 @@ impl OpenCADStudio {
         let composed = stack![
             main_ui,
             dropdown_layer,
-            layout_ctx_layer,
-            doc_tab_ctx_layer,
             qselect_layer,
             snap_override_layer,
             open_progress_layer,
@@ -1919,6 +1889,109 @@ impl OpenCADStudio {
 
 // ── Document tab bar ───────────────────────────────────────────────────────
 
+/// Right-click actions for a drawing tab. `ContextMenu` owns opening,
+/// cursor-relative placement, boundary clamping, and dismissal.
+fn doc_tab_context_menu(
+    tab_idx: usize,
+    has_current_path: bool,
+    has_other_drawings: bool,
+) -> Element<'static, Message> {
+    const MENU_W: f32 = 210.0;
+    const MENU_BG: Color = Color {
+        r: 0.17,
+        g: 0.17,
+        b: 0.17,
+        a: 1.0,
+    };
+    const MENU_BORDER: Color = Color {
+        r: 0.35,
+        g: 0.35,
+        b: 0.35,
+        a: 1.0,
+    };
+    const ITEM_HOVER: Color = Color {
+        r: 0.25,
+        g: 0.45,
+        b: 0.70,
+        a: 1.0,
+    };
+    const TEXT_COLOR: Color = Color {
+        r: 0.88,
+        g: 0.88,
+        b: 0.88,
+        a: 1.0,
+    };
+    const DISABLED_TEXT: Color = Color {
+        r: 0.43,
+        g: 0.43,
+        b: 0.43,
+        a: 1.0,
+    };
+
+    let item = |label: &'static str, msg: Option<Message>| {
+        let enabled = msg.is_some();
+        let mut item = button(text(label).size(12).color(if enabled {
+            TEXT_COLOR
+        } else {
+            DISABLED_TEXT
+        }))
+        .style(move |_: &Theme, status| button::Style {
+            background: Some(Background::Color(if enabled {
+                match status {
+                    button::Status::Hovered | button::Status::Pressed => ITEM_HOVER,
+                    _ => Color::TRANSPARENT,
+                }
+            } else {
+                Color::TRANSPARENT
+            })),
+            text_color: if enabled { TEXT_COLOR } else { DISABLED_TEXT },
+            border: Border::default(),
+            shadow: iced::Shadow::default(),
+            snap: false,
+        })
+        .padding([4, 12])
+        .width(Fill);
+        if let Some(msg) = msg {
+            item = item.on_press(msg);
+        }
+        item
+    };
+
+    let native_path_actions = cfg!(not(target_arch = "wasm32")) && has_current_path;
+    container(
+        column![
+            item("Save All", Some(Message::DocTabSaveAll)),
+            item("Close All", Some(Message::DocTabCloseAll)),
+            item(
+                "Close All Other Drawings",
+                has_other_drawings.then_some(Message::DocTabCloseOthers(tab_idx)),
+            ),
+            item(
+                "Copy Full File Path",
+                native_path_actions.then_some(Message::DocTabCopyFullPath(tab_idx)),
+            ),
+            item(
+                "Open File Location",
+                native_path_actions.then_some(Message::DocTabOpenFileLocation(tab_idx)),
+            ),
+        ]
+        .spacing(0)
+        .width(MENU_W),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(MENU_BG)),
+        border: Border {
+            color: MENU_BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .padding([4, 0])
+    .width(iced::Length::Fixed(MENU_W))
+    .into()
+}
+
 pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Element<'a, Message> {
     const BAR_BG: Color = Color {
         r: 0.13,
@@ -2093,9 +2166,13 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
         let tab_element: Element<'_, Message> = if tab.is_start {
             tab_container.into()
         } else {
+            let has_current_path = tab.current_path.is_some();
+            let has_other_drawings = drag_targets.len() > 1;
             crate::ui::wrap_bar::PosReport::owned(
                 format!("DOC_TAB:{idx}"),
-                mouse_area(tab_container).on_right_press(Message::DocTabContextMenu(idx)),
+                ContextMenu::new(tab_container, move || {
+                    doc_tab_context_menu(idx, has_current_path, has_other_drawings)
+                }),
             )
             .into()
         };

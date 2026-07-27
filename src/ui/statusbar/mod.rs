@@ -6,9 +6,10 @@ pub mod status_menu;
 
 use iced::widget::tooltip::Position as TipPos;
 use iced::widget::{
-    button, container, mouse_area, row, text, text_input, tooltip,
+    button, column, container, mouse_area, row, text, text_input, tooltip,
 };
 use iced::{Background, Border, Color, Element, Length, Theme};
+use iced_aw::ContextMenu;
 use std::sync::Arc;
 
 /// Scrollable id of the status-bar layout-tab strip (retained so the existing
@@ -766,6 +767,70 @@ fn osnap_btn<'a>(
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
+fn layout_tab_context_menu(name: String) -> Element<'static, Message> {
+    const MENU_BG: Color = Color {
+        r: 0.17,
+        g: 0.17,
+        b: 0.17,
+        a: 1.0,
+    };
+    const MENU_BORDER: Color = Color {
+        r: 0.35,
+        g: 0.35,
+        b: 0.35,
+        a: 1.0,
+    };
+    const ITEM_HOVER: Color = Color {
+        r: 0.25,
+        g: 0.45,
+        b: 0.70,
+        a: 1.0,
+    };
+    const TEXT_COLOR: Color = Color {
+        r: 0.88,
+        g: 0.88,
+        b: 0.88,
+        a: 1.0,
+    };
+
+    let item = |label: &'static str, msg: Message| {
+        button(text(label).size(12).color(TEXT_COLOR))
+            .on_press(msg)
+            .style(|_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => ITEM_HOVER,
+                    _ => Color::TRANSPARENT,
+                })),
+                text_color: TEXT_COLOR,
+                border: Border::default(),
+                shadow: iced::Shadow::default(),
+                snap: false,
+            })
+            .padding([4, 12])
+            .width(Length::Fill)
+    };
+
+    container(
+        column![
+            item("Rename", Message::LayoutRenameStart(name.clone())),
+            item("Delete", Message::LayoutDelete(name)),
+        ]
+        .spacing(0)
+        .width(160),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(MENU_BG)),
+        border: Border {
+            color: MENU_BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    })
+    .padding([4, 0])
+    .into()
+}
+
 /// A layout tab button.
 ///
 /// When `rename_edit` is `Some(value)` the tab shows an inline text input
@@ -884,7 +949,8 @@ fn space_tab<'a>(
             .align_y(iced::Center)
             .into()
     } else {
-        // Normal clickable tab — left click switches, right click opens context menu.
+        // Normal clickable tab — left click switches. Paper-layout tabs are
+        // wrapped in `ContextMenu`, which owns right-click handling.
         let display = container(text(label.clone()).size(12).color(text_color))
             .style(move |_: &Theme| container::Style {
                 background: Some(Background::Color(bg(is_active, false))),
@@ -894,16 +960,10 @@ fn space_tab<'a>(
             .padding([4, 10]);
 
         let switch_msg = Message::LayoutSwitch(label.clone());
-        let ctx_msg = Message::LayoutContextMenu(label.clone());
-
-        // Use mouse_area so we can capture right-click for the context menu.
-        // PosReport records the tab's screen bounds so the context menu can
-        // anchor next to the clicked tab instead of the screen's left edge
-        // (#428).
-        let tab = mouse_area(display)
-            .on_press(switch_msg)
-            .on_right_press(ctx_msg);
-        let tab: Element<'a, Message> = if reorderable_layouts.contains(&label) {
+        let has_context_menu = reorderable_layouts.contains(&label);
+        let report_key = format!("SB_LAYOUT_TAB:{label}");
+        let tab = mouse_area(display).on_press(switch_msg);
+        let tab: Element<'a, Message> = if has_context_menu {
             crate::ui::wrap_bar::ReorderTab::layout(
                 label.clone(),
                 reorderable_layouts,
@@ -914,8 +974,13 @@ fn space_tab<'a>(
             tab.into()
         };
 
+        let tab = if has_context_menu {
+            ContextMenu::new(tab, move || layout_tab_context_menu(label.clone())).into()
+        } else {
+            tab
+        };
         crate::ui::wrap_bar::PosReport::owned(
-            format!("SB_LAYOUT_TAB:{label}"),
+            report_key,
             tab,
         )
         .into()
