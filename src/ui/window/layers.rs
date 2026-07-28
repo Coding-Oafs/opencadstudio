@@ -475,6 +475,48 @@ impl LayerPanel {
 
 // ── Sorting helpers ─────────────────────────────────────────────────────────
 
+fn layer_cell_button_style(
+    theme: &Theme,
+    status: button::Status,
+    is_selected: bool,
+    index: usize,
+) -> button::Style {
+    let palette = theme.extended_palette();
+    let highlighted = matches!(status, button::Status::Hovered);
+    let pair = if highlighted {
+        palette.background.strong
+    } else if is_selected {
+        palette.primary.weak
+    } else if index % 2 == 0 {
+        palette.background.base
+    } else {
+        palette.background.weak
+    };
+    button::Style {
+        background: highlighted.then_some(Background::Color(pair.color)),
+        text_color: pair.text,
+        ..Default::default()
+    }
+}
+
+fn layer_header_button_style(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let highlighted = matches!(
+        status,
+        button::Status::Hovered | button::Status::Pressed
+    );
+    let pair = if highlighted {
+        palette.background.strong
+    } else {
+        palette.background.weak
+    };
+    button::Style {
+        background: highlighted.then_some(Background::Color(pair.color)),
+        text_color: pair.text,
+        ..Default::default()
+    }
+}
+
 /// Packed RGB key for ordering colours deterministically by hue-ish bytes.
 fn color_sort_key(c: Color) -> u32 {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
@@ -502,16 +544,7 @@ fn sortable_header<'a>(
     }
     button(content)
         .on_press(Message::LayerSort(col))
-        .style(|theme: &Theme, status| button::Style {
-            background: matches!(
-                status,
-                button::Status::Hovered | button::Status::Pressed
-            )
-            .then_some(Background::Color(
-                theme.extended_palette().background.strong.color
-            )),
-            ..Default::default()
-        })
+        .style(layer_header_button_style)
         .padding(Padding {
             top: 0.0,
             bottom: 0.0,
@@ -655,11 +688,8 @@ fn layer_row<'a>(
     let svg_btn = |bytes: &'static [u8], on_press: Message| -> Element<'a, Message> {
         button(crate::ui::icons::semantic(bytes, ICON_SZ))
         .on_press(on_press)
-        .style(|theme: &Theme, status| button::Style {
-            background: matches!(status, button::Status::Hovered).then_some(
-                Background::Color(theme.extended_palette().background.strong.color)
-            ),
-            ..Default::default()
+        .style(move |theme: &Theme, status| {
+            layer_cell_button_style(theme, status, is_selected, index)
         })
         .padding(Padding {
             top: COMBO_PAD_V,
@@ -704,11 +734,8 @@ fn layer_row<'a>(
                 .size(FONT_SZ),
         )
         .on_press(Message::LayerRenameStart(index))
-        .style(|theme: &Theme, status| button::Style {
-            background: matches!(status, button::Status::Hovered).then_some(
-                Background::Color(theme.extended_palette().background.strong.color)
-            ),
-            ..Default::default()
+        .style(move |theme: &Theme, status| {
+            layer_cell_button_style(theme, status, is_selected, index)
         })
         .padding(Padding {
             top: COMBO_PAD_V,

@@ -42,6 +42,7 @@ fn vc_btn<'a>(content: Element<'a, Message>, size: f32, msg: Message) -> Element
             radius: 3.0.into(),
             ..Default::default()
         },
+        text_color: theme.extended_palette().background.base.text,
         ..Default::default()
     })
     .into()

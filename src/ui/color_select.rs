@@ -140,6 +140,21 @@ pub fn color_selector<'a>(
     })
 }
 
+fn list_row_style(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let hovered = matches!(status, button::Status::Hovered);
+    let text_color = if hovered {
+        palette.background.strong.text
+    } else {
+        palette.background.base.text
+    };
+    button::Style {
+        background: hovered.then_some(Background::Color(palette.background.strong.color)),
+        text_color,
+        ..Default::default()
+    }
+}
+
 /// The colour list shown inside a picker popup: named ACI colours (with
 /// swatches) plus a "More…" entry that opens the full palette window. Shared by
 /// `color_selector` and the ribbon's colour overlay.
@@ -156,12 +171,7 @@ pub fn color_list<'a>(
                 .align_y(iced::Center),
         )
         .on_press(on_select(color))
-        .style(|theme: &Theme, status| button::Style {
-            background: matches!(status, button::Status::Hovered).then_some(
-                Background::Color(theme.extended_palette().background.strong.color)
-            ),
-            ..Default::default()
-        })
+        .style(list_row_style)
         .padding([2, 4])
         .width(Length::Fill)
         .into()
@@ -180,12 +190,7 @@ pub fn color_list<'a>(
     list = list.push(
         button(text("More…").size(11))
             .on_press(on_more)
-            .style(|theme: &Theme, status| button::Style {
-                background: matches!(status, button::Status::Hovered).then_some(
-                    Background::Color(theme.extended_palette().background.strong.color)
-                ),
-                ..Default::default()
-            })
+            .style(list_row_style)
             .padding([2, 4])
             .width(Length::Fill),
     );
@@ -236,6 +241,7 @@ pub fn color_grid_window(on_pick: impl Fn(AcadColor) -> Message) -> Element<'sta
                             },
                             radius: 1.0.into(),
                         },
+                        text_color: theme.extended_palette().background.base.text,
                         ..Default::default()
                     })
                     .padding(0),

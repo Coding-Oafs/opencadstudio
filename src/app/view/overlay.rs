@@ -841,6 +841,7 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
                     theme.extended_palette().primary.weak.color
                 )),
                 border: Border::default(),
+                text_color: theme.extended_palette().background.base.text,
                 ..Default::default()
             })
             .padding(2);

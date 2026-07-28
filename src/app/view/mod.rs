@@ -81,6 +81,13 @@ impl OpenCADStudio {
     pub fn view_main(&self) -> Element<'_, Message> {
         let i = self.active_tab;
         let tab = &self.tabs[i];
+        let theme_text = self.active_theme.extended_palette().background.base.text;
+        let viewcube_text_color = [
+            theme_text.r,
+            theme_text.g,
+            theme_text.b,
+            theme_text.a,
+        ];
         let is_paper = tab.scene.current_layout != "Model";
         // Adaptive corner widgets: the ViewCube shows only while the active
         // viewport is wide enough to hold it *beside* the render-mode bar, whose
@@ -137,6 +144,7 @@ impl OpenCADStudio {
                 &tab.scene,
                 viewcube_visible,
                 tab.render_mode,
+                viewcube_text_color,
             ))
             .width(Fill)
             .height(Fill)
@@ -172,6 +180,7 @@ impl OpenCADStudio {
                             show_viewcube,
                             render_mode,
                             idx,
+                            viewcube_text_color,
                         ))
                         .width(Fill)
                         .height(Fill),

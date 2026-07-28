@@ -951,6 +951,7 @@ pub fn color_picker_dropdown<'a>(
                             },
                             radius: 2.0.into(),
                         },
+                        text_color: theme.extended_palette().background.base.text,
                         ..Default::default()
                     })
                     .padding(0),
@@ -1033,6 +1034,7 @@ pub fn color_picker_dropdown<'a>(
                                 },
                                 radius: 1.0.into(),
                             },
+                            text_color: theme.extended_palette().background.base.text,
                             ..Default::default()
                         })
                         .padding(0),
