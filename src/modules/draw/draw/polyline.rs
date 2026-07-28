@@ -431,3 +431,56 @@ impl CadCommand for PlineCommand {
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["PLINE"] });  // PlineCommand
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_contains_only_the_pending_segment() {
+        let mut command = PlineCommand::new();
+        command.on_point(DVec3::new(0.0, 0.0, 0.0));
+        command.on_point(DVec3::new(10.0, 0.0, 0.0));
+        command.on_point(DVec3::new(10.0, 5.0, 0.0));
+
+        let preview = command
+            .on_mouse_move(DVec3::new(15.0, 5.0, 0.0))
+            .expect("polyline with vertices should have a preview");
+
+        assert_eq!(
+            preview.points,
+            vec![[10.0, 5.0, 0.0], [15.0, 5.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn committed_vertices_update_one_live_polyline() {
+        let mut command = PlineCommand::new();
+        assert!(matches!(
+            command.on_point(DVec3::new(0.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
+
+        match command.on_point(DVec3::new(10.0, 0.0, 0.0)) {
+            CmdResult::CommitLiveEntity(EntityType::LwPolyline(polyline)) => {
+                assert_eq!(polyline.vertices.len(), 2);
+            }
+            _ => panic!("the first segment should create a live polyline"),
+        }
+
+        let handle = Handle::new(42);
+        command.set_live_handle(handle);
+        match command.on_point(DVec3::new(10.0, 5.0, 0.0)) {
+            CmdResult::UpdateLiveEntity {
+                handle: updated,
+                entity: EntityType::LwPolyline(polyline),
+                finish,
+            } => {
+                assert_eq!(updated, handle);
+                assert_eq!(polyline.vertices.len(), 3);
+                assert!(!finish);
+            }
+            _ => panic!("later segments should update the same live polyline"),
+        }
+    }
+}

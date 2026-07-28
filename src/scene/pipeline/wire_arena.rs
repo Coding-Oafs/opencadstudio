@@ -9,9 +9,9 @@
 //
 //   * Modify in place — a move / rotate / scale / colour change keeps the
 //     entity's segment count, so its slab is overwritten where it sits.
-//   * Add / a Modify whose segment count changed — bump-allocate a fresh slab at
-//     the tail (tombstone the old one); the instance buffer only grows by that
-//     entity.
+//   * Add — bump-allocate a fresh slab at the tail.
+//   * A Modify whose segment count changed — reject the patch before touching
+//     GPU state, so the caller can rebuild this wire arena cleanly.
 //   * Erase — tombstone the slab (blank instances that render nothing).
 //
 // Two correctness points make add/remove safe:
@@ -70,6 +70,14 @@ struct Slab {
     /// the whole slab by the base-depth delta instead of flattening those
     /// offsets.
     base_depth: f32,
+}
+
+struct PreparedPatchRun {
+    insts: Vec<WireInstance>,
+    csts: Vec<WireConst>,
+    base_depth: f32,
+    aabb: [f32; 4],
+    order_sensitive: bool,
 }
 
 pub struct WireArena {
@@ -499,6 +507,65 @@ impl WireArena {
         let depth_structural = changes
             .iter()
             .any(|(_, kind)| !matches!(kind, ChangeKind::Modified));
+
+        // Prepare and validate every visible run before mutating either GPU
+        // buffer. Growing/shrinking a Modified slab used to tombstone the old
+        // range and append a new one. Repeated live-polyline updates could then
+        // leave the arena half-patched when a later guard requested a rebuild,
+        // producing alternating old/new submissions. A shape change now takes
+        // the clean full-arena fallback, while the scene itself still
+        // re-tessellates only the named entity.
+        let mut prepared: FxHashMap<Handle, PreparedPatchRun> = FxHashMap::default();
+        for &(h, kind) in changes {
+            let run = runs.get(&h).map(Vec::as_slice).unwrap_or(&[]);
+            if matches!(kind, ChangeKind::Removed) || run.is_empty() {
+                continue;
+            }
+
+            let mut insts: Vec<WireInstance> = Vec::new();
+            let mut csts: Vec<WireConst> = Vec::new();
+            for &w in run {
+                let wire_id = csts.len() as u32;
+                let dd = if self.mesh_edge {
+                    0.0
+                } else {
+                    wire_draw_depth(w, depth_map)
+                };
+                let (mut wi, c) = emit_wire_native(w, wire_id, w.color, dd);
+                insts.append(&mut wi);
+                csts.push(c);
+            }
+            let inst_len = insts.len() as u32;
+            let const_len = csts.len() as u32;
+
+            if matches!(kind, ChangeKind::Modified)
+                && self
+                    .slabs
+                    .get(&h)
+                    .or_else(|| self.vacant.get(&h))
+                    .is_some_and(|slab| {
+                        slab.inst_len != inst_len || slab.const_len != const_len
+                    })
+            {
+                return false;
+            }
+
+            prepared.insert(
+                h,
+                PreparedPatchRun {
+                    insts,
+                    csts,
+                    base_depth: if self.mesh_edge {
+                        0.0
+                    } else {
+                        depth_map.get(&h.value()).map_or(0.0, |d| d[0])
+                    },
+                    aabb: run_aabb(run),
+                    order_sensitive: order_sensitive(run, depth_map),
+                },
+            );
+        }
+
         for &(h, kind) in changes {
             let run = runs.get(&h).map(Vec::as_slice).unwrap_or(&[]);
 
@@ -520,24 +587,17 @@ impl WireArena {
                 continue;
             }
 
-            // Emit into fresh, run-local const slots (patched to absolute below).
-            let mut insts: Vec<WireInstance> = Vec::new();
-            let mut csts: Vec<WireConst> = Vec::new();
-            for &w in run {
-                let wire_id = csts.len() as u32;
-                let dd = if self.mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
-                let (mut wi, c) = emit_wire_native(w, wire_id, w.color, dd);
-                insts.append(&mut wi);
-                csts.push(c);
-            }
+            let PreparedPatchRun {
+                mut insts,
+                csts,
+                base_depth,
+                aabb,
+                order_sensitive: run_order_sensitive,
+            } = prepared
+                .remove(&h)
+                .expect("visible wire patch run was prepared");
             let inst_len = insts.len() as u32;
             let const_len = csts.len() as u32;
-            let base_depth = if self.mesh_edge {
-                0.0
-            } else {
-                depth_map.get(&h.value()).map_or(0.0, |d| d[0])
-            };
-            let aabb = run_aabb(run);
 
             if !self.slabs.contains_key(&h)
                 && self
@@ -589,7 +649,6 @@ impl WireArena {
             // back to a full rebuild instead.
             let is_new = !self.slabs.contains_key(&h);
             let preserves_submission_order = is_new && new_handles_are_suffix;
-            let run_order_sensitive = order_sensitive(run, depth_map);
             if (self.order_sensitive || run_order_sensitive || self.mesh_edge)
                 && !preserves_submission_order
             {
