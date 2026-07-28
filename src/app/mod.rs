@@ -271,6 +271,9 @@ pub(super) struct OpenCADStudio {
     /// Which Start-page section is shown when the page is too narrow for all
     /// three side by side and falls back to a tab bar.
     start_section: StartSection,
+    /// Widest natural single-row width of the Start-page action buttons,
+    /// measured by `WrapFlow` so side lists collapse before those buttons wrap.
+    start_action_w: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// When the window is too narrow the properties panel collapses to a
     /// vertical bar; this is the user's toggle to expand it back out.
     props_expanded: bool,
@@ -2494,6 +2497,7 @@ impl OpenCADStudio {
             discussions_loading: false,
             props_asym_scale: std::collections::HashSet::new(),
             start_section: StartSection::default(),
+            start_action_w: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             props_expanded: false,
             history_content: iced::widget::text_editor::Content::new(),
             status_bar: StatusBar::new(),

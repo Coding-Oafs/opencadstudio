@@ -135,6 +135,7 @@ impl OpenCADStudio {
                     self.recent_limit,
                     &self.recent_limit_input,
                     size.width,
+                    self.start_action_w.clone(),
                     self.start_section,
                 )
             })
@@ -2191,6 +2192,7 @@ pub(super) fn start_page_view<'a>(
     recent_limit: usize,
     recent_limit_input: &'a str,
     avail_w: f32,
+    action_width_out: std::sync::Arc<std::sync::atomic::AtomicU32>,
     active: super::StartSection,
 ) -> Element<'a, Message> {
     let headline = text("Open CAD Studio").size(40).style(start_primary_style);
@@ -2243,7 +2245,8 @@ pub(super) fn start_page_view<'a>(
         donate_btn.into(),
     ])
     .spacing_x(12.0)
-    .row_h(48.0);
+    .row_h(48.0)
+    .report_natural_width(action_width_out.clone());
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut secondary_items: Vec<Element<'a, Message>> = vec![
@@ -2276,34 +2279,14 @@ pub(super) fn start_page_view<'a>(
     }
     let secondary_row = WrapFlow::new(secondary_items)
         .spacing_x(12.0)
-        .row_h(44.0);
-
-    // Buttons sit on a transparent container with a large, primary-tinted
-    // ambient shadow (offset = 0, big blur) — produces a soft halo behind
-    // the action row, matching the Thunderbird coloured-glow look against
-    // the dark page.
-    let primary_glow = container(primary_row)
-        .padding(iced::Padding {
-            top: 4.0,
-            right: 8.0,
-            bottom: 4.0,
-            left: 8.0,
-        })
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(Color::TRANSPARENT)),
-            shadow: iced::Shadow {
-                color: theme.extended_palette().primary.base.color.scale_alpha(0.45),
-                offset: iced::Vector::ZERO,
-                blur_radius: 80.0,
-            },
-            ..Default::default()
-        });
+        .row_h(44.0)
+        .report_natural_width(action_width_out.clone());
 
     let content = column![
         Space::new().height(iced::Length::Fixed(28.0)),
         container(headline).center_x(Fill),
         Space::new().height(iced::Length::Fixed(22.0)),
-        container(primary_glow).center_x(Fill),
+        container(primary_row).center_x(Fill),
         Space::new().height(iced::Length::Fixed(10.0)),
         container(secondary_row).center_x(Fill),
         Space::new().height(Fill),
@@ -2323,7 +2306,12 @@ pub(super) fn start_page_view<'a>(
         Compact,
     }
     let panel_w = 280.0f32;
-    let welcome_wide_min = 360.0f32;
+    const VIDEO_PANEL_PADDING: f32 = 16.0;
+    const VIDEO_SCROLL_GUTTER: f32 = 14.0;
+    let measured_action_w = f32::from_bits(
+        action_width_out.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    let welcome_wide_min = measured_action_w.max(360.0);
     let avail = (avail_w - 16.0).max(0.0); // minus the page's l/r padding
     let panel_widths = [panel_w; 4];
     let mut panel_visible = [true, true, true, true];
@@ -2371,14 +2359,16 @@ pub(super) fn start_page_view<'a>(
     // Tutorial-videos rail: the official playlist, fetched at boot (cached on
     // disk) — thumbnail card + title per video, click opens the browser.
     let videos_panel: Element<'a, Message> = {
-        // Inner width = panel 300 − padding 2×16 − scrollbar gutter 14.
-        const THUMB_H: f32 = (300.0 - 32.0 - 14.0) * 9.0 / 16.0;
+        // Derive the 16:9 cover box from the actual shared list width so the
+        // whole thumbnail remains visible when that width changes.
+        let thumb_h =
+            (panel_w - VIDEO_PANEL_PADDING * 2.0 - VIDEO_SCROLL_GUTTER) * 9.0 / 16.0;
         let mut list = column![text("Tutorials").size(15)]
             .spacing(10)
             .width(Fill)
             // Keep the scrollbar off the thumbnails.
             .padding(iced::Padding {
-                right: 14.0,
+                right: VIDEO_SCROLL_GUTTER,
                 ..iced::Padding::ZERO
             });
         for v in videos {
@@ -2388,11 +2378,11 @@ pub(super) fn start_page_view<'a>(
                     container(
                         iced::widget::image(handle.clone())
                             .width(Fill)
-                            .height(iced::Length::Fixed(THUMB_H))
-                            .content_fit(iced::ContentFit::Cover),
+                            .height(iced::Length::Fixed(thumb_h))
+                            .content_fit(iced::ContentFit::Contain),
                     )
                     .width(Fill)
-                    .height(iced::Length::Fixed(THUMB_H))
+                    .height(iced::Length::Fixed(thumb_h))
                     .style(|theme: &Theme| container::Style {
                         border: Border {
                             color: theme.extended_palette().background.neutral.color,
@@ -2453,7 +2443,7 @@ pub(super) fn start_page_view<'a>(
             | StartLayout::Compact => iced::Length::Fill,
         })
         .height(Fill)
-        .padding(16)
+        .padding(VIDEO_PANEL_PADDING)
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {

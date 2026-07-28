@@ -482,6 +482,9 @@ pub struct WrapFlow<'a> {
     row_h: f32,
     /// Align every wrapped row to the right edge of the available width.
     justify_end: bool,
+    /// Receives the natural single-row width (as `f32` bits). Multiple flows
+    /// may share one output; the widest measured value wins.
+    natural_width_out: Option<Arc<AtomicU32>>,
 }
 
 impl<'a> WrapFlow<'a> {
@@ -493,6 +496,7 @@ impl<'a> WrapFlow<'a> {
             spacing_y: 0.0,
             row_h: 28.0,
             justify_end: false,
+            natural_width_out: None,
         }
     }
 
@@ -515,6 +519,11 @@ impl<'a> WrapFlow<'a> {
 
     pub fn justify_end(mut self, justify: bool) -> Self {
         self.justify_end = justify;
+        self
+    }
+
+    pub fn report_natural_width(mut self, out: Arc<AtomicU32>) -> Self {
+        self.natural_width_out = Some(out);
         self
     }
 }
@@ -557,6 +566,11 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
         // bit closer before wrapping. Only fires when max_w is a real bound
         // (i.e. the flow is already width-constrained, e.g. overflowing tabs).
         let n = measured.len();
+        if let Some(out) = &self.natural_width_out {
+            let natural_width =
+                sum_w + n.saturating_sub(1) as f32 * self.spacing_x;
+            out.fetch_max(natural_width.to_bits(), Ordering::Relaxed);
+        }
         let mut eff_gap = self.spacing_x;
         if self.min_spacing_x < self.spacing_x && max_w.is_finite() && n > 1 {
             let line_w = sum_w + (n - 1) as f32 * self.spacing_x;
