@@ -106,6 +106,10 @@ impl Scene {
     /// the normal render shows the fill, not this outline.
     fn hatch_outline_wire(&self, handle: Handle) -> Option<WireModel> {
         let m = self.hatches.get(&handle)?;
+        Self::hatch_model_outline_wire(handle, m)
+    }
+
+    fn hatch_model_outline_wire(handle: Handle, m: &HatchModel) -> Option<WireModel> {
         let (wx, wy) = (m.world_origin[0], m.world_origin[1]);
         let pts: Vec<[f64; 3]> = m
             .boundary
@@ -127,6 +131,28 @@ impl Scene {
             m.color,
             false,
         ))
+    }
+
+    /// Fill-only geometry has no resident wire for the normal rollover xray.
+    /// Supply an orange boundary overlay while an entity-pick command previews
+    /// a top-level hatch or an Insert whose visible children contain hatches.
+    pub fn fill_hover_preview_wires(&self, handle: Handle) -> Vec<WireModel> {
+        let mut wires: Vec<WireModel> = match self.document.get_entity(handle) {
+            Some(EntityType::Hatch(_)) => self.hatch_outline_wire(handle).into_iter().collect(),
+            Some(EntityType::Insert(_)) => self
+                .insert_hatches_for_click()
+                .get(&handle)
+                .into_iter()
+                .flatten()
+                .filter_map(|model| Self::hatch_model_outline_wire(handle, model))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for wire in &mut wires {
+            wire.color = WireModel::HOVER;
+            wire.line_weight_px = wire.line_weight_px.max(2.0);
+        }
+        wires
     }
 
     /// Build wire models for an arbitrary slice of entities (e.g. clipboard contents).

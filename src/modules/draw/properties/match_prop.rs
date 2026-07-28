@@ -18,6 +18,7 @@ use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
+use crate::scene::Scene;
 
 pub struct MatchPropCommand {
     /// Source handle; NULL until phase 1 is complete.
@@ -51,6 +52,21 @@ impl CadCommand for MatchPropCommand {
 
     fn needs_entity_pick(&self) -> bool {
         !self.phase1_done()
+    }
+
+    fn entity_pick_includes_fills(&self) -> bool {
+        !self.phase1_done()
+    }
+
+    fn entity_pick_highlights_hover(&self) -> bool {
+        !self.phase1_done()
+    }
+
+    fn entity_pick_acquire_previews(&self, scene: &Scene, handle: Handle) -> Vec<WireModel> {
+        if self.phase1_done() || handle.is_null() {
+            return vec![];
+        }
+        scene.fill_hover_preview_wires(handle)
     }
 
     fn on_entity_pick(&mut self, handle: Handle, _pt: DVec3) -> CmdResult {

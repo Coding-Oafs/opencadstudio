@@ -1296,6 +1296,21 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// Include filled hatch / DXF SOLID regions in the entity hit-test.
+    ///
+    /// Most entity-pick commands operate on curve geometry and intentionally
+    /// keep the cheaper wire-only path. Commands that accept fill entities
+    /// override this so clicking inside a fill resolves its entity handle.
+    fn entity_pick_includes_fills(&self) -> bool {
+        false
+    }
+
+    /// Render the entity under the cursor through the normal rollover
+    /// highlight while this command is waiting for an entity pick.
+    fn entity_pick_highlights_hover(&self) -> bool {
+        false
+    }
+
     /// Called when the text editor closes, either because the user committed or cancelled the edit.
     fn on_editor_closed(&mut self, _committed: bool) -> CmdResult {
         CmdResult::Cancel

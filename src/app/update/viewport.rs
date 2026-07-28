@@ -1339,7 +1339,19 @@ impl OpenCADStudio {
                 }
                 p
             } else if needs_entity {
-                let hover_handle = scene::pick::hit_test::click_hit(
+                let include_fills = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .map(|c| c.entity_pick_includes_fills())
+                    .unwrap_or(false);
+                let candidate_handles = if include_fills {
+                    self.tabs[i]
+                        .scene
+                        .interaction_candidate_handles(&snap_candidates)
+                } else {
+                    None
+                };
+                let hovered = scene::pick::hit_test::click_hit(
                     p,
                     &snap_candidates,
                     view_rot,
@@ -1348,7 +1360,53 @@ impl OpenCADStudio {
                     self.tabs[i].scene.document.header.lineweight_display,
                 )
                 .and_then(|s| Scene::handle_from_wire_name(s))
-                .unwrap_or(acadrust::Handle::NULL);
+                .or_else(|| {
+                    if !include_fills {
+                        return None;
+                    }
+                    scene::pick::hit_test::click_hit_hatch(
+                        p,
+                        &self.tabs[i]
+                            .scene
+                            .visible_hatches_for_click(candidate_handles.as_ref()),
+                        view_rot,
+                        eye,
+                        bounds,
+                        candidate_handles.as_ref(),
+                    )
+                })
+                .or_else(|| {
+                    include_fills.then(|| {
+                        scene::pick::hit_test::click_hit_insert_hatch(
+                            p,
+                            self.tabs[i].scene.insert_hatches_for_click().as_ref(),
+                            view_rot,
+                            eye,
+                            bounds,
+                            candidate_handles.as_ref(),
+                        )
+                    })?
+                })
+                .or_else(|| {
+                    include_fills.then(|| {
+                        self.tabs[i].scene.solid_hover_hit(
+                            p,
+                            view_rot,
+                            eye,
+                            bounds,
+                            candidate_handles.as_ref(),
+                        )
+                    })?
+                });
+                let highlights_hover = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .map(|c| c.entity_pick_highlights_hover())
+                    .unwrap_or(false);
+                if highlights_hover {
+                    self.tabs[i].scene.set_hover_highlight(hovered);
+                }
+                let hover_handle = hovered.unwrap_or(acadrust::Handle::NULL);
                 let shift = self.shift_down;
                 let mut p = self.tabs[i]
                     .active_cmd
@@ -2290,6 +2348,18 @@ impl OpenCADStudio {
                     bounds,
                     scene::pick::hit_test::CLICK_THRESHOLD_PX * 2.0,
                 );
+                let include_fills = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .map(|c| c.entity_pick_includes_fills())
+                    .unwrap_or(false);
+                let candidate_handles = if include_fills {
+                    self.tabs[i]
+                        .scene
+                        .interaction_candidate_handles(&click_candidates)
+                } else {
+                    None
+                };
                 let hit = scene::pick::hit_test::click_hit(
                     p,
                     &click_candidates,
@@ -2298,7 +2368,45 @@ impl OpenCADStudio {
                     bounds,
                     self.tabs[i].scene.document.header.lineweight_display,
                 )
-                .and_then(|s| Scene::handle_from_wire_name(s));
+                .and_then(|s| Scene::handle_from_wire_name(s))
+                .or_else(|| {
+                    if !include_fills {
+                        return None;
+                    }
+                    scene::pick::hit_test::click_hit_hatch(
+                        p,
+                        &self.tabs[i]
+                            .scene
+                            .visible_hatches_for_click(candidate_handles.as_ref()),
+                        view_rot2,
+                        eye2,
+                        bounds,
+                        candidate_handles.as_ref(),
+                    )
+                })
+                .or_else(|| {
+                    include_fills.then(|| {
+                        scene::pick::hit_test::click_hit_insert_hatch(
+                            p,
+                            self.tabs[i].scene.insert_hatches_for_click().as_ref(),
+                            view_rot2,
+                            eye2,
+                            bounds,
+                            candidate_handles.as_ref(),
+                        )
+                    })?
+                })
+                .or_else(|| {
+                    include_fills.then(|| {
+                        self.tabs[i].scene.solid_click_hit(
+                            p,
+                            view_rot2,
+                            eye2,
+                            bounds,
+                            candidate_handles.as_ref(),
+                        )
+                    })?
+                });
                 if let Some(handle) = hit {
                     // Some commands (e.g. SS_CATCHMENT) need the entity
                     // body before `on_entity_pick` can advance.
