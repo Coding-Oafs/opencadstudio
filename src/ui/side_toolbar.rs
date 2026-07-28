@@ -21,7 +21,7 @@ const EDGE_MARGIN: f32 = 8.0;
 fn icon_el(icon: IconKind) -> Element<'static, Message> {
     match icon {
         IconKind::Glyph(s) => text(s).size(ICON_SIZE * 0.85).into(),
-        IconKind::Svg(bytes) => crate::ui::icons::themed(bytes, ICON_SIZE),
+        IconKind::Svg(bytes) => crate::ui::icons::semantic(bytes, ICON_SIZE),
     }
 }
 

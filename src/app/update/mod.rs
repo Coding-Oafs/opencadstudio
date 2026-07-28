@@ -3959,6 +3959,16 @@ impl OpenCADStudio {
                 self.videos_loading = false;
                 Task::none()
             }
+            Message::DiscussionsFetched(Ok(discussions)) => {
+                self.discussions_loading = false;
+                self.discussions = discussions;
+                Task::none()
+            }
+            // Offline: keep the native cache (web leaves the panel empty).
+            Message::DiscussionsFetched(Err(_)) => {
+                self.discussions_loading = false;
+                Task::none()
+            }
             Message::RecentThumbsLoaded(thumbs) => {
                 for (path, handle) in thumbs {
                     self.recent_thumbs.insert(path, handle);

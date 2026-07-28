@@ -56,7 +56,7 @@ pub struct UiThemeConfig {
 
 impl Default for UiThemeConfig {
     fn default() -> Self {
-        let theme = iced::Theme::Dark;
+        let theme = iced::Theme::Oxocarbon;
         Self {
             name: theme.to_string(),
             palette: UiThemePalette::from_iced(theme.palette()),
@@ -69,7 +69,7 @@ impl UiThemeConfig {
         if self.name == "Custom" {
             iced::Theme::custom("Custom", self.palette.to_iced())
         } else {
-            builtin_theme(&self.name).unwrap_or(iced::Theme::Dark)
+            builtin_theme(&self.name).unwrap_or(iced::Theme::Oxocarbon)
         }
     }
 }
@@ -87,7 +87,7 @@ pub struct UiThemePalette {
 
 impl Default for UiThemePalette {
     fn default() -> Self {
-        Self::from_iced(iced::Theme::Dark.palette())
+        Self::from_iced(iced::Theme::Oxocarbon.palette())
     }
 }
 

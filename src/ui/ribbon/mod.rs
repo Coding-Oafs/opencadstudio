@@ -869,7 +869,7 @@ impl Ribbon {
         // on it flips that state instead of bubbling up to the row's
         // make-active handler (#133).
         let icon_btn = |bytes: &'static [u8], msg: Message| -> Element<'_, Message> {
-            button(crate::ui::icons::raw(bytes, 14.0))
+            button(crate::ui::icons::semantic(bytes, 14.0))
                 .on_press(msg)
                 .style(popup_row_style)
                 .padding([2, 4])

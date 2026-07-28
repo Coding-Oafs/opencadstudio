@@ -126,7 +126,7 @@ pub(super) fn flush_small_col<'a>(
 pub(super) fn make_icon(icon: IconKind, size: f32) -> Element<'static, Message> {
     match icon {
         IconKind::Glyph(s) => text(s).size(size * 0.7).into(),
-        IconKind::Svg(bytes) => icons::themed(bytes, size),
+        IconKind::Svg(bytes) => icons::semantic(bytes, size),
     }
 }
 
@@ -137,7 +137,7 @@ pub(super) fn start_dimmed(state: &ToggleState, event: &ModuleEvent) -> bool {
         && !matches!(event, ModuleEvent::Command(c) if crate::app::commands::start_allowed(c))
 }
 
-/// `make_icon`, greyed out when `dim` (SVGs render monochrome via tint).
+/// `make_icon`, faded when `dim` without flattening multi-colour SVGs.
 pub(super) fn make_icon_dim(icon: IconKind, size: f32, dim: bool) -> Element<'static, Message> {
     if !dim {
         return make_icon(icon, size);
@@ -149,7 +149,7 @@ pub(super) fn make_icon_dim(icon: IconKind, size: f32, dim: bool) -> Element<'st
                 color: Some(theme.extended_palette().background.base.text.scale_alpha(0.42)),
             })
             .into(),
-        IconKind::Svg(bytes) => icons::themed_disabled(bytes, size),
+        IconKind::Svg(bytes) => icons::semantic_disabled(bytes, size),
     }
 }
 
@@ -625,9 +625,9 @@ pub(super) fn render_large<'a>(
             let ll = info.map(|l| l.locked).unwrap_or(false);
             let is_open = open_dd.as_deref() == Some(LAYER_COMBO_ID);
 
-            let vis_icon = icons::raw(icons::layer_visible(lv), 14.0);
-            let freeze_icon = icons::raw(icons::layer_freeze(lf), 14.0);
-            let lock_icon = icons::raw(icons::layer_lock(ll), 14.0);
+            let vis_icon = icons::semantic(icons::layer_visible(lv), 14.0);
+            let freeze_icon = icons::semantic(icons::layer_freeze(lf), 14.0);
+            let lock_icon = icons::semantic(icons::layer_lock(ll), 14.0);
             let swatch = container(text(""))
                 .style(move |theme: &Theme| container::Style {
                     background: Some(Background::Color(lc)),

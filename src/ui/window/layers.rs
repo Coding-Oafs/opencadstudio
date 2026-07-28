@@ -653,11 +653,7 @@ fn layer_row<'a>(
     name_col_w: f32,
 ) -> Element<'a, Message> {
     let svg_btn = |bytes: &'static [u8], on_press: Message| -> Element<'a, Message> {
-        button(
-            iced::widget::svg(iced::widget::svg::Handle::from_memory(bytes))
-                .width(ICON_SZ)
-                .height(ICON_SZ),
-        )
+        button(crate::ui::icons::semantic(bytes, ICON_SZ))
         .on_press(on_press)
         .style(|theme: &Theme, status| button::Style {
             background: matches!(status, button::Status::Hovered).then_some(

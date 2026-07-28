@@ -226,6 +226,7 @@ pub enum StartSection {
     Videos,
     #[default]
     Welcome,
+    Discussions,
     Supporters,
 }
 
@@ -259,6 +260,10 @@ pub(super) struct OpenCADStudio {
     video_thumbs: std::collections::HashMap<String, iced::widget::image::Handle>,
     /// True while the boot-time playlist fetch is still in flight.
     videos_loading: bool,
+    /// GitHub Discussions shown on the Start page, with pinned entries first.
+    discussions: Vec<crate::discussions::DiscussionEntry>,
+    /// True while the boot-time Discussions refresh is still in flight.
+    discussions_loading: bool,
     /// Block references whose properties panel shows per-axis Scale X/Y/Z even
     /// though the three factors are currently equal — the user unchecked the
     /// "Uniform scale" box for them (#427). Keyed by entity handle.
@@ -2056,6 +2061,8 @@ pub enum Message {
     PatronsFetched(Result<Vec<(String, i64)>, String>),
     /// Tutorial-playlist videos fetched at boot for the Start page.
     VideosFetched(Result<Vec<crate::videos::VideoEntry>, String>),
+    /// GitHub Discussions fetched at boot for the Start page.
+    DiscussionsFetched(Result<Vec<crate::discussions::DiscussionEntry>, String>),
     /// Recent-file DWG preview thumbnails decoded on a background thread.
     RecentThumbsLoaded(
         Vec<(std::path::PathBuf, Option<iced::widget::image::Handle>)>,
@@ -2483,6 +2490,8 @@ impl OpenCADStudio {
             videos: Vec::new(),
             video_thumbs: std::collections::HashMap::new(),
             videos_loading: false,
+            discussions: Vec::new(),
+            discussions_loading: false,
             props_asym_scale: std::collections::HashSet::new(),
             start_section: StartSection::default(),
             props_expanded: false,
@@ -2630,8 +2639,8 @@ impl OpenCADStudio {
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             // Plot style
             active_plot_style: None,
-            // Color scheme (default: dark CAD-style)
-            active_theme: Theme::Dark,
+            // Color scheme (default: Oxocarbon)
+            active_theme: Theme::Oxocarbon,
             ui_theme: config::UiThemeConfig::default(),
             theme_color_inputs: config::UiThemePalette::default().hex_values(),
             // Keyboard shortcuts
@@ -2947,6 +2956,26 @@ impl OpenCADStudio {
         };
         #[cfg(target_arch = "wasm32")]
         let videos_fetch = Task::none();
+        // GitHub Discussions: seed from the last successful fetch, then refresh
+        // the public feed and pinned section on a background thread.
+        #[cfg(not(target_arch = "wasm32"))]
+        let discussions_fetch = {
+            s.discussions = crate::discussions::load_cached();
+            s.discussions_loading = true;
+            let (tx, rx) = iced::futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::discussions::fetch_discussions());
+            });
+            Task::perform(
+                async move {
+                    rx.await
+                        .unwrap_or_else(|_| Err("discussion fetch thread died".into()))
+                },
+                Message::DiscussionsFetched,
+            )
+        };
+        #[cfg(target_arch = "wasm32")]
+        let discussions_fetch = Task::none();
         // Recent-file thumbnails: decoded off-thread — parsing every recent
         // DWG's preview on the boot path held the first frame back.
         let thumbs_fetch = s.refresh_recent_thumbs();
@@ -2961,6 +2990,7 @@ impl OpenCADStudio {
                 assoc_prompt,
                 patrons_fetch,
                 videos_fetch,
+                discussions_fetch,
                 thumbs_fetch,
             ]),
         )
@@ -2980,7 +3010,12 @@ impl OpenCADStudio {
             crate::patreon::fetch_patrons_web(),
             Message::PatronsFetched,
         );
-        (s, Task::batch([focus, patrons]))
+        s.discussions_loading = true;
+        let discussions = Task::perform(
+            crate::discussions::fetch_discussions_web(),
+            Message::DiscussionsFetched,
+        );
+        (s, Task::batch([focus, patrons, discussions]))
     }
 }
 

@@ -121,6 +121,8 @@ impl OpenCADStudio {
                     &self.videos,
                     self.videos_loading,
                     &self.video_thumbs,
+                    &self.discussions,
+                    self.discussions_loading,
                     &self.recent_files,
                     &self.recent_thumbs,
                     self.recent_limit,
@@ -1917,7 +1919,7 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
         let name = crate::ui::text_util::elide(&tab.tab_display_name(), 24);
         let title_inner: Element<'_, Message> = if tab.dirty {
             row![
-                crate::ui::icons::themed_warning(crate::ui::icons::DOT, 7.0),
+                crate::ui::icons::themed_warning(crate::ui::icons::DIRTY_DOT, 14.0),
                 text(name).size(12),
             ]
             .spacing(5)
@@ -1929,33 +1931,24 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
 
         let title_btn = button(title_inner)
             .on_press(Message::TabSwitch(idx))
-            .padding([5, 12])
+            .height(Fill)
+            .padding([4, 12])
             .style(move |theme: &Theme, status| {
                 let palette = theme.extended_palette();
-                let pair = if is_active {
-                    palette.primary.weak
-                } else {
-                    match status {
-                        button::Status::Hovered => palette.background.weak,
-                        _ => palette.background.base,
+                let background = match (is_active, status) {
+                    (false, button::Status::Hovered) => {
+                        Some(Background::Color(palette.background.weak.color))
                     }
+                    _ => None,
                 };
                 button::Style {
-                    background: Some(Background::Color(pair.color)),
+                    background,
                     text_color: if is_active {
-                        pair.text
+                        palette.primary.weak.text
                     } else {
                         palette.background.base.text.scale_alpha(0.72)
                     },
-                    border: Border {
-                        color: if is_active {
-                            palette.primary.base.color
-                        } else {
-                            Color::TRANSPARENT
-                        },
-                        width: if is_active { 1.0 } else { 0.0 },
-                        radius: 0.0.into(),
-                    },
+                    border: Border::default(),
                     shadow: iced::Shadow::default(),
                     snap: false,
                 }
@@ -1975,53 +1968,61 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
         let row_inner: Row<'_, Message> = if tab.is_start {
             row![title_btn].spacing(0).align_y(iced::Center)
         } else {
-            let close_btn = button(crate::ui::icons::themed_secondary(
-                crate::ui::icons::CLOSE,
-                10.0,
-            ))
-            .on_press(Message::TabClose(idx))
-            .padding([3, 5])
-            .style(move |theme: &Theme, status| {
+            let close_btn = button(text("×").size(12))
+                .on_press(Message::TabClose(idx))
+                .height(Fill)
+                .padding([4, 8])
+                .style(button::subtle);
+            row![title_btn, close_btn]
+                .spacing(0)
+                .height(Fill)
+                .align_y(iced::Center)
+        };
+
+        let tab_container = container(row_inner)
+            .height(iced::Length::Fixed(23.0))
+            .style(move |theme: &Theme| {
                 let palette = theme.extended_palette();
-                let pair = match status {
-                    button::Status::Hovered | button::Status::Pressed => palette.danger.weak,
-                    _ if is_active => palette.primary.weak,
-                    _ => palette.background.base,
-                };
-                button::Style {
-                    background: Some(Background::Color(pair.color)),
-                    text_color: pair.text,
+                container::Style {
+                    background: Some(Background::Color(if is_active {
+                        palette.primary.weak.color
+                    } else {
+                        palette.background.base.color
+                    })),
                     border: Border {
-                        radius: 3.0.into(),
-                        ..Default::default()
+                        color: if is_active {
+                            palette.primary.base.color
+                        } else {
+                            Color::TRANSPARENT
+                        },
+                        width: if is_active { 1.0 } else { 0.0 },
+                        radius: 0.0.into(),
                     },
                     ..Default::default()
                 }
             });
-            row![title_btn, close_btn].spacing(0).align_y(iced::Center)
-        };
-
-        let tab_container = container(row_inner).style(move |theme: &Theme| container::Style {
-            border: Border {
-                color: if is_active {
-                    theme.extended_palette().background.neutral.color
-                } else {
-                    Color::TRANSPARENT
-                },
-                width: if is_active { 1.0 } else { 0.0 },
-                radius: 0.0.into(),
-            },
-            ..Default::default()
-        });
 
         let tab_element: Element<'_, Message> = if tab.is_start {
             tab_container.into()
         } else {
             let has_current_path = tab.current_path.is_some();
             let has_other_drawings = drag_targets.len() > 1;
+            let tab_target: Element<'_, Message> = if let Some(path) = &tab.current_path {
+                iced::widget::tooltip(
+                    tab_container,
+                    container(text(path.to_string_lossy().into_owned()).size(11))
+                        .style(container::bordered_box)
+                        .padding([4, 8]),
+                    iced::widget::tooltip::Position::Bottom,
+                )
+                .gap(4)
+                .into()
+            } else {
+                tab_container.into()
+            };
             crate::ui::wrap_bar::PosReport::owned(
                 format!("DOC_TAB:{idx}"),
-                ContextMenu::new(tab_container, move || {
+                ContextMenu::new(tab_target, move || {
                     doc_tab_context_menu(idx, has_current_path, has_other_drawings)
                 }),
             )
@@ -2171,6 +2172,8 @@ pub(super) fn start_page_view<'a>(
     videos: &'a [crate::videos::VideoEntry],
     videos_loading: bool,
     video_thumbs: &'a std::collections::HashMap<String, iced::widget::image::Handle>,
+    discussions: &'a [crate::discussions::DiscussionEntry],
+    discussions_loading: bool,
     recents: &'a [std::path::PathBuf],
     thumbs: &'a std::collections::HashMap<
         std::path::PathBuf,
@@ -2301,24 +2304,21 @@ pub(super) fn start_page_view<'a>(
     .height(Fill);
 
     // Collapse side panels one at a time as width shrinks: Tutorials first,
-    // then Supporters, and Recent Documents last. The previous all-or-nothing
-    // threshold reserved a videos-sized empty margin on both sides of the
-    // centred Welcome block and hid every panel around 1664 px.
+    // then Discussions, Supporters, and Recent Documents last.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum StartLayout {
         AllPanels,
         WithoutVideos,
+        WithoutVideosAndDiscussions,
         RecentAndWelcome,
         Compact,
     }
-    let recent_w = 280.0f32;
-    let videos_w = 300.0f32;
-    let sup_w = 240.0f32;
+    let panel_w = 280.0f32;
     let welcome_wide_min = 360.0f32;
     let avail = (avail_w - 16.0).max(0.0); // minus the page's l/r padding
-    let panel_widths = [recent_w, videos_w, sup_w];
-    let mut panel_visible = [true, true, true];
-    let required_width = |visible: &[bool; 3]| {
+    let panel_widths = [panel_w; 4];
+    let mut panel_visible = [true, true, true, true];
+    let required_width = |visible: &[bool; 4]| {
         let visible_panels = visible.iter().filter(|&&shown| shown).count();
         welcome_wide_min
             + panel_widths
@@ -2330,16 +2330,17 @@ pub(super) fn start_page_view<'a>(
     };
     // Re-measure after every collapse. There are no independent breakpoints:
     // the available width and the panels' preferred widths decide the state.
-    for panel in [1usize, 2, 0] {
+    for panel in [1usize, 2, 3, 0] {
         if required_width(&panel_visible) <= avail {
             break;
         }
         panel_visible[panel] = false;
     }
     let start_layout = match panel_visible {
-        [true, true, true] => StartLayout::AllPanels,
-        [true, false, true] => StartLayout::WithoutVideos,
-        [true, false, false] => StartLayout::RecentAndWelcome,
+        [true, true, true, true] => StartLayout::AllPanels,
+        [true, false, true, true] => StartLayout::WithoutVideos,
+        [true, false, false, true] => StartLayout::WithoutVideosAndDiscussions,
+        [true, false, false, false] => StartLayout::RecentAndWelcome,
         _ => StartLayout::Compact,
     };
 
@@ -2351,7 +2352,8 @@ pub(super) fn start_page_view<'a>(
         match start_layout {
             StartLayout::AllPanels
             | StartLayout::WithoutVideos
-            | StartLayout::RecentAndWelcome => iced::Length::Fixed(recent_w),
+            | StartLayout::WithoutVideosAndDiscussions
+            | StartLayout::RecentAndWelcome => iced::Length::Fixed(panel_w),
             StartLayout::Compact => iced::Length::Fill,
         },
     );
@@ -2435,8 +2437,9 @@ pub(super) fn start_page_view<'a>(
             playlist_btn,
         ])
         .width(match start_layout {
-            StartLayout::AllPanels => iced::Length::Fixed(videos_w),
+            StartLayout::AllPanels => iced::Length::Fixed(panel_w),
             StartLayout::WithoutVideos
+            | StartLayout::WithoutVideosAndDiscussions
             | StartLayout::RecentAndWelcome
             | StartLayout::Compact => iced::Length::Fill,
         })
@@ -2452,6 +2455,125 @@ pub(super) fn start_page_view<'a>(
                 radius: 8.0.into(),
             },
             ..Default::default()
+            }
+        })
+        .into()
+    };
+
+    // GitHub Discussions rail. Native builds refresh from GitHub's public feed;
+    // web builds read the CI-generated snapshot. Both sources mark pinned
+    // discussions and sort them before the rest of the list.
+    let discussions_panel: Element<'a, Message> = {
+        let mut list = column![text("Discussions").size(15)]
+            .spacing(8)
+            .width(Fill);
+        for discussion in discussions {
+            let mut meta = iced::widget::row![
+                text(format!("#{}", discussion.number))
+                    .size(10)
+                    .style(start_muted_style),
+            ]
+            .spacing(6)
+            .align_y(iced::Center);
+            if discussion.pinned {
+                meta = meta.push(
+                    text("Pinned")
+                        .size(10)
+                        .style(start_primary_style),
+                );
+            }
+            if !discussion.author.is_empty() {
+                meta = meta.push(
+                    text(format!("@{}", discussion.author))
+                        .size(10)
+                        .style(start_muted_style),
+                );
+            }
+            let card = container(
+                column![
+                    text(discussion.title.clone()).size(12),
+                    meta,
+                ]
+                .spacing(4),
+            )
+            .padding([8, 10])
+            .width(Fill)
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(Background::Color(
+                        palette.background.base.color.scale_alpha(0.42),
+                    )),
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }
+            });
+            list = list.push(
+                mouse_area(card)
+                    .interaction(iced::mouse::Interaction::Pointer)
+                    .on_press(Message::OpenUrl(discussion.url.clone())),
+            );
+        }
+        if discussions.is_empty() {
+            let note = if discussions_loading {
+                "Loading discussions…"
+            } else {
+                "Discussions load from GitHub."
+            };
+            list = list.push(text(note).size(12).style(start_muted_style));
+        }
+        let open_btn = mouse_area(
+            container(text("Open Discussions on GitHub").size(12))
+                .padding([6, 10])
+                .width(Fill)
+                .center_x(Fill)
+                .style(|theme: &Theme| {
+                    let pair = theme.extended_palette().primary.base;
+                    container::Style {
+                        background: Some(Background::Color(pair.color)),
+                        border: Border {
+                            color: Color::TRANSPARENT,
+                            width: 0.0,
+                            radius: 6.0.into(),
+                        },
+                        text_color: Some(pair.text),
+                        ..Default::default()
+                    }
+                }),
+        )
+        .interaction(iced::mouse::Interaction::Pointer)
+        .on_press(Message::OpenUrl(
+            crate::discussions::DISCUSSIONS_URL.to_string(),
+        ));
+        container(column![
+            iced::widget::scrollable(list).height(Fill),
+            Space::new().height(iced::Length::Fixed(12.0)),
+            open_btn,
+        ])
+        .width(match start_layout {
+            StartLayout::AllPanels | StartLayout::WithoutVideos => {
+                iced::Length::Fixed(panel_w)
+            }
+            StartLayout::WithoutVideosAndDiscussions
+            | StartLayout::RecentAndWelcome
+            | StartLayout::Compact => iced::Length::Fill,
+        })
+        .height(Fill)
+        .padding(16)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(Background::Color(palette.background.weak.color)),
+                border: Border {
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
             }
         })
         .into()
@@ -2515,8 +2637,10 @@ pub(super) fn start_page_view<'a>(
             support_btn,
         ])
         .width(match start_layout {
-            StartLayout::AllPanels | StartLayout::WithoutVideos => {
-                iced::Length::Fixed(sup_w)
+            StartLayout::AllPanels
+            | StartLayout::WithoutVideos
+            | StartLayout::WithoutVideosAndDiscussions => {
+                iced::Length::Fixed(panel_w)
             }
             StartLayout::RecentAndWelcome
             | StartLayout::Compact => iced::Length::Fill,
@@ -2543,12 +2667,19 @@ pub(super) fn start_page_view<'a>(
             recent,
             videos_panel,
             welcome,
+            discussions_panel,
             supporters,
         ]
         .spacing(16)
         .height(Fill)
         .into(),
         StartLayout::WithoutVideos => {
+            iced::widget::row![recent, welcome, discussions_panel, supporters]
+                .spacing(16)
+                .height(Fill)
+                .into()
+        }
+        StartLayout::WithoutVideosAndDiscussions => {
             iced::widget::row![recent, welcome, supporters]
                 .spacing(16)
                 .height(Fill)
@@ -2595,6 +2726,7 @@ pub(super) fn start_page_view<'a>(
                 tab_btn("Recent Files", super::StartSection::Recent).into(),
                 tab_btn("Videos", super::StartSection::Videos).into(),
                 tab_btn("Welcome", super::StartSection::Welcome).into(),
+                tab_btn("Discussions", super::StartSection::Discussions).into(),
                 tab_btn("Supporters", super::StartSection::Supporters).into(),
             ])
             .spacing_x(6.0)
@@ -2611,6 +2743,11 @@ pub(super) fn start_page_view<'a>(
                     .center_x(Fill)
                     .into(),
                 super::StartSection::Welcome => welcome.into(),
+                super::StartSection::Discussions => container(discussions_panel)
+                    .width(Fill)
+                    .height(Fill)
+                    .center_x(Fill)
+                    .into(),
                 super::StartSection::Supporters => container(supporters)
                     .width(Fill)
                     .height(Fill)
