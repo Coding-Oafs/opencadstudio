@@ -206,7 +206,9 @@ impl super::OpenCADStudio {
             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(h) {
                 write_text_field(entity, ed.field, ed.value.clone());
             }
-            self.tabs[i].scene.bump_geometry();
+            self.tabs[i]
+                .scene
+                .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             self.tabs[i].dirty = true;
         } else {
             let mut t = Text::with_value(

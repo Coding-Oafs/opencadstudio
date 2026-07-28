@@ -89,6 +89,7 @@ impl Scene {
     ) -> usize {
         let group_dict_handle = self.document.header.acad_group_dict_handle;
         let mut copied = 0;
+        let mut dictionary_recorded = false;
         for source in sources {
             let entities: Vec<Handle> = source
                 .entities
@@ -105,6 +106,14 @@ impl Scene {
             group.name = name.clone();
             group.entities = entities;
             let gh = group.handle;
+            if self.is_recording_undo() {
+                if !dictionary_recorded {
+                    let before = self.document.objects.get(&group_dict_handle).cloned();
+                    self.record_undo_object_before(group_dict_handle, before);
+                    dictionary_recorded = true;
+                }
+                self.record_undo_object_before(gh, None);
+            }
             self.document.objects.insert(gh, ObjectType::Group(group));
             if let Some(ObjectType::Dictionary(dict)) =
                 self.document.objects.get_mut(&group_dict_handle)

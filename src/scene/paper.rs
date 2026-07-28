@@ -196,22 +196,55 @@ impl Scene {
         Arc<Vec<HatchModel>>,
         Arc<Vec<ImageModel>>,
     ) {
-        let selected = self.selected_set_sig();
-        {
+        let selected = self.selected_hatch_sig();
+        let reuse = {
             let cache = self.paper_sheet_render_cache.borrow();
             if let Some(cache) = cache.get(&self.current_layout) {
-                if cache.epoch == self.geometry_epoch
-                    && cache.layout == self.current_layout
+                if cache.layout == self.current_layout
                     && cache.selected == selected
                     && cache.paper_bg == self.paper_bg_color
+                    && self.category_cache_valid(
+                        cache.epoch,
+                        super::CACHE_CATEGORY_HATCH,
+                        |handle| self.hatches.contains_key(&handle),
+                    )
+                    && self.category_cache_valid(
+                        cache.epoch,
+                        super::CACHE_CATEGORY_WIPEOUT,
+                        |handle| {
+                            matches!(
+                                self.document.get_entity(handle),
+                                Some(EntityType::Wipeout(_))
+                            )
+                        },
+                    )
+                    && self.category_cache_valid(
+                        cache.epoch,
+                        super::CACHE_CATEGORY_IMAGE,
+                        |handle| self.images.contains_key(&handle),
+                    )
                 {
-                    return (
+                    Some((
                         Arc::clone(&cache.hatches),
                         Arc::clone(&cache.wipeouts),
                         Arc::clone(&cache.images),
-                    );
+                    ))
+                } else {
+                    None
                 }
+            } else {
+                None
             }
+        };
+        if let Some(models) = reuse {
+            if let Some(cache) = self
+                .paper_sheet_render_cache
+                .borrow_mut()
+                .get_mut(&self.current_layout)
+            {
+                cache.epoch = self.geometry_epoch;
+            }
+            return models;
         }
 
         let mut hatches = Vec::new();

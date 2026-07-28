@@ -169,7 +169,11 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].dirty = true;
-                self.tabs[i].scene.bump_geometry();
+                let changes: Vec<_> = handles
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect();
+                self.tabs[i].scene.bump_entities(&changes);
                 self.command_line
                     .push_output(&format!("JUSTIFYTEXT: updated {n} text object(s)."));
             }
@@ -253,7 +257,11 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].dirty = true;
-                self.tabs[i].scene.bump_geometry();
+                let changes: Vec<_> = handles
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect();
+                self.tabs[i].scene.bump_entities(&changes);
                 self.command_line
                     .push_output(&format!("TCASE: updated {n} text object(s)."));
             }
@@ -397,7 +405,11 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].dirty = true;
-                self.tabs[i].scene.bump_geometry();
+                let changes: Vec<_> = handles
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect();
+                self.tabs[i].scene.bump_entities(&changes);
                 self.command_line.push_output(&format!(
                     "TEXTFIT: fitted {n} text object(s) to width {target}."
                 ));
@@ -459,7 +471,11 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].dirty = true;
-                self.tabs[i].scene.bump_geometry();
+                let changes: Vec<_> = texts
+                    .iter()
+                    .map(|(handle, _, _)| (*handle, crate::scene::ChangeKind::Modified))
+                    .collect();
+                self.tabs[i].scene.bump_entities(&changes);
                 self.command_line.push_output(&format!(
                     "TCOUNT: numbered {} text object(s) from {start}.",
                     texts.len()

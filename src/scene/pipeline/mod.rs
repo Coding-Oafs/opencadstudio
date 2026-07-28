@@ -232,6 +232,13 @@ pub struct Pipeline {
     /// ranges from the resident arena.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_cull_key: (u64, u64, u32, u32),
+    /// View/source keys for CPU visibility passes. A plain entity edit changes
+    /// the scene render signature, but it must not rescan every unchanged hatch,
+    /// wipeout, or mesh AABB when the camera and corresponding source stayed
+    /// identical.
+    pub(crate) hatch_lod_key: (usize, u64, u32, u32, bool),
+    pub(crate) wipeout_lod_key: (usize, u64, u32, u32, bool),
+    pub(crate) mesh_lod_key: (usize, u64, u32, u32),
     /// This content viewport's non-rectangular clip boundary as a triangle-fan
     /// vertex buffer in the render target's normalized device coords (`None` =
     /// rectangular / unclipped, where the viewport's own render rectangle does
@@ -292,7 +299,7 @@ pub struct Pipeline {
     pub cached_mesh_source: Option<std::sync::Arc<Vec<MeshLodSet>>>,
     pub cached_face3d_source: Option<std::sync::Arc<Vec<WireModel>>>,
     pub cached_face3d_depth_source:
-        Option<std::sync::Arc<rustc_hash::FxHashMap<u64, [f32; 2]>>>,
+        Option<std::sync::Weak<rustc_hash::FxHashMap<u64, [f32; 2]>>>,
     pub cached_fill_mode: bool,
     /// Last `(geometry_epoch, camera_generation)` value for which GPU buffers
     /// were uploaded. We re-upload when either side changes — pan/zoom bumps
@@ -1812,6 +1819,9 @@ impl Pipeline {
             wire_arena_id: u64::MAX,
             #[cfg(not(target_arch = "wasm32"))]
             wire_cull_key: (u64::MAX, u64::MAX, 0, 0),
+            hatch_lod_key: (usize::MAX, u64::MAX, 0, 0, false),
+            wipeout_lod_key: (usize::MAX, u64::MAX, 0, 0, false),
+            mesh_lod_key: (usize::MAX, u64::MAX, 0, 0),
             clip_boundary: None,
             gpu_selected_wires: vec![],
             gpu_preview_wires: vec![],
@@ -1928,36 +1938,64 @@ impl Pipeline {
         hover: Option<acadrust::Handle>,
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) {
+        let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         let hover = hover.filter(|h| !selected.contains(h));
         if selected.is_empty() && hover.is_none() {
             self.gpu_selected_wires = vec![];
             return;
         }
-        // Gather the highlighted entities' wires via the prebuilt index —
-        // O(highlighted), no per-wire string parse. Selection recolours blue,
-        // hover orange. Drawn on top (depth-compare Always) over the base pass.
-        let mut out: Vec<WireModel> = Vec::new();
-        let push = |handle_val: u64, color: [f32; 4], wires: &[WireModel], out: &mut Vec<WireModel>| {
-            if let Some(idxs) = self.wire_handle_index.get(&handle_val) {
+        // Gather borrowed highlighted wires via the prebuilt index —
+        // O(highlighted), no per-wire string parse or deep geometry clone.
+        let mut selected_wires: Vec<&WireModel> = Vec::new();
+        let mut hover_wires: Vec<&WireModel> = Vec::new();
+        for h in selected {
+            if let Some(idxs) = self.wire_handle_index.get(&h.value()) {
                 let mut slots = idxs.clone();
                 slots.sort_unstable();
                 for &i in &slots {
                     if let Some(w) = wires.get(i as usize) {
-                        let mut c = w.clone();
-                        c.color = color;
-                        out.push(c);
+                        selected_wires.push(w);
                     }
                 }
             }
-        };
-        for h in selected {
-            push(h.value(), WireModel::SELECTED, wires, &mut out);
         }
         if let Some(h) = hover {
-            push(h.value(), WireModel::HOVER, wires, &mut out);
+            if let Some(idxs) = self.wire_handle_index.get(&h.value()) {
+                let mut slots = idxs.clone();
+                slots.sort_unstable();
+                for &i in &slots {
+                    if let Some(w) = wires.get(i as usize) {
+                        hover_wires.push(w);
+                    }
+                }
+            }
         }
-        self.gpu_selected_wires =
-            WireGpu::from_run(device, &out, depth_map, false, self.wire_const_bgl.as_ref());
+        let mut gpu = WireGpu::from_highlight_refs(
+            device,
+            &selected_wires,
+            WireModel::SELECTED,
+            depth_map,
+            self.wire_const_bgl.as_ref(),
+        );
+        gpu.extend(WireGpu::from_highlight_refs(
+            device,
+            &hover_wires,
+            WireModel::HOVER,
+            depth_map,
+            self.wire_const_bgl.as_ref(),
+        ));
+        self.gpu_selected_wires = gpu;
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 1.0 {
+                crate::perf_record!(
+                    "[perf] wire-highlight {:>7.1}ms handles={} wires={}",
+                    elapsed_ms,
+                    selected.len() + usize::from(hover.is_some()),
+                    selected_wires.len() + hover_wires.len(),
+                );
+            }
+        }
     }
 
     /// Build the text-highlight overlay: the glyph quads of just the selected /
@@ -1971,6 +2009,7 @@ impl Pipeline {
         selected: &rustc_hash::FxHashSet<acadrust::Handle>,
         hover: Option<acadrust::Handle>,
     ) {
+        let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         let hover = hover.filter(|h| !selected.contains(h));
         if selected.is_empty() && hover.is_none() {
             self.text_highlight_vbuf = None;
@@ -2001,6 +2040,16 @@ impl Pipeline {
         }
         self.text_highlight_vcount = out.len() as u32;
         self.text_highlight_vbuf = text_gpu::upload_vertices(device, &out);
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 1.0 {
+                crate::perf_record!(
+                    "[perf] text-highlight {:>7.1}ms vertices={}",
+                    elapsed_ms,
+                    out.len(),
+                );
+            }
+        }
     }
 
     /// Upload the live overlay (command preview / interim / grip-drag) wires.
@@ -2297,6 +2346,7 @@ impl Pipeline {
         clip_w: u32,
         clip_h: u32,
     ) {
+        let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         let Some(batch) = &mut self.gpu_hatch else {
             return;
         };
@@ -2306,6 +2356,16 @@ impl Pipeline {
             batch.visibility[i] = if skip { 0 } else { 1 };
         }
         batch.upload_visibility(queue);
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 1.0 {
+                crate::perf_record!(
+                    "[perf] hatch-lod {:>7.1}ms instances={}",
+                    elapsed_ms,
+                    batch.instance_aabbs.len(),
+                );
+            }
+        }
     }
 
     /// Per-frame wipeout frustum-skip flag (Phase 2.3). Mirrors
@@ -2331,6 +2391,7 @@ impl Pipeline {
         wireframe_only: bool,
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) {
+        let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         // Edge buffer is always built from `face3d_wires`, so 3DFACE
         // outlines stay on the screen regardless of mode.
         self.gpu_face3d_edges =
@@ -2358,6 +2419,17 @@ impl Pipeline {
                 keep_3d_mesh_fills,
                 depth_map,
             ));
+        }
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 1.0 {
+                crate::perf_record!(
+                    "[perf] face3d-upload {:>7.1}ms face-wires={} all-wires={}",
+                    elapsed_ms,
+                    face3d_wires.len(),
+                    all_wires.len(),
+                );
+            }
         }
     }
 
@@ -2773,6 +2845,7 @@ impl Pipeline {
         queue: &wgpu::Queue,
         hatches: &[HatchModel],
     ) {
+        let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         if let Some(bgl1) = &self.hatch_compat_bgl1 {
             self.gpu_hatches_compat = hatches
                 .iter()
@@ -2792,6 +2865,16 @@ impl Pipeline {
         let renderable: Vec<HatchModel> =
             hatches.iter().filter(|h| h.boundary.len() >= 3).cloned().collect();
         self.gpu_hatch = hatch_gpu::HatchGpu::build(device, bgl1, &renderable);
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 1.0 {
+                crate::perf_record!(
+                    "[perf] hatch-upload {:>7.1}ms models={}",
+                    elapsed_ms,
+                    renderable.len(),
+                );
+            }
+        }
     }
 
     pub fn upload_wipeouts(&mut self, device: &wgpu::Device, wipeouts: &[HatchModel]) {
@@ -2823,6 +2906,7 @@ impl Pipeline {
         queue: &wgpu::Queue,
         verts: &[text_gpu::TextVertex],
     ) {
+        let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
             if self.text_atlas_gpu.is_none() || atlas.is_dirty() {
                 self.text_atlas_gpu = Some(text_gpu::TextAtlasGpu::upload(
@@ -2836,6 +2920,16 @@ impl Pipeline {
         }
         self.text_vbuf = text_gpu::upload_vertices(device, verts);
         self.text_vcount = verts.len() as u32;
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 1.0 {
+                crate::perf_record!(
+                    "[perf] text-upload {:>7.1}ms vertices={}",
+                    elapsed_ms,
+                    verts.len(),
+                );
+            }
+        }
     }
 
     pub fn upload_uniforms(&self, queue: &wgpu::Queue, uniforms: &Uniforms) {

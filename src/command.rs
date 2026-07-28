@@ -1020,6 +1020,10 @@ pub enum CmdResult {
         entity: EntityType,
         finish: bool,
     },
+    /// End a command-owned live entity without replacing its already-current
+    /// document geometry. PLINE uses this for Enter/Escape after the latest
+    /// vertex was published, avoiding one redundant geometry epoch/GPU patch.
+    FinalizeLiveEntity(Handle),
     /// Remove the live entity from the document but keep the command running —
     /// PLINE's Undo popping back below the two vertices an entity needs.
     RemoveLiveEntity(Handle),

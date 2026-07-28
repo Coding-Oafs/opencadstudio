@@ -46,7 +46,7 @@ pub(super) struct EntityIndex {
     pub unbounded_handles: Vec<Handle>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct DependencyTargets {
     render_handles: HashSet<Handle>,
     source_handles: HashSet<Handle>,
@@ -59,6 +59,9 @@ struct SceneDependencyIndex {
     text_styles: HashMap<String, DependencyTargets>,
     dim_styles: HashMap<String, DependencyTargets>,
     object_styles: HashMap<Handle, DependencyTargets>,
+    points: DependencyTargets,
+    text_geometry: DependencyTargets,
+    annotation_geometry: DependencyTargets,
 }
 
 fn hatch_interaction_aabb(hatch: &model::hatch_model::HatchModel) -> Option<[f64; 4]> {
@@ -205,11 +208,11 @@ pub enum ChangeKind {
 /// While an entity-only undoable command runs, this captures the pre-mutation
 /// image of every entity the five mutation primitives (add / update / erase /
 /// transform / copy) touch, so the app can build a cheap **delta**-undo entry
-/// instead of cloning the whole ~800k-entity document (~46 ms). `poisoned` is
-/// set when a primitive also mutated non-entity state (a brand-new layer, a
-/// group, or a `*D` block record) that a pure-entity delta cannot restore — the
-/// app's per-command predicate keeps that from happening, and a debug assertion
-/// fires if it ever does.
+/// instead of cloning the whole ~800k-entity document (~46 ms). The small set
+/// of object-map entries changed by ordinary entity operations (groups and
+/// raster-image definitions) is captured alongside the entities. `poisoned`
+/// remains the fallback for broader structure changes such as a brand-new
+/// layer or a `*D` block record.
 #[derive(Default)]
 pub struct UndoRecording {
     /// First-touch before-image per handle (the first write for a handle wins,
@@ -218,6 +221,10 @@ pub struct UndoRecording {
     /// state). `order` preserves first-touch order for a deterministic delta.
     before: HashMap<Handle, Option<Arc<EntityType>>>,
     order: Vec<Handle>,
+    /// First-touch before-images for the exact document.objects entries changed
+    /// by the command. `None` denotes a newly-created object.
+    object_before: HashMap<Handle, Option<ObjectType>>,
+    object_order: Vec<Handle>,
     poisoned: bool,
 }
 
@@ -227,20 +234,36 @@ impl UndoRecording {
         self.poisoned
     }
 
-    /// No entity was recorded (nothing to undo).
+    /// No entity or object entry was recorded (nothing to undo).
     pub fn is_empty(&self) -> bool {
-        self.order.is_empty()
+        self.order.is_empty() && self.object_order.is_empty()
     }
 
-    /// Consume the recording into `(handle, before-image)` pairs in first-touch
-    /// order. A `None` before-image means the entity was added by the command.
-    /// The app pairs each with the entity's current (after) state to build the
-    /// invertible delta entry.
-    pub fn into_before_images(mut self) -> Vec<(Handle, Option<Arc<EntityType>>)> {
-        self.order
+    /// Consume both recording directories in deterministic first-touch order.
+    /// A `None` image means the entity/object was added by the command.
+    pub fn into_recorded_images(
+        mut self,
+    ) -> (
+        Vec<(Handle, Option<Arc<EntityType>>)>,
+        Vec<(Handle, Option<ObjectType>)>,
+    ) {
+        let entities = self
+            .order
             .drain(..)
             .map(|h| (h, self.before.remove(&h).flatten()))
-            .collect()
+            .collect();
+        let objects = self
+            .object_order
+            .drain(..)
+            .map(|h| (h, self.object_before.remove(&h).flatten()))
+            .collect();
+        (entities, objects)
+    }
+
+    /// Entity-only convenience used by the focused Scene delta tests.
+    #[cfg(test)]
+    pub fn into_before_images(self) -> Vec<(Handle, Option<Arc<EntityType>>)> {
+        self.into_recorded_images().0
     }
 }
 
@@ -252,8 +275,22 @@ impl UndoRecording {
 struct GeometryDelta {
     epoch: u64,
     changes: Vec<(Handle, ChangeKind)>,
+    /// Cache-category membership captured immediately before a Removed entity
+    /// leaves the document. Presence with value 0 means "known unrelated";
+    /// absence means the caller removed it outside the tracked primitives and
+    /// consumers must remain conservative.
+    removed_categories: HashMap<Handle, u16>,
     full: bool,
 }
+
+const CACHE_CATEGORY_ANNOTATIVE: u16 = 1 << 0;
+const CACHE_CATEGORY_HATCH: u16 = 1 << 1;
+const CACHE_CATEGORY_WIPEOUT: u16 = 1 << 2;
+const CACHE_CATEGORY_IMAGE: u16 = 1 << 3;
+const CACHE_CATEGORY_MESH: u16 = 1 << 4;
+const CACHE_CATEGORY_INTERACTION: u16 = 1 << 5;
+const CACHE_CATEGORY_TEXT: u16 = 1 << 6;
+const CACHE_CATEGORY_INSERT_HATCH: u16 = 1 << 7;
 
 /// Mutable assembly metadata for one resident wire set. Keeping entity ranges
 /// beside the flat render Vec lets a one-entity edit splice that run directly;
@@ -272,6 +309,12 @@ struct ResidentWireLayout {
     order: Vec<Handle>,
     /// Flat wire range `(start, len)` for each currently visible entity.
     ranges: HashMap<Handle, (usize, usize)>,
+    /// Blanked ranges retained in the flat Vec. Undo/Redo and grip hide/show can
+    /// restore a same-shaped entity in place without shifting every later run.
+    vacant: HashMap<Handle, (usize, usize)>,
+    /// Number of blank WireModel slots currently retained. Excessive waste
+    /// triggers the normal full-build compaction fallback.
+    tombstoned_wires: usize,
     /// First synthesized marker wire. Markers have no entity handle and remain
     /// at the tail while entity runs are inserted/removed before them.
     marker_start: usize,
@@ -310,14 +353,102 @@ pub(crate) struct WireIndexEdit {
     pub(crate) start: usize,
     pub(crate) old_len: usize,
     pub(crate) new_len: usize,
+    /// Whether the handle should exist in the selection/text slot index after
+    /// the physical edit. Tombstoning keeps `old_len == new_len` but removes it
+    /// from the index; restoring the vacant range adds it back without a shift.
+    pub(crate) visible: bool,
+}
+
+#[derive(Clone, Copy)]
+struct DrawDepthEntry {
+    handle: u64,
+    effective: u64,
+    label: i32,
+    half_label: i32,
+}
+
+// Stable order-maintenance labels. Initial builds occupy the middle half of
+// this space, leaving 200 million units at either end. New CAD handles are
+// monotonic, so ordinary Add extends with the existing label stride without
+// changing any sibling's clip-z bias. The large integer domain preserves enough
+// f32 separation for nested block children even in very large drawings.
+// Deleted entries remain as tombstones so Undo/Redo restores the same slot.
+const DRAW_DEPTH_LABEL_MIN: i32 = -1_000_000_000;
+const DRAW_DEPTH_LABEL_MAX: i32 = 1_000_000_000;
+const DRAW_DEPTH_INITIAL_MIN: i32 = -800_000_000;
+const DRAW_DEPTH_INITIAL_MAX: i32 = 800_000_000;
+const DRAW_DEPTH_LABEL_SCALE: f32 = 1.0 / 1_073_741_824.0;
+
+fn draw_depth_value(label: i32, half_label: i32) -> [f32; 2] {
+    [
+        label as f32 * DRAW_DEPTH_LABEL_SCALE,
+        half_label as f32 * DRAW_DEPTH_LABEL_SCALE,
+    ]
+}
+
+fn seed_draw_depth_entries(order: Vec<(u64, u64)>) -> Vec<DrawDepthEntry> {
+    let count = order.len();
+    let middle_capacity =
+        (DRAW_DEPTH_INITIAL_MAX as i64 - DRAW_DEPTH_INITIAL_MIN as i64 - 1) as usize;
+    let (low, high) = if count <= middle_capacity {
+        (DRAW_DEPTH_INITIAL_MIN, DRAW_DEPTH_INITIAL_MAX)
+    } else {
+        (DRAW_DEPTH_LABEL_MIN, DRAW_DEPTH_LABEL_MAX)
+    };
+    let span = high as i64 - low as i64;
+    let step = (span / (count as i64 + 1)).max(1);
+    order
+        .into_iter()
+        .enumerate()
+        .map(|(index, (handle, effective))| DrawDepthEntry {
+            handle,
+            effective,
+            label: (low as i64 + step * (index as i64 + 1)) as i32,
+            half_label: (step / 2).max(1) as i32,
+        })
+        .collect()
+}
+
+fn inserted_draw_depth_label(order: &[DrawDepthEntry], position: usize) -> Option<(i32, i32)> {
+    match (
+        position.checked_sub(1).and_then(|index| order.get(index)),
+        order.get(position),
+    ) {
+        (None, None) => Some((0, 1)),
+        (Some(left), None) => {
+            let stride = order
+                .get(position.saturating_sub(2))
+                .map(|previous| left.label - previous.label)
+                .unwrap_or(left.half_label.saturating_mul(2))
+                .max(1);
+            let label = left.label.checked_add(stride)?;
+            (label <= DRAW_DEPTH_LABEL_MAX).then_some((label, (stride / 2).max(1)))
+        }
+        (None, Some(right)) => {
+            let stride = order
+                .get(1)
+                .map(|next| next.label - right.label)
+                .unwrap_or(right.half_label.saturating_mul(2))
+                .max(1);
+            let label = right.label.checked_sub(stride)?;
+            (label >= DRAW_DEPTH_LABEL_MIN).then_some((label, (stride / 2).max(1)))
+        }
+        (Some(left), Some(right)) if right.label - left.label > 1 => {
+            let label = left.label + (right.label - left.label) / 2;
+            let nearest = (label - left.label).min(right.label - label);
+            Some((label, (nearest / 2).max(1)))
+        }
+        _ => None,
+    }
 }
 
 struct DrawDepthCache {
     epoch: u64,
     depths: Arc<HashMap<u64, [f32; 2]>>,
-    /// Per-block handles already sorted by effective draw-order key.
-    blocks: HashMap<Handle, Vec<(u64, u64)>>,
-    /// Reverse owner lookup retained so Removed deltas need no document scan.
+    /// Per-block stable order labels, including deleted tombstones retained for
+    /// symmetric Undo/Redo.
+    blocks: HashMap<Handle, Vec<DrawDepthEntry>>,
+    /// Reverse owner lookup retained across removal for tombstone restoration.
     owners: HashMap<u64, Handle>,
 }
 
@@ -1484,18 +1615,11 @@ pub struct Scene {
     /// Maps block_handle → (entity_handle.value() → sort_handle.value()).
     /// Replaces the O(objects) linear scan inside `wires_for_block()` with an O(1) lookup.
     sort_cache: RefCell<Option<(u64, HashMap<Handle, HashMap<u64, u64>>)>>,
-    /// Per-entity normalized draw-order depth in (0,1), keyed by
-    /// entity_handle.value(). Higher = drawn on top. Built once per
-    /// geometry epoch by ranking every entity within its owning block by
-    /// effective sort key (SortEntitiesTable override or own handle), then
-    /// fed to the 2D pipelines as a small clip-z bias so entities of
-    /// *different* types order correctly against each other. 3D meshes are
-    /// excluded (they keep real geometric depth). Each value is
-    /// `[depth, half]`: `depth` = the entity's signed rank in (-1,1), `half` =
-    /// half the gap to the neighbouring ranks (`1/(block_count+1)`) — the
-    /// sub-range a block INSERT's children may occupy without crossing the
-    /// insert's siblings. Fill explosion and band wires compose child depths
-    /// as `depth + child_rank * half`.
+    /// Per-entity stable draw-order depth keyed by entity handle. Initial order
+    /// is assigned sparse integer labels; Add/Delete never renormalizes existing
+    /// siblings, so a structural edit updates only the changed entity's GPU
+    /// constants. `[depth, half]` retains a fixed child sub-range for block
+    /// composition. Full sort/layout/block changes rebuild the labels.
     draw_depth_cache: RefCell<Option<DrawDepthCache>>,
     /// Cached hatch fill models, keyed by geometry_epoch. View culling
     /// is handled at draw time via `hatch_skip_flags` in the pipeline,
@@ -1729,6 +1853,9 @@ pub struct Scene {
     /// entries past its last-synced epoch and patches per-handle instead of
     /// re-walking the whole document. See [`Scene::replay_since`].
     geometry_deltas: RefCell<std::collections::VecDeque<GeometryDelta>>,
+    /// Before-category hints staged by erase/history immediately before the
+    /// entity disappears, then consumed by the matching geometry delta.
+    pending_removed_categories: RefCell<HashMap<Handle, u16>>,
     /// Highest epoch whose delta has been evicted from the ring. A consumer
     /// synced older than this can't be caught up incrementally → full rebuild.
     geometry_journal_floor: std::cell::Cell<u64>,
@@ -1850,6 +1977,7 @@ impl Scene {
             resident_tess_memo: RefCell::new(HashMap::default()),
             resident_tess_guard: std::cell::Cell::new(0),
             geometry_deltas: RefCell::new(std::collections::VecDeque::new()),
+            pending_removed_categories: RefCell::new(HashMap::default()),
             geometry_journal_floor: std::cell::Cell::new(0),
             resident_patch_hits: std::cell::Cell::new(0),
             model_wire_gpu_patch: RefCell::new(None),
@@ -1961,10 +2089,26 @@ impl Scene {
     /// rebuild. Every `geometry_epoch` bump must call this exactly once so the
     /// journal never has a gap (a gap would let a consumer serve stale geometry).
     fn push_geometry_delta(&self, epoch: u64, changes: Vec<(Handle, ChangeKind)>, full: bool) {
+        let pending_categories =
+            std::mem::take(&mut *self.pending_removed_categories.borrow_mut());
+        let removed_categories = if full {
+            HashMap::default()
+        } else {
+            let mut removed = HashMap::default();
+            for &(handle, kind) in &changes {
+                if let Some(&bits) = pending_categories.get(&handle) {
+                    if matches!(kind, ChangeKind::Removed) {
+                        removed.insert(handle, bits);
+                    }
+                }
+            }
+            removed
+        };
         let mut ring = self.geometry_deltas.borrow_mut();
         ring.push_back(GeometryDelta {
             epoch,
             changes,
+            removed_categories,
             full,
         });
         while ring.len() > GEOMETRY_JOURNAL_CAP {
@@ -2021,28 +2165,103 @@ impl Scene {
         Some(state.into_iter().collect())
     }
 
-    /// True when a per-category derived cache (hatches / images / meshes /
-    /// wipeouts) synced at `cached_epoch` is still valid because nothing in its
-    /// category changed since. `in_category(h)` reports membership against the
-    /// live seed map. A removal is treated conservatively as possibly-relevant
-    /// (the handle is already gone from the seed map, so its category can't be
-    /// re-checked), and a `full`/overflow replay always invalidates. This lets a
-    /// plain edit — drawing or moving a line — keep every unrelated category
-    /// cache warm instead of rebuilding all hatch / image / mesh models.
+    fn entity_affects_text_cache(&self, entity: &EntityType) -> bool {
+        if matches!(
+            entity,
+            EntityType::Text(_)
+                | EntityType::MText(_)
+                | EntityType::Dimension(_)
+                | EntityType::MultiLeader(_)
+                | EntityType::Leader(_)
+                | EntityType::Table(_)
+                | EntityType::Tolerance(_)
+                | EntityType::AttributeEntity(_)
+                | EntityType::AttributeDefinition(_)
+                | EntityType::Insert(_)
+        ) {
+            return true;
+        }
+        // Complex-linetype glyphs ride the host entity's wire.
+        let lt = crate::scene::view::render::linetype_name_for(&self.document, entity);
+        crate::io::linetypes::resolve_complex_lt(&self.document, &lt).is_some()
+    }
+
+    /// Stage the cache categories an entity belongs to before erase removes the
+    /// only cheap way to classify it. The next Removed geometry delta consumes
+    /// this entry; even a zero mask is meaningful ("known plain geometry").
+    fn remember_removed_cache_categories(&self, handle: Handle) {
+        let Some(entity) = self.document.get_entity(handle) else {
+            return;
+        };
+        let mut bits = 0u16;
+        if crate::scene::annotative::is_annotative(&self.document, entity) {
+            bits |= CACHE_CATEGORY_ANNOTATIVE;
+        }
+        if self.hatches.contains_key(&handle) {
+            bits |= CACHE_CATEGORY_HATCH | CACHE_CATEGORY_INTERACTION;
+        }
+        if matches!(entity, EntityType::Wipeout(_)) {
+            bits |= CACHE_CATEGORY_WIPEOUT;
+        }
+        if self.images.contains_key(&handle) {
+            bits |= CACHE_CATEGORY_IMAGE;
+        }
+        let is_insert = matches!(entity, EntityType::Insert(_));
+        if self.meshes.contains_key(&handle) || self.block_meshes.contains_key(&handle) || is_insert
+        {
+            bits |= CACHE_CATEGORY_MESH | CACHE_CATEGORY_INTERACTION;
+        }
+        if is_insert {
+            bits |= CACHE_CATEGORY_INSERT_HATCH;
+        }
+        if self.entity_affects_text_cache(entity) {
+            bits |= CACHE_CATEGORY_TEXT;
+        }
+        self.pending_removed_categories
+            .borrow_mut()
+            .insert(handle, bits);
+    }
+
+    /// True when a per-category derived cache synced at `cached_epoch` remains
+    /// valid. Adds/edits are classified from live state; removals use the tiny
+    /// pre-erase category mask stored in the journal. Thus deleting a LINE no
+    /// longer rebuilds every hatch/image/mesh/text cache merely because its type
+    /// became unknowable after removal.
     fn category_cache_valid(
         &self,
         cached_epoch: u64,
+        category: u16,
         in_category: impl Fn(Handle) -> bool,
     ) -> bool {
         if cached_epoch == self.geometry_epoch {
             return true;
         }
-        match self.replay_since(cached_epoch) {
-            None => false,
-            Some(deltas) => deltas
-                .iter()
-                .all(|&(h, k)| k != ChangeKind::Removed && !in_category(h)),
+        if cached_epoch < self.geometry_journal_floor.get() {
+            return false;
         }
+        let ring = self.geometry_deltas.borrow();
+        for delta in ring.iter().filter(|delta| delta.epoch > cached_epoch) {
+            if delta.full {
+                return false;
+            }
+            for &(handle, kind) in &delta.changes {
+                match kind {
+                    ChangeKind::Removed => {
+                        let Some(bits) = delta.removed_categories.get(&handle) else {
+                            return false;
+                        };
+                        if bits & category != 0 {
+                            return false;
+                        }
+                    }
+                    ChangeKind::Added | ChangeKind::Modified if in_category(handle) => {
+                        return false;
+                    }
+                    ChangeKind::Added | ChangeKind::Modified => {}
+                }
+            }
+        }
+        true
     }
 
     /// True when no text-bearing entity changed since `last_epoch`, so cached SDF
@@ -2051,49 +2270,20 @@ impl Scene {
     /// references (their baked text moves with the instance) — an edit to any of
     /// those, or any removal, invalidates it; a plain line / arc / polyline edit
     /// does not.
-    /// Whether the per-entity draw-order ranks are unchanged since
-    /// `last_epoch`: every delta is a Modify (an Add / Remove changes the rank
-    /// denominator and shifts every sibling's bias — same rule as the
-    /// `draw_depth_map` cache).
+    /// Whether the per-entity draw-order labels can be replayed since
+    /// `last_epoch`. Add/Remove keep every existing label stable; only a full
+    /// structural delta (DRAWORDER, file/layout/block rebuild, journal overflow)
+    /// requires consumers to regenerate their depth-bearing data.
     pub(super) fn draw_ranks_stable(&self, last_epoch: u64) -> bool {
-        match self.replay_since(last_epoch) {
-            Some(deltas) => deltas.iter().all(|&(_, k)| k == ChangeKind::Modified),
-            None => false,
-        }
+        self.replay_since(last_epoch).is_some()
     }
 
     fn text_unchanged(&self, last_epoch: u64) -> bool {
-        match self.replay_since(last_epoch) {
-            Some(deltas) => deltas.iter().all(|&(h, k)| {
-                if k == ChangeKind::Removed {
-                    return false;
-                }
-                let Some(e) = self.document.get_entity(h) else {
-                    return true;
-                };
-                if matches!(
-                    e,
-                    EntityType::Text(_)
-                        | EntityType::MText(_)
-                        | EntityType::Dimension(_)
-                        | EntityType::MultiLeader(_)
-                        | EntityType::Leader(_)
-                        | EntityType::Table(_)
-                        | EntityType::Tolerance(_)
-                        | EntityType::AttributeEntity(_)
-                        | EntityType::AttributeDefinition(_)
-                        | EntityType::Insert(_)
-                ) {
-                    return false;
-                }
-                // Complex-linetype glyphs ride the host entity's own wire, so a
-                // plain line/polyline edit still moves text when its linetype
-                // embeds text or shapes.
-                let lt = crate::scene::view::render::linetype_name_for(&self.document, e);
-                crate::io::linetypes::resolve_complex_lt(&self.document, &lt).is_none()
-            }),
-            None => false,
-        }
+        self.category_cache_valid(last_epoch, CACHE_CATEGORY_TEXT, |handle| {
+            self.document
+                .get_entity(handle)
+                .is_some_and(|entity| self.entity_affects_text_cache(entity))
+        })
     }
 
     /// Report the exact handles a mutation changed. Folds the memo drop and the
@@ -2130,6 +2320,22 @@ impl Scene {
             if !rec.before.contains_key(&handle) {
                 rec.order.push(handle);
                 rec.before.insert(handle, before);
+            }
+        }
+    }
+
+    /// Record one document.objects entry before its first mutation. This keeps
+    /// Group erase and RasterImage add on targeted history rather than forcing
+    /// a clone of all document structure.
+    pub(crate) fn record_undo_object_before(
+        &mut self,
+        handle: Handle,
+        before: Option<ObjectType>,
+    ) {
+        if let Some(rec) = self.undo_recording.as_mut() {
+            if !rec.object_before.contains_key(&handle) {
+                rec.object_order.push(handle);
+                rec.object_before.insert(handle, before);
             }
         }
     }
@@ -2183,6 +2389,7 @@ impl Scene {
                 }
                 None => {
                     if existed {
+                        self.remember_removed_cache_categories(*h);
                         self.document.remove_entity_arc(*h);
                         changes.push((*h, ChangeKind::Removed));
                     }
@@ -2198,6 +2405,13 @@ impl Scene {
     }
 
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        if !changes.is_empty() {
+            // A Modified delta can change layer/style/block references as well
+            // as coordinates. Rebuild the reverse dependency map lazily on its
+            // next use so later targeted global-property updates never follow
+            // stale ownership.
+            self.invalidate_dependency_index();
+        }
         let cached_light_changed = self.lighting_cache.borrow().as_ref().is_some_and(|lights| {
             changes
                 .iter()
@@ -2516,7 +2730,9 @@ impl Scene {
     pub fn set_refedit_keep(&mut self, keep: Option<HashSet<Handle>>) {
         self.refedit_keep = keep;
         self.recolor_meshes();
-        self.bump_geometry();
+        // Fading is applied after the raw per-entity tessellation memo is read;
+        // keep those expensive wires and only rebuild the resident assembly.
+        self.bump_geometry_no_blocks();
     }
 
     /// Fade the colours of wires that belong to entities outside the REFEDIT
@@ -3556,9 +3772,16 @@ impl Scene {
             })
             .map(|entity| entity.common().handle)
             .collect();
+        let changes: Vec<_> = hide
+            .iter()
+            .copied()
+            .map(|handle| (handle, ChangeKind::Modified))
+            .collect();
         self.object_isolation.hidden.extend(hide);
         self.object_isolation.keep = Some(keep);
-        self.bump_geometry_no_blocks();
+        if !changes.is_empty() {
+            self.bump_entities(&changes);
+        }
     }
 
     /// Temporarily hide the current selection without changing any entity
@@ -3567,11 +3790,17 @@ impl Scene {
         if self.selected.is_empty() {
             return;
         }
+        let changes: Vec<_> = self
+            .selected
+            .iter()
+            .copied()
+            .map(|handle| (handle, ChangeKind::Modified))
+            .collect();
         self.object_isolation
             .hidden
             .extend(self.selected.iter().copied());
         self.selected.clear();
-        self.bump_geometry_no_blocks();
+        self.bump_entities(&changes);
     }
 
     /// Clear every session-only object visibility filter.
@@ -3579,8 +3808,17 @@ impl Scene {
         if !self.object_isolation.is_active() {
             return;
         }
+        let changes: Vec<_> = self
+            .object_isolation
+            .hidden
+            .iter()
+            .copied()
+            .map(|handle| (handle, ChangeKind::Modified))
+            .collect();
         self.object_isolation = ObjectIsolationState::default();
-        self.bump_geometry_no_blocks();
+        if !changes.is_empty() {
+            self.bump_entities(&changes);
+        }
     }
 
     /// A newly opened/replaced document starts with no session visibility.
@@ -3771,7 +4009,7 @@ impl Scene {
             // Skip the whole-document annotative scan when nothing annotative
             // changed since (PSLTSCALE toggles route through a full delta, which
             // fails this check and forces the recompute below).
-            if self.category_cache_valid(epoch, |h| {
+            if self.category_cache_valid(epoch, CACHE_CATEGORY_ANNOTATIVE, |h| {
                 self.document
                     .get_entity(h)
                     .map(|e| crate::scene::annotative::is_annotative(&self.document, e))
@@ -3965,6 +4203,8 @@ impl Scene {
         Some(ResidentWireLayout {
             order,
             ranges,
+            vacant: HashMap::default(),
+            tombstoned_wires: 0,
             marker_start,
         })
     }
@@ -4072,6 +4312,21 @@ impl Scene {
                 memo.insert(h, a);
             }
         }
+        // Capture whether any replaced/removed OLD run fed the Face3D/fill
+        // pass before blanking its resident slots. Treating every removal as a
+        // face change made deleting an ordinary line rescan/re-upload the whole
+        // fill pass on large drawings.
+        let old_face_pass_changed = deltas.iter().any(|(handle, _)| {
+            layout
+                .ranges
+                .get(handle)
+                .is_some_and(|&(start, len)| {
+                    start + len <= layout.marker_start
+                        && owned[start..start + len]
+                            .iter()
+                            .any(|wire| !wire.fill_tris.is_empty())
+                })
+        });
 
         // Keep the submission-order directory current. Adds are inserted by
         // the same effective SortEntitiesTable key used by the full builder;
@@ -4090,7 +4345,8 @@ impl Scene {
             };
             for &(handle, kind) in &deltas {
                 if matches!(kind, ChangeKind::Removed) {
-                    layout.order.retain(|&h| h != handle);
+                    // Keep the order entry as a tombstone. Undo/Redo can then
+                    // restore the exact physical slot and submission position.
                     continue;
                 }
                 if visible_changed.contains(&handle) && !layout.order.contains(&handle) {
@@ -4103,9 +4359,10 @@ impl Scene {
             }
         }
 
-        // Splice only changed runs into the uniquely-owned flat Vec. Same-size
-        // edits overwrite in place. Grip hide/show shifts shallow WireModel
-        // structs once, instead of cloning/grouping all nested geometry.
+        // Patch changed runs without shifting the resident Vec. Delete/hide
+        // blanks the old slots; same-shaped Undo/Redo restores them in place.
+        // Only a true tail add/resize touches Vec length (and shifts the handful
+        // of synthesized marker wires, never the drawing's entity runs).
         let mut gpu_runs: HashMap<Handle, Arc<Vec<WireModel>>> = HashMap::default();
         let mut index_edits = Vec::new();
         for &(handle, kind) in &deltas {
@@ -4117,52 +4374,124 @@ impl Scene {
             gpu_runs.insert(handle, Arc::new(new_run.clone()));
             let new_len = new_run.len();
             let old_range = layout.ranges.remove(&handle);
-            if old_range.is_none() && new_len == 0 {
+
+            if new_len == 0 {
+                if let Some((start, old_len)) = old_range {
+                    if start + old_len > layout.marker_start {
+                        return None;
+                    }
+                    for slot in &mut owned[start..start + old_len] {
+                        *slot = WireModel::solid(
+                            String::new(),
+                            Vec::new(),
+                            [0.0; 4],
+                            false,
+                        );
+                        slot.aabb = [
+                            f32::INFINITY,
+                            f32::INFINITY,
+                            f32::NEG_INFINITY,
+                            f32::NEG_INFINITY,
+                        ];
+                    }
+                    layout.vacant.insert(handle, (start, old_len));
+                    layout.tombstoned_wires =
+                        layout.tombstoned_wires.saturating_add(old_len);
+                    index_edits.push(WireIndexEdit {
+                        handle,
+                        start,
+                        old_len,
+                        new_len: old_len,
+                        visible: false,
+                    });
+                }
                 continue;
             }
-            let (start, old_len) = match old_range {
-                Some(range) => range,
-                None => {
-                    let order_index = layout.order.iter().position(|&h| h == handle)?;
-                    let start = layout.order[order_index + 1..]
-                        .iter()
-                        .find_map(|next| layout.ranges.get(next).map(|range| range.0))
-                        .unwrap_or(layout.marker_start);
-                    (start, 0)
-                }
-            };
-            if start + old_len > layout.marker_start || layout.marker_start > owned.len() {
-                return None;
-            }
 
-            if old_len == new_len {
-                for (slot, wire) in owned[start..start + old_len]
+            if let Some((start, vacant_len)) = layout.vacant.remove(&handle) {
+                if vacant_len != new_len || start + vacant_len > layout.marker_start {
+                    return None;
+                }
+                for (slot, wire) in owned[start..start + vacant_len]
                     .iter_mut()
                     .zip(new_run)
                 {
                     *slot = wire;
                 }
-            } else {
+                layout.ranges.insert(handle, (start, new_len));
+                layout.tombstoned_wires =
+                    layout.tombstoned_wires.saturating_sub(vacant_len);
+                index_edits.push(WireIndexEdit {
+                    handle,
+                    start,
+                    old_len: vacant_len,
+                    new_len,
+                    visible: true,
+                });
+                continue;
+            }
+
+            if let Some((start, old_len)) = old_range {
+                if start + old_len > layout.marker_start || layout.marker_start > owned.len() {
+                    return None;
+                }
+                if old_len == new_len {
+                    for (slot, wire) in owned[start..start + old_len]
+                        .iter_mut()
+                        .zip(new_run)
+                    {
+                        *slot = wire;
+                    }
+                    layout.ranges.insert(handle, (start, new_len));
+                    continue;
+                }
+                // Shape-changing edits are relocation-free only for the
+                // terminal entity (the live-polyline case). A non-terminal
+                // resize takes the clean full-build fallback instead of
+                // shifting every following range.
+                if start + old_len != layout.marker_start {
+                    return None;
+                }
                 index_edits.push(WireIndexEdit {
                     handle,
                     start,
                     old_len,
                     new_len,
+                    visible: true,
                 });
                 owned.splice(start..start + old_len, new_run);
                 let delta = new_len as isize - old_len as isize;
-                for range in layout.ranges.values_mut() {
-                    if range.0 >= start + old_len {
-                        range.0 = (range.0 as isize + delta) as usize;
-                    }
-                }
                 layout.marker_start = (layout.marker_start as isize + delta) as usize;
-            }
-            if new_len != 0 {
                 layout.ranges.insert(handle, (start, new_len));
+                continue;
             }
+
+            // A genuinely new handle must append after all live entity runs.
+            // Monotonic document handles make this the ordinary Add path. A
+            // middle insertion (custom sort key) falls back to a full rebuild.
+            let order_index = layout.order.iter().position(|&h| h == handle)?;
+            let insertion = layout.order[order_index + 1..]
+                .iter()
+                .find_map(|next| layout.ranges.get(next).map(|range| range.0))
+                .unwrap_or(layout.marker_start);
+            if insertion != layout.marker_start {
+                return None;
+            }
+            index_edits.push(WireIndexEdit {
+                handle,
+                start: insertion,
+                old_len: 0,
+                new_len,
+                visible: true,
+            });
+            owned.splice(insertion..insertion, new_run);
+            layout.marker_start += new_len;
+            layout.ranges.insert(handle, (insertion, new_len));
         }
         if !new_runs.is_empty() {
+            return None;
+        }
+        if layout.tombstoned_wires > layout.marker_start / 2 {
             return None;
         }
         let added: HashSet<Handle> = deltas
@@ -4181,13 +4510,13 @@ impl Scene {
                 break;
             }
         }
-        let face_pass_changed = deltas.iter().any(|&(handle, kind)| {
-            matches!(kind, ChangeKind::Removed)
-                || matches!(self.document.get_entity(handle), Some(EntityType::Face3D(_)))
+        let face_pass_changed = old_face_pass_changed
+            || deltas.iter().any(|&(handle, _)| {
+                matches!(self.document.get_entity(handle), Some(EntityType::Face3D(_)))
                 || gpu_runs.get(&handle).is_some_and(|run| {
                     run.iter().any(|wire| !wire.fill_tris.is_empty())
                 })
-        });
+            });
 
         let arc = Arc::new(owned);
         self.last_tess_wires.set(arc.len());
@@ -4324,11 +4653,10 @@ impl Scene {
         self.entity_wires_arc()
     }
 
-    /// Per-entity normalized draw-order depth, keyed by entity handle value.
-    /// Built (and cached per geometry epoch) by ranking every entity within
-    /// its owning block by effective sort key (SortEntitiesTable override or
-    /// own handle). The result feeds the 2D pipelines as a clip-z bias so
-    /// entities of different types order correctly against each other.
+    /// Per-entity stable draw-order depth, keyed by entity handle value.
+    /// A full build assigns sparse labels in effective draw order. Incremental
+    /// Add/Remove then changes only the named handle: existing siblings retain
+    /// their depth, avoiding an O(all entities) map rewrite and GPU const upload.
     pub(super) fn draw_depth_map(&self) -> Arc<HashMap<u64, [f32; 2]>> {
         {
             let cache = self.draw_depth_cache.borrow();
@@ -4341,8 +4669,9 @@ impl Scene {
         let perf = crate::perf::enabled();
         let t_depth = iced::time::Instant::now();
 
-        // Replay Add/Remove into the retained block order. This avoids rescanning
-        // every document entity and re-sorting every block for one new LINE.
+        // Replay Add/Remove into the retained sparse order directory. Removed
+        // entries stay in `blocks`/`owners` as tombstones, so Undo/Redo restores
+        // their exact prior label without shifting a sibling.
         let stale_cache = self.draw_depth_cache.borrow_mut().take();
         if let Some(mut cache) = stale_cache {
             if let Some(deltas) = self.replay_since(cache.epoch) {
@@ -4356,19 +4685,13 @@ impl Scene {
                     return arc;
                 }
 
-                let mut depths = (*cache.depths).clone();
-                let mut affected: HashSet<Handle> = HashSet::default();
+                let depths = Arc::make_mut(&mut cache.depths);
                 let ms = self.model_space_block_handle();
+                let mut incremental_ok = true;
                 for &(handle, kind) in &deltas {
                     match kind {
                         ChangeKind::Modified => {}
                         ChangeKind::Removed => {
-                            if let Some(block) = cache.owners.remove(&handle.value()) {
-                                if let Some(order) = cache.blocks.get_mut(&block) {
-                                    order.retain(|(value, _)| *value != handle.value());
-                                }
-                                affected.insert(block);
-                            }
                             depths.remove(&handle.value());
                         }
                         ChangeKind::Added => {
@@ -4394,42 +4717,72 @@ impl Scene {
                                 common.owner_handle
                             };
                             let value = handle.value();
+                            if let Some(&known_block) = cache.owners.get(&value) {
+                                if known_block != block {
+                                    incremental_ok = false;
+                                    break;
+                                }
+                                let restored = cache
+                                    .blocks
+                                    .get(&block)
+                                    .and_then(|order| {
+                                        order.iter().find(|entry| entry.handle == value)
+                                    });
+                                let Some(entry) = restored else {
+                                    incremental_ok = false;
+                                    break;
+                                };
+                                depths.insert(
+                                    value,
+                                    draw_depth_value(entry.label, entry.half_label),
+                                );
+                                continue;
+                            }
                             // A newly allocated handle cannot already have a
                             // SortEntitiesTable override; its effective key is
                             // therefore its own handle.
                             let order = cache.blocks.entry(block).or_default();
-                            let position =
-                                order.partition_point(|(_, effective)| *effective <= value);
-                            order.insert(position, (value, value));
+                            let position = order.partition_point(|entry| {
+                                (entry.effective, entry.handle) <= (value, value)
+                            });
+                            let Some((label, half_label)) =
+                                inserted_draw_depth_label(order, position)
+                            else {
+                                // Pathological middle insertion exhausted the
+                                // reserved label gap. A full rebuild is the safe
+                                // rare fallback (ordinary monotonic adds use the
+                                // two-million-slot tail reserve).
+                                incremental_ok = false;
+                                break;
+                            };
+                            order.insert(
+                                position,
+                                DrawDepthEntry {
+                                    handle: value,
+                                    effective: value,
+                                    label,
+                                    half_label,
+                                },
+                            );
                             cache.owners.insert(value, block);
-                            affected.insert(block);
+                            depths.insert(value, draw_depth_value(label, half_label));
                         }
                     }
                 }
-                for block in affected {
-                    let Some(order) = cache.blocks.get(&block) else {
-                        continue;
-                    };
-                    let denom = order.len() as f32 + 1.0;
-                    let half = 1.0 / denom;
-                    for (rank, (value, _)) in order.iter().enumerate() {
-                        let norm = (rank as f32 + 1.0) / denom;
-                        depths.insert(*value, [(norm - 0.5) * 2.0, half]);
+                if incremental_ok {
+                    cache.epoch = self.geometry_epoch;
+                    let arc = Arc::clone(&cache.depths);
+                    *self.draw_depth_cache.borrow_mut() = Some(cache);
+                    if perf {
+                        crate::perf_record!(
+                            "[perf] draw-depth-patch {:>7.1}ms entries={} changes={}",
+                            t_depth.elapsed().as_secs_f64() * 1000.0,
+                            arc.len(),
+                            deltas.len(),
+                        );
                     }
+                    return arc;
                 }
-                let arc = Arc::new(depths);
-                cache.epoch = self.geometry_epoch;
-                cache.depths = Arc::clone(&arc);
-                *self.draw_depth_cache.borrow_mut() = Some(cache);
-                if perf {
-                    crate::perf_record!(
-                        "[perf] draw-depth-patch {:>7.1}ms entries={} changes={}",
-                        t_depth.elapsed().as_secs_f64() * 1000.0,
-                        arc.len(),
-                        deltas.len(),
-                    );
-                }
-                return arc;
             }
         }
 
@@ -4480,31 +4833,26 @@ impl Scene {
                 .unwrap_or(hv);
             by_block.entry(block).or_default().push((hv, eff));
         }
-        for order in by_block.values_mut() {
-            order.sort_by_key(|(_, effective)| *effective);
-        }
         let mut depth_map: HashMap<u64, [f32; 2]> = HashMap::default();
         let mut owners: HashMap<u64, Handle> = HashMap::default();
-        for (&block, order) in &by_block {
-            let denom = (order.len() as f32) + 1.0;
-            // Adjacent ranks are 2/denom apart; a child sub-range of
-            // ±half = ±1/denom around the parent depth never crosses them.
-            let half = 1.0 / denom;
-            for (rank, (hv, _)) in order.iter().enumerate() {
-                // Signed (-1,1): back ranks → negative, front → positive,
-                // mid → ~0. The shader applies `z -= draw_depth * BIAS`, so a
-                // default/unranked 0.0 means "no bias" (neutral) — which keeps
-                // 3D mesh faces and transient wires at their real depth.
-                let norm = (rank as f32 + 1.0) / denom; // (0,1)
-                depth_map.insert(*hv, [(norm - 0.5) * 2.0, half]);
-                owners.insert(*hv, block);
+        let mut blocks: HashMap<Handle, Vec<DrawDepthEntry>> = HashMap::default();
+        for (block, mut order) in by_block {
+            order.sort_by_key(|(handle, effective)| (*effective, *handle));
+            let entries = seed_draw_depth_entries(order);
+            for entry in &entries {
+                depth_map.insert(
+                    entry.handle,
+                    draw_depth_value(entry.label, entry.half_label),
+                );
+                owners.insert(entry.handle, block);
             }
+            blocks.insert(block, entries);
         }
         let arc = Arc::new(depth_map);
         *self.draw_depth_cache.borrow_mut() = Some(DrawDepthCache {
             epoch: self.geometry_epoch,
             depths: Arc::clone(&arc),
-            blocks: by_block,
+            blocks,
             owners,
         });
         if perf {
@@ -4524,7 +4872,7 @@ impl Scene {
         // rebuild every hatch model: an O(N-hatch) stutter on hatch-heavy
         // drawings. Key on a signature of `selected` instead, so hover (which
         // never changes `selected`) keeps the cache warm.
-        let sel_sig = self.selected_set_sig();
+        let sel_sig = self.selected_hatch_sig();
         let space = self.current_layout.clone();
         {
             let reuse = {
@@ -4534,9 +4882,13 @@ impl Scene {
                     // match; category = a changed handle that is a hatch/solid fill.
                     Some((cached_epoch, cached_sel, arc))
                         if *cached_sel == sel_sig
-                            && self.category_cache_valid(*cached_epoch, |h| {
+                            && self.category_cache_valid(
+                                *cached_epoch,
+                                CACHE_CATEGORY_HATCH,
+                                |h| {
                                 self.hatches.contains_key(&h)
-                            }) =>
+                                },
+                            ) =>
                     {
                         Some(Arc::clone(arc))
                     }
@@ -4569,6 +4921,20 @@ impl Scene {
         sig
     }
 
+    fn selected_hatch_sig(&self) -> u64 {
+        let mut sig = 0u64;
+        let mut count = 0u64;
+        for h in self
+            .selected
+            .iter()
+            .filter(|handle| self.hatches.contains_key(handle))
+        {
+            count += 1;
+            sig ^= h.value().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+        sig ^ count
+    }
+
     pub(super) fn wipeout_models_arc(&self) -> Arc<Vec<HatchModel>> {
         let space = self.current_layout.clone();
         {
@@ -4578,12 +4944,16 @@ impl Scene {
                     Some((cached_epoch, arc))
                         // wipeout_models scans the whole document for Wipeout
                         // entities; relevance = the changed handle is a Wipeout.
-                        if self.category_cache_valid(*cached_epoch, |h| {
-                            matches!(
-                                self.document.get_entity(h),
-                                Some(EntityType::Wipeout(_))
-                            )
-                        }) =>
+                        if self.category_cache_valid(
+                            *cached_epoch,
+                            CACHE_CATEGORY_WIPEOUT,
+                            |h| {
+                                matches!(
+                                    self.document.get_entity(h),
+                                    Some(EntityType::Wipeout(_))
+                                )
+                            },
+                        ) =>
                     {
                         Some(Arc::clone(arc))
                     }
@@ -4610,9 +4980,11 @@ impl Scene {
                 let cache = self.image_cache.borrow();
                 match *cache {
                     Some((cached_epoch, ref arc))
-                        if self.category_cache_valid(cached_epoch, |h| {
-                            self.images.contains_key(&h)
-                        }) =>
+                        if self.category_cache_valid(
+                            cached_epoch,
+                            CACHE_CATEGORY_IMAGE,
+                            |h| self.images.contains_key(&h),
+                        ) =>
                     {
                         Some(Arc::clone(arc))
                     }
@@ -4694,13 +5066,17 @@ impl Scene {
                     // also invalidate. Block-definition edits route through
                     // bump_geometry (a full delta) and invalidate regardless.
                     Some((cached_epoch, arc))
-                        if self.category_cache_valid(*cached_epoch, |h| {
-                            self.meshes.contains_key(&h)
-                                || matches!(
-                                    self.document.get_entity(h),
-                                    Some(EntityType::Insert(_))
-                                )
-                        }) =>
+                        if self.category_cache_valid(
+                            *cached_epoch,
+                            CACHE_CATEGORY_MESH,
+                            |h| {
+                                self.meshes.contains_key(&h)
+                                    || matches!(
+                                        self.document.get_entity(h),
+                                        Some(EntityType::Insert(_))
+                                    )
+                            },
+                        ) =>
                     {
                         Some(Arc::clone(arc))
                     }
@@ -4930,7 +5306,7 @@ impl Scene {
         }
         let sig = Self::frozen_layers_sig(frozen);
         let key = (self.current_layout.clone(), sig);
-        let sel = self.selected_set_sig();
+        let sel = self.selected_hatch_sig();
         if let Some((e, s, arc)) = self.frozen_hatch_cache.borrow().get(&key) {
             if *e == self.geometry_epoch && *s == sel {
                 return Arc::clone(arc);
@@ -5501,8 +5877,26 @@ impl Scene {
         {
             let c = self.insert_hatch_cache.borrow();
             if let Some((epoch, cached_space, ref arc)) = *c {
-                if epoch == self.geometry_epoch && cached_space == space_key {
-                    return Arc::clone(arc);
+                if cached_space == space_key
+                    && self.category_cache_valid(
+                        epoch,
+                        CACHE_CATEGORY_INSERT_HATCH,
+                        |handle| {
+                            matches!(
+                                self.document.get_entity(handle),
+                                Some(EntityType::Insert(_))
+                            )
+                        },
+                    )
+                {
+                    let arc = Arc::clone(arc);
+                    drop(c);
+                    if let Some((cached_epoch, _, _)) =
+                        self.insert_hatch_cache.borrow_mut().as_mut()
+                    {
+                        *cached_epoch = self.geometry_epoch;
+                    }
+                    return arc;
                 }
             }
         }
@@ -6016,7 +6410,10 @@ impl Scene {
                 match cache.as_ref() {
                     Some((epoch, cached_space, index))
                         if *cached_space == space_key
-                            && self.category_cache_valid(*epoch, |handle| {
+                            && self.category_cache_valid(
+                                *epoch,
+                                CACHE_CATEGORY_INTERACTION,
+                                |handle| {
                                 self.hatches.contains_key(&handle)
                                     || self.meshes.contains_key(&handle)
                                     || self.block_meshes.contains_key(&handle)
@@ -6024,7 +6421,8 @@ impl Scene {
                                         self.document.get_entity(handle),
                                         Some(EntityType::Insert(_))
                                     )
-                            }) =>
+                                },
+                            ) =>
                     {
                         Some(Arc::clone(index))
                     }
@@ -7166,6 +7564,35 @@ impl Scene {
             } else {
                 std::iter::once(common.handle).collect()
             };
+            let extend_category = |target: &mut DependencyTargets| {
+                target.render_handles.extend(render_handles.iter().copied());
+                target.source_handles.insert(common.handle);
+                target.touches_block_definition |= inside_block;
+            };
+            if matches!(entity, EntityType::Point(_)) {
+                extend_category(&mut index.points);
+            }
+            if matches!(
+                entity,
+                EntityType::Text(_)
+                    | EntityType::MText(_)
+                    | EntityType::AttributeDefinition(_)
+                    | EntityType::AttributeEntity(_)
+                    | EntityType::Dimension(_)
+                    | EntityType::Leader(_)
+                    | EntityType::Tolerance(_)
+                    | EntityType::MultiLeader(_)
+                    | EntityType::Table(_)
+                    | EntityType::Shape(_)
+            ) || matches!(entity, EntityType::Insert(insert) if !insert.attributes.is_empty())
+            {
+                extend_category(&mut index.text_geometry);
+            }
+            if matches!(entity, EntityType::Hatch(_))
+                || crate::scene::annotative::is_annotative(&self.document, entity)
+            {
+                extend_category(&mut index.annotation_geometry);
+            }
             let add = |map: &mut HashMap<String, DependencyTargets>, name: &str| {
                 let target = map.entry(name.to_ascii_uppercase()).or_default();
                 target.render_handles.extend(render_handles.iter().copied());
@@ -7301,6 +7728,35 @@ impl Scene {
             }
         }
         self.invalidate_dependency_targets(combined);
+    }
+
+    fn invalidate_dependency_category(
+        &mut self,
+        select: impl FnOnce(&SceneDependencyIndex) -> &DependencyTargets,
+    ) {
+        if self.dependency_index_cache.borrow().is_none() {
+            *self.dependency_index_cache.borrow_mut() = Some(self.rebuild_dependency_index());
+        }
+        let targets = self
+            .dependency_index_cache
+            .borrow()
+            .as_ref()
+            .map(select)
+            .cloned()
+            .unwrap_or_default();
+        self.invalidate_dependency_targets(targets);
+    }
+
+    pub fn invalidate_point_dependencies(&mut self) {
+        self.invalidate_dependency_category(|index| &index.points);
+    }
+
+    pub fn invalidate_text_geometry_dependencies(&mut self) {
+        self.invalidate_dependency_category(|index| &index.text_geometry);
+    }
+
+    pub fn invalidate_annotation_dependencies(&mut self) {
+        self.invalidate_dependency_category(|index| &index.annotation_geometry);
     }
 
     pub(crate) fn invalidate_dependency_index(&self) {
@@ -7760,6 +8216,110 @@ mod journal_tests {
     }
 
     #[test]
+    fn insert_add_and_update_publish_targeted_deltas() {
+        use acadrust::entities::Insert;
+        use acadrust::types::Vector3;
+
+        let mut s = Scene::new();
+        let before_add = s.geometry_epoch;
+        let handle = s.add_entity(EntityType::Insert(Insert::new(
+            "EXISTING_BLOCK",
+            Vector3::new(0.0, 0.0, 0.0),
+        )));
+        assert_eq!(
+            as_map(s.replay_since(before_add)).unwrap().get(&handle),
+            Some(&ChangeKind::Added),
+            "adding an INSERT must not force a whole-drawing rebuild"
+        );
+
+        let before_update = s.geometry_epoch;
+        let mut edited = s.document.get_entity(handle).cloned().unwrap();
+        if let EntityType::Insert(insert) = &mut edited {
+            insert.insert_point.x = 25.0;
+        }
+        assert!(s.update_entity(edited));
+        assert_eq!(
+            as_map(s.replay_since(before_update)).unwrap().get(&handle),
+            Some(&ChangeKind::Modified),
+            "retargeting or moving an INSERT changes only its render handle"
+        );
+    }
+
+    #[test]
+    fn dependency_categories_invalidate_only_affected_render_handles() {
+        use acadrust::entities::{Line, MText, Point, Text};
+        use acadrust::types::Vector3;
+
+        let mut s = Scene::new();
+        let line = s.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        )));
+        let point = s.add_entity(EntityType::Point(Point::new()));
+        let text = s.add_entity(EntityType::Text(Text::with_value(
+            "plain",
+            Vector3::new(0.0, 2.0, 0.0),
+        )));
+        let mut annotative = MText::new();
+        annotative.value = "annotative".to_string();
+        annotative.is_annotative = true;
+        let annotative = s.add_entity(EntityType::MText(annotative));
+
+        let before_points = s.geometry_epoch;
+        s.invalidate_point_dependencies();
+        let points = as_map(s.replay_since(before_points)).unwrap();
+        assert_eq!(points.len(), 1);
+        assert_eq!(points.get(&point), Some(&ChangeKind::Modified));
+
+        let before_text = s.geometry_epoch;
+        s.invalidate_text_geometry_dependencies();
+        let texts = as_map(s.replay_since(before_text)).unwrap();
+        assert_eq!(texts.get(&text), Some(&ChangeKind::Modified));
+        assert_eq!(texts.get(&annotative), Some(&ChangeKind::Modified));
+        assert!(!texts.contains_key(&line));
+        assert!(!texts.contains_key(&point));
+
+        let before_annotation = s.geometry_epoch;
+        s.invalidate_annotation_dependencies();
+        let annotation = as_map(s.replay_since(before_annotation)).unwrap();
+        assert_eq!(annotation.len(), 1);
+        assert_eq!(
+            annotation.get(&annotative),
+            Some(&ChangeKind::Modified)
+        );
+    }
+
+    #[test]
+    fn object_visibility_uses_entity_deltas() {
+        use acadrust::entities::Line;
+        use acadrust::types::Vector3;
+
+        let mut s = Scene::new();
+        let hidden = s.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        let untouched = s.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(1.0, 1.0, 0.0),
+        )));
+
+        s.selected.insert(hidden);
+        let before_hide = s.geometry_epoch;
+        s.hide_selected();
+        let hide = as_map(s.replay_since(before_hide)).unwrap();
+        assert_eq!(hide.len(), 1);
+        assert_eq!(hide.get(&hidden), Some(&ChangeKind::Modified));
+        assert!(!hide.contains_key(&untouched));
+
+        let before_show = s.geometry_epoch;
+        s.end_isolation();
+        let show = as_map(s.replay_since(before_show)).unwrap();
+        assert_eq!(show.len(), 1);
+        assert_eq!(show.get(&hidden), Some(&ChangeKind::Modified));
+    }
+
+    #[test]
     fn ring_overflow_forces_rebuild() {
         let mut s = Scene::new();
         let e0 = s.geometry_epoch;
@@ -7846,11 +8406,16 @@ mod journal_tests {
                 Vector3::new(b.0, b.1, 0.0),
             ))
         }
-        // Wire names, in order — captures entity attribution + draw order + count.
+        // Visible wire names, in order. Resident erase deliberately retains
+        // blank tombstone slots, which are not part of a from-scratch build.
         fn resident_names(s: &Scene) -> Vec<String> {
             let cam = Camera::default();
             let arc = s.model_tile_wires_arc(0, &cam, 1.0, 1.0);
-            let names: Vec<String> = arc.iter().map(|w| w.name.clone()).collect();
+            let names: Vec<String> = arc
+                .iter()
+                .filter(|wire| Scene::handle_from_wire_name(&wire.name).is_some())
+                .map(|wire| wire.name.clone())
+                .collect();
             drop(arc); // release so the next patch can move the wires out
             names
         }
@@ -7862,6 +8427,7 @@ mod journal_tests {
         let mut s = Scene::new();
         let _h1 = s.add_entity(line((0.0, 0.0), (10.0, 10.0)));
         let h2 = s.add_entity(line((5.0, 5.0), (20.0, 3.0)));
+        let h2_image = s.document.get_entity_arc(h2).unwrap();
         let _ = resident_names(&s); // prime the resident cache
 
         let hits0 = s.resident_patch_hits.get();
@@ -7880,15 +8446,99 @@ mod journal_tests {
             "resident after modify"
         );
 
+        let original_h2_start = s
+            .resident_wire_sets
+            .borrow()
+            .values()
+            .find_map(|set| {
+                set.layout
+                    .as_ref()
+                    .and_then(|layout| layout.ranges.get(&h2).map(|range| range.0))
+            })
+            .unwrap();
+        let before_erase_names = resident_names(&s);
         s.erase_entities(&[h2]);
-        assert_eq!(resident_names(&s), from_scratch(&s), "resident after erase");
+        let patched = resident_names(&s);
+        let erase_gen = s.last_model_wire_gen.get();
+        assert!(
+            s.model_wire_patch_for(erase_gen)
+                .is_some_and(|(_, patch)| !patch.face_pass_changed),
+            "removing a plain line must keep the unrelated Face3D/fill pass warm"
+        );
+        assert!(
+            s.resident_wire_sets.borrow().values().any(|set| {
+                set.layout
+                    .as_ref()
+                    .is_some_and(|layout| layout.vacant.contains_key(&h2))
+            }),
+            "erase should retain h2's physical range as a tombstone"
+        );
+        let expected_erased: Vec<_> = before_erase_names
+            .iter()
+            .filter(|name| *name != &h2.value().to_string())
+            .cloned()
+            .collect();
+        assert_eq!(patched, expected_erased, "resident after erase");
+
+        // Replay the same Added delta history Undo emits. The entity must return
+        // to its original physical range instead of appending/shifting the set.
+        let restored = s.apply_entity_delta(
+            &[(h2, Some(Arc::clone(&h2_image)), None)],
+            true,
+        );
+        for &(handle, _) in &restored {
+            s.reseed_derived_caches(handle);
+        }
+        s.bump_entities(&restored);
+        let restored_names = resident_names(&s);
+        assert_eq!(restored_names, before_erase_names);
+        assert!(s.resident_wire_sets.borrow().values().any(|set| {
+            set.layout.as_ref().is_some_and(|layout| {
+                layout.ranges.get(&h2).map(|range| range.0)
+                    == Some(original_h2_start)
+                    && !layout.vacant.contains_key(&h2)
+            })
+        }));
 
         assert_eq!(
             s.resident_patch_hits.get(),
-            hits0 + 3,
-            "every one of the add / modify / erase edits must use the incremental \
+            hits0 + 4,
+            "every add / modify / erase / restore edit must use the incremental \
              patch, not silently fall back to a full rebuild"
         );
+    }
+
+    #[test]
+    fn draw_depth_add_and_erase_keep_existing_labels_stable() {
+        use acadrust::entities::Line;
+        use acadrust::types::Vector3;
+
+        let line = |y: f64| {
+            EntityType::Line(Line::from_points(
+                Vector3::new(0.0, y, 0.0),
+                Vector3::new(10.0, y, 0.0),
+            ))
+        };
+        let mut s = Scene::new();
+        let h1 = s.add_entity(line(1.0));
+        let h2 = s.add_entity(line(2.0));
+        let initial = s.draw_depth_map();
+        let d1 = initial[&h1.value()];
+        let d2 = initial[&h2.value()];
+        drop(initial);
+
+        let h3 = s.add_entity(line(3.0));
+        let after_add = s.draw_depth_map();
+        assert_eq!(after_add[&h1.value()], d1);
+        assert_eq!(after_add[&h2.value()], d2);
+        let d3 = after_add[&h3.value()];
+        drop(after_add);
+
+        s.erase_entities(&[h2]);
+        let after_erase = s.draw_depth_map();
+        assert_eq!(after_erase[&h1.value()], d1);
+        assert_eq!(after_erase[&h3.value()], d3);
+        assert!(!after_erase.contains_key(&h2.value()));
     }
 
     #[test]
@@ -7898,15 +8548,93 @@ mod journal_tests {
         // Editing handles NOT in the (empty) hatch category leaves it valid.
         s.bump_entities(&[(h(40), ChangeKind::Modified)]);
         assert!(
-            s.category_cache_valid(e0, |hh| s.hatches.contains_key(&hh)),
+            s.category_cache_valid(e0, CACHE_CATEGORY_HATCH, |hh| {
+                s.hatches.contains_key(&hh)
+            }),
             "an edit outside the category must keep it warm"
         );
-        // A removal is conservatively treated as possibly-relevant.
+        // A caller that bypasses the tracked erase primitive supplies no
+        // before-category hint, so removal remains conservatively invalid.
         s.bump_entities(&[(h(41), ChangeKind::Removed)]);
         assert!(
-            !s.category_cache_valid(e0, |hh| s.hatches.contains_key(&hh)),
-            "a removal must invalidate (category unknowable post-erase)"
+            !s.category_cache_valid(e0, CACHE_CATEGORY_HATCH, |hh| {
+                s.hatches.contains_key(&hh)
+            }),
+            "an unclassified removal must invalidate"
         );
+    }
+
+    #[test]
+    fn plain_geometry_keeps_insert_hatch_cache_warm() {
+        use acadrust::entities::{Insert, Line};
+        use acadrust::types::Vector3;
+
+        let mut s = Scene::new();
+        let initial = s.insert_hatches_for_click();
+        s.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        let after_line = s.insert_hatches_for_click();
+        assert!(
+            Arc::ptr_eq(&initial, &after_line),
+            "a line edit must not rescan and explode every block insert"
+        );
+
+        let insert = s.add_entity(EntityType::Insert(Insert::new(
+            "EXISTING_BLOCK",
+            Vector3::new(0.0, 0.0, 0.0),
+        )));
+        let after_insert = s.insert_hatches_for_click();
+        assert!(!Arc::ptr_eq(&after_line, &after_insert));
+
+        s.erase_entities(&[insert]);
+        let after_erase = s.insert_hatches_for_click();
+        assert!(!Arc::ptr_eq(&after_insert, &after_erase));
+    }
+
+    #[test]
+    fn selecting_plain_geometry_keeps_hatch_models_warm() {
+        use acadrust::entities::Line;
+        use acadrust::types::Vector3;
+
+        let mut s = Scene::new();
+        let line = s.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        let before = s.hatch_models_arc();
+        s.select_entity(line, false);
+        let after = s.hatch_models_arc();
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "selecting a non-hatch must not rebuild every hatch model"
+        );
+    }
+
+    #[test]
+    fn plain_line_erase_keeps_unrelated_category_and_text_caches_warm() {
+        use acadrust::entities::Line;
+        use acadrust::types::Vector3;
+
+        let mut s = Scene::new();
+        let line = s.add_entity(EntityType::Line(Line::from_points(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )));
+        let cached_epoch = s.geometry_epoch;
+        s.erase_entities(&[line]);
+
+        assert!(s.category_cache_valid(cached_epoch, CACHE_CATEGORY_HATCH, |h| {
+            s.hatches.contains_key(&h)
+        }));
+        assert!(s.category_cache_valid(cached_epoch, CACHE_CATEGORY_IMAGE, |h| {
+            s.images.contains_key(&h)
+        }));
+        assert!(s.category_cache_valid(cached_epoch, CACHE_CATEGORY_MESH, |h| {
+            s.meshes.contains_key(&h)
+        }));
+        assert!(s.text_unchanged(cached_epoch));
     }
 }
 
@@ -8041,6 +8769,61 @@ mod delta_undo_tests {
         scene.apply_entity_delta(&delta, false);
         assert_eq!(scene.document.get_entity(h).cloned().unwrap(), added);
         assert_eq!(ms_occurrences(&scene, h), 1);
+    }
+
+    #[test]
+    fn raster_add_records_only_its_image_definition_object() {
+        use acadrust::entities::RasterImage;
+        use acadrust::objects::ObjectType;
+        use acadrust::types::Vector3;
+
+        let mut scene = Scene::new();
+        let image = RasterImage::with_size(
+            "test.png",
+            Vector3::new(0.0, 0.0, 0.0),
+            16.0,
+            16.0,
+            10.0,
+            10.0,
+        );
+        scene.begin_undo_recording();
+        let handle = scene.add_entity(EntityType::RasterImage(image));
+        let rec = scene.take_undo_recording().unwrap();
+        assert!(!rec.is_poisoned());
+        let (entities, objects) = rec.into_recorded_images();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].0, handle);
+        assert_eq!(objects.len(), 1);
+        assert!(objects[0].1.is_none());
+        assert!(matches!(
+            scene.document.objects.get(&objects[0].0),
+            Some(ObjectType::ImageDefinition(_))
+        ));
+    }
+
+    #[test]
+    fn grouped_erase_records_group_object_without_poisoning() {
+        use acadrust::objects::ObjectType;
+
+        let mut scene = Scene::new();
+        let h1 = scene.add_entity(line(0.0, 0.0, 1.0, 0.0));
+        let h2 = scene.add_entity(line(2.0, 0.0, 3.0, 0.0));
+        let group = scene.create_group("G".to_string(), vec![h1, h2]);
+
+        scene.begin_undo_recording();
+        scene.erase_entities(&[h1]);
+        let rec = scene.take_undo_recording().unwrap();
+        assert!(!rec.is_poisoned());
+        let (entities, objects) = rec.into_recorded_images();
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].0, h1);
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].0, group);
+        assert!(matches!(objects[0].1, Some(ObjectType::Group(_))));
+        assert!(matches!(
+            scene.document.objects.get(&group),
+            Some(ObjectType::Group(current)) if current.entities == vec![h2]
+        ));
     }
 
     #[test]

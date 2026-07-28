@@ -95,7 +95,7 @@ impl OpenCADStudio {
         let next = if self.point_size_relative { -mag } else { mag };
         self.push_undo_snapshot(i, "PDSIZE");
         self.tabs[i].scene.document.header.point_display_size = next;
-        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].scene.invalidate_point_dependencies();
         self.tabs[i].dirty = true;
     }
 
@@ -110,7 +110,7 @@ impl OpenCADStudio {
         }
         self.push_undo_snapshot(i, "PDMODE");
         self.tabs[i].scene.document.header.point_display_mode = next;
-        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].scene.invalidate_point_dependencies();
         self.tabs[i].dirty = true;
     }
 
@@ -161,7 +161,7 @@ impl OpenCADStudio {
         self.tabs[i].wireframe = wf;
         self.ribbon.set_wireframe(wf);
         self.tabs[i].visual_style = label.into();
-        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].scene.bump_geometry_no_blocks();
     }
 
     /// Project a pane-local cursor onto the active drawing plane and return a
@@ -405,7 +405,7 @@ impl OpenCADStudio {
         // viewport, the picker drives that viewport entity's own
         // render mode; the model-layout tab style is untouched.
         if self.tabs[i].scene.set_active_viewport_render_mode(mode) {
-            self.tabs[i].scene.bump_geometry();
+            self.tabs[i].scene.bump_geometry_no_blocks();
             self.command_line
                 .push_output(&format!("Viewport visual style: {label}"));
             return Task::none();
@@ -423,7 +423,7 @@ impl OpenCADStudio {
         self.tabs[i].visual_style = label.into();
         // Re-upload face3d fills on the next frame — the render
         // pipeline keys its upload cache off `geometry_epoch`.
-        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].scene.bump_geometry_no_blocks();
         self.command_line
             .push_output(&format!("Visual style: {label}"));
         Task::none()

@@ -1922,9 +1922,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     }
 
                     self.tabs[i].dirty = true;
-                    // The paper sheet fill is cached; bump geometry so the new
-                    // sheet size re-tessellates and shows immediately.
-                    self.tabs[i].scene.bump_geometry();
+                    // The paper sheet fill is cached by epoch, while document
+                    // entity tessellation is unaffected by the paper size.
+                    self.tabs[i].scene.bump_geometry_no_blocks();
                     self.command_line.push_info(&format!(
                         "Page setup: {w:.1}×{h:.1} mm  area={plot_area}  \
                          center={center}  rot={rotation}°"

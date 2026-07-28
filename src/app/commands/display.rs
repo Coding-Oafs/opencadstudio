@@ -686,7 +686,11 @@ impl OpenCADStudio {
                         n += 1;
                     }
                 }
-                self.tabs[i].scene.bump_geometry();
+                let changes: Vec<_> = handles
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect();
+                self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
                     "OBJECTSCALE: marked {n} object(s) annotative (they scale with the annotation scale)."
@@ -776,6 +780,7 @@ impl OpenCADStudio {
                     let v = v.min(100);
                     self.push_undo_snapshot(i, "ADJUST");
                     let mut changed = 0usize;
+                    let mut changed_handles = Vec::new();
                     for h in &handles {
                         if let Some(acadrust::EntityType::RasterImage(img)) = self.tabs[i]
                             .scene
@@ -787,14 +792,17 @@ impl OpenCADStudio {
                                 "BRIGHTNESS" => {
                                     img.brightness = v;
                                     changed += 1;
+                                    changed_handles.push(*h);
                                 }
                                 "CONTRAST" => {
                                     img.contrast = v;
                                     changed += 1;
+                                    changed_handles.push(*h);
                                 }
                                 "FADE" => {
                                     img.fade = v;
                                     changed += 1;
+                                    changed_handles.push(*h);
                                 }
                                 _ => {}
                             }
@@ -802,7 +810,14 @@ impl OpenCADStudio {
                     }
                     if changed > 0 {
                         self.tabs[i].dirty = true;
-                        self.tabs[i].scene.bump_geometry();
+                        for &handle in &changed_handles {
+                            self.tabs[i].scene.reseed_derived_caches(handle);
+                        }
+                        let changes: Vec<_> = changed_handles
+                            .into_iter()
+                            .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                            .collect();
+                        self.tabs[i].scene.bump_entities(&changes);
                         self.command_line
                             .push_output(&format!("ADJUST: {action} = {v} on {changed} image(s)."));
                     } else {
@@ -860,7 +875,7 @@ impl OpenCADStudio {
                         let hdr = &mut self.tabs[i].scene.document.header;
                         hdr.current_annotation_scale = arg.clone();
                         hdr.annotation_scale_value = 1.0 / v as f64;
-                        self.tabs[i].scene.bump_geometry();
+                        self.tabs[i].scene.invalidate_annotation_dependencies();
                         self.tabs[i].dirty = true;
                         self.command_line
                             .push_output(&format!("Annotation scale: {arg}"));
@@ -1014,7 +1029,6 @@ impl OpenCADStudio {
                         self.tabs[i]
                             .scene
                             .add_entity_clone(acadrust::EntityType::Table(table));
-                        self.tabs[i].scene.bump_geometry();
                         self.tabs[i].dirty = true;
                         self.command_line.push_output(&format!(
                             "DATALINK: imported {nrows}×{ncols} cells into a table at the origin."
@@ -1061,7 +1075,6 @@ impl OpenCADStudio {
                                 .scene
                                 .add_entity_clone(acadrust::EntityType::Point(p));
                         }
-                        self.tabs[i].scene.bump_geometry();
                         self.tabs[i].dirty = true;
                         self.command_line.push_output(&format!(
                             "LANDXMLIMPORT: imported {} survey point(s). Use ZOOM EXTENTS to view.",

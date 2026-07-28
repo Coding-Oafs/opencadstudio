@@ -1089,7 +1089,9 @@ impl super::OpenCADStudio {
                 }
                 _ => {}
             }
-            self.tabs[i].scene.bump_geometry();
+            self.tabs[i]
+                .scene
+                .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             self.tabs[i].dirty = true;
         } else {
             // Align new MText to the active UCS (text runs along the UCS X axis).
@@ -1140,7 +1142,9 @@ impl super::OpenCADStudio {
                 }
                 _ => {}
             }
-            self.tabs[i].scene.bump_geometry();
+            self.tabs[i]
+                .scene
+                .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             self.tabs[i].dirty = true;
         } else {
             mt.rotation = self.tabs[i].ucs_rotation_angle();

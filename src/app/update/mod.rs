@@ -39,6 +39,22 @@ fn is_modal_blocked_key_msg(msg: &Message) -> bool {
     )
 }
 
+fn perf_message_label(msg: &Message) -> &'static str {
+    match msg {
+        Message::ViewportLeftPress | Message::PanePress(_) => "pointer-down",
+        Message::ViewportLeftRelease | Message::PaneRelease(_) => "pointer-up",
+        Message::ViewportMove(_) | Message::PaneMove(_, _) => "pointer-move",
+        Message::CommandFinalize => "command-finalize",
+        Message::CommandEscape => "command-escape",
+        Message::Undo | Message::UndoMany(_) => "undo",
+        Message::Redo | Message::RedoMany(_) => "redo",
+        Message::DeleteSelected => "delete",
+        Message::HoverDwellTick => "hover-dwell",
+        Message::InteractionIndexReady { .. } => "interaction-index-ready",
+        _ => "other",
+    }
+}
+
 const VIEWCUBE_HIT_SIZE: f32 = VIEWCUBE_DRAW_PX;
 
 fn format_size(bytes: u64) -> String {
@@ -139,6 +155,8 @@ impl OpenCADStudio {
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
+        let perf_started = crate::perf::enabled().then(Instant::now);
+        let perf_label = perf_message_label(&msg);
         // A modal dialog must capture the keyboard the same way it already
         // captures the mouse. Otherwise keystrokes from the global key
         // subscription leak past the modal into the command line and fire as
@@ -185,6 +203,15 @@ impl OpenCADStudio {
             self.snapper.clear_tracking();
             self.otrack_active = None;
         }
+        if let Some(started) = perf_started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms >= 5.0 {
+                crate::perf_record!(
+                    "[perf] update {:>7.1}ms message={perf_label}",
+                    elapsed_ms,
+                );
+            }
+        }
         task
     }
 
@@ -223,7 +250,7 @@ impl OpenCADStudio {
                         crate::scene::text::web_font::insert(script, Some(bytes));
                         crate::scene::text::ttf_glyph::clear_fallback_cache();
                         for tab in self.tabs.iter_mut() {
-                            tab.scene.bump_geometry();
+                            tab.scene.invalidate_text_geometry_dependencies();
                         }
                     }
                     Err(e) => {
@@ -965,7 +992,9 @@ impl OpenCADStudio {
                         &self.tabs[idx].scene.document.header.code_page,
                     ) {
                         crate::scene::text::ttf_glyph::clear_fallback_cache();
-                        self.tabs[idx].scene.bump_geometry();
+                        self.tabs[idx]
+                            .scene
+                            .invalidate_text_geometry_dependencies();
                     }
                 }
                 Task::none()
@@ -2103,7 +2132,7 @@ impl OpenCADStudio {
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                     tab.scene.annotation_scale = scale;
                     util::sync_annotation_scale_header(&mut tab.scene);
-                    tab.scene.bump_geometry();
+                    tab.scene.invalidate_annotation_dependencies();
                 }
                 Task::none()
             }
@@ -2341,7 +2370,7 @@ impl OpenCADStudio {
                             self.tabs[i].scene.document.header.annotation_scale_value = p / d;
                         }
                     }
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_annotation_dependencies();
                 }
                 Task::none()
             }

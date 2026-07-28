@@ -10,6 +10,8 @@ const MAX_LINES: usize = 500;
 static UI_ENABLED: AtomicBool = AtomicBool::new(false);
 static ENV_ENABLED: OnceLock<bool> = OnceLock::new();
 static LINES: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+#[cfg(not(target_arch = "wasm32"))]
+static STDERR_TX: OnceLock<std::sync::mpsc::SyncSender<String>> = OnceLock::new();
 
 fn lines() -> &'static Mutex<VecDeque<String>> {
     LINES.get_or_init(|| Mutex::new(VecDeque::with_capacity(MAX_LINES)))
@@ -32,6 +34,24 @@ pub fn record(args: fmt::Arguments<'_>) {
         return;
     }
     let line = args.to_string();
+    // Terminal writes can block the UI/render thread when its pipe is slow.
+    // PERF is diagnostic and must not create the hitch it is measuring.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let tx = STDERR_TX.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1024);
+            let _ = std::thread::Builder::new()
+                .name("ocs-perf-log".to_string())
+                .spawn(move || {
+                    while let Ok(line) = rx.recv() {
+                        eprintln!("{line}");
+                    }
+                });
+            tx
+        });
+        let _ = tx.try_send(line.clone());
+    }
+    #[cfg(target_arch = "wasm32")]
     eprintln!("{line}");
     let mut entries = lines().lock().unwrap_or_else(|e| e.into_inner());
     if entries.len() == MAX_LINES {
@@ -45,6 +65,20 @@ pub fn snapshot_text() -> String {
     let entries = lines().lock().unwrap_or_else(|e| e.into_inner());
     entries
         .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A short tail for the live HUD. The full 500-line history remains available
+/// to Copy, while rendering a large monolithic text widget on every mouse event
+/// is avoided.
+pub fn snapshot_tail_text(max_lines: usize) -> String {
+    let entries = lines().lock().unwrap_or_else(|e| e.into_inner());
+    let skip = entries.len().saturating_sub(max_lines);
+    entries
+        .iter()
+        .skip(skip)
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join("\n")

@@ -956,7 +956,9 @@ impl OpenCADStudio {
                         // render-side `sort_cache` rebuilds per geometry epoch.
                         // Bump it so the new draw order shows immediately
                         // instead of waiting for an unrelated geometry change.
-                        self.tabs[i].scene.bump_geometry();
+                        // Draw order changes submission order only; all
+                        // per-entity tessellation remains valid.
+                        self.tabs[i].scene.bump_geometry_no_blocks();
                         self.tabs[i].dirty = true;
                     } else {
                         self.command_line.push_info(

@@ -581,10 +581,7 @@ impl OpenCADStudio {
     pub(super) fn style_stage_commit(&mut self) {
         let i = self.active_tab;
         let Some(stage) = self.style_stage.take() else {
-            // No active transaction — still refresh the drawing so a bare Apply
-            // is harmless.
-            self.tabs[i].dirty = true;
-            self.tabs[i].scene.bump_geometry();
+            // No staged edits: a bare Apply has no geometry work to publish.
             self.sync_ribbon_styles();
             return;
         };
@@ -820,7 +817,7 @@ impl OpenCADStudio {
         if !resolves {
             self.tabs[i].scene.document.header.current_annotation_scale = snap.current.clone();
         }
-        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].scene.invalidate_annotation_dependencies();
     }
 
     /// Begin a staging transaction for a freshly-opened scale manager.

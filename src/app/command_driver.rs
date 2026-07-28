@@ -351,9 +351,9 @@ impl OpenCADStudio {
                     self.update_cont_anchor(&entity);
                 }
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
-                // A plain drawable added on an existing layer touches only the
-                // one new entity; a block/image/dimension/viewport add also
-                // mutates layers/objects/blocks → keep the full snapshot.
+                // Ordinary drawables, viewports and raster images use targeted
+                // entity/object deltas. Block sentinels and novel layers retain
+                // the structure snapshot fallback.
                 let delta_safe = self.delta_add_safe(i, &entity);
                 let pending = self.begin_undo(i, label, 1, delta_safe);
                 self.commit_entity(entity);
@@ -401,7 +401,7 @@ impl OpenCADStudio {
                     )
                 });
                 let label = self.history_label_from_active_cmd(i, "MVIEW");
-                let pending = self.begin_undo(i, label, 1, false);
+                let pending = self.begin_undo(i, label, 1, true);
                 let handle = self.commit_entity_handle(
                     acadrust::EntityType::Viewport(viewport),
                 );
@@ -475,7 +475,7 @@ impl OpenCADStudio {
                 let created_boundary = boundary.is_some();
                 let touched = 2;
                 let label = self.history_label_from_active_cmd(i, "MVIEW");
-                let pending = self.begin_undo(i, label, touched, false);
+                let pending = self.begin_undo(i, label, touched, true);
                 let clip_handle = match boundary {
                     Some(mut boundary) => {
                         // A non-rectangular viewport owns a helper boundary
@@ -1126,6 +1126,16 @@ impl OpenCADStudio {
                     }
                 }
             }
+            CmdResult::FinalizeLiveEntity(handle) => {
+                // The live geometry already matches the command's committed
+                // vertices. Close the deferred history image and UI state
+                // without publishing a redundant Modified delta.
+                self.finish_live_entity_history(i, handle);
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+            }
             CmdResult::RemoveLiveEntity(handle) => {
                 // The command backed off below a valid entity (PLINE Undo at
                 // one remaining vertex): take the live entity out of the
@@ -1289,9 +1299,14 @@ impl OpenCADStudio {
                     }
                     self.tabs[i].dirty = true;
                     // Color / linetype / lineweight are baked into the cached
-                    // wires at tessellation time; bump the geometry epoch so the
-                    // matched objects repaint instead of holding their old look.
-                    self.tabs[i].scene.bump_geometry();
+                    // wires at tessellation time; re-tessellate only the matched
+                    // objects instead of rebuilding a large drawing.
+                    let changes: Vec<_> = dest
+                        .iter()
+                        .copied()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
                     self.refresh_properties();
                     self.command_line
                         .push_info(&format!("Properties matched to {} object(s).", dest.len()));
@@ -1661,9 +1676,10 @@ impl OpenCADStudio {
                         if changed {
                             self.tabs[i].dirty = true;
                             // Repaint immediately (wide-band fill included).
-                            self.tabs[i].scene.mark_entity_dirty(handle);
                             self.tabs[i].scene.refresh_fill_model(handle);
-                            self.tabs[i].scene.bump_geometry_no_blocks();
+                            self.tabs[i]
+                                .scene
+                                .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
                             self.command_line.push_output("PEDIT: applied.");
                             self.refresh_properties();
                         } else {
@@ -2093,15 +2109,11 @@ impl OpenCADStudio {
                 // moved entities so the viewport reflects the stretch right away
                 // instead of only on the next unrelated redraw. See #95.
                 if count > 0 {
-                    if structural {
-                        self.tabs[i].scene.bump_geometry();
-                    } else {
-                        let changes: Vec<_> = changed_handles
-                            .iter()
-                            .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
-                            .collect();
-                        self.tabs[i].scene.bump_entities(&changes);
-                    }
+                    let changes: Vec<_> = changed_handles
+                        .iter()
+                        .map(|&handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
                 }
                 self.tabs[i].dirty = true;
                 self.tabs[i].active_cmd = None;
@@ -2928,9 +2940,15 @@ impl OpenCADStudio {
                 }
             }
         }
-        // The wires were tessellated before the filters existed; force a rebuild
-        // so the clip is applied to the freshly-pasted, now-filtered inserts.
-        self.tabs[i].scene.bump_geometry();
+        // The wires were tessellated before the filters existed; refresh only
+        // the freshly-pasted entities whose clip object graph was attached.
+        let changes: Vec<_> = by_index
+            .iter()
+            .copied()
+            .filter(|handle| !handle.is_null())
+            .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+            .collect();
+        self.tabs[i].scene.bump_entities(&changes);
     }
 
     /// Recreate the captured xdictionary subtrees in this document (fresh
@@ -3098,9 +3116,11 @@ fn apply_dimspace(scene: &mut crate::scene::Scene, encoded: &str) {
     };
 
     let effective_spacing = if spacing <= 0.0 { 10.0 } else { spacing };
+    let mut changes = Vec::new();
     for (idx, &hv) in other_vals.iter().enumerate() {
         let h = acadrust::Handle::from(hv);
         let target = base_coord + effective_spacing * (idx + 1) as f64;
+        let mut changed = false;
         if let Some(acadrust::EntityType::Dimension(dim)) = scene.document.get_entity_mut(h) {
             // Slide this dim's definition point along perp so its perpendicular
             // coordinate equals `target`; update both the struct field (render)
@@ -3115,19 +3135,26 @@ fn apply_dimspace(scene: &mut crate::scene::Scene, encoded: &str) {
                 Dimension::Linear(d) => {
                     slide(&mut d.definition_point);
                     d.base.definition_point = d.definition_point;
+                    changed = true;
                 }
                 Dimension::Aligned(d) => {
                     slide(&mut d.definition_point);
                     d.base.definition_point = d.definition_point;
+                    changed = true;
                 }
                 _ => {}
             }
         }
-        // The dimension line moved, so its baked *D block is stale — drop it so
-        // the next save re-bakes it (no-op for non-dimensions). (#181)
-        scene.invalidate_dim_block_recorded(h);
+        if changed {
+            // The dimension line moved, so its baked *D block is stale — drop it
+            // so the next save re-bakes it. (#181)
+            scene.invalidate_dim_block_recorded(h);
+            changes.push((h, crate::scene::ChangeKind::Modified));
+        }
     }
-    scene.bump_geometry();
+    if !changes.is_empty() {
+        scene.bump_entities(&changes);
+    }
 }
 
 // ── MLEADERALIGN helper ───────────────────────────────────────────────────────

@@ -345,12 +345,21 @@ impl CadCommand for PlineCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        // The committed vertices already live in the document; finalise it.
-        self.sync_live(false, true)
+        // Every landed vertex is already published into the live document
+        // entity. Finishing must only close its history/command state; replacing
+        // the identical polyline again would advance geometry_epoch and make
+        // large drawings do another cache/GPU patch for no visual change.
+        match self.live_handle {
+            Some(handle) => CmdResult::FinalizeLiveEntity(handle),
+            None => CmdResult::Cancel,
+        }
     }
 
     fn on_escape(&mut self) -> CmdResult {
-        self.sync_live(false, true)
+        match self.live_handle {
+            Some(handle) => CmdResult::FinalizeLiveEntity(handle),
+            None => CmdResult::Cancel,
+        }
     }
 
     fn wants_text_input(&self) -> bool {
@@ -482,5 +491,24 @@ mod tests {
             }
             _ => panic!("later segments should update the same live polyline"),
         }
+    }
+
+    #[test]
+    fn finishing_live_polyline_does_not_publish_duplicate_update() {
+        let handle = Handle::new(42);
+
+        let mut enter = PlineCommand::new();
+        enter.live_handle = Some(handle);
+        assert!(matches!(
+            enter.on_enter(),
+            CmdResult::FinalizeLiveEntity(h) if h == handle
+        ));
+
+        let mut escape = PlineCommand::new();
+        escape.live_handle = Some(handle);
+        assert!(matches!(
+            escape.on_escape(),
+            CmdResult::FinalizeLiveEntity(h) if h == handle
+        ));
     }
 }

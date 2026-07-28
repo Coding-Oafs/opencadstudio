@@ -1116,7 +1116,7 @@ impl OpenCADStudio {
                 s.last_tess_wires.get(),
                 s.geometry_epoch,
             );
-            let trace = crate::perf::snapshot_text();
+            let trace = crate::perf::snapshot_tail_text(80);
             let trace = if trace.is_empty() {
                 "No samples yet".to_string()
             } else {

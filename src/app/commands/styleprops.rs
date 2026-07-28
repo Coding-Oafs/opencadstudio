@@ -725,7 +725,11 @@ impl OpenCADStudio {
                         }
                     }
                     self.tabs[i].dirty = true;
-                    self.tabs[i].scene.bump_geometry();
+                    let changes: Vec<_> = handles
+                        .into_iter()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
                     self.command_line.push_output(&format!(
                         "SETBYLAYER: reset {changed} entity/entities to ByLayer."
                     ));
@@ -1593,7 +1597,9 @@ impl OpenCADStudio {
                     // TEXTFILL reset the glyph atlas; re-tessellate so text picks
                     // up the re-baked filled / hollow tiles.
                     if name == "TEXTFILL" {
-                        self.tabs[i].scene.bump_geometry();
+                        self.tabs[i]
+                            .scene
+                            .invalidate_text_geometry_dependencies();
                     }
                     // ORTHOMODE / OSMODE set the header directly; mirror them into
                     // the live Ortho / running OSNAP so the constraint + status
@@ -1902,7 +1908,7 @@ impl OpenCADStudio {
                     self.push_undo_snapshot(i, "PDMODE");
                     self.tabs[i].scene.document.header.point_display_mode = v;
                     // Point glyphs are built at tessellation time — rebuild them.
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_point_dependencies();
                     self.tabs[i].dirty = true;
                     self.command_line.push_output(&format!("PDMODE set to {v}"));
                 } else {
@@ -2046,7 +2052,7 @@ impl OpenCADStudio {
                 } else if let Ok(v) = val_str.parse::<f64>() {
                     self.push_undo_snapshot(i, "PDSIZE");
                     self.tabs[i].scene.document.header.point_display_size = v;
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.invalidate_point_dependencies();
                     self.tabs[i].dirty = true;
                     self.command_line
                         .push_output(&format!("PDSIZE set to {v:.4}"));

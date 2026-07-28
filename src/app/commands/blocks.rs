@@ -370,6 +370,7 @@ impl OpenCADStudio {
                     .unwrap_or_default();
                 self.push_undo_snapshot(i, "ATTSYNC");
                 let mut synced = 0usize;
+                let mut changes = Vec::new();
                 for e in self.tabs[i].scene.document.entities_mut() {
                     if let acadrust::EntityType::Insert(ins) = e {
                         if ins.block_name.eq_ignore_ascii_case(&block) {
@@ -390,10 +391,11 @@ impl OpenCADStudio {
                                 }
                             }
                             synced += 1;
+                            changes.push((ins.common.handle, crate::scene::ChangeKind::Modified));
                         }
                     }
                 }
-                self.tabs[i].scene.bump_geometry();
+                self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
                     "ATTSYNC: synchronised {synced} insert(s) of \"{block}\" against {} attribute definition(s).",

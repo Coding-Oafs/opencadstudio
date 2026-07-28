@@ -623,52 +623,30 @@ impl OpenCADStudio {
         self.push_undo_entry(i, HistorySnapshot::Delta(delta));
     }
 
-    /// Copy is delta-safe only when no target is a Dimension and no complete
-    /// group is copied: dimensions clone fresh anonymous `*D` block records,
-    /// and complete group copies add Group objects / dictionary entries. Both
-    /// are non-entity state a pure-entity delta can't restore.
+    /// Dimension copies still need a full snapshot because they clone a fresh
+    /// anonymous `*D` block record. Complete group copies record their exact
+    /// Group/dictionary object entries and remain delta-safe.
     pub(super) fn delta_copy_safe(&self, i: usize, handles: &[Handle]) -> bool {
-        use acadrust::objects::ObjectType;
         let doc = &self.tabs[i].scene.document;
-        let handle_set: HashSet<Handle> = handles.iter().copied().collect();
-        let copies_dimension = handles
+        !handles
             .iter()
-            .any(|h| matches!(doc.get_entity(*h), Some(EntityType::Dimension(_))));
-        let copies_complete_group = doc.objects.values().any(|o| match o {
-            ObjectType::Group(g) => {
-                !g.entities.is_empty() && g.entities.iter().all(|h| handle_set.contains(h))
-            }
-            _ => false,
-        });
-        !copies_dimension && !copies_complete_group
+            .any(|h| matches!(doc.get_entity(*h), Some(EntityType::Dimension(_))))
     }
 
-    /// Erase is delta-safe only when no target belongs to a group: erasing a
-    /// grouped entity rewrites the group's membership in `document.objects`.
-    pub(super) fn delta_erase_safe(&self, i: usize, handles: &[Handle]) -> bool {
-        use acadrust::objects::ObjectType;
-        let doc = &self.tabs[i].scene.document;
-        let handle_set: HashSet<Handle> = handles.iter().copied().collect();
-        !doc.objects.values().any(|o| match o {
-            ObjectType::Group(g) => g.entities.iter().any(|h| handle_set.contains(h)),
-            _ => false,
-        })
+    /// Erase records any affected Group/object dictionary entries alongside the
+    /// entity before-images, so it never needs a whole-structure snapshot.
+    pub(super) fn delta_erase_safe(&self, _i: usize, _handles: &[Handle]) -> bool {
+        true
     }
 
-    /// Add is delta-safe only for a plain drawable on an already-existing layer:
-    /// a block / image add also creates block records, image definitions or
-    /// layers (non-entity state). INSERT only references an existing block and
-    /// is entity-delta safe.
+    /// Add is delta-safe on an already-existing layer unless it creates block
+    /// records. RasterImage definitions are captured as exact object-map deltas;
+    /// Viewport commits explicitly record their added entity handle.
     pub(super) fn delta_add_safe(&self, i: usize, entity: &EntityType) -> bool {
         if matches!(
             entity,
             EntityType::Block(_)
                 | EntityType::BlockEnd(_)
-                | EntityType::RasterImage(_)
-                // A viewport commit routes through add_entity_to_layout +
-                // bump_geometry_no_blocks, bypassing the recorded Scene::add_entity
-                // — nothing would be captured, so keep the full snapshot.
-                | EntityType::Viewport(_)
         ) {
             return false;
         }
@@ -706,12 +684,23 @@ impl OpenCADStudio {
                 pending.label
             );
         }
-        let entities: Vec<(Handle, Option<Arc<EntityType>>, Option<Arc<EntityType>>)> = rec
-            .into_before_images()
+        let (entity_before, object_before) = rec.into_recorded_images();
+        let entities: Vec<(Handle, Option<Arc<EntityType>>, Option<Arc<EntityType>>)> = entity_before
             .into_iter()
             .map(|(h, before)| {
                 let after = self.tabs[i].scene.document.get_entity_arc(h);
                 (h, before, after)
+            })
+            .collect();
+        let objects: Vec<ObjectEntryDelta> = object_before
+            .into_iter()
+            .filter_map(|(handle, before)| {
+                let after = self.tabs[i].scene.document.objects.get(&handle).cloned();
+                (before != after).then_some(ObjectEntryDelta {
+                    handle,
+                    before,
+                    after,
+                })
             })
             .collect();
         let selected_after = self.tabs[i].scene.selected.iter().copied().collect();
@@ -722,19 +711,22 @@ impl OpenCADStudio {
                 let after_structure = self.tabs[i].scene.document.snapshot_structure();
                 let added_handles: Vec<Handle> = entities
                     .iter()
-                .filter_map(|(handle, before, after)| {
-                    (before.is_none() && after.is_some()).then_some(*handle)
-                })
-                .collect();
-            acadrust::CadDocument::align_added_entity_structure(
-                before_structure,
-                &after_structure,
-                &added_handles,
-            );
-            if *before_structure == after_structure {
-                structure = None;
+                    .filter_map(|(handle, before, after)| {
+                        (before.is_none() && after.is_some()).then_some(*handle)
+                    })
+                    .collect();
+                acadrust::CadDocument::align_added_entity_structure(
+                    before_structure,
+                    &after_structure,
+                    &added_handles,
+                );
+                if *before_structure == after_structure {
+                    structure = None;
+                }
             }
-            }
+        }
+        if structure.is_none() && !objects.is_empty() {
+            structure = Some(StructureSnapshot::Objects(objects));
         }
         let delta = DeltaSnapshot {
             entities,
@@ -849,7 +841,6 @@ impl OpenCADStudio {
                             self.tabs[i].scene.document.objects.remove(&entry.handle);
                         }
                     }
-                    self.tabs[i].scene.invalidate_dependency_index();
                 }
                 StructureSnapshot::Styles {
                     before,
@@ -909,13 +900,21 @@ impl OpenCADStudio {
             (&snapshot.after, &snapshot.selected_after)
         };
         let scene = &mut self.tabs[i].scene;
+        let mut affected = scene.object_isolation.hidden.clone();
+        affected.extend(state.hidden.iter().copied());
         scene.object_isolation = state.clone();
         scene.selected = selected
             .iter()
             .copied()
             .filter(|handle| scene.document.get_entity(*handle).is_some())
             .collect();
-        scene.bump_geometry_no_blocks();
+        let changes: Vec<_> = affected
+            .into_iter()
+            .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+            .collect();
+        if !changes.is_empty() {
+            scene.bump_entities(&changes);
+        }
     }
 
     /// Perform the one expensive cache/UI synchronization required after a
@@ -925,7 +924,7 @@ impl OpenCADStudio {
         &mut self,
         i: usize,
         had_full: bool,
-        structure_changed: bool,
+        layer_panel_changed: bool,
         changes: &[(Handle, crate::scene::ChangeKind)],
     ) {
         self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
@@ -970,7 +969,7 @@ impl OpenCADStudio {
         self.tabs[i].active_cmd = None;
         self.tabs[i].snap_result = None;
         self.tabs[i].active_grip = None;
-        if structure_changed {
+        if layer_panel_changed {
             let doc_layers = self.tabs[i].scene.document.layers.clone();
             let vp_info = self.tabs[i].scene.viewport_list();
             self.tabs[i]
@@ -1001,7 +1000,7 @@ impl OpenCADStudio {
 
         let mut last_label = String::new();
         let mut had_full = false;
-        let mut structure_changed = false;
+        let mut layer_panel_changed = false;
         let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.undo_stack.pop() else {
@@ -1013,7 +1012,19 @@ impl OpenCADStudio {
                     // Symmetric: undo applies the before side, then the same
                     // delta rides to the redo stack (it still holds the after
                     // side) — no current-state capture needed.
-                    structure_changed |= d.structure.is_some();
+                    layer_panel_changed |= d.structure.as_ref().is_some_and(|structure| {
+                        matches!(
+                            structure,
+                            StructureSnapshot::Full(_) | StructureSnapshot::Layers(_)
+                        )
+                    }) || d.entities.iter().any(|(_, before, after)| {
+                        before
+                            .as_deref()
+                            .is_some_and(|entity| matches!(entity, EntityType::Viewport(_)))
+                            || after
+                                .as_deref()
+                                .is_some_and(|entity| matches!(entity, EntityType::Viewport(_)))
+                    });
                     had_full |= d.structure.as_ref().is_some_and(StructureSnapshot::is_full);
                     changes.extend(self.apply_delta_state(i, &mut d, true));
                     self.tabs[i]
@@ -1030,7 +1041,7 @@ impl OpenCADStudio {
                 }
             }
         }
-        self.finish_history_apply(i, had_full, structure_changed, &changes);
+        self.finish_history_apply(i, had_full, layer_panel_changed, &changes);
         self.command_line
             .push_output(&format!("Undo: {last_label}"));
     }
@@ -1047,7 +1058,7 @@ impl OpenCADStudio {
 
         let mut last_label = String::new();
         let mut had_full = false;
-        let mut structure_changed = false;
+        let mut layer_panel_changed = false;
         let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.redo_stack.pop() else {
@@ -1056,7 +1067,19 @@ impl OpenCADStudio {
             last_label = snapshot.label().to_string();
             match snapshot {
                 HistorySnapshot::Delta(mut d) => {
-                    structure_changed |= d.structure.is_some();
+                    layer_panel_changed |= d.structure.as_ref().is_some_and(|structure| {
+                        matches!(
+                            structure,
+                            StructureSnapshot::Full(_) | StructureSnapshot::Layers(_)
+                        )
+                    }) || d.entities.iter().any(|(_, before, after)| {
+                        before
+                            .as_deref()
+                            .is_some_and(|entity| matches!(entity, EntityType::Viewport(_)))
+                            || after
+                                .as_deref()
+                                .is_some_and(|entity| matches!(entity, EntityType::Viewport(_)))
+                    });
                     had_full |= d.structure.as_ref().is_some_and(StructureSnapshot::is_full);
                     changes.extend(self.apply_delta_state(i, &mut d, false));
                     self.tabs[i]
@@ -1073,7 +1096,7 @@ impl OpenCADStudio {
                 }
             }
         }
-        self.finish_history_apply(i, had_full, structure_changed, &changes);
+        self.finish_history_apply(i, had_full, layer_panel_changed, &changes);
         self.command_line
             .push_output(&format!("Redo: {last_label}"));
     }

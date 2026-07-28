@@ -607,6 +607,84 @@ fn build_const_bind_group(
 }
 
 impl WireGpu {
+    /// Build a small selection/hover overlay from borrowed resident wires while
+    /// overriding their colour. Avoids deep-cloning every point/text/fill array
+    /// of a large selected polyline or block before packing the overlay.
+    pub fn from_highlight_refs(
+        device: &wgpu::Device,
+        wires: &[&WireModel],
+        color: [f32; 4],
+        depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
+        const_bgl: Option<&wgpu::BindGroupLayout>,
+    ) -> Vec<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(const_bgl) = const_bgl {
+            const MAX_INSTANCES: usize =
+                268_435_456 / std::mem::size_of::<WireInstance>();
+            use crate::par::prelude::*;
+            let per: Vec<(Vec<WireInstance>, WireConst)> = wires
+                .par_iter()
+                .enumerate()
+                .map(|(idx, &wire)| {
+                    emit_wire_native(wire, idx as u32, color, wire_draw_depth(wire, depth_map))
+                })
+                .collect();
+            let mut instances =
+                Vec::with_capacity(per.iter().map(|(items, _)| items.len()).sum());
+            let mut consts = Vec::with_capacity(per.len());
+            for (mut items, constant) in per {
+                instances.append(&mut items);
+                consts.push(constant);
+            }
+            if instances.is_empty() {
+                return Vec::new();
+            }
+            let bind_group = build_const_bind_group(device, const_bgl, &consts);
+            return instances
+                .chunks(MAX_INSTANCES)
+                .map(|chunk| Self {
+                    instance_buffer: instance_buffer_mapped(
+                        device,
+                        "wire.highlight.ibuf",
+                        chunk,
+                    ),
+                    first_instance: 0,
+                    instance_count: chunk.len() as u32,
+                    is_3d_mesh_edge: false,
+                    const_bind_group: Some(bind_group.clone()),
+                })
+                .collect();
+        }
+
+        let _ = const_bgl;
+        const MAX_PACKED_INSTANCES: usize =
+            268_435_456 / std::mem::size_of::<PackedWireInstance>();
+        let per: Vec<Vec<PackedWireInstance>> = wires
+            .iter()
+            .map(|wire| {
+                emit_wire_packed(wire, color, wire_draw_depth(wire, depth_map))
+            })
+            .collect();
+        let mut instances = Vec::with_capacity(per.iter().map(Vec::len).sum());
+        for mut items in per {
+            instances.append(&mut items);
+        }
+        instances
+            .chunks(MAX_PACKED_INSTANCES)
+            .map(|chunk| Self {
+                instance_buffer: instance_buffer_mapped(
+                    device,
+                    "wire.highlight.compat.ibuf",
+                    chunk,
+                ),
+                first_instance: 0,
+                instance_count: chunk.len() as u32,
+                is_3d_mesh_edge: false,
+                const_bind_group: None,
+            })
+            .collect()
+    }
+
     /// Native-only equivalent of [`from_run`] for an already partitioned set
     /// of borrowed wires. Used when one arena partition exceeds the 256 MB
     /// buffer limit: the compatible partition stays patchable while only the

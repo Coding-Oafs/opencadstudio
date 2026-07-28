@@ -199,7 +199,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.tabs[i]
                         .scene
                         .invalidate_dim_block_recorded(pending.handle);
-                    self.tabs[i].scene.bump_geometry();
+                    self.tabs[i].scene.bump_entities(&[(
+                        pending.handle,
+                        crate::scene::ChangeKind::Modified,
+                    )]);
                     self.tabs[i].dirty = true;
                     self.refresh_selected_grips();
                     self.refresh_properties();
@@ -534,7 +537,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 crate::scene::model::object::GripMenuAction::RemoveLeader,
                             );
                         }
-                        self.tabs[i].scene.bump_geometry();
+                        self.tabs[i]
+                            .scene
+                            .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
                         self.refresh_selected_grips();
                     }
                     // Cancel an in-progress grip drag: restore the edited
@@ -649,7 +654,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         self.tabs[i]
                             .layers
                             .sync_with_viewports(&doc_layers, vp_info);
-                        self.tabs[i].scene.bump_geometry();
+                        // Per-viewport layer visibility changes the resident
+                        // assembly, not any entity's tessellated geometry.
+                        self.tabs[i].scene.bump_geometry_no_blocks();
                         self.tabs[i].dirty = true;
                     }
                 }
@@ -1022,7 +1029,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.tabs[i]
                     .scene
                     .invalidate_dim_block_recorded(popup.handle);
-                self.tabs[i].scene.bump_geometry();
+                self.tabs[i]
+                    .scene
+                    .bump_entities(&[(popup.handle, crate::scene::ChangeKind::Modified)]);
                 self.tabs[i].dirty = true;
                 self.refresh_selected_grips();
                 self.refresh_properties();
@@ -1534,7 +1543,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             .get(&value)
                             .map(|br| br.name.clone());
                         if let Some(canon) = canon {
-                            let mut changed = false;
+                            let mut changes = Vec::new();
                             for &handle in &handles {
                                 if self.tabs[i].scene.is_layer_locked(handle) {
                                     continue;
@@ -1544,14 +1553,15 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 {
                                     if ins.block_name != canon {
                                         ins.block_name = canon.clone();
-                                        changed = true;
+                                        changes.push((
+                                            handle,
+                                            crate::scene::ChangeKind::Modified,
+                                        ));
                                     }
                                 }
                             }
-                            if changed {
-                                // The picked block may not be in the defn cache
-                                // yet — rebuild block definitions too.
-                                self.tabs[i].scene.bump_geometry();
+                            if !changes.is_empty() {
+                                self.tabs[i].scene.bump_entities(&changes);
                             }
                         }
                     } else if field == "plot_style" {
@@ -1804,7 +1814,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
             if protected {
                 return;
             }
-            let mut changed = false;
+            let mut changes = Vec::new();
             for &handle in handles {
                 if self.tabs[i].scene.is_layer_locked(handle) {
                     continue;
@@ -1814,12 +1824,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 {
                     if ins.block_name != canon {
                         ins.block_name = canon.clone();
-                        changed = true;
+                        changes.push((handle, crate::scene::ChangeKind::Modified));
                     }
                 }
             }
-            if changed {
-                self.tabs[i].scene.bump_geometry();
+            if !changes.is_empty() {
+                self.tabs[i].scene.bump_entities(&changes);
             }
             return;
         }

@@ -1965,15 +1965,14 @@ impl OpenCADStudio {
                 Ok(new_handle) => {
                     if self.tabs[i].scene.is_recording_undo() {
                         self.tabs[i].scene.record_undo_before(new_handle, None);
-                        self.tabs[i].scene.poison_undo_recording();
                     }
                     self.tabs[i].scene.auto_fit_viewport(new_handle);
                     // Adding a viewport straight onto the document layout
-                    // bypasses Scene::add_entity, which is what normally
-                    // invalidates the wire-tessellation cache. Without this the
-                    // new viewport's border isn't tessellated until the next
-                    // zoom/pan forces a rebuild.
-                    self.tabs[i].scene.bump_geometry_no_blocks();
+                    // bypasses Scene::add_entity; publish the exact new handle
+                    // so only its border is tessellated.
+                    self.tabs[i]
+                        .scene
+                        .bump_entities(&[(new_handle, crate::scene::ChangeKind::Added)]);
                     Some(new_handle)
                 }
                 Err(e) => {

@@ -10,16 +10,15 @@
 //   * Modify in place — a move / rotate / scale / colour change keeps the
 //     entity's segment count, so its slab is overwritten where it sits.
 //   * Add — bump-allocate a fresh slab at the tail.
-//   * A Modify whose segment count changed — reject the patch before touching
-//     GPU state, so the caller can rebuild this wire arena cleanly.
+//   * A tail Modify whose segment count changed — resize its terminal slab in
+//     place. A non-tail shape change rejects the patch before touching GPU state
+//     so the caller can rebuild this wire arena cleanly.
 //   * Erase — tombstone the slab (blank instances that render nothing).
 //
 // Two correctness points make add/remove safe:
-//   * draw_depth_map normalises each entity's draw-order z-bias by the block's
-//     entity count, so ANY add/remove re-scales EVERY entity's bias. We keep a
-//     CPU mirror of the WireConst array and, on a structural change, refresh every
-//     slab's draw_depth and re-upload the (small, ~1 MB) const buffer — the huge
-//     instance buffer is untouched.
+//   * draw_depth_map uses stable sparse labels, so Add/Remove changes only the
+//     named entity's depth. Existing slabs retain their WireConst values and no
+//     whole-const-buffer upload is needed.
 //   * A tail-appended entity draws last, which only mis-orders alpha-blended /
 //     coincident wires. So when the set contains ANY transparent wire we bail to a
 //     full rebuild instead of appending. Opaque overlap resolves by the z-bias, so
@@ -80,6 +79,23 @@ struct PreparedPatchRun {
     order_sensitive: bool,
 }
 
+fn can_resize_terminal_slab(
+    slab: &Slab,
+    inst_tail: u32,
+    const_tail: u32,
+    inst_cap: u32,
+    const_cap: u32,
+    new_inst_len: u32,
+    new_const_len: u32,
+    change_count: usize,
+) -> bool {
+    change_count == 1
+        && slab.inst_off + slab.inst_len == inst_tail
+        && slab.const_off + slab.const_len == const_tail
+        && slab.inst_off + new_inst_len <= inst_cap
+        && slab.const_off + new_const_len <= const_cap
+}
+
 pub struct WireArena {
     inst_buf: wgpu::Buffer,
     inst_cap: u32,
@@ -88,8 +104,7 @@ pub struct WireArena {
     const_bind_group: std::sync::Arc<wgpu::BindGroup>,
     const_cap: u32,
     const_tail: u32,
-    /// CPU mirror of the const buffer so a structural edit can refresh every
-    /// slab's draw_depth (denominator change) without re-emitting geometry.
+    /// CPU mirror of the const buffer, used for in-place tail resize/patches.
     consts_cpu: Vec<WireConst>,
     slabs: FxHashMap<Handle, Slab>,
     /// Temporarily hidden Modified slabs. Grip drag blanks these but keeps their
@@ -166,7 +181,7 @@ pub(crate) fn patch_handle_index(
                 }
             }
         }
-        if edit.new_len != 0 {
+        if edit.visible && edit.new_len != 0 {
             index.insert(
                 edit.handle.value(),
                 (edit.start..edit.start + edit.new_len)
@@ -504,17 +519,14 @@ impl WireArena {
         new_handles_are_suffix: bool,
         depth_map: &FxHashMap<u64, [f32; 2]>,
     ) -> bool {
-        let depth_structural = changes
-            .iter()
-            .any(|(_, kind)| !matches!(kind, ChangeKind::Modified));
-
         // Prepare and validate every visible run before mutating either GPU
         // buffer. Growing/shrinking a Modified slab used to tombstone the old
         // range and append a new one. Repeated live-polyline updates could then
         // leave the arena half-patched when a later guard requested a rebuild,
-        // producing alternating old/new submissions. A shape change now takes
-        // the clean full-arena fallback, while the scene itself still
-        // re-tessellates only the named entity.
+        // producing alternating old/new submissions. The terminal slab can
+        // grow/shrink without relocation (the common live-polyline case);
+        // other shape changes take the clean full-arena fallback while the
+        // scene itself still re-tessellates only the named entity.
         let mut prepared: FxHashMap<Handle, PreparedPatchRun> = FxHashMap::default();
         for &(h, kind) in changes {
             let run = runs.get(&h).map(Vec::as_slice).unwrap_or(&[]);
@@ -538,16 +550,25 @@ impl WireArena {
             let inst_len = insts.len() as u32;
             let const_len = csts.len() as u32;
 
-            if matches!(kind, ChangeKind::Modified)
-                && self
-                    .slabs
-                    .get(&h)
-                    .or_else(|| self.vacant.get(&h))
-                    .is_some_and(|slab| {
-                        slab.inst_len != inst_len || slab.const_len != const_len
-                    })
-            {
-                return false;
+            if matches!(kind, ChangeKind::Modified) {
+                let known = self.slabs.get(&h).or_else(|| self.vacant.get(&h));
+                let shape_changed = known
+                    .is_some_and(|slab| slab.inst_len != inst_len || slab.const_len != const_len);
+                let can_resize_tail = self.slabs.get(&h).is_some_and(|slab| {
+                    can_resize_terminal_slab(
+                        slab,
+                        self.inst_tail,
+                        self.const_tail,
+                        self.inst_cap,
+                        self.const_cap,
+                        inst_len,
+                        const_len,
+                        changes.len(),
+                    )
+                });
+                if shape_changed && !can_resize_tail {
+                    return false;
+                }
             }
 
             prepared.insert(
@@ -642,6 +663,50 @@ impl WireArena {
                 continue;
             }
 
+            // A live entity is normally the newest handle and therefore owns
+            // the terminal slab. Resize that slab at the same offsets instead
+            // of tombstoning it and rebuilding the whole arena as its segment
+            // count grows on every click.
+            let can_resize_tail = self.slabs.get(&h).is_some_and(|slab| {
+                can_resize_terminal_slab(
+                    slab,
+                    self.inst_tail,
+                    self.const_tail,
+                    self.inst_cap,
+                    self.const_cap,
+                    inst_len,
+                    const_len,
+                    changes.len(),
+                )
+            });
+            if can_resize_tail {
+                let (inst_off, const_off) = {
+                    let slab = self.slabs.get(&h).unwrap();
+                    (slab.inst_off, slab.const_off)
+                };
+                for instance in &mut insts {
+                    instance.wire_id += const_off;
+                }
+                self.write_insts(queue, inst_off, &insts);
+                self.consts_cpu.truncate(const_off as usize);
+                self.consts_cpu.extend(csts.iter().copied());
+                let csz = std::mem::size_of::<WireConst>() as u64;
+                queue.write_buffer(
+                    &self.const_buf,
+                    const_off as u64 * csz,
+                    bytemuck::cast_slice(&csts),
+                );
+                self.inst_tail = inst_off + inst_len;
+                self.const_tail = const_off + const_len;
+                let slab = self.slabs.get_mut(&h).unwrap();
+                slab.inst_len = inst_len;
+                slab.const_len = const_len;
+                slab.base_depth = base_depth;
+                slab.aabb = aabb;
+                self.order_sensitive |= run_order_sensitive;
+                continue;
+            }
+
             // Layout changed ⇒ append at the tail. Unsafe to relocate when the set
             // resolves overlap by submission order: transparency, a wire with no
             // draw-order depth, or the mesh-edge arena (all its wires are forced
@@ -674,6 +739,16 @@ impl WireArena {
             for c in &csts {
                 self.consts_cpu.push(*c);
             }
+            // Appended instances immediately reference these constant slots.
+            // Keep the GPU buffer in sync without relying on a full-scene upload.
+            if !csts.is_empty() {
+                let const_size = std::mem::size_of::<WireConst>() as u64;
+                queue.write_buffer(
+                    &self.const_buf,
+                    const_off as u64 * const_size,
+                    bytemuck::cast_slice(&csts),
+                );
+            }
             self.inst_tail += inst_len;
             self.const_tail += const_len;
             self.slabs.insert(
@@ -690,30 +765,6 @@ impl WireArena {
             self.order_sensitive |= run_order_sensitive;
         }
 
-        if depth_structural {
-            // The entity count changed ⇒ draw_depth_map re-normalised every
-            // entity's z-bias. Refresh each live slab's draw_depth from the new
-            // depth map and re-upload the whole (small) const buffer; the instance
-            // buffer is untouched.
-            // Preserve block-local depth composition. A slab may contain many
-            // different child offsets around its entity base; shifting every
-            // const by the base delta keeps those offsets intact.
-            for (h, slab) in &mut self.slabs {
-                // Mesh-edge wires keep depth 0 (no draw-order bias); regular wires
-                // take the re-normalised map value.
-                let dd = if self.mesh_edge {
-                    0.0
-                } else {
-                    depth_map.get(&h.value()).map_or(0.0, |d| d[0])
-                };
-                let delta = dd - slab.base_depth;
-                for k in 0..slab.const_len {
-                    self.consts_cpu[(slab.const_off + k) as usize].draw_depth += delta;
-                }
-                slab.base_depth = dd;
-            }
-            queue.write_buffer(&self.const_buf, 0, bytemuck::cast_slice(&self.consts_cpu));
-        }
         if self.tombstoned > self.inst_tail / 2 {
             return false;
         }
@@ -746,6 +797,8 @@ impl WireArena {
         clip_w: u32,
         clip_h: u32,
     ) -> Vec<WireGpu> {
+        let perf = crate::perf::enabled();
+        let perf_started = perf.then(iced::time::Instant::now);
         if self.inst_tail == 0 {
             return vec![];
         }
@@ -799,14 +852,18 @@ impl WireArena {
                 .collect();
         }
 
-        if crate::perf::enabled() {
+        if perf {
             let submitted: u64 = ranges
                 .iter()
                 .map(|(start, end)| (end - start) as u64)
                 .sum();
-            if submitted < self.inst_tail as u64 {
+            let elapsed_ms = perf_started
+                .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                .unwrap_or_default();
+            if submitted < self.inst_tail as u64 || elapsed_ms >= 1.0 {
                 crate::perf_record!(
-                    "[perf] wire-cull submitted={} resident={} ranges={}",
+                    "[perf] wire-cull {:>7.1}ms submitted={} resident={} ranges={}",
+                    elapsed_ms,
                     submitted,
                     self.inst_tail,
                     ranges.len(),
@@ -824,5 +881,59 @@ impl WireArena {
                 const_bind_group: Some(self.const_bind_group.clone()),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slab() -> Slab {
+        Slab {
+            inst_off: 100,
+            inst_len: 10,
+            const_off: 20,
+            const_len: 2,
+            aabb: [0.0; 4],
+            base_depth: 0.0,
+        }
+    }
+
+    #[test]
+    fn terminal_slab_can_grow_without_relocating_the_arena() {
+        assert!(can_resize_terminal_slab(
+            &slab(),
+            110,
+            22,
+            1000,
+            100,
+            18,
+            3,
+            1,
+        ));
+    }
+
+    #[test]
+    fn non_terminal_or_batched_resize_uses_clean_fallback() {
+        assert!(!can_resize_terminal_slab(
+            &slab(),
+            111,
+            22,
+            1000,
+            100,
+            18,
+            3,
+            1,
+        ));
+        assert!(!can_resize_terminal_slab(
+            &slab(),
+            110,
+            22,
+            1000,
+            100,
+            18,
+            3,
+            2,
+        ));
     }
 }

@@ -112,13 +112,12 @@ impl Scene {
     }
 
     pub fn add_entity(&mut self, mut entity: EntityType) -> Handle {
-        // Only Insert / Block entities can introduce or reference a block
-        // definition that the block cache must (re)build. Adding a plain
-        // top-level entity (line, arc, text, …) leaves every block defn intact,
-        // so it keeps the cache and skips the all-blocks re-tessellation.
+        // Only block sentinels mutate a block definition and require rebuilding
+        // the block cache. A top-level INSERT merely references an existing
+        // definition, so adding it can patch just that new render handle.
         let affects_blocks = matches!(
             &entity,
-            EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
+            EntityType::Block(_) | EntityType::BlockEnd(_)
         );
         // INSERT invalidates rendered block instances, but it does not mutate
         // the referenced block definition. Only block sentinels require a
@@ -161,6 +160,9 @@ impl Scene {
             if img.definition_handle.is_none() {
                 use acadrust::objects::{ImageDefinition, ObjectType};
                 let def_handle = Handle::new(self.document.next_handle());
+                if self.is_recording_undo() {
+                    self.record_undo_object_before(def_handle, None);
+                }
                 let mut img_def = ImageDefinition::with_dimensions(
                     &img.file_path,
                     img.size.x as u32,
@@ -184,7 +186,6 @@ impl Scene {
         // definition mutates non-entity state a pure-entity delta can't undo.
         let creates_layer =
             self.is_recording_undo() && !layer.trim().is_empty() && !self.document.layers.contains(&layer);
-        let is_image = matches!(&entity, EntityType::RasterImage(_));
         self.ensure_layer(&layer);
 
         // Route to the correct block based on current editing mode:
@@ -238,11 +239,12 @@ impl Scene {
             }
             // Delta-undo: the new handle's before-image is "nothing" (it did not
             // exist). Poison the recording if this add also mutated non-entity
-            // state (a new layer / block / image definition) so the app knows a
-            // pure-entity delta would be incomplete.
+            // state (a new layer / block) so the app knows a pure-entity delta
+            // would be incomplete. Raster image definitions are captured as
+            // targeted object before-images above.
             if self.is_recording_undo() {
                 self.record_undo_before(handle, None);
-                if creates_layer || mutates_block_structure || is_image {
+                if creates_layer || mutates_block_structure {
                     self.poison_undo_recording();
                 }
             }
@@ -323,14 +325,15 @@ impl Scene {
         // The caller edited a snapshot copy; keep the live entity in its block.
         entity.common_mut().owner_handle = existing.common().owner_handle;
 
-        // Replacing (or becoming) a block entity forces a full block-cache
-        // rebuild; a plain entity only needs its own wires re-tessellated.
+        // Replacing (or becoming) a block sentinel forces a full block-cache
+        // rebuild. INSERT edits (including retargeting to another existing
+        // definition) only change that top-level render handle.
         let affects_blocks = matches!(
             existing,
-            EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
+            EntityType::Block(_) | EntityType::BlockEnd(_)
         ) || matches!(
             &entity,
-            EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
+            EntityType::Block(_) | EntityType::BlockEnd(_)
         );
 
         // A plugin edit may retarget the entity to a novel layer; register it
@@ -481,6 +484,34 @@ impl Scene {
         if handles.is_empty() {
             return;
         }
+        let mesh_entities: Vec<(Handle, std::sync::Arc<EntityType>)> = handles
+            .iter()
+            .filter_map(|&handle| {
+                let entity = self.document.get_entity_arc(handle)?;
+                matches!(
+                    entity.as_ref(),
+                    EntityType::Solid3D(_)
+                        | EntityType::Region(_)
+                        | EntityType::Body(_)
+                        | EntityType::Surface(_)
+                        | EntityType::Mesh(_)
+                        | EntityType::PolygonMesh(_)
+                        | EntityType::PolyfaceMesh(_)
+                )
+                .then_some((handle, entity))
+            })
+            .collect();
+        for handle in handles {
+            self.meshes.remove(handle);
+            self.block_meshes.remove(handle);
+            self.solid_models.remove(handle);
+        }
+        // The overwhelmingly common Undo/Redo target is 2-D geometry. Return
+        // before scanning every Layout object just to discover there is no mesh
+        // to rebuild.
+        if mesh_entities.is_empty() {
+            return;
+        }
         let layout_blocks: std::collections::HashSet<Handle> = self
             .document
             .objects
@@ -492,32 +523,15 @@ impl Scene {
                 _ => None,
             })
             .collect();
-        let entries: Vec<(Handle, std::sync::Arc<EntityType>, [f32; 4], bool)> = handles
-            .iter()
-            .filter_map(|&handle| {
-                let entity = self.document.get_entity_arc(handle)?;
-                if !matches!(
-                    entity.as_ref(),
-                    EntityType::Solid3D(_)
-                        | EntityType::Region(_)
-                        | EntityType::Body(_)
-                        | EntityType::Surface(_)
-                        | EntityType::Mesh(_)
-                        | EntityType::PolygonMesh(_)
-                        | EntityType::PolyfaceMesh(_)
-                ) {
-                    return None;
-                }
-                let color = self.render_style(entity.as_ref()).0;
-                let top_level = layout_blocks.contains(&entity.common().owner_handle);
-                Some((handle, entity, color, top_level))
-            })
-            .collect();
-        for handle in handles {
-            self.meshes.remove(handle);
-            self.block_meshes.remove(handle);
-            self.solid_models.remove(handle);
-        }
+        let entries: Vec<(Handle, std::sync::Arc<EntityType>, [f32; 4], bool)> =
+            mesh_entities
+                .into_iter()
+                .map(|(handle, entity)| {
+                    let color = self.render_style(entity.as_ref()).0;
+                    let top_level = layout_blocks.contains(&entity.common().owner_handle);
+                    (handle, entity, color, top_level)
+                })
+                .collect();
         let facet_res = self.document.header.facet_resolution;
         let isolines = self.document.header.isolines.max(0) as usize;
         use crate::par::prelude::*;

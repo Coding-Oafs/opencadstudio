@@ -66,7 +66,8 @@ pub struct ViewportData {
     /// by the wire / face3d pipelines as a clip-z bias. WireModels carry no
     /// depth field (84 construction sites); the bias is looked up by handle
     /// at GPU-upload time from this map instead.
-    pub(in crate::scene) draw_depths: Arc<rustc_hash::FxHashMap<u64, [f32; 2]>>,
+    pub(in crate::scene) draw_depths:
+        std::sync::Weak<rustc_hash::FxHashMap<u64, [f32; 2]>>,
     pub(in crate::scene) hatches: Arc<Vec<HatchModel>>,
     /// Wipeout fills — rendered in a separate pass AFTER wires.
     pub(in crate::scene) wipeout_hatches: Arc<Vec<HatchModel>>,
@@ -277,6 +278,9 @@ impl shader::Primitive for Primitive {
                 {
                     inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
                 }
+                inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
+                inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
+                inner.mesh_lod_key = (usize::MAX, u64::MAX, 0, 0);
                 inner.render_sig = u64::MAX;
             }
             // The MSAA / depth / resolve textures are always sized to the
@@ -335,6 +339,9 @@ impl shader::Primitive for Primitive {
                 continue;
             }
             let Some(vp_wires) = vp.wires.upgrade() else {
+                continue;
+            };
+            let Some(draw_depths) = vp.draw_depths.upgrade() else {
                 continue;
             };
             // Third component is the *selected-set* signature (not
@@ -411,7 +418,8 @@ impl shader::Primitive for Primitive {
                 || inner
                     .cached_face3d_depth_source
                     .as_ref()
-                    .map_or(true, |source| !Arc::ptr_eq(source, &vp.draw_depths))
+                    .and_then(std::sync::Weak::upgrade)
+                    .map_or(true, |source| !Arc::ptr_eq(&source, &draw_depths))
                 || (inner.cached_face3d_key.0 != vp.wire_content_id
                     && !face_pass_unchanged);
             if face3d_changed || face3d_fill_active != inner.cached_face3d_key.1 {
@@ -420,10 +428,10 @@ impl shader::Primitive for Primitive {
                     &vp.face3d_wires[..],
                     &vp_wires[..],
                     !face3d_fill_active,
-                    &vp.draw_depths,
+                    &draw_depths,
                 );
                 inner.cached_face3d_source = Some(Arc::clone(&vp.face3d_wires));
-                inner.cached_face3d_depth_source = Some(Arc::clone(&vp.draw_depths));
+                inner.cached_face3d_depth_source = Some(Arc::downgrade(&draw_depths));
             }
             inner.cached_face3d_key = (vp.wire_content_id, face3d_fill_active);
             // Wire buffers are world-space, so a camera move alone doesn't
@@ -527,7 +535,7 @@ impl shader::Primitive for Primitive {
                                 &patch.changes,
                                 &regular_changed,
                                 patch.new_handles_are_suffix,
-                                &vp.draw_depths,
+                                &draw_depths,
                             )
                         } else {
                             inner.wire_arena_fallback_kind == Some(false)
@@ -541,7 +549,7 @@ impl shader::Primitive for Primitive {
                                 &patch.changes,
                                 &mesh_changed,
                                 patch.new_handles_are_suffix,
-                                &vp.draw_depths,
+                                &draw_depths,
                             )
                         } else {
                             inner.wire_arena_fallback_kind == Some(true)
@@ -571,7 +579,7 @@ impl shader::Primitive for Primitive {
                                 device,
                                 queue,
                                 &regular,
-                                &vp.draw_depths,
+                                &draw_depths,
                                 bgl,
                                 false,
                             );
@@ -580,7 +588,7 @@ impl shader::Primitive for Primitive {
                                     crate::scene::pipeline::WireGpu::from_run_refs(
                                         device,
                                         &regular,
-                                        &vp.draw_depths,
+                                        &draw_depths,
                                         false,
                                         bgl,
                                     ),
@@ -607,7 +615,7 @@ impl shader::Primitive for Primitive {
                                 device,
                                 queue,
                                 &mesh,
-                                &vp.draw_depths,
+                                &draw_depths,
                                 bgl,
                                 true,
                             );
@@ -616,7 +624,7 @@ impl shader::Primitive for Primitive {
                                     crate::scene::pipeline::WireGpu::from_run_refs(
                                         device,
                                         &mesh,
-                                        &vp.draw_depths,
+                                        &draw_depths,
                                         true,
                                         bgl,
                                     ),
@@ -700,7 +708,7 @@ impl shader::Primitive for Primitive {
                         Some(entry) => entry,
                         None => {
                             let entry =
-                                inner.build_wire_buffers(device, &vp_wires[..], &vp.draw_depths);
+                                inner.build_wire_buffers(device, &vp_wires[..], &draw_depths);
                             pipeline
                                 .wire_buffer_cache
                                 .insert(vp.wire_content_id, entry.clone());
@@ -745,13 +753,26 @@ impl shader::Primitive for Primitive {
             // so this refreshes without re-tessellating or re-uploading the main
             // wire buffers.
             let sel_key = (vp.wire_content_id, vp.selection_generation);
-            if sel_key != inner.cached_selection {
+            let highlighted_geometry_unchanged =
+                vp.selected_handles.is_empty() && vp.hover_handle.is_none()
+                    || vp.wire_patch.as_ref().is_some_and(|(previous, patch)| {
+                        *previous == inner.cached_selection.0
+                            && patch.changes.iter().all(|(handle, _)| {
+                                !vp.selected_handles.contains(handle)
+                                    && vp.hover_handle != Some(*handle)
+                            })
+                    });
+            let selection_changed = inner.cached_selection.1 != vp.selection_generation;
+            let highlighted_geometry_changed = inner.cached_selection.0
+                != vp.wire_content_id
+                && !highlighted_geometry_unchanged;
+            if selection_changed || highlighted_geometry_changed {
                 inner.upload_selected_wires(
                     device,
                     &vp_wires[..],
                     &vp.selected_handles,
                     vp.hover_handle,
-                    &vp.draw_depths,
+                    &draw_depths,
                 );
                 // Text highlight rides the same selection key: a pick / rollover
                 // recolours the selected / hovered glyphs without touching the
@@ -762,8 +783,11 @@ impl shader::Primitive for Primitive {
                     &vp.selected_handles,
                     vp.hover_handle,
                 );
-                inner.cached_selection = sel_key;
             }
+            // Advance the content id even when an unrelated entity patch kept
+            // the existing overlay valid, so future deltas compare to the
+            // arena generation actually on screen.
+            inner.cached_selection = sel_key;
             // Batched solid meshes stay resident while unrelated entity
             // categories change.
             if inner
@@ -800,7 +824,7 @@ impl shader::Primitive for Primitive {
             // Live overlay (command preview / interim / grip drag) — small and
             // refreshed every frame it's present, so a drag never re-uploads
             // the resident base wire buffer.
-            inner.upload_preview_wires(device, &vp.preview_wires[..], &vp.draw_depths);
+            inner.upload_preview_wires(device, &vp.preview_wires[..], &draw_depths);
             inner.upload_preview_text(device, queue, &vp.preview_text_verts[..]);
             // Cull / scissor / LOD project AABBs relative-to-eye (matching the
             // GPU's RTE path) so the math stays precise at UTM-scale coords.
@@ -819,15 +843,44 @@ impl shader::Primitive for Primitive {
                 inner.upload_silhouettes(device, &[], vp.view_dir);
             }
             inner.upload_clip_boundary(device, &vp.clip_boundary_ndc);
-            inner.compute_hatch_lod(queue, view_rot, eye, clip_size.width, clip_size.height);
-            inner.compute_wipeout_lod(view_rot, eye, clip_size.width, clip_size.height);
-            inner.compute_mesh_lod(
-                queue,
-                view_rot,
-                eye,
+            let hatch_lod_key = (
+                Arc::as_ptr(&vp.hatches) as usize,
+                vp.camera_generation,
+                clip_size.width,
+                clip_size.height,
+                fill_mode,
+            );
+            if inner.hatch_lod_key != hatch_lod_key {
+                inner.compute_hatch_lod(queue, view_rot, eye, clip_size.width, clip_size.height);
+                inner.hatch_lod_key = hatch_lod_key;
+            }
+            let wipeout_lod_key = (
+                Arc::as_ptr(&vp.wipeout_hatches) as usize,
+                vp.camera_generation,
+                clip_size.width,
+                clip_size.height,
+                fill_mode,
+            );
+            if inner.wipeout_lod_key != wipeout_lod_key {
+                inner.compute_wipeout_lod(view_rot, eye, clip_size.width, clip_size.height);
+                inner.wipeout_lod_key = wipeout_lod_key;
+            }
+            let mesh_lod_key = (
+                Arc::as_ptr(&vp.meshes) as usize,
+                vp.camera_generation,
                 clip_size.width,
                 clip_size.height,
             );
+            if inner.mesh_lod_key != mesh_lod_key {
+                inner.compute_mesh_lod(
+                    queue,
+                    view_rot,
+                    eye,
+                    clip_size.width,
+                    clip_size.height,
+                );
+                inner.mesh_lod_key = mesh_lod_key;
+            }
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let cull_key = (
@@ -881,6 +934,7 @@ impl shader::Primitive for Primitive {
                 );
             }
         }
+        let prepare_ms = nav_prepare_started.elapsed().as_secs_f64() * 1000.0;
         if let Some(sample) = self.nav_perf {
             crate::perf::record(format_args!(
                 "[perf] nav-prepare op={} space={} mode={} input={:.2}ms build={:.2}ms prepare={:.2}ms elapsed={:.2}ms viewports={}",
@@ -889,10 +943,16 @@ impl shader::Primitive for Primitive {
                 sample.mode,
                 sample.input_ms,
                 sample.build_ms,
-                nav_prepare_started.elapsed().as_secs_f64() * 1000.0,
+                prepare_ms,
                 sample.started.elapsed().as_secs_f64() * 1000.0,
                 self.viewports.len(),
             ));
+        } else if crate::perf::enabled() && prepare_ms >= 5.0 {
+            crate::perf_record!(
+                "[perf] frame-prepare {:>7.1}ms viewports={}",
+                prepare_ms,
+                self.viewports.len(),
+            );
         }
     }
 
@@ -970,16 +1030,23 @@ impl shader::Primitive for Primitive {
                 inner.viewcube.render(encoder, target, vp_clip);
             }
         }
+        let render_ms = nav_render_started.elapsed().as_secs_f64() * 1000.0;
         if let Some(sample) = self.nav_perf {
             crate::perf::record(format_args!(
                 "[perf] nav-render op={} space={} mode={} encode={:.2}ms elapsed={:.2}ms viewports={}",
                 sample.op.label(),
                 sample.space,
                 sample.mode,
-                nav_render_started.elapsed().as_secs_f64() * 1000.0,
+                render_ms,
                 sample.started.elapsed().as_secs_f64() * 1000.0,
                 self.viewports.len(),
             ));
+        } else if crate::perf::enabled() && render_ms >= 5.0 {
+            crate::perf_record!(
+                "[perf] frame-encode  {:>7.1}ms viewports={}",
+                render_ms,
+                self.viewports.len(),
+            );
         }
     }
 }
@@ -2062,11 +2129,12 @@ impl Scene {
         } else {
             0x3000_0000_0000_0000 | inst.handle.value()
         };
+        let draw_depths = self.draw_depth_map();
         let text_verts = self.gather_text_verts(
             &all_wires,
             wire_content_id,
             text_source_key,
-            &self.draw_depth_map(),
+            &draw_depths,
         );
         // Grip-drag / command-preview glyphs, excluded from the epoch-cached base
         // gather above. Two sources, both tiny (one operation's worth) and walked
@@ -2117,7 +2185,7 @@ impl Scene {
             face3d_wires,
             text_verts,
             preview_text_verts,
-            draw_depths: self.draw_depth_map(),
+            draw_depths: Arc::downgrade(&draw_depths),
             hatches,
             wipeout_hatches,
             images,

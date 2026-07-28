@@ -200,7 +200,10 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].scene.document.layers.remove(&src);
-                self.tabs[i].scene.bump_geometry();
+                self.tabs[i].scene.invalidate_dependency_index();
+                self.tabs[i]
+                    .scene
+                    .invalidate_layer_dependencies(std::slice::from_ref(&dst));
                 self.tabs[i].dirty = true;
                 self.refresh_layer_panel();
                 self.command_line.push_output(&format!(
