@@ -7,7 +7,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
-pub(super) async fn parse_document(name: &str, bytes: Vec<u8>) -> Result<CadDocument, String> {
+pub(super) async fn parse_document(name: &str, bytes: &[u8]) -> Result<CadDocument, String> {
     let options = WorkerOptions::new();
     options.set_type(WorkerType::Module);
     let worker = Worker::new_with_options("ocs-parse-worker.js", &options).map_err(js_error)?;
@@ -55,7 +55,7 @@ pub(super) async fn parse_document(name: &str, bytes: Vec<u8>) -> Result<CadDocu
         &JsValue::from_str(name),
     )
     .map_err(js_error)?;
-    let input = Uint8Array::from(bytes.as_slice());
+    let input = Uint8Array::from(bytes);
     Reflect::set(&payload, &JsValue::from_str("bytes"), &input.buffer()).map_err(js_error)?;
     let transfer = Array::new();
     transfer.push(&input.buffer());

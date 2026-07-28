@@ -366,8 +366,8 @@ impl OpenCADStudio {
         self.plot_dialog = cfg.plot;
     }
 
-    /// Write the config to disk only when it changed since the last write, so a
-    /// toggle persists immediately without thrashing the file.
+    /// Write the config only when it changed since the last write, so a toggle
+    /// persists immediately without thrashing native or browser storage.
     pub(in crate::app) fn save_config(&mut self) {
         let cur = self.current_config();
         if self.last_saved_config.as_ref() != Some(&cur) {
@@ -423,13 +423,24 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// resolved (deleted since) matches nothing and falls through to the normal
     /// open, which reports the miss.
     pub(in crate::app) fn tab_showing(&self, path: &std::path::Path) -> Option<usize> {
-        let want = std::fs::canonicalize(path).ok()?;
-        self.tabs.iter().position(|t| {
-            t.current_path
-                .as_deref()
-                .and_then(|p| std::fs::canonicalize(p).ok())
-                .is_some_and(|p| p == want)
-        })
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self
+                .tabs
+                .iter()
+                .position(|tab| tab.current_path.as_deref() == Some(path));
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let want = std::fs::canonicalize(path).ok()?;
+            self.tabs.iter().position(|t| {
+                t.current_path
+                    .as_deref()
+                    .and_then(|p| std::fs::canonicalize(p).ok())
+                    .is_some_and(|p| p == want)
+            })
+        }
     }
 
     /// Start the next drawing a second launch handed us, if any.
@@ -1632,12 +1643,33 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.stamp_header_sysvars(i);
                     self.sync_truck_solids_to_acis(i);
                     self.stamp_thumbnail(i, version);
-                    let saved =
-                        match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
+                    let mut recent_task = Task::none();
+                    let saved = match crate::io::save_to_bytes(
+                        &self.tabs[i].scene.document,
+                        ext,
+                        version,
+                    ) {
                         Ok(bytes) => {
                             crate::sys::download_bytes(&filename, &bytes);
+                            let cache_name = std::path::Path::new(&filename)
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| filename.clone());
+                            let path = std::path::PathBuf::from(cache_name);
+                            self.tabs[i].current_path = Some(path.clone());
                             self.tabs[i].scene.document.version = version;
                             self.tabs[i].dirty = false;
+                            recent_task = Task::perform(
+                                async move {
+                                    crate::io::web_recent::store(
+                                        &path.to_string_lossy(),
+                                        &bytes,
+                                    )
+                                    .await
+                                    .map(|_| path)
+                                },
+                                Message::WebRecentStored,
+                            );
                             self.command_line.push_output(&format!("Saved: {filename}"));
                             true
                         }
@@ -1654,14 +1686,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             {
                                 let cont = self.update(Message::TabClose(idx));
                                 let rest = self.continue_tab_close_queue();
-                                return Task::batch([close, cont, rest]);
+                                return Task::batch([close, recent_task, cont, rest]);
                             }
                         } else if self.pending_close.is_some() {
                             let retry = self.open_unsaved_dialog_window();
-                            return Task::batch([close, retry]);
+                            return Task::batch([close, recent_task, retry]);
                         }
                     }
-                    close
+                    Task::batch([close, recent_task])
                 }
     }
 

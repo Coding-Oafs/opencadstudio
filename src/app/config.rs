@@ -1,8 +1,9 @@
-//! Consolidated user configuration — one grouped JSON file
-//! (`<config>/OpenCADStudio/settings.json`) holding every app preference except
-//! the command aliases (which stay in the hand-editable `ocad.pgp`). Serialized
-//! via serde so the file is structured and grouped, replacing the former
-//! scattered flat stores (`settings.txt` / `recent.txt` / `recent_limit.txt` /
+//! Consolidated user configuration. Native builds use one grouped JSON file
+//! (`<config>/OpenCADStudio/settings.json`); web builds keep the same JSON in
+//! `localStorage`. It holds every app preference except the command aliases,
+//! which use native `ocad.pgp` or a separate web storage key. Serialized via
+//! serde so the data is structured and grouped, replacing the former scattered
+//! flat stores (`settings.txt` / `recent.txt` / `recent_limit.txt` /
 //! `statusbar.txt` / `ribbon.txt` / `plot.txt`).
 
 use serde::{Deserialize, Serialize};
@@ -209,28 +210,49 @@ pub struct RibbonConfig {
 
 impl AppConfig {
     /// Read the saved config, or all-defaults when the file is missing or
-    /// unreadable (fresh install / wasm). Unknown or missing fields fall back to
-    /// their section defaults via `#[serde(default)]`.
+    /// unreadable. Unknown or missing fields fall back to their section defaults
+    /// via `#[serde(default)]`.
     pub fn load() -> Self {
-        config_path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|body| serde_json::from_str(&body).ok())
+        #[cfg(not(target_arch = "wasm32"))]
+        let body = config_path().and_then(|p| std::fs::read_to_string(p).ok());
+
+        #[cfg(target_arch = "wasm32")]
+        let body = web_sys::window()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(WEB_CONFIG_KEY).ok().flatten());
+
+        body.and_then(|body| serde_json::from_str(&body).ok())
             .unwrap_or_default()
     }
 
-    /// Persist the config as pretty JSON. Best-effort; silent on failure
-    /// (read-only home, full disk, wasm — where `config_dir` is `None`).
+    /// Persist the config as JSON. Best-effort; silent on unavailable or
+    /// read-only storage.
     pub fn save(&self) {
-        let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(path) = config_path() else { return };
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Ok(json) = serde_json::to_string_pretty(self) {
+                let _ = std::fs::write(path, json);
+            }
         }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, json);
+
+        #[cfg(target_arch = "wasm32")]
+        if let (Some(storage), Ok(json)) = (
+            web_sys::window().and_then(|window| window.local_storage().ok().flatten()),
+            serde_json::to_string(self),
+        ) {
+            let _ = storage.set_item(WEB_CONFIG_KEY, &json);
         }
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+const WEB_CONFIG_KEY: &str = "opencadstudio.settings";
+
+#[cfg(not(target_arch = "wasm32"))]
 fn config_path() -> Option<std::path::PathBuf> {
     Some(crate::config::config_dir()?.join("settings.json"))
 }

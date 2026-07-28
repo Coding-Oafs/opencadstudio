@@ -82,6 +82,70 @@ jobs:
             > dist/supporters.json || echo '[]' > dist/supporters.json
           echo "supporters: $(jq 'length' dist/supporters.json)"
 
+      # Browsers cannot reliably fetch YouTube playlist/oEmbed responses because
+      # of CORS. Build a same-origin listing and thumbnail directory for the
+      # Start page. Keep the checked-in snapshot if YouTube is temporarily
+      # unavailable during deployment.
+      - name: Generate videos.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import shutil
+          import urllib.request
+          from pathlib import Path
+
+          playlist = "https://youtube.com/playlist?list=PLZq_TEkIFh9bAnoOX1HiCAunm3anZDBOl"
+          fallback = Path("web/videos.json")
+          output = Path("dist/videos.json")
+          thumbs = Path("dist/video_thumbs")
+          thumbs.mkdir(parents=True, exist_ok=True)
+          request_headers = {"User-Agent": "Mozilla/5.0"}
+
+          def fetch(url):
+              request = urllib.request.Request(url, headers=request_headers)
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  return response.read()
+
+          try:
+              page = fetch(playlist).decode("utf-8", errors="replace")
+              ids = []
+              for video_id in re.findall(r'"videoId":"([^"]+)"', page):
+                  if len(video_id) == 11 and video_id not in ids:
+                      ids.append(video_id)
+                  if len(ids) >= 50:
+                      break
+
+              entries = []
+              for video_id in ids:
+                  try:
+                      metadata = json.loads(fetch(
+                          "https://www.youtube.com/oembed"
+                          f"?url=https://youtu.be/{video_id}&format=json"
+                      ))
+                      title = str(metadata.get("title", "")).strip()
+                      if not title:
+                          continue
+                      entries.append({"id": video_id, "title": title})
+                      (thumbs / f"{video_id}.jpg").write_bytes(fetch(
+                          f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
+                      ))
+                  except Exception as error:
+                      print(f"video {video_id}: {error}")
+
+              if not entries:
+                  raise RuntimeError("playlist returned no usable videos")
+              output.write_text(
+                  json.dumps(list(reversed(entries)), ensure_ascii=False),
+                  encoding="utf-8",
+              )
+          except Exception as error:
+              print(f"video snapshot fallback: {error}")
+              shutil.copyfile(fallback, output)
+
+          print(f"videos: {len(json.loads(output.read_text(encoding='utf-8')))}")
+          PY
+
       # GitHub's Discussions API is authenticated GraphQL. Generate a public,
       # token-free snapshot next to the web app; discussion activity (including
       # pin/unpin) triggers this workflow so pinned entries stay at the top.

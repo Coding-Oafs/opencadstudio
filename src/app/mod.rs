@@ -1471,6 +1471,9 @@ pub enum Message {
     /// running but its result is discarded.
     OpenCancel,
     FileOpened(Result<(String, PathBuf, CadDocument, crate::scene::DerivedCaches), String>),
+    /// Web: an asynchronous OPFS copy written after Save is ready for recents.
+    #[cfg(target_arch = "wasm32")]
+    WebRecentStored(Result<PathBuf, String>),
     SaveFile,
     SaveAs,
     // ── Custom Save-As dialog ─────────────────────────────────────────────
@@ -3016,12 +3019,17 @@ impl OpenCADStudio {
             crate::patreon::fetch_patrons_web(),
             Message::PatronsFetched,
         );
+        s.videos_loading = true;
+        let videos = Task::perform(
+            crate::videos::fetch_playlist_web(),
+            Message::VideosFetched,
+        );
         s.discussions_loading = true;
         let discussions = Task::perform(
             crate::discussions::fetch_discussions_web(),
             Message::DiscussionsFetched,
         );
-        (s, Task::batch([focus, patrons, discussions]))
+        (s, Task::batch([focus, patrons, videos, discussions]))
     }
 }
 

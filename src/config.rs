@@ -2,11 +2,13 @@
 //! files, status-bar layout, ribbon collapse mode, …). Everything lives under
 //! `<platform-config>/OpenCADStudio` so the app keeps a single tidy folder.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 /// The OpenCADStudio config directory (not created). `None` when the platform
 /// config base can't be resolved (e.g. no `HOME`). Callers `join` their own
 /// file name onto it and `create_dir_all` its parent before writing.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn config_dir() -> Option<PathBuf> {
     let base: PathBuf = if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA").map(PathBuf::from)?

@@ -22,6 +22,8 @@ pub mod paper_sizes;
 pub mod thumbnail;
 #[cfg(target_arch = "wasm32")]
 mod web_worker;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod web_recent;
 
 use crate::scene::DerivedCaches;
 use acadrust::entities::EntityType;
@@ -224,8 +226,45 @@ pub async fn pick_and_load_web(
     let name = handle.file_name();
     progress.set(crate::app::OPEN_PHASE_READING, 500, 1, 2);
     let bytes = handle.read().await;
+    let parsed = load_web_bytes(&name, &bytes, progress.clone());
+    let cached = web_recent::store(&name, &bytes);
+    let (result, cache_result) = iced::futures::future::join(parsed, cached).await;
+    if result.is_err() && cache_result.is_ok() {
+        let _ = web_recent::remove(&name).await;
+    }
+    result
+}
+
+/// Reopen a browser-private recent copy without showing the file picker.
+#[cfg(target_arch = "wasm32")]
+pub async fn open_recent_web(
+    path: PathBuf,
+    progress: Arc<OpenProgressState>,
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| "Recent drawing has no file name".to_string())?;
+    let bytes = web_recent::read(&name)
+        .await
+        .map_err(|error| format!("Recent copy unavailable for \"{name}\": {error}"))?;
+    progress.set(
+        crate::app::OPEN_PHASE_READING,
+        1000,
+        bytes.len(),
+        bytes.len(),
+    );
+    load_web_bytes(&name, &bytes, progress).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn load_web_bytes(
+    name: &str,
+    bytes: &[u8],
+    progress: Arc<OpenProgressState>,
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
     progress.set(crate::app::OPEN_PHASE_PARSING, 1000, 0, 1);
-    let mut doc = match web_worker::parse_document(&name, bytes).await {
+    let mut doc = match web_worker::parse_document(name, bytes).await {
         Ok(document) => document,
         Err(error) => return Err(format!("Web parser worker: {error}")),
     };
@@ -240,8 +279,8 @@ pub async fn pick_and_load_web(
     let mut caches = crate::scene::build_derived_caches(&doc);
     caches.corrupt_dropped = dropped;
     progress.set(crate::app::OPEN_PHASE_FINALIZING, 9900, 1, 1);
-    let path = PathBuf::from(&name);
-    Ok((name, path, doc, caches))
+    let path = PathBuf::from(name);
+    Ok((name.to_string(), path, doc, caches))
 }
 
 /// Parse a CAD document from in-memory bytes, choosing the format from

@@ -290,18 +290,45 @@ impl OpenCADStudio {
             ),
 
             Message::OpenRecent(path) => {
-                // Recents are read from disk every save → the path may be
-                // stale. Skip silently if the file no longer exists; the
-                // entry stays in the list so the user can clean it up.
-                match std::fs::metadata(&path) {
-                    Ok(m) => self.update(Message::OpenPathPicked(Some((path, m.len())))),
-                    Err(_) => {
-                        self.command_line.push_error(&format!(
-                            "Recent file no longer exists: {}",
-                            path.display()
-                        ));
-                        Task::none()
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // Recents are read from disk every save → the path may be
+                    // stale. Skip silently if the file no longer exists; the
+                    // entry stays in the list so the user can clean it up.
+                    return match std::fs::metadata(&path) {
+                        Ok(m) => self.update(Message::OpenPathPicked(Some((path, m.len())))),
+                        Err(_) => {
+                            self.command_line.push_error(&format!(
+                                "Recent file no longer exists: {}",
+                                path.display()
+                            ));
+                            Task::none()
+                        }
+                    };
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(idx) = self.tab_showing(&path) {
+                        return self.update(Message::TabSwitch(idx));
                     }
+                    let name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                    let state = std::sync::Arc::new(crate::io::OpenProgressState::new(
+                        crate::app::OPEN_PHASE_READING,
+                    ));
+                    self.opening = Some(crate::app::OpenProgress {
+                        name,
+                        size_bytes: 0,
+                        state: state.clone(),
+                        started: Instant::now(),
+                    });
+                    Task::perform(
+                        crate::io::open_recent_web(path, state),
+                        Message::FileOpened,
+                    )
                 }
             }
 
@@ -547,6 +574,17 @@ impl OpenCADStudio {
                 // behind it.
                 self.drain_pending_open()
             }
+
+            #[cfg(target_arch = "wasm32")]
+            Message::WebRecentStored(result) => match result {
+                Ok(path) => self.push_recent(path),
+                Err(error) => {
+                    self.command_line.push_error(&format!(
+                        "Saved download, but recent copy could not be stored: {error}"
+                    ));
+                    Task::none()
+                }
+            },
 
             Message::ImagePick => {
                 Task::perform(crate::io::pick_image_file(), Message::ImagePickResult)

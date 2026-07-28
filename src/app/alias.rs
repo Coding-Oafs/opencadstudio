@@ -15,11 +15,12 @@
 //!
 //! An alias is the token left of the comma; the command is the token right of
 //! it, with an optional leading `*`. Both are matched case-insensitively and
-//! stored uppercased. Stored next to the other per-user config under
-//! `crate::config::config_dir()`, so no serialization crate is pulled in.
+//! stored uppercased. Native builds use `ocad.pgp`; web builds store the same
+//! PGP text in `localStorage`.
 
 use super::OpenCADStudio;
 use rustc_hash::FxHashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 /// The shipped default alias file, embedded at compile time. Its aliases live in
@@ -31,10 +32,14 @@ use std::path::PathBuf;
 const DEFAULT_ALIASES_PGP: &str = include_str!("../../assets/ocad.pgp");
 
 /// Path to the user's alias file, `<config>/ocad.pgp`. `None` when the platform
-/// config base can't be resolved (headless, no `HOME`, wasm).
+/// config base can't be resolved (headless, no `HOME`).
+#[cfg(not(target_arch = "wasm32"))]
 fn alias_file_path() -> Option<PathBuf> {
     Some(crate::config::config_dir()?.join("ocad.pgp"))
 }
+
+#[cfg(target_arch = "wasm32")]
+const WEB_ALIAS_KEY: &str = "opencadstudio.aliases";
 
 /// Parse `.pgp` text into an `alias → command` map, both uppercased. Skips blank
 /// lines and `;` comments; tolerates a leading `*` on the command and arbitrary
@@ -81,38 +86,63 @@ fn default_map() -> FxHashMap<String, String> {
     parse_pgp(DEFAULT_ALIASES_PGP)
 }
 
-/// Load the alias table at boot. Reads the user's `aliases.pgp`; if it is
-/// missing, writes the shipped default file verbatim (preserving its comments
-/// and layout) so the user has a well-formatted starting point to edit, then
-/// parses it. Falls back to the embedded defaults when the file can't be read
-/// or written (read-only home, wasm — where it silently no-ops).
+/// Load the alias table at boot. Native reads `ocad.pgp`; web reads the same
+/// text from `localStorage`. Missing or unavailable storage falls back to the
+/// embedded defaults.
 pub(super) fn load_aliases() -> FxHashMap<String, String> {
-    match alias_file_path() {
-        Some(path) => match std::fs::read_to_string(&path) {
-            Ok(body) => parse_pgp(&body),
-            Err(_) => {
-                // No file yet — copy the shipped default file, best-effort.
-                if let Some(dir) = path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match alias_file_path() {
+            Some(path) => match std::fs::read_to_string(&path) {
+                Ok(body) => parse_pgp(&body),
+                Err(_) => {
+                    // No file yet — copy the shipped default file, best-effort.
+                    if let Some(dir) = path.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    let _ = std::fs::write(&path, DEFAULT_ALIASES_PGP);
+                    default_map()
                 }
-                let _ = std::fs::write(&path, DEFAULT_ALIASES_PGP);
-                default_map()
-            }
-        },
-        None => default_map(),
+            },
+            None => default_map(),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(WEB_ALIAS_KEY).ok().flatten())
+            .map(|body| parse_pgp(&body))
+            .unwrap_or_else(default_map)
     }
 }
 
-/// Persist the alias table to `aliases.pgp`. Best-effort; returns `Ok` (no-op)
-/// when there is no config dir (wasm/headless).
+/// Persist the alias table to native `ocad.pgp` or web `localStorage`.
 pub(super) fn save_map(map: &FxHashMap<String, String>) -> std::io::Result<()> {
-    let Some(path) = alias_file_path() else {
-        return Ok(());
-    };
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(path) = alias_file_path() else {
+            return Ok(());
+        };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        return std::fs::write(path, to_pgp(map));
     }
-    std::fs::write(path, to_pgp(map))
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(storage) =
+            web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+        else {
+            return Ok(());
+        };
+        storage
+            .set_item(WEB_ALIAS_KEY, &to_pgp(map))
+            .map_err(|_| std::io::Error::other("browser alias storage unavailable"))?;
+        return Ok(());
+    }
 }
 
 impl OpenCADStudio {
