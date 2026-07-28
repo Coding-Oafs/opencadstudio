@@ -111,6 +111,46 @@ impl Scene {
         }
     }
 
+    /// Fit model-space bounds into the active floating viewport without moving
+    /// the surrounding paper-space camera.
+    pub fn fit_active_viewport_to_bounds(
+        &mut self,
+        min: glam::Vec3,
+        max: glam::Vec3,
+    ) -> bool {
+        let Some(viewport_handle) = self.active_viewport else {
+            return false;
+        };
+        let (width, height, locked) = match self.document.get_entity(viewport_handle) {
+            Some(acadrust::EntityType::Viewport(viewport)) => {
+                (viewport.width, viewport.height, viewport.status.locked)
+            }
+            _ => return false,
+        };
+        if locked {
+            return false;
+        }
+        let Some(mut camera) = self.camera_for_viewport(viewport_handle) else {
+            return false;
+        };
+        camera.fit_to_bounds(min, max, (width / height.max(1e-9)) as f32);
+        if let Some(acadrust::EntityType::Viewport(viewport)) =
+            self.document.get_entity_mut(viewport_handle)
+        {
+            viewport.view_target.x = camera.target.x;
+            viewport.view_target.y = camera.target.y;
+            viewport.view_target.z = camera.target.z;
+            viewport.view_center.x = 0.0;
+            viewport.view_center.y = 0.0;
+            viewport.view_height = camera.ortho_size() as f64 * 2.0;
+            if viewport.view_height > 1e-9 {
+                viewport.custom_scale = viewport.height / viewport.view_height;
+            }
+        }
+        self.camera_generation += 1;
+        true
+    }
+
     /// Pan the active viewport's model-space view by `(screen_dx, screen_dy)` pixels.
     /// The delta is converted to model-space units using the camera and viewport scale.
     /// No-op when there is no active viewport.

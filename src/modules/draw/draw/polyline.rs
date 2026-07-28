@@ -362,6 +362,13 @@ impl CadCommand for PlineCommand {
         }
     }
 
+    fn on_space_change(&mut self) -> CmdResult {
+        match self.live_handle {
+            Some(handle) => CmdResult::FinalizeLiveEntity(handle),
+            None => CmdResult::Cancel,
+        }
+    }
+
     fn wants_text_input(&self) -> bool {
         // Accept A / L / C once we have at least the first point.
         !self.vertices.is_empty()

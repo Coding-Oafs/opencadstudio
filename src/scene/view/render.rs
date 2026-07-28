@@ -1991,7 +1991,21 @@ impl Scene {
         // per-frame buffer so the (potentially huge) base buffer stays resident
         // and unchanged while a command preview or grip drag is live.
         let all_wires = other_arc;
-        let preview_wires = if self.interim_wire.is_none() && self.preview_wires.is_empty() {
+        // A live overlay belongs to exactly one drawing context. In a paper
+        // layout, feeding model-space preview coordinates to the full-canvas
+        // sheet pass draws a second copy outside the floating viewport (#540).
+        // The inverse is equally wrong: paper-space coordinates must not be
+        // interpreted by a content viewport's model camera.
+        let show_live_overlay = if self.current_layout == "Model" {
+            inst.active
+        } else if let Some(active_viewport) = self.active_viewport {
+            !inst.paper_sheet && inst.handle == active_viewport
+        } else {
+            inst.paper_sheet
+        };
+        let preview_wires = if !show_live_overlay
+            || (self.interim_wire.is_none() && self.preview_wires.is_empty())
+        {
             Arc::new(Vec::new())
         } else {
             let mut v: Vec<WireModel> = Vec::with_capacity(self.preview_wires.len() + 1);
@@ -2150,7 +2164,9 @@ impl Scene {
                     pv.extend_from_slice(&w.text_verts);
                 }
             }
-            pv.extend_from_slice(&self.preview_text);
+            if show_live_overlay {
+                pv.extend_from_slice(&self.preview_text);
+            }
             Arc::new(pv)
         };
         // Stable per-viewport identity (tagged so tile / sheet / content /

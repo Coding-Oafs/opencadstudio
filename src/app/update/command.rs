@@ -524,46 +524,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.command_line.input.clear();
                     return Task::none();
                 }
-                // A hot grip (click-move-click placement in progress) ends on
-                // Escape, leaving the entity at its last previewed position.
-                if self.tabs[self.active_tab].active_grip.take().is_some() {
-                    // An Add-Leader arrow being placed: Esc removes it again.
-                    if let Some((h, gid)) = self.grip_add_provisional.take() {
-                        let i = self.active_tab;
-                        use crate::entities::traits::EntityTypeOps;
-                        if let Some(e) = self.tabs[i].scene.document.get_entity_mut(h) {
-                            e.apply_grip_menu(
-                                gid,
-                                crate::scene::model::object::GripMenuAction::RemoveLeader,
-                            );
-                        }
-                        self.tabs[i]
-                            .scene
-                            .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
-                        self.refresh_selected_grips();
-                    }
-                    // Cancel an in-progress grip drag: restore the edited
-                    // entity from its pre-drag backup, un-hide it, re-tessellate
-                    // once, and drop the preview.
-                    if let Some(h) = self.grip_preview_handle.take() {
-                        let i = self.active_tab;
-                        self.grip_text_verts = Vec::new();
-                        self.grip_text_slide = false;
-                        if let Some(orig) = self.grip_original.take() {
-                            if let Some(e) = self.tabs[i].scene.document.get_entity_mut(h) {
-                                *e = orig;
-                            }
-                        }
-                        self.tabs[i].scene.preview_hidden.remove(&h);
-                        self.tabs[i].scene.clear_preview_wire();
-                        // Geometry restored to the backup — re-tessellate just it.
-                        self.tabs[i]
-                            .scene
-                            .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
-                        self.refresh_selected_grips();
-                    }
-                    self.tabs[self.active_tab].snap_result = None;
-                    self.refresh_properties();
+                // A hot grip (click-move-click placement in progress) rolls
+                // back to its pre-drag image on Escape.
+                if self.cancel_active_grip_edit() {
                     return Task::none();
                 }
                 // Cancel layout rename first, then fall through.

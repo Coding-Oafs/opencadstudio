@@ -848,6 +848,9 @@ pub enum CmdResult {
     ReplaceMany(Vec<(Handle, Vec<EntityType>)>, Vec<EntityType>),
     /// Cancel: discard any preview and end the command.
     Cancel,
+    /// Cancel because the active drawing space changed. Cleanup is identical
+    /// to `Cancel`, but the host reports the context change explicitly.
+    CancelForSpaceChange,
     /// End the selection-gather phase and re-dispatch the named command
     /// with the gathered handles installed as the active scene selection.
     Relaunch(String, Vec<Handle>),
@@ -1276,6 +1279,15 @@ pub trait CadCommand: Send {
     /// Called when the user presses Escape (cancel).
     #[allow(dead_code)]
     fn on_escape(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+
+    /// Abort because the active drawing coordinate space is about to change.
+    /// Unlike `on_escape`, the default never interprets cancellation as
+    /// "finish with the points collected so far" (SPLINE does that for a
+    /// deliberate Escape). Commands owning a live document entity can
+    /// override this to close that entity's deferred history safely.
+    fn on_space_change(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
 

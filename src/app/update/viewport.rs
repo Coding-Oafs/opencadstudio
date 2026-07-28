@@ -1488,7 +1488,7 @@ impl OpenCADStudio {
         Task::none()
     }
 
-    pub(super) fn on_viewport_exit(&mut self) -> Task<Message> {
+    pub(crate) fn on_viewport_exit(&mut self) -> Task<Message> {
         let i = self.active_tab;
         let mut sel = self.tabs[i].scene.selection.borrow_mut();
         sel.left_down = false;
@@ -3676,6 +3676,24 @@ impl OpenCADStudio {
     }
 
     pub(crate) fn on_layout_switch(&mut self, name: String) -> Task<Message> {
+        self.on_layout_switch_inner(name, false)
+    }
+
+    /// MVIEW's "Insert view > New" flow deliberately visits Model space to
+    /// define a view and then returns to its paper layout. This is the only
+    /// layout transition allowed to preserve an active command.
+    pub(crate) fn on_layout_switch_preserving_command(
+        &mut self,
+        name: String,
+    ) -> Task<Message> {
+        self.on_layout_switch_inner(name, true)
+    }
+
+    fn on_layout_switch_inner(
+        &mut self,
+        name: String,
+        preserve_active_command: bool,
+    ) -> Task<Message> {
         let i = self.active_tab;
         if self.tabs[i].is_start {
             self.command_line
@@ -3693,6 +3711,25 @@ impl OpenCADStudio {
         let perf = crate::perf::enabled();
         let perf_total = Instant::now();
         let perf_from = self.tabs[i].scene.current_layout.clone();
+        let context_changed =
+            self.tabs[i].scene.current_layout != name || self.tabs[i].scene.active_viewport.is_some();
+        let preserve_active_command = preserve_active_command
+            && self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .is_some_and(|command| command.name() == "MVIEW");
+        if context_changed {
+            if preserve_active_command {
+                // MVIEW keeps its command-owned step data, but all host-owned
+                // cursor/snap/dynamic-input state belongs to the old space.
+                self.reset_space_interaction_state();
+            }
+        }
+        let cancel_task = if context_changed && !preserve_active_command {
+            self.cancel_active_command_for_space_change()
+        } else {
+            Task::none()
+        };
         let going_to_paper = name != "Model";
         // Persist the camera of the layout we're leaving BEFORE switching
         // so returning to it restores where the user left off (the
@@ -3715,6 +3752,9 @@ impl OpenCADStudio {
         self.tabs[i].refresh_active_ucs();
         self.tabs[i].scene.restore_saved_camera();
         self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+        // `deselect_all` invalidates the scene highlight, but grips and the
+        // Properties panel are separate caches owned by the app.
+        self.refresh_properties();
         // Grid/snap are per-view: load the layout we just entered (its
         // sheet viewport in paper space, the model tile in model space)
         // so model and each layout keep independent grid state.
@@ -3744,7 +3784,10 @@ impl OpenCADStudio {
                 self.tabs[i].scene.geometry_epoch,
             );
         }
-        Task::none()
+        if context_changed {
+            self.sync_dyn_fields();
+        }
+        cancel_task
     }
 
     pub(super) fn on_layout_create(&mut self) -> Task<Message> {
@@ -3754,6 +3797,7 @@ impl OpenCADStudio {
                 .push_info("Open or create a drawing to add a layout.");
             return Task::none();
         }
+        let cancel_task = self.cancel_active_command_for_space_change();
         // Find a unique name (e.g. Layout2, Layout3, ...).
         let existing = self.tabs[i].scene.layout_names();
         let mut idx = existing.len();
@@ -3779,22 +3823,22 @@ impl OpenCADStudio {
                         }
                     }
                 }
-                self.tabs[i].scene.set_current_layout(new_name.clone());
                 // Safety net — `add_layout` already creates the overall
                 // sheet viewport; this covers any path that doesn't.
                 self.tabs[i].scene.ensure_sheet_viewport(&new_name);
-                self.tabs[i].scene.deselect_all();
+                let switch_task = self.on_layout_switch(new_name.clone());
                 self.tabs[i].scene.fit_all();
                 self.command_line.push_output(&format!(
                     "Layout \"{new_name}\" created — use MVIEW to add a viewport"
                 ));
                 self.tabs[i].dirty = true;
+                return Task::batch([cancel_task, switch_task]);
             }
             Err(e) => self
                 .command_line
                 .push_error(&format!("Failed to create layout: {e}")),
         }
-        Task::none()
+        cancel_task
     }
 
     pub(super) fn on_layout_rename_commit(&mut self) -> Task<Message> {

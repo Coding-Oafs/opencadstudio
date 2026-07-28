@@ -3393,14 +3393,25 @@ impl OpenCADStudio {
 
             Message::LayoutDelete(name) => {
                 let i = self.active_tab;
+                let deleting_current = self.tabs[i].scene.current_layout == name;
+                let cancel_task = if deleting_current {
+                    self.cancel_active_command_for_space_change()
+                } else {
+                    Task::none()
+                };
                 self.push_undo_snapshot(i, "LAYOUT DEL");
+                let switch_task = if deleting_current {
+                    self.on_layout_switch("Model".to_string())
+                } else {
+                    Task::none()
+                };
                 if self.tabs[i].scene.delete_layout(&name) {
                     self.layout_rename_state = None;
                     self.command_line
                         .push_output(&format!("Layout \"{name}\" silindi"));
                     self.tabs[i].dirty = true;
                 }
-                Task::none()
+                Task::batch([cancel_task, switch_task])
             }
 
             Message::LayoutRenameStart(name) => {
@@ -3520,20 +3531,28 @@ impl OpenCADStudio {
                 if name == "Model" {
                     self.command_line
                         .push_error("Cannot delete the Model layout.");
+                    Task::none()
                 } else {
+                    let deleting_current = self.tabs[i].scene.current_layout == name;
+                    let cancel_task = if deleting_current {
+                        self.cancel_active_command_for_space_change()
+                    } else {
+                        Task::none()
+                    };
                     self.push_undo_snapshot(i, "LAYOUT DELETE");
+                    let switch_task = if deleting_current {
+                        self.on_layout_switch("Model".to_string())
+                    } else {
+                        Task::none()
+                    };
                     self.tabs[i].scene.delete_layout(&name);
                     self.tabs[i].dirty = true;
-                    // Switch to Model if active layout was deleted.
-                    if self.tabs[i].scene.current_layout == name {
-                        self.tabs[i].scene.set_current_layout("Model".to_string());
-                    }
                     self.layout_manager_selected = "Model".to_string();
                     self.layout_manager_rename_buf = String::new();
                     self.command_line
                         .push_output(&format!("Layout '{name}' deleted."));
+                    Task::batch([cancel_task, switch_task])
                 }
-                Task::none()
             }
             Message::LayoutManagerMoveLeft => {
                 let i = self.active_tab;
@@ -3571,12 +3590,13 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::LayoutManagerSetCurrent => {
-                let i = self.active_tab;
                 let name = self.layout_manager_selected.clone();
-                self.tabs[i].scene.set_current_layout(name.clone());
-                self.command_line
-                    .push_output(&format!("Switched to layout '{name}'."));
-                Task::none()
+                let task = self.on_layout_switch(name.clone());
+                if self.tabs[self.active_tab].scene.current_layout == name {
+                    self.command_line
+                        .push_output(&format!("Switched to layout '{name}'."));
+                }
+                task
             }
 
             Message::SetTheme(theme) => {
@@ -4084,8 +4104,17 @@ impl OpenCADStudio {
 
             Message::EnterViewport(handle) => {
                 let i = self.active_tab;
+                let context_changed = self.tabs[i].scene.active_viewport != Some(handle);
+                let cancel_task = if context_changed {
+                    self.cancel_active_command_for_space_change()
+                } else {
+                    Task::none()
+                };
                 let perf = crate::perf::enabled();
                 let total = Instant::now();
+                if context_changed {
+                    self.tabs[i].scene.clear_preview_wire();
+                }
                 // Clear paper-space selection before entering model space.
                 self.tabs[i].scene.deselect_all();
                 self.tabs[i].scene.active_viewport = Some(handle);
@@ -4119,11 +4148,23 @@ impl OpenCADStudio {
                         handle.value(),
                     );
                 }
-                Task::none()
+                if context_changed {
+                    self.sync_dyn_fields();
+                }
+                cancel_task
             }
 
             Message::ExitViewport => {
                 let i = self.active_tab;
+                let context_changed = self.tabs[i].scene.active_viewport.is_some();
+                let cancel_task = if context_changed {
+                    self.cancel_active_command_for_space_change()
+                } else {
+                    Task::none()
+                };
+                if context_changed {
+                    self.tabs[i].scene.clear_preview_wire();
+                }
                 // Clear model-space selection before returning to paper space.
                 self.tabs[i].scene.deselect_all();
                 self.tabs[i].scene.active_viewport = None;
@@ -4133,7 +4174,10 @@ impl OpenCADStudio {
                 self.tabs[i].refresh_active_ucs();
                 self.refresh_properties();
                 self.command_line.push_output("PSPACE");
-                Task::none()
+                if context_changed {
+                    self.sync_dyn_fields();
+                }
+                cancel_task
             }
 
             Message::MspaceCommand => {

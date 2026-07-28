@@ -4,6 +4,133 @@ use acadrust::Handle;
 use iced::Task;
 
 impl OpenCADStudio {
+    /// Drop cursor-relative state that was computed in the drawing space being
+    /// left. This is also used by MVIEW, whose command object survives its
+    /// intentional paper/model round-trip while its old-space overlays cannot.
+    pub(super) fn reset_space_interaction_state(&mut self) {
+        let i = self.active_tab;
+        self.tabs[i].scene.clear_preview_wire();
+        self.tabs[i].snap_result = None;
+        self.last_point = None;
+        self.snapper.from_point = None;
+        self.snapper.clear_tracking();
+        self.otrack_active = None;
+        self.axis_lock_dir = None;
+        self.dyn_user_reshaped = false;
+        self.grip_hover = None;
+        self.grip_popup = None;
+        self.grip_pending = None;
+        self.visibility_popup = None;
+        self.hover_dwell = None;
+        self.ucs_grip_drag = None;
+        self.ucs_icon_selected = false;
+        self.ucs_icon_hover = false;
+        self.tabs[i].pan_mode = false;
+        let _ = self.on_viewport_exit();
+    }
+
+    /// Roll a hot grip back to its pre-drag image and remove every grip-owned
+    /// overlay. Shared by Escape and drawing-space transitions.
+    pub(super) fn cancel_active_grip_edit(&mut self) -> bool {
+        let i = self.active_tab;
+        let had_grip = self.tabs[i].active_grip.take().is_some()
+            || self.grip_add_provisional.is_some()
+            || self.grip_preview_handle.is_some();
+        if !had_grip {
+            return false;
+        }
+
+        // An Add-Leader arrow being placed is still provisional.
+        if let Some((handle, grip_id)) = self.grip_add_provisional.take() {
+            use crate::entities::traits::EntityTypeOps;
+            if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                entity.apply_grip_menu(
+                    grip_id,
+                    crate::scene::model::object::GripMenuAction::RemoveLeader,
+                );
+            }
+            self.tabs[i]
+                .scene
+                .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
+        }
+
+        if let Some(handle) = self.grip_preview_handle.take() {
+            if let Some(original) = self.grip_original.take() {
+                if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                    *entity = original;
+                }
+            }
+            self.tabs[i].scene.preview_hidden.remove(&handle);
+            self.tabs[i]
+                .scene
+                .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
+        } else {
+            self.grip_original = None;
+        }
+
+        self.grip_text_verts.clear();
+        self.grip_text_slide = false;
+        self.tabs[i].scene.clear_preview_wire();
+        self.tabs[i].snap_result = None;
+        self.refresh_selected_grips();
+        self.refresh_properties();
+        true
+    }
+
+    /// End an interactive command before its drawing coordinate context
+    /// changes. This is a full interaction boundary, not only an `active_cmd`
+    /// check: grip drags, suspended editor commands, snaps, tracking, dynamic
+    /// input and pointer gestures all carry coordinates from the old space.
+    pub(super) fn cancel_active_command_for_space_change(&mut self) -> Task<Message> {
+        let i = self.active_tab;
+        let mut tasks = Vec::new();
+        let mut cancellation_reported = false;
+
+        if let Some(result) = self.tabs[i]
+            .active_cmd
+            .as_mut()
+            .map(|command| command.on_space_change())
+        {
+            let (result, message_pending) = match result {
+                CmdResult::Cancel => (CmdResult::CancelForSpaceChange, false),
+                other => (other, true),
+            };
+            tasks.push(self.apply_cmd_result(result));
+
+            // `on_space_change` must be terminal. Force a plain cancellation
+            // if an external/plugin command violates that contract.
+            if self.tabs[i].active_cmd.is_some() {
+                tasks.push(self.apply_cmd_result(CmdResult::CancelForSpaceChange));
+            } else if message_pending {
+                self.command_line
+                    .push_info("Command cancelled because the active drawing space changed.");
+            }
+            cancellation_reported = true;
+        }
+
+        let grip_cancelled = self.cancel_active_grip_edit();
+        let suspended_cancelled = self.tabs[i].suspended_cmd.take().is_some();
+        let editor_cancelled = self.text_inline.is_some() || self.mtext_editor.is_some();
+        if editor_cancelled {
+            self.text_inline_cancel();
+            self.mtext_cancel();
+        }
+        if !cancellation_reported && (grip_cancelled || suspended_cancelled || editor_cancelled) {
+            self.command_line
+                .push_info("Command cancelled because the active drawing space changed.");
+        }
+
+        self.command_line.input.clear();
+        self.command_line.autocomplete_cursor = None;
+        self.command_line.close_history();
+        self.reset_space_interaction_state();
+        if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        }
+    }
+
     /// Apply LIMCHECK/PLIMCHECK to a point before an interactive command
     /// consumes it. LIMITS itself must be able to redefine a rectangle beyond
     /// the old boundary, so it is the sole bypass.
@@ -611,7 +738,7 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::MviewSwitchLayout(layout) => {
-                let task = self.on_layout_switch(layout);
+                let task = self.on_layout_switch_preserving_command(layout);
                 if let Some(prompt) =
                     self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
                 {
@@ -1149,12 +1276,17 @@ impl OpenCADStudio {
                     self.command_line.push_info(&p);
                 }
             }
-            CmdResult::Cancel => {
+            cancel @ (CmdResult::Cancel | CmdResult::CancelForSpaceChange) => {
+                let space_changed = matches!(cancel, CmdResult::CancelForSpaceChange);
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.restore_pre_cmd_tangent();
-                self.command_line.push_info("Command cancelled.");
+                self.command_line.push_info(if space_changed {
+                    "Command cancelled because the active drawing space changed."
+                } else {
+                    "Command cancelled."
+                });
             }
             CmdResult::Relaunch(cmd, handles) => {
                 self.tabs[i].scene.deselect_all();

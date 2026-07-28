@@ -655,7 +655,108 @@ impl Scene {
         self.camera.borrow_mut().fit_depth_to_bounds(min, max);
     }
 
+    fn fit_paper_space_extents(&mut self) {
+        let layout_block = self.current_layout_block_handle();
+        let mut min = glam::Vec3::splat(f32::INFINITY);
+        let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
+        {
+            let mut include = |x: f64, y: f64, z: f64| {
+                const SANE_EXTENT: f64 = 1.0e16;
+                if x.is_finite()
+                    && y.is_finite()
+                    && z.is_finite()
+                    && x.abs() < SANE_EXTENT
+                    && y.abs() < SANE_EXTENT
+                    && z.abs() < SANE_EXTENT
+                {
+                    let point = glam::Vec3::new(x as f32, y as f32, z as f32);
+                    min = min.min(point);
+                    max = max.max(point);
+                }
+            };
+
+            // The physical sheet is always part of Paper Space extents, even
+            // when the layout contains no entities (#539).
+            if let Some(((x0, y0), (x1, y1))) = self.paper_limits() {
+                include(x0, y0, 0.0);
+                include(x1, y1, 0.0);
+            }
+
+            // Paper entities and viewport borders belong to the sheet. Model
+            // content projected through those viewports deliberately does not.
+            for wire in self.wires_for_block_culled(layout_block, None, None, None, None) {
+                let is_infinite = Self::handle_from_wire_name(&wire.name)
+                    .and_then(|handle| self.document.get_entity(handle))
+                    .is_some_and(|entity| {
+                        matches!(entity, EntityType::XLine(_) | EntityType::Ray(_))
+                    });
+                if is_infinite {
+                    for &[x, y, z] in &wire.key_vertices {
+                        include(x, y, z);
+                    }
+                } else {
+                    for (index, &[x, y, z]) in wire.points.iter().enumerate() {
+                        let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
+                        include(
+                            x as f64 + low[0] as f64,
+                            y as f64 + low[1] as f64,
+                            z as f64 + low[2] as f64,
+                        );
+                    }
+                }
+            }
+
+            // Hatches, wipeouts and raster images are GPU-only and may carry
+            // no normal wire outline, so include their visible paper bounds.
+            let (hatches, wipeouts, images) = self.paper_sheet_render_models();
+            for hatch in hatches.iter().chain(wipeouts.iter()) {
+                for &[x, y] in hatch.boundary.iter() {
+                    include(
+                        hatch.world_origin[0] + x as f64,
+                        hatch.world_origin[1] + y as f64,
+                        0.0,
+                    );
+                }
+            }
+            for image in images.iter() {
+                for (corner, low) in image.corners.iter().zip(image.corners_low.iter()) {
+                    include(
+                        corner[0] as f64 + low[0] as f64,
+                        corner[1] as f64 + low[1] as f64,
+                        corner[2] as f64 + low[2] as f64,
+                    );
+                }
+            }
+        }
+
+        if !min.is_finite() || !max.is_finite() {
+            return;
+        }
+        if min == max {
+            max += glam::Vec3::splat(1.0);
+        }
+        self.camera
+            .borrow_mut()
+            .fit_to_bounds(min, max, self.last_render_aspect.get().max(0.01));
+        self.camera_generation += 1;
+    }
+
     pub fn fit_all(&mut self) {
+        if self.active_viewport.is_some() {
+            if let Some((mut min, mut max)) = self.model_space_extents() {
+                if min == max {
+                    max += glam::Vec3::splat(1.0);
+                    min -= glam::Vec3::splat(1.0);
+                }
+                self.fit_active_viewport_to_bounds(min, max);
+            }
+            return;
+        }
+        if self.current_layout != "Model" {
+            self.fit_paper_space_extents();
+            return;
+        }
+
         // Use the FULL, un-culled wire set — not `entity_wires()`, which is
         // frustum-culled to the current view. Culled input would fit only the
         // entities already on screen, so each call would zoom out a little and
@@ -664,9 +765,6 @@ impl Scene {
         // the bounds don't drift with zoom-adaptive curve sampling.
         let layout_block = self.current_layout_block_handle();
         let mut wires = self.wires_for_block_culled(layout_block, None, None, None, None);
-        if self.current_layout != "Model" {
-            wires.extend(self.viewport_content_wires(layout_block, None, None));
-        }
         // Ray / XLine tessellate as ±DISPLAY_EXTENT display segments
         // (entities/ray.rs) — their endpoints are rendering artifacts, not
         // drawing extent. A construction line through the drawing defeats

@@ -132,36 +132,8 @@ impl Scene {
         let max = glam::Vec3::new(limit_max.x as f32, limit_max.y as f32, 0.0);
 
         // MSPACE owns a camera encoded on the active viewport entity.
-        if let Some(viewport_handle) = self.active_viewport {
-            let (width, height, locked) = match self.document.get_entity(viewport_handle) {
-                Some(EntityType::Viewport(viewport)) => {
-                    (viewport.width, viewport.height, viewport.status.locked)
-                }
-                _ => return,
-            };
-            if locked {
-                return;
-            }
-            let aspect = (width / height.max(1e-9)) as f32;
-            let mut camera = match self.viewport_edit_frame(self.selection.borrow().vp_size) {
-                Some((camera, _)) => camera,
-                None => return,
-            };
-            camera.fit_to_bounds(min, max, aspect.max(0.01));
-            if let Some(EntityType::Viewport(viewport)) =
-                self.document.get_entity_mut(viewport_handle)
-            {
-                viewport.view_target.x = camera.target.x;
-                viewport.view_target.y = camera.target.y;
-                viewport.view_target.z = camera.target.z;
-                viewport.view_center.x = 0.0;
-                viewport.view_center.y = 0.0;
-                viewport.view_height = camera.ortho_size() as f64 * 2.0;
-                if viewport.view_height > 1e-9 {
-                    viewport.custom_scale = viewport.height / viewport.view_height;
-                }
-            }
-            self.camera_generation += 1;
+        if self.active_viewport.is_some() {
+            self.fit_active_viewport_to_bounds(min, max);
             return;
         }
 
