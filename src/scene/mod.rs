@@ -8715,6 +8715,9 @@ mod delta_undo_tests {
         let orig1 = scene.document.get_entity(h1).cloned().unwrap();
         let orig2 = scene.document.get_entity(h2).cloned().unwrap();
         let count = scene.document.entities().count();
+        scene.select_entity(h2, false);
+        scene.set_hover_highlight(Some(h2));
+        let selection_generation = scene.selection_generation;
 
         scene.begin_undo_recording();
         scene.erase_entities(&[h2]);
@@ -8725,6 +8728,12 @@ mod delta_undo_tests {
         );
         let delta = build_delta(&scene, rec);
         assert!(scene.document.get_entity(h2).is_none(), "h2 must be erased");
+        assert!(!scene.selected.contains(&h2));
+        assert_eq!(scene.hover_highlight, None);
+        assert_ne!(
+            scene.selection_generation, selection_generation,
+            "erase must invalidate the stale selection overlay"
+        );
 
         // Undo re-inserts h2 with its ORIGINAL handle and image, exactly once in
         // the block record (the strip prevents a duplicated dangling entry),

@@ -875,7 +875,13 @@ impl OpenCADStudio {
             .copied()
             .filter(|h| scene.document.get_entity(*h).is_some())
             .collect();
-        scene.selected = restored;
+        scene.replace_selection(restored);
+        if scene
+            .hover_highlight
+            .is_some_and(|handle| scene.document.get_entity(handle).is_none())
+        {
+            scene.set_hover_highlight(None);
+        }
         // Entity deltas currently preserve the layout; direct assignment avoids
         // clearing layout render caches between steps and keeps future widened
         // deltas batchable.
@@ -903,11 +909,13 @@ impl OpenCADStudio {
         let mut affected = scene.object_isolation.hidden.clone();
         affected.extend(state.hidden.iter().copied());
         scene.object_isolation = state.clone();
-        scene.selected = selected
-            .iter()
-            .copied()
-            .filter(|handle| scene.document.get_entity(*handle).is_some())
-            .collect();
+        scene.replace_selection(
+            selected
+                .iter()
+                .copied()
+                .filter(|handle| scene.document.get_entity(*handle).is_some())
+                .collect(),
+        );
         let changes: Vec<_> = affected
             .into_iter()
             .map(|handle| (handle, crate::scene::ChangeKind::Modified))

@@ -754,7 +754,7 @@ impl OpenCADStudio {
                         .push_info(&format!("{cmd}: no text or dimension objects."));
                     return Some(Task::none());
                 }
-                self.tabs[i].scene.selected = handles;
+                self.tabs[i].scene.replace_selection(handles);
                 return self.dispatch_view(
                     if to_front {
                         "DRAWORDER FRONT"

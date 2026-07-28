@@ -17,6 +17,16 @@ impl Scene {
         self.bump_selection();
     }
 
+    /// Replace the complete selection and invalidate the GPU highlight overlay
+    /// only when its contents actually changed. History/file/command paths must
+    /// use this instead of assigning `selected` directly.
+    pub(crate) fn replace_selection(&mut self, selected: HashSet<Handle>) {
+        if self.selected != selected {
+            self.selected = selected;
+            self.bump_selection();
+        }
+    }
+
     /// Remove a single entity from the selection (Shift+click subtractive pick).
     pub fn deselect_entity(&mut self, handle: Handle) {
         if self.selected.remove(&handle) {
@@ -333,6 +343,7 @@ impl Scene {
     pub fn erase_entities(&mut self, handles: &[Handle]) {
         let mut handle_set: HashSet<Handle> = HashSet::default();
         let mut erased: Vec<(Handle, ChangeKind)> = Vec::new();
+        let mut highlight_changed = false;
         for &h in handles {
             // Objects on a locked layer can't be erased.
             if self.is_layer_locked(h) {
@@ -345,7 +356,11 @@ impl Scene {
             }
             self.remember_removed_cache_categories(h);
             self.document.remove_entity_arc(h);
-            self.selected.remove(&h);
+            highlight_changed |= self.selected.remove(&h);
+            if self.hover_highlight == Some(h) {
+                self.hover_highlight = None;
+                highlight_changed = true;
+            }
             self.hatches.remove(&h);
             self.images.remove(&h);
             self.meshes.remove(&h);
@@ -353,6 +368,9 @@ impl Scene {
             self.solid_models.remove(&h);
             handle_set.insert(h);
             erased.push((h, ChangeKind::Removed));
+        }
+        if highlight_changed {
+            self.bump_selection();
         }
         // Capture exactly the group objects that this erase will rewrite, plus
         // the group dictionary when an emptied group will be removed. Do this

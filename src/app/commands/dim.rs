@@ -334,7 +334,9 @@ impl OpenCADStudio {
                     n += 1;
                 }
                 // Draw the text in front of its newly-added masks.
-                self.tabs[i].scene.selected = handles.iter().cloned().collect();
+                self.tabs[i]
+                    .scene
+                    .replace_selection(handles.iter().cloned().collect());
                 self.tabs[i].dirty = true;
                 self.command_line
                     .push_output(&format!("TEXTMASK: masked {n} text object(s)."));

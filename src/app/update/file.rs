@@ -801,7 +801,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 if let Some(prepared) = prepared_geometry {
                     self.tabs[i].scene.install_prepared_open_geometry(prepared);
                 }
-                self.tabs[i].scene.selected = rustc_hash::FxHashSet::default();
+                self.tabs[i]
+                    .scene
+                    .replace_selection(rustc_hash::FxHashSet::default());
                 self.tabs[i].scene.preview_wires = vec![];
                 // Reopen in whichever space the file was saved in — the CTAB
                 // tab name when recorded, else the $TILEMODE model/paper flag —

@@ -2473,7 +2473,7 @@ impl Scene {
     pub fn clear(&mut self) {
         self.document.record_all_entities_for_transaction();
         self.document = CadDocument::new();
-        self.selected = HashSet::default();
+        self.replace_selection(HashSet::default());
         self.preview_wires = vec![];
         self.preview_text = vec![];
         self.current_layout = "Model".to_string();
