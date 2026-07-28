@@ -60,8 +60,10 @@ impl StatusBar {
         dyn_input: bool,
         otrack: bool,
         layouts: Vec<String>,
+        block_tabs: Vec<String>,
         reorderable_layouts: Vec<String>,
         current_layout: String,
+        active_block: Option<String>,
         // Start/welcome view has no drawing to own layouts.
         is_start: bool,
         // If `Some((original, edit_value))`, the named tab shows a text input.
@@ -413,10 +415,11 @@ impl StatusBar {
         if show_layout_tabs {
             let reorderable_layouts: Arc<[String]> = reorderable_layouts.into();
             for name in layouts {
-                let is_active = name == current_layout;
+                let is_active = active_block.is_none() && name == current_layout;
                 let renaming = rename_state
                     .filter(|(orig, _)| *orig == name)
                     .map(|(_, edit)| edit.as_str());
+                let switch_msg = Message::LayoutSwitch(name.clone());
                 left.push(
                     space_tab(
                         name,
@@ -424,6 +427,24 @@ impl StatusBar {
                         renaming,
                         !is_start,
                         reorderable_layouts.clone(),
+                        switch_msg,
+                        "SB_LAYOUT_TAB",
+                    )
+                    .into(),
+                );
+            }
+            for name in block_tabs {
+                let is_active = active_block.as_deref() == Some(name.as_str());
+                let switch_msg = Message::BlockEditSwitch(name.clone());
+                left.push(
+                    space_tab(
+                        name,
+                        is_active,
+                        None,
+                        !is_start,
+                        Arc::from(Vec::<String>::new()),
+                        switch_msg,
+                        "SB_BLOCK_TAB",
                     )
                     .into(),
                 );
@@ -760,6 +781,8 @@ fn space_tab<'a>(
     rename_edit: Option<&'a str>,
     enabled: bool,
     reorderable_layouts: Arc<[String]>,
+    switch_msg: Message,
+    report_key_prefix: &'static str,
 ) -> Element<'a, Message> {
     let tab_style = move |theme: &Theme| {
         let palette = theme.extended_palette();
@@ -791,7 +814,7 @@ fn space_tab<'a>(
             .style(tab_style)
             .padding([4, 10]);
         crate::ui::wrap_bar::PosReport::owned(
-            format!("SB_LAYOUT_TAB:{label}"),
+            format!("{report_key_prefix}:{label}"),
             tip(
                 display.into(),
                 "Open or create a drawing to switch layouts.",
@@ -827,9 +850,8 @@ fn space_tab<'a>(
             .style(tab_style)
             .padding([4, 10]);
 
-        let switch_msg = Message::LayoutSwitch(label.clone());
         let has_context_menu = reorderable_layouts.contains(&label);
-        let report_key = format!("SB_LAYOUT_TAB:{label}");
+        let report_key = format!("{report_key_prefix}:{label}");
         let tab = mouse_area(display).on_press(switch_msg);
         let tab: Element<'a, Message> = if has_context_menu {
             crate::ui::wrap_bar::ReorderTab::layout(

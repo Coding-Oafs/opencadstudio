@@ -370,7 +370,12 @@ impl OpenCADStudio {
         let gen = self.tabs[i].scene.camera_generation;
         if gen != self.tabs[i].last_synced_camera_gen {
             self.tabs[i].last_synced_camera_gen = gen;
-            if self.tabs[i].scene.sync_camera_to_document() {
+            if self.tabs[i].active_block_edit.is_some() {
+                let camera = self.tabs[i].scene.camera.borrow().clone();
+                if let Some(session) = self.tabs[i].active_block_edit_session_mut() {
+                    session.editor_camera = camera;
+                }
+            } else if self.tabs[i].scene.sync_camera_to_document() {
                 self.tabs[i].dirty = true;
             }
         }
@@ -3134,17 +3139,14 @@ impl OpenCADStudio {
                         self.tabs[i].scene.document.get_entity(handle),
                         Some(AcadEntityType::Insert(ins)) if !ins.attributes.is_empty()
                     );
-                    if insert_has_attrs {
+                    if insert_has_attrs && self.tabs[i].active_block_edit.is_none() {
                         return Task::done(Message::AttrEditorOpen(handle));
                     }
                     let is_insert = matches!(
                         self.tabs[i].scene.document.get_entity(handle),
                         Some(AcadEntityType::Insert(_))
                     );
-                    if is_insert
-                        && self.tabs[i].refedit_session.is_none()
-                        && self.tabs[i].block_edit.is_none()
-                    {
+                    if is_insert && self.tabs[i].refedit_session.is_none() {
                         return Task::done(Message::Command(format!(
                             "BEDIT_BEGIN:{}",
                             handle.value()
@@ -3679,6 +3681,59 @@ impl OpenCADStudio {
         self.on_layout_switch_inner(name, false)
     }
 
+    pub(crate) fn on_block_edit_switch(&mut self, name: String) -> Task<Message> {
+        let i = self.active_tab;
+        if self.tabs[i].is_start {
+            return Task::none();
+        }
+        let Some(target_index) = self.tabs[i]
+            .block_edits
+            .iter()
+            .position(|session| session.block_name == name)
+        else {
+            self.command_line
+                .push_error(&format!("BEDIT: block tab \"{name}\" is not open."));
+            return Task::none();
+        };
+        if self.tabs[i].active_block_edit == Some(target_index) {
+            return Task::none();
+        }
+
+        let cancel_task = self.cancel_active_command_for_space_change();
+        let current_camera = self.tabs[i].scene.camera.borrow().clone();
+        if let Some(active_index) = self.tabs[i].active_block_edit {
+            if let Some(session) = self.tabs[i].block_edits.get_mut(active_index) {
+                session.editor_camera = current_camera;
+            }
+        } else {
+            self.tabs[i].scene.sync_camera_to_document();
+        }
+
+        let (br_handle, editor_camera) = {
+            let session = &self.tabs[i].block_edits[target_index];
+            (session.br_handle, session.editor_camera.clone())
+        };
+        self.layout_rename_state = None;
+        self.tabs[i].scene.active_viewport = None;
+        self.tabs[i].scene.set_current_layout("Model".to_string());
+        self.tabs[i].scene.block_edit_block = Some(br_handle);
+        self.tabs[i].active_block_edit = Some(target_index);
+        *self.tabs[i].scene.camera.borrow_mut() = editor_camera;
+        self.tabs[i].scene.camera_generation += 1;
+        self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+        self.tabs[i].scene.deselect_all();
+        self.tabs[i].active_grip = None;
+        self.grip_hover = None;
+        self.grip_popup = None;
+        self.visibility_popup = None;
+        self.tabs[i].refresh_active_ucs();
+        self.tabs[i].scene.bump_geometry_no_blocks();
+        self.refresh_properties();
+        self.adopt_view_display(i);
+        self.sync_dyn_fields();
+        cancel_task
+    }
+
     /// MVIEW's "Insert view > New" flow deliberately visits Model space to
     /// define a view and then returns to its paper layout. This is the only
     /// layout transition allowed to preserve an active command.
@@ -3700,19 +3755,16 @@ impl OpenCADStudio {
                 .push_info("Open or create a drawing to switch layouts.");
             return Task::none();
         }
-        // A BEDIT block editor locks the active space; finish it with
-        // Save Block or Discard before switching spaces. (#261)
-        if self.tabs[i].block_edit.is_some() {
-            self.command_line.push_info(
-                "Finish the block editor (Save Block or Discard) before switching spaces.",
-            );
-            return Task::none();
-        }
         let perf = crate::perf::enabled();
         let perf_total = Instant::now();
-        let perf_from = self.tabs[i].scene.current_layout.clone();
-        let context_changed =
-            self.tabs[i].scene.current_layout != name || self.tabs[i].scene.active_viewport.is_some();
+        let leaving_block_edit = self.tabs[i].active_block_edit.is_some();
+        let perf_from = self.tabs[i]
+            .active_block_edit_session()
+            .map(|session| session.block_name.clone())
+            .unwrap_or_else(|| self.tabs[i].scene.current_layout.clone());
+        let context_changed = leaving_block_edit
+            || self.tabs[i].scene.current_layout != name
+            || self.tabs[i].scene.active_viewport.is_some();
         let preserve_active_command = preserve_active_command
             && self.tabs[i]
                 .active_cmd
@@ -3730,6 +3782,24 @@ impl OpenCADStudio {
         } else {
             Task::none()
         };
+        if let Some(active_index) = self.tabs[i].active_block_edit.take() {
+            let camera = self.tabs[i].scene.camera.borrow().clone();
+            let (return_layout, return_camera) = {
+                let session = &mut self.tabs[i].block_edits[active_index];
+                session.editor_camera = camera;
+                (session.return_layout.clone(), session.return_camera.clone())
+            };
+            let return_layout = if self.tabs[i].scene.layout_names().contains(&return_layout) {
+                return_layout
+            } else {
+                "Model".to_string()
+            };
+            self.tabs[i].scene.block_edit_block = None;
+            self.tabs[i].scene.set_current_layout(return_layout);
+            *self.tabs[i].scene.camera.borrow_mut() = return_camera;
+            self.tabs[i].scene.camera_generation += 1;
+            self.tabs[i].scene.bump_geometry_no_blocks();
+        }
         let going_to_paper = name != "Model";
         // Persist the camera of the layout we're leaving BEFORE switching
         // so returning to it restores where the user left off (the
@@ -3849,10 +3919,8 @@ impl OpenCADStudio {
                 // BEDIT block tab: renaming it renames the BLOCK itself —
                 // its record, marker and every INSERT reference. (#261)
                 let is_block_tab = self.tabs[i]
-                    .block_edit
-                    .as_ref()
-                    .map(|be| be.block_name == orig)
-                    .unwrap_or(false);
+                    .active_block_edit_session()
+                    .is_some_and(|session| session.block_name == orig);
                 if is_block_tab {
                     if self.tabs[i]
                         .scene
@@ -3866,8 +3934,15 @@ impl OpenCADStudio {
                     } else {
                         self.push_undo_snapshot(i, "BLOCK RENAME");
                         if self.tabs[i].scene.rename_block(&orig, &new_name) {
-                            if let Some(be) = self.tabs[i].block_edit.as_mut() {
-                                be.block_name = new_name.clone();
+                            if let Some(session) =
+                                self.tabs[i].active_block_edit_session_mut()
+                            {
+                                session.block_name = new_name.clone();
+                            }
+                            for session in &mut self.tabs[i].block_edits {
+                                if session.return_block.as_deref() == Some(orig.as_str()) {
+                                    session.return_block = Some(new_name.clone());
+                                }
                             }
                             self.tabs[i].dirty = true;
                             self.command_line

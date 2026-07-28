@@ -231,8 +231,11 @@ pub(super) struct DocumentTab {
     pub(super) paper_bg_color: Option<[f32; 4]>,
     /// Active REFEDIT session, if any.
     pub(super) refedit_session: Option<RefEditSession>,
-    /// Active BEDIT block-editor space session, if any (issue #261).
-    pub(super) block_edit: Option<BlockEditSession>,
+    /// Open BEDIT block tabs. Definitions are edited live; each tab owns its
+    /// entry snapshot and camera so nested blocks can remain open independently.
+    pub(super) block_edits: Vec<BlockEditSession>,
+    /// Index of the block tab currently shown, or `None` for Model/Paper space.
+    pub(super) active_block_edit: Option<usize>,
     /// Currently active MLeader style name.
     pub(super) active_mleader_style: String,
     /// Last camera_generation value written back to the document.
@@ -258,6 +261,16 @@ pub(super) struct DocumentTab {
 }
 
 impl DocumentTab {
+    pub(super) fn active_block_edit_session(&self) -> Option<&BlockEditSession> {
+        self.active_block_edit
+            .and_then(|index| self.block_edits.get(index))
+    }
+
+    pub(super) fn active_block_edit_session_mut(&mut self) -> Option<&mut BlockEditSession> {
+        self.active_block_edit
+            .and_then(|index| self.block_edits.get_mut(index))
+    }
+
     /// The active WCS↔UCS converter for this tab — identity when no UCS is set.
     /// Every consumer that needs UCS-relative coordinates goes through this.
     pub(super) fn ucs_xform(&self) -> super::helpers::UcsXform {
@@ -478,7 +491,8 @@ impl DocumentTab {
             bg_color: None,
             paper_bg_color: None,
             refedit_session: None,
-            block_edit: None,
+            block_edits: Vec::new(),
+            active_block_edit: None,
             active_mleader_style: "Standard".to_string(),
             last_synced_camera_gen: 0,
             #[cfg(not(target_arch = "wasm32"))]

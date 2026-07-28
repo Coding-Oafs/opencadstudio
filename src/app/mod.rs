@@ -1957,6 +1957,8 @@ pub enum Message {
     PspaceCommand,
     /// Switch to a named layout ("Model" or paper space layout name).
     LayoutSwitch(String),
+    /// Switch to an already-open BEDIT block tab.
+    BlockEditSwitch(String),
     /// Move a paper layout before/after another paper layout.
     LayoutReorder {
         from: String,

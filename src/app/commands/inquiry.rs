@@ -335,11 +335,7 @@ impl OpenCADStudio {
 
             "BEDIT" => {
                 use crate::modules::draw::modify::block_edit::BlockEditPickCommand;
-                if self.tabs[i].block_edit.is_some() {
-                    self.command_line.push_error(
-                        "BEDIT: a block editor is already open. Save or discard it first.",
-                    );
-                } else if self.tabs[i].refedit_session.is_some() {
+                if self.tabs[i].refedit_session.is_some() {
                     self.command_line
                         .push_error("BEDIT: finish the active REFEDIT (REFCLOSE) first.");
                 } else {
@@ -399,6 +395,16 @@ impl OpenCADStudio {
                         .push_error("BEDIT: cannot edit an external reference (xref).");
                     return Some(Task::none());
                 }
+                if self.tabs[i]
+                    .block_edits
+                    .iter()
+                    .any(|session| session.br_handle == br_handle)
+                {
+                    self.tabs[i].active_cmd = None;
+                    return Some(Task::done(Message::BlockEditSwitch(
+                        insert.block_name.clone(),
+                    )));
+                }
 
                 // Snapshot the block's block-local entities so Discard can restore
                 // them (skip structural Block/BlockEnd/AttDef, mirroring REFEDIT).
@@ -425,23 +431,42 @@ impl OpenCADStudio {
 
                 self.push_undo_snapshot(i, "BEDIT");
 
-                let return_layout = self.tabs[i].scene.current_layout.clone();
                 // Capture the camera before the editor reframes it, so leaving
                 // the block editor returns the view exactly where it was (#425).
-                let return_camera = self.tabs[i].scene.camera.borrow().clone();
+                let current_camera = self.tabs[i].scene.camera.borrow().clone();
+                let (return_layout, return_block, return_camera) =
+                    if let Some(parent_index) = self.tabs[i].active_block_edit {
+                        let parent = &mut self.tabs[i].block_edits[parent_index];
+                        parent.editor_camera = current_camera.clone();
+                        (
+                            parent.return_layout.clone(),
+                            Some(parent.block_name.clone()),
+                            parent.return_camera.clone(),
+                        )
+                    } else {
+                        self.tabs[i].scene.sync_camera_to_document();
+                        (
+                            self.tabs[i].scene.current_layout.clone(),
+                            None,
+                            current_camera.clone(),
+                        )
+                    };
                 // A block editor renders in model style; switch to Model first so
                 // the paper-space code paths stay off, then scope to the block.
-                if return_layout != "Model" {
+                if self.tabs[i].scene.current_layout != "Model" {
                     self.tabs[i].scene.set_current_layout("Model".to_string());
                 }
                 self.tabs[i].scene.block_edit_block = Some(br_handle);
-                self.tabs[i].block_edit = Some(BlockEditSession {
+                self.tabs[i].block_edits.push(BlockEditSession {
                     block_name: insert.block_name.clone(),
                     br_handle,
                     return_layout,
+                    return_block,
                     snapshot,
                     return_camera,
+                    editor_camera: current_camera,
                 });
+                self.tabs[i].active_block_edit = Some(self.tabs[i].block_edits.len() - 1);
 
                 self.tabs[i].scene.deselect_all();
                 // The first click of a double-click selects the model-space
@@ -461,6 +486,11 @@ impl OpenCADStudio {
                 // it already scopes to the edited block. Without this the view
                 // stays wherever model/paper space was. (#261)
                 self.tabs[i].scene.fit_all();
+                let editor_camera = self.tabs[i].scene.camera.borrow().clone();
+                if let Some(session) = self.tabs[i].active_block_edit_session_mut() {
+                    session.editor_camera = editor_camera;
+                }
+                self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
                 self.refresh_properties();
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].dirty = true;
@@ -471,27 +501,28 @@ impl OpenCADStudio {
             }
 
             "BEDIT_SAVE" => {
-                let session = match self.tabs[i].block_edit.take() {
-                    Some(s) => s,
+                let session = match self.tabs[i].active_block_edit.take() {
+                    Some(index) if index < self.tabs[i].block_edits.len() => {
+                        self.tabs[i].block_edits.remove(index)
+                    }
                     None => {
                         self.command_line
                             .push_error("BEDIT_SAVE: no block editor is open.");
                         return Some(Task::none());
                     }
+                    Some(_) => {
+                        self.command_line
+                            .push_error("BEDIT_SAVE: invalid block editor state.");
+                        return Some(Task::none());
+                    }
                 };
                 // Edits are live on the block record — just leave the block space.
-                self.tabs[i].scene.block_edit_block = None;
-                self.tabs[i].scene.deselect_all();
-                self.tabs[i].active_grip = None;
-                self.grip_hover = None;
-                self.grip_popup = None;
-                self.visibility_popup = None;
-                self.tabs[i].scene.set_current_layout(session.return_layout.clone());
-                // Return the view to where it was when BEDIT began (#425).
-                *self.tabs[i].scene.camera.borrow_mut() = session.return_camera.clone();
-                self.tabs[i].scene.camera_generation += 1;
-                self.tabs[i].scene.rebuild_derived_caches();
-                self.refresh_properties();
+                self.restore_after_block_edit_close(
+                    i,
+                    session.return_block.as_deref(),
+                    &session.return_layout,
+                    &session.return_camera,
+                );
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
                     "BEDIT: Block \"{}\" saved. All references updated.",
@@ -500,11 +531,18 @@ impl OpenCADStudio {
             }
 
             "BEDIT_DISCARD" => {
-                let session = match self.tabs[i].block_edit.take() {
-                    Some(s) => s,
+                let session = match self.tabs[i].active_block_edit.take() {
+                    Some(index) if index < self.tabs[i].block_edits.len() => {
+                        self.tabs[i].block_edits.remove(index)
+                    }
                     None => {
                         self.command_line
                             .push_error("BEDIT_DISCARD: no block editor is open.");
+                        return Some(Task::none());
+                    }
+                    Some(_) => {
+                        self.command_line
+                            .push_error("BEDIT_DISCARD: invalid block editor state.");
                         return Some(Task::none());
                     }
                 };
@@ -531,27 +569,25 @@ impl OpenCADStudio {
                 {
                     br.entity_handles.clear();
                 }
+                let block_name = session.block_name.clone();
+                let return_block = session.return_block.clone();
+                let return_layout = session.return_layout.clone();
+                let return_camera = session.return_camera.clone();
                 for mut entity in session.snapshot {
                     entity.common_mut().handle = acadrust::Handle::NULL;
                     entity.common_mut().owner_handle = session.br_handle;
                     let _ = self.tabs[i].scene.document.add_entity(entity);
                 }
-                self.tabs[i].scene.block_edit_block = None;
-                self.tabs[i].scene.deselect_all();
-                self.tabs[i].active_grip = None;
-                self.grip_hover = None;
-                self.grip_popup = None;
-                self.visibility_popup = None;
-                self.tabs[i].scene.set_current_layout(session.return_layout.clone());
-                // Return the view to where it was when BEDIT began (#425).
-                *self.tabs[i].scene.camera.borrow_mut() = session.return_camera.clone();
-                self.tabs[i].scene.camera_generation += 1;
-                self.tabs[i].scene.rebuild_derived_caches();
-                self.refresh_properties();
+                self.restore_after_block_edit_close(
+                    i,
+                    return_block.as_deref(),
+                    &return_layout,
+                    &return_camera,
+                );
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
                     "BEDIT: Block \"{}\" edit discarded.",
-                    session.block_name
+                    block_name
                 ));
             }
 
@@ -1148,6 +1184,60 @@ impl OpenCADStudio {
             _ => return None,
         }
         Some(self.finish_dispatch(cmd))
+    }
+
+    fn restore_after_block_edit_close(
+        &mut self,
+        i: usize,
+        return_block: Option<&str>,
+        return_layout: &str,
+        return_camera: &crate::scene::view::camera::Camera,
+    ) {
+        self.tabs[i].scene.block_edit_block = None;
+        self.tabs[i].scene.deselect_all();
+        self.tabs[i].active_grip = None;
+        self.grip_hover = None;
+        self.grip_popup = None;
+        self.visibility_popup = None;
+
+        let parent_index = return_block.and_then(|parent_name| {
+            self.tabs[i]
+                .block_edits
+                .iter()
+                .position(|candidate| candidate.block_name == parent_name)
+        });
+        if let Some(parent_index) = parent_index {
+            let (br_handle, editor_camera) = {
+                let parent = &self.tabs[i].block_edits[parent_index];
+                (parent.br_handle, parent.editor_camera.clone())
+            };
+            self.tabs[i].scene.set_current_layout("Model".to_string());
+            self.tabs[i].scene.block_edit_block = Some(br_handle);
+            self.tabs[i].active_block_edit = Some(parent_index);
+            *self.tabs[i].scene.camera.borrow_mut() = editor_camera;
+        } else {
+            let return_layout = if self.tabs[i]
+                .scene
+                .layout_names()
+                .iter()
+                .any(|name| name == return_layout)
+            {
+                return_layout.to_string()
+            } else {
+                "Model".to_string()
+            };
+            self.tabs[i].active_block_edit = None;
+            self.tabs[i].scene.set_current_layout(return_layout);
+            *self.tabs[i].scene.camera.borrow_mut() = return_camera.clone();
+        }
+
+        self.tabs[i].scene.camera_generation += 1;
+        self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+        self.tabs[i].scene.rebuild_derived_caches();
+        self.tabs[i].refresh_active_ucs();
+        self.refresh_properties();
+        self.adopt_view_display(i);
+        self.sync_dyn_fields();
     }
 
     /// ADDSELECTED — start the draw command that creates the same kind of

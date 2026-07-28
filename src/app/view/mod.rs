@@ -1084,7 +1084,7 @@ impl OpenCADStudio {
         }
 
         // BEDIT block editor: right-edge Save Block / Discard toolbar (#261).
-        if tab.block_edit.is_some() && !tab.is_start {
+        if tab.active_block_edit.is_some() && !tab.is_start {
             if let Some(tb) = crate::ui::side_toolbar::view(
                 &crate::modules::draw::modify::block_edit::block_edit_tools(),
             ) {
@@ -1375,10 +1375,14 @@ impl OpenCADStudio {
                     let coords_mode = tab.scene.document.header.coords_mode;
                     let picking = tab.active_cmd.is_some();
                     let layout_names = tab.scene.layout_names();
-                    let mut displayed_layouts = layout_names.clone();
-                    if let Some(be) = &tab.block_edit {
-                        displayed_layouts.push(be.block_name.clone());
-                    }
+                    let block_tabs = tab
+                        .block_edits
+                        .iter()
+                        .map(|session| session.block_name.clone())
+                        .collect();
+                    let active_block = tab
+                        .active_block_edit_session()
+                        .map(|session| session.block_name.clone());
                     let status_menu_data = crate::ui::statusbar::StatusMenuData {
                         layout_names: layout_names.clone(),
                         polar_custom_input: &self.polar_custom_input,
@@ -1401,12 +1405,11 @@ impl OpenCADStudio {
                         self.polar_increment_deg,
                         self.dyn_input,
                         self.snapper.otrack_enabled,
-                        displayed_layouts,
+                        layout_names.clone(),
+                        block_tabs,
                         layout_names.into_iter().skip(1).collect(),
-                        tab.block_edit
-                            .as_ref()
-                            .map(|be| be.block_name.clone())
-                            .unwrap_or_else(|| tab.scene.current_layout.clone()),
+                        tab.scene.current_layout.clone(),
+                        active_block,
                         tab.is_start,
                         self.layout_rename_state.as_ref(),
                         tab.scene.first_viewport_scale(),

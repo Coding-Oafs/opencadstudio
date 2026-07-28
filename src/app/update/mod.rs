@@ -3358,6 +3358,11 @@ impl OpenCADStudio {
                 self.on_layout_switch(name)
             }
 
+            Message::BlockEditSwitch(name) => {
+                self.layout_list_open = false;
+                self.on_block_edit_switch(name)
+            }
+
             Message::LayoutReorder { from, to, after } => {
                 let i = self.active_tab;
                 if self.tabs[i].is_start {
