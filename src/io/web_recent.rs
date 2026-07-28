@@ -94,28 +94,12 @@ async fn read_blob(blob: &web_sys::Blob) -> Result<Vec<u8>, String> {
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
-/// Load a cached preview. Records created before thumbnail sidecars existed are
-/// migrated by slicing only the DWG header and preview container from the OPFS
-/// file; the potentially large drawing body is never copied or parsed.
 pub async fn read_thumbnail(name: &str) -> Result<Option<Thumbnail>, String> {
     let directory = recent_directory(false).await?;
-    if let Ok(bytes) = read_entry(&directory, &thumbnail_key(name)).await {
-        if let Some(thumbnail) = decode_thumbnail(bytes) {
-            return Ok(Some(thumbnail));
-        }
+    match read_entry(&directory, &thumbnail_key(name)).await {
+        Ok(bytes) => Ok(decode_thumbnail(bytes)),
+        Err(_) => Ok(None),
     }
-
-    let file = get_file(&directory, &cache_key(name)).await?;
-    let Some(image) = extract_embedded_thumbnail(&file).await? else {
-        return Ok(None);
-    };
-    let encoded = encode_thumbnail(image);
-    let thumbnail = decode_thumbnail(encoded.clone())
-        .ok_or_else(|| "generated recent thumbnail is invalid".to_string())?;
-    // Migration caching is best-effort: a readable drawing should still show
-    // its preview even if quota pressure prevents writing the sidecar.
-    let _ = write_entry(&directory, &thumbnail_key(name), &encoded).await;
-    Ok(Some(thumbnail))
 }
 
 pub async fn remove(name: &str) -> Result<(), String> {
@@ -194,54 +178,6 @@ fn decode_thumbnail(bytes: Vec<u8>) -> Option<Thumbnail> {
         height,
         rgba: bytes[12..].to_vec(),
     })
-}
-
-async fn extract_embedded_thumbnail(
-    file: &web_sys::File,
-) -> Result<Option<dwg_thumbnailer::RgbaImage>, String> {
-    let header = read_file_range(file, 0, 0x11).await?;
-    if header.get(..2) != Some(b"AC") {
-        return Ok(None);
-    }
-    let Some(offset) = header
-        .get(0x0D..0x11)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map(i32::from_le_bytes)
-        .filter(|offset| *offset > 0)
-    else {
-        return Ok(None);
-    };
-    let offset = offset as u64;
-    let container_header = read_file_range(file, offset, offset + 20).await?;
-    let Some(overall) = container_header
-        .get(16..20)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map(u32::from_le_bytes)
-        .map(u64::from)
-        .filter(|size| *size > 0 && *size <= 64 * 1024 * 1024)
-    else {
-        return Ok(None);
-    };
-    let Some(end) = offset
-        .checked_add(36)
-        .and_then(|end| end.checked_add(overall))
-    else {
-        return Ok(None);
-    };
-    let container = read_file_range(file, offset, end).await?;
-    Ok(dwg_thumbnailer::extract_container(
-        &container,
-        offset,
-        THUMBNAIL_MAX_DIM,
-    ))
-}
-
-async fn read_file_range(file: &web_sys::File, start: u64, end: u64) -> Result<Vec<u8>, String> {
-    let blob: &web_sys::Blob = file.as_ref();
-    let slice = blob
-        .slice_with_f64_and_f64(start as f64, end as f64)
-        .map_err(js_error)?;
-    read_blob(&slice).await
 }
 
 fn js_error(value: wasm_bindgen::JsValue) -> String {

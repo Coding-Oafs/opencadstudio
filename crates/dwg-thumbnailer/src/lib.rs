@@ -41,14 +41,7 @@ pub fn extract_bytes(bytes: &[u8], max_dim: u32) -> Option<RgbaImage> {
     let start = usize::try_from(base).ok()?;
     let total = preview_container_len(bytes.get(start..start.checked_add(20)?)?)?;
     let container = bytes.get(start..start.checked_add(total)?)?;
-    extract_container(container, base, max_dim)
-}
-
-/// Decode a preview container read from a DWG at `file_offset`. Exposing this
-/// narrow entry point lets browser callers use `Blob.slice()` to migrate old
-/// recent files without copying the entire drawing into memory.
-pub fn extract_container(container: &[u8], file_offset: u64, max_dim: u32) -> Option<RgbaImage> {
-    let (format, data) = parse_preview_container(container, file_offset)?;
+    let (format, data) = parse_preview_container(container, base)?;
     let img = decode(format, data)?;
     Some(downscale(img, max_dim.max(1)))
 }
