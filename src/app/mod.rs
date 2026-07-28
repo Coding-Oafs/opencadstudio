@@ -1,7 +1,7 @@
 mod alias;
 #[cfg(not(target_arch = "wasm32"))]
 mod automation;
-mod config;
+pub(crate) mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub use automation::{export_headless, serve};
 mod command_driver;
@@ -688,6 +688,8 @@ pub(super) struct OpenCADStudio {
 
     // ── Color Scheme ──────────────────────────────────────────────────────
     active_theme: Theme,
+    ui_theme: config::UiThemeConfig,
+    theme_color_inputs: [String; 6],
 
     // ── Keyboard Shortcut Editor ──────────────────────────────────────────
     /// User-defined function-key overrides: "F3" → command string.
@@ -1474,6 +1476,10 @@ pub enum Message {
     OptionsOpen,
     /// Set the default type/version used when first saving a new drawing.
     DefaultSaveFormatChanged(String),
+    /// Select one of Iced's built-in themes or the editable Custom theme.
+    OptionsThemeChanged(String),
+    /// Edit one of Custom theme's six base colours as #RRGGBB.
+    OptionsThemeColorChanged(usize, String),
     ClearScene,
     SetWireframe(bool),
     /// Set the active tab's render mode (one of acadrust's seven visual
@@ -2626,6 +2632,8 @@ impl OpenCADStudio {
             active_plot_style: None,
             // Color scheme (default: dark CAD-style)
             active_theme: Theme::Dark,
+            ui_theme: config::UiThemeConfig::default(),
+            theme_color_inputs: config::UiThemePalette::default().hex_values(),
             // Keyboard shortcuts
             shortcut_overrides: rustc_hash::FxHashMap::default(),
             // Command aliases (populated from ocad.pgp just after construction)

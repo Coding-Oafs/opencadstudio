@@ -7,7 +7,7 @@
 //! boxes. Drawing them from SVG instead makes the chrome font-independent.
 
 use iced::widget::{container, svg, Space};
-use iced::{Color, Element, Length, Theme};
+use iced::{Element, Length, Theme};
 
 const TRI_DOWN: &[u8] = include_bytes!("../../assets/icons/ui/tri_down.svg");
 const TRI_UP: &[u8] = include_bytes!("../../assets/icons/ui/tri_up.svg");
@@ -65,7 +65,6 @@ pub const FILE_EXPORT: &[u8] = include_bytes!("../../assets/icons/ui/file_export
 pub const PRINT: &[u8] = include_bytes!("../../assets/icons/ui/print.svg");
 pub const HEART: &[u8] = include_bytes!("../../assets/icons/ui/heart.svg");
 pub const DOT: &[u8] = include_bytes!("../../assets/icons/ui/dot.svg");
-pub const TRI_LEFT_B: &[u8] = include_bytes!("../../assets/icons/ui/tri_left.svg");
 pub const ARROW_LONG_RIGHT: &[u8] = include_bytes!("../../assets/icons/ui/arrow_long_right.svg");
 
 // ── Status-bar toggle icons (issue #216) ──────────────────────────────────
@@ -82,26 +81,112 @@ pub const ST_FILTER: &[u8] = include_bytes!("../../assets/icons/status/filter.sv
 pub const ST_SELCYCLE: &[u8] = include_bytes!("../../assets/icons/status/selcycle.svg");
 pub const ST_CLEANSCREEN: &[u8] = include_bytes!("../../assets/icons/status/cleanscreen.svg");
 
-/// Render one of the bundled SVGs tinted to `color` at a square `size`.
-pub fn tinted<'a, M: 'a>(bytes: &'static [u8], size: f32, color: Color) -> Element<'a, M> {
+/// Render a chrome icon with the active Iced theme's normal text color.
+pub fn themed<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
     svg(svg::Handle::from_memory(bytes))
         .width(size)
         .height(size)
-        .style(move |_: &Theme, _| svg::Style { color: Some(color) })
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.extended_palette().background.base.text),
+        })
         .into()
 }
 
-/// Backwards-compatible alias used by the caret/undo/redo helpers below.
-fn icon<'a, M: 'a>(bytes: &'static [u8], size: f32, color: Color) -> Element<'a, M> {
-    tinted(bytes, size, color)
+/// Render secondary chrome with the active Iced theme's text color.
+pub fn themed_secondary<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.72),
+            ),
+        })
+        .into()
 }
 
-/// A fixed-width (14 px) "current row" check column: a green-tintable check
-/// when `active`, otherwise an empty spacer that preserves alignment. Used by
-/// the many dropdown / popup list rows that mark the selected entry.
-pub fn check_cell<'a, M: 'a>(active: bool, color: Color) -> Element<'a, M> {
+/// Render disabled chrome with the active Iced theme's text color.
+pub fn themed_disabled<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.42),
+            ),
+        })
+        .into()
+}
+
+/// Render an emphasized chrome icon with the active Iced theme's primary color.
+pub fn themed_primary<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.extended_palette().primary.base.color),
+        })
+        .into()
+}
+
+/// Render a positive-state chrome icon with the active Iced theme's success color.
+pub fn themed_success<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.extended_palette().success.base.color),
+        })
+        .into()
+}
+
+/// Render a warning-state chrome icon from the active Iced theme.
+pub fn themed_warning<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.extended_palette().warning.base.color),
+        })
+        .into()
+}
+
+/// Render a destructive-state chrome icon from the active Iced theme.
+pub fn themed_danger<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.extended_palette().danger.base.color),
+        })
+        .into()
+}
+
+/// Render an icon with the foreground chosen for a danger-coloured surface.
+pub fn themed_danger_text<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.extended_palette().danger.base.text),
+        })
+        .into()
+}
+
+/// Fixed-width check column colored from the active Iced theme.
+pub fn themed_check_cell<'a, M: 'a>(active: bool) -> Element<'a, M> {
     let inner: Element<'a, M> = if active {
-        tinted(CHECK, 11.0, color)
+        themed_primary(CHECK, 11.0)
     } else {
         Space::new().width(0).into()
     };
@@ -166,46 +251,59 @@ pub fn layer_lock(locked: bool) -> &'static [u8] {
     }
 }
 
-/// Downward dropdown caret (replaces `▾`).
-pub fn arrow_down<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(TRI_DOWN, size, color)
+pub fn themed_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed(TRI_DOWN, size)
 }
 
-/// Upward dropdown caret, shown when a dropdown is open (replaces `▲`).
-pub fn arrow_up<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(TRI_UP, size, color)
+pub fn themed_arrow_up<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed(TRI_UP, size)
 }
 
-/// Rightward caret for a collapsed item (replaces `▸`).
-pub fn arrow_right<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(TRI_RIGHT, size, color)
+pub fn themed_arrow_right<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed(TRI_RIGHT, size)
 }
 
-/// Leftward caret.
-pub fn arrow_left<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(TRI_LEFT, size, color)
+pub fn themed_arrow_left<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed(TRI_LEFT, size)
 }
 
-/// House glyph — the ViewCube "home view" button.
-pub fn home<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(HOME, size, color)
+pub fn themed_primary_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed_primary(TRI_DOWN, size)
+}
+
+pub fn themed_secondary_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed_secondary(TRI_DOWN, size)
+}
+
+pub fn themed_disabled_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed_disabled(TRI_DOWN, size)
+}
+
+pub fn themed_home<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed(HOME, size)
 }
 
 /// Caret that flips up/down with `open`.
-pub fn arrow_toggle<'a, M: 'a>(open: bool, size: f32, color: Color) -> Element<'a, M> {
+pub fn themed_arrow_toggle<'a, M: 'a>(open: bool, size: f32) -> Element<'a, M> {
     if open {
-        arrow_up(size, color)
+        themed_arrow_up(size)
     } else {
-        arrow_down(size, color)
+        themed_arrow_down(size)
     }
 }
 
-/// Undo curved arrow (replaces `↶`).
-pub fn undo<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(UNDO, size, color)
+pub fn themed_undo<'a, M: 'a>(size: f32, enabled: bool) -> Element<'a, M> {
+    if enabled {
+        themed(UNDO, size)
+    } else {
+        themed_disabled(UNDO, size)
+    }
 }
 
-/// Redo curved arrow (replaces `↷`).
-pub fn redo<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
-    icon(REDO, size, color)
+pub fn themed_redo<'a, M: 'a>(size: f32, enabled: bool) -> Element<'a, M> {
+    if enabled {
+        themed(REDO, size)
+    } else {
+        themed_disabled(REDO, size)
+    }
 }

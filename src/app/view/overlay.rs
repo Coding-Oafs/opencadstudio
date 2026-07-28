@@ -26,19 +26,6 @@ pub(super) fn text_inline_overlay(
     ed: &super::super::text_inline::TextInlineState,
     canvas: (f32, f32),
 ) -> Element<'_, Message> {
-    const PANEL_BG: Color = Color {
-        r: 0.16,
-        g: 0.16,
-        b: 0.16,
-        a: 0.98,
-    };
-    const BORDER: Color = Color {
-        r: 0.40,
-        g: 0.40,
-        b: 0.40,
-        a: 1.0,
-    };
-
     let field = text_input("Text", &ed.value)
         .id(iced::widget::Id::new(TEXT_INLINE_ID))
         .on_input(Message::TextInlineInput)
@@ -48,14 +35,17 @@ pub(super) fn text_inline_overlay(
         .width(iced::Length::Fixed(240.0));
 
     let panel = container(field)
-        .style(move |_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
+        .style(move |theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+            background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
-                color: BORDER,
+                color: palette.background.neutral.color,
                 width: 1.0,
                 radius: 5.0.into(),
             },
             ..Default::default()
+            }
         })
         .padding(4);
 
@@ -195,7 +185,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
         &self,
         _state: &MTextPreviewState,
         renderer: &iced::Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: iced::Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<iced::widget::canvas::Geometry> {
@@ -221,12 +211,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
                     );
                     frame.fill(
                         &rect,
-                        Color {
-                            r: 0.20,
-                            g: 0.42,
-                            b: 0.72,
-                            a: 0.45,
-                        },
+                        theme.extended_palette().primary.base.color.scale_alpha(0.45),
                     );
                 }
             }
@@ -262,12 +247,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
             frame.stroke(
                 &path,
                 Stroke::default()
-                    .with_color(Color {
-                        r: 0.95,
-                        g: 0.95,
-                        b: 0.55,
-                        a: 1.0,
-                    })
+                    .with_color(theme.extended_palette().warning.base.color)
                     .with_width(1.5),
             );
         } else if collapsed {
@@ -291,12 +271,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
                 frame.stroke(
                     &path,
                     Stroke::default()
-                        .with_color(Color {
-                            r: 0.95,
-                            g: 0.95,
-                            b: 0.55,
-                            a: 1.0,
-                        })
+                        .with_color(theme.extended_palette().warning.base.color)
                         .with_width(1.5),
                 );
             }
@@ -344,59 +319,34 @@ pub(super) fn mtext_editor_overlay<'a>(
     modal_resize: iced::Vector,
 ) -> Element<'a, Message> {
     use super::super::mtext_editor::{JustifyChoice, MTextFmt, ParaAlign};
-    use iced::widget::{canvas, svg};
+    use iced::widget::canvas;
 
-    const BORDER: Color = Color {
-        r: 0.40,
-        g: 0.40,
-        b: 0.40,
-        a: 1.0,
-    };
-    const TEXT_COL: Color = Color {
-        r: 0.88,
-        g: 0.88,
-        b: 0.88,
-        a: 1.0,
-    };
-    const FIELD_BG: Color = Color {
-        r: 0.12,
-        g: 0.12,
-        b: 0.12,
-        a: 1.0,
-    };
-
-    let btn_style = |_: &Theme, status: button::Status| button::Style {
-        background: Some(Background::Color(match status {
-            button::Status::Hovered | button::Status::Pressed => Color {
-                r: 0.28,
-                g: 0.40,
-                b: 0.55,
-                a: 1.0,
-            },
-            _ => Color {
-                r: 0.22,
-                g: 0.22,
-                b: 0.22,
-                a: 1.0,
-            },
-        })),
-        text_color: TEXT_COL,
+    let btn_style = |theme: &Theme, status: button::Status| {
+        let palette = theme.extended_palette();
+        let pair = match status {
+            button::Status::Hovered | button::Status::Pressed => palette.background.strong,
+            _ => palette.background.weak,
+        };
+        button::Style {
+        background: Some(Background::Color(pair.color)),
+        text_color: pair.text,
         border: Border {
-            color: BORDER,
+            color: palette.background.neutral.color,
             width: 1.0,
             radius: 3.0.into(),
         },
         shadow: iced::Shadow::default(),
         snap: false,
+        }
     };
     let icon_btn = move |bytes: &'static [u8], msg: Message| -> Element<'static, Message> {
-        button(svg(svg::Handle::from_memory(bytes)).width(18).height(18))
+        button(crate::ui::icons::themed(bytes, 18.0))
             .on_press(msg)
             .padding(3)
             .style(btn_style)
             .into()
     };
-    let lbl = |s: &'static str| text(s).size(11).color(TEXT_COL);
+    let lbl = |s: &'static str| text(s).size(11);
     let small_input = |placeholder: &'static str,
                        val: &str,
                        on: fn(String) -> Message,
@@ -640,14 +590,17 @@ pub(super) fn mtext_editor_overlay<'a>(
                 .width(Fill)
                 .height(Fill),
         )
-            .style(move |_: &Theme| container::Style {
-                background: Some(Background::Color(FIELD_BG)),
+            .style(move |theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                background: Some(Background::Color(palette.background.base.color)),
                 border: Border {
-                    color: BORDER,
+                    color: palette.background.neutral.color,
                     width: 1.0,
                     radius: 3.0.into(),
                 },
                 ..Default::default()
+                }
             })
             .padding(2)
             .width(Fill)
@@ -665,8 +618,10 @@ pub(super) fn mtext_editor_overlay<'a>(
         ]
         .align_y(iced::Alignment::Center),
     )
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(crate::ui::style::style_manager::TB)),
+    .style(|theme: &Theme| container::Style {
+        background: Some(Background::Color(
+            theme.extended_palette().background.weak.color
+        )),
         ..Default::default()
     })
     .width(Fill)
@@ -710,50 +665,10 @@ pub(super) fn viewport_context_menu_overlay(
     last_cmds: Vec<String>,
     draworder_open: bool,
 ) -> Element<'static, Message> {
-    const MENU_BG: Color = Color {
-        r: 0.17,
-        g: 0.17,
-        b: 0.17,
-        a: 1.0,
-    };
-    const MENU_BORDER: Color = Color {
-        r: 0.35,
-        g: 0.35,
-        b: 0.35,
-        a: 1.0,
-    };
-    const ITEM_HOVER: Color = Color {
-        r: 0.25,
-        g: 0.45,
-        b: 0.70,
-        a: 1.0,
-    };
-    const TEXT_COL: Color = Color {
-        r: 0.88,
-        g: 0.88,
-        b: 0.88,
-        a: 1.0,
-    };
-    const SEP_COL: Color = Color {
-        r: 0.30,
-        g: 0.30,
-        b: 0.30,
-        a: 1.0,
-    };
-
     let item = |label: String, msg: Message| -> Element<'static, Message> {
-        button(text(label).size(12).color(TEXT_COL))
+        button(text(label).size(12))
             .on_press(msg)
-            .style(|_: &Theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered | button::Status::Pressed => ITEM_HOVER,
-                    _ => Color::TRANSPARENT,
-                })),
-                text_color: TEXT_COL,
-                border: Border::default(),
-                shadow: iced::Shadow::default(),
-                snap: false,
-            })
+            .style(button::subtle)
             .padding([4, 12])
             .width(Fill)
             .into()
@@ -761,8 +676,10 @@ pub(super) fn viewport_context_menu_overlay(
 
     let sep = || -> Element<'static, Message> {
         container(iced::widget::Space::new().width(Fill).height(1))
-            .style(move |_: &Theme| container::Style {
-                background: Some(Background::Color(SEP_COL)),
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(
+                    theme.extended_palette().background.weak.color,
+                )),
                 ..Default::default()
             })
             .width(Fill)
@@ -773,18 +690,9 @@ pub(super) fn viewport_context_menu_overlay(
 
     // Indented variant for sub-menu rows (e.g. Draw Order children).
     let subitem = |label: String, msg: Message| -> Element<'static, Message> {
-        button(text(label).size(12).color(TEXT_COL))
+        button(text(label).size(12))
             .on_press(msg)
-            .style(|_: &Theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered | button::Status::Pressed => ITEM_HOVER,
-                    _ => Color::TRANSPARENT,
-                })),
-                text_color: TEXT_COL,
-                border: Border::default(),
-                shadow: iced::Shadow::default(),
-                snap: false,
-            })
+            .style(button::subtle)
             .padding(iced::Padding {
                 top: 4.0,
                 right: 12.0,
@@ -827,30 +735,21 @@ pub(super) fn viewport_context_menu_overlay(
             ));
             items.push(sep());
             let do_caret = if draworder_open {
-                crate::ui::icons::arrow_down(9.0, TEXT_COL)
+                crate::ui::icons::themed_arrow_down(9.0)
             } else {
-                crate::ui::icons::arrow_right(9.0, TEXT_COL)
+                crate::ui::icons::themed_arrow_right(9.0)
             };
             items.push(
                 button(
                     row![
-                        text("Draw Order").size(12).color(TEXT_COL),
+                        text("Draw Order").size(12),
                         iced::widget::Space::new().width(Fill),
                         do_caret,
                     ]
                     .align_y(iced::Center),
                 )
                 .on_press(Message::DrawOrderSubmenuToggle)
-                .style(|_: &Theme, status| button::Style {
-                    background: Some(Background::Color(match status {
-                        button::Status::Hovered | button::Status::Pressed => ITEM_HOVER,
-                        _ => Color::TRANSPARENT,
-                    })),
-                    text_color: TEXT_COL,
-                    border: Border::default(),
-                    shadow: iced::Shadow::default(),
-                    snap: false,
-                })
+                .style(button::subtle)
                 .padding([4, 12])
                 .width(Fill)
                 .into(),
@@ -909,15 +808,7 @@ pub(super) fn viewport_context_menu_overlay(
     let menu_col = column(items).spacing(0).width(iced::Length::Fixed(180.0));
 
     let menu = container(menu_col)
-        .style(move |_: &Theme| container::Style {
-            background: Some(Background::Color(MENU_BG)),
-            border: Border {
-                color: MENU_BORDER,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..Default::default()
-        })
+        .style(container::bordered_box)
         .padding([4, 0])
         .width(iced::Length::Fixed(180.0));
 
@@ -928,18 +819,12 @@ pub(super) fn viewport_context_menu_overlay(
 /// snap ICONS only — the names show as hover tooltips. Picking one applies
 /// that snap to just the next point pick.
 pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Message> {
-    const PANEL_BG: Color = Color { r: 0.16, g: 0.16, b: 0.16, a: 0.98 };
-    const PANEL_BORDER: Color = Color { r: 0.35, g: 0.35, b: 0.35, a: 1.0 };
-    const ICON_COLOR: Color = Color { r: 0.85, g: 0.85, b: 0.85, a: 1.0 };
-    const HOVER: Color = Color { r: 0.25, g: 0.45, b: 0.70, a: 1.0 };
-    const TIP_BG: Color = Color { r: 0.10, g: 0.10, b: 0.10, a: 0.98 };
     const COLS: usize = 4;
 
     let cell = |snap_type: crate::snap::SnapType, label: &'static str| -> Element<'static, Message> {
-        let icon = container(crate::ui::icons::tinted::<Message>(
+        let icon = container(crate::ui::icons::themed::<Message>(
             crate::ui::icons::osnap(snap_type),
             16.0,
-            ICON_COLOR,
         ))
         .width(26)
         .height(26)
@@ -947,26 +832,33 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
         .align_y(iced::Center);
         let btn = button(icon)
             .on_press(Message::SnapOverridePick(snap_type))
-            .style(|_: &Theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered | button::Status::Pressed => HOVER,
-                    _ => Color::TRANSPARENT,
-                })),
+            .style(|theme: &Theme, status| button::Style {
+                background: matches!(
+                    status,
+                    button::Status::Hovered | button::Status::Pressed
+                )
+                .then_some(Background::Color(
+                    theme.extended_palette().primary.weak.color
+                )),
                 border: Border::default(),
                 ..Default::default()
             })
             .padding(2);
         iced::widget::tooltip(
             btn,
-            container(text(label).size(11).color(Color::WHITE))
-                .style(|_: &Theme| container::Style {
-                    background: Some(Background::Color(TIP_BG)),
+            container(text(label).size(11))
+                .style(|theme: &Theme| {
+                    let palette = theme.extended_palette();
+                    container::Style {
+                    background: Some(Background::Color(palette.background.strong.color)),
                     border: Border {
-                        color: PANEL_BORDER,
+                        color: palette.background.neutral.color,
                         width: 1.0,
                         radius: 2.0.into(),
                     },
+                    text_color: Some(palette.background.strong.text),
                     ..Default::default()
+                    }
                 })
                 .padding([2, 6]),
             iced::widget::tooltip::Position::Bottom,
@@ -984,14 +876,17 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
     }
 
     let panel = container(grid)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+            background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
-                color: PANEL_BORDER,
+                color: palette.background.neutral.color,
                 width: 1.0,
                 radius: 4.0.into(),
             },
             ..Default::default()
+            }
         })
         .padding(4);
 
@@ -1024,49 +919,6 @@ pub(super) fn qselect_overlay<'a>(
     properties: &[(String, String)],
 ) -> Element<'a, Message> {
     use iced::widget::{checkbox, pick_list};
-    const BG: Color = Color {
-        r: 0.12,
-        g: 0.12,
-        b: 0.12,
-        a: 0.98,
-    };
-    const BORDER: Color = Color {
-        r: 0.35,
-        g: 0.35,
-        b: 0.35,
-        a: 1.0,
-    };
-    const TEXT: Color = Color {
-        r: 0.88,
-        g: 0.88,
-        b: 0.88,
-        a: 1.0,
-    };
-    const BTN_OK: Color = Color {
-        r: 0.22,
-        g: 0.42,
-        b: 0.68,
-        a: 1.0,
-    };
-    const BTN_OK_HOV: Color = Color {
-        r: 0.30,
-        g: 0.52,
-        b: 0.80,
-        a: 1.0,
-    };
-    const BTN_BG: Color = Color {
-        r: 0.22,
-        g: 0.22,
-        b: 0.22,
-        a: 1.0,
-    };
-    const BTN_HOV: Color = Color {
-        r: 0.30,
-        g: 0.30,
-        b: 0.30,
-        a: 1.0,
-    };
-
     let mut type_options: Vec<String> = vec![QSELECT_ANY_TYPE.to_string()];
     type_options.extend(types.iter().cloned());
 
@@ -1111,28 +963,33 @@ pub(super) fn qselect_overlay<'a>(
     let label = |s: &'static str| {
         text(s)
             .size(12)
-            .color(TEXT)
             .width(iced::Length::Fixed(90.0))
     };
 
-    let btn = |lbl: &'static str, msg: Message, base: Color, hov: Color| {
-        button(text(lbl).size(12).color(TEXT))
+    let btn = |lbl: &'static str, msg: Message, primary: bool| {
+        button(text(lbl).size(12))
             .on_press(msg)
-            .style(move |_: &Theme, st| button::Style {
-                background: Some(Background::Color(
-                    if matches!(st, button::Status::Hovered | button::Status::Pressed) {
-                        hov
-                    } else {
-                        base
-                    },
-                )),
-                text_color: TEXT,
+            .style(move |theme: &Theme, st| {
+                let palette = theme.extended_palette();
+                let pair = match (
+                    primary,
+                    matches!(st, button::Status::Hovered | button::Status::Pressed),
+                ) {
+                    (true, true) => palette.primary.strong,
+                    (true, false) => palette.primary.base,
+                    (false, true) => palette.background.strong,
+                    (false, false) => palette.background.weak,
+                };
+                button::Style {
+                background: Some(Background::Color(pair.color)),
+                text_color: pair.text,
                 border: Border {
-                    color: BORDER,
+                    color: palette.background.neutral.color,
                     width: 1.0,
                     radius: 4.0.into(),
                 },
                 ..Default::default()
+                }
             })
             .padding([4, 14])
     };
@@ -1143,7 +1000,7 @@ pub(super) fn qselect_overlay<'a>(
     }
 
     let panel_body = column![
-        text("Quick Select").size(14).color(TEXT),
+        text("Quick Select").size(14),
         Space::new().height(10),
         row![
             label("Object type:"),
@@ -1198,15 +1055,15 @@ pub(super) fn qselect_overlay<'a>(
                 .on_toggle(Message::QSelectSetAppend)
                 .size(14),
             Space::new().width(6),
-            text("Append to current selection").size(12).color(TEXT),
+            text("Append to current selection").size(12),
         ]
         .align_y(iced::Alignment::Center),
         Space::new().height(14),
         row![
             Space::new().width(Fill),
-            btn("Cancel", Message::QSelectClose, BTN_BG, BTN_HOV),
+            btn("Cancel", Message::QSelectClose, false),
             Space::new().width(8),
-            btn("Apply", Message::QSelectApply, BTN_OK, BTN_OK_HOV),
+            btn("Apply", Message::QSelectApply, true),
         ]
         .align_y(iced::Alignment::Center),
     ]
@@ -1215,14 +1072,17 @@ pub(super) fn qselect_overlay<'a>(
     let panel = container(panel_body)
         .padding(16)
         .width(iced::Length::Fixed(400.0))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(BG)),
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+            background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
-                color: BORDER,
+                color: palette.background.neutral.color,
                 width: 1.0,
                 radius: 6.0.into(),
             },
             ..Default::default()
+            }
         });
 
     // Outside-click catcher — fills the whole screen, sits below the

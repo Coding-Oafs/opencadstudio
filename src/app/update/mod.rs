@@ -3551,7 +3551,12 @@ impl OpenCADStudio {
             }
 
             Message::SetTheme(theme) => {
+                self.ui_theme.name = theme.to_string();
+                self.ui_theme.palette =
+                    crate::app::config::UiThemePalette::from_iced(theme.palette());
+                self.theme_color_inputs = self.ui_theme.palette.hex_values();
                 self.active_theme = theme;
+                self.persist_settings_if_changed();
                 Task::none()
             }
 
@@ -3620,6 +3625,37 @@ impl OpenCADStudio {
             Message::DefaultSaveFormatChanged(format) => {
                 self.default_save_format =
                     crate::io::canonical_save_format(&format).to_string();
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::OptionsThemeChanged(name) => {
+                self.ui_theme.name = name;
+                if let Some(theme) =
+                    crate::app::config::builtin_theme(&self.ui_theme.name)
+                {
+                    self.ui_theme.palette =
+                        crate::app::config::UiThemePalette::from_iced(theme.palette());
+                    self.theme_color_inputs = self.ui_theme.palette.hex_values();
+                    self.active_theme = theme;
+                } else {
+                    self.ui_theme.name = "Custom".to_string();
+                    self.active_theme = self.ui_theme.to_iced();
+                }
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::OptionsThemeColorChanged(index, value) => {
+                if index >= self.theme_color_inputs.len() {
+                    return Task::none();
+                }
+                self.theme_color_inputs[index] = value.clone();
+                if self.ui_theme.palette.set_hex(index, &value) {
+                    self.ui_theme.name = "Custom".to_string();
+                    self.active_theme = self.ui_theme.to_iced();
+                    self.persist_settings_if_changed();
+                }
                 Task::none()
             }
 

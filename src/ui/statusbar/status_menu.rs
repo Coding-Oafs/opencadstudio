@@ -51,57 +51,30 @@ pub fn menu_bar<'a>(
         .safe_bounds_margin(0.0)
         .close_on_background_click_global(true)
         .draw_path(DrawPath::Backdrop)
-        .style(|_: &Theme, _| iced_aw::style::menu_bar::Style {
-            bar_background: Background::Color(Color::TRANSPARENT),
-            bar_border: Border::default(),
-            bar_shadow: Shadow::default(),
-            menu_background: Background::Color(MENU_BG),
-            menu_border: Border {
-                color: MENU_BORDER,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            menu_shadow: Shadow {
-                color: Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 0.35,
+        .style(|theme: &Theme, _| {
+            let palette = theme.extended_palette();
+            iced_aw::style::menu_bar::Style {
+                bar_background: Background::Color(Color::TRANSPARENT),
+                bar_border: Border::default(),
+                bar_shadow: Shadow::default(),
+                menu_background: Background::Color(palette.background.weakest.color),
+                menu_border: Border {
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                    radius: 3.0.into(),
                 },
-                offset: iced::Vector::new(0.0, -2.0),
-                blur_radius: 6.0,
-            },
-            path: Background::Color(ACTIVE_BG),
-            path_border: Border {
-                color: ACTIVE_BORDER,
-                width: 1.0,
-                radius: 2.0.into(),
-            },
+                menu_shadow: Shadow {
+                    color: palette.background.strongest.color.scale_alpha(0.35),
+                    offset: iced::Vector::new(0.0, -2.0),
+                    blur_radius: 6.0,
+                },
+                path: Background::Color(palette.primary.weak.color),
+                path_border: Border {
+                    color: palette.primary.base.color,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+            }
         })
         .into()
 }
-
-const MENU_BG: Color = Color {
-    r: 0.15,
-    g: 0.15,
-    b: 0.15,
-    a: 1.0,
-};
-const MENU_BORDER: Color = Color {
-    r: 0.32,
-    g: 0.32,
-    b: 0.32,
-    a: 1.0,
-};
-const ACTIVE_BG: Color = Color {
-    r: 0.10,
-    g: 0.20,
-    b: 0.32,
-    a: 1.0,
-};
-const ACTIVE_BORDER: Color = Color {
-    r: 0.20,
-    g: 0.50,
-    b: 0.85,
-    a: 1.0,
-};

@@ -25,7 +25,7 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, tree, Widget};
 use iced::advanced::{mouse, overlay, renderer, Clipboard, Renderer as _, Shell};
 use iced::{
-    Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size,
+    Background, Border, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size,
     Theme, Vector,
 };
 
@@ -1360,12 +1360,7 @@ impl<'a> Widget<Message, Theme, Renderer> for ReorderTab<'a> {
                             shadow: Shadow::default(),
                             snap: true,
                         },
-                        Background::Color(Color {
-                            r: 0.20,
-                            g: 0.55,
-                            b: 0.90,
-                            a: 1.0,
-                        }),
+                        Background::Color(theme.extended_palette().primary.base.color),
                     );
                 }
             }
