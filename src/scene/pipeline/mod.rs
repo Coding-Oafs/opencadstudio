@@ -257,6 +257,10 @@ pub struct Pipeline {
     gpu_hatch: Option<hatch_gpu::HatchGpu>,
     /// Compatibility hatch fills — one texture-backed GPU object per hatch.
     gpu_hatches_compat: Vec<hatch_web_gpu::HatchWebGpu>,
+    /// Tiny live hatch batch used by grip previews. Separate from the resident
+    /// batch so an interactive edit uploads only the hatch being changed.
+    gpu_preview_hatch: Option<hatch_gpu::HatchGpu>,
+    gpu_preview_hatches_compat: Vec<hatch_web_gpu::HatchWebGpu>,
     /// Wipeout masks — solid fills rendered after wires in a separate pass via
     /// the legacy per-primitive `WipeoutGpu` renderer.
     gpu_wipeouts: Vec<WipeoutGpu>,
@@ -293,6 +297,7 @@ pub struct Pipeline {
     /// Arc makes pointer identity ABA-safe: an unchanged category reuses the
     /// same Arc even when an unrelated entity advances `geometry_epoch`.
     pub cached_hatch_source: Option<std::sync::Arc<Vec<HatchModel>>>,
+    pub cached_preview_hatch_source: Option<std::sync::Arc<Vec<HatchModel>>>,
     pub cached_wipeout_source: Option<std::sync::Arc<Vec<HatchModel>>>,
     pub cached_image_source: Option<std::sync::Arc<Vec<ImageModel>>>,
     pub cached_text_source: Option<std::sync::Arc<Vec<text_gpu::TextVertex>>>,
@@ -1827,6 +1832,8 @@ impl Pipeline {
             gpu_preview_wires: vec![],
             gpu_hatch: None,
             gpu_hatches_compat: vec![],
+            gpu_preview_hatch: None,
+            gpu_preview_hatches_compat: vec![],
             gpu_wipeouts: vec![],
             wipeout_skip_flags: vec![],
             gpu_images: vec![],
@@ -1842,6 +1849,7 @@ impl Pipeline {
             gpu_face3d_edges: vec![],
             viewcube,
             cached_hatch_source: None,
+            cached_preview_hatch_source: None,
             cached_wipeout_source: None,
             cached_image_source: None,
             cached_text_source: None,
@@ -2877,6 +2885,35 @@ impl Pipeline {
         }
     }
 
+    pub fn upload_preview_hatches(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        hatches: &[HatchModel],
+    ) {
+        if let Some(bgl1) = &self.hatch_compat_bgl1 {
+            self.gpu_preview_hatches_compat = hatches
+                .iter()
+                .filter(|h| h.boundary.len() >= 3)
+                .map(|h| hatch_web_gpu::HatchWebGpu::new(device, queue, h, bgl1))
+                .collect();
+            self.gpu_preview_hatch = None;
+            return;
+        }
+
+        self.gpu_preview_hatches_compat.clear();
+        let Some(bgl1) = &self.hatch_bgl1 else {
+            self.gpu_preview_hatch = None;
+            return;
+        };
+        let renderable: Vec<HatchModel> = hatches
+            .iter()
+            .filter(|h| h.boundary.len() >= 3)
+            .cloned()
+            .collect();
+        self.gpu_preview_hatch = hatch_gpu::HatchGpu::build(device, bgl1, &renderable);
+    }
+
     pub fn upload_wipeouts(&mut self, device: &wgpu::Device, wipeouts: &[HatchModel]) {
         self.gpu_wipeouts = wipeouts
             .iter()
@@ -3063,6 +3100,18 @@ impl Pipeline {
                     pass.draw(0..batch.vertex_count, 0..1);
                 }
             }
+            if let (Some(batch), Some(pipeline)) =
+                (&self.gpu_preview_hatch, &self.hatch_pipeline)
+            {
+                if !self.skip_hatch_frame {
+                    pass.set_pipeline(pipeline);
+                    pass.set_stencil_reference(stencil_ref);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, &batch.bind_group, &[]);
+                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
+                    pass.draw(0..batch.vertex_count, 0..1);
+                }
+            }
 
             // Storage-free compatibility path. Draw before wires so outlines
             // remain on top, matching the batched path.
@@ -3072,6 +3121,11 @@ impl Pipeline {
                     pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                     pass.set_stencil_reference(stencil_ref);
                     for hatch in &self.gpu_hatches_compat {
+                        pass.set_bind_group(1, &hatch.bind_group, &[]);
+                        pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
+                        pass.draw(0..6, 0..1);
+                    }
+                    for hatch in &self.gpu_preview_hatches_compat {
                         pass.set_bind_group(1, &hatch.bind_group, &[]);
                         pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
                         pass.draw(0..6, 0..1);

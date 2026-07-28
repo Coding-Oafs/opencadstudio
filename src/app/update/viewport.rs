@@ -865,6 +865,12 @@ impl OpenCADStudio {
             self.tabs[i]
                 .scene
                 .apply_grip(grip.handle, grip.grip_id, apply);
+            if matches!(
+                self.tabs[i].scene.document.get_entity(grip.handle),
+                Some(acadrust::EntityType::Hatch(_))
+            ) {
+                self.tabs[i].scene.set_preview_hatch(grip.handle);
+            }
             self.tabs[i].dirty = true;
             self.tabs[i].active_grip.as_mut().unwrap().last_world = snapped;
             let apply_ms = apply_started.elapsed().as_secs_f64() * 1000.0;

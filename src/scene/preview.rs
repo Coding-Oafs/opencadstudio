@@ -14,6 +14,58 @@ impl Scene {
         self.preview_wires = wires;
     }
 
+    /// Publish the current cached hatch as a one-entity live fill overlay.
+    /// The edited hatch is hidden from the resident set during a grip drag;
+    /// this keeps its pattern visible without rebuilding the full hatch batch.
+    pub fn set_preview_hatch(&mut self, handle: Handle) {
+        let Some(mut model) = self.hatches.get(&handle).cloned() else {
+            self.preview_hatches = std::sync::Arc::new(Vec::new());
+            return;
+        };
+        let Some(entity) = self.document.get_entity(handle) else {
+            self.preview_hatches = std::sync::Arc::new(Vec::new());
+            return;
+        };
+
+        if !matches!(
+            model.pattern,
+            crate::scene::model::hatch_model::HatchPattern::Gradient { .. }
+        ) {
+            model.color = self.render_style(entity).0;
+        }
+        if self.selected.contains(&handle) {
+            model.color = [0.15, 0.55, 1.00, model.color[3]];
+        }
+        model.draw_depth = self
+            .draw_depth_map()
+            .get(&handle.value())
+            .map_or(0.0, |depth| depth[0]);
+
+        let mut models = Vec::with_capacity(2);
+        if let EntityType::Hatch(hatch) = entity {
+            if let Some(background) = crate::entities::hatch::background_color(hatch) {
+                let mut backdrop = model.clone();
+                backdrop.pattern =
+                    crate::scene::model::hatch_model::HatchPattern::Solid;
+                backdrop.color = match background {
+                    acadrust::types::Color::ByLayer => {
+                        crate::scene::view::render::layer_render_style(
+                            &self.document,
+                            &hatch.common.layer,
+                        )
+                        .color
+                    }
+                    acadrust::types::Color::ByBlock => self.render_style(entity).0,
+                    other => crate::scene::convert::tess_util::aci_to_rgba(&other),
+                };
+                backdrop.name = "SOLID".into();
+                models.push(backdrop);
+            }
+        }
+        models.push(model);
+        self.preview_hatches = std::sync::Arc::new(models);
+    }
+
     pub fn set_preview_text(&mut self, verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>) {
         // Overlay glyphs — same reasoning as `set_preview_wires`: no geometry
         // bump. Uploaded to a dedicated per-frame text buffer in `prepare`.
@@ -25,6 +77,9 @@ impl Scene {
         // flips the wire content id back to the base tessellation id, which
         // re-uploads the base wires (without the preview) on the next frame.
         self.preview_wires = vec![];
+        if !self.preview_hatches.is_empty() {
+            self.preview_hatches = std::sync::Arc::new(Vec::new());
+        }
         self.preview_text = vec![];
         self.interim_wire = None;
         // Drop any point-picked window marquee (STRETCH) so it doesn't linger

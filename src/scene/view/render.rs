@@ -52,6 +52,9 @@ pub struct ViewportData {
     /// the main `wires` buffer so a drag re-uploads only this small set each
     /// frame, never the resident base buffer. Drawn on top in the wire pass.
     pub(in crate::scene) preview_wires: Arc<Vec<WireModel>>,
+    /// One/few live hatch models for grip editing. Uploaded through a separate
+    /// tiny GPU batch so the resident hatch buffer remains untouched.
+    pub(in crate::scene) preview_hatches: Arc<Vec<HatchModel>>,
     /// 3DFACE entity wires — separated so they are uploaded to the dedicated
     /// face3d pipeline (fill + batched edges) instead of N individual WireGpu.
     pub(in crate::scene) face3d_wires: Arc<Vec<WireModel>>,
@@ -268,6 +271,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_mesh_content_id = u64::MAX;
                 inner.cached_face3d_key = (u64::MAX, false);
                 inner.cached_hatch_source = None;
+                inner.cached_preview_hatch_source = None;
                 inner.cached_wipeout_source = None;
                 inner.cached_image_source = None;
                 inner.cached_text_source = None;
@@ -370,6 +374,23 @@ impl shader::Primitive for Primitive {
                     if fill_mode { &vp.hatches[..] } else { &[] },
                 );
                 inner.cached_hatch_source = Some(Arc::clone(&vp.hatches));
+            }
+            let preview_hatch_changed = inner
+                .cached_preview_hatch_source
+                .as_ref()
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.preview_hatches));
+            if preview_hatch_changed || fill_changed {
+                inner.upload_preview_hatches(
+                    device,
+                    queue,
+                    if fill_mode {
+                        &vp.preview_hatches[..]
+                    } else {
+                        &[]
+                    },
+                );
+                inner.cached_preview_hatch_source =
+                    Some(Arc::clone(&vp.preview_hatches));
             }
             if wipeout_changed || fill_changed {
                 inner.upload_wipeouts(
@@ -1098,6 +1119,56 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
             p[0].to_bits().hash(&mut h);
             p[1].to_bits().hash(&mut h);
             p[2].to_bits().hash(&mut h);
+        }
+    }
+    // Live hatch preview. Pattern-origin grip drags keep the boundary fixed and
+    // move only the family anchors, so hash both geometry and pattern data.
+    vp.preview_hatches.len().hash(&mut h);
+    for model in vp.preview_hatches.iter() {
+        model.world_origin[0].to_bits().hash(&mut h);
+        model.world_origin[1].to_bits().hash(&mut h);
+        model.boundary.len().hash(&mut h);
+        for point in model.boundary.iter() {
+            point[0].to_bits().hash(&mut h);
+            point[1].to_bits().hash(&mut h);
+        }
+        for component in model.color {
+            component.to_bits().hash(&mut h);
+        }
+        model.angle_offset.to_bits().hash(&mut h);
+        model.scale.to_bits().hash(&mut h);
+        match &model.pattern {
+            crate::scene::model::hatch_model::HatchPattern::Solid => {
+                0_u8.hash(&mut h);
+            }
+            crate::scene::model::hatch_model::HatchPattern::Pattern(families) => {
+                1_u8.hash(&mut h);
+                families.len().hash(&mut h);
+                for family in families {
+                    family.angle_deg.to_bits().hash(&mut h);
+                    family.x0.to_bits().hash(&mut h);
+                    family.y0.to_bits().hash(&mut h);
+                    family.dx.to_bits().hash(&mut h);
+                    family.dy.to_bits().hash(&mut h);
+                    for dash in &family.dashes {
+                        dash.to_bits().hash(&mut h);
+                    }
+                }
+            }
+            crate::scene::model::hatch_model::HatchPattern::Gradient {
+                angle_deg,
+                color2,
+                kind,
+                invert,
+            } => {
+                2_u8.hash(&mut h);
+                angle_deg.to_bits().hash(&mut h);
+                for component in color2 {
+                    component.to_bits().hash(&mut h);
+                }
+                kind.shader_kind().hash(&mut h);
+                invert.hash(&mut h);
+            }
         }
     }
     // Grip-drag / command-preview glyph quads (issue #316). A pure-text slide
@@ -2015,6 +2086,11 @@ impl Scene {
             v.extend(self.preview_wires.iter().cloned());
             Arc::new(v)
         };
+        let preview_hatches = if show_live_overlay {
+            Arc::clone(&self.preview_hatches)
+        } else {
+            Arc::new(Vec::new())
+        };
 
         // Build the camera at the *full* viewport's aspect so the ortho
         // frustum matches what the viewport entity stores, then post-
@@ -2198,6 +2274,7 @@ impl Scene {
             wires: Arc::downgrade(&all_wires),
             clip_boundary_ndc,
             preview_wires,
+            preview_hatches,
             face3d_wires,
             text_verts,
             preview_text_verts,

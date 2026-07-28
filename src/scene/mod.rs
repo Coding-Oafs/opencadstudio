@@ -1536,6 +1536,10 @@ pub struct Scene {
     pub selection_filter: HashSet<String>,
     /// In-progress preview wires while a command is active (rubber-band + object ghosts).
     pub preview_wires: Vec<WireModel>,
+    /// Live hatch fill used by interactive edits such as dragging the pattern
+    /// origin grip. Kept separate from the resident hatch set so moving one
+    /// pattern never re-uploads every hatch in a large drawing.
+    pub preview_hatches: Arc<Vec<HatchModel>>,
     /// In-progress preview SDF glyph quads (grip drag / command preview). Rides
     /// a per-frame GPU buffer separate from the epoch-cached base text so the
     /// dragged text stays visible while it's hidden from the base set (#316).
@@ -1911,6 +1915,7 @@ impl Scene {
             transparency_display: true,
             selection_filter: HashSet::default(),
             preview_wires: vec![],
+            preview_hatches: Arc::new(Vec::new()),
             preview_text: vec![],
             interim_wire: None,
             camera_generation: 0,
