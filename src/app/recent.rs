@@ -16,10 +16,14 @@ impl OpenCADStudio {
     /// the background task that decodes its thumbnail.
     pub(super) fn push_recent(&mut self, path: PathBuf) -> iced::Task<crate::app::Message> {
         self.recent_files.retain(|r| r != &path);
+        self.recent_thumbs.remove(&path);
         self.recent_files.insert(0, path);
         let evicted = self
             .recent_files
             .split_off(self.recent_limit.min(self.recent_files.len()));
+        for path in &evicted {
+            self.recent_thumbs.remove(path);
+        }
         remove_cached_copies(evicted);
         self.save_config();
         self.refresh_recent_thumbs()
@@ -42,11 +46,36 @@ impl OpenCADStudio {
         if missing.is_empty() {
             return iced::Task::none();
         }
-        // The web build has no spawnable threads and no filesystem previews —
-        // recents there simply show without thumbnails.
         #[cfg(target_arch = "wasm32")]
         {
-            return iced::Task::none();
+            return iced::Task::perform(
+                async move {
+                    let mut thumbnails = Vec::with_capacity(missing.len());
+                    for path in missing {
+                        let handle = if let Some(name) = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                        {
+                            crate::io::web_recent::read_thumbnail(&name)
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|thumbnail| {
+                                    iced::widget::image::Handle::from_rgba(
+                                        thumbnail.width,
+                                        thumbnail.height,
+                                        thumbnail.rgba,
+                                    )
+                                })
+                        } else {
+                            None
+                        };
+                        thumbnails.push((path, handle));
+                    }
+                    thumbnails
+                },
+                crate::app::Message::RecentThumbsLoaded,
+            );
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -71,6 +100,7 @@ impl OpenCADStudio {
     /// Drop a path from the recents list (manual removal from the Start page).
     pub(super) fn remove_recent(&mut self, path: &Path) {
         self.recent_files.retain(|r| r.as_path() != path);
+        self.recent_thumbs.remove(path);
         remove_cached_copies([path.to_path_buf()]);
         self.save_config();
     }
@@ -82,6 +112,9 @@ impl OpenCADStudio {
         let evicted = self
             .recent_files
             .split_off(self.recent_limit.min(self.recent_files.len()));
+        for path in &evicted {
+            self.recent_thumbs.remove(path);
+        }
         remove_cached_copies(evicted);
         self.save_config();
     }

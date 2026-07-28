@@ -2829,6 +2829,16 @@ pub(super) fn recent_files_panel<'a>(
                 .parent()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            // Browsers intentionally do not reveal the source folder selected
+            // by the user. The reusable copy lives in origin-private browser
+            // storage, which is the truthful web equivalent of native's parent
+            // directory line.
+            #[cfg(target_arch = "wasm32")]
+            let dir = if dir.is_empty() {
+                "Browser storage".to_string()
+            } else {
+                dir
+            };
 
             // Leading DWG preview thumbnail (fixed box keeps rows aligned even
             // when a file has no readable preview).

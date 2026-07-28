@@ -26,6 +26,33 @@ pub fn extract(path: &Path, max_dim: u32) -> Option<RgbaImage> {
     Some(downscale(img, max_dim.max(1)))
 }
 
+/// Extract an embedded preview from an in-memory DWG. This is the browser
+/// counterpart of [`extract`], where the file picker supplies bytes instead of
+/// a reusable filesystem path.
+pub fn extract_bytes(bytes: &[u8], max_dim: u32) -> Option<RgbaImage> {
+    if bytes.get(..2)? != b"AC" {
+        return None;
+    }
+    let base = i32::from_le_bytes(bytes.get(0x0D..0x11)?.try_into().ok()?);
+    if base <= 0 {
+        return None;
+    }
+    let base = base as u64;
+    let start = usize::try_from(base).ok()?;
+    let total = preview_container_len(bytes.get(start..start.checked_add(20)?)?)?;
+    let container = bytes.get(start..start.checked_add(total)?)?;
+    extract_container(container, base, max_dim)
+}
+
+/// Decode a preview container read from a DWG at `file_offset`. Exposing this
+/// narrow entry point lets browser callers use `Blob.slice()` to migrate old
+/// recent files without copying the entire drawing into memory.
+pub fn extract_container(container: &[u8], file_offset: u64, max_dim: u32) -> Option<RgbaImage> {
+    let (format, data) = parse_preview_container(container, file_offset)?;
+    let img = decode(format, data)?;
+    Some(downscale(img, max_dim.max(1)))
+}
+
 /// White "DWG" wordmark, composited (centered) onto the format band.
 static DWG_LABEL_PNG: &[u8] = include_bytes!("../assets/dwg-label.png");
 /// Format band colour — OCS brand red.
@@ -119,20 +146,32 @@ fn read_preview(path: &Path) -> Option<(Fmt, Vec<u8>)> {
     f.seek(SeekFrom::Start(base)).ok()?;
     let mut head = [0u8; 20];
     f.read_exact(&mut head).ok()?;
-    if head[..16] != PREVIEW_SENTINEL {
+    let total = preview_container_len(&head)?;
+    f.seek(SeekFrom::Start(base)).ok()?;
+    let mut buf = vec![0u8; total];
+    f.read_exact(&mut buf).ok()?;
+    let (format, data) = parse_preview_container(&buf, base)?;
+    Some((format, data.to_vec()))
+}
+
+fn preview_container_len(head: &[u8]) -> Option<usize> {
+    if head.get(..16)? != PREVIEW_SENTINEL {
         return None;
     }
-    let overall = u32::from_le_bytes([head[16], head[17], head[18], head[19]]) as usize;
+    let overall = u32::from_le_bytes(head.get(16..20)?.try_into().ok()?) as usize;
     if overall == 0 || overall > 64 * 1024 * 1024 {
         return None;
     }
     // Whole container = sentinel(16) + size(4) + overall + end sentinel(16).
-    let total = 36 + overall;
-    f.seek(SeekFrom::Start(base)).ok()?;
-    let mut buf = vec![0u8; total];
-    f.read_exact(&mut buf).ok()?;
+    36usize.checked_add(overall)
+}
 
-    let count = buf[20] as usize;
+fn parse_preview_container(buf: &[u8], base: u64) -> Option<(Fmt, &[u8])> {
+    let total = preview_container_len(buf.get(..20)?)?;
+    if buf.len() < total {
+        return None;
+    }
+    let count = *buf.get(20)? as usize;
     let mut off = 21usize;
     for _ in 0..count {
         if off + 9 > buf.len() {
@@ -155,7 +194,7 @@ fn read_preview(path: &Path) -> Option<(Fmt, Vec<u8>)> {
         if size == 0 || end > buf.len() {
             continue;
         }
-        return Some((fmt, buf[rel..end].to_vec()));
+        return Some((fmt, &buf[rel..end]));
     }
     None
 }
