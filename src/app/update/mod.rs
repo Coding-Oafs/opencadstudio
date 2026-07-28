@@ -4356,23 +4356,25 @@ impl OpenCADStudio {
                     .and_then(|p: &std::path::Path| p.file_stem())
                     .map(|s: &std::ffi::OsStr| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "drawing".into());
-                Task::perform(
-                    crate::io::pdf_export::pick_pdf_path_owned(stem),
-                    Message::PlotExportPath,
-                )
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let Some(window_id) = self.main_window else {
+                        return Task::done(Message::PlotExportPath(None));
+                    };
+                    iced::window::run(window_id, move |parent| {
+                        crate::io::pdf_export::pick_pdf_path_owned(stem, parent)
+                    })
+                    .map(Message::PlotExportPath)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    Task::perform(
+                        crate::io::pdf_export::pick_pdf_path_owned(stem),
+                        Message::PlotExportPath,
+                    )
+                }
             }
-            // None means the save dialog was cancelled — or never opened at
-            // all (a broken XDG portal / missing zenity on Linux resolves to
-            // None too, and rfd only reports that through `log`, which is
-            // opt-in). Either way say something instead of silently doing
-            // nothing. (#369)
-            Message::PlotExportPath(None) => {
-                self.command_line.push_info(
-                    "PDF export canceled — no file chosen. \
-                     If no dialog appeared, use EXPORTPDF <path>.",
-                );
-                Task::none()
-            }
+            Message::PlotExportPath(None) => Task::none(),
             Message::PlotExportPath(Some(path)) => self.on_plot_export_path_some(path),
 
             Message::PlotFormat(f) => {
@@ -4391,19 +4393,25 @@ impl OpenCADStudio {
                     .and_then(|p: &std::path::Path| p.file_stem())
                     .map(|s: &std::ffi::OsStr| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "drawing".into());
-                Task::perform(
-                    crate::io::pdf_export::pick_pdf_path_owned(stem),
-                    Message::PlotWindowExportPath,
-                )
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let Some(window_id) = self.main_window else {
+                        return Task::done(Message::PlotWindowExportPath(None));
+                    };
+                    iced::window::run(window_id, move |parent| {
+                        crate::io::pdf_export::pick_pdf_path_owned(stem, parent)
+                    })
+                    .map(Message::PlotWindowExportPath)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    Task::perform(
+                        crate::io::pdf_export::pick_pdf_path_owned(stem),
+                        Message::PlotWindowExportPath,
+                    )
+                }
             }
-            // Same silent-None trap as PlotExportPath above. (#369)
-            Message::PlotWindowExportPath(None) => {
-                self.command_line.push_info(
-                    "PDF export canceled — no file chosen. \
-                     If no dialog appeared, use EXPORTPDF <path>.",
-                );
-                Task::none()
-            }
+            Message::PlotWindowExportPath(None) => Task::none(),
             Message::PlotWindowExportPath(Some(path)) => self.on_plot_window_export_path_some(path),
 
             Message::BackgroundIoFinished(result, reopen_plot) => {

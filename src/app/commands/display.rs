@@ -448,40 +448,8 @@ impl OpenCADStudio {
             "PLOT" | "PRINT" => {
                 return Some(Task::done(Message::PlotDialogOpen));
             }
-            // With no argument these open the save dialog; with a path they
-            // export straight to it. The direct form is also the workaround for
-            // systems where the native save dialog cannot open at all (broken
-            // XDG portal / missing zenity on Linux) — there the dialog future
-            // resolves to None and no export would happen. (#369)
-            cmd if cmd == "EXPORT"
-                || cmd == "EXPORTPDF"
-                || cmd.starts_with("EXPORT ")
-                || cmd.starts_with("EXPORTPDF ") =>
-            {
-                // Strip the keyword actually typed — EXPORTPDF first, since
-                // EXPORT is its prefix (see #295 for the failure mode).
-                let arg = cmd
-                    .strip_prefix("EXPORTPDF")
-                    .or_else(|| cmd.strip_prefix("EXPORT"))
-                    .unwrap_or("")
-                    .trim()
-                    .trim_matches('"');
-                if arg.is_empty() {
-                    return Some(Task::done(Message::PlotExport));
-                }
-                let mut path = std::path::PathBuf::from(arg);
-                if path.extension().is_none() {
-                    path.set_extension("pdf");
-                }
-                // A bare filename lands next to the drawing when it has a home.
-                if path.is_relative() {
-                    if let Some(dir) =
-                        self.tabs[i].current_path.as_deref().and_then(|p| p.parent())
-                    {
-                        path = dir.join(path);
-                    }
-                }
-                return Some(self.on_plot_export_path_some(path));
+            "EXPORT" | "EXPORTPDF" => {
+                return Some(Task::done(Message::PlotExport));
             }
             // PLOTSTYLE — load or clear CTB/STB plot style table
             cmd if cmd == "PLOTSTYLE" || cmd.starts_with("PLOTSTYLE ") => {

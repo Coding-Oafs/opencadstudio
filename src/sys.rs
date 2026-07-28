@@ -131,6 +131,20 @@ pub fn file_dialog() -> rfd::AsyncFileDialog {
     }
 }
 
+/// Blocking native file dialog seeded with the last-used directory.
+///
+/// Use this through `iced::window::run` when the picker needs the main
+/// window's raw handle. Portal-based desktops can otherwise reject or lose a
+/// parentless save request without ever showing a dialog (#537).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn blocking_file_dialog() -> rfd::FileDialog {
+    let dlg = rfd::FileDialog::new();
+    match crate::config::last_dialog_dir() {
+        Some(dir) => dlg.set_directory(dir),
+        None => dlg,
+    }
+}
+
 /// Web: no filesystem paths, nothing to remember.
 #[cfg(target_arch = "wasm32")]
 pub fn file_dialog() -> rfd::AsyncFileDialog {

@@ -99,17 +99,26 @@ pub fn export_pdf(
     file.write_all(&bytes).map_err(|e| e.to_string())
 }
 
-/// Show a PDF save-file dialog and return the chosen path (or None if cancelled).
+/// Show a parented PDF save-file dialog and return the chosen path.
+///
+/// The parent comes from `iced::window::run`, keeping the portal request tied
+/// to the visible app window on Wayland instead of silently resolving to
+/// `None` on desktops that reject a parentless save dialog (#537).
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn pick_pdf_path_owned(stem: String) -> Option<std::path::PathBuf> {
-    crate::sys::file_dialog()
+pub fn pick_pdf_path_owned(
+    stem: String,
+    parent: &dyn iced::window::Window,
+) -> Option<std::path::PathBuf> {
+    let path = crate::sys::blocking_file_dialog()
+        .set_parent(parent)
         .set_title("Export as PDF")
         .set_file_name(&format!("{stem}.pdf"))
         .add_filter("PDF Files", &["pdf"])
         .add_filter("All Files", &["*"])
         .save_file()
-        .await
-        .map(|h| crate::sys::handle_path(&h))
+        ?;
+    crate::config::remember_dialog_dir(&path);
+    Some(path)
 }
 
 // ── PDF builder ───────────────────────────────────────────────────────────

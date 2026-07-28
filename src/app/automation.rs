@@ -822,56 +822,6 @@ mod tests {
     }
 
     #[test]
-    fn exportpdf_with_explicit_path_writes_pdf_without_dialog() {
-        // EXPORTPDF <path> must export straight to the given file — no save
-        // dialog — and confirm on the command line. This is the dialog-free
-        // export path added for #369 (Export to PDF silently did nothing when
-        // the native save dialog could not open).
-        let mut app = OpenCADStudio::new_for_test();
-        app.automation_op(r#"{"op":"new"}"#);
-        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 100,50"}"#);
-
-        let path = std::env::temp_dir().join(format!("ocs_test_369_{}.pdf", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let start = app.command_line.history.len();
-        let _ = app.run_command_line(&format!("EXPORTPDF {}", path.display()));
-        let out: String = app.command_line.history[start..]
-            .iter()
-            .map(|e| e.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(out.contains("Exported"), "no export confirmation: {out:?}");
-
-        let bytes = std::fs::read(&path).expect("EXPORTPDF <path> should write the file");
-        assert!(bytes.starts_with(b"%PDF"), "output is not a PDF");
-        assert!(bytes.len() > 200, "suspiciously small PDF: {}", bytes.len());
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn cancelled_pdf_save_dialog_reports_on_command_line() {
-        // The save dialog resolving to None (cancelled, or it never opened —
-        // e.g. a broken XDG portal) must leave a visible message, not silence.
-        // Regression for #369.
-        use crate::app::Message;
-        let mut app = OpenCADStudio::new_for_test();
-        app.automation_op(r#"{"op":"new"}"#);
-        for msg in [Message::PlotExportPath(None), Message::PlotWindowExportPath(None)] {
-            let start = app.command_line.history.len();
-            let _ = app.update(msg);
-            let out: String = app.command_line.history[start..]
-                .iter()
-                .map(|e| e.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                out.contains("EXPORTPDF"),
-                "dialog-None must mention the EXPORTPDF fallback: {out:?}"
-            );
-        }
-    }
-
-    #[test]
     fn handing_over_an_already_open_drawing_switches_to_its_tab() {
         // Double-clicking a drawing that is already open should land on the tab
         // showing it, not load a second copy of the same file.
