@@ -71,31 +71,45 @@ impl OpenCADStudio {
                 520,
                 500,
             ),
-            super::super::ModalKind::PluginManager => sized(
-                crate::ui::window::plugin_manager::view_window(
-                    &self.disabled_plugins,
-                    &self.external_plugins,
-                    &self.loaded_plugin_ids,
-                    crate::ui::window::plugin_manager::MarketView {
-                        registry: &self.plugin_registry,
-                        registry_loading: self.plugin_registry_loading,
-                        registry_error: self.plugin_registry_error.as_deref(),
-                        registry_error_details_open: self.plugin_registry_error_details_open,
-                        input: &self.plugin_repo_input,
-                        search: &self.plugin_search_input,
-                        repos: &self.plugin_repos,
-                        release_tags: &self.repo_release_tags,
-                        selected_tag: &self.repo_selected_tag,
-                        selected_repo: self.selected_plugin_repo.as_deref(),
-                        readmes: &self.plugin_readmes,
-                        readme_loading: &self.plugin_readme_loading,
-                        status: &self.marketplace_status,
-                    },
-                    &self.active_theme,
-                ),
-                940,
-                600,
-            ),
+            super::super::ModalKind::PluginManager => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    sized(
+                        crate::ui::window::plugin_manager::view_window(
+                            &self.disabled_plugins,
+                            &self.external_plugins,
+                            &self.loaded_plugin_ids,
+                            crate::ui::window::plugin_manager::MarketView {
+                                registry: &self.plugin_registry,
+                                registry_loading: self.plugin_registry_loading,
+                                registry_error: self.plugin_registry_error.as_deref(),
+                                registry_error_details_open: self
+                                    .plugin_registry_error_details_open,
+                                input: &self.plugin_repo_input,
+                                search: &self.plugin_search_input,
+                                repos: &self.plugin_repos,
+                                release_tags: &self.repo_release_tags,
+                                selected_tag: &self.repo_selected_tag,
+                                selected_repo: self.selected_plugin_repo.as_deref(),
+                                readmes: &self.plugin_readmes,
+                                readme_loading: &self.plugin_readme_loading,
+                                status: &self.marketplace_status,
+                            },
+                            &self.active_theme,
+                        ),
+                        940,
+                        600,
+                    )
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    sized(
+                        crate::ui::window::plugin_manager::view_web_notice(),
+                        520,
+                        260,
+                    )
+                }
+            }
             super::super::ModalKind::UpdateNotice => {
                 let latest = self.update_notice_version.as_deref().unwrap_or("?");
                 let body = self.update_notice_body.as_deref().unwrap_or("");

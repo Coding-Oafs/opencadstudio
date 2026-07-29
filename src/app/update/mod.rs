@@ -4058,8 +4058,7 @@ impl OpenCADStudio {
             Message::PluginManagerOpen => {
                 #[cfg(target_arch = "wasm32")]
                 {
-                    self.command_line
-                        .push_info("External plugins are available in the desktop app.");
+                    self.active_modal = Some(super::ModalKind::PluginManager);
                     return Task::none();
                 }
                 #[cfg(not(target_arch = "wasm32"))]

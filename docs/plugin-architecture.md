@@ -334,8 +334,9 @@ plugin dead, and reports a `CallTimeout` error via the normal plugin error path.
 ## Marketplace
 
 The desktop **Plugin Manager** (`PLUGINS` / `PLUGINMANAGER`, or the Start-page
-button) installs plugins from GitHub Releases. It is hidden in the browser
-build because marketplace packages are native dynamic libraries:
+button) installs plugins from GitHub Releases. In the browser, the same entry
+points show a desktop-download notice because marketplace packages are native
+dynamic libraries:
 
 - **Curated registry** — [`plugins/registry.json`](../plugins/registry.json) in
   this repo lists discoverable plugins. The host fetches it from `main` at

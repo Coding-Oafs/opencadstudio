@@ -81,9 +81,10 @@ on the web.
 
 Marketplace plugins are native `.dll`, `.so`, or `.dylib` packages launched in
 an isolated child process. Browsers cannot load those libraries or spawn the
-plugin runner, so the web build does not show the Plugin Manager or register
-its commands. Installed desktop plugins remain in the per-user plugins folder
-and load again on the next desktop launch.
+plugin runner. The web Plugin button and `PLUGINS` command therefore show a
+short explanation with a link to download the desktop app instead of opening
+the marketplace. Installed desktop plugins remain in the per-user plugins
+folder and load again on the next desktop launch.
 
 ### Platform shims (`src/sys.rs`)
 - `open_url`: `open::that` on native, `window.open(_blank)` on web.

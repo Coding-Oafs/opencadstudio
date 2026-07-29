@@ -521,6 +521,7 @@ pub(super) struct OpenCADStudio {
     external_plugins: Vec<crate::plugin::external::ExternalPlugin>,
     /// Ids of external packages actually loaded this session (a subset of
     /// `external_plugins` — compatible, with a library, dlopen'd at startup).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     loaded_plugin_ids: rustc_hash::FxHashSet<String>,
     /// Curated plugin registry fetched from the OpenCADStudio repo.
     plugin_registry: Vec<crate::plugin::external::RegistryEntry>,
@@ -1313,7 +1314,6 @@ impl ClipboardDeps {
 pub enum ModalKind {
     About,
     Shortcuts,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     PluginManager,
     UpdateNotice,
     Layers,

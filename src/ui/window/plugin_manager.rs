@@ -4,6 +4,8 @@
 //! launches). Dynamic loading still comes with the phase-2 loader; see
 //! `docs/plugin-architecture.md`.
 
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 use crate::app::Message;
 use crate::plugin::external::{ExternalPlugin, RegistryEntry};
 use iced::widget::{
@@ -33,9 +35,13 @@ pub struct MarketView<'a> {
     pub status: &'a str,
 }
 
-// External plugins are native dynamic libraries, so the browser build must not
-// advertise a manager it cannot use.
-#[cfg(not(target_arch = "wasm32"))]
+/// Latest desktop builds, used by the browser-only plugin notice.
+#[cfg(target_arch = "wasm32")]
+pub const DESKTOP_DOWNLOAD_URL: &str =
+    "https://github.com/HakanSeven12/OpenCADStudio/releases/latest";
+
+// Register the command names for autocomplete. On the web they open a desktop
+// download notice instead of the native marketplace.
 inventory::submit!(crate::command::CommandRegistration {
     names: &["PLUGINS", "PLUGINMANAGER"]
 });
@@ -839,6 +845,36 @@ pub fn view_window<'a>(
         )),
         ..Default::default()
     })
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+/// Browser replacement for the native Plugin Manager.
+#[cfg(target_arch = "wasm32")]
+pub fn view_web_notice<'a>() -> Element<'a, Message> {
+    let download = button(text("Download desktop app").size(13))
+        .on_press(Message::OpenUrl(DESKTOP_DOWNLOAD_URL.to_string()))
+        .padding([8, 16])
+        .style(button::primary);
+
+    container(
+        column![
+            text("Plugins require the desktop app").size(20),
+            text(
+                "Open CAD Studio plugins are native packages and cannot run inside a browser. \
+                 Install the desktop app to browse, install, and use plugins.",
+            )
+            .size(13)
+            .style(muted_style),
+            Space::new().height(8),
+            download,
+        ]
+        .spacing(8)
+        .padding(24)
+        .width(Fill),
+    )
+    .center(Fill)
     .width(Fill)
     .height(Fill)
     .into()

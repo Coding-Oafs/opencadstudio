@@ -2300,11 +2300,11 @@ pub(super) fn start_page_view<'a>(
         .into(),
         outline_btn("Options", Message::OptionsOpen).into(),
     ];
-    // External plugins are native dynamic libraries and the web build is
-    // already in the browser, so both actions are desktop-only.
+    secondary_items.push(outline_btn("Plugins", Message::PluginManagerOpen).into());
+    // The web build is already in the browser, so only the desktop offers a
+    // link to the web version.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        secondary_items.push(outline_btn("Plugins", Message::PluginManagerOpen).into());
         // Filled with the active theme's primary colour.
         secondary_items.push(
             button(text("OCS Web").size(14))
