@@ -218,6 +218,7 @@ impl OpenCADStudio {
             )
             .width(Fill)
             .height(Fill)
+            .min_size(scene.model_pane_min_px())
             .spacing(crate::scene::TILE_DIVIDER_PX);
             stack![size_probe, shaders].width(Fill).height(Fill).into()
         };
@@ -236,6 +237,7 @@ impl OpenCADStudio {
                 })
                 .width(Fill)
                 .height(Fill)
+                .min_size(scene.model_pane_min_px())
                 .spacing(crate::scene::TILE_DIVIDER_PX)
                 .on_resize(6.0, Message::PaneResized)
                 .into(),
@@ -782,6 +784,7 @@ impl OpenCADStudio {
                     .into(),
             ])
             .report_width0(self.render_bar_w.clone())
+            .report_width0(tab.scene.model_pane_min_reporter())
             .into();
             // Pin the bar to the active model tile's top-left corner so it
             // follows the active panel in a tiled layout.

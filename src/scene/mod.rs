@@ -1110,6 +1110,9 @@ pub(crate) struct ModelTile {
 /// the drawn viewports line up exactly with the pane_grid layout.
 pub const TILE_DIVIDER_PX: f32 = 2.0;
 
+/// Minimum used until the viewport render-mode bar reports its natural width.
+pub const MODEL_PANE_MIN_FALLBACK_PX: f32 = 50.0;
+
 /// Shift every vertex of a freshly tessellated `MeshLodSet` into the
 /// scene's local f32 space by subtracting `world_offset`. ACIS / SAT
 /// tessellation hands us WCS coordinates; the wire / hatch / face3d
@@ -1502,6 +1505,10 @@ pub struct Scene {
     /// Plain field (not a `RefCell`) so the view can borrow it for the
     /// `PaneGrid` widget's lifetime; mutated through `&mut Scene` in update.
     pub(crate) model_panes: iced::widget::pane_grid::State<usize>,
+    /// Natural width of the Model viewport control bar. `DensitySwap` updates
+    /// it during layout; every pane-grid geometry calculation reads it on the
+    /// next frame so a pane cannot become narrower than its controls.
+    model_pane_min_px: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub selection: Rc<RefCell<SelectionState>>,
     /// The CAD document — single source of truth for all entities.
     pub document: CadDocument,
@@ -1903,6 +1910,7 @@ impl Scene {
             last_sdf_text: RefCell::new(HashMap::default()),
             // One pane mapped to tile 0 — matches the single default tile above.
             model_panes: iced::widget::pane_grid::State::new(0).0,
+            model_pane_min_px: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             selection: Rc::new(RefCell::new(SelectionState::default())),
             document: CadDocument::new(),
             object_data_cache: crate::entities::object_data::ObjectDataCache::default(),

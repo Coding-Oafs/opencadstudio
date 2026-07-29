@@ -761,7 +761,7 @@ pub struct DensitySwap<'a> {
     /// measured every layout regardless of which variant is shown — so a caller
     /// can place a neighbouring widget relative to the full-size content even
     /// while a narrower variant is on screen.
-    width0_out: Option<Arc<AtomicU32>>,
+    width0_out: Vec<Arc<AtomicU32>>,
 }
 
 impl<'a> DensitySwap<'a> {
@@ -770,7 +770,7 @@ impl<'a> DensitySwap<'a> {
             variants,
             chosen: Cell::new(0),
             height_out: None,
-            width0_out: None,
+            width0_out: Vec::new(),
         }
     }
 
@@ -783,7 +783,7 @@ impl<'a> DensitySwap<'a> {
 
     /// Report the first variant's natural (unconstrained) width — see `width0_out`.
     pub fn report_width0(mut self, out: Arc<AtomicU32>) -> Self {
-        self.width0_out = Some(out);
+        self.width0_out.push(out);
         self
     }
 }
@@ -818,7 +818,7 @@ impl<'a> Widget<Message, Theme, Renderer> for DensitySwap<'a> {
         for (i, v) in self.variants.iter_mut().enumerate() {
             let n = v.as_widget_mut().layout(&mut tree.children[i], renderer, &natural);
             if i == 0 {
-                if let Some(out) = &self.width0_out {
+                for out in &self.width0_out {
                     out.store(n.size().width.to_bits(), Ordering::Relaxed);
                 }
             }

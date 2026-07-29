@@ -4,6 +4,24 @@ use super::*;
 impl Scene {
     // ── Layout management ─────────────────────────────────────────────────
 
+    pub(crate) fn model_pane_min_px(&self) -> f32 {
+        let measured = f32::from_bits(
+            self.model_pane_min_px
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        if measured.is_finite() && measured > 1.0 {
+            measured
+        } else {
+            MODEL_PANE_MIN_FALLBACK_PX
+        }
+    }
+
+    pub(crate) fn model_pane_min_reporter(
+        &self,
+    ) -> std::sync::Arc<std::sync::atomic::AtomicU32> {
+        self.model_pane_min_px.clone()
+    }
+
     /// Rename a paper-space layout.  Updates the Layout object name in the document.
     pub fn rename_layout(&mut self, old_name: &str, new_name: &str) {
         for obj in self.document.objects.values_mut() {
@@ -361,7 +379,11 @@ impl Scene {
         let half = TILE_DIVIDER_PX * 0.5;
         self.model_panes
             .layout()
-            .split_regions(TILE_DIVIDER_PX, 0.0, iced::Size::new(vw, vh))
+            .split_regions(
+                TILE_DIVIDER_PX,
+                self.model_pane_min_px(),
+                iced::Size::new(vw, vh),
+            )
             .values()
             .map(|(axis, region, ratio)| match axis {
                 Axis::Vertical => {
@@ -394,7 +416,7 @@ impl Scene {
         }
         let regions = self.model_panes.layout().pane_regions(
             TILE_DIVIDER_PX,
-            0.0,
+            self.model_pane_min_px(),
             iced::Size::new(vw, vh),
         );
         self.model_panes
@@ -421,7 +443,7 @@ impl Scene {
         }
         let regions = self.model_panes.layout().pane_regions(
             TILE_DIVIDER_PX,
-            0.0,
+            self.model_pane_min_px(),
             iced::Size::new(canvas_w, canvas_h),
         );
         let mut tiles = self.model_tiles.borrow_mut();
