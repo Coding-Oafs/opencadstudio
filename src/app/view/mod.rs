@@ -1931,27 +1931,27 @@ fn doc_tab_context_menu(
         item
     };
 
-    let native_path_actions = cfg!(not(target_arch = "wasm32")) && has_current_path;
-    container(
-        column![
-            item("Save All", Some(Message::DocTabSaveAll)),
-            item("Close All", Some(Message::DocTabCloseAll)),
-            item(
-                "Close All Other Drawings",
-                has_other_drawings.then_some(Message::DocTabCloseOthers(tab_idx)),
-            ),
-            item(
+    let mut menu = column![
+        item("Save All", Some(Message::DocTabSaveAll)),
+        item("Close All", Some(Message::DocTabCloseAll)),
+        item(
+            "Close All Other Drawings",
+            has_other_drawings.then_some(Message::DocTabCloseOthers(tab_idx)),
+        ),
+    ];
+    if cfg!(not(target_arch = "wasm32")) {
+        menu = menu
+            .push(item(
                 "Copy Full File Path",
-                native_path_actions.then_some(Message::DocTabCopyFullPath(tab_idx)),
-            ),
-            item(
+                has_current_path.then_some(Message::DocTabCopyFullPath(tab_idx)),
+            ))
+            .push(item(
                 "Open File Location",
-                native_path_actions.then_some(Message::DocTabOpenFileLocation(tab_idx)),
-            ),
-        ]
-        .spacing(0)
-        .width(MENU_W),
-    )
+                has_current_path.then_some(Message::DocTabOpenFileLocation(tab_idx)),
+            ));
+    }
+
+    container(menu.spacing(0).width(MENU_W))
     .style(container::bordered_box)
     .padding([4, 0])
     .width(iced::Length::Fixed(MENU_W))
