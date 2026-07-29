@@ -1,6 +1,7 @@
 pub mod align;
 pub mod array;
 pub mod attedit;
+pub mod blend;
 pub mod break_cmd;
 pub mod copy;
 pub mod delete;

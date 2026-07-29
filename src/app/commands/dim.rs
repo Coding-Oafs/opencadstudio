@@ -819,6 +819,22 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
+            "BLEND" | "BLE" => {
+                use crate::modules::draw::modify::blend::BlendCommand;
+                let all_entities: Vec<_> = self.tabs[i]
+                    .scene
+                    .entity_wires()
+                    .iter()
+                    .filter_map(|wire| {
+                        let handle = Scene::handle_from_wire_name(&wire.name)?;
+                        self.tabs[i].scene.document.get_entity(handle).cloned()
+                    })
+                    .collect();
+                let new_cmd = BlendCommand::new(all_entities);
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
             "ARRAY" | "ARRAYRECT" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
