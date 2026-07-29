@@ -30,6 +30,10 @@ pub struct ExternalPlugin {
     pub name: String,
     pub version: String,
     pub description: String,
+    /// GitHub source in `owner/repo` form. New marketplace installs persist
+    /// this beside the manifest so their README remains discoverable even when
+    /// an older `plugin.toml` does not declare `repository`.
+    pub repository: Option<String>,
     pub api_version: u32,
     pub ribbon_order: i32,
     pub command_prefixes: Vec<String>,
@@ -125,6 +129,11 @@ pub fn discover() -> Vec<ExternalPlugin> {
             continue;
         };
         if let Some(mut p) = parse_plugin_toml(&text) {
+            if p.repository.is_none() {
+                p.repository = std::fs::read_to_string(dir.join(".source_repo"))
+                    .ok()
+                    .and_then(|repo| normalize_repository(&repo));
+            }
             p.lib_present = lib_present_in(&dir);
             p.dir = dir;
             found.push(p);
@@ -156,6 +165,7 @@ pub(crate) fn parse_plugin_toml(text: &str) -> Option<ExternalPlugin> {
     let mut name = String::new();
     let mut version = String::new();
     let mut description = String::new();
+    let mut repository = None;
     let mut api_version: u32 = 0;
     let mut ribbon_order: i32 = 0;
     let mut command_prefixes: Vec<String> = Vec::new();
@@ -175,6 +185,7 @@ pub(crate) fn parse_plugin_toml(text: &str) -> Option<ExternalPlugin> {
             "name" => name = unquote(value),
             "version" => version = unquote(value),
             "description" => description = unquote(value),
+            "repository" => repository = normalize_repository(&unquote(value)),
             "api_version" => api_version = value.parse().unwrap_or(0),
             "ribbon_order" => ribbon_order = value.parse().unwrap_or(0),
             "command_prefixes" => command_prefixes = parse_string_array(value),
@@ -187,12 +198,33 @@ pub(crate) fn parse_plugin_toml(text: &str) -> Option<ExternalPlugin> {
         name,
         version,
         description,
+        repository,
         api_version,
         ribbon_order,
         command_prefixes,
         dir: PathBuf::new(),
         lib_present: false,
     })
+}
+
+/// Convert a plugin source URL or shorthand to the marketplace's canonical
+/// `owner/repo` form.
+pub(crate) fn normalize_repository(value: &str) -> Option<String> {
+    let repo = value
+        .trim()
+        .trim_start_matches("https://github.com/")
+        .trim_start_matches("http://github.com/")
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+    let mut parts = repo.split('/');
+    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    if owner.is_empty() || name.is_empty() {
+        None
+    } else {
+        Some(format!("{owner}/{name}"))
+    }
 }
 
 /// Strip surrounding single or double quotes from a TOML scalar.
@@ -321,6 +353,7 @@ id = "opencad.my_plugin"
 name = "My Plugin"
 version = "0.1.0"
 description = "Template plugin"
+repository = "https://github.com/example/opencad-my-plugin.git"
 
 [opencad]
 api_version = 2
@@ -330,6 +363,7 @@ xdata_apps = ["MYPLUGIN_RECORD"]
 "#;
         let p = parse_plugin_toml(toml).expect("parsed");
         assert_eq!(p.api_version, 2);
+        assert_eq!(p.repository.as_deref(), Some("example/opencad-my-plugin"));
         assert!(p.command_prefixes.contains(&"MP_".to_string()));
         assert!(p.api_compatible(), "API v2 plugins must run on API v3 host");
     }

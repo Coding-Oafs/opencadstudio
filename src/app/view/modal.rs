@@ -79,14 +79,19 @@ impl OpenCADStudio {
                     crate::ui::window::plugin_manager::MarketView {
                         registry: &self.plugin_registry,
                         input: &self.plugin_repo_input,
+                        search: &self.plugin_search_input,
                         repos: &self.plugin_repos,
                         release_tags: &self.repo_release_tags,
                         selected_tag: &self.repo_selected_tag,
+                        selected_repo: self.selected_plugin_repo.as_deref(),
+                        readmes: &self.plugin_readmes,
+                        readme_loading: &self.plugin_readme_loading,
                         status: &self.marketplace_status,
                     },
+                    &self.active_theme,
                 ),
-                520,
-                460,
+                940,
+                600,
             ),
             super::super::ModalKind::UpdateNotice => {
                 let latest = self.update_notice_version.as_deref().unwrap_or("?");

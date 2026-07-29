@@ -528,10 +528,19 @@ pub(super) struct OpenCADStudio {
     plugin_repos: Vec<String>,
     /// Add-repository text field in the Plugin Manager.
     plugin_repo_input: String,
+    /// Live filter for installed and available plugin cards.
+    plugin_search_input: String,
     /// Installable release tags fetched per linked repo (for the dropdown).
     repo_release_tags: rustc_hash::FxHashMap<String, Vec<String>>,
     /// The release tag currently selected per linked repo.
     repo_selected_tag: rustc_hash::FxHashMap<String, String>,
+    /// Repository currently shown in the Plugin Manager detail pane.
+    selected_plugin_repo: Option<String>,
+    /// Parsed GitHub README content or the last fetch error, cached per repo.
+    plugin_readmes:
+        rustc_hash::FxHashMap<String, Result<iced::widget::markdown::Content, String>>,
+    /// README requests in flight, used to render a deterministic loading state.
+    plugin_readme_loading: rustc_hash::FxHashSet<String>,
     /// Last marketplace status / error line shown in the Plugin Manager.
     marketplace_status: String,
     /// PDSIZE text buffer for the Point Style (DDPTYPE) dialog.
@@ -2059,6 +2068,8 @@ pub enum Message {
     // ── Plugin marketplace (install from a linked repo's releases) ─────────
     /// Edit the add-repository text field.
     PluginRepoInput(String),
+    /// Filter installed and available plugin cards.
+    PluginSearchInput(String),
     /// Link the repository currently in the text field.
     PluginRepoAdd,
     /// Unlink a repository.
@@ -2079,8 +2090,14 @@ pub enum Message {
     PluginReleasesFetched(String, Result<Vec<String>, String>),
     /// Choose a release tag for a repo (`repo`, `tag`).
     PluginReleaseSelect(String, String),
+    /// Select a plugin source and show its GitHub README in the detail pane.
+    PluginReadmeSelect(String),
+    /// A GitHub README fetch finished (`repo`, Markdown or error).
+    PluginReadmeFetched(String, Result<String, String>),
     /// Install the selected release of `owner/repo`.
     PluginInstall(String),
+    /// Install a specific newer release from an installed plugin card.
+    PluginUpdate(String, String),
     /// Result of an install: the plugin id, or an error message.
     PluginInstalled(Result<String, String>),
     /// Delete an installed plugin's folder (effective next restart).
@@ -2594,8 +2611,12 @@ impl OpenCADStudio {
             plugin_registry: Vec::new(),
             plugin_repos: Vec::new(),
             plugin_repo_input: String::new(),
+            plugin_search_input: String::new(),
             repo_release_tags: rustc_hash::FxHashMap::default(),
             repo_selected_tag: rustc_hash::FxHashMap::default(),
+            selected_plugin_repo: None,
+            plugin_readmes: rustc_hash::FxHashMap::default(),
+            plugin_readme_loading: rustc_hash::FxHashSet::default(),
             marketplace_status: String::new(),
             point_size_buf: String::new(),
             point_size_relative: true,

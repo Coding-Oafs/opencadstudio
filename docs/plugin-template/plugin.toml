@@ -5,6 +5,7 @@ version = "0.1.0"
 description = "Short description of what this add-on does"
 author = "Your Name"
 license = "GPL-3.0-only"
+repository = "your-account/your-plugin-repo"
 
 [opencad]
 api_version = 3

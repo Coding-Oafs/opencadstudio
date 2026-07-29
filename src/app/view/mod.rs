@@ -1537,7 +1537,7 @@ impl OpenCADStudio {
             About => (440, 360),
             Shortcuts => (720, 520),
             Options => (480, 190),
-            PluginManager => (520, 460),
+            PluginManager => (940, 600),
             UpdateNotice => (560, 460),
             Layers => (900, 360),
             Plot => (760, 540),

@@ -295,6 +295,21 @@ impl OpenCADStudio {
         Task::none()
     }
 
+    /// Background task: fetch a repository README from its default branch.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn fetch_plugin_readme_task(&self, repo: String) -> Task<Message> {
+        let label = repo.clone();
+        Task::perform(
+            async move { crate::plugin::marketplace::fetch_readme(&repo) },
+            move |result| Message::PluginReadmeFetched(label, result),
+        )
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(in crate::app) fn fetch_plugin_readme_task(&self, _repo: String) -> Task<Message> {
+        Task::none()
+    }
+
     /// Background task: download and install the `tag` release of `owner/repo`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn install_task(&self, repo: String, tag: String) -> Task<Message> {
@@ -305,7 +320,7 @@ impl OpenCADStudio {
                     .into_iter()
                     .find(|r| r.tag == tag)
                     .ok_or_else(|| format!("release {tag} not found"))?;
-                crate::plugin::marketplace::install(&rel)
+                crate::plugin::marketplace::install(&rel, &repo)
             },
             Message::PluginInstalled,
         )

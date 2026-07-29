@@ -3951,17 +3951,42 @@ impl OpenCADStudio {
                 // Refresh the on-disk external-plugin list each time the manager
                 // opens so newly dropped-in packages show up.
                 self.external_plugins = crate::plugin::external::discover();
+                self.marketplace_status.clear();
                 self.active_modal = Some(super::ModalKind::PluginManager);
                 // Fetch the curated registry and release lists for linked repos.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let mut tasks = vec![self.fetch_registry_task()];
+                    let release_repos: rustc_hash::FxHashSet<String> = self
+                        .plugin_repos
+                        .iter()
+                        .cloned()
+                        .chain(
+                            self.external_plugins
+                                .iter()
+                                .filter_map(|plugin| plugin.repository.clone()),
+                        )
+                        .collect();
                     tasks.extend(
-                        self.plugin_repos
-                            .clone()
+                        release_repos
                             .into_iter()
                             .map(|r| self.fetch_releases_task(r)),
                     );
+                    if self.selected_plugin_repo.is_none() {
+                        self.selected_plugin_repo = self
+                            .external_plugins
+                            .iter()
+                            .find_map(|plugin| plugin.repository.clone())
+                            .or_else(|| self.plugin_registry.first().map(|entry| entry.repo.clone()))
+                            .or_else(|| self.plugin_repos.first().cloned());
+                    }
+                    if let Some(repo) = self.selected_plugin_repo.clone() {
+                        if !self.plugin_readmes.contains_key(&repo)
+                            && self.plugin_readme_loading.insert(repo.clone())
+                        {
+                            tasks.push(self.fetch_plugin_readme_task(repo));
+                        }
+                    }
                     return Task::batch(tasks);
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -3985,26 +4010,66 @@ impl OpenCADStudio {
                 self.plugin_repo_input = s;
                 Task::none()
             }
+            Message::PluginSearchInput(s) => {
+                self.plugin_search_input = s;
+                Task::none()
+            }
             Message::PluginRepoAdd => {
-                let repo = self
-                    .plugin_repo_input
-                    .trim()
-                    .trim_start_matches("https://github.com/")
-                    .trim_end_matches('/')
-                    .to_string();
-                if repo.is_empty() || self.plugin_repos.contains(&repo) {
+                let Some(repo) =
+                    crate::plugin::external::normalize_repository(&self.plugin_repo_input)
+                else {
+                    self.marketplace_status =
+                        "Enter a GitHub URL or repository in owner/repo format.".to_string();
+                    return Task::none();
+                };
+                if self.plugin_repos.contains(&repo)
+                    || self.plugin_registry.iter().any(|entry| entry.repo == repo)
+                {
+                    self.marketplace_status = format!("{repo} is already in the catalog.");
+                    self.selected_plugin_repo = Some(repo.clone());
+                    if !self.plugin_readmes.contains_key(&repo)
+                        && self.plugin_readme_loading.insert(repo.clone())
+                    {
+                        return self.fetch_plugin_readme_task(repo);
+                    }
+                    return Task::none();
+                }
+                if self
+                    .external_plugins
+                    .iter()
+                    .any(|plugin| plugin.repository.as_deref() == Some(repo.as_str()))
+                {
+                    self.marketplace_status = format!("{repo} is already installed.");
+                    self.selected_plugin_repo = Some(repo.clone());
+                    if !self.plugin_readmes.contains_key(&repo)
+                        && self.plugin_readme_loading.insert(repo.clone())
+                    {
+                        return self.fetch_plugin_readme_task(repo);
+                    }
                     return Task::none();
                 }
                 self.plugin_repos.push(repo.clone());
                 self.plugin_repo_input.clear();
                 self.persist_settings_if_changed();
                 self.marketplace_status = format!("Fetching releases for {repo}…");
-                self.fetch_releases_task(repo)
+                self.selected_plugin_repo = Some(repo.clone());
+                self.plugin_readmes.remove(&repo);
+                self.plugin_readme_loading.insert(repo.clone());
+                Task::batch(vec![
+                    self.fetch_releases_task(repo.clone()),
+                    self.fetch_plugin_readme_task(repo),
+                ])
             }
             Message::PluginRepoRemove(repo) => {
                 self.plugin_repos.retain(|r| r != &repo);
                 self.repo_release_tags.remove(&repo);
                 self.repo_selected_tag.remove(&repo);
+                if self.selected_plugin_repo.as_deref() == Some(repo.as_str())
+                    && !self.plugin_registry.iter().any(|entry| entry.repo == repo)
+                {
+                    self.selected_plugin_repo =
+                        self.plugin_registry.first().map(|entry| entry.repo.clone());
+                }
                 self.persist_settings_if_changed();
                 Task::none()
             }
@@ -4012,11 +4077,32 @@ impl OpenCADStudio {
                 // Fetch releases for every curated repo so the dropdowns fill in.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let tasks: Vec<_> = entries
+                    if self.selected_plugin_repo.is_none() {
+                        self.selected_plugin_repo = self
+                            .external_plugins
+                            .iter()
+                            .find_map(|plugin| {
+                                plugin.repository.clone().or_else(|| {
+                                    entries
+                                        .iter()
+                                        .find(|entry| entry.name.eq_ignore_ascii_case(&plugin.name))
+                                        .map(|entry| entry.repo.clone())
+                                })
+                            })
+                            .or_else(|| entries.first().map(|entry| entry.repo.clone()));
+                    }
+                    let mut tasks: Vec<_> = entries
                         .iter()
                         .map(|e| self.fetch_releases_task(e.repo.clone()))
                         .collect();
                     self.plugin_registry = entries;
+                    if let Some(repo) = self.selected_plugin_repo.clone() {
+                        if !self.plugin_readmes.contains_key(&repo)
+                            && self.plugin_readme_loading.insert(repo.clone())
+                        {
+                            tasks.push(self.fetch_plugin_readme_task(repo));
+                        }
+                    }
                     return Task::batch(tasks);
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -4073,7 +4159,10 @@ impl OpenCADStudio {
                         .entry(repo.clone())
                         .or_insert_with(|| first.clone());
                 }
-                self.marketplace_status = format!("{repo}: {} installable release(s)", tags.len());
+                if self.marketplace_status == format!("Fetching releases for {repo}…") {
+                    self.marketplace_status =
+                        format!("Repository added. {} installable release(s) found.", tags.len());
+                }
                 self.repo_release_tags.insert(repo, tags);
                 Task::none()
             }
@@ -4085,11 +4174,36 @@ impl OpenCADStudio {
                 self.repo_selected_tag.insert(repo, tag);
                 Task::none()
             }
+            Message::PluginReadmeSelect(repo) => {
+                self.selected_plugin_repo = Some(repo.clone());
+                if self.plugin_readme_loading.contains(&repo) {
+                    return Task::none();
+                }
+                if matches!(self.plugin_readmes.get(&repo), Some(Ok(_))) {
+                    return Task::none();
+                }
+                // A second click on an error state acts as retry.
+                self.plugin_readmes.remove(&repo);
+                self.plugin_readme_loading.insert(repo.clone());
+                self.fetch_plugin_readme_task(repo)
+            }
+            Message::PluginReadmeFetched(repo, result) => {
+                self.plugin_readme_loading.remove(&repo);
+                self.plugin_readmes.insert(
+                    repo,
+                    result.map(|source| iced::widget::markdown::Content::parse(&source)),
+                );
+                Task::none()
+            }
             Message::PluginInstall(repo) => {
                 let Some(tag) = self.repo_selected_tag.get(&repo).cloned() else {
                     return Task::none();
                 };
                 self.marketplace_status = format!("Installing {repo} {tag}…");
+                self.install_task(repo, tag)
+            }
+            Message::PluginUpdate(repo, tag) => {
+                self.marketplace_status = format!("Updating {repo} to {tag}…");
                 self.install_task(repo, tag)
             }
             Message::PluginInstalled(Ok(id)) => {
