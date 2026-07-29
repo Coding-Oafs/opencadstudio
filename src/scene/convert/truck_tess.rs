@@ -132,7 +132,18 @@ pub fn tessellate_edge(e: &Edge) -> TruckTessResult {
     // parameter_division samples adaptively: fewer points on straight segments,
     // more on tight curves, all within the active chord-height tolerance.
     // The Scene scales this with zoom so far-out arcs aren't oversampled.
-    let (_, pts) = curve.parameter_division((t0, t1), current_curve_tol());
+    let (_, mut pts) = curve.parameter_division((t0, t1), current_curve_tol());
+    // Keep the rendered endpoints bit-for-bit identical to the topology.
+    // Evaluating a curve again at t=0/1 can differ from its stored vertices by
+    // a few f64 ULPs (a straight line's end is computed as p0 + (p1-p0), for
+    // example). At extreme zoom that turns a shared CAD endpoint into a visible
+    // gap between independently tessellated entities (#561).
+    if let Some(first) = pts.first_mut() {
+        *first = e.front().point();
+    }
+    if pts.len() > 1 {
+        *pts.last_mut().expect("length checked") = e.back().point();
+    }
     let mut high: Vec<[f32; 3]> = Vec::with_capacity(pts.len());
     let mut low: Vec<[f32; 3]> = Vec::with_capacity(pts.len());
     for p in &pts {
