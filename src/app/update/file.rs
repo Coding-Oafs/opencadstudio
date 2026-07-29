@@ -291,8 +291,11 @@ impl OpenCADStudio {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(in crate::app) fn fetch_releases_task(&self, _repo: String) -> Task<Message> {
-        Task::none()
+    pub(in crate::app) fn fetch_releases_task(&self, repo: String) -> Task<Message> {
+        Task::done(Message::PluginReleasesFetched(
+            repo,
+            Err("External plugins are available in the desktop app.".to_string()),
+        ))
     }
 
     /// Background task: fetch a repository README from its default branch.
@@ -306,8 +309,11 @@ impl OpenCADStudio {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(in crate::app) fn fetch_plugin_readme_task(&self, _repo: String) -> Task<Message> {
-        Task::none()
+    pub(in crate::app) fn fetch_plugin_readme_task(&self, repo: String) -> Task<Message> {
+        Task::done(Message::PluginReadmeFetched(
+            repo,
+            Err("Plugin details are available in the desktop app.".to_string()),
+        ))
     }
 
     /// Background task: download and install the `tag` release of `owner/repo`.
@@ -328,7 +334,9 @@ impl OpenCADStudio {
 
     #[cfg(target_arch = "wasm32")]
     pub(in crate::app) fn install_task(&self, _repo: String, _tag: String) -> Task<Message> {
-        Task::none()
+        Task::done(Message::PluginInstalled(Err(
+            "External plugins are available in the desktop app.".to_string(),
+        )))
     }
 
     /// Gather the full persisted config (all sections) from live app state.

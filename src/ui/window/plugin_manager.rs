@@ -33,7 +33,9 @@ pub struct MarketView<'a> {
     pub status: &'a str,
 }
 
-// Register the command names for autocomplete.
+// External plugins are native dynamic libraries, so the browser build must not
+// advertise a manager it cannot use.
+#[cfg(not(target_arch = "wasm32"))]
 inventory::submit!(crate::command::CommandRegistration {
     names: &["PLUGINS", "PLUGINMANAGER"]
 });

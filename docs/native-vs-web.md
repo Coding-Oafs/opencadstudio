@@ -18,6 +18,7 @@ browser can't provide. This page lists the differences.
 | Parallelism | Multi-threaded (rayon) | Single-threaded |
 | GPU backend | Vulkan / DX12 / Metal (wgpu) | WebGL2 (WebGPU where available) |
 | Update check / external links | `ureq`, `open` | skipped / `window.open` |
+| External plugins | Native packages + Plugin Manager | **No** — native libraries cannot run in a browser |
 
 ## Details
 
@@ -75,6 +76,14 @@ headers GitHub Pages can't set). `crate::par::prelude` re-exports `rayon` on
 native and sequential `std` iterators on wasm, so the same call sites run in
 parallel on the desktop and serially in the browser. Large drawings are slower
 on the web.
+
+### External plugins — web: unavailable
+
+Marketplace plugins are native `.dll`, `.so`, or `.dylib` packages launched in
+an isolated child process. Browsers cannot load those libraries or spawn the
+plugin runner, so the web build does not show the Plugin Manager or register
+its commands. Installed desktop plugins remain in the per-user plugins folder
+and load again on the next desktop launch.
 
 ### Platform shims (`src/sys.rs`)
 - `open_url`: `open::that` on native, `window.open(_blank)` on web.

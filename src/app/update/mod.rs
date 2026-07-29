@@ -4056,14 +4056,20 @@ impl OpenCADStudio {
 
             // ── Plugin Manager window ─────────────────────────────────────
             Message::PluginManagerOpen => {
-                // Refresh the on-disk external-plugin list each time the manager
-                // opens so newly dropped-in packages show up.
-                self.external_plugins = crate::plugin::external::discover();
-                self.marketplace_status.clear();
-                self.active_modal = Some(super::ModalKind::PluginManager);
-                // Fetch the curated registry and release lists for linked repos.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.command_line
+                        .push_info("External plugins are available in the desktop app.");
+                    return Task::none();
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    // Refresh the on-disk external-plugin list each time the manager
+                    // opens so newly dropped-in packages show up.
+                    self.external_plugins = crate::plugin::external::discover();
+                    self.marketplace_status.clear();
+                    self.active_modal = Some(super::ModalKind::PluginManager);
+                    // Fetch the curated registry and release lists for linked repos.
                     self.plugin_registry_loading = true;
                     self.plugin_registry_error = None;
                     self.plugin_registry_error_details_open = false;
@@ -4100,8 +4106,6 @@ impl OpenCADStudio {
                     }
                     return Task::batch(tasks);
                 }
-                #[cfg(target_arch = "wasm32")]
-                Task::none()
             }
             Message::PluginManagerClose => {
                 self.close_active_modal();

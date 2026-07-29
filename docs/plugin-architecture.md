@@ -333,8 +333,9 @@ plugin dead, and reports a `CallTimeout` error via the normal plugin error path.
 
 ## Marketplace
 
-The **Plugin Manager** (`PLUGINS` / `PLUGINMANAGER`, or the Start-page button)
-installs plugins from GitHub Releases:
+The desktop **Plugin Manager** (`PLUGINS` / `PLUGINMANAGER`, or the Start-page
+button) installs plugins from GitHub Releases. It is hidden in the browser
+build because marketplace packages are native dynamic libraries:
 
 - **Curated registry** — [`plugins/registry.json`](../plugins/registry.json) in
   this repo lists discoverable plugins. The host fetches it from `main` at
@@ -343,7 +344,7 @@ installs plugins from GitHub Releases:
   [`plugins/README.md`](../plugins/README.md)); merged PRs reach every user with
   no app update.
 - **Manual link** — *Add a repository* (`owner/repo`) for unlisted or private
-  dev repos; linked repos persist in `settings.txt` (`plugin_repos=`).
+  dev repos; linked repos persist in `settings.json`.
 - **Install / upgrade / reinstall** — pick a release from the dropdown and
   *Install*; the host downloads the platform asset + `plugin.toml` into the
   plugins folder, checking `api_version` first. Reinstalling overwrites and

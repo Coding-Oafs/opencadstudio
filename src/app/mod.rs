@@ -1313,6 +1313,7 @@ impl ClipboardDeps {
 pub enum ModalKind {
     About,
     Shortcuts,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     PluginManager,
     UpdateNotice,
     Layers,

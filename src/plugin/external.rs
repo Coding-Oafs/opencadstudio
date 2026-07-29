@@ -13,6 +13,8 @@
 //!     <lib<name>.so | .dll | .dylib>
 //! ```
 
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 use std::path::PathBuf;
 
 /// One entry in the curated plugin registry (`plugins/registry.json`).

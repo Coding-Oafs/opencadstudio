@@ -212,8 +212,15 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::AboutOpen));
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             "PLUGINS" | "PLUGINMANAGER" => {
                 return Some(Task::done(Message::PluginManagerOpen));
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            "PLUGINS" | "PLUGINMANAGER" => {
+                self.command_line
+                    .push_info("External plugins are available in the desktop app.");
             }
 
             "CHANGELOG" => {

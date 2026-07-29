@@ -236,8 +236,6 @@ pub fn start_allowed(cmd: &str) -> bool {
             | "REPORT"
             | "CHANGELOG"
             | "ABOUT"
-            | "PLUGINS"
-            | "PLUGINMANAGER"
             | "DONATE"
             | "WEBVERSION"
             | "HELP"
@@ -247,6 +245,8 @@ pub fn start_allowed(cmd: &str) -> bool {
             | "CUILOAD"
             | "CUIIMPORT"
     )
+        || (!cfg!(target_arch = "wasm32")
+            && matches!(cmd, "PLUGINS" | "PLUGINMANAGER"))
 }
 
 // ── Autocomplete registry — one-shot commands ──────────────────────────────
