@@ -5,7 +5,7 @@ use iced::time::Instant;
 use crate::app::Message;
 use crate::command::CmdOption;
 use iced::widget::{
-    button, column, container, opaque, row, text, text_editor, text_input, tooltip, Space,
+    button, column, container, opaque, row, rule, text, text_editor, text_input, tooltip, Space,
 };
 use iced::{Background, Border, Color, Element, Length, Theme};
 
@@ -361,11 +361,18 @@ impl CommandLine {
         // Only the most recent entries pushed within the last few
         // seconds show on the overlay. The dropdown button keeps the
         // full backlog reachable when the user actually wants it.
-        let visible: Vec<&HistoryEntry> = self
+        let mut visible: Vec<&HistoryEntry> = self
             .history
             .iter()
             .filter(|e| e.pinned || e.created_at.elapsed().as_secs_f32() < HISTORY_VISIBLE_SECS)
             .collect();
+        // Keep the active prompt/options immediately above the input. Commands
+        // may emit informational lines while waiting for the next option; those
+        // lines belong above the pinned interaction row, not below it.
+        if let Some(index) = visible.iter().position(|entry| entry.pinned) {
+            let pinned = visible.remove(index);
+            visible.push(pinned);
+        }
         let start = visible.len().saturating_sub(4);
         let history_rows = visible[start..]
             .iter()
@@ -602,7 +609,6 @@ impl CommandLine {
             .width(Length::Fill)
             .padding([2, 6]);
             let panel = container(column![header, log])
-                .style(container::bordered_box)
                 .width(Length::Fill)
                 .padding([4, 0]);
             opaque(panel).into()
@@ -610,9 +616,12 @@ impl CommandLine {
             container(column![]).height(0).into()
         };
 
-        container(column![
-            autocomplete,
-            dropdown,
+        // The transient recent lines and the full archive are two views of the
+        // same history. Showing both while the archive is open creates a fake
+        // second history region and visually disconnects the input row (#555).
+        let recent_history: Element<'a, Message> = if self.history_open {
+            container(column![]).height(0).into()
+        } else {
             container(history_rows)
                 .style(|theme: &Theme| container::Style {
                     background: Some(Background::Color(
@@ -621,17 +630,25 @@ impl CommandLine {
                     ..Default::default()
                 })
                 .width(Length::Fill)
-                .padding([2, 0]),
+                .padding([2, 0])
+                .into()
+        };
+        let history_divider: Element<'a, Message> = if self.history_open {
+            rule::horizontal(1).into()
+        } else {
+            container(column![]).height(0).into()
+        };
+
+        container(column![
+            autocomplete,
+            dropdown,
+            recent_history,
+            history_divider,
             container(input_row)
                 .style(|theme: &Theme| {
                     let palette = theme.extended_palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.weakest.color)),
-                    border: Border {
-                        color: palette.background.neutral.color,
-                        width: 1.0,
-                        radius: 3.0.into()
-                    },
                     ..Default::default()
                     }
                 })
@@ -652,7 +669,8 @@ impl CommandLine {
             ..Default::default()
             }
         })
-        .width(Length::Fixed(720.0))
+        .width(Length::Fill)
+        .max_width(720.0)
         .into()
     }
 }

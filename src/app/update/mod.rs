@@ -93,6 +93,20 @@ mod util;
 mod viewport;
 
 impl OpenCADStudio {
+    fn sync_open_command_history(&mut self) {
+        if !self.command_line.history_open {
+            return;
+        }
+        let latest = self.command_line.history_plain_text();
+        if self.history_content.text() == latest {
+            return;
+        }
+        use iced::widget::text_editor::{Action, Motion};
+        self.history_content = iced::widget::text_editor::Content::with_text(&latest);
+        self.history_content
+            .perform(Action::Move(Motion::DocumentEnd));
+    }
+
     /// Close the active in-canvas modal (Plan B), mirroring what closing the
     /// old OS window did: a style editor discards its staged (un-applied)
     /// changes, and the ribbon tool that launched the dialog is de-highlighted.
@@ -178,6 +192,7 @@ impl OpenCADStudio {
             }
         }
         let task = self.update_inner(msg);
+        self.sync_open_command_history();
         // Close the document-level first-touch transaction started by
         // push_undo_snapshot at this message boundary.
         self.finish_all_pending_history();
@@ -1295,17 +1310,7 @@ impl OpenCADStudio {
 
             Message::CommandHistoryToggle => {
                 self.command_line.toggle_history();
-                // On open, snapshot the current log into the read-only editor
-                // buffer so it can be drag-selected across lines and copied.
-                if self.command_line.history_open {
-                    use iced::widget::text_editor::{Action, Motion};
-                    self.history_content = iced::widget::text_editor::Content::with_text(
-                        &self.command_line.history_plain_text(),
-                    );
-                    // Scroll to the newest line (bottom), the most useful when
-                    // opening the log to grab a recent error.
-                    self.history_content.perform(Action::Move(Motion::DocumentEnd));
-                }
+                self.sync_open_command_history();
                 Task::none()
             }
 
