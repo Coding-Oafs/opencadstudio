@@ -1325,10 +1325,10 @@ impl OpenCADStudio {
             Space::new().into()
         };
 
-        // Command-line sits as a bottom-centre overlay on top of the
-        // viewport stack rather than as a separate row in the main
-        // column — frees up vertical space when no command is active
-        // and keeps the input close to where the cursor is drawing.
+        // Drawing viewports keep the command line as a bottom-centre overlay so
+        // the input stays close to the cursor. The Start page gives it a real
+        // layout row instead: its panels and action buttons must end above the
+        // command line rather than rendering behind it (#546).
         // Autocomplete shows only when no command is collecting its
         // own input (otherwise typed prefixes are coordinates / values).
         let allow_autocomplete = tab.active_cmd.is_none();
@@ -1340,12 +1340,30 @@ impl OpenCADStudio {
             (self.dyn_input && tab.active_cmd.is_some() && !tab.dyn_fields.is_empty())
                 || self.mtext_editor.as_ref().is_some_and(|e| e.show_preview)
                 || self.text_inline.is_some();
-        let command_line_overlay =
-            iced::widget::container(self.command_line.view(
-                allow_autocomplete,
-                dyn_capturing,
-                &self.history_content,
-            ))
+        let workspace = row![properties_el, viewport_stack].width(Fill).height(Fill);
+        let command_line = self.command_line.view(
+            allow_autocomplete,
+            dyn_capturing,
+            &self.history_content,
+        );
+        let center_stack: Element<'_, Message> = if tab.is_start {
+            column![
+                workspace,
+                iced::widget::container(command_line)
+                    .width(Fill)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .padding(iced::Padding {
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 2.0,
+                        left: 0.0,
+                    }),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .into()
+        } else {
+            let command_line_overlay = iced::widget::container(command_line)
                 .width(Fill)
                 .height(Fill)
                 .align_x(iced::alignment::Horizontal::Center)
@@ -1356,13 +1374,11 @@ impl OpenCADStudio {
                     bottom: 2.0,
                     left: 0.0,
                 });
-
-        let center_stack = iced::widget::stack![
-            row![properties_el, viewport_stack].width(Fill).height(Fill),
-            command_line_overlay,
-        ]
-        .width(Fill)
-        .height(Fill);
+            iced::widget::stack![workspace, command_line_overlay]
+                .width(Fill)
+                .height(Fill)
+                .into()
+        };
 
         let main_ui = container({
             // Clean-screen mode drops the ribbon for a full-canvas view; the
