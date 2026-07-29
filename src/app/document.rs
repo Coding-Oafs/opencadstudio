@@ -438,7 +438,7 @@ impl DocumentTab {
     pub(super) fn new_drawing(n: usize) -> Self {
         let mut scene = Scene::new();
         linetypes::populate_document(&mut scene.document);
-        // Override acadrust's imperial default limits (12×9) with A4 landscape.
+        // Paper layouts start as A4 landscape.
         for obj in scene.document.objects.values_mut() {
             if let acadrust::objects::ObjectType::Layout(l) = obj {
                 if l.name != "Model" {

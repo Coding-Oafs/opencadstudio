@@ -98,7 +98,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 
 [patch.crates-io]
 # Track standard DWG object relationships used by the scene integration.
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "a66b0d9" }
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "5a2069a" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).

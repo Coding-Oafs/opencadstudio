@@ -1589,6 +1589,28 @@ fn draw_grid(
             }
         }
         draw_segments(frame, &segments);
+
+        // LIMITS bounds the grid, not the UCS axes. Size the axes from the
+        // visible grid plane so X/Y/Z still span the viewport even when the
+        // finite grid rectangle is small or currently off-screen.
+        let axis_extent = samples.iter().fold(0.0_f32, |extent, (_, world)| {
+            let delta = (*world - grid_origin).as_vec3();
+            extent
+                .max(delta.dot(axis1).abs())
+                .max(delta.dot(axis2).abs())
+        });
+        if axis_extent > 0.0 {
+            let extent = (axis_extent + s) * 1.5;
+            draw_axes(
+                frame,
+                view_rot,
+                eye,
+                bounds,
+                extent.max(10.0),
+                grid_origin,
+                (gx, gy, gz),
+            );
+        }
         return;
     }
 
