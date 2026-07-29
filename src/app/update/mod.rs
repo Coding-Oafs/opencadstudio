@@ -1213,6 +1213,12 @@ impl OpenCADStudio {
             }
 
             Message::CommandHistoryPrev => {
+                if self.tabs[self.active_tab]
+                    .properties
+                    .hatch_pattern_picker_open
+                {
+                    return self.update(Message::PropHatchPatternNavigate(-2));
+                }
                 // Grip popup wins first — arrow keys walk its items.
                 if let Some(popup) = self.grip_popup.as_mut() {
                     if !popup.items.is_empty() {
@@ -1235,6 +1241,12 @@ impl OpenCADStudio {
             }
 
             Message::CommandHistoryNext => {
+                if self.tabs[self.active_tab]
+                    .properties
+                    .hatch_pattern_picker_open
+                {
+                    return self.update(Message::PropHatchPatternNavigate(2));
+                }
                 if let Some(popup) = self.grip_popup.as_mut() {
                     if !popup.items.is_empty() {
                         popup.selected = (popup.selected + 1) % popup.items.len();
@@ -1349,7 +1361,17 @@ impl OpenCADStudio {
             }
             Message::CommandFinalize => self.on_command_finalize(),
 
-            Message::CommandEscape => self.on_command_escape(),
+            Message::CommandEscape => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                if panel.hatch_pattern_picker_open {
+                    panel.hatch_pattern_picker_open = false;
+                    panel.hatch_pattern_search.clear();
+                    panel.hatch_pattern_focus = 0;
+                    Task::none()
+                } else {
+                    self.on_command_escape()
+                }
+            }
 
             Message::Command(cmd) => {
                 // Close viewport context menu if open.
@@ -2764,6 +2786,12 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::MTextCaretMove(d) => {
+                if self.tabs[self.active_tab]
+                    .properties
+                    .hatch_pattern_picker_open
+                {
+                    return self.update(Message::PropHatchPatternNavigate(d as i8));
+                }
                 self.mtext_caret_move(d);
                 Task::none()
             }
@@ -3088,7 +3116,79 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::PropHatchPatternChanged(name) => self.on_prop_hatch_pattern_changed(name),
+            Message::PropHatchPatternChanged(name) => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                panel.hatch_pattern_picker_open = false;
+                panel.hatch_pattern_search.clear();
+                self.on_prop_hatch_pattern_changed(name)
+            }
+
+            Message::PropHatchPatternPickerToggle(current) => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                panel.hatch_pattern_picker_open = !panel.hatch_pattern_picker_open;
+                if panel.hatch_pattern_picker_open {
+                    panel.color_picker_open = false;
+                    panel.color_palette_open = false;
+                    panel.open_color_field = None;
+                    panel.edit_choice_open = false;
+                    panel.hatch_pattern_focus =
+                        crate::ui::properties::filtered_hatch_patterns("")
+                            .iter()
+                            .position(|entry| entry.name.eq_ignore_ascii_case(&current))
+                            .unwrap_or(0);
+                    return iced::widget::operation::focus(iced::widget::Id::new(
+                        "hatch-pattern-search",
+                    ));
+                } else {
+                    panel.hatch_pattern_search.clear();
+                    panel.hatch_pattern_focus = 0;
+                }
+                Task::none()
+            }
+
+            Message::PropHatchPatternSearchChanged(search) => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                panel.hatch_pattern_search = search;
+                panel.hatch_pattern_focus = 0;
+                Task::none()
+            }
+
+            Message::PropHatchPatternFocus(index) => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                let len =
+                    crate::ui::properties::filtered_hatch_patterns(&panel.hatch_pattern_search)
+                        .len();
+                if index < len {
+                    panel.hatch_pattern_focus = index;
+                }
+                Task::none()
+            }
+
+            Message::PropHatchPatternNavigate(delta) => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                let len =
+                    crate::ui::properties::filtered_hatch_patterns(&panel.hatch_pattern_search)
+                        .len();
+                if len > 0 {
+                    panel.hatch_pattern_focus =
+                        (panel.hatch_pattern_focus as isize + delta as isize)
+                            .rem_euclid(len as isize) as usize;
+                }
+                Task::none()
+            }
+
+            Message::PropHatchPatternConfirm => {
+                let panel = &self.tabs[self.active_tab].properties;
+                let name =
+                    crate::ui::properties::filtered_hatch_patterns(&panel.hatch_pattern_search)
+                        .get(panel.hatch_pattern_focus)
+                        .map(|entry| entry.name.clone());
+                if let Some(name) = name {
+                    self.update(Message::PropHatchPatternChanged(name))
+                } else {
+                    Task::none()
+                }
+            }
 
             Message::PropBoolToggle(field) => {
                 let i = self.active_tab;
@@ -3236,6 +3336,10 @@ impl OpenCADStudio {
             Message::PropEditChoiceToggle => {
                 let panel = &mut self.tabs[self.active_tab].properties;
                 panel.edit_choice_open = !panel.edit_choice_open;
+                if panel.edit_choice_open {
+                    panel.hatch_pattern_picker_open = false;
+                    panel.hatch_pattern_search.clear();
+                }
                 Task::none()
             }
 
@@ -3255,6 +3359,8 @@ impl OpenCADStudio {
                     !self.tabs[i].properties.color_picker_open;
                 if self.tabs[i].properties.color_picker_open {
                     self.tabs[i].properties.color_palette_open = false;
+                    self.tabs[i].properties.hatch_pattern_picker_open = false;
+                    self.tabs[i].properties.hatch_pattern_search.clear();
                 }
                 Task::none()
             }
@@ -3382,6 +3488,8 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 self.tabs[i].properties.color_picker_open = false;
                 self.tabs[i].properties.color_palette_open = false;
+                self.tabs[i].properties.hatch_pattern_picker_open = false;
+                self.tabs[i].properties.hatch_pattern_search.clear();
                 Task::none()
             }
 

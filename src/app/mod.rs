@@ -1926,6 +1926,16 @@ pub enum Message {
     PropVertexStep(i8),
     /// User selected a hatch pattern from the pattern pick_list in Properties.
     PropHatchPatternChanged(String),
+    /// Open or close the visual hatch-pattern picker.
+    PropHatchPatternPickerToggle(String),
+    /// Filter the visual hatch-pattern picker.
+    PropHatchPatternSearchChanged(String),
+    /// Move the visual pattern grid focus to a hovered card.
+    PropHatchPatternFocus(usize),
+    /// Move keyboard focus by one card or one two-column row.
+    PropHatchPatternNavigate(i8),
+    /// Select the keyboard-focused visual pattern card.
+    PropHatchPatternConfirm,
     /// User selected a generic choice field in the Properties panel.
     PropGeomChoiceChanged {
         field: &'static str,

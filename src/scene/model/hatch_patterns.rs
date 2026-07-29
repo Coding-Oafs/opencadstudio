@@ -34,10 +34,6 @@ pub fn find(name: &str) -> Option<&'static PatternEntry> {
     catalog().iter().find(|e| e.name.eq_ignore_ascii_case(name))
 }
 
-pub fn names() -> Vec<String> {
-    catalog().iter().map(|e| e.name.clone()).collect()
-}
-
 // ── DXF export ────────────────────────────────────────────────────────────
 
 pub fn build_dxf_pattern(entry: &PatternEntry) -> DxfPattern {

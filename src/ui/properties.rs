@@ -8,18 +8,24 @@
 //! • Geometry   → text_input per coordinate / dimension field
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use crate::ui::ROW_H;
 use acadrust::types::{Color as AcadColor, LineWeight};
 use acadrust::Handle;
-use iced::widget::{button, column, combo_box, container, row, scrollable, text, text_input};
-use iced::{Background, Border, Color, Element, Length, Padding, Theme};
+use iced::widget::{
+    button, canvas, column, combo_box, container, mouse_area, row, scrollable, text, text_input,
+};
+use iced::{
+    mouse, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Size, Theme,
+};
 
 // ── Row-height-derived constants ─────────────────────────────────────────
 const FONT_SZ: f32 = ROW_H * 0.42; // ≈11 px
 const COMBO_PAD_V: f32 = (ROW_H - FONT_SZ * 1.3 - 2.0) / 2.0; // fills combo to ROW_H
 const SWATCH_SZ: f32 = ROW_H * 0.54; // ≈14 px color swatch
+const PATTERN_CARD_W: f32 = 158.0;
+const PATTERN_PREVIEW_H: f32 = 58.0;
 
 use crate::app::Message;
 use crate::scene::model::object::{PropSection, PropValue};
@@ -70,6 +76,124 @@ impl fmt::Display for SelectionGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.label)
     }
+}
+
+#[derive(Clone)]
+struct HatchPatternPreview {
+    pattern: crate::scene::model::hatch_model::HatchPattern,
+}
+
+impl canvas::Program<Message> for HatchPatternPreview {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use crate::scene::model::hatch_model::{HatchModel, HatchPattern};
+
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let palette = theme.extended_palette();
+        let pad = 4.0;
+        let sample = canvas::Path::rectangle(
+            Point::new(pad, pad),
+            Size::new(
+                (bounds.width - pad * 2.0).max(0.0),
+                (bounds.height - pad * 2.0).max(0.0),
+            ),
+        );
+        frame.fill(&sample, palette.background.base.color);
+
+        match &self.pattern {
+            HatchPattern::Solid => {
+                frame.fill(&sample, palette.background.base.text.scale_alpha(0.72));
+            }
+            HatchPattern::Gradient { .. } => {
+                frame.fill(&sample, palette.primary.weak.color);
+            }
+            HatchPattern::Pattern(_) => {
+                let model = HatchModel {
+                    world_origin: [0.0, 0.0],
+                    boundary: Arc::new(vec![
+                        [pad, pad],
+                        [bounds.width - pad, pad],
+                        [bounds.width - pad, bounds.height - pad],
+                        [pad, bounds.height - pad],
+                    ]),
+                    boundary_wcs: None,
+                    pattern: self.pattern.clone(),
+                    name: String::new(),
+                    color: [1.0; 4],
+                    angle_offset: 0.0,
+                    scale: hatch_preview_scale(&self.pattern),
+                    draw_depth: 0.0,
+                };
+                let stroke = canvas::Stroke::default()
+                    .with_color(palette.background.base.text)
+                    .with_width(1.0);
+                for segment in model.pattern_segments() {
+                    frame.stroke(
+                        &canvas::Path::line(
+                            Point::new(segment[0][0] as f32, bounds.height - segment[0][1] as f32),
+                            Point::new(segment[1][0] as f32, bounds.height - segment[1][1] as f32),
+                        ),
+                        stroke.clone(),
+                    );
+                }
+            }
+        }
+
+        frame.stroke(
+            &sample,
+            canvas::Stroke::default()
+                .with_color(palette.background.neutral.color)
+                .with_width(1.0),
+        );
+        vec![frame.into_geometry()]
+    }
+}
+
+fn hatch_preview_scale(pattern: &crate::scene::model::hatch_model::HatchPattern) -> f32 {
+    use crate::scene::model::hatch_model::HatchPattern;
+
+    let HatchPattern::Pattern(families) = pattern else {
+        return 1.0;
+    };
+    let spacing = families
+        .iter()
+        .filter_map(|family| {
+            let spacing = family.dy.abs();
+            (spacing > 1.0e-4).then_some(spacing)
+        })
+        .fold(f32::INFINITY, f32::min);
+    if spacing.is_finite() {
+        (8.0 / spacing).clamp(0.01, 100.0)
+    } else {
+        1.0
+    }
+}
+
+fn hatch_pattern_matches(
+    entry: &crate::scene::model::hatch_patterns::PatternEntry,
+    search: &str,
+) -> bool {
+    let query = search.trim();
+    query.is_empty()
+        || entry.name.to_lowercase().contains(&query.to_lowercase())
+        || entry.description.to_lowercase().contains(&query.to_lowercase())
+}
+
+pub(crate) fn filtered_hatch_patterns(
+    search: &str,
+) -> Vec<&'static crate::scene::model::hatch_patterns::PatternEntry> {
+    crate::scene::model::hatch_patterns::catalog()
+        .iter()
+        .filter(|entry| hatch_pattern_matches(entry, search))
+        .collect()
 }
 
 /// All standard CAD lineweight options for the combobox.
@@ -131,7 +255,12 @@ pub struct PropertiesPanel {
     pub layer_combo: combo_box::State<String>,
     pub lineweight_combo: combo_box::State<LwItem>,
     pub linetype_combo: combo_box::State<LinetypeItem>,
-    pub hatch_pattern_combo: combo_box::State<String>,
+    /// Whether the visual hatch-pattern picker is open.
+    pub hatch_pattern_picker_open: bool,
+    /// Case-insensitive filter for the visual hatch-pattern picker.
+    pub hatch_pattern_search: String,
+    /// Keyboard/hover focus inside the filtered visual pattern grid.
+    pub hatch_pattern_focus: usize,
     /// In-progress text edits keyed by `field` name.
     pub edit_buf: HashMap<String, String>,
     /// Entity handles this panel was built for. `refresh_properties` compares
@@ -177,7 +306,9 @@ impl Default for PropertiesPanel {
             layer_combo: combo_box::State::new(vec![]),
             lineweight_combo: combo_box::State::new(lw_options()),
             linetype_combo: combo_box::State::new(vec![]),
-            hatch_pattern_combo: combo_box::State::new(crate::scene::model::hatch_patterns::names()),
+            hatch_pattern_picker_open: false,
+            hatch_pattern_search: String::new(),
+            hatch_pattern_focus: 0,
             edit_buf: HashMap::default(),
             source_handles: vec![],
             color_picker_open: false,
@@ -865,38 +996,142 @@ impl PropertiesPanel {
         label: &'a str,
         current: &'a str,
     ) -> Element<'a, Message> {
-        let selected = if current == VARIES_LABEL {
-            None
-        } else {
-            Some(current.to_string())
-        };
-        // iced hides `selected` while the combo has focus and shows its
-        // placeholder instead. Use the real pattern name for a single hatch;
-        // a fixed VARIES placeholder made a correct ANSI31 value look mixed as
-        // soon as the dropdown opened (#476).
-        let placeholder = if current == VARIES_LABEL {
-            VARIES_LABEL
-        } else {
-            current
-        };
-        let combo = combo_box(
-            &self.hatch_pattern_combo,
-            placeholder,
-            selected.as_ref(),
-            Message::PropHatchPatternChanged,
+        let head = button(
+            row![
+                text(crate::ui::text_util::elide(current, 16))
+                    .size(FONT_SZ)
+                    .width(Length::Fill),
+                if self.hatch_pattern_picker_open {
+                    crate::ui::icons::themed_arrow_up(FONT_SZ)
+                } else {
+                    crate::ui::icons::themed_arrow_down(FONT_SZ)
+                },
+            ]
+            .align_y(iced::Center),
         )
-        .size(FONT_SZ)
-        .padding(Padding {
-            top: COMBO_PAD_V,
-            bottom: COMBO_PAD_V,
-            left: 6.0,
-            right: 6.0,
+        .on_press(Message::PropHatchPatternPickerToggle(current.to_string()))
+        .style(move |theme: &Theme, status| {
+            let palette = theme.extended_palette();
+            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(Background::Color(if hovered {
+                    palette.background.weak.color
+                } else {
+                    palette.background.base.color
+                })),
+                text_color: palette.background.base.text,
+                border: Border {
+                    color: if self.hatch_pattern_picker_open {
+                        palette.primary.base.color
+                    } else {
+                        palette.background.neutral.color
+                    },
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..Default::default()
+            }
         })
-        .input_style(combo_input_style)
-        .on_open(Message::PropColorPickerClose)
+        .padding([COMBO_PAD_V, 6.0])
         .width(Length::Fill);
 
-        prop_row_widget(label, combo.into())
+        if !self.hatch_pattern_picker_open {
+            return prop_row_widget(label, head.into());
+        }
+
+        let search = text_input("Search patterns…", &self.hatch_pattern_search)
+            .id(iced::widget::Id::new("hatch-pattern-search"))
+            .on_input(Message::PropHatchPatternSearchChanged)
+            .on_submit(Message::PropHatchPatternConfirm)
+            .size(FONT_SZ)
+            .padding([5, 7])
+            .width(Length::Fill);
+
+        let mut grid = column![].spacing(6);
+        let visible = filtered_hatch_patterns(&self.hatch_pattern_search);
+        for (row_index, pair) in visible.chunks(2).enumerate() {
+            let mut cards = row![].spacing(6);
+            for (column_index, entry) in pair.iter().enumerate() {
+                let index = row_index * 2 + column_index;
+                let selected = current.eq_ignore_ascii_case(&entry.name);
+                let focused = self.hatch_pattern_focus == index;
+                let name = entry.name.clone();
+                let preview = canvas(HatchPatternPreview {
+                    pattern: entry.gpu.clone(),
+                })
+                .width(Length::Fill)
+                .height(PATTERN_PREVIEW_H);
+                let card = button(
+                    column![
+                        preview,
+                        container(text(crate::ui::text_util::elide(&entry.name, 20)).size(FONT_SZ))
+                            .width(Length::Fill)
+                            .align_x(iced::Center),
+                    ]
+                    .spacing(3),
+                )
+                .on_press(Message::PropHatchPatternChanged(name))
+                .style(move |theme: &Theme, status| {
+                    let palette = theme.extended_palette();
+                    let hovered =
+                        matches!(status, button::Status::Hovered | button::Status::Pressed);
+                    let pair = if selected {
+                        palette.primary.weak
+                    } else if hovered || focused {
+                        palette.background.strong
+                    } else {
+                        palette.background.weak
+                    };
+                    button::Style {
+                        background: Some(Background::Color(pair.color)),
+                        text_color: pair.text,
+                        border: Border {
+                            color: if selected || focused {
+                                palette.primary.base.color
+                            } else {
+                                palette.background.neutral.color
+                            },
+                            width: if selected || focused { 2.0 } else { 1.0 },
+                            radius: 4.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .padding(5)
+                .width(PATTERN_CARD_W);
+                cards = cards.push(
+                    mouse_area(card).on_enter(Message::PropHatchPatternFocus(index)),
+                );
+            }
+            grid = grid.push(cards);
+        }
+
+        let results: Element<'_, Message> = if visible.is_empty() {
+            container(
+                text("No matching patterns")
+                    .size(FONT_SZ)
+                    .style(hint_text_style),
+            )
+            .padding(12)
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .into()
+        } else {
+            scrollable(grid)
+                .height(Length::Fixed(300.0))
+                .width(Length::Fill)
+                .into()
+        };
+        let popup = container(column![search, results].spacing(7))
+            .style(container::bordered_box)
+            .padding(8)
+            .width(348)
+            .max_height(360.0);
+
+        prop_row_widget(
+            label,
+            crate::ui::color_select::floating_below(head.into(), popup.into()),
+        )
     }
 }
 
@@ -1489,5 +1724,28 @@ fn muted_text_style(theme: &Theme) -> iced::widget::text::Style {
 fn hint_text_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(theme.extended_palette().background.base.text.scale_alpha(0.48)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hatch_pattern_matches, hatch_preview_scale};
+
+    #[test]
+    fn hatch_picker_filters_names_and_descriptions() {
+        let ansi31 = crate::scene::model::hatch_patterns::find("ANSI31").unwrap();
+
+        assert!(hatch_pattern_matches(ansi31, "ansi"));
+        assert!(hatch_pattern_matches(ansi31, &ansi31.description));
+        assert!(!hatch_pattern_matches(ansi31, "definitely-not-a-pattern"));
+    }
+
+    #[test]
+    fn hatch_preview_scale_is_finite_and_visible() {
+        let ansi31 = crate::scene::model::hatch_patterns::find("ANSI31").unwrap();
+        let scale = hatch_preview_scale(&ansi31.gpu);
+
+        assert!(scale.is_finite());
+        assert!((0.01..=100.0).contains(&scale));
     }
 }

@@ -342,9 +342,6 @@ impl OpenCADStudio {
                         lineweight_combo: iced::widget::combo_box::State::new(
                             ui::properties::lw_options(),
                         ),
-                        hatch_pattern_combo: iced::widget::combo_box::State::new(
-                            crate::scene::model::hatch_patterns::names(),
-                        ),
                         linetype_items,
                         ..Default::default()
                     }
@@ -1464,9 +1461,6 @@ impl OpenCADStudio {
                         title,
                         layer_combo: iced::widget::combo_box::State::new(layer_names.clone()),
                         linetype_combo: iced::widget::combo_box::State::new(linetype_items.clone()),
-                        hatch_pattern_combo: iced::widget::combo_box::State::new(
-                            crate::scene::model::hatch_patterns::names(),
-                        ),
                         lineweight_combo: iced::widget::combo_box::State::new(
                             ui::properties::lw_options(),
                         ),
@@ -1484,9 +1478,6 @@ impl OpenCADStudio {
                     linetype_combo: iced::widget::combo_box::State::new(linetype_items.clone()),
                     lineweight_combo: iced::widget::combo_box::State::new(
                         ui::properties::lw_options(),
-                    ),
-                    hatch_pattern_combo: iced::widget::combo_box::State::new(
-                        crate::scene::model::hatch_patterns::names(),
                     ),
                     linetype_items,
                     ..Default::default()
@@ -1528,9 +1519,6 @@ impl OpenCADStudio {
                         selected_group: active_group,
                         layer_combo: iced::widget::combo_box::State::new(layer_names.clone()),
                         linetype_combo: iced::widget::combo_box::State::new(linetype_items.clone()),
-                        hatch_pattern_combo: iced::widget::combo_box::State::new(
-                            crate::scene::model::hatch_patterns::names(),
-                        ),
                         lineweight_combo: iced::widget::combo_box::State::new(
                             ui::properties::lw_options(),
                         ),

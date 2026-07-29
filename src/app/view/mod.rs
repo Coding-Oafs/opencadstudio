@@ -45,6 +45,34 @@ fn viewcube_has_room(bar_w: f32, tile_w: f32) -> bool {
     bar_w + VIEWCUBE_GAP + VIEWCUBE_REGION_PX + VIEWCUBE_PAD <= tile_w
 }
 
+fn hatch_pattern_key_event(
+    event: iced::Event,
+    status: iced::event::Status,
+    _window: window::Id,
+) -> Option<Message> {
+    if !matches!(status, iced::event::Status::Captured) {
+        return None;
+    }
+    let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) = event else {
+        return None;
+    };
+    match key {
+        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+            Some(Message::PropHatchPatternNavigate(-1))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+            Some(Message::PropHatchPatternNavigate(1))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+            Some(Message::PropHatchPatternNavigate(-2))
+        }
+        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+            Some(Message::PropHatchPatternNavigate(2))
+        }
+        _ => None,
+    }
+}
+
 /// `ViewportRenderMode` enum carries the raw DXF integers, not a label,
 /// so wrap it locally with a friendly name renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1658,6 +1686,14 @@ impl OpenCADStudio {
         let single_instance = crate::io::single_instance::subscribe().map(Message::OpenExternal);
         #[cfg(target_arch = "wasm32")]
         let single_instance = Subscription::none();
+        let hatch_pattern_keys = if self.tabs[self.active_tab]
+            .properties
+            .hatch_pattern_picker_open
+        {
+            event::listen_with(hatch_pattern_key_event)
+        } else {
+            Subscription::none()
+        };
         iced::Subscription::batch([
             frames,
             history_tick,
@@ -1668,6 +1704,7 @@ impl OpenCADStudio {
             web_fonts,
             autosave,
             single_instance,
+            hatch_pattern_keys,
             event::listen_with(|ev, status, win_id| {
                 use iced::event::Status;
                 match ev {
