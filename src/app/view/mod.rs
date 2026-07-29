@@ -2327,6 +2327,27 @@ pub(super) fn start_page_view<'a>(
         .row_h(44.0)
         .report_natural_width(action_width_out.clone());
 
+    let sponsors = column![
+        text("Sponsors").size(15),
+        mouse_area(
+            container(
+                iced::widget::svg(iced::widget::svg::Handle::from_memory(include_bytes!(
+                    "../../../assets/sponsors/openaec-logo-dark-on-light.svg"
+                )))
+                .width(Fill)
+                .height(iced::Length::Fixed(120.0))
+                .content_fit(iced::ContentFit::Contain),
+            )
+            .width(Fill)
+            .max_width(300.0),
+        )
+        .interaction(iced::mouse::Interaction::Pointer)
+        .on_press(Message::OpenUrl("https://open-aec.com/".to_string())),
+    ]
+    .spacing(10)
+    .align_x(iced::alignment::Horizontal::Center)
+    .width(Fill);
+
     let content = column![
         Space::new().height(iced::Length::Fixed(28.0)),
         container(headline).center_x(Fill),
@@ -2335,6 +2356,8 @@ pub(super) fn start_page_view<'a>(
         Space::new().height(iced::Length::Fixed(10.0)),
         container(secondary_row).center_x(Fill),
         Space::new().height(Fill),
+        sponsors,
+        Space::new().height(iced::Length::Fixed(52.0)),
     ]
     .spacing(0)
     .width(Fill)
