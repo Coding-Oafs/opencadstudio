@@ -83,6 +83,8 @@ ttf-parser = "0.25"
 # render through our own wire pipeline.
 cosmic-text = "0.15"
 lyon_tessellation = "1.0.20"
+# Exact line/arc polyline offsets with self-intersection slicing and stitching.
+cavalier_contours = "=0.7.0"
 
 [dev-dependencies]
 # Shader-interface regression tests. This is already present transitively
