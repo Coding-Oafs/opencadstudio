@@ -217,6 +217,8 @@ impl OpenCADStudio {
                 );
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        crate::sys::set_unsaved_changes_warning(self.tabs.iter().any(|tab| tab.dirty));
         task
     }
 

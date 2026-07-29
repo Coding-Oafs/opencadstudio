@@ -17,6 +17,47 @@ pub fn open_url(url: &str) {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static BEFORE_UNLOAD_WARNING: std::cell::RefCell<
+        Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::BeforeUnloadEvent)>>
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Enable the browser's standard leave-page confirmation while drawings have
+/// unsaved changes. Browsers control the dialog text; preventing the event and
+/// setting `returnValue` are the portable signal that a warning is required.
+///
+/// The callback is installed only while needed so clean sessions remain
+/// eligible for the browser back/forward cache.
+#[cfg(target_arch = "wasm32")]
+pub fn set_unsaved_changes_warning(active: bool) {
+    use wasm_bindgen::JsCast;
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    BEFORE_UNLOAD_WARNING.with(|warning| {
+        let mut warning = warning.borrow_mut();
+        if active == warning.is_some() {
+            return;
+        }
+        if active {
+            let callback = wasm_bindgen::closure::Closure::new(
+                move |event: web_sys::BeforeUnloadEvent| {
+                    event.prevent_default();
+                    event.set_return_value("");
+                },
+            );
+            window.set_onbeforeunload(Some(callback.as_ref().unchecked_ref()));
+            *warning = Some(callback);
+        } else {
+            window.set_onbeforeunload(None);
+            warning.take();
+        }
+    });
+}
+
 /// Reveal a saved drawing in the native platform's file manager.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {

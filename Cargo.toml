@@ -163,6 +163,7 @@ web-sys = { version = "0.3", features = [
     "KeyboardEventInit",
     "EventInit",
     "EventTarget",
+    "BeforeUnloadEvent",
     # Error banner (web_diag): forward wgpu/naga errors to the browser console
     # and inject a copyable DOM overlay (document.body → append_child).
     "console",
