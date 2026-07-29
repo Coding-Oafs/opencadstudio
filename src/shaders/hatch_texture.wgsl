@@ -272,25 +272,29 @@ fn check_family(
         return mix(h.color2, h.color, t);
     }
 
-    // Pattern LOD: when the densest family projects below 2 px, lines blur into
-    // a solid fill — return solid instead of looping every family.
-    if u.world_per_pixel > 0.0 && h.n_families > 0u {
-        var min_spacing_world: f32 = 1.0e30;
+    // Keep every family visible until all family spacings project below 2 px,
+    // then substitute one solid fill. A single dense family must neither hide
+    // itself nor turn a complex hatch solid.
+    var all_families_subpixel = h.n_families > 0u && u.world_per_pixel > 0.0;
+    if all_families_subpixel {
         for (var i = 0u; i < h.n_families; i++) {
-            let s = abs(load_family(i).perp_step) * h.scale;
-            if s > 0.0 && s < min_spacing_world {
-                min_spacing_world = s;
+            let spacing_world = abs(load_family(i).perp_step) * h.scale;
+            if spacing_world <= 0.0 {
+                all_families_subpixel = false;
+            } else if spacing_world / u.world_per_pixel >= 2.0 {
+                all_families_subpixel = false;
             }
         }
-        if min_spacing_world / u.world_per_pixel < 2.0 {
-            return h.color;
-        }
+    }
+    if all_families_subpixel {
+        return h.color;
     }
 
     let cos_off = cos(h.angle_offset);
     let sin_off = sin(h.angle_offset);
     for (var i = 0u; i < h.n_families; i++) {
-        if check_family(v.xz, ddx_xz, ddy_xz, load_family(i), cos_off, sin_off, h.scale) {
+        let fam = load_family(i);
+        if check_family(v.xz, ddx_xz, ddy_xz, fam, cos_off, sin_off, h.scale) {
             return h.color;
         }
     }

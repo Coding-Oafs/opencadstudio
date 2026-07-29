@@ -319,27 +319,31 @@ fn check_family(
         return mix(inst.color2, inst.color, t);
     }
 
-    // 3. Pattern LOD: when the densest family's spacing projects below
-    //    2 px, lines blur into a solid fill — return color instead of
-    //    iterating every family (mirrors Phase 3.3 LOD in hatch.wgsl).
-    if u.world_per_pixel > 0.0 && inst.family_count > 0u {
-        var min_spacing_world: f32 = 1.0e30;
+    // 3. Pattern LOD. Keep every family visible until all family spacings
+    //    project below 2 px, then substitute one solid fill. A single dense
+    //    family must neither hide itself nor turn a complex hatch solid.
+    var all_families_subpixel = inst.family_count > 0u && u.world_per_pixel > 0.0;
+    if all_families_subpixel {
         for (var i = 0u; i < inst.family_count; i++) {
-            let s = abs(families[inst.family_offset + i].perp_step) * inst.scale;
-            if s > 0.0 && s < min_spacing_world {
-                min_spacing_world = s;
+            let spacing_world =
+                abs(families[inst.family_offset + i].perp_step) * inst.scale;
+            if spacing_world <= 0.0 {
+                all_families_subpixel = false;
+            } else if spacing_world / u.world_per_pixel >= 2.0 {
+                all_families_subpixel = false;
             }
         }
-        if min_spacing_world / u.world_per_pixel < 2.0 {
-            return inst.color;
-        }
+    }
+    if all_families_subpixel {
+        return inst.color;
     }
 
     // 4. Pattern evaluation.
     let cos_off = cos(inst.angle_offset);
     let sin_off = sin(inst.angle_offset);
     for (var i = 0u; i < inst.family_count; i++) {
-        if check_family(v.xz, ddx_xz, ddy_xz, families[inst.family_offset + i], cos_off, sin_off, inst.scale) {
+        let fam = families[inst.family_offset + i];
+        if check_family(v.xz, ddx_xz, ddy_xz, fam, cos_off, sin_off, inst.scale) {
             return inst.color;
         }
     }
