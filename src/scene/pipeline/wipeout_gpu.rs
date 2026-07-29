@@ -1,6 +1,6 @@
 // Wipeout GPU buffers — the legacy per-primitive fill renderer, now used ONLY
 // for wipeout masks (solid fills drawn after wires to hide them). Real hatch
-// fills go through the canonical `hatch_gpu.rs` batched renderer.
+// fills go through the capability-selected `hatch_gpu` renderer.
 //
 // It retains a general pattern/gradient capability (mode 0/2 below) and the
 // `MAX_FAMILIES = 16` cap, but wipeouts are always solid (mode 1, zero pattern

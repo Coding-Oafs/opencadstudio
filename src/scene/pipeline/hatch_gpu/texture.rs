@@ -1,14 +1,14 @@
 // Storage-free hatch renderer — texture-backed, UNCAPPED.
 //
-// WebGL2 has no storage buffers; some native adapters also expose insufficient
-// limits. This per-hatch renderer reuses the WebGL2-safe hatch algorithm (see
-// wipeout.wgsl / hatch_web.wgsl) but packs the
+// Devices without storage buffers use this per-hatch renderer. It reuses the
+// storage-free hatch algorithm (see wipeout.wgsl / hatch_texture.wgsl) but packs the
 // variable-length boundary / family / dash arrays into ONE RGBA32F data texture
 // read via textureLoad — removing the MAX_FAMILIES / MAX_HATCH_BOUNDARY_VERTS /
 // MAX_DASHES caps of the uniform (WipeoutGpu) path. Every hatch type — solid,
 // gradient, and arbitrarily complex line patterns — renders in compat mode.
 //
-// Storage-capable devices use hatch_gpu.rs; wipeout masks use wipeout_gpu.rs.
+// Storage-capable devices use the sibling storage backend; wipeout masks use
+// wipeout_gpu.rs.
 
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern};
 use iced::wgpu;
@@ -27,12 +27,24 @@ struct HatchVertex {
     _pad: f32,
 }
 
+pub(super) fn vertex_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+    wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<HatchVertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 0,
+            format: wgpu::VertexFormat::Float32x3,
+        }],
+    }
+}
+
 // ── Per-hatch uniform (binding 0) — 96 bytes, matches HatchUniforms in
-//    hatch_web.wgsl. ─────────────────────────────────────────────────────────
+//    hatch_texture.wgsl. ──────────────────────────────────────────────────────
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct HatchWebUniform {
+struct TextureHatchUniform {
     color: [f32; 4],      //  0
     color2: [f32; 4],     // 16
     mode: u32,            // 32
@@ -53,9 +65,9 @@ struct HatchWebUniform {
 
 // ── Per-hatch GPU handle ────────────────────────────────────────────────────
 
-pub struct HatchWebGpu {
-    pub vertex_buffer: wgpu::Buffer,
-    pub bind_group: wgpu::BindGroup,
+pub(super) struct TextureHatch {
+    pub(super) vertex_buffer: wgpu::Buffer,
+    pub(super) bind_group: wgpu::BindGroup,
     /// Reserved for per-frame AABB LOD (mirrors `WipeoutGpu`); not yet wired
     /// into the web hatch draw loop — the native batched path doesn't do
     /// per-hatch LOD either.
@@ -65,12 +77,12 @@ pub struct HatchWebGpu {
     _data_tex: wgpu::Texture,
 }
 
-impl HatchWebGpu {
+impl TextureHatch {
     /// Group-1 layout: uniform header (binding 0) + non-filterable float data
     /// texture (binding 1).
-    pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    pub(super) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hatch_web.bgl1"),
+            label: Some("hatch.texture.bgl1"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -96,7 +108,7 @@ impl HatchWebGpu {
         })
     }
 
-    pub fn new(
+    pub(super) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         model: &HatchModel,
@@ -143,7 +155,7 @@ impl HatchWebGpu {
         let pad = (diag * 0.8 + max_spacing * 2.0 * model.scale).max(1.0);
 
         // Anchor pattern phase at `world_origin` with the boundary stored raw,
-        // matching the desktop batched renderer (hatch_gpu.rs) — NOT WipeoutGpu,
+        // matching the storage backend — NOT WipeoutGpu,
         // whose f64 origin grid-snap is dead code (wipeouts are always solid)
         // and would phase-shift every line pattern relative to desktop. No drift.
         let origin = model.world_origin;
@@ -164,7 +176,7 @@ impl HatchWebGpu {
             HatchVertex { pos: [x0, y1, 0.0], _pad: 0.0 },
         ];
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("hatch_web.vbuf"),
+            label: Some("hatch.texture.vbuf"),
             contents: bytemuck::cast_slice(&quad),
             usage: wgpu::BufferUsages::VERTEX,
         });
@@ -182,7 +194,7 @@ impl HatchWebGpu {
             } else {
                 let proj_min = projs.iter().cloned().fold(f32::INFINITY, f32::min);
                 let proj_max = projs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                // Floor matches the desktop hatch renderer (hatch_gpu.rs).
+                // Floor matches the storage backend.
                 (proj_min, (proj_max - proj_min).max(1.0))
             }
         } else if mode == 3 {
@@ -260,7 +272,7 @@ impl HatchWebGpu {
         let height = ((texels.len() as u32).div_ceil(width)).max(1);
         texels.resize((width * height) as usize, [0.0; 4]);
         let data_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("hatch_web.data_tex"),
+            label: Some("hatch.texture.data_tex"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -290,7 +302,7 @@ impl HatchWebGpu {
         let tex_view = data_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // ── Uniform header ────────────────────────────────────────────────
-        let uniform_data = HatchWebUniform {
+        let uniform_data = TextureHatchUniform {
             color: model.color,
             color2,
             mode,
@@ -314,13 +326,13 @@ impl HatchWebGpu {
             tex_width: width,
         };
         let _uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("hatch_web.uniform"),
+            label: Some("hatch.texture.uniform"),
             contents: bytemuck::bytes_of(&uniform_data),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hatch_web.bind_group1"),
+            label: Some("hatch.texture.bind_group1"),
             layout: bgl1,
             entries: &[
                 wgpu::BindGroupEntry {

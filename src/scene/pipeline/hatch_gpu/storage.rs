@@ -126,13 +126,13 @@ const _: () = assert!(std::mem::size_of::<LineFamilyGpu>() == 48);
 /// failed to tessellate emit an AABB quad here instead (see `build`).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct HatchVertex {
+pub(super) struct HatchVertex {
     pub local_xy: [f32; 2],  // 0  — local-space position
     pub instance_index: u32, // 8  — index into InstanceBuffer
 }
 
 impl HatchVertex {
-    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+    pub(super) fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<HatchVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -158,7 +158,7 @@ impl HatchVertex {
 /// buffers + the per-vertex buffer needed by `hatch.wgsl`.
 /// Returns `None` when the input slice is empty (caller skips the
 /// hatch render pass entirely).
-pub struct HatchGpu {
+pub(super) struct StorageHatchBatch {
     pub vertex_buffer: wgpu::Buffer,
     pub vertex_count: u32,
     // The four storage buffers below are referenced via `bind_group` —
@@ -190,12 +190,12 @@ pub struct HatchGpu {
     pub instance_aabbs: Vec<[f32; 4]>,
 }
 
-impl HatchGpu {
+impl StorageHatchBatch {
     /// One-time build from the full hatch list. Re-uploaded only when
     /// `geometry_epoch` advances (mirrors the existing per-hatch
     /// upload trigger). Per-frame visibility flips go through
     /// [`upload_visibility`].
-    pub fn build(
+    pub(super) fn build(
         device: &wgpu::Device,
         bgl: &wgpu::BindGroupLayout,
         hatches: &[HatchModel],
@@ -257,7 +257,7 @@ impl HatchGpu {
                         }
                         let n_dashes = (dashes.len() as u32 - dash_offset).min(u32::MAX);
                         // QCAD PAT local-frame convention (mirrors
-                        // `build_family_batch` in hatch_gpu.rs): `dy` is
+                        // the storage batch convention: `dy` is
                         // the perpendicular spacing, `dx` is the along-line
                         // phase shift — both in family-local coords. The
                         // shader applies cos_off/sin_off to rotate them.
@@ -501,7 +501,7 @@ impl HatchGpu {
 
     /// Push the CPU `visibility` slice to GPU. Call when any
     /// element changes (typically per-frame from compute_hatch_lod).
-    pub fn upload_visibility(&self, queue: &wgpu::Queue) {
+    pub(super) fn upload_visibility(&self, queue: &wgpu::Queue) {
         queue.write_buffer(
             &self.visibility_buffer,
             0,
@@ -514,7 +514,7 @@ impl HatchGpu {
     /// storage and visible to both VS (AABB+visibility lookup) and FS
     /// (boundary / family / dash sampling).
     #[allow(dead_code)]
-    pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    pub(super) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let entry = |binding: u32| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,

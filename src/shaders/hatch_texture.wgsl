@@ -1,4 +1,4 @@
-// Hatch shader (WebGL2) — texture-backed, UNCAPPED variant of wipeout.wgsl.
+// Hatch texture shader — storage-free, UNCAPPED variant of wipeout.wgsl.
 //
 // Devices without vertex/fragment storage buffers cannot use the batched
 // storage-buffer renderer (hatch.wgsl). This shader keeps the exact

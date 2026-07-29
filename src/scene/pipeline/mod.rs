@@ -1,9 +1,6 @@
 mod device_capabilities;
 pub mod face3d_gpu;
 pub mod hatch_gpu;
-/// Texture-backed compatibility hatch renderer. Used on WebGL2 and on native
-/// adapters that cannot support the storage-buffer batch.
-pub mod hatch_web_gpu;
 pub mod wipeout_gpu;
 pub mod image_gpu;
 pub mod mesh_gpu;
@@ -91,14 +88,9 @@ pub struct Pipeline {
     /// compatibility mode. Passed to `WireGpu::from_run` / `from_batch`.
     pub(crate) wire_const_bgl: Option<wgpu::BindGroupLayout>,
     wipeout_pipeline: wgpu::RenderPipeline,
-    /// Phase 4-B — single-draw batched hatch pipeline. Per-instance
-    /// data lives in storage buffers; one draw call covers every
-    /// hatch in the frame. `None` in compatibility mode.
-    hatch_pipeline: Option<wgpu::RenderPipeline>,
-    /// Texture-backed compatibility hatch pipeline + its group-1 layout.
-    /// Present whenever the storage-buffer batch is unavailable or forced off.
-    hatch_compat_bgl1: Option<wgpu::BindGroupLayout>,
-    hatch_compat_pipeline: Option<wgpu::RenderPipeline>,
+    /// Capability-selected hatch renderer. Storage and texture transports are
+    /// private backends behind one upload/LOD/draw lifecycle.
+    hatch_gpu: hatch_gpu::HatchGpu,
     image_pipeline: wgpu::RenderPipeline,
     /// SDF text-quad pipeline (Phase 2b): draws per-glyph quads sampling the
     /// shared glyph atlas. Fed only when `OCS_TEXT_SDF` is set (else no verts).
@@ -140,11 +132,6 @@ pub struct Pipeline {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     wipeout_bgl1: wgpu::BindGroupLayout,
-    /// Group-1 layout for the batched hatch pipeline (storage buffers
-    /// for instances / boundary / families / dashes). `None` in compatibility
-    /// mode, where hatches render through `hatch_web_gpu`.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    hatch_bgl1: Option<wgpu::BindGroupLayout>,
     image_bgl1: wgpu::BindGroupLayout,
     /// Group-1 layout for the text pipeline (atlas texture + sampler).
     text_atlas_bgl: wgpu::BindGroupLayout,
@@ -245,16 +232,6 @@ pub struct Pipeline {
     /// frame they are present (small), drawn on top of the base wire pass — so
     /// a live drag never re-uploads the resident base buffer.
     gpu_preview_wires: Vec<WireGpu>,
-    /// The canonical hatch fills — a single batched GPU resource drawn in one
-    /// call with per-instance visibility masking the rest. All pattern line
-    /// families are uploaded (no cap). `None` in compatibility mode.
-    gpu_hatch: Option<hatch_gpu::HatchGpu>,
-    /// Compatibility hatch fills — one texture-backed GPU object per hatch.
-    gpu_hatches_compat: Vec<hatch_web_gpu::HatchWebGpu>,
-    /// Tiny live hatch batch used by grip previews. Separate from the resident
-    /// batch so an interactive edit uploads only the hatch being changed.
-    gpu_preview_hatch: Option<hatch_gpu::HatchGpu>,
-    gpu_preview_hatches_compat: Vec<hatch_web_gpu::HatchWebGpu>,
     /// Wipeout masks — solid fills rendered after wires in a separate pass via
     /// the legacy per-primitive `WipeoutGpu` renderer.
     gpu_wipeouts: Vec<WipeoutGpu>,
@@ -398,32 +375,8 @@ impl Pipeline {
         let force_compat_renderer = crate::cli::gui_config().compat_renderer;
         #[cfg(target_arch = "wasm32")]
         let force_compat_renderer = false;
-        let wire_mode = wire_gpu::WirePipelineMode::select(
-            device_caps,
-            force_compat_renderer,
-        );
-        let hatch_uses_storage =
-            !force_compat_renderer && device_caps.supports_batched_hatch();
-        #[cfg(not(target_arch = "wasm32"))]
-        if std::env::var_os("RUST_LOG").is_some() {
-            eprintln!(
-                "renderer pipelines: wire={} hatch={} mesh={} compute-cull={} (storage buffers/stage: {})",
-                if wire_mode.uses_storage() { "storage" } else { "packed" },
-                if hatch_uses_storage { "storage" } else { "texture" },
-                if device_caps.supports_mesh_storage_instancing() { "storage" } else { "uniform" },
-                if device_caps.supports_mesh_compute_culling() { "gpu" } else { "cpu" },
-                device.limits().max_storage_buffers_per_shader_stage
-            );
-        }
-        #[cfg(target_arch = "wasm32")]
-        log::info!(
-            "renderer pipelines: wire={} hatch={} mesh={} compute-cull={} (storage buffers/stage: {})",
-            if wire_mode.uses_storage() { "storage" } else { "packed" },
-            if hatch_uses_storage { "storage" } else { "texture" },
-            if device_caps.supports_mesh_storage_instancing() { "storage" } else { "uniform" },
-            if device_caps.supports_mesh_compute_culling() { "gpu" } else { "cpu" },
-            device.limits().max_storage_buffers_per_shader_stage
-        );
+        let wire_mode =
+            wire_gpu::WirePipelineMode::select(device_caps, force_compat_renderer);
         let wire_const_bgl = wire_mode
             .uses_storage()
             .then(|| wire_gpu::WireConst::bind_group_layout(device));
@@ -761,138 +714,36 @@ impl Pipeline {
             cache: None,
         });
 
-        // ── Hatch pipelines ────────────────────────────────────────────────
-        // Fast mode batches every hatch through five storage buffers. Compat
-        // mode uses one data texture per hatch and therefore needs no storage.
-        let (hatch_bgl1, hatch_pipeline) = if hatch_uses_storage {
-            let hatch_bgl1 = hatch_gpu::HatchGpu::bind_group_layout(device);
-            let hatch_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("hatch.pipeline_layout"),
-                bind_group_layouts: &[&frame_bgl, &hatch_bgl1],
-                push_constant_ranges: &[],
-            });
-            let hatch_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("hatch.shader"),
-                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                    "../../shaders/hatch.wgsl"
-                ))),
-            });
-            let hatch_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("hatch.pipeline"),
-                layout: Some(&hatch_layout),
-                vertex: wgpu::VertexState {
-                    module: &hatch_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[hatch_gpu::HatchVertex::layout()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth24PlusStencil8,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::LessEqual,
-                    stencil: content_stencil.clone(),
-                    bias: wgpu::DepthBiasState {
-                        constant: 1,
-                        slope_scale: 1.0,
-                        clamp: 0.0,
-                    },
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: MSAA_SAMPLES,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &hatch_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                multiview: None,
-                cache: None,
-            });
-            (Some(hatch_bgl1), Some(hatch_pipeline))
-        } else {
-            (None, None)
-        };
-
-        let (hatch_compat_bgl1, hatch_compat_pipeline) = if !hatch_uses_storage {
-            let bgl1 = hatch_web_gpu::HatchWebGpu::bind_group_layout(device);
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("hatch_compat.pipeline_layout"),
-                bind_group_layouts: &[&frame_bgl, &bgl1],
-                push_constant_ranges: &[],
-            });
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("hatch_compat.shader"),
-                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                    "../../shaders/hatch_web.wgsl"
-                ))),
-            });
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("hatch_compat.pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: 16,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &[wgpu::VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                        }],
-                    }],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth24PlusStencil8,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::LessEqual,
-                    stencil: content_stencil.clone(),
-                    bias: wgpu::DepthBiasState {
-                        constant: 1,
-                        slope_scale: 1.0,
-                        clamp: 0.0,
-                    },
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: MSAA_SAMPLES,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                multiview: None,
-                cache: None,
-            });
-            (Some(bgl1), Some(pipeline))
-        } else {
-            (None, None)
-        };
+        // ── Hatch renderer ─────────────────────────────────────────────────
+        // The façade owns capability selection plus both backend lifecycles.
+        let hatch_gpu = hatch_gpu::HatchGpu::new(
+            device,
+            format,
+            &frame_bgl,
+            &content_stencil,
+            device_caps,
+            force_compat_renderer,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::var_os("RUST_LOG").is_some() {
+            eprintln!(
+                "renderer pipelines: wire={} hatch={} mesh={} compute-cull={} (storage buffers/stage: {})",
+                if wire_mode.uses_storage() { "storage" } else { "packed" },
+                hatch_gpu.backend_name(),
+                if device_caps.supports_mesh_storage_instancing() { "storage" } else { "uniform" },
+                if device_caps.supports_mesh_compute_culling() { "gpu" } else { "cpu" },
+                device.limits().max_storage_buffers_per_shader_stage
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
+        log::info!(
+            "renderer pipelines: wire={} hatch={} mesh={} compute-cull={} (storage buffers/stage: {})",
+            if wire_mode.uses_storage() { "storage" } else { "packed" },
+            hatch_gpu.backend_name(),
+            if device_caps.supports_mesh_storage_instancing() { "storage" } else { "uniform" },
+            if device_caps.supports_mesh_compute_culling() { "gpu" } else { "cpu" },
+            device.limits().max_storage_buffers_per_shader_stage
+        );
 
         // ── Mesh pipeline ──────────────────────────────────────────────────
         let mesh_storage_instancing = device_caps.supports_mesh_storage_instancing();
@@ -1758,9 +1609,7 @@ impl Pipeline {
             wire_xray_pipeline,
             wire_const_bgl,
             wipeout_pipeline,
-            hatch_pipeline,
-            hatch_compat_bgl1,
-            hatch_compat_pipeline,
+            hatch_gpu,
             image_pipeline,
             text_pipeline,
             text_highlight_pipeline,
@@ -1798,7 +1647,6 @@ impl Pipeline {
             uniform_buffer,
             uniform_bind_group,
             wipeout_bgl1,
-            hatch_bgl1,
             image_bgl1,
             depth_texture_size: Size::new(1, 1),
             // (0, 0) forces the first `ensure_depth_texture` to allocate at the
@@ -1827,10 +1675,6 @@ impl Pipeline {
             clip_boundary: None,
             gpu_selected_wires: vec![],
             gpu_preview_wires: vec![],
-            gpu_hatch: None,
-            gpu_hatches_compat: vec![],
-            gpu_preview_hatch: None,
-            gpu_preview_hatches_compat: vec![],
             gpu_wipeouts: vec![],
             wipeout_skip_flags: vec![],
             gpu_images: vec![],
@@ -2352,22 +2196,20 @@ impl Pipeline {
         clip_h: u32,
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
-        let Some(batch) = &mut self.gpu_hatch else {
+        let instance_count = self.hatch_gpu.update_visibility(queue, |aabb| {
+            !aabb_below_pixel(aabb, view_rot, eye, clip_w, clip_h, 2.0)
+                && !aabb_offscreen(aabb, view_rot, eye, clip_w, clip_h)
+        });
+        if instance_count == 0 {
             return;
-        };
-        for (i, aabb) in batch.instance_aabbs.iter().enumerate() {
-            let skip = aabb_below_pixel(*aabb, view_rot, eye, clip_w, clip_h, 2.0)
-                || aabb_offscreen(*aabb, view_rot, eye, clip_w, clip_h);
-            batch.visibility[i] = if skip { 0 } else { 1 };
         }
-        batch.upload_visibility(queue);
         if let Some(started) = perf_started {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             if elapsed_ms >= 1.0 {
                 crate::perf_record!(
                     "[perf] hatch-lod {:>7.1}ms instances={}",
                     elapsed_ms,
-                    batch.instance_aabbs.len(),
+                    instance_count,
                 );
             }
         }
@@ -2851,32 +2693,18 @@ impl Pipeline {
         hatches: &[HatchModel],
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
-        if let Some(bgl1) = &self.hatch_compat_bgl1 {
-            self.gpu_hatches_compat = hatches
-                .iter()
-                .filter(|h| h.boundary.len() >= 3)
-                .map(|h| hatch_web_gpu::HatchWebGpu::new(device, queue, h, bgl1))
-                .collect();
-            self.gpu_hatch = None;
-            return;
-        }
-
-        self.gpu_hatches_compat.clear();
-        let _ = queue;
-        let Some(bgl1) = &self.hatch_bgl1 else {
-            self.gpu_hatch = None;
-            return;
-        };
-        let renderable: Vec<HatchModel> =
-            hatches.iter().filter(|h| h.boundary.len() >= 3).cloned().collect();
-        self.gpu_hatch = hatch_gpu::HatchGpu::build(device, bgl1, &renderable);
+        let renderable_count = hatches
+            .iter()
+            .filter(|hatch| hatch.boundary.len() >= 3)
+            .count();
+        self.hatch_gpu.upload(device, queue, hatches);
         if let Some(started) = perf_started {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             if elapsed_ms >= 1.0 {
                 crate::perf_record!(
                     "[perf] hatch-upload {:>7.1}ms models={}",
                     elapsed_ms,
-                    renderable.len(),
+                    renderable_count,
                 );
             }
         }
@@ -2888,27 +2716,7 @@ impl Pipeline {
         queue: &wgpu::Queue,
         hatches: &[HatchModel],
     ) {
-        if let Some(bgl1) = &self.hatch_compat_bgl1 {
-            self.gpu_preview_hatches_compat = hatches
-                .iter()
-                .filter(|h| h.boundary.len() >= 3)
-                .map(|h| hatch_web_gpu::HatchWebGpu::new(device, queue, h, bgl1))
-                .collect();
-            self.gpu_preview_hatch = None;
-            return;
-        }
-
-        self.gpu_preview_hatches_compat.clear();
-        let Some(bgl1) = &self.hatch_bgl1 else {
-            self.gpu_preview_hatch = None;
-            return;
-        };
-        let renderable: Vec<HatchModel> = hatches
-            .iter()
-            .filter(|h| h.boundary.len() >= 3)
-            .cloned()
-            .collect();
-        self.gpu_preview_hatch = hatch_gpu::HatchGpu::build(device, bgl1, &renderable);
+        self.hatch_gpu.upload_preview(device, queue, hatches);
     }
 
     pub fn upload_wipeouts(&mut self, device: &wgpu::Device, wipeouts: &[HatchModel]) {
@@ -3077,57 +2885,13 @@ impl Pipeline {
                 pass.set_vertex_buffer(0, vbuf.slice(..));
                 pass.draw(0..*vcount, 0..1);
             }
-            // Phase 4-B — single batched draw covers every hatch.
-            // Vertex shader culls per-instance via the `visibility`
-            // buffer (sub-pixel LOD + frustum cull written each frame
-            // by `compute_hatch_lod`). Per-hatch viewport scissor
-            // (paper-space MSPACE) isn't ported to the batched path
-            // yet — follow-up if it shows up as a visual issue.
-            if let (Some(batch), Some(pipeline)) =
-                (&self.gpu_hatch, &self.hatch_pipeline)
-            {
-                // Skipped while navigating (interaction LOD) — the per-pixel
-                // hatch pass dominates the GPU frame on hatch-heavy drawings.
-                if !self.skip_hatch_frame {
-                    pass.set_pipeline(pipeline);
-                    pass.set_stencil_reference(stencil_ref);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                    pass.set_bind_group(1, &batch.bind_group, &[]);
-                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
-                    pass.draw(0..batch.vertex_count, 0..1);
-                }
-            }
-            if let (Some(batch), Some(pipeline)) =
-                (&self.gpu_preview_hatch, &self.hatch_pipeline)
-            {
-                if !self.skip_hatch_frame {
-                    pass.set_pipeline(pipeline);
-                    pass.set_stencil_reference(stencil_ref);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                    pass.set_bind_group(1, &batch.bind_group, &[]);
-                    pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
-                    pass.draw(0..batch.vertex_count, 0..1);
-                }
-            }
-
-            // Storage-free compatibility path. Draw before wires so outlines
-            // remain on top, matching the batched path.
+            // The capability-selected façade dispatches storage or texture
+            // draws before wires so outlines remain on top in either backend.
+            // Skipped while navigating because per-pixel hatch work dominates
+            // hatch-heavy drawings.
             if !self.skip_hatch_frame {
-                if let Some(pipeline) = &self.hatch_compat_pipeline {
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                    pass.set_stencil_reference(stencil_ref);
-                    for hatch in &self.gpu_hatches_compat {
-                        pass.set_bind_group(1, &hatch.bind_group, &[]);
-                        pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
-                        pass.draw(0..6, 0..1);
-                    }
-                    for hatch in &self.gpu_preview_hatches_compat {
-                        pass.set_bind_group(1, &hatch.bind_group, &[]);
-                        pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
-                        pass.draw(0..6, 0..1);
-                    }
-                }
+                self.hatch_gpu
+                    .draw(&mut pass, &self.uniform_bind_group, stencil_ref);
             }
         }
 

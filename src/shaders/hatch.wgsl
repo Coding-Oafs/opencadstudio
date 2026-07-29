@@ -5,7 +5,7 @@
 // positions so we don't depend on @builtin(instance_index) edge cases
 // across backends).
 //
-// Layout — matches `hatch_gpu.rs`:
+// Layout — matches `hatch_gpu/storage.rs`:
 //   group 1 binding 0  InstanceBuffer  HatchInstance[]   (128 B / inst)
 //   group 1 binding 1  BoundaryBuffer  vec4<f32>[]       (xy in .xy)
 //   group 1 binding 2  FamilyBuffer    LineFamilyGpu[]   (48 B / fam)
