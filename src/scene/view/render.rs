@@ -106,8 +106,9 @@ pub struct ViewportData {
     /// rendered on top of fills. Most shaded modes turn this off; the
     /// `*WithEdges` variants and the pure wireframes leave it on.
     pub(in crate::scene) show_3d_edges: bool,
-    /// DISPSILH — draw view-dependent silhouette outlines on curved solid faces.
-    /// A document-header global (default off), orthogonal to the visual style.
+    /// Draw view-dependent silhouette outlines on curved solid faces.
+    /// HiddenLine enables them as part of the visual style; wireframe modes
+    /// continue to follow the document's DISPSILH setting.
     pub(in crate::scene) display_silhouette: bool,
     /// HiddenLine routes 3D fills through a depth-only prepass so edges
     /// occluded by closer geometry are culled by the LessEqual depth
@@ -869,9 +870,9 @@ impl shader::Primitive for Primitive {
                 vp.uniforms.eye_high[1] as f64 + vp.uniforms.eye_low[1] as f64,
                 vp.uniforms.eye_high[2] as f64 + vp.uniforms.eye_low[2] as f64,
             );
-            // DISPSILH: rebuild view-dependent silhouettes each frame (off by
-            // default, so this is a no-op unless the drawing enables it). Only
-            // in modes that draw edges — pure shaded hides them.
+            // Rebuild view-dependent silhouettes each frame when requested by
+            // DISPSILH or by a visual style such as HiddenLine. Only modes that
+            // draw edges consume them — pure shaded hides them.
             if vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges) {
                 inner.upload_silhouettes(device, &vp.meshes[..], vp.view_dir);
             } else {
@@ -2328,7 +2329,7 @@ impl Scene {
             view_wireframe,
             mesh_fill: flags.mesh_fill,
             show_3d_edges: flags.show_3d_edges,
-            display_silhouette: self.document.header.display_silhouette,
+            display_silhouette: flags.hidden_line || self.document.header.display_silhouette,
             hidden_line: flags.hidden_line,
             // Interaction LOD: suppress the costly hatch pass while the view is
             // actively moving; the scene-render cache holds the full-quality
