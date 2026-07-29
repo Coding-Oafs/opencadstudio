@@ -2094,15 +2094,15 @@ impl Scene {
         // per-frame buffer so the (potentially huge) base buffer stays resident
         // and unchanged while a command preview or grip drag is live.
         let all_wires = other_arc;
-        // A live overlay belongs to exactly one drawing context. In a paper
-        // layout, feeding model-space preview coordinates to the full-canvas
-        // sheet pass draws a second copy outside the floating viewport (#540).
-        // The inverse is equally wrong: paper-space coordinates must not be
-        // interpreted by a content viewport's model camera.
+        // A live overlay belongs to one drawing space, but every viewport that
+        // displays that space must project the same world-space preview. In a
+        // paper layout, model-space overlays go to all content viewports while
+        // paper-space overlays stay on the sheet. This also keeps model-space
+        // coordinates out of the full-canvas sheet pass (#540).
         let show_live_overlay = if self.current_layout == "Model" {
-            inst.active
-        } else if let Some(active_viewport) = self.active_viewport {
-            !inst.paper_sheet && inst.handle == active_viewport
+            true
+        } else if self.active_viewport.is_some() {
+            !inst.paper_sheet
         } else {
             inst.paper_sheet
         };
