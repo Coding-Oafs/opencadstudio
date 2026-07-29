@@ -263,6 +263,11 @@ fn cap_clipped(cap: vec2<f32>, cap_ends: vec3<f32>) -> bool {
 }
 
 @fragment fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    // Negative pattern length is the persistent-arena tombstone sentinel.
+    // Discard before cap/alpha work so deleted slabs cannot write color/depth.
+    if in.pattern_length < 0.0 {
+        discard;
+    }
     if cap_clipped(in.cap, in.cap_ends) {
         discard;
     }
@@ -287,6 +292,9 @@ fn cap_clipped(cap: vec2<f32>, cap_ends: vec3<f32>) -> bool {
 // mesh reads as a shaded surface framed by black edges. Keeps the dash/LOD
 // logic identical to `fs_main`; only the RGB is forced to black.
 @fragment fn fs_black(in: VertexOut) -> @location(0) vec4<f32> {
+    if in.pattern_length < 0.0 {
+        discard;
+    }
     if cap_clipped(in.cap, in.cap_ends) {
         discard;
     }

@@ -1,15 +1,11 @@
-// The whole batched renderer is native-only: WebGL2 lacks storage buffers, so
-// on wasm hatches go through `hatch_web_gpu` and nothing here is called.
-#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
-
 // Hatch rendering — the single, canonical GPU hatch renderer. One draw
 // call for all hatches, per-instance data fetched from storage buffers in
 // the vertex shader. There is NO per-family cap here: every pattern line
 // family is uploaded (`family_count` per instance) and the fragment shader
 // loops over all of them, so complex baked patterns (ROOFING, GRAVEL,
 // CAROLINA-LEDGESTONE with dozens–hundreds of families) draw in full,
-// matching the PDF export. `None` on WebGL2 (wasm), which lacks
-// vertex-stage storage buffers. The old per-hatch renderer with the
+// matching the PDF export. Unavailable on devices that lack vertex-stage
+// storage buffers. The old per-hatch renderer with the
 // 16-family cap now lives in `wipeout_gpu.rs` and serves only wipeouts.
 //
 // Data layout — three storage buffers fed from `HatchModel`s:

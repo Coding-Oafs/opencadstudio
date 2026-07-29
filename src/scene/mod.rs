@@ -477,8 +477,8 @@ const GEOMETRY_JOURNAL_CAP: usize = 256;
 
 /// Whether the persistent per-entity GPU wire arena (`OCS_WIRE_GPU_PATCH`) is
 /// enabled — patches one entity's instance slab on an edit instead of rebuilding
-/// the whole wire buffer. Opt-in while it is validated visually. Always off on
-/// wasm (WebGL2 has the fat self-contained instance, no arena).
+/// the whole wire buffer. The render layer selects indexed-storage or packed
+/// arena storage from the active device's wire pipeline.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn wire_gpu_patch_enabled() -> bool {
     use std::sync::OnceLock;
@@ -494,7 +494,7 @@ pub(crate) fn wire_gpu_patch_enabled() -> bool {
 }
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn wire_gpu_patch_enabled() -> bool {
-    false
+    true
 }
 
 /// Resolve a viewport's paper-to-model scale ratio from its two

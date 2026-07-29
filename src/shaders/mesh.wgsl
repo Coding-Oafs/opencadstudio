@@ -112,6 +112,35 @@ struct VertexOut {
     @location(15)      uv_normal:     vec2<f32>,
 };
 
+struct EdgeVertexIn {
+    @location(0) position:     vec3<f32>,
+    @location(2) color:        vec4<f32>,
+    @location(3) position_low: vec3<f32>,
+};
+
+struct EdgeVertexOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+fn relative_position(
+    position: vec3<f32>,
+    position_low: vec3<f32>,
+    instance: MeshInstance,
+) -> vec3<f32> {
+    let world_high = vec3<f32>(
+        dot(instance.model_row_0.xyz, position) + instance.model_row_0.w,
+        dot(instance.model_row_1.xyz, position) + instance.model_row_1.w,
+        dot(instance.model_row_2.xyz, position) + instance.model_row_2.w,
+    );
+    let world_low = vec3<f32>(
+        dot(instance.model_row_0.xyz, position_low),
+        dot(instance.model_row_1.xyz, position_low),
+        dot(instance.model_row_2.xyz, position_low),
+    ) + instance.translation_low.xyz;
+    return (world_high - u.eye_high) + (world_low - u.eye_low);
+}
+
 @vertex
 fn vs_main(
     v: VertexIn,
@@ -119,17 +148,7 @@ fn vs_main(
 ) -> VertexOut {
     var out: VertexOut;
     let instance = mesh_instances[instance_index];
-    let world_high = vec3<f32>(
-        dot(instance.model_row_0.xyz, v.position) + instance.model_row_0.w,
-        dot(instance.model_row_1.xyz, v.position) + instance.model_row_1.w,
-        dot(instance.model_row_2.xyz, v.position) + instance.model_row_2.w,
-    );
-    let world_low = vec3<f32>(
-        dot(instance.model_row_0.xyz, v.position_low),
-        dot(instance.model_row_1.xyz, v.position_low),
-        dot(instance.model_row_2.xyz, v.position_low),
-    ) + instance.translation_low.xyz;
-    let rel = (world_high - u.eye_high) + (world_low - u.eye_low);
+    let rel = relative_position(v.position, v.position_low, instance);
     out.clip_pos  = u.view_rot * vec4<f32>(rel, 1.0);
     out.color     = v.color;
     out.normal    = normalize(vec3<f32>(
@@ -151,6 +170,19 @@ fn vs_main(
     out.uv_bump = v.uv_bump;
     out.uv_refraction = v.uv_refraction;
     out.uv_normal = v.uv_normal;
+    return out;
+}
+
+@vertex
+fn vs_edge(
+    v: EdgeVertexIn,
+    @builtin(instance_index) instance_index: u32,
+) -> EdgeVertexOut {
+    var out: EdgeVertexOut;
+    let instance = mesh_instances[instance_index];
+    let rel = relative_position(v.position, v.position_low, instance);
+    out.clip_pos = u.view_rot * vec4<f32>(rel, 1.0);
+    out.color = v.color;
     return out;
 }
 
@@ -327,14 +359,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 // Edge fragment (LineList): flat entity colour, no lighting. Used for the
 // wireframe and hidden-line edge passes so lines read at their true colour.
 @fragment
-fn fs_edge(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_edge(in: EdgeVertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(in.color.rgb, 1.0);
 }
 
 // Edge fragment for filled render modes: force black so edges frame the shaded
 // fill regardless of the solid's colour.
 @fragment
-fn fs_edge_black(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_edge_black(_in: EdgeVertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
 }
 

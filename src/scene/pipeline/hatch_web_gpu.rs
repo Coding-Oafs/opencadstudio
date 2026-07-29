@@ -8,7 +8,7 @@
 // MAX_DASHES caps of the uniform (WipeoutGpu) path. Every hatch type — solid,
 // gradient, and arbitrarily complex line patterns — renders in compat mode.
 //
-// The fast native path remains hatch_gpu.rs; wipeout masks use wipeout_gpu.rs.
+// Storage-capable devices use hatch_gpu.rs; wipeout masks use wipeout_gpu.rs.
 
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern};
 use iced::wgpu;

@@ -129,6 +129,37 @@ impl MeshVertex {
             attributes: ATTRS,
         }
     }
+
+    /// Minimal layout shared by native and WebGL mesh edge pipelines.
+    ///
+    /// Edge fragments only need position and entity color. Advertising the
+    /// material/normal/UV attributes here would keep the full surface-shader
+    /// interface alive on WebGL even though the edge entry point never reads
+    /// those values.
+    pub fn edge_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, position) as u64,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, color) as u64,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshVertex, position_low) as u64,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MeshVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: ATTRS,
+        }
+    }
 }
 
 #[repr(C)]

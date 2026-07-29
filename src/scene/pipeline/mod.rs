@@ -1,3 +1,4 @@
+mod device_capabilities;
 pub mod face3d_gpu;
 pub mod hatch_gpu;
 /// Texture-backed compatibility hatch renderer. Used on WebGL2 and on native
@@ -9,10 +10,9 @@ pub mod mesh_gpu;
 pub mod text_gpu;
 pub mod uniforms;
 pub mod viewcube;
-/// Persistent per-entity wire instance arena (native), enabled by
-/// `OCS_WIRE_GPU_PATCH` — patches one entity's slab via `write_buffer` instead
-/// of re-uploading the whole wire set on an edit.
-#[cfg(not(target_arch = "wasm32"))]
+/// Persistent per-entity wire instance arena. Its indexed-storage and packed
+/// adapters share the same patch/cull lifecycle across native, WebGPU, and
+/// WebGL2.
 pub mod wire_arena;
 pub mod wire_gpu;
 
@@ -31,6 +31,7 @@ use crate::scene::model::hatch_model::HatchModel;
 use crate::scene::model::image_model::ImageModel;
 use crate::scene::model::mesh_model::MeshLodSet;
 use crate::scene::model::wire_model::WireModel;
+use device_capabilities::DeviceCapabilities;
 
 /// MSAA sample count for the main drawing pipelines.
 const MSAA_SAMPLES: u32 = 4;
@@ -86,7 +87,7 @@ pub struct Pipeline {
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
     /// Layout for the per-wire `WireConst` storage buffer (group 1 of the wire /
-    /// xray pipelines). `Some` only on the fast native path; `None` in packed
+    /// xray pipelines). `Some` on any storage-capable device; `None` in packed
     /// compatibility mode. Passed to `WireGpu::from_run` / `from_batch`.
     pub(crate) wire_const_bgl: Option<wgpu::BindGroupLayout>,
     wipeout_pipeline: wgpu::RenderPipeline,
@@ -207,30 +208,23 @@ pub struct Pipeline {
     /// replace this thin draw-range list on camera changes without touching the
     /// shared resident buffer.
     pub(crate) gpu_wires: std::sync::Arc<Vec<WireGpu>>,
-    /// Persistent per-entity wire instance arena (native, `OCS_WIRE_GPU_PATCH`).
+    /// Persistent per-entity wire instance arena (capability-selected format).
     /// When active, `gpu_wires` is a thin wrapper over this arena's buffers and an
     /// edit patches one entity's slab in place instead of rebuilding every wire.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) wire_arena: Option<wire_arena::WireArena>,
+    pub(crate) wire_arena: Option<wire_arena::PersistentWireArena>,
     /// Second arena for the mesh/solid EDGE wires (drawn with the mesh-edge skip /
     /// black treatment); the resident set is split into this + `wire_arena` so
     /// both patch incrementally. Shares `wire_arena_id`.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) wire_arena_mesh: Option<wire_arena::WireArena>,
+    pub(crate) wire_arena_mesh: Option<wire_arena::PersistentWireArena>,
     /// Chunked resident buffers for whichever arena partition exceeded one
     /// GPU buffer. `Some(false)` = regular wires, `Some(true)` = mesh edges.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_fallback: std::sync::Arc<Vec<WireGpu>>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_fallback_kind: Option<bool>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_fallback_handles: rustc_hash::FxHashSet<acadrust::Handle>,
     /// The Model content id both arenas currently mirror (`u64::MAX` = none).
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_arena_id: u64,
     /// Last content/camera/viewport tuple used to derive visible instance
     /// ranges from the resident arena.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) wire_cull_key: (u64, u64, u32, u32),
     /// View/source keys for CPU visibility passes. A plain entity edit changes
     /// the scene render signature, but it must not rescan every unchanged hatch,
@@ -396,31 +390,43 @@ impl Pipeline {
         });
 
         // ── Wire pipeline ──────────────────────────────────────────────────
-        // Select once per device. The fast native path hoists shared constants
-        // into storage; compatibility mode keeps them in 10 packed attributes.
-        let wire_mode = wire_gpu::WirePipelineMode::select(device);
-        let renderer_mode_name =
-            if wire_mode.uses_storage() { "fast-storage" } else { "packed-compat" };
+        // Select once from actual device limits. Any device whose compositor
+        // exposes the required storage limits uses the storage renderer; all
+        // other devices use the packed/texture compatibility renderer.
+        let device_caps = DeviceCapabilities::detect(device);
+        #[cfg(not(target_arch = "wasm32"))]
+        let force_compat_renderer = crate::cli::gui_config().compat_renderer;
+        #[cfg(target_arch = "wasm32")]
+        let force_compat_renderer = false;
+        let wire_mode = wire_gpu::WirePipelineMode::select(
+            device_caps,
+            force_compat_renderer,
+        );
+        let hatch_uses_storage =
+            !force_compat_renderer && device_caps.supports_batched_hatch();
         #[cfg(not(target_arch = "wasm32"))]
         if std::env::var_os("RUST_LOG").is_some() {
             eprintln!(
-                "renderer pipeline: {} (storage buffers/stage: {})",
-                renderer_mode_name,
+                "renderer pipelines: wire={} hatch={} mesh={} compute-cull={} (storage buffers/stage: {})",
+                if wire_mode.uses_storage() { "storage" } else { "packed" },
+                if hatch_uses_storage { "storage" } else { "texture" },
+                if device_caps.supports_mesh_storage_instancing() { "storage" } else { "uniform" },
+                if device_caps.supports_mesh_compute_culling() { "gpu" } else { "cpu" },
                 device.limits().max_storage_buffers_per_shader_stage
             );
         }
         #[cfg(target_arch = "wasm32")]
         log::info!(
-            "renderer pipeline: {} (storage buffers/stage: {})",
-            renderer_mode_name,
+            "renderer pipelines: wire={} hatch={} mesh={} compute-cull={} (storage buffers/stage: {})",
+            if wire_mode.uses_storage() { "storage" } else { "packed" },
+            if hatch_uses_storage { "storage" } else { "texture" },
+            if device_caps.supports_mesh_storage_instancing() { "storage" } else { "uniform" },
+            if device_caps.supports_mesh_compute_culling() { "gpu" } else { "cpu" },
             device.limits().max_storage_buffers_per_shader_stage
         );
-        #[cfg(not(target_arch = "wasm32"))]
         let wire_const_bgl = wire_mode
             .uses_storage()
             .then(|| wire_gpu::WireConst::bind_group_layout(device));
-        #[cfg(target_arch = "wasm32")]
-        let wire_const_bgl: Option<wgpu::BindGroupLayout> = None;
         let mut wire_bgls: Vec<&wgpu::BindGroupLayout> = vec![&frame_bgl];
         if let Some(bgl) = &wire_const_bgl {
             wire_bgls.push(bgl);
@@ -437,7 +443,6 @@ impl Pipeline {
         let wire_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wire.shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(match wire_mode {
-                #[cfg(not(target_arch = "wasm32"))]
                 wire_gpu::WirePipelineMode::IndexedStorage => {
                     include_str!("../../shaders/wire_indexed.wgsl")
                 }
@@ -759,7 +764,7 @@ impl Pipeline {
         // ── Hatch pipelines ────────────────────────────────────────────────
         // Fast mode batches every hatch through five storage buffers. Compat
         // mode uses one data texture per hatch and therefore needs no storage.
-        let (hatch_bgl1, hatch_pipeline) = if wire_mode.uses_storage() {
+        let (hatch_bgl1, hatch_pipeline) = if hatch_uses_storage {
             let hatch_bgl1 = hatch_gpu::HatchGpu::bind_group_layout(device);
             let hatch_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("hatch.pipeline_layout"),
@@ -820,7 +825,7 @@ impl Pipeline {
             (None, None)
         };
 
-        let (hatch_compat_bgl1, hatch_compat_pipeline) = if !wire_mode.uses_storage() {
+        let (hatch_compat_bgl1, hatch_compat_pipeline) = if !hatch_uses_storage {
             let bgl1 = hatch_web_gpu::HatchWebGpu::bind_group_layout(device);
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("hatch_compat.pipeline_layout"),
@@ -890,8 +895,7 @@ impl Pipeline {
         };
 
         // ── Mesh pipeline ──────────────────────────────────────────────────
-        let mesh_storage_instancing =
-            device.limits().max_storage_buffers_per_shader_stage > 0;
+        let mesh_storage_instancing = device_caps.supports_mesh_storage_instancing();
         let mesh_source = include_str!("../../shaders/mesh.wgsl");
         let mesh_source = if mesh_storage_instancing {
             std::borrow::Cow::Borrowed(mesh_source)
@@ -906,7 +910,7 @@ impl Pipeline {
             source: wgpu::ShaderSource::Wgsl(mesh_source),
         });
         let (mesh_cull_bgl, mesh_cull_pipeline, mesh_cull_uniform) =
-            if mesh_storage_instancing {
+            if device_caps.supports_mesh_compute_culling() {
                 let bgl =
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                         label: Some("mesh.cull.bgl"),
@@ -1333,8 +1337,8 @@ impl Pipeline {
                 layout: Some(&mesh_layout),
                 vertex: wgpu::VertexState {
                     module: &mesh_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[mesh_gpu::MeshVertex::layout()],
+                    entry_point: Some("vs_edge"),
+                    buffers: &[mesh_gpu::MeshVertex::edge_layout()],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 primitive: wgpu::PrimitiveState {
@@ -1810,19 +1814,12 @@ impl Pipeline {
             blit_uniform_buffer,
             surface_format: format,
             gpu_wires: std::sync::Arc::new(vec![]),
-            #[cfg(not(target_arch = "wasm32"))]
             wire_arena: None,
-            #[cfg(not(target_arch = "wasm32"))]
             wire_arena_mesh: None,
-            #[cfg(not(target_arch = "wasm32"))]
             wire_arena_fallback: std::sync::Arc::new(Vec::new()),
-            #[cfg(not(target_arch = "wasm32"))]
             wire_arena_fallback_kind: None,
-            #[cfg(not(target_arch = "wasm32"))]
             wire_arena_fallback_handles: rustc_hash::FxHashSet::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             wire_arena_id: u64::MAX,
-            #[cfg(not(target_arch = "wasm32"))]
             wire_cull_key: (u64::MAX, u64::MAX, 0, 0),
             hatch_lod_key: (usize::MAX, u64::MAX, 0, 0, false),
             wipeout_lod_key: (usize::MAX, u64::MAX, 0, 0, false),

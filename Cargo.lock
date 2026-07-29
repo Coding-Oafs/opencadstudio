@@ -36,6 +36,7 @@ dependencies = [
  "log",
  "lyon_tessellation",
  "lzma-sys",
+ "naga",
  "ocs_plugin_api",
  "open",
  "printpdf",

@@ -1,12 +1,12 @@
 // Hatch shader (WebGL2) — texture-backed, UNCAPPED variant of wipeout.wgsl.
 //
-// WebGL2 has no vertex/fragment storage buffers, so the batched storage-buffer
-// renderer (hatch.wgsl) is disabled on wasm. This shader keeps the exact
+// Devices without vertex/fragment storage buffers cannot use the batched
+// storage-buffer renderer (hatch.wgsl). This shader keeps the exact
 // wipeout.wgsl hatch algorithm (in_polygon + per-family line/dash/dot + solid +
 // gradient) but reads the variable-length boundary / family / dash arrays from a
 // single RGBA32F data texture via textureLoad instead of fixed-size uniforms —
 // removing the MAX_FAMILIES (16) / MAX_HATCH_BOUNDARY_VERTS (1024) / MAX_DASHES
-// (128) caps of the uniform path. Native (hatch.wgsl) is untouched.
+// (128) caps of the uniform path.
 //
 // Data texture layout (row-major, width = h.tex_width, one vec4 per texel):
 //   [ 0 .. vcount )                 boundary verts, .xy = local XY, NaN = break

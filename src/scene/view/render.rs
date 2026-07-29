@@ -278,10 +278,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_mesh_source = None;
                 inner.cached_face3d_source = None;
                 inner.cached_face3d_depth_source = None;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
-                }
+                inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
                 inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.mesh_lod_key = (usize::MAX, u64::MAX, 0, 0);
@@ -468,20 +465,27 @@ impl shader::Primitive for Primitive {
                 // the whole wire buffer. Only for the scissor-free, mesh-free
                 // (single-batch) Model set; scissored paper viewports and mixed
                 // 2D/3D sets fall through to the shared batched path below.
-                #[cfg(not(target_arch = "wasm32"))]
                 let mut arena_served = false;
-                #[cfg(target_arch = "wasm32")]
-                let arena_served = false;
-                #[cfg(not(target_arch = "wasm32"))]
                 let _perf = crate::perf::enabled();
-                #[cfg(not(target_arch = "wasm32"))]
                 let _t0 = iced::time::Instant::now();
-                #[cfg(not(target_arch = "wasm32"))]
                 let mut _patched = false;
-                #[cfg(not(target_arch = "wasm32"))]
-                if crate::scene::wire_gpu_patch_enabled() && inner.wire_const_bgl.is_some() {
-                    use crate::scene::pipeline::wire_arena::{self, WireArena};
-                    let bgl = inner.wire_const_bgl.as_ref().unwrap();
+                // Storage arenas preserve the existing per-slot fast path.
+                // Packed arenas start only after the first edit (cold-open keeps
+                // the exact-sized shared buffer), and one slot owns each shared
+                // content id so split panes do not duplicate 1.5× headroom.
+                let packed_arena_owner = self.viewports[..i]
+                    .iter()
+                    .all(|other| other.wire_content_id != vp.wire_content_id);
+                let use_wire_arena = crate::scene::wire_gpu_patch_enabled()
+                    && (inner.wire_const_bgl.is_some()
+                        || ((vp.wire_patch.is_some()
+                            || inner.wire_arena_id != u64::MAX)
+                            && packed_arena_owner));
+                if use_wire_arena {
+                    use crate::scene::pipeline::wire_arena::{
+                        self, PersistentWireArena as WireArena,
+                    };
+                    let const_bgl = inner.wire_const_bgl.as_ref();
                     let base_ok = vp
                         .wire_patch
                         .as_ref()
@@ -601,7 +605,7 @@ impl shader::Primitive for Primitive {
                                 queue,
                                 &regular,
                                 &draw_depths,
-                                bgl,
+                                const_bgl,
                                 false,
                             );
                             if inner.wire_arena.is_none() && !regular.is_empty() {
@@ -611,7 +615,7 @@ impl shader::Primitive for Primitive {
                                         &regular,
                                         &draw_depths,
                                         false,
-                                        bgl,
+                                        const_bgl,
                                     ),
                                 );
                                 inner.wire_arena_fallback_kind = Some(false);
@@ -637,7 +641,7 @@ impl shader::Primitive for Primitive {
                                 queue,
                                 &mesh,
                                 &draw_depths,
-                                bgl,
+                                const_bgl,
                                 true,
                             );
                             if inner.wire_arena_mesh.is_none() && !mesh.is_empty() {
@@ -647,7 +651,7 @@ impl shader::Primitive for Primitive {
                                         &mesh,
                                         &draw_depths,
                                         true,
-                                        bgl,
+                                        const_bgl,
                                     ),
                                 );
                                 inner.wire_arena_fallback_kind = Some(true);
@@ -712,6 +716,17 @@ impl shader::Primitive for Primitive {
                         inner.wire_arena_fallback_handles.clear();
                         inner.wire_arena_id = u64::MAX;
                     }
+                } else if inner.wire_const_bgl.is_none() {
+                    // This packed slot is no longer the owner of its shared
+                    // content. Drop stale arena state before the shared-cache
+                    // buffer is installed; otherwise the camera-cull refresh
+                    // below could resurrect its old draw ranges.
+                    inner.wire_arena = None;
+                    inner.wire_arena_mesh = None;
+                    inner.wire_arena_fallback = std::sync::Arc::new(Vec::new());
+                    inner.wire_arena_fallback_kind = None;
+                    inner.wire_arena_fallback_handles.clear();
+                    inner.wire_arena_id = u64::MAX;
                 }
                 // Share one copy of the resident wire buffers across every slot
                 // (and every pane — one MultiPipeline backs them all) rendering
@@ -748,7 +763,6 @@ impl shader::Primitive for Primitive {
                     inner.wire_handle_index = built.1;
                 } // end !arena_served
                 inner.cached_wire_id = vp.wire_content_id;
-                #[cfg(not(target_arch = "wasm32"))]
                 if _perf {
                     let gi: u32 = inner.gpu_wires.iter().map(|w| w.instance_count).sum();
                     let outcome = if !arena_served {
@@ -902,46 +916,43 @@ impl shader::Primitive for Primitive {
                 );
                 inner.mesh_lod_key = mesh_lod_key;
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            let cull_key = (
+                vp.wire_content_id,
+                vp.camera_generation,
+                clip_size.width,
+                clip_size.height,
+            );
+            if inner.wire_arena_id == vp.wire_content_id
+                && inner.wire_cull_key != cull_key
             {
-                let cull_key = (
-                    vp.wire_content_id,
-                    vp.camera_generation,
-                    clip_size.width,
-                    clip_size.height,
-                );
-                if inner.wire_arena_id == vp.wire_content_id
-                    && inner.wire_cull_key != cull_key
-                {
-                    let mut visible = if inner.wire_arena_fallback_kind == Some(false) {
-                        inner.wire_arena_fallback.as_ref().clone()
-                    } else {
-                        inner
-                            .wire_arena
-                            .as_ref()
-                            .map(|arena| {
-                                arena.wire_gpus_visible(
-                                    view_rot,
-                                    eye,
-                                    clip_size.width,
-                                    clip_size.height,
-                                )
-                            })
-                            .unwrap_or_default()
-                    };
-                    if inner.wire_arena_fallback_kind == Some(true) {
-                        visible.extend(inner.wire_arena_fallback.iter().cloned());
-                    } else if let Some(arena) = inner.wire_arena_mesh.as_ref() {
-                        visible.extend(arena.wire_gpus_visible(
-                            view_rot,
-                            eye,
-                            clip_size.width,
-                            clip_size.height,
-                        ));
-                    }
-                    inner.gpu_wires = std::sync::Arc::new(visible);
-                    inner.wire_cull_key = cull_key;
+                let mut visible = if inner.wire_arena_fallback_kind == Some(false) {
+                    inner.wire_arena_fallback.as_ref().clone()
+                } else {
+                    inner
+                        .wire_arena
+                        .as_ref()
+                        .map(|arena| {
+                            arena.wire_gpus_visible(
+                                view_rot,
+                                eye,
+                                clip_size.width,
+                                clip_size.height,
+                            )
+                        })
+                        .unwrap_or_default()
+                };
+                if inner.wire_arena_fallback_kind == Some(true) {
+                    visible.extend(inner.wire_arena_fallback.iter().cloned());
+                } else if let Some(arena) = inner.wire_arena_mesh.as_ref() {
+                    visible.extend(arena.wire_gpus_visible(
+                        view_rot,
+                        eye,
+                        clip_size.width,
+                        clip_size.height,
+                    ));
                 }
+                inner.gpu_wires = std::sync::Arc::new(visible);
+                inner.wire_cull_key = cull_key;
             }
             if vp.show_viewcube {
                 inner.viewcube.upload(
