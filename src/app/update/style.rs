@@ -991,6 +991,9 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                             _ => None,
                         }
                     }
+                    Some(crate::app::ColorPickTarget::LayerState(idx)) => {
+                        Some(Message::LayerStateEditorLayerColor(idx, color))
+                    }
                     None => None,
                 };
                 if let Some(m) = edit {

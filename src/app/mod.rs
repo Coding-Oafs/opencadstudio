@@ -740,6 +740,9 @@ pub(super) struct OpenCADStudio {
     layer_state_name_buf: String,
     layer_state_description_buf: String,
     layer_state_filter: String,
+    layer_state_edit_draft: Option<acadrust::LayerState>,
+    layer_state_edit_filter: String,
+    layer_state_edit_color_open: Option<usize>,
 
     // ── Annotation-scale Manager ──────────────────────────────────────────
     scale_manager_selected: String,
@@ -1003,6 +1006,8 @@ pub enum ColorPickTarget {
     Ribbon,
     /// A layer's colour, by panel row index.
     Layer(usize),
+    /// A saved layer-state layer's colour, by editor row index.
+    LayerState(usize),
     /// The MText editor's selection (or global) colour.
     MText,
 }
@@ -1324,6 +1329,7 @@ pub enum ModalKind {
     UpdateNotice,
     Layers,
     LayerStateManager,
+    LayerStateEditor,
     Plot,
     LayoutManager,
     Plotstyle,
@@ -1350,6 +1356,31 @@ pub enum ModalKind {
     /// Add / remove the annotation scales a single selected object has a
     /// per-object representation for.
     AnnoObjectScale,
+}
+
+/// A property group controlled by a layer state's restore mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerStateProperty {
+    On,
+    Frozen,
+    Locked,
+    Plot,
+    NewViewport,
+    Color,
+    LineType,
+    LineWeight,
+    PlotStyle,
+    Transparency,
+}
+
+/// A boolean saved for one layer inside a named layer state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerStateLayerFlag {
+    On,
+    Frozen,
+    Locked,
+    Plot,
+    NewViewport,
 }
 
 /// Identifies a DimStyle field that can be edited in the dialog.
@@ -1688,6 +1719,21 @@ pub enum Message {
     LayerStateManagerSave,
     LayerStateManagerRestore,
     LayerStateManagerDelete,
+    LayerStateManagerEdit,
+    LayerStateEditorMaskToggle(LayerStateProperty),
+    LayerStateEditorLayerFlagToggle(usize, LayerStateLayerFlag),
+    LayerStateEditorLayerColorToggle(usize),
+    LayerStateEditorLayerColor(usize, acadrust::types::Color),
+    LayerStateEditorLayerLinetype(usize, String),
+    LayerStateEditorLayerLineweight(usize, LineWeight),
+    LayerStateEditorLayerPlotStyle(usize, String),
+    LayerStateEditorLayerTransparency(usize, Option<acadrust::types::Transparency>),
+    LayerStateEditorName(String),
+    LayerStateEditorDescription(String),
+    LayerStateEditorCurrentLayer(String),
+    LayerStateEditorFilter(String),
+    LayerStateEditorSave,
+    LayerStateEditorCancel,
     CursorMoved(Point),
     ViewportClick,
     ViewportMove(Point),
@@ -2729,6 +2775,9 @@ impl OpenCADStudio {
             layer_state_name_buf: String::new(),
             layer_state_description_buf: String::new(),
             layer_state_filter: String::new(),
+            layer_state_edit_draft: None,
+            layer_state_edit_filter: String::new(),
+            layer_state_edit_color_open: None,
             scale_manager_selected: String::new(),
             scale_manager_paper_buf: String::new(),
             scale_manager_drawing_buf: String::new(),

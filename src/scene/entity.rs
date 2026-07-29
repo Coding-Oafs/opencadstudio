@@ -588,7 +588,10 @@ impl Scene {
             .map(|l| &l.color)
             .unwrap_or(&acadrust::types::Color::WHITE);
         let [r, g, b, _] = crate::scene::convert::tess_util::aci_to_rgba(color);
-        [r, g, b, 1.0]
+        let alpha = layer_entry
+            .map(|layer| 1.0 - layer.transparency.as_percent() as f32)
+            .unwrap_or(1.0);
+        [r, g, b, alpha]
     }
 
     pub fn custom_block_names(&self) -> Vec<String> {

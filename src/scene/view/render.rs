@@ -1575,7 +1575,16 @@ pub(in crate::scene) fn render_style_for(
             _ => 0,
         };
         let [r, g, b, _] = tess_util::aci_to_rgba(resolved);
-        let alpha = 1.0 - e.common().transparency.as_percent() as f32;
+        let transparency = if common.transparency.alpha() == 0 {
+            document
+                .layers
+                .get(layer_name)
+                .map(|layer| layer.transparency)
+                .unwrap_or(common.transparency)
+        } else {
+            common.transparency
+        };
+        let alpha = 1.0 - transparency.as_percent() as f32;
         ([r, g, b, alpha], aci)
     };
 
@@ -1648,12 +1657,15 @@ pub(crate) fn layer_render_style(document: &CadDocument, layer_name: &str) -> In
     let layer = document.layers.get(layer_name);
     let color = layer.map(|l| &l.color).unwrap_or(&AcadColor::WHITE);
     let [r, g, b, _] = tess_util::aci_to_rgba(color);
+    let alpha = layer
+        .map(|layer| 1.0 - layer.transparency.as_percent() as f32)
+        .unwrap_or(1.0);
     let lt_name = layer.map(|l| l.line_type.as_str()).unwrap_or("Continuous");
     let lt_scale = document.header.linetype_scale as f32;
     let (pat_len, pat) = resolve_pattern(&document.line_types, lt_name, lt_scale);
     let lw = layer.map(|l| &l.line_weight).unwrap_or(&LineWeight::Default);
     InheritStyle {
-        color: [r, g, b, 1.0],
+        color: [r, g, b, alpha],
         pat_len,
         pat,
         lw_px: lineweight_to_px(lw),
@@ -1694,8 +1706,12 @@ pub(crate) fn render_style_for_block_sub(
     let final_color = if !has_book_color && common.color == AcadColor::ByBlock {
         insert_color
     } else if !has_book_color && on_l0 && common.color == AcadColor::ByLayer {
-        // Inherit the insert layer's RGB but keep the child's own transparency.
-        [l0.color[0], l0.color[1], l0.color[2], color[3]]
+        let alpha = if common.transparency.alpha() == 0 {
+            l0.color[3]
+        } else {
+            color[3]
+        };
+        [l0.color[0], l0.color[1], l0.color[2], alpha]
     } else {
         color
     };

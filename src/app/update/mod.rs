@@ -136,6 +136,11 @@ impl OpenCADStudio {
             Some(Aliases) => {
                 self.alias_editor_rows.clear();
             }
+            Some(LayerStateEditor) => {
+                self.layer_state_edit_draft = None;
+                self.layer_state_edit_filter.clear();
+                self.layer_state_edit_color_open = None;
+            }
             _ => {}
         }
         // The tool that opened this dialog is done with it now. Keep the
@@ -1014,9 +1019,12 @@ impl OpenCADStudio {
                             Some(
                                 super::ModalKind::LayoutManager
                                     | super::ModalKind::LayerStateManager
+                                    | super::ModalKind::LayerStateEditor
                             )
                         )
                     {
+                        self.close_active_modal();
+                    } else if self.active_modal == Some(super::ModalKind::LayerStateEditor) {
                         self.close_active_modal();
                     } else if self.active_modal == Some(super::ModalKind::LayerStateManager) {
                         let mut names: Vec<String> = self.tabs[idx]
@@ -1560,6 +1568,211 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            Message::LayerStateManagerEdit => {
+                let i = self.active_tab;
+                let Some(name) = self.layer_state_selected.clone() else {
+                    return Task::none();
+                };
+                let Some(state) = self.tabs[i].scene.document.layer_state(&name) else {
+                    self.command_line
+                        .push_error(&format!("Layer state \"{name}\" was not found."));
+                    return Task::none();
+                };
+                self.layer_state_edit_draft = Some(state);
+                self.layer_state_edit_filter.clear();
+                self.layer_state_edit_color_open = None;
+                self.active_modal = Some(super::ModalKind::LayerStateEditor);
+                Task::none()
+            }
+            Message::LayerStateEditorMaskToggle(property) => {
+                let flag = match property {
+                    super::LayerStateProperty::On => acadrust::LayerStateMask::ON,
+                    super::LayerStateProperty::Frozen => acadrust::LayerStateMask::FROZEN,
+                    super::LayerStateProperty::Locked => acadrust::LayerStateMask::LOCKED,
+                    super::LayerStateProperty::Plot => acadrust::LayerStateMask::PLOT,
+                    super::LayerStateProperty::NewViewport => {
+                        acadrust::LayerStateMask::NEW_VIEWPORT
+                    }
+                    super::LayerStateProperty::Color => acadrust::LayerStateMask::COLOR,
+                    super::LayerStateProperty::LineType => acadrust::LayerStateMask::LINE_TYPE,
+                    super::LayerStateProperty::LineWeight => {
+                        acadrust::LayerStateMask::LINE_WEIGHT
+                    }
+                    super::LayerStateProperty::PlotStyle => acadrust::LayerStateMask::PLOT_STYLE,
+                    super::LayerStateProperty::Transparency => {
+                        acadrust::LayerStateMask::TRANSPARENCY
+                    }
+                };
+                if let Some(state) = self.layer_state_edit_draft.as_mut() {
+                    state.mask =
+                        acadrust::LayerStateMask::from_bits(state.mask.bits() ^ flag.bits());
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorLayerFlagToggle(index, flag) => {
+                let Some(layer) = self
+                    .layer_state_edit_draft
+                    .as_mut()
+                    .and_then(|state| state.layers.get_mut(index))
+                else {
+                    return Task::none();
+                };
+                match flag {
+                    super::LayerStateLayerFlag::On => layer.off = !layer.off,
+                    super::LayerStateLayerFlag::Frozen => layer.frozen = !layer.frozen,
+                    super::LayerStateLayerFlag::Locked => layer.locked = !layer.locked,
+                    super::LayerStateLayerFlag::Plot => layer.plottable = !layer.plottable,
+                    super::LayerStateLayerFlag::NewViewport => {
+                        layer.new_viewport_frozen = !layer.new_viewport_frozen
+                    }
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorLayerColorToggle(index) => {
+                self.layer_state_edit_color_open = if self.layer_state_edit_color_open == Some(index)
+                {
+                    None
+                } else {
+                    Some(index)
+                };
+                Task::none()
+            }
+            Message::LayerStateEditorLayerColor(index, color) => {
+                if let Some(layer) = self
+                    .layer_state_edit_draft
+                    .as_mut()
+                    .and_then(|state| state.layers.get_mut(index))
+                {
+                    layer.color = color;
+                }
+                self.layer_state_edit_color_open = None;
+                Task::none()
+            }
+            Message::LayerStateEditorLayerLinetype(index, value) => {
+                if let Some(layer) = self
+                    .layer_state_edit_draft
+                    .as_mut()
+                    .and_then(|state| state.layers.get_mut(index))
+                {
+                    layer.line_type = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorLayerLineweight(index, value) => {
+                if let Some(layer) = self
+                    .layer_state_edit_draft
+                    .as_mut()
+                    .and_then(|state| state.layers.get_mut(index))
+                {
+                    layer.line_weight = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorLayerPlotStyle(index, value) => {
+                if let Some(layer) = self
+                    .layer_state_edit_draft
+                    .as_mut()
+                    .and_then(|state| state.layers.get_mut(index))
+                {
+                    layer.plot_style = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorLayerTransparency(index, value) => {
+                if let Some(layer) = self
+                    .layer_state_edit_draft
+                    .as_mut()
+                    .and_then(|state| state.layers.get_mut(index))
+                {
+                    layer.transparency = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorName(value) => {
+                if let Some(state) = self.layer_state_edit_draft.as_mut() {
+                    state.name = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorDescription(value) => {
+                if let Some(state) = self.layer_state_edit_draft.as_mut() {
+                    state.description = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorCurrentLayer(value) => {
+                if let Some(state) = self.layer_state_edit_draft.as_mut() {
+                    state.current_layer = value;
+                }
+                Task::none()
+            }
+            Message::LayerStateEditorFilter(value) => {
+                self.layer_state_edit_filter = value;
+                Task::none()
+            }
+            Message::LayerStateEditorSave => {
+                let i = self.active_tab;
+                let Some(draft) = self.layer_state_edit_draft.as_ref() else {
+                    return Task::none();
+                };
+                let name = draft.name.trim().to_string();
+                if name.is_empty() {
+                    self.command_line
+                        .push_error("Layer state name cannot be empty.");
+                    return Task::none();
+                }
+                let old_name = self.layer_state_selected.clone();
+                let duplicate = self.tabs[i]
+                    .scene
+                    .document
+                    .layer_states()
+                    .into_iter()
+                    .any(|state| {
+                        state.name.eq_ignore_ascii_case(&name)
+                            && old_name
+                                .as_deref()
+                                .is_none_or(|old| !state.name.eq_ignore_ascii_case(old))
+                    });
+                if duplicate {
+                    self.command_line
+                        .push_error(&format!("Layer state \"{name}\" already exists."));
+                    return Task::none();
+                }
+                let Some(state) = self.layer_state_edit_draft.take() else {
+                    return Task::none();
+                };
+                let mut state = state;
+                state.name.clone_from(&name);
+                state.description = state.description.trim().to_string();
+                let description = state.description.clone();
+                self.push_undo_snapshot(i, "LAYERSTATE EDIT");
+                if let Some(old_name) = old_name.as_deref() {
+                    if !old_name.eq_ignore_ascii_case(&name) {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .rename_layer_state(old_name, &name);
+                    }
+                }
+                self.tabs[i].scene.document.store_layer_state(state);
+                self.tabs[i].dirty = true;
+                self.layer_state_selected = Some(name.clone());
+                self.layer_state_name_buf = name.clone();
+                self.layer_state_description_buf = description;
+                self.layer_state_edit_filter.clear();
+                self.layer_state_edit_color_open = None;
+                self.active_modal = Some(super::ModalKind::LayerStateManager);
+                self.command_line
+                    .push_output(&format!("LAYERSTATE: updated \"{name}\"."));
+                Task::none()
+            }
+            Message::LayerStateEditorCancel => {
+                self.layer_state_edit_draft = None;
+                self.layer_state_edit_filter.clear();
+                self.layer_state_edit_color_open = None;
+                self.active_modal = Some(super::ModalKind::LayerStateManager);
+                Task::none()
+            }
 
             Message::WindowCloseRequested(id) => {
                 if self.main_window == Some(id) {
@@ -1867,11 +2080,21 @@ impl OpenCADStudio {
                 if let Some(v) = val {
                     let targets = self.layer_row_action_targets(i, idx);
                     for name in &targets {
+                        if let Some(layer) =
+                            self.tabs[i].scene.document.layers.get_mut(name)
+                        {
+                            layer.transparency =
+                                acadrust::types::Transparency::from_percent(v as f64 / 100.0);
+                        }
                         if let Some(pl) =
                             self.tabs[i].layers.layers.iter_mut().find(|l| &l.name == name)
                         {
                             pl.transparency = v;
                         }
+                    }
+                    if !targets.is_empty() {
+                        self.tabs[i].scene.invalidate_layer_dependencies(&targets);
+                        self.tabs[i].dirty = true;
                     }
                 }
                 Task::none()

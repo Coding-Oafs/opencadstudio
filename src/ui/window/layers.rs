@@ -219,7 +219,7 @@ impl LayerPanel {
                         l.line_type.clone()
                     },
                     lineweight: l.line_weight,
-                    transparency: 0,
+                    transparency: (l.transparency.as_percent() * 100.0).round() as i32,
                     vp_frozen,
                 }
             })

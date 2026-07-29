@@ -16,6 +16,7 @@ impl OpenCADStudio {
             Some(K::UpdateNotice) => "Update Available",
             Some(K::Layers) => "Layer Manager",
             Some(K::LayerStateManager) => "Layer State Manager",
+            Some(K::LayerStateEditor) => "Edit Layer State",
             Some(K::Plot) => "Plot",
             Some(K::LayoutManager) => "Layout Manager",
             Some(K::ScaleManager) => "Scale Manager",
@@ -133,6 +134,46 @@ impl OpenCADStudio {
                     720,
                     420,
                 )
+            }
+            super::super::ModalKind::LayerStateEditor => {
+                let tab = &self.tabs[self.active_tab];
+                if let Some(state) = self.layer_state_edit_draft.as_ref() {
+                    let mut linetypes: Vec<String> = tab
+                        .scene
+                        .document
+                        .line_types
+                        .iter()
+                        .map(|line_type| line_type.name.clone())
+                        .collect();
+                    for layer in &state.layers {
+                        if !layer.line_type.is_empty()
+                            && !linetypes
+                                .iter()
+                                .any(|name| name.eq_ignore_ascii_case(&layer.line_type))
+                        {
+                            linetypes.push(layer.line_type.clone());
+                        }
+                    }
+                    linetypes.sort_by_key(|name| name.to_lowercase());
+                    sized(
+                        crate::ui::window::layer_state_manager::view_editor(
+                            state,
+                            &self.layer_state_edit_filter,
+                            self.layer_state_edit_color_open,
+                            linetypes,
+                        ),
+                        1180,
+                        560,
+                    )
+                } else {
+                    sized(
+                        container(text("The selected layer state is no longer available."))
+                            .padding(16)
+                            .into(),
+                        520,
+                        180,
+                    )
+                }
             }
             super::super::ModalKind::Plot => {
                 sized(crate::ui::window::plot::view_window(&self.plot_dialog), 760, 540)

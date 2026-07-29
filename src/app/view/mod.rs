@@ -1572,6 +1572,7 @@ impl OpenCADStudio {
             UpdateNotice => (560, 460),
             Layers => (900, 360),
             LayerStateManager => (720, 420),
+            LayerStateEditor => (1180, 560),
             Plot => (760, 540),
             LayoutManager => (640, 320),
             Plotstyle => (780, 540),

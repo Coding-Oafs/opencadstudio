@@ -78,6 +78,7 @@ pub struct LocalWire {
     /// *layer* (the layer-0 inheritance rule) instead of the cached layer-0
     /// value baked here.
     pub color_l0: bool,
+    pub transparency_l0: bool,
     pub lt_l0: bool,
     pub lw_l0: bool,
     /// XY bounding box of this wire in block-local coordinates.
@@ -641,6 +642,7 @@ fn tessellate_sub_local(
     let on_l0 = crate::scene::view::render::is_effective_layer_zero(&sub.common().layer);
     let color_l0 =
         !has_book_color && on_l0 && sub.common().color == AcadColor::ByLayer;
+    let transparency_l0 = on_l0 && sub.common().transparency.alpha() == 0;
     let lt_l0 = on_l0 && {
         let lt = &sub.common().linetype;
         lt.is_empty() || lt.eq_ignore_ascii_case("bylayer")
@@ -719,6 +721,7 @@ fn tessellate_sub_local(
             lt_is_byblock,
             lw_is_byblock,
             color_l0: color_l0 && wire_on_base_color,
+            transparency_l0: transparency_l0 && wire_on_base_color,
             lt_l0,
             lw_l0,
             aabb_local,
@@ -1542,8 +1545,12 @@ fn resolve_wire_color(lw: &LocalWire, ctx: &ExpandCtx) -> [f32; 4] {
     } else if lw.color_is_byblock {
         ctx.ins_color
     } else if lw.color_l0 {
-        // Inherit the insert layer's RGB but keep the child's own transparency.
-        [ctx.l0.color[0], ctx.l0.color[1], ctx.l0.color[2], lw.color[3]]
+        let alpha = if lw.transparency_l0 {
+            ctx.l0.color[3]
+        } else {
+            lw.color[3]
+        };
+        [ctx.l0.color[0], ctx.l0.color[1], ctx.l0.color[2], alpha]
     } else {
         lw.color
     };
