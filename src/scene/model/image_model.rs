@@ -434,10 +434,7 @@ fn decode_reference(path: &str) -> Option<DecodedImage> {
 /// synchronous fetch and would hit CORS on a cross-origin image anyway.
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_remote(url: &str) -> Option<Vec<u8>> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(8)))
-        .build()
-        .into();
+    let agent = crate::network::agent(std::time::Duration::from_secs(8));
     let mut resp = agent
         .get(url)
         .header(

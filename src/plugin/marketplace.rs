@@ -16,7 +16,7 @@ use super::external;
 use super::external::RegistryEntry;
 
 /// The curated registry, read from the OpenCADStudio repo's `main` branch.
-const REGISTRY_URL: &str =
+pub(crate) const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/HakanSeven12/OpenCADStudio/main/plugins/registry.json";
 
 /// Fetch the curated plugin registry (`plugins/registry.json`).
@@ -104,10 +104,7 @@ fn external_lib_ext() -> &'static str {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(15)))
-        .build()
-        .into()
+    crate::network::agent(std::time::Duration::from_secs(15))
 }
 
 const UA: &str = concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION"));

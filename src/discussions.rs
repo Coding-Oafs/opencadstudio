@@ -61,10 +61,7 @@ pub fn load_cached() -> Vec<DiscussionEntry> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_discussions() -> Result<Vec<DiscussionEntry>, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(15)))
-        .build()
-        .into();
+    let agent = crate::network::agent(std::time::Duration::from_secs(15));
     let feed = get_text(&agent, FEED_URL)?;
     let page = get_text(&agent, DISCUSSIONS_URL)?;
     let pinned = pinned_numbers(&page);

@@ -11,6 +11,8 @@ mod cli;
 mod command;
 mod entities;
 mod io;
+#[cfg(not(target_arch = "wasm32"))]
+mod network;
 mod modules;
 mod patreon;
 mod discussions;

@@ -78,6 +78,9 @@ impl OpenCADStudio {
                     &self.loaded_plugin_ids,
                     crate::ui::window::plugin_manager::MarketView {
                         registry: &self.plugin_registry,
+                        registry_loading: self.plugin_registry_loading,
+                        registry_error: self.plugin_registry_error.as_deref(),
+                        registry_error_details_open: self.plugin_registry_error_details_open,
                         input: &self.plugin_repo_input,
                         search: &self.plugin_search_input,
                         repos: &self.plugin_repos,

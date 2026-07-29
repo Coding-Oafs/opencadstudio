@@ -47,10 +47,7 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
         .filter(|t| !t.is_empty())
         .ok_or("no Patreon token configured")?;
 
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(15)))
-        .build()
-        .into();
+    let agent = crate::network::agent(std::time::Duration::from_secs(15));
 
     // The token is creator-scoped, so its first campaign is the one to list.
     let campaigns = get_json(&agent, token, "https://www.patreon.com/api/oauth2/v2/campaigns")?;

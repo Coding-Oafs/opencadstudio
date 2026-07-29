@@ -3956,6 +3956,9 @@ impl OpenCADStudio {
                 // Fetch the curated registry and release lists for linked repos.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    self.plugin_registry_loading = true;
+                    self.plugin_registry_error = None;
+                    self.plugin_registry_error_details_open = false;
                     let mut tasks = vec![self.fetch_registry_task()];
                     let release_repos: rustc_hash::FxHashSet<String> = self
                         .plugin_repos
@@ -4074,6 +4077,9 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::PluginRegistryFetched(Ok(entries)) => {
+                self.plugin_registry_loading = false;
+                self.plugin_registry_error = None;
+                self.plugin_registry_error_details_open = false;
                 // Fetch releases for every curated repo so the dropdowns fill in.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -4112,7 +4118,41 @@ impl OpenCADStudio {
                 }
             }
             Message::PluginRegistryFetched(Err(e)) => {
-                self.marketplace_status = format!("Registry: {e}");
+                self.plugin_registry_loading = false;
+                self.plugin_registry_error = Some(e);
+                self.plugin_registry_error_details_open = false;
+                Task::none()
+            }
+            Message::PluginRegistryRetry => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.plugin_registry_loading = true;
+                    self.plugin_registry_error = None;
+                    self.plugin_registry_error_details_open = false;
+                    return self.fetch_registry_task();
+                }
+                #[cfg(target_arch = "wasm32")]
+                Task::none()
+            }
+            Message::PluginRegistryErrorDetailsToggle => {
+                if self.plugin_registry_error.is_some() {
+                    self.plugin_registry_error_details_open =
+                        !self.plugin_registry_error_details_open;
+                }
+                Task::none()
+            }
+            Message::PluginRegistryCopyDiagnostics => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(error) = &self.plugin_registry_error {
+                    return iced::clipboard::write(format!(
+                        "Open CAD Studio v{}\nOS: {}\nArchitecture: {}\nRegistry: {}\nError: {}",
+                        env!("CARGO_PKG_VERSION"),
+                        std::env::consts::OS,
+                        std::env::consts::ARCH,
+                        crate::plugin::marketplace::REGISTRY_URL,
+                        error,
+                    ));
+                }
                 Task::none()
             }
             Message::PatronsFetched(Ok(names)) => {

@@ -48,10 +48,7 @@ pub async fn check_for_update() -> Option<UpdateInfo> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_latest_if_outdated() -> Option<UpdateInfo> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(5)))
-        .build()
-        .into();
+    let agent = crate::network::agent(std::time::Duration::from_secs(5));
     let body = agent
         .get(RELEASES_API)
         .header("User-Agent", concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION")))

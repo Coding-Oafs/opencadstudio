@@ -19,6 +19,9 @@ const SCROLLBAR_GUTTER: f32 = 16.0;
 /// Marketplace state passed to the Plugin Manager view.
 pub struct MarketView<'a> {
     pub registry: &'a [RegistryEntry],
+    pub registry_loading: bool,
+    pub registry_error: Option<&'a str>,
+    pub registry_error_details_open: bool,
     pub input: &'a str,
     pub search: &'a str,
     pub repos: &'a [String],
@@ -407,12 +410,119 @@ fn add_repository_card<'a>(m: &MarketView) -> Element<'a, Message> {
     )
 }
 
+fn registry_error_message(error: &str) -> (&'static str, &'static str) {
+    let error = error.to_ascii_lowercase();
+    if error.contains("certificate")
+        || error.contains("unknownissuer")
+        || error.contains("unknown issuer")
+    {
+        (
+            "Unable to verify the server certificate",
+            "Open CAD Studio could not trust the certificate presented for the plugin registry. \
+             Check your system certificate and proxy settings, then retry.",
+        )
+    } else if error.contains("timed out") || error.contains("timeout") {
+        (
+            "Plugin registry request timed out",
+            "Check your internet or proxy connection, then retry. Manually added repositories \
+             remain available.",
+        )
+    } else {
+        (
+            "Unable to load the plugin registry",
+            "Check your internet or proxy connection, then retry. Manually added repositories \
+             remain available.",
+        )
+    }
+}
+
+fn registry_notice<'a>(m: &MarketView) -> Option<Element<'a, Message>> {
+    if let Some(error) = m.registry_error {
+        let (title, message) = registry_error_message(error);
+        let actions = row![
+            pill_button(
+                "Retry",
+                Message::PluginRegistryRetry,
+                button::primary,
+            ),
+            Space::new().width(6),
+            pill_button(
+                if m.registry_error_details_open {
+                    "Hide details"
+                } else {
+                    "Show details"
+                },
+                Message::PluginRegistryErrorDetailsToggle,
+                button::secondary,
+            ),
+            Space::new().width(6),
+            pill_button(
+                "Copy details",
+                Message::PluginRegistryCopyDiagnostics,
+                button::secondary,
+            ),
+        ]
+        .align_y(iced::Center);
+        let mut body = column![
+            text(title).size(13),
+            text(message).size(11).style(muted_style),
+            Space::new().height(3),
+            actions,
+        ]
+        .spacing(5);
+        if m.registry_error_details_open {
+            body = body.push(
+                container(text(error.to_string()).size(10).width(Fill))
+                    .padding(8)
+                    .width(Fill)
+                    .style(container::bordered_box),
+            );
+        }
+        return Some(
+            container(body.padding([10, 12]))
+                .width(Fill)
+                .style(|theme: &Theme| {
+                    let pair = theme.extended_palette().warning.weak;
+                    container::Style {
+                        background: Some(Background::Color(pair.color.scale_alpha(0.16))),
+                        border: Border {
+                            color: pair.color,
+                            width: 1.0,
+                            radius: 6.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .into(),
+        );
+    }
+
+    (m.registry_loading && m.registry.is_empty()).then(|| {
+        container(
+            column![
+                text("Loading plugin catalog…").size(13),
+                text("Connecting securely using your system certificate settings.")
+                    .size(11)
+                    .style(muted_style),
+            ]
+            .spacing(5)
+            .padding([10, 12]),
+        )
+        .width(Fill)
+        .style(container::bordered_box)
+        .into()
+    })
+}
+
 fn marketplace_section<'a>(
     m: &MarketView,
     externals: &[ExternalPlugin],
 ) -> Element<'a, Message> {
     let mut col = column![text("Available plugins").size(13).style(primary_style)].spacing(6);
     let mut visible = 0usize;
+    if let Some(notice) = registry_notice(m) {
+        col = col.push(notice);
+    }
 
     // Curated registry entries (from the OpenCADStudio repo).
     for e in m.registry {
@@ -482,7 +592,10 @@ fn marketplace_section<'a>(
         ));
     }
 
-    if visible == 0 {
+    if visible == 0
+        && m.registry_error.is_none()
+        && !(m.registry_loading && m.registry.is_empty())
+    {
         let message = if m.search.trim().is_empty() {
             "No additional plugins are available."
         } else {
@@ -731,7 +844,7 @@ pub fn view_window<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{newest_update, repository_display_name};
+    use super::{newest_update, registry_error_message, repository_display_name};
 
     #[test]
     fn newest_update_uses_semver_not_release_order() {
@@ -750,5 +863,15 @@ mod tests {
             repository_display_name("owner/opencad-storm_sewer-plugin"),
             "OpenCAD Storm Sewer Plugin",
         );
+    }
+
+    #[test]
+    fn certificate_errors_get_user_friendly_copy() {
+        let (title, message) =
+            registry_error_message("io: invalid peer certificate: UnknownIssuer");
+
+        assert_eq!(title, "Unable to verify the server certificate");
+        assert!(message.contains("system certificate"));
+        assert!(!message.contains("UnknownIssuer"));
     }
 }

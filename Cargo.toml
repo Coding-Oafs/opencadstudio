@@ -108,7 +108,7 @@ open = "5"
 # PDF export / printing. Native-only: printpdf pulls a wasm-incompatible
 # `memchr` (1.0.2) via lopdf → nom_locate, and the web build has no filesystem.
 printpdf = { version = "0.9.1", default-features = false }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "win-system-proxy"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Web gets the dependency-free manifest/ribbon contract only (no plugin host).

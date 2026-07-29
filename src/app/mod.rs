@@ -524,6 +524,14 @@ pub(super) struct OpenCADStudio {
     loaded_plugin_ids: rustc_hash::FxHashSet<String>,
     /// Curated plugin registry fetched from the OpenCADStudio repo.
     plugin_registry: Vec<crate::plugin::external::RegistryEntry>,
+    /// True while the curated registry request is in flight.
+    plugin_registry_loading: bool,
+    /// Last curated-registry request error. Kept separate from general
+    /// marketplace status so the UI can show a friendly retry card and retain
+    /// copyable technical details.
+    plugin_registry_error: Option<String>,
+    /// Whether the registry error card exposes its raw diagnostic text.
+    plugin_registry_error_details_open: bool,
     /// User-linked plugin source repos (`owner/repo`) beyond the curated list.
     plugin_repos: Vec<String>,
     /// Add-repository text field in the Plugin Manager.
@@ -2076,6 +2084,12 @@ pub enum Message {
     PluginRepoRemove(String),
     /// The curated registry was fetched.
     PluginRegistryFetched(Result<Vec<crate::plugin::external::RegistryEntry>, String>),
+    /// Retry the curated registry request after a connection failure.
+    PluginRegistryRetry,
+    /// Expand or collapse raw registry error details.
+    PluginRegistryErrorDetailsToggle,
+    /// Copy registry URL, platform, version, and raw error details.
+    PluginRegistryCopyDiagnostics,
     /// Patreon supporters fetched at boot for the Start page (name, pledge cents).
     PatronsFetched(Result<Vec<(String, i64)>, String>),
     /// Tutorial-playlist videos fetched at boot for the Start page.
@@ -2609,6 +2623,9 @@ impl OpenCADStudio {
             external_plugins: Vec::new(),
             loaded_plugin_ids: rustc_hash::FxHashSet::default(),
             plugin_registry: Vec::new(),
+            plugin_registry_loading: false,
+            plugin_registry_error: None,
+            plugin_registry_error_details_open: false,
             plugin_repos: Vec::new(),
             plugin_repo_input: String::new(),
             plugin_search_input: String::new(),
