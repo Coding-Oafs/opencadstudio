@@ -2,6 +2,36 @@ use super::OpenCADStudio;
 use crate::ui;
 
 impl OpenCADStudio {
+    pub(super) fn load_layer_state_editor(&mut self, selected: Option<String>) {
+        let i = self.active_tab;
+        if let Some(name) = selected {
+            if let Some(state) = self.tabs[i].scene.document.layer_state(&name) {
+                self.layer_state_name_buf = state.name.clone();
+                self.layer_state_description_buf = state.description;
+                self.layer_state_selected = Some(state.name);
+                return;
+            }
+        }
+        self.layer_state_selected = None;
+        self.layer_state_description_buf.clear();
+        let names: Vec<String> = self.tabs[i]
+            .scene
+            .document
+            .layer_states()
+            .into_iter()
+            .map(|state| state.name)
+            .collect();
+        let n = (1usize..)
+            .find(|n| {
+                let candidate = format!("Layer State {n}");
+                !names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&candidate))
+            })
+            .unwrap_or(1);
+        self.layer_state_name_buf = format!("Layer State {n}");
+    }
+
     /// Reload the `LayerPanel` cache from the document and push the
     /// fresh state through to the ribbon dropdown + every other
     /// layer-aware UI mirror. Use this whenever a command mutates the

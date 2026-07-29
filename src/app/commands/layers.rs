@@ -212,22 +212,10 @@ impl OpenCADStudio {
             }
 
             // LAYERSTATE — save / restore named snapshots of all layer states
-            // (on/off, freeze, lock, colour, linetype, lineweight).
+            // in the drawing's native ACAD_LAYERSTATES dictionary.
             // LAYERSTATE SAVE <name> | RESTORE <name> | DELETE <name> | ? (list)
             "LAYERSTATE" | "LAS" | "LMAN" => {
-                use crate::command::KeywordCommand;
-                let c = KeywordCommand::new(
-                    "LAYERSTATE",
-                    "LAYERSTATE  [List / Save / Restore / Delete]:",
-                    vec![
-                        ("List", "LIST", None),
-                        ("Save", "SAVE", Some("LAYERSTATE SAVE  new state name:")),
-                        ("Restore", "RESTORE", Some("LAYERSTATE RESTORE  state name:")),
-                        ("Delete", "DELETE", Some("LAYERSTATE DELETE  state name:")),
-                    ],
-                );
-                self.command_line.push_info(&c.prompt());
-                self.tabs[i].active_cmd = Some(Box::new(c));
+                return Some(Task::done(Message::LayerStateManagerOpen));
             }
             cmd if cmd.starts_with("LAYERSTATE ")
                 || cmd.starts_with("LAS ")
@@ -243,13 +231,14 @@ impl OpenCADStudio {
                 let arg = parts.next().unwrap_or("").trim();
                 match sub.as_str() {
                     "" | "?" | "LIST" => {
-                        let states = &self.tabs[i].layer_states;
+                        let states = self.tabs[i].scene.document.layer_states();
                         if states.is_empty() {
                             self.command_line.push_info(
                                 "LAYERSTATE: no saved states. Use LAYERSTATE SAVE <name>.",
                             );
                         } else {
-                            let mut names: Vec<&str> = states.keys().map(|s| s.as_str()).collect();
+                            let mut names: Vec<&str> =
+                                states.iter().map(|state| state.name.as_str()).collect();
                             names.sort_unstable();
                             self.command_line
                                 .push_output(&format!("Saved layer states: {}", names.join(", ")));
@@ -259,7 +248,18 @@ impl OpenCADStudio {
                         if arg.is_empty() {
                             self.command_line.push_info("Usage: LAYERSTATE SAVE <name>");
                         } else {
-                            self.tabs[i].save_layer_state(arg);
+                            let description = self.tabs[i]
+                                .scene
+                                .document
+                                .layer_state(arg)
+                                .map(|state| state.description)
+                                .unwrap_or_default();
+                            self.push_undo_snapshot(i, "LAYERSTATE SAVE");
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .capture_layer_state(arg, description);
+                            self.tabs[i].dirty = true;
                             self.command_line
                                 .push_output(&format!("LAYERSTATE: saved \"{arg}\"."));
                         }
@@ -268,7 +268,7 @@ impl OpenCADStudio {
                         if arg.is_empty() {
                             self.command_line
                                 .push_info("Usage: LAYERSTATE RESTORE <name>");
-                        } else if !self.tabs[i].layer_states.contains_key(arg) {
+                        } else if self.tabs[i].scene.document.layer_state(arg).is_none() {
                             self.command_line.push_error(&format!(
                                 "LAYERSTATE: no saved state named \"{arg}\"."
                             ));
@@ -280,11 +280,20 @@ impl OpenCADStudio {
                                 .iter()
                                 .map(|layer| layer.name.clone())
                                 .collect();
-                            let undo = self.begin_layer_undo(i, "LAYERSTATE", &names);
-                            let n = self.tabs[i].restore_layer_state(arg).unwrap_or(0);
+                            self.push_undo_snapshot(i, "LAYERSTATE RESTORE");
+                            let n = self.tabs[i]
+                                .scene
+                                .document
+                                .restore_layer_state(arg)
+                                .unwrap_or(0);
+                            self.tabs[i].active_layer = self.tabs[i]
+                                .scene
+                                .document
+                                .header
+                                .current_layer_name
+                                .clone();
                             self.tabs[i].scene.invalidate_layer_dependencies(&names);
                             self.tabs[i].dirty = true;
-                            self.commit_layer_undo(i, undo);
                             self.refresh_layer_panel();
                             self.command_line.push_output(&format!(
                                 "LAYERSTATE: restored \"{arg}\" ({n} layer(s))."
@@ -292,13 +301,19 @@ impl OpenCADStudio {
                         }
                     }
                     "DELETE" | "D" => {
-                        if self.tabs[i].layer_states.remove(arg).is_some() {
+                        if arg.is_empty() {
                             self.command_line
-                                .push_output(&format!("LAYERSTATE: deleted \"{arg}\"."));
-                        } else {
+                                .push_info("Usage: LAYERSTATE DELETE <name>");
+                        } else if self.tabs[i].scene.document.layer_state(arg).is_none() {
                             self.command_line.push_error(&format!(
                                 "LAYERSTATE: no saved state named \"{arg}\"."
                             ));
+                        } else {
+                            self.push_undo_snapshot(i, "LAYERSTATE DELETE");
+                            self.tabs[i].scene.document.delete_layer_state(arg);
+                            self.tabs[i].dirty = true;
+                            self.command_line
+                                .push_output(&format!("LAYERSTATE: deleted \"{arg}\"."));
                         }
                     }
                     _ => {

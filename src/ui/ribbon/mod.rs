@@ -960,10 +960,33 @@ impl Ribbon {
             .on_input(Message::RibbonLayerFilterChanged)
             .size(11)
             .padding([4, 6]);
+        let state_manager = button(
+            row![
+                crate::ui::icons::themed_arrow_right(9.0),
+                text("Layer State Manager…").size(11),
+            ]
+            .spacing(7)
+            .align_y(iced::Center),
+        )
+        .on_press(Message::LayerStateManagerOpen)
+        .style(popup_row_style)
+        .width(Fill)
+        .padding([6, 10]);
         let panel = container(
             column![
                 container(search).padding([4, 4]),
                 scrollable(column(rows)).height(Length::Fixed(list_h)),
+                container(state_manager)
+                    .width(Fill)
+                    .padding([3, 4])
+                    .style(|theme: &Theme| container::Style {
+                        border: Border {
+                            color: theme.extended_palette().background.neutral.color,
+                            width: 1.0,
+                            radius: 0.0.into(),
+                        },
+                        ..Default::default()
+                    }),
             ]
             .spacing(2),
         )

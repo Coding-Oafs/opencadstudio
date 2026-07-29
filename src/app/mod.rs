@@ -735,6 +735,12 @@ pub(super) struct OpenCADStudio {
     layout_manager_selected: String,
     layout_manager_rename_buf: String,
 
+    // ── Layer State Manager ───────────────────────────────────────────────
+    layer_state_selected: Option<String>,
+    layer_state_name_buf: String,
+    layer_state_description_buf: String,
+    layer_state_filter: String,
+
     // ── Annotation-scale Manager ──────────────────────────────────────────
     scale_manager_selected: String,
     scale_manager_paper_buf: String,
@@ -1317,6 +1323,7 @@ pub enum ModalKind {
     PluginManager,
     UpdateNotice,
     Layers,
+    LayerStateManager,
     Plot,
     LayoutManager,
     Plotstyle,
@@ -1671,6 +1678,16 @@ pub enum Message {
     LayerLineweightSet(LineWeight),
     LayerTransparencyEdit(usize, String),
     LayerRenameCommit,
+    // ── Layer State Manager ─────────────────────────────────────────────
+    LayerStateManagerOpen,
+    LayerStateManagerSelect(String),
+    LayerStateManagerNew,
+    LayerStateManagerFilter(String),
+    LayerStateManagerName(String),
+    LayerStateManagerDescription(String),
+    LayerStateManagerSave,
+    LayerStateManagerRestore,
+    LayerStateManagerDelete,
     CursorMoved(Point),
     ViewportClick,
     ViewportMove(Point),
@@ -2708,6 +2725,10 @@ impl OpenCADStudio {
             alias_editor_rows: Vec::new(),
             // Layout Manager
             layout_manager_selected: "Model".to_string(),
+            layer_state_selected: None,
+            layer_state_name_buf: String::new(),
+            layer_state_description_buf: String::new(),
+            layer_state_filter: String::new(),
             scale_manager_selected: String::new(),
             scale_manager_paper_buf: String::new(),
             scale_manager_drawing_buf: String::new(),

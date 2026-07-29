@@ -1009,9 +1009,25 @@ impl OpenCADStudio {
                     }
                     self.active_tab = idx;
                     if self.tabs[idx].is_start
-                        && self.active_modal == Some(super::ModalKind::LayoutManager)
+                        && matches!(
+                            self.active_modal,
+                            Some(
+                                super::ModalKind::LayoutManager
+                                    | super::ModalKind::LayerStateManager
+                            )
+                        )
                     {
                         self.close_active_modal();
+                    } else if self.active_modal == Some(super::ModalKind::LayerStateManager) {
+                        let mut names: Vec<String> = self.tabs[idx]
+                            .scene
+                            .document
+                            .layer_states()
+                            .into_iter()
+                            .map(|state| state.name)
+                            .collect();
+                        names.sort_by_key(|name| name.to_lowercase());
+                        self.load_layer_state_editor(names.into_iter().next());
                     }
                     self.sync_ribbon_layers();
                     self.sync_ribbon_styles();
@@ -1397,6 +1413,150 @@ impl OpenCADStudio {
                 } else {
                     self.sync_ribbon_layers();
                     self.active_modal = Some(super::ModalKind::Layers);
+                }
+                Task::none()
+            }
+
+            Message::LayerStateManagerOpen => {
+                let i = self.active_tab;
+                self.ribbon.close_dropdown();
+                if self.tabs[i].is_start {
+                    self.command_line
+                        .push_info("Open or create a drawing to manage layer states.");
+                    return Task::none();
+                }
+                let mut names: Vec<String> = self.tabs[i]
+                    .scene
+                    .document
+                    .layer_states()
+                    .into_iter()
+                    .map(|state| state.name)
+                    .collect();
+                names.sort_by_key(|name| name.to_lowercase());
+                self.load_layer_state_editor(names.into_iter().next());
+                self.active_modal = Some(super::ModalKind::LayerStateManager);
+                Task::none()
+            }
+            Message::LayerStateManagerSelect(name) => {
+                self.load_layer_state_editor(Some(name));
+                Task::none()
+            }
+            Message::LayerStateManagerNew => {
+                self.load_layer_state_editor(None);
+                Task::none()
+            }
+            Message::LayerStateManagerFilter(value) => {
+                self.layer_state_filter = value;
+                Task::none()
+            }
+            Message::LayerStateManagerName(value) => {
+                self.layer_state_name_buf = value;
+                Task::none()
+            }
+            Message::LayerStateManagerDescription(value) => {
+                self.layer_state_description_buf = value;
+                Task::none()
+            }
+            Message::LayerStateManagerSave => {
+                let i = self.active_tab;
+                let name = self.layer_state_name_buf.trim().to_string();
+                if name.is_empty() {
+                    self.command_line
+                        .push_error("Layer state name cannot be empty.");
+                    return Task::none();
+                }
+                let old_name = self.layer_state_selected.clone();
+                let duplicate = self.tabs[i]
+                    .scene
+                    .document
+                    .layer_states()
+                    .into_iter()
+                    .any(|state| {
+                        state.name.eq_ignore_ascii_case(&name)
+                            && old_name
+                                .as_deref()
+                                .is_none_or(|old| !state.name.eq_ignore_ascii_case(old))
+                    });
+                if duplicate {
+                    self.command_line
+                        .push_error(&format!("Layer state \"{name}\" already exists."));
+                    return Task::none();
+                }
+
+                self.push_undo_snapshot(i, "LAYERSTATE SAVE");
+                if let Some(old_name) = old_name.as_deref() {
+                    if !old_name.eq_ignore_ascii_case(&name) {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .rename_layer_state(old_name, &name);
+                    }
+                }
+                self.tabs[i].scene.document.capture_layer_state(
+                    &name,
+                    self.layer_state_description_buf.trim(),
+                );
+                self.tabs[i].dirty = true;
+                self.layer_state_selected = Some(name.clone());
+                self.layer_state_name_buf = name.clone();
+                self.command_line
+                    .push_output(&format!("LAYERSTATE: saved \"{name}\" in the drawing."));
+                Task::none()
+            }
+            Message::LayerStateManagerRestore => {
+                let i = self.active_tab;
+                let Some(name) = self.layer_state_selected.clone() else {
+                    return Task::none();
+                };
+                let layer_names: Vec<String> = self.tabs[i]
+                    .scene
+                    .document
+                    .layers
+                    .iter()
+                    .map(|layer| layer.name.clone())
+                    .collect();
+                self.push_undo_snapshot(i, "LAYERSTATE RESTORE");
+                let restored = self.tabs[i]
+                    .scene
+                    .document
+                    .restore_layer_state(&name)
+                    .unwrap_or(0);
+                let active = self.tabs[i]
+                    .scene
+                    .document
+                    .header
+                    .current_layer_name
+                    .clone();
+                self.tabs[i].active_layer = active;
+                self.tabs[i]
+                    .scene
+                    .invalidate_layer_dependencies(&layer_names);
+                self.tabs[i].dirty = true;
+                self.refresh_layer_panel();
+                self.command_line.push_output(&format!(
+                    "LAYERSTATE: restored \"{name}\" ({restored} layer(s))."
+                ));
+                Task::none()
+            }
+            Message::LayerStateManagerDelete => {
+                let i = self.active_tab;
+                let Some(name) = self.layer_state_selected.clone() else {
+                    return Task::none();
+                };
+                self.push_undo_snapshot(i, "LAYERSTATE DELETE");
+                if self.tabs[i].scene.document.delete_layer_state(&name) {
+                    self.tabs[i].dirty = true;
+                    let mut names: Vec<String> = self.tabs[i]
+                        .scene
+                        .document
+                        .layer_states()
+                        .into_iter()
+                        .map(|state| state.name)
+                        .collect();
+                    names.sort_by_key(|name| name.to_lowercase());
+                    self.load_layer_state_editor(names.into_iter().next());
+                    self.command_line
+                        .push_output(&format!("LAYERSTATE: deleted \"{name}\"."));
                 }
                 Task::none()
             }

@@ -15,6 +15,7 @@ impl OpenCADStudio {
             Some(K::PluginManager) => "Plugin Manager",
             Some(K::UpdateNotice) => "Update Available",
             Some(K::Layers) => "Layer Manager",
+            Some(K::LayerStateManager) => "Layer State Manager",
             Some(K::Plot) => "Plot",
             Some(K::LayoutManager) => "Layout Manager",
             Some(K::ScaleManager) => "Scale Manager",
@@ -118,6 +119,20 @@ impl OpenCADStudio {
             super::super::ModalKind::Layers => {
                 let tab = &self.tabs[self.active_tab];
                 sized(tab.layers.view_window(self.layer_name_col_w), 900, 360)
+            }
+            super::super::ModalKind::LayerStateManager => {
+                let states = self.tabs[self.active_tab].scene.document.layer_states();
+                sized(
+                    crate::ui::window::layer_state_manager::view_window(
+                        states,
+                        self.layer_state_selected.as_deref(),
+                        &self.layer_state_name_buf,
+                        &self.layer_state_description_buf,
+                        &self.layer_state_filter,
+                    ),
+                    720,
+                    420,
+                )
             }
             super::super::ModalKind::Plot => {
                 sized(crate::ui::window::plot::view_window(&self.plot_dialog), 760, 540)

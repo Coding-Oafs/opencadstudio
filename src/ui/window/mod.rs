@@ -1,5 +1,6 @@
 pub mod about;
 pub mod layout_manager;
+pub mod layer_state_manager;
 pub mod plot;
 pub mod plugin_manager;
 pub mod shortcuts;
