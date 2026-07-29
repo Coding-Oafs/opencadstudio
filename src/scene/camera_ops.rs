@@ -98,6 +98,25 @@ impl Scene {
         self.camera_generation += 1;
     }
 
+    /// Aspect ratio of the active camera's actual render rectangle. Model
+    /// panes are separate shader widgets, so the full-canvas render aspect is
+    /// wrong whenever a tiled viewport is active.
+    pub(super) fn active_camera_aspect(&self) -> f32 {
+        if self.current_layout == "Model" {
+            let (canvas_w, canvas_h) = self.selection.borrow().vp_size;
+            let tiles = self.model_tiles.borrow();
+            let active = self.active_model_tile.get().min(tiles.len().saturating_sub(1));
+            if let Some(tile) = tiles.get(active) {
+                let width = tile.rect.width * canvas_w;
+                let height = tile.rect.height * canvas_h;
+                if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+                    return width / height;
+                }
+            }
+        }
+        self.last_render_aspect.get().max(0.01)
+    }
+
     /// Fit the camera to a world-space bounding box (corners p1, p2).
     pub fn zoom_to_window(&mut self, p1: glam::Vec3, p2: glam::Vec3) {
         let min = p1.min(p2);
@@ -105,9 +124,10 @@ impl Scene {
         if min == max {
             return;
         }
+        let aspect = self.active_camera_aspect();
         self.camera
             .borrow_mut()
-            .fit_to_bounds(min, max, self.last_render_aspect.get().max(0.01));
+            .fit_to_bounds(min, max, aspect);
         self.camera_generation += 1;
     }
 
@@ -925,9 +945,61 @@ impl Scene {
         if min == max {
             max += glam::Vec3::splat(1.0);
         }
-        self.camera
-            .borrow_mut()
-            .fit_to_bounds(min, max, self.last_render_aspect.get().max(0.01));
+        let aspect = self.active_camera_aspect();
+        self.camera.borrow_mut().fit_to_bounds(min, max, aspect);
+        self.camera_generation += 1;
+    }
+
+    /// Fit every tiled Model viewport independently. The drawing bounds are
+    /// shared, but each tile keeps its own orientation and uses its own screen
+    /// aspect when calculating the required zoom.
+    pub fn fit_all_model_viewports(&mut self) {
+        if self.current_layout != "Model" || self.model_tiles.borrow().len() <= 1 {
+            self.fit_all();
+            return;
+        }
+        let generation_before = self.camera_generation;
+        self.fit_all();
+        if self.camera_generation == generation_before {
+            return;
+        }
+        let Some((min, max)) = self.camera.borrow().fitted_model_bounds() else {
+            return;
+        };
+
+        let (canvas_w, canvas_h) = self.selection.borrow().vp_size;
+        let fallback = self.last_render_aspect.get().max(0.01);
+        let aspects: Vec<f32> = self
+            .model_tiles
+            .borrow()
+            .iter()
+            .map(|tile| {
+                let width = tile.rect.width * canvas_w;
+                let height = tile.rect.height * canvas_h;
+                if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+                    width / height
+                } else {
+                    fallback
+                }
+            })
+            .collect();
+        let active = self
+            .active_model_tile
+            .get()
+            .min(aspects.len().saturating_sub(1));
+        let live_camera = self.camera.borrow_mut();
+        let mut tiles = self.model_tiles.borrow_mut();
+        for (index, tile) in tiles.iter_mut().enumerate() {
+            let aspect = aspects.get(index).copied().unwrap_or(fallback);
+            if index == active {
+                tile.camera = live_camera.clone();
+            } else {
+                tile.camera.fit_to_bounds(min, max, aspect);
+            }
+        }
+        if let Some(aspect) = aspects.get(active) {
+            self.last_render_aspect.set(*aspect);
+        }
         self.camera_generation += 1;
     }
 

@@ -1923,6 +1923,10 @@ impl Scene {
         };
         let active = self.active_model_tile.get();
         let is_active = tile_idx == active;
+        if is_active && canvas.1 > 0.0 {
+            self.set_render_aspect(canvas.0 / canvas.1);
+            self.set_render_pixel_scale(canvas.0, canvas.1);
+        }
         let nav_build_started = iced::time::Instant::now();
         let perf_nav = if is_active {
             self.take_nav_perf()

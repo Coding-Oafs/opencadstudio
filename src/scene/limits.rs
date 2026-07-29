@@ -137,9 +137,8 @@ impl Scene {
             return;
         }
 
-        self.camera
-            .borrow_mut()
-            .fit_to_bounds(min, max, self.last_render_aspect.get().max(0.01));
+        let aspect = self.active_camera_aspect();
+        self.camera.borrow_mut().fit_to_bounds(min, max, aspect);
         self.camera_generation += 1;
     }
 }

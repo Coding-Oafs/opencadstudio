@@ -695,6 +695,11 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
+            "ZOOM EXTENTS ALL" | "ZOOM EXTENTS ALL VIEWPORTS" | "ZEA" => {
+                self.tabs[i].scene.fit_all_model_viewports();
+                self.command_line.push_output("Zoom Extents — All Viewports");
+            }
+
             "ZOOM EXTENTS" | "ZOOMEXTENTS" | "ZE" => {
                 self.tabs[i].scene.fit_all();
                 self.command_line.push_output("Zoom Extents");
@@ -751,10 +756,11 @@ impl OpenCADStudio {
                 use crate::command::KeywordCommand;
                 let c = KeywordCommand::new(
                     "ZOOM",
-                    "ZOOM  [Window / Extents / All / In / Out / Scale]:",
+                    "ZOOM  [Window / Extents / Extents All / All / In / Out / Scale]:",
                     vec![
                         ("Window", "WINDOW", None),
                         ("Extents", "EXTENTS", None),
+                        ("Extents All", "EXTENTS ALL", None),
                         ("All", "ALL", None),
                         ("In", "IN", None),
                         ("Out", "OUT", None),

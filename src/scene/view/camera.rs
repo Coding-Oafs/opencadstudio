@@ -464,6 +464,10 @@ impl Camera {
         self.depth_half_range = self.depth_extent_in_view(min, max);
     }
 
+    pub(crate) fn fitted_model_bounds(&self) -> Option<(Vec3, Vec3)> {
+        self.model_bounds
+    }
+
     // ── ViewCube snap ─────────────────────────────────────────────────────
 
     /// Snap to a canonical view direction (called by ViewCubeSnap).
