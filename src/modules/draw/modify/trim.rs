@@ -2108,6 +2108,194 @@ enum TrimMode {
     Erase,
 }
 
+#[derive(Clone, Copy)]
+struct CrossingWindow {
+    min: [f64; 2],
+    max: [f64; 2],
+    /// The first corner is the trim-side hint, matching the side from which
+    /// the crossing window was dragged.
+    pick: [f64; 2],
+}
+
+fn segment_window_range(
+    p1: [f64; 2],
+    p2: [f64; 2],
+    window: CrossingWindow,
+) -> Option<(f64, f64)> {
+    let mut lo: f64 = 0.0;
+    let mut hi: f64 = 1.0;
+    for axis in 0..2 {
+        let d = p2[axis] - p1[axis];
+        if d.abs() < 1e-12 {
+            if p1[axis] < window.min[axis] - 1e-9
+                || p1[axis] > window.max[axis] + 1e-9
+            {
+                return None;
+            }
+            continue;
+        }
+        let mut a = (window.min[axis] - p1[axis]) / d;
+        let mut b = (window.max[axis] - p1[axis]) / d;
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        lo = lo.max(a);
+        hi = hi.min(b);
+        if lo > hi + 1e-9 {
+            return None;
+        }
+    }
+    Some((lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0)))
+}
+
+/// Crossing selection trims LwPolyline segments independently. A segment that
+/// lies inside the selection rectangle but never meets a cutting edge must
+/// survive; otherwise a rectangle loses its far vertical edge (#588).
+fn crossing_trim_lwpolyline(
+    poly: &LwPolyline,
+    geos: &[Geo],
+    window: CrossingWindow,
+) -> Option<Vec<EntityType>> {
+    let handle = poly.common.handle;
+    let n = poly.vertices.len();
+    if n < 2 {
+        return None;
+    }
+    let closed = poly.is_closed;
+    let seg_count = if closed { n } else { n - 1 };
+    let total = seg_count as f64;
+    let vertex_xy = |i: usize| {
+        let v = &poly.vertices[i % n];
+        [v.location.x, v.location.y]
+    };
+
+    let mut removed = Vec::<(f64, f64)>::new();
+    for i in 0..seg_count {
+        let a = vertex_xy(i);
+        let b = vertex_xy(i + 1);
+        let Some((inside_lo, inside_hi)) = segment_window_range(a, b, window) else {
+            continue;
+        };
+        let cuts = line_seg_ts(a[0], a[1], b[0], b[1], handle, geos);
+        if cuts.is_empty() {
+            continue;
+        }
+
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let len2 = dx * dx + dy * dy;
+        let projected = if len2 > 1e-12 {
+            ((window.pick[0] - a[0]) * dx + (window.pick[1] - a[1]) * dy) / len2
+        } else {
+            (inside_lo + inside_hi) * 0.5
+        };
+        let pick_t = projected.clamp(inside_lo, inside_hi);
+
+        let mut bounds = vec![0.0];
+        bounds.extend(cuts);
+        bounds.push(1.0);
+        bounds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        bounds.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        if let Some(span) = bounds
+            .windows(2)
+            .find(|span| pick_t >= span[0] - 1e-6 && pick_t <= span[1] + 1e-6)
+        {
+            if span[1] - span[0] > 1e-6 {
+                removed.push((i as f64 + span[0], i as f64 + span[1]));
+            }
+        }
+    }
+    if removed.is_empty() {
+        return None;
+    }
+
+    removed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut merged = Vec::<(f64, f64)>::new();
+    for span in removed {
+        if let Some(last) = merged.last_mut() {
+            if span.0 <= last.1 + 1e-6 {
+                last.1 = last.1.max(span.1);
+                continue;
+            }
+        }
+        merged.push(span);
+    }
+
+    let point_at = |t: f64| {
+        let tt = if closed {
+            t.rem_euclid(total)
+        } else {
+            t.clamp(0.0, total)
+        };
+        let i = (tt.floor() as usize).min(seg_count.saturating_sub(1));
+        let u = tt - i as f64;
+        let a = vertex_xy(i);
+        let b = vertex_xy(i + 1);
+        [a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1])]
+    };
+    let emit = |s0: f64, s1: f64| -> Option<EntityType> {
+        if s1 - s0 <= 1e-6 {
+            return None;
+        }
+        let mut vertices = Vec::<LwVertex>::new();
+        let start = point_at(s0);
+        vertices.push(LwVertex::from_coords(start[0], start[1]));
+        let mut k = s0.floor() as i64 + 1;
+        while (k as f64) < s1 - 1e-9 {
+            vertices.push(poly.vertices[(k as usize) % n]);
+            k += 1;
+        }
+        if let Some(last) = vertices.last_mut() {
+            last.bulge = 0.0;
+        }
+        let end = point_at(s1);
+        if vertices.last().is_none_or(|v| {
+            (v.location.x - end[0]).hypot(v.location.y - end[1]) > 1e-6
+        }) {
+            vertices.push(LwVertex::from_coords(end[0], end[1]));
+        }
+        if vertices.len() < 2 {
+            return None;
+        }
+        let mut piece = poly.clone();
+        piece.common.handle = Handle::NULL;
+        piece.is_closed = false;
+        piece.vertices = vertices;
+        Some(EntityType::LwPolyline(piece))
+    };
+
+    let mut kept = Vec::<(f64, f64)>::new();
+    if closed {
+        for i in 0..merged.len() {
+            let start = merged[i].1;
+            let mut end = merged[(i + 1) % merged.len()].0;
+            if i + 1 == merged.len() {
+                end += total;
+            }
+            if end - start > 1e-6 {
+                kept.push((start, end));
+            }
+        }
+    } else {
+        let mut cursor = 0.0;
+        for &(start, end) in &merged {
+            if start - cursor > 1e-6 {
+                kept.push((cursor, start));
+            }
+            cursor = cursor.max(end);
+        }
+        if total - cursor > 1e-6 {
+            kept.push((cursor, total));
+        }
+    }
+
+    Some(
+        kept.into_iter()
+            .filter_map(|(start, end)| emit(start, end))
+            .collect(),
+    )
+}
+
 /// Quick-mode trim at a click/crossing point: the surviving pieces, or `None`
 /// when the pick doesn't intersect any boundary (or the type is unsupported).
 fn pick_trim_at(
@@ -2406,9 +2594,15 @@ fn fence_pieces(
     e: &EntityType,
     geos: &[Geo],
     fence_geos: &[Geo],
-    window: Option<[[f64; 2]; 2]>,
+    window: Option<CrossingWindow>,
     extend: bool,
 ) -> Option<Vec<EntityType>> {
+    if !extend {
+        if let (EntityType::LwPolyline(poly), Some(window)) = (e, window) {
+            return crossing_trim_lwpolyline(poly, geos, window);
+        }
+    }
+
     // Sentinel handle: keeps the self-exclusion in *_seg_ts from matching any
     // real boundary geo while the piece is being re-picked.
     const TMP: u64 = u64::MAX - 7;
@@ -2427,9 +2621,12 @@ fn fence_pieces(
             // inside the window is picked too — synthesize the click at a
             // sampled point inside it.
             if cps.is_empty() {
-                if let Some([min, max]) = window {
+                if let Some(window) = window {
                     if let Some(p) = fence_sample_xy(&tmp_all[0]).into_iter().find(|p| {
-                        p[0] >= min[0] && p[0] <= max[0] && p[1] >= min[1] && p[1] <= max[1]
+                        p[0] >= window.min[0]
+                            && p[0] <= window.max[0]
+                            && p[1] >= window.min[1]
+                            && p[1] <= window.max[1]
                     }) {
                         cps.push(p);
                     }
@@ -2494,7 +2691,7 @@ fn fence_result_preview(
     all: &[EntityType],
     geos: &[Geo],
     fence: &[[f64; 2]],
-    window: Option<[[f64; 2]; 2]>,
+    window: Option<CrossingWindow>,
     extend: bool,
     implied_edges: bool,
 ) -> Vec<WireModel> {
@@ -2537,7 +2734,7 @@ fn fence_pass(
     all: &[EntityType],
     geos: &[Geo],
     fence: &[[f64; 2]],
-    window: Option<[[f64; 2]; 2]>,
+    window: Option<CrossingWindow>,
     extend: bool,
 ) -> Vec<(Handle, Vec<EntityType>)> {
     let fence_geos: Vec<Geo> = build_fence_geos(fence);
@@ -2879,7 +3076,7 @@ impl TrimCommand {
     fn fence_run(
         &mut self,
         fence: &[[f64; 2]],
-        window: Option<[[f64; 2]; 2]>,
+        window: Option<CrossingWindow>,
     ) -> CmdResult {
         let repl = fence_pass(&self.all_entities, &self.geos, fence, window, self.shift);
         if repl.is_empty() {
@@ -3436,10 +3633,11 @@ impl CadCommand for TrimCommand {
                 let p2 = [pt.x, pt.y];
                 self.mode = TrimMode::Pick;
                 let rect = [p1, [p1[0], p2[1]], p2, [p2[0], p1[1]], p1];
-                let window = [
-                    [p1[0].min(p2[0]), p1[1].min(p2[1])],
-                    [p1[0].max(p2[0]), p1[1].max(p2[1])],
-                ];
+                let window = CrossingWindow {
+                    min: [p1[0].min(p2[0]), p1[1].min(p2[1])],
+                    max: [p1[0].max(p2[0]), p1[1].max(p2[1])],
+                    pick: p1,
+                };
                 self.fence_run(&rect, Some(window))
             }
             _ => CmdResult::NeedPoint,
@@ -3467,10 +3665,11 @@ impl CadCommand for TrimCommand {
                 let p2 = [pt.x, pt.y];
                 let mut out = vec![crossing_preview_wire(p1, p2, "trim_cross")];
                 let rect = [p1, [p1[0], p2[1]], p2, [p2[0], p1[1]], p1];
-                let window = [
-                    [p1[0].min(p2[0]), p1[1].min(p2[1])],
-                    [p1[0].max(p2[0]), p1[1].max(p2[1])],
-                ];
+                let window = CrossingWindow {
+                    min: [p1[0].min(p2[0]), p1[1].min(p2[1])],
+                    max: [p1[0].max(p2[0]), p1[1].max(p2[1])],
+                    pick: p1,
+                };
                 out.extend(fence_result_preview(
                     &self.all_entities,
                     &self.geos,
@@ -3562,7 +3761,7 @@ impl ExtendCommand {
     fn fence_run(
         &mut self,
         fence: &[[f64; 2]],
-        window: Option<[[f64; 2]; 2]>,
+        window: Option<CrossingWindow>,
     ) -> CmdResult {
         // EXTEND's fence extends; Shift held at Enter swaps it to trim.
         let repl = fence_pass(&self.all_entities, &self.geos, fence, window, !self.shift);
@@ -3882,10 +4081,11 @@ impl CadCommand for ExtendCommand {
                 let p2 = [pt.x, pt.y];
                 self.mode = TrimMode::Pick;
                 let rect = [p1, [p1[0], p2[1]], p2, [p2[0], p1[1]], p1];
-                let window = [
-                    [p1[0].min(p2[0]), p1[1].min(p2[1])],
-                    [p1[0].max(p2[0]), p1[1].max(p2[1])],
-                ];
+                let window = CrossingWindow {
+                    min: [p1[0].min(p2[0]), p1[1].min(p2[1])],
+                    max: [p1[0].max(p2[0]), p1[1].max(p2[1])],
+                    pick: p1,
+                };
                 self.fence_run(&rect, Some(window))
             }
             _ => CmdResult::NeedPoint,
@@ -3913,10 +4113,11 @@ impl CadCommand for ExtendCommand {
                 let p2 = [pt.x, pt.y];
                 let mut out = vec![crossing_preview_wire(p1, p2, "extend_cross")];
                 let rect = [p1, [p1[0], p2[1]], p2, [p2[0], p1[1]], p1];
-                let window = [
-                    [p1[0].min(p2[0]), p1[1].min(p2[1])],
-                    [p1[0].max(p2[0]), p1[1].max(p2[1])],
-                ];
+                let window = CrossingWindow {
+                    min: [p1[0].min(p2[0]), p1[1].min(p2[1])],
+                    max: [p1[0].max(p2[0]), p1[1].max(p2[1])],
+                    pick: p1,
+                };
                 out.extend(fence_result_preview(
                     &self.all_entities,
                     &self.geos,
