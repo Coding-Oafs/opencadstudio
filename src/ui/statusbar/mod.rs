@@ -172,11 +172,22 @@ impl StatusBar {
         // Scale pill: opens the scale picker popup.
         // Model space: always interactive, shows annotation scale.
         // Paper space: interactive only when a viewport is active/selected.
-        let scale_label = if current_layout == "Model" {
-            format_scale(Some(1.0 / annotation_scale as f64))
-        } else {
-            format_scale(viewport_scale)
-        };
+        // Keep its text identical to the active drawing-defined scale. Rebuilding
+        // the label from the numeric factor turns an architectural
+        // `1/2" = 1'-0"` scale into `1:24`, mixing formats in the same control.
+        let scale_label = active_scale_label(
+            scale_is_model,
+            annotation_scale,
+            viewport_scale,
+            &scale_list,
+        )
+        .unwrap_or_else(|| {
+            if scale_is_model {
+                format_scale(Some(1.0 / annotation_scale as f64))
+            } else {
+                format_scale(viewport_scale)
+            }
+        });
         let scale_element: Element<'_, Message> = if scale_pill_enabled {
             status_menu::menu_bar(
                 menu_tip(
@@ -981,4 +992,27 @@ fn format_scale(scale: Option<f64>) -> String {
         .trim_end_matches('0')
         .trim_end_matches('.')
         .to_string()
+}
+
+fn active_scale_label(
+    is_model: bool,
+    annotation_scale: f32,
+    viewport_scale: Option<f64>,
+    scales: &[(String, f32, f64)],
+) -> Option<String> {
+    scales
+        .iter()
+        .find(|(_, anno_scale, vp_scale)| {
+            if is_model {
+                (annotation_scale - *anno_scale).abs()
+                    < 0.001 * annotation_scale.max(0.001)
+            } else {
+                viewport_scale
+                    .map(|current| {
+                        (current - *vp_scale).abs() < 0.001 * vp_scale.max(0.001)
+                    })
+                    .unwrap_or(false)
+            }
+        })
+        .map(|(label, _, _)| label.clone())
 }
