@@ -2255,6 +2255,13 @@ pub(super) fn collapse_bar<'a>(name: &str, on_press: Message) -> Element<'a, Mes
     .into()
 }
 
+const START_ACTION_RADIUS: f32 = 6.0;
+
+fn start_action_shape(mut style: button::Style) -> button::Style {
+    style.border.radius = START_ACTION_RADIUS.into();
+    style
+}
+
 pub(super) fn start_page_view<'a>(
     patrons: &'a [(String, i64)],
     videos: &'a [crate::videos::VideoEntry],
@@ -2323,16 +2330,16 @@ fn start_page_content<'a>(
                     button::Status::Hovered => palette.background.strong,
                     _ => palette.background.weak,
                 };
-                button::Style {
-                background: Some(Background::Color(pair.color)),
-                text_color: pair.text,
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..Default::default()
-                }
+                start_action_shape(button::Style {
+                    background: Some(Background::Color(pair.color)),
+                    text_color: pair.text,
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
             })
     };
 
@@ -2350,8 +2357,8 @@ fn start_page_content<'a>(
             tool_id: "DONATE".to_string(),
             event: crate::modules::ModuleEvent::Command("DONATE".to_string()),
         })
-        .padding([12, 28])
-        .style(button::danger)
+        .padding([10, 22])
+        .style(|theme: &Theme, status| start_action_shape(button::danger(theme, status)))
     };
 
     let primary_row = WrapFlow::new(vec![
@@ -2388,7 +2395,7 @@ fn start_page_content<'a>(
                     event: crate::modules::ModuleEvent::Command("WEBVERSION".to_string()),
                 })
                 .padding([10, 22])
-                .style(button::primary)
+                .style(|theme: &Theme, status| start_action_shape(button::primary(theme, status)))
                 .into(),
         );
     }
