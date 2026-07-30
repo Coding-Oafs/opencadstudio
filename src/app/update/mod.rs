@@ -4699,17 +4699,20 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
-            Message::PluginReleasesFetched(repo, Ok(tags)) => {
-                if let Some(first) = tags.first() {
+            Message::PluginReleasesFetched(repo, Ok(releases)) => {
+                if let Some(first) = releases.first() {
                     self.repo_selected_tag
                         .entry(repo.clone())
-                        .or_insert_with(|| first.clone());
+                        .or_insert_with(|| first.tag.clone());
                 }
                 if self.marketplace_status == format!("Fetching releases for {repo}…") {
                     self.marketplace_status =
-                        format!("Repository added. {} installable release(s) found.", tags.len());
+                        format!(
+                            "Repository added. {} installable release(s) found.",
+                            releases.len()
+                        );
                 }
-                self.repo_release_tags.insert(repo, tags);
+                self.repo_release_tags.insert(repo, releases);
                 Task::none()
             }
             Message::PluginReleasesFetched(repo, Err(e)) => {
@@ -4754,6 +4757,7 @@ impl OpenCADStudio {
             }
             Message::PluginInstalled(Ok(id)) => {
                 self.marketplace_status = format!("Installed '{id}'. Restart to load it.");
+                self.plugin_load_errors.remove(&id);
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.external_plugins = crate::plugin::external::discover();
@@ -4771,6 +4775,7 @@ impl OpenCADStudio {
                         Ok(()) => {
                             self.marketplace_status =
                                 format!("Uninstalled '{id}'. Restart to unload it.");
+                            self.plugin_load_errors.remove(&id);
                             self.external_plugins = crate::plugin::external::discover();
                         }
                         Err(e) => {

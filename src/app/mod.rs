@@ -523,6 +523,9 @@ pub(super) struct OpenCADStudio {
     /// `external_plugins` — compatible, with a library, dlopen'd at startup).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     loaded_plugin_ids: rustc_hash::FxHashSet<String>,
+    /// Startup load failures keyed by plugin id. The Plugin Manager uses these
+    /// to distinguish an installed-but-failed package from one awaiting restart.
+    plugin_load_errors: rustc_hash::FxHashMap<String, String>,
     /// Curated plugin registry fetched from the OpenCADStudio repo.
     plugin_registry: Vec<crate::plugin::external::RegistryEntry>,
     /// True while the curated registry request is in flight.
@@ -540,7 +543,8 @@ pub(super) struct OpenCADStudio {
     /// Live filter for installed and available plugin cards.
     plugin_search_input: String,
     /// Installable release tags fetched per linked repo (for the dropdown).
-    repo_release_tags: rustc_hash::FxHashMap<String, Vec<String>>,
+    repo_release_tags:
+        rustc_hash::FxHashMap<String, Vec<crate::plugin::external::ReleaseInfo>>,
     /// The release tag currently selected per linked repo.
     repo_selected_tag: rustc_hash::FxHashMap<String, String>,
     /// Repository currently shown in the Plugin Manager detail pane.
@@ -2174,8 +2178,11 @@ pub enum Message {
     RecentThumbsLoaded(
         Vec<(std::path::PathBuf, Option<iced::widget::image::Handle>)>,
     ),
-    /// Installable release tags fetched for `owner/repo`.
-    PluginReleasesFetched(String, Result<Vec<String>, String>),
+    /// Installable releases and manifest API versions fetched for `owner/repo`.
+    PluginReleasesFetched(
+        String,
+        Result<Vec<crate::plugin::external::ReleaseInfo>, String>,
+    ),
     /// Choose a release tag for a repo (`repo`, `tag`).
     PluginReleaseSelect(String, String),
     /// Select a plugin source and show its GitHub README in the detail pane.
@@ -2696,6 +2703,7 @@ impl OpenCADStudio {
             disabled_plugins: rustc_hash::FxHashSet::default(),
             external_plugins: Vec::new(),
             loaded_plugin_ids: rustc_hash::FxHashSet::default(),
+            plugin_load_errors: rustc_hash::FxHashMap::default(),
             plugin_registry: Vec::new(),
             plugin_registry_loading: false,
             plugin_registry_error: None,
@@ -2934,6 +2942,7 @@ impl OpenCADStudio {
                 if let Err(e) = res {
                     app.command_line
                         .push_error(&format!("Plugin '{id}' failed to load: {e}"));
+                    app.plugin_load_errors.insert(id, e);
                 }
             }
             app.loaded_plugin_ids = crate::plugin::external::loaded_ids().into_iter().collect();

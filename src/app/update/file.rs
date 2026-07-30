@@ -273,19 +273,13 @@ impl OpenCADStudio {
         )
     }
 
-    /// Background task: fetch `owner/repo`'s installable release tags.
+    /// Background task: fetch `owner/repo`'s installable releases and their
+    /// manifest API versions.
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn fetch_releases_task(&self, repo: String) -> Task<Message> {
         let label = repo.clone();
         Task::perform(
-            async move {
-                crate::plugin::marketplace::fetch_releases(&repo).map(|rs| {
-                    rs.into_iter()
-                        .filter(|r| r.installable())
-                        .map(|r| r.tag)
-                        .collect::<Vec<_>>()
-                })
-            },
+            async move { crate::plugin::marketplace::fetch_release_info(&repo) },
             move |res| Message::PluginReleasesFetched(label, res),
         )
     }

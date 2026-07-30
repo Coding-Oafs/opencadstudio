@@ -114,6 +114,7 @@ impl OpenCADStudio {
                                 &self.disabled_plugins,
                                 &self.external_plugins,
                                 &self.loaded_plugin_ids,
+                                &self.plugin_load_errors,
                                 crate::ui::window::plugin_manager::MarketView {
                                     registry: &self.plugin_registry,
                                     registry_loading: self.plugin_registry_loading,

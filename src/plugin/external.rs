@@ -25,6 +25,13 @@ pub struct RegistryEntry {
     pub description: String,
 }
 
+/// Installable release metadata shown by the marketplace before download.
+#[derive(Debug, Clone)]
+pub struct ReleaseInfo {
+    pub tag: String,
+    pub api_version: u32,
+}
+
 /// An add-on package found on disk (not necessarily loaded or compatible).
 #[derive(Debug, Clone)]
 pub struct ExternalPlugin {
@@ -48,7 +55,7 @@ pub struct ExternalPlugin {
 impl ExternalPlugin {
     /// True when the package's API version is supported by this host.
     pub fn api_compatible(&self) -> bool {
-        ocs_plugin_api::host_accepts_plugin_version(self.api_version)
+        self.api_version == ocs_plugin_api::API_VERSION
     }
 
     /// True when the package can be loaded today: compatible API *and* a native
@@ -348,7 +355,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn api_v2_plugin_from_template_is_compatible() {
+    fn api_v2_plugin_from_template_is_incompatible() {
         let toml = r#"
 [plugin]
 id = "opencad.my_plugin"
@@ -367,7 +374,7 @@ xdata_apps = ["MYPLUGIN_RECORD"]
         assert_eq!(p.api_version, 2);
         assert_eq!(p.repository.as_deref(), Some("example/opencad-my-plugin"));
         assert!(p.command_prefixes.contains(&"MP_".to_string()));
-        assert!(p.api_compatible(), "API v2 plugins must run on API v3 host");
+        assert!(!p.api_compatible(), "old API plugins must be rebuilt");
     }
 
     #[test]

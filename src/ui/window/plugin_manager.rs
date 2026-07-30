@@ -7,7 +7,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 use crate::app::Message;
-use crate::plugin::external::{ExternalPlugin, RegistryEntry};
+use crate::plugin::external::{ExternalPlugin, RegistryEntry, ReleaseInfo};
 use iced::widget::{
     button, column, container, markdown, row, rule, scrollable, text, text_input, Space,
 };
@@ -27,7 +27,7 @@ pub struct MarketView<'a> {
     pub input: &'a str,
     pub search: &'a str,
     pub repos: &'a [String],
-    pub release_tags: &'a FxHashMap<String, Vec<String>>,
+    pub release_tags: &'a FxHashMap<String, Vec<ReleaseInfo>>,
     pub selected_tag: &'a FxHashMap<String, String>,
     pub selected_repo: Option<&'a str>,
     pub readmes: &'a FxHashMap<String, Result<markdown::Content, String>>,
@@ -212,15 +212,20 @@ fn external_card<'a>(
     repository: Option<String>,
     update_tag: Option<String>,
     loaded: bool,
+    load_error: Option<&str>,
     disabled: bool,
     selected: bool,
 ) -> Element<'a, Message> {
+    let failed_old_api =
+        load_error.is_some() && p.api_version != ocs_plugin_api::API_VERSION;
     let (status, kind) = if loaded && disabled {
         ("Disabled", StatusKind::Muted)
     } else if loaded {
         ("Loaded", StatusKind::Success)
-    } else if !p.api_compatible() {
+    } else if !p.api_compatible() || failed_old_api {
         ("API incompatible", StatusKind::Danger)
+    } else if load_error.is_some() {
+        ("Load failed", StatusKind::Danger)
     } else if !p.lib_present {
         ("No library", StatusKind::Warning)
     } else {
@@ -247,6 +252,26 @@ fn external_card<'a>(
             text(format!("Commands: {}", p.command_prefixes.join(", ")))
                 .size(11)
                 .style(muted_style),
+        );
+    }
+    if let Some(error) = load_error {
+        let detail = if failed_old_api {
+            format!(
+                "Plugin API {} is incompatible with this build's API {} ribbon ABI. \
+                 Update or rebuild the plugin.",
+                p.api_version,
+                ocs_plugin_api::API_VERSION,
+            )
+        } else {
+            format!("Load failed: {error}")
+        };
+        info_body = info_body.push(
+            text(detail)
+                .size(11)
+                .width(Fill)
+                .style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(theme.palette().danger.base.color),
+                }),
         );
     }
 
@@ -316,11 +341,21 @@ fn pill_icon_button<'a>(
 /// Release dropdown + Install (+ optional unlink) for one repo.
 fn install_controls<'a>(
     repo: &str,
-    tags: Vec<String>,
+    releases: Vec<ReleaseInfo>,
     selected: Option<String>,
     removable: bool,
 ) -> Element<'a, Message> {
     let repo_s = repo.to_string();
+    let tags = releases
+        .iter()
+        .map(|release| release.tag.clone())
+        .collect::<Vec<_>>();
+    let selected_api = selected.as_ref().and_then(|selected| {
+        releases
+            .iter()
+            .find(|release| release.tag == *selected)
+            .map(|release| release.api_version)
+    });
     let picker: Element<'_, Message> = if tags.is_empty() {
         text("no releases").size(11).style(muted_style).into()
     } else {
@@ -330,17 +365,20 @@ fn install_controls<'a>(
         .text_size(12)
         .into()
     };
-    let mut controls = row![
-        picker,
-        Space::new().width(8),
-        pill_button(
-            "Install",
-            Message::PluginInstall(repo_s.clone()),
-            button::success,
-        ),
-    ]
-    .align_y(iced::Center)
-    .spacing(4);
+    let action = match selected_api {
+        Some(api_version) if api_version == ocs_plugin_api::API_VERSION => {
+            pill_button(
+                "Install",
+                Message::PluginInstall(repo_s.clone()),
+                button::success,
+            )
+        }
+        Some(_) => status_badge("Incompatible", StatusKind::Danger),
+        None => status_badge("Unavailable", StatusKind::Muted),
+    };
+    let mut controls = row![picker, Space::new().width(8), action]
+        .align_y(iced::Center)
+        .spacing(4);
     if removable {
         controls = controls.push(Space::new().width(6));
         controls = controls.push(pill_icon_button(
@@ -766,6 +804,7 @@ pub fn view_window<'a>(
     disabled: &FxHashSet<String>,
     externals: &[ExternalPlugin],
     loaded: &FxHashSet<String>,
+    load_errors: &FxHashMap<String, String>,
     market: MarketView<'a>,
     theme: &'a Theme,
     sizing: crate::ui::modal::ModalSizing,
@@ -796,12 +835,22 @@ pub fn view_window<'a>(
             let update_tag = repository
                 .as_ref()
                 .and_then(|repo| market.release_tags.get(repo))
-                .and_then(|tags| newest_update(&p.version, tags));
+                .and_then(|releases| {
+                    let compatible_tags = releases
+                        .iter()
+                        .filter(|release| {
+                            release.api_version == ocs_plugin_api::API_VERSION
+                        })
+                        .map(|release| release.tag.clone())
+                        .collect::<Vec<_>>();
+                    newest_update(&p.version, &compatible_tags)
+                });
             list = list.push(external_card(
                 p,
                 repository,
                 update_tag,
                 loaded.contains(&p.id),
+                load_errors.get(&p.id).map(String::as_str),
                 disabled.contains(&p.id),
                 selected,
             ));

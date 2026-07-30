@@ -13,7 +13,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use super::external;
-use super::external::RegistryEntry;
+use super::external::{RegistryEntry, ReleaseInfo};
 
 /// The curated registry, read from the OpenCADStudio repo's `main` branch.
 pub(crate) const REGISTRY_URL: &str =
@@ -109,8 +109,68 @@ fn agent() -> ureq::Agent {
 
 const UA: &str = concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION"));
 
-/// Fetch the releases of `owner/repo` from the GitHub API.
+/// Fetch releases without consuming GitHub API quota. The public Atom feed
+/// supplies tags and the expanded-assets endpoint supplies download links.
+/// Fall back to the API only if GitHub changes either public representation.
 pub fn fetch_releases(repo: &str) -> Result<Vec<Release>, String> {
+    match fetch_releases_public(repo) {
+        Ok(releases) => Ok(releases),
+        Err(public_error) => fetch_releases_api(repo).map_err(|api_error| {
+            format!(
+                "public release metadata failed: {public_error}; \
+                 GitHub API fallback failed: {api_error}"
+            )
+        }),
+    }
+}
+
+fn fetch_releases_public(repo: &str) -> Result<Vec<Release>, String> {
+    let atom_url = format!("https://github.com/{repo}/releases.atom");
+    let atom = download_string(&atom_url)?;
+    let tag_marker = format!("https://github.com/{repo}/releases/tag/");
+    let mut tags = atom
+        .lines()
+        .filter_map(|line| {
+            let start = line.find(&tag_marker)? + tag_marker.len();
+            let rest = &line[start..];
+            let end = rest.find('"')?;
+            let tag = &rest[..end];
+            (!tag.is_empty()).then(|| tag.to_string())
+        })
+        .collect::<Vec<_>>();
+    tags.dedup();
+    if tags.is_empty() {
+        return Err("release feed contains no tags".to_string());
+    }
+
+    let mut releases = Vec::new();
+    for tag in tags {
+        let assets_url = format!("https://github.com/{repo}/releases/expanded_assets/{tag}");
+        let html = download_string(&assets_url)?;
+        let asset_prefix = format!("/{repo}/releases/download/{tag}/");
+        let mut assets = html
+            .split("href=\"")
+            .skip(1)
+            .filter_map(|tail| {
+                let end = tail.find('"')?;
+                let href = &tail[..end];
+                if !href.starts_with(&asset_prefix) {
+                    return None;
+                }
+                let name = href.rsplit('/').next()?.to_string();
+                Some(Asset {
+                    name,
+                    url: format!("https://github.com{href}"),
+                })
+            })
+            .collect::<Vec<_>>();
+        assets.dedup_by(|left, right| left.url == right.url);
+        releases.push(Release { tag, assets });
+    }
+    Ok(releases)
+}
+
+fn fetch_releases_api(repo: &str) -> Result<Vec<Release>, String> {
     let url = format!("https://api.github.com/repos/{repo}/releases");
     let body = agent()
         .get(&url)
@@ -145,8 +205,46 @@ pub fn fetch_releases(repo: &str) -> Result<Vec<Release>, String> {
     Ok(out)
 }
 
+/// Fetch installable releases and read each bundled manifest so compatibility
+/// is known before the Plugin Manager offers an Install action.
+pub fn fetch_release_info(repo: &str) -> Result<Vec<ReleaseInfo>, String> {
+    let releases = fetch_releases(repo)?;
+    let mut info = Vec::new();
+    let mut last_error = None;
+    for release in releases.into_iter().filter(Release::installable) {
+        let result = (|| {
+            let manifest_asset = release
+                .toml_asset()
+                .ok_or_else(|| format!("release {} has no plugin.toml", release.tag))?;
+            let manifest_text = download_string(&manifest_asset.url)?;
+            let manifest = external::parse_plugin_toml(&manifest_text)
+                .ok_or_else(|| format!("release {} plugin.toml is missing an id", release.tag))?;
+            Ok::<_, String>(ReleaseInfo {
+                tag: release.tag,
+                api_version: manifest.api_version,
+            })
+        })();
+        match result {
+            Ok(release) => info.push(release),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    if info.is_empty() {
+        Err(last_error.unwrap_or_else(|| "no installable releases found".to_string()))
+    } else {
+        Ok(info)
+    }
+}
+
 /// Fetch the repository README from its default branch as raw Markdown.
 pub fn fetch_readme(repo: &str) -> Result<String, String> {
+    // GitHub's raw host is not subject to the unauthenticated REST API's
+    // 60-request/hour limit. `HEAD` resolves the repository's default branch.
+    let raw_url = format!("https://raw.githubusercontent.com/{repo}/HEAD/README.md");
+    if let Ok(readme) = download_string(&raw_url) {
+        return Ok(readme);
+    }
+
     let url = format!("https://api.github.com/repos/{repo}/readme");
     agent()
         .get(&url)
@@ -193,11 +291,10 @@ pub fn install(release: &Release, repository: &str) -> Result<String, String> {
 
     let toml_text = download_string(&toml.url)?;
     let manifest = external::parse_plugin_toml(&toml_text).ok_or("plugin.toml is missing an id")?;
-    if !ocs_plugin_api::host_accepts_plugin_version(manifest.api_version) {
+    if manifest.api_version != ocs_plugin_api::API_VERSION {
         return Err(format!(
-            "API version {} is incompatible (host supports {}-{})",
+            "API version {} is incompatible (host requires {})",
             manifest.api_version,
-            ocs_plugin_api::API_VERSION_MIN_SUPPORTED,
             ocs_plugin_api::API_VERSION
         ));
     }
