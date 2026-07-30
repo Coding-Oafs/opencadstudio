@@ -34,7 +34,8 @@ impl CadModule for DrawModule {
         use draw::{arc, circle, ellipse, hatch, line, polyline, shapes};
         use groups::{group, ungroup};
         use layers::{
-            layfrz, laylck, layoff, layon, laythw, layulk, make_current, match_layer, panel,
+            layfrz, layiso, laylck, layoff, layon, laythw, layulk, layuniso, make_current,
+            match_layer, panel,
         };
         use modify::{
             array, copy, delete, explode, fillet, mirror, offset, rotate, scale, stretch,
@@ -182,12 +183,14 @@ impl CadModule for DrawModule {
                                 layfrz::tool(),
                                 laylck::tool(),
                                 make_current::tool(),
+                                layiso::tool(),
                             ],
                             row3: vec![
                                 layon::tool(),
                                 laythw::tool(),
                                 layulk::tool(),
                                 match_layer::tool(),
+                                layuniso::tool(),
                             ],
                         },
                     ],

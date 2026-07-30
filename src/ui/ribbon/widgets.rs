@@ -613,10 +613,17 @@ pub(super) fn render_large<'a>(
                     *id, *icon, None, items, *default, active_tool, open_dd, last_cmd,
                     dim,
                 )
-            }
+        }
 
         RibbonItem::LayerComboGroup { row2, row3 } => {
-            const COMBO_W: f32 = LARGE_W * 2.5;
+            const TOOL_BUTTON_W: f32 = 26.0;
+            const TOOL_SPACING: f32 = 2.0;
+            const GROUP_PADDING: f32 = 8.0;
+            let tool_count = row2.len().max(row3.len()) as f32;
+            let tools_w = tool_count * TOOL_BUTTON_W
+                + (tool_count - 1.0).max(0.0) * TOOL_SPACING
+                + GROUP_PADDING;
+            let combo_w = (LARGE_W * 2.5).max(tools_w);
 
             let info = layer_infos.iter().find(|l| l.name == active_layer);
             let lc = info.map(|l| l.color).unwrap_or(Color::WHITE);
@@ -641,8 +648,15 @@ pub(super) fn render_large<'a>(
                 .width(12)
                 .height(12);
 
-            const ICONS_USED: f32 = 14.0 + 14.0 + 14.0 + 12.0 + 10.0 + 5.0 * 4.0 + 16.0 + 16.0;
-            let name_w = (COMBO_W - ICONS_USED).max(40.0);
+            const FIXED_COMBO_W: f32 =
+                14.0 * 3.0 + 12.0 + 9.0 + 4.0 * 4.0 + 8.0 * 2.0;
+            let name_w = (combo_w - FIXED_COMBO_W).max(24.0);
+            // About 6 px per glyph at 11 px. The dropdown itself keeps the
+            // complete layer name available; only its closed ribbon label is
+            // shortened to preserve the fixed row height.
+            let name_budget = ((name_w / 6.0) as usize).max(4);
+            let active_layer_label =
+                crate::ui::text_util::elide(active_layer, name_budget);
 
             let combo_btn = button(
                 row![
@@ -650,7 +664,7 @@ pub(super) fn render_large<'a>(
                     freeze_icon,
                     lock_icon,
                     swatch,
-                    container(text(active_layer).size(11))
+                    container(text(active_layer_label).size(11))
                         .width(name_w)
                         .clip(true),
                     icons::themed_arrow_down(9.0),
@@ -710,7 +724,7 @@ pub(super) fn render_large<'a>(
                 .spacing(3)
                 .align_x(iced::Left),
             )
-            .width(Length::Fixed(COMBO_W))
+            .width(Length::Fixed(combo_w))
             .height(Fill)
             .align_y(iced::Center)
             .padding(Padding {
