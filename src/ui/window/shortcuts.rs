@@ -109,6 +109,7 @@ pub fn view_window<'a>(
         shortcut_row(format!("{MOD}+Shift+S"), "Save As"),
         shortcut_row(format!("{MOD}+Z"), "Undo"),
         shortcut_row(format!("{MOD}+Shift+Z / {MOD}+Y"), "Redo"),
+        shortcut_row(format!("{MOD}+F / {MOD}+H"), "Find and Replace"),
         shortcut_row(format!("{MOD}+C"), "Copy to Clipboard"),
         shortcut_row(format!("{MOD}+X"), "Cut to Clipboard"),
         shortcut_row(format!("{MOD}+V"), "Paste from Clipboard"),

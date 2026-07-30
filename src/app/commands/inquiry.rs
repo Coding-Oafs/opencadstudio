@@ -1078,13 +1078,7 @@ impl OpenCADStudio {
             // FIND <search> REPLACE <rep> — replace first occurrence (case-insensitive)
             // FINDALL <search> REPLACE <rep> — replace all occurrences
             "FIND" => {
-                use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new(
-                    "FIND",
-                    "FIND  text to find  (add REPLACE <text> by typing):",
-                );
-                self.command_line.push_info(&c.prompt());
-                self.tabs[self.active_tab].active_cmd = Some(Box::new(c));
+                return Some(Task::done(Message::FindReplaceOpen));
             }
             "FINDALL" => {
                 use crate::command::ValuePromptCommand;

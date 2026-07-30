@@ -1586,6 +1586,7 @@ impl OpenCADStudio {
             About => (440, 360),
             Shortcuts => (720, 520),
             Options => (520, 500),
+            FindReplace => (560, 190),
             PluginManager => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -1889,6 +1890,7 @@ impl OpenCADStudio {
                                 "z" if !shift => Some(Message::Undo),
                                 "z" if shift => Some(Message::Redo),
                                 "y" => Some(Message::Redo),
+                                "f" | "h" => Some(Message::FindReplaceOpen),
                                 // Ctrl/Cmd+A: select all layer rows when the
                                 // Layer Manager is open, else all objects. The
                                 // update handler branches on the active modal.

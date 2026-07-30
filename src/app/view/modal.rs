@@ -17,6 +17,7 @@ impl OpenCADStudio {
             Some(K::Shortcuts) => "Keyboard Shortcuts",
             Some(K::Aliases) => "Command Aliases",
             Some(K::Options) => "Options",
+            Some(K::FindReplace) => "Find and Replace",
             Some(K::PluginManager) => "Plugin Manager",
             Some(K::UpdateNotice) => "Update Available",
             Some(K::Layers) => "Layer Manager",
@@ -101,6 +102,15 @@ impl OpenCADStudio {
                         flow,
                     )
                 },
+            ),
+            super::super::ModalKind::FindReplace => sized(
+                crate::ui::window::find_replace::view_window(
+                    &self.find_replace.search,
+                    &self.find_replace.replacement,
+                    &self.find_replace.status,
+                ),
+                560,
+                190,
             ),
             super::super::ModalKind::PluginManager => {
                 #[cfg(not(target_arch = "wasm32"))]

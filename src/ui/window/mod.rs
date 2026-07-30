@@ -10,3 +10,4 @@ pub mod open_progress;
 pub mod options;
 pub mod attribute_editor;
 pub mod alias_editor;
+pub mod find_replace;

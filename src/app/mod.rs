@@ -8,6 +8,7 @@ mod command_driver;
 pub(crate) mod commands;
 mod document;
 mod expr_eval;
+mod find_replace;
 mod helpers;
 mod history;
 mod layers;
@@ -159,6 +160,27 @@ pub struct QSelectState {
     pub operator: QSelectOp,
     pub value: String,
     pub append: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FindReplaceState {
+    pub search: String,
+    pub replacement: String,
+    pub status: String,
+    pub current_match: Option<FindMatchKey>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FindMatchKey {
+    Entity(acadrust::Handle),
+    BlockEntityInInsert {
+        entity: acadrust::Handle,
+        insert: acadrust::Handle,
+    },
+    InsertAttribute {
+        insert: acadrust::Handle,
+        index: usize,
+    },
 }
 use crate::snap::Snapper;
 use crate::ui::{CommandLine, Ribbon, StatusBar};
@@ -470,6 +492,8 @@ pub(super) struct OpenCADStudio {
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
+    /// FIND dialog inputs and current result cursor.
+    find_replace: FindReplaceState,
     /// Set once the user acknowledges the AEC-drop warning, so re-entering the
     /// save path proceeds instead of re-showing the warning.
     aec_drop_acknowledged: bool,
@@ -1345,6 +1369,7 @@ pub enum ModalKind {
     Unsaved,
     SaveDialog,
     Options,
+    FindReplace,
     AecDropWarning,
     #[cfg(not(target_arch = "wasm32"))]
     FileInUse,
@@ -1480,6 +1505,13 @@ pub enum Message {
     /// Ctrl/Cmd+A — select all layer rows when the Layer Manager is open, or all
     /// drawing objects otherwise (#236).
     SelectAllShortcut,
+    /// Open the shared Find and Replace dialog (Ctrl/Cmd+F or Ctrl/Cmd+H).
+    FindReplaceOpen,
+    FindReplaceSearchChanged(String),
+    FindReplaceReplacementChanged(String),
+    FindReplaceNext,
+    FindReplaceOne,
+    FindReplaceAll,
     /// System-clipboard text read for the MText editor (`None` = empty/denied).
     MTextPasteClip(Option<String>),
     /// System-clipboard text read for the single-line TEXT editor.
@@ -2685,6 +2717,7 @@ impl OpenCADStudio {
             main_window: None,
             color_pick_target: None,
             active_modal: None,
+            find_replace: FindReplaceState::default(),
             aec_drop_acknowledged: false,
             aec_drop_count: 0,
             layer_delete_pending: None,

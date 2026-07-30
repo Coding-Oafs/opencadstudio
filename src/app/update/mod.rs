@@ -35,6 +35,7 @@ fn is_modal_blocked_key_msg(msg: &Message) -> bool {
             | Message::SaveAs
             | Message::Undo
             | Message::Redo
+            | Message::FindReplaceOpen
     )
 }
 
@@ -3234,6 +3235,27 @@ impl OpenCADStudio {
                 } else {
                     self.dispatch_command("SELECTALL")
                 }
+            }
+            Message::FindReplaceOpen => self.open_find_replace(),
+            Message::FindReplaceSearchChanged(value) => {
+                self.find_replace_search_changed(value);
+                Task::none()
+            }
+            Message::FindReplaceReplacementChanged(value) => {
+                self.find_replace_replacement_changed(value);
+                Task::none()
+            }
+            Message::FindReplaceNext => {
+                self.find_replace_next();
+                Task::none()
+            }
+            Message::FindReplaceOne => {
+                self.find_replace_one();
+                Task::none()
+            }
+            Message::FindReplaceAll => {
+                self.find_replace_all();
+                Task::none()
             }
             Message::MTextPasteClip(text) => {
                 if let Some(text) = text.filter(|t| !t.is_empty()) {
