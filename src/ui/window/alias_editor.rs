@@ -6,7 +6,7 @@
 
 use crate::app::Message;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
-use iced::{Background, Element, Fill, Length, Theme};
+use iced::{Background, Element, Length, Theme};
 
 /// Which column of an alias row a text edit targets.
 #[derive(Clone, Copy, Debug)]
@@ -20,12 +20,15 @@ const GUTTER: f32 = 16.0;
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 /// Build the alias editor content. `rows` is the live working buffer.
-pub fn view_window(rows: &[(String, String)]) -> Element<'_, Message> {
+pub fn view_window(
+    rows: &[(String, String)],
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'_, Message> {
     let title = text("Command Aliases").size(15);
     let hint = text(
         "Type an alias and the command it runs (e.g. L → LINE). \
@@ -42,7 +45,7 @@ pub fn view_window(rows: &[(String, String)]) -> Element<'_, Message> {
     let head = container(
         row![
             container(text("Alias").size(11).style(muted_style)).width(Length::Fixed(120.0)),
-            container(text("Command").size(11).style(muted_style)).width(Fill),
+            container(text("Command").size(11).style(muted_style)).width(sizing.width),
             Space::new().width(Length::Fixed(30.0)),
         ]
         .spacing(8),
@@ -60,7 +63,7 @@ pub fn view_window(rows: &[(String, String)]) -> Element<'_, Message> {
             .on_input(move |v| Message::AliasEditorInput { idx, field: AliasField::Command, value: v })
             .size(13)
             .padding([3, 6])
-            .width(Fill);
+            .width(sizing.width);
         let del = button(crate::ui::icons::themed_danger(crate::ui::icons::CLOSE, 12.0))
             .on_press(Message::AliasEditorRemove(idx))
             .padding([2, 6])
@@ -89,20 +92,20 @@ pub fn view_window(rows: &[(String, String)]) -> Element<'_, Message> {
             hint,
             Space::new().height(6),
             head,
-            scrollable(container(list).padding(gutter)).height(Fill),
+            scrollable(container(list).padding(gutter)).height(sizing.height),
             Space::new().height(6),
-            row![add, Space::new().width(Fill), apply].align_y(iced::Center),
+            row![add, Space::new().width(sizing.width), apply].align_y(iced::Center),
         ]
         .spacing(6)
-        .width(Fill)
-        .height(Fill),
+        .width(sizing.width)
+        .height(sizing.height),
     )
     .padding(12)
-    .width(Fill)
-    .height(Fill)
+    .width(sizing.width)
+    .height(sizing.height)
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.base.color,
+            theme.palette().background.base.color,
         )),
         ..Default::default()
     })

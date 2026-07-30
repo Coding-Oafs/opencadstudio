@@ -22,7 +22,7 @@ pub fn menu_entries<'a>(snapper: &'a Snapper) -> Vec<Entry<'a>> {
     let divider = container(iced::widget::Space::new().height(1))
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.weak.color,
+                theme.palette().background.weak.color,
             )),
             ..Default::default()
         })

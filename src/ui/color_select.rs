@@ -8,7 +8,7 @@ use crate::ui::properties::acad_color_display;
 use acadrust::types::Color as AcadColor;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
-use iced::advanced::{mouse, overlay, renderer, Clipboard, Shell};
+use iced::advanced::{mouse, overlay, renderer, Shell};
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
@@ -69,7 +69,7 @@ fn swatch<'a>(bg: Color) -> Element<'a, Message> {
         .style(move |theme: &Theme| container::Style {
             background: Some(Background::Color(bg)),
             border: Border {
-                color: theme.extended_palette().background.neutral.color,
+                color: theme.palette().background.neutral.color,
                 width: 1.0,
                 radius: 2.0.into(),
             },
@@ -118,7 +118,7 @@ pub fn color_selector<'a>(
 
     let popup = container(color_list(extras, on_select, on_more))
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
@@ -141,7 +141,7 @@ pub fn color_selector<'a>(
 }
 
 fn list_row_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let hovered = matches!(status, button::Status::Hovered);
     let text_color = if hovered {
         palette.background.strong.text
@@ -230,9 +230,9 @@ pub fn color_grid_window(on_pick: impl Fn(AcadColor) -> Message) -> Element<'sta
                         background: Some(Background::Color(bg)),
                         border: Border {
                             color: if matches!(status, button::Status::Hovered) {
-                                theme.extended_palette().primary.base.color
+                                theme.palette().primary.base.color
                             } else {
-                                theme.extended_palette().background.neutral.color
+                                theme.palette().background.neutral.color
                             },
                             width: if matches!(status, button::Status::Hovered) {
                                 1.5
@@ -241,7 +241,7 @@ pub fn color_grid_window(on_pick: impl Fn(AcadColor) -> Message) -> Element<'sta
                             },
                             radius: 1.0.into(),
                         },
-                        text_color: theme.extended_palette().background.base.text,
+                        text_color: theme.palette().background.base.text,
                         ..Default::default()
                     })
                     .padding(0),
@@ -255,19 +255,19 @@ pub fn color_grid_window(on_pick: impl Fn(AcadColor) -> Message) -> Element<'sta
         column![
             text("Select Color").size(13),
             row![chip(AcadColor::ByLayer, "ByLayer"), chip(AcadColor::ByBlock, "ByBlock")].spacing(6),
-            scrollable(grid).height(Length::Fill),
+            scrollable(grid).height(Length::Fit),
         ]
         .spacing(8),
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.weak.color
+            theme.palette().background.weak.color
         )),
         ..Default::default()
     })
     .padding(10)
-    .width(Length::Fill)
-    .height(Length::Fill)
+    .width(Length::Fit)
+    .height(Length::Fit)
     .into()
 }
 
@@ -289,20 +289,12 @@ struct Floating<'a> {
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for Floating<'a> {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.base), widget::Tree::new(&self.popup)]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[self.base.as_widget(), self.popup.as_widget()]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [&mut self.base, &mut self.popup]);
     }
 
     fn size(&self) -> Size<Length> {
         self.base.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.base.as_widget().size_hint()
     }
 
     fn layout(
@@ -323,7 +315,6 @@ impl<'a> Widget<Message, Theme, Renderer> for Floating<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -333,7 +324,6 @@ impl<'a> Widget<Message, Theme, Renderer> for Floating<'a> {
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -469,13 +459,12 @@ impl overlay::Overlay<Message, Theme, Renderer> for FloatingOverlay<'_, '_> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
         let child = layout.children().next().unwrap();
         let vp = child.bounds();
         self.popup.as_widget_mut().update(
-            self.tree, event, child, cursor, renderer, clipboard, shell, &vp,
+            self.tree, event, child, cursor, renderer, shell, &vp,
         );
     }
 

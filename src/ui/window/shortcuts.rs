@@ -2,7 +2,7 @@
 
 use crate::app::Message;
 use iced::widget::{column, container, row, scrollable, text, Space};
-use iced::{Background, Element, Fill, Theme};
+use iced::{Background, Element, Theme};
 use std::borrow::Cow;
 
 /// Display name of the primary accelerator modifier on this platform.
@@ -16,23 +16,23 @@ const MOD: &str = "Ctrl";
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
-fn hdivider<'a>() -> Element<'a, Message> {
-    container(Space::new().width(Fill).height(1))
-        .width(Fill)
+fn hdivider<'a>(width: iced::Length) -> Element<'a, Message> {
+    container(Space::new().width(width).height(1))
+        .width(width)
         .height(1)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color,
+                theme.palette().background.neutral.color,
             )),
             ..Default::default()
         })
@@ -70,6 +70,7 @@ fn section<'a>(title: impl Into<Cow<'static, str>>) -> Element<'a, Message> {
 
 pub fn view_window<'a>(
     overrides: &'a rustc_hash::FxHashMap<String, String>,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     // ── Toolbar ───────────────────────────────────────────────────────────
     let toolbar = container(
@@ -82,11 +83,11 @@ pub fn view_window<'a>(
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.weakest.color,
+            theme.palette().background.weakest.color,
         )),
         ..Default::default()
     })
-    .width(Fill)
+    .width(sizing.width)
     .padding([5, 10]);
 
     // ── Shortcut entries ──────────────────────────────────────────────────
@@ -152,8 +153,8 @@ pub fn view_window<'a>(
 
     // ── Section headers styled separately ────────────────────────────────
     let content = scrollable(column(rows).spacing(3).padding([12, 16]))
-        .width(Fill)
-        .height(Fill);
+        .width(sizing.width)
+        .height(sizing.height);
 
     // ── Header row with accent ────────────────────────────────────────────
     let header = container(
@@ -166,20 +167,29 @@ pub fn view_window<'a>(
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().primary.weak.color,
+            theme.palette().primary.weak.color,
         )),
         ..Default::default()
     })
-    .width(Fill);
+    .width(sizing.width);
 
-    container(column![toolbar, hdivider(), header, hdivider(), content].spacing(0))
+    container(
+        column![
+            toolbar,
+            hdivider(sizing.width),
+            header,
+            hdivider(sizing.width),
+            content
+        ]
+        .spacing(0),
+    )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.base.color,
+                theme.palette().background.base.color,
             )),
             ..Default::default()
         })
-        .width(Fill)
-        .height(Fill)
+        .width(sizing.width)
+        .height(sizing.height)
         .into()
 }

@@ -34,13 +34,13 @@ pub(super) fn viewport_controls<'a>(
                         | iced::widget::button::Status::Pressed
                 )
                 .then_some(Background::Color(
-                    theme.extended_palette().danger.weak.color
+                    theme.palette().danger.weak.color
                 )),
                 border: Border {
                     radius: 3.0.into(),
                     ..Default::default()
                 },
-                text_color: theme.extended_palette().danger.base.color,
+                text_color: theme.palette().danger.base.color,
                 ..Default::default()
             })
     };
@@ -56,7 +56,7 @@ pub(super) fn viewport_controls<'a>(
             .on_press(msg)
             .padding([4, 6])
             .style(move |theme: &Theme, status| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let pair = match (active, status) {
                     (_, iced::widget::button::Status::Hovered) => {
                         Some(palette.background.strong)
@@ -79,7 +79,7 @@ pub(super) fn viewport_controls<'a>(
     };
 
     // Render-mode picker, restyled borderless so the outer chip frames it.
-    let picker = iced::widget::pick_list(
+    let picker = crate::ui::pick_list(
         render_modes,
         Some(RenderModeChoice(render_mode)),
         |c| Message::SetRenderMode(c.0),
@@ -87,7 +87,7 @@ pub(super) fn viewport_controls<'a>(
     .text_size(11)
     .padding([4, 6])
     .style(move |theme: &Theme, _| {
-        let text = theme.extended_palette().background.base.text;
+        let text = theme.palette().background.base.text;
         iced::widget::pick_list::Style {
         background: Background::Color(iced::Color::TRANSPARENT),
         border: Border {
@@ -105,7 +105,7 @@ pub(super) fn viewport_controls<'a>(
         container(iced::widget::Space::new().width(1.0).height(16.0)).style(|theme: &Theme| {
             iced::widget::container::Style {
                 background: Some(Background::Color(
-                    theme.extended_palette().background.neutral.color.scale_alpha(0.7)
+                    theme.palette().background.neutral.color.scale_alpha(0.7)
                 )),
                 ..Default::default()
             }
@@ -156,7 +156,7 @@ pub(super) fn viewport_controls<'a>(
     container(bar)
         .padding(2)
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             iced::widget::container::Style {
             background: Some(Background::Color(
                 palette.background.weak.color.scale_alpha(0.92)

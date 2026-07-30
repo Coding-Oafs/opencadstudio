@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
-use iced::advanced::{mouse, overlay, renderer, Clipboard, Renderer as _, Shell};
+use iced::advanced::{mouse, overlay, renderer, Renderer as _, Shell};
 use iced::{
     Background, Border, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size,
     Theme, Vector,
@@ -184,28 +184,16 @@ impl<'a> CollapsePanels<'a> {
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
-    fn children(&self) -> Vec<widget::Tree> {
-        let mut v = Vec::with_capacity(self.panels.len() * SLOTS);
-        for p in &self.panels {
-            v.push(widget::Tree::new(&p.full));
-            v.push(widget::Tree::new(&p.compact));
-            v.push(widget::Tree::new(&p.button));
-            v.push(widget::Tree::new(&p.tight));
-            v.push(widget::Tree::new(&p.flyout));
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        let mut refs = Vec::with_capacity(self.panels.len() * SLOTS);
+        for p in &mut self.panels {
+            refs.push(&mut p.full);
+            refs.push(&mut p.compact);
+            refs.push(&mut p.button);
+            refs.push(&mut p.tight);
+            refs.push(&mut p.flyout);
         }
-        v
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        let mut refs: Vec<&dyn Widget<Message, Theme, Renderer>> = Vec::new();
-        for p in &self.panels {
-            refs.push(p.full.as_widget());
-            refs.push(p.compact.as_widget());
-            refs.push(p.button.as_widget());
-            refs.push(p.tight.as_widget());
-            refs.push(p.flyout.as_widget());
-        }
-        tree.diff_children(&refs);
+        tree.diff_children(&mut refs);
     }
 
     fn size(&self) -> Size<Length> {
@@ -362,7 +350,6 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -376,7 +363,6 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
                 child_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -477,7 +463,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
                     shadow: Shadow::default(),
                     snap: true,
                 },
-                Background::Color(theme.extended_palette().background.neutral.color),
+                Background::Color(theme.palette().background.neutral.color),
             );
         }
     }
@@ -611,7 +597,6 @@ impl overlay::Overlay<Message, Theme, Renderer> for FlyoutOverlay<'_, '_> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
         let child = layout.children().next().unwrap();
@@ -627,7 +612,7 @@ impl overlay::Overlay<Message, Theme, Renderer> for FlyoutOverlay<'_, '_> {
 
         self.flyout
             .as_widget_mut()
-            .update(self.tree, event, child, cursor, renderer, clipboard, shell, &vp);
+            .update(self.tree, event, child, cursor, renderer, shell, &vp);
     }
 
     fn operate(

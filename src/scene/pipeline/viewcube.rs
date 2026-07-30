@@ -510,8 +510,8 @@ impl ViewCubeText {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vc.text_layout"),
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[&bgl].map(Some),
+            immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vc.text_shader"),
@@ -545,7 +545,7 @@ impl ViewCubeText {
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let vertex_capacity = MAX_VERTS as u32;
@@ -782,6 +782,7 @@ impl ViewCubeText {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_viewport(
             clip.x as f32,
@@ -1172,8 +1173,8 @@ impl ViewCubePipeline {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vc.layout"),
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[&bgl].map(Some),
+            immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vc.shader"),
@@ -1199,8 +1200,8 @@ impl ViewCubePipeline {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth24PlusStencil8,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -1215,7 +1216,7 @@ impl ViewCubePipeline {
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let text = ViewCubeText::new(device, queue, format);
@@ -1303,6 +1304,7 @@ impl ViewCubePipeline {
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_viewport(
             clip.x as f32,

@@ -1,14 +1,15 @@
 use crate::app::config::UiThemeConfig;
 use crate::app::Message;
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text, text_input, Space,
+    button, column, container, row, scrollable, text, text_input, Space,
 };
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Theme};
 
 pub fn view_window<'a>(
     default_save_format: &'a str,
     ui_theme: &'a UiThemeConfig,
     theme_color_inputs: &'a [String; 6],
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     let selected_format = crate::io::SAVE_FORMAT_OPTIONS
         .iter()
@@ -40,7 +41,7 @@ pub fn view_window<'a>(
             .style(move |theme: &Theme| container::Style {
                 background: Some(Background::Color(color)),
                 border: Border {
-                    color: theme.extended_palette().background.strong.color,
+                    color: theme.palette().background.strong.color,
                     width: 1.0,
                     radius: 3.0.into(),
                 },
@@ -69,12 +70,12 @@ pub fn view_window<'a>(
         Space::new().height(10),
         row![
             text("Default save format:").size(12).width(150),
-            pick_list(
+            crate::ui::pick_list(
                 crate::io::SAVE_FORMAT_OPTIONS,
                 selected_format,
                 |format: &str| Message::DefaultSaveFormatChanged(format.to_string())
             )
-            .width(Fill),
+            .width(sizing.width),
         ]
         .spacing(12)
         .align_y(iced::Center),
@@ -82,18 +83,19 @@ pub fn view_window<'a>(
         text(
             "Used for the first save of a new drawing. Existing drawings keep their file type and version."
         )
-        .size(11),
+        .size(11)
+        .width(sizing.width),
         Space::new().height(22),
         text("Theme").size(15),
         Space::new().height(10),
         row![
             text("Iced theme:").size(12).width(150),
-            pick_list(
+            crate::ui::pick_list(
                 theme_options,
                 selected_theme,
                 Message::OptionsThemeChanged,
             )
-            .width(Fill),
+            .width(sizing.width),
         ]
         .spacing(12)
         .align_y(iced::Center),
@@ -101,25 +103,26 @@ pub fn view_window<'a>(
         text(
             "Changing a base colour switches to Custom. Iced generates every component shade from these six colours."
         )
-        .size(11),
+        .size(11)
+        .width(sizing.width),
         Space::new().height(12),
         color_controls,
     ]
     .spacing(0)
-    .width(Fill);
+    .width(sizing.width);
 
     let body = column![
-        scrollable(content).height(Fill),
+        scrollable(content).height(sizing.height),
         Space::new().height(12),
-        row![Space::new().width(Fill), close],
+        row![Space::new().width(sizing.width), close],
     ]
-    .width(Fill)
-    .height(Fill);
+    .width(sizing.width)
+    .height(sizing.height);
 
     container(body)
         .style(container::rounded_box)
         .padding([16, 18])
-        .width(Fill)
-        .height(Fill)
+        .width(sizing.width)
+        .height(sizing.height)
         .into()
 }

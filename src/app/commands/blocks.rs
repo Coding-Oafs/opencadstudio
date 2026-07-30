@@ -61,7 +61,7 @@ impl OpenCADStudio {
                         Some(text) => {
                             self.command_line
                                 .push_info("Copied selected text to clipboard.");
-                            Some(iced::clipboard::write(text))
+                            Some(iced::clipboard::write(text).discard())
                         }
                         None => Some(Task::none()),
                     };

@@ -1,6 +1,6 @@
 use super::super::Message;
 use iced::widget::{
-    button, column, container, mouse_area, pick_list, row, stack, text, text_input,
+    button, column, container, mouse_area, row, stack, text, text_input,
     Space,
 };
 use iced::{Background, Border, Color, Element, Fill, Theme};
@@ -36,7 +36,7 @@ pub(super) fn text_inline_overlay(
 
     let panel = container(field)
         .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
@@ -211,7 +211,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
                     );
                     frame.fill(
                         &rect,
-                        theme.extended_palette().primary.base.color.scale_alpha(0.45),
+                        theme.palette().primary.base.color.scale_alpha(0.45),
                     );
                 }
             }
@@ -247,7 +247,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
             frame.stroke(
                 &path,
                 Stroke::default()
-                    .with_color(theme.extended_palette().warning.base.color)
+                    .with_color(theme.palette().warning.base.color)
                     .with_width(1.5),
             );
         } else if collapsed {
@@ -271,7 +271,7 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
                 frame.stroke(
                     &path,
                     Stroke::default()
-                        .with_color(theme.extended_palette().warning.base.color)
+                        .with_color(theme.palette().warning.base.color)
                         .with_width(1.5),
                 );
             }
@@ -318,11 +318,14 @@ pub(super) fn mtext_editor_overlay<'a>(
     modal_offset: iced::Vector,
     modal_resize: iced::Vector,
 ) -> Element<'a, Message> {
+    let sizing = crate::ui::modal::ModalSizing::from_resize(modal_resize);
+    let width = sizing.width;
+    let height = sizing.height;
     use super::super::mtext_editor::{JustifyChoice, MTextFmt, ParaAlign};
     use iced::widget::canvas;
 
     let btn_style = |theme: &Theme, status: button::Status| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match status {
             button::Status::Hovered | button::Status::Pressed => palette.background.strong,
             _ => palette.background.weak,
@@ -366,7 +369,7 @@ pub(super) fn mtext_editor_overlay<'a>(
     } else {
         styles
     };
-    let style_pl = pick_list(style_opts, Some(ed.style.clone()), Message::MTextStyle)
+    let style_pl = crate::ui::pick_list(style_opts, Some(ed.style.clone()), Message::MTextStyle)
         .text_size(11)
         .width(iced::Length::Fixed(96.0));
     let font_sel = if ed.font.trim().is_empty() {
@@ -374,7 +377,7 @@ pub(super) fn mtext_editor_overlay<'a>(
     } else {
         ed.font.clone()
     };
-    let font_pl = pick_list(
+    let font_pl = crate::ui::pick_list(
         MTEXT_FONTS
             .iter()
             .map(|s| s.to_string())
@@ -432,14 +435,15 @@ pub(super) fn mtext_editor_overlay<'a>(
             include_bytes!("../../../assets/icons/mt_lower.svg"),
             Message::MTextFmt(MTextFmt::Lowercase)
         ),
-        iced::widget::Space::new().width(Fill),
+        iced::widget::Space::new().width(width),
         color_pl,
     ]
     .spacing(4)
-    .align_y(iced::Alignment::Center);
+    .align_y(iced::Alignment::Center)
+    .width(width);
 
     // ── Row 2: oblique / width / char-spacing · align · line spacing · OK ─
-    let justify = pick_list(
+    let justify = crate::ui::pick_list(
         JustifyChoice::ALL,
         Some(JustifyChoice(ed.attachment)),
         |c| Message::MTextJustify(c.0),
@@ -487,7 +491,8 @@ pub(super) fn mtext_editor_overlay<'a>(
             .style(btn_style),
     ]
     .spacing(4)
-    .align_y(iced::Alignment::Center);
+    .align_y(iced::Alignment::Center)
+    .width(width);
 
     // ── Body: the rendered preview (the editor is preview-only). It fills the
     // space left by the toolbars, so the resizable modal's extra height flows
@@ -587,11 +592,11 @@ pub(super) fn mtext_editor_overlay<'a>(
                     vertical: Scrollbar::default(),
                     horizontal: Scrollbar::default(),
                 })
-                .width(Fill)
-                .height(Fill),
+                .width(width)
+                .height(height),
         )
             .style(move |theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 container::Style {
                 background: Some(Background::Color(palette.background.base.color)),
                 border: Border {
@@ -603,8 +608,8 @@ pub(super) fn mtext_editor_overlay<'a>(
                 }
             })
             .padding(2)
-            .width(Fill)
-            .height(Fill)
+            .width(width)
+            .height(height)
             .into()
     };
 
@@ -613,32 +618,31 @@ pub(super) fn mtext_editor_overlay<'a>(
     // buffer, so there is no separate Cancel.
     let action_bar = container(
         row![
-            iced::widget::Space::new().width(Fill),
+            iced::widget::Space::new().width(width),
             crate::ui::style::style_manager::tb_button("Apply", Message::MTextApply, true),
         ]
         .align_y(iced::Alignment::Center),
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.weak.color
+            theme.palette().background.weak.color
         )),
         ..Default::default()
     })
-    .width(Fill)
+    .width(width)
     .padding([5, 8]);
 
     // The shared modal frame supplies the panel background, drag title bar,
-    // ✕ (which also cancels) and the resize grip. The content is a Fill column
-    // wrapped here in a fixed box (natural 660×480, grown by the shared resize
-    // delta) so the modal frame shrinks to it and the corner grip can drag it.
+    // ✕ (which also cancels) and the resize grip. Iced 0.15 measures this
+    // content first and clamps it to the user-growable maximum.
     let content = container(
         column![action_bar, row1, row2, body]
             .spacing(6)
-            .width(Fill)
-            .height(Fill),
+            .width(width)
+            .height(height),
     )
-    .width(iced::Length::Fixed(660.0 + modal_resize.x))
-    .height(iced::Length::Fixed(480.0 + modal_resize.y));
+    .width(iced::Length::Fit.max(660.0 + modal_resize.x))
+    .height(iced::Length::Fit.max(480.0 + modal_resize.y));
 
     let _ = canvas_size; // positioned & sized by the modal frame now
     // `modal` sizes its stack from the base layer, so the base must fill the
@@ -647,11 +651,10 @@ pub(super) fn mtext_editor_overlay<'a>(
     crate::ui::modal::modal(
         iced::widget::Space::new().width(Fill).height(Fill),
         "Text Editor",
-        660.0 + modal_resize.x,
         content,
         Message::MTextCancel,
         modal_offset,
-        true,
+        crate::ui::modal::ModalOptions::STANDARD,
     )
 }
 
@@ -678,7 +681,7 @@ pub(super) fn viewport_context_menu_overlay(
         container(iced::widget::Space::new().width(Fill).height(1))
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
-                    theme.extended_palette().background.weak.color,
+                    theme.palette().background.weak.color,
                 )),
                 ..Default::default()
             })
@@ -838,10 +841,10 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
                     button::Status::Hovered | button::Status::Pressed
                 )
                 .then_some(Background::Color(
-                    theme.extended_palette().primary.weak.color
+                    theme.palette().primary.weak.color
                 )),
                 border: Border::default(),
-                text_color: theme.extended_palette().background.base.text,
+                text_color: theme.palette().background.base.text,
                 ..Default::default()
             })
             .padding(2);
@@ -849,7 +852,7 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
             btn,
             container(text(label).size(11))
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.strong.color)),
                     border: Border {
@@ -878,7 +881,7 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
 
     let panel = container(grid)
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
@@ -919,7 +922,7 @@ pub(super) fn qselect_overlay<'a>(
     types: &[String],
     properties: &[(String, String)],
 ) -> Element<'a, Message> {
-    use iced::widget::{checkbox, pick_list};
+    use iced::widget::{checkbox};
     let mut type_options: Vec<String> = vec![QSELECT_ANY_TYPE.to_string()];
     type_options.extend(types.iter().cloned());
 
@@ -971,7 +974,7 @@ pub(super) fn qselect_overlay<'a>(
         button(text(lbl).size(12))
             .on_press(msg)
             .style(move |theme: &Theme, st| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let pair = match (
                     primary,
                     matches!(st, button::Status::Hovered | button::Status::Pressed),
@@ -1005,7 +1008,7 @@ pub(super) fn qselect_overlay<'a>(
         Space::new().height(10),
         row![
             label("Object type:"),
-            pick_list(type_options, Some(type_sel), |s: String| {
+            crate::ui::pick_list(type_options, Some(type_sel), |s: String| {
                 if s == QSELECT_ANY_TYPE {
                     Message::QSelectSetType(None)
                 } else {
@@ -1019,7 +1022,7 @@ pub(super) fn qselect_overlay<'a>(
         Space::new().height(6),
         row![
             label("Property:"),
-            pick_list(
+            crate::ui::pick_list(
                 prop_options,
                 Some(prop_sel),
                 |p: crate::app::QSelectPropertyChoice| {
@@ -1037,7 +1040,7 @@ pub(super) fn qselect_overlay<'a>(
         Space::new().height(6),
         row![
             label("Operator:"),
-            pick_list(
+            crate::ui::pick_list(
                 op_options,
                 Some(state.operator),
                 Message::QSelectSetOperator
@@ -1074,7 +1077,7 @@ pub(super) fn qselect_overlay<'a>(
         .padding(16)
         .width(iced::Length::Fixed(400.0))
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.weak.color)),
             border: Border {

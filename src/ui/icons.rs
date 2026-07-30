@@ -74,6 +74,8 @@ pub const SAVE: &[u8] = include_bytes!("../../assets/icons/ui/save.svg");
 pub const FILE_EXPORT: &[u8] = include_bytes!("../../assets/icons/ui/file_export.svg");
 pub const PRINT: &[u8] = include_bytes!("../../assets/icons/ui/print.svg");
 pub const HEART: &[u8] = include_bytes!("../../assets/icons/ui/heart.svg");
+#[cfg(target_arch = "wasm32")]
+pub const GEAR: &[u8] = include_bytes!("../../assets/icons/ui/gear.svg");
 pub const DOT: &[u8] = include_bytes!("../../assets/icons/ui/dot.svg");
 pub const DIRTY_DOT: &[u8] = include_bytes!("../../assets/icons/ui/dirty_dot.svg");
 pub const ARROW_LONG_RIGHT: &[u8] = include_bytes!("../../assets/icons/ui/arrow_long_right.svg");
@@ -130,7 +132,7 @@ struct SemanticColors {
 
 impl SemanticColors {
     fn from_theme(theme: &Theme) -> Self {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         Self {
             background: color_hex(palette.background.strong.color),
             text: color_hex(palette.background.base.text),
@@ -257,12 +259,12 @@ fn semantic_handle(bytes: &'static [u8], theme: &Theme) -> svg::Handle {
 fn palette_key(theme: &Theme) -> [[u8; 4]; 6] {
     let palette = theme.palette();
     [
-        palette.background.into_rgba8(),
-        palette.text.into_rgba8(),
-        palette.primary.into_rgba8(),
-        palette.success.into_rgba8(),
-        palette.warning.into_rgba8(),
-        palette.danger.into_rgba8(),
+        palette.background.base.color.into_rgba8(),
+        palette.background.base.text.into_rgba8(),
+        palette.primary.base.color.into_rgba8(),
+        palette.success.base.color.into_rgba8(),
+        palette.warning.base.color.into_rgba8(),
+        palette.danger.base.color.into_rgba8(),
     ]
 }
 
@@ -395,7 +397,7 @@ pub fn themed<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
         .width(size)
         .height(size)
         .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.extended_palette().background.base.text),
+            color: Some(theme.palette().background.base.text),
         })
         .into()
 }
@@ -408,7 +410,7 @@ pub fn themed_secondary<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'
         .style(|theme: &Theme, _| svg::Style {
             color: Some(
                 theme
-                    .extended_palette()
+                    .palette()
                     .background
                     .base
                     .text
@@ -426,7 +428,7 @@ pub fn themed_disabled<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a
         .style(|theme: &Theme, _| svg::Style {
             color: Some(
                 theme
-                    .extended_palette()
+                    .palette()
                     .background
                     .base
                     .text
@@ -442,7 +444,7 @@ pub fn themed_primary<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a,
         .width(size)
         .height(size)
         .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.extended_palette().primary.base.color),
+            color: Some(theme.palette().primary.base.color),
         })
         .into()
 }
@@ -453,7 +455,7 @@ pub fn themed_success<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a,
         .width(size)
         .height(size)
         .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.extended_palette().success.base.color),
+            color: Some(theme.palette().success.base.color),
         })
         .into()
 }
@@ -464,7 +466,7 @@ pub fn themed_warning<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a,
         .width(size)
         .height(size)
         .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.extended_palette().warning.base.color),
+            color: Some(theme.palette().warning.base.color),
         })
         .into()
 }
@@ -475,7 +477,7 @@ pub fn themed_danger<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, 
         .width(size)
         .height(size)
         .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.extended_palette().danger.base.color),
+            color: Some(theme.palette().danger.base.color),
         })
         .into()
 }
@@ -486,7 +488,7 @@ pub fn themed_danger_text<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element
         .width(size)
         .height(size)
         .style(|theme: &Theme, _| svg::Style {
-            color: Some(theme.extended_palette().danger.base.text),
+            color: Some(theme.palette().danger.base.text),
         })
         .into()
 }

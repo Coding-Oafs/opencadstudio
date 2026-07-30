@@ -1044,7 +1044,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         Message::MTextPasteClip,
                     );
                     #[cfg(not(target_arch = "wasm32"))]
-                    return iced::clipboard::read().map(Message::MTextPasteClip);
+                    return iced::clipboard::read_text().map(|result| {
+                        Message::MTextPasteClip(result.ok().map(|text| (*text).clone()))
+                    });
                 }
                 if self.text_inline.is_some() {
                     // Web: the iced text_input can't reach the async clipboard,

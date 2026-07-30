@@ -37,7 +37,7 @@ fn layout_row<'a>(name: String, is_current: bool) -> Element<'a, Message> {
         .style(move |theme: &Theme, status| {
             let mut style = button::subtle(theme, status);
             if is_current && status == button::Status::Active {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 style.background = Some(Background::Color(palette.primary.weak.color));
                 style.text_color = palette.primary.weak.text;
             }

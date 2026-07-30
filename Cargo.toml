@@ -48,8 +48,11 @@ semver = "1"
 # Forcing the `static` feature builds liblzma from the bundled source, making
 # the binary self-contained on every platform.
 lzma-sys = { version = "0.1", features = ["static"], optional = true }
-iced = { version = "0.14", features = ["image", "svg", "advanced", "canvas", "smol", "markdown"] }
-iced_aw = { version = "0.14.1", features = ["menu"] }
+iced = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39", features = ["image", "svg", "advanced", "canvas", "smol", "markdown"] }
+iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
+# iced_aw 0.15 compatibility is pending upstream in PR #432. Pin the exact
+# reviewed pair of commits so Iced and its additional widgets cannot drift.
+iced_aw = { git = "https://github.com/tsuza/iced_aw.git", rev = "a9301708a4d008dc17f63cbbbb2b2aa06e0e7352", features = ["menu", "context_menu"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = { version = "0.33", features = ["bytemuck"] }
 truck-modeling = "0.6"
@@ -101,6 +104,10 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 [patch.crates-io]
 # Track standard DWG object relationships used by the scene integration.
 acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "a7b1e07" }
+# iced_aw's 0.15 branch declares the split Iced crates by version. Resolve
+# those declarations to the same Iced commit as the application dependency.
+iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
+iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native enables the plugin host runtime (out-of-process plugins).
@@ -132,7 +139,7 @@ js-sys = "0.3"
 bincode = "1.3"
 # window.open (external URLs) + Blob/anchor file downloads (Save) + fetch()
 # (Response) for the lazy per-script web font loader (#141).
-web-sys = { version = "0.3", features = [
+web-sys = { version = "=0.3.85", features = [
     "Window",
     "Storage",
     "StorageManager",
@@ -176,7 +183,7 @@ web-sys = { version = "0.3", features = [
 # `webgl` enables it. `fira-sans` embeds the default UI font — the web has no
 # system fonts, so without it all iced text (ribbon labels, command line) is
 # blank. Features merge with the main `iced` dependency.
-iced = { version = "0.14", features = ["webgl", "fira-sans"] }
+iced = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39", features = ["webgl", "fira-sans"] }
 
 [profile.release]
 strip = true

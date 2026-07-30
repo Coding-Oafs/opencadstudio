@@ -4,7 +4,7 @@ use crate::app::{LayerStateLayerFlag, LayerStateProperty, Message};
 use crate::ui::properties::{lw_options, LwItem};
 use acadrust::{LayerState, LayerStateMask};
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
+    button, checkbox, column, container, row, scrollable, text, text_input, Space,
 };
 use iced::{Background, Border, Element, Fill, Length, Theme};
 use std::fmt;
@@ -39,7 +39,7 @@ fn muted(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(
             theme
-                .extended_palette()
+                .palette()
                 .background
                 .base
                 .text
@@ -68,13 +68,13 @@ fn list_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
     }
 }
 
-fn divider<'a>() -> Element<'a, Message> {
-    container(Space::new().width(Fill).height(1))
-        .width(Fill)
+fn divider<'a>(width: Length) -> Element<'a, Message> {
+    container(Space::new().width(width).height(1))
+        .width(width)
         .height(1)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color,
+                theme.palette().background.neutral.color,
             )),
             ..Default::default()
         })
@@ -107,6 +107,7 @@ pub fn view_window<'a>(
     name: &'a str,
     description: &'a str,
     filter: &'a str,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     let selected_state = selected.and_then(|selected| {
         states
@@ -139,7 +140,7 @@ pub fn view_window<'a>(
             .on_press(Message::LayerStateManagerSelect(state.name.clone()))
             .style(list_style(is_selected))
             .padding([6, 9])
-            .width(Fill)
+            .width(sizing.width)
             .into()
         })
         .collect();
@@ -165,7 +166,9 @@ pub fn view_window<'a>(
     let state_list: Element<'_, Message> = if rows.is_empty() {
         empty
     } else {
-        scrollable(column(rows).spacing(2)).height(Fill).into()
+        scrollable(column(rows).spacing(2))
+            .height(sizing.height)
+            .into()
     };
 
     let left = container(
@@ -175,12 +178,12 @@ pub fn view_window<'a>(
                 .size(11)
                 .padding([5, 8]),
             container(state_list)
-                .width(Fill)
-                .height(Fill)
+                .width(sizing.width)
+                .height(sizing.height)
                 .padding(3)
                 .style(|theme: &Theme| container::Style {
                     border: Border {
-                        color: theme.extended_palette().background.neutral.color,
+                        color: theme.palette().background.neutral.color,
                         width: 1.0,
                         radius: 3.0.into(),
                     },
@@ -188,10 +191,10 @@ pub fn view_window<'a>(
                 }),
         ]
         .spacing(8)
-        .height(Fill),
+        .height(sizing.height),
     )
     .width(280)
-    .height(Fill)
+    .height(sizing.height)
     .padding(iced::Padding {
         top: 12.0,
         right: 8.0,
@@ -261,13 +264,13 @@ pub fn view_window<'a>(
                     .style(button_style(false))
                     .padding([5, 12]),
                 edit.padding([5, 12]),
-                Space::new().width(Fill),
+                Space::new().width(sizing.width),
                 restore.padding([5, 12]),
                 delete.padding([5, 12]),
             ]
             .spacing(6)
             .align_y(iced::Center),
-            divider(),
+            divider(sizing.width),
             text("Name").size(10).style(muted),
             text_input("Layer state name", name)
                 .on_input(Message::LayerStateManagerName)
@@ -281,7 +284,7 @@ pub fn view_window<'a>(
                 .padding([5, 8]),
             Space::new().height(8),
             details,
-            Space::new().height(Fill),
+            Space::new().height(sizing.height),
             text("Layer states are stored inside the drawing and remain available after reopening it.")
                 .size(10)
                 .style(muted),
@@ -296,15 +299,15 @@ pub fn view_window<'a>(
             .padding([6, 14]),
         ]
         .spacing(7)
-        .height(Fill),
+        .height(sizing.height),
     )
-    .width(Fill)
-    .height(Fill)
+    .width(sizing.width)
+    .height(sizing.height)
     .padding([12, 12]);
 
-    container(row![left, right].height(Fill))
-        .width(Fill)
-        .height(Fill)
+    container(row![left, right].height(sizing.height))
+        .width(sizing.width)
+        .height(sizing.height)
         .into()
 }
 
@@ -380,10 +383,10 @@ fn editor_header<'a>() -> Element<'a, Message> {
     .padding([5, 8])
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.weak.color,
+            theme.palette().background.weak.color,
         )),
         border: Border {
-            color: theme.extended_palette().background.neutral.color,
+            color: theme.palette().background.neutral.color,
             width: 1.0,
             radius: 0.0.into(),
         },
@@ -429,13 +432,13 @@ fn editor_layer_row<'a>(
                 54.0
             ),
             container(color).width(Length::Fixed(135.0)),
-            pick_list(linetypes, current_linetype, move |value| {
+            crate::ui::pick_list(linetypes, current_linetype, move |value| {
                 Message::LayerStateEditorLayerLinetype(index, value)
             })
             .text_size(11)
             .padding([3, 5])
             .width(Length::Fixed(150.0)),
-            pick_list(lw_options(), current_lineweight, move |item: LwItem| {
+            crate::ui::pick_list(lw_options(), current_lineweight, move |item: LwItem| {
                 Message::LayerStateEditorLayerLineweight(index, item.0)
             })
             .text_size(11)
@@ -446,7 +449,7 @@ fn editor_layer_row<'a>(
                 .size(11)
                 .padding([3, 5])
                 .width(Length::Fixed(135.0)),
-            pick_list(
+            crate::ui::pick_list(
                 transparency_options(layer.transparency),
                 Some(TransparencyItem(layer.transparency)),
                 move |item| Message::LayerStateEditorLayerTransparency(index, item.0),
@@ -461,7 +464,7 @@ fn editor_layer_row<'a>(
     .padding([3, 8])
     .style(move |theme: &Theme| container::Style {
         background: (index % 2 == 1).then_some(Background::Color(
-            theme.extended_palette().background.weak.color,
+            theme.palette().background.weak.color,
         )),
         ..Default::default()
     })
@@ -474,6 +477,7 @@ pub fn view_editor<'a>(
     filter: &'a str,
     color_open: Option<usize>,
     linetypes: Vec<String>,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     let properties = [
         ("On / Off", LayerStateProperty::On),
@@ -529,7 +533,7 @@ pub fn view_editor<'a>(
                     .on_input(Message::LayerStateEditorDescription)
                     .size(11)
                     .padding([3, 6])
-                    .width(Fill),
+                    .width(sizing.width),
             ]
             .spacing(8)
             .align_y(iced::Center),
@@ -537,9 +541,9 @@ pub fn view_editor<'a>(
                 text(format!("{} saved layers", state.layers.len()))
                     .size(10)
                     .style(muted),
-                Space::new().width(Fill),
+                Space::new().width(sizing.width),
                 text("Current layer").size(10).style(muted),
-                pick_list(
+                crate::ui::pick_list(
                     layer_names,
                     Some(state.current_layer.clone()),
                     Message::LayerStateEditorCurrentLayer,
@@ -550,12 +554,12 @@ pub fn view_editor<'a>(
             ]
             .spacing(8)
             .align_y(iced::Center),
-            divider(),
+            divider(sizing.width),
             text("Properties restored by this state").size(10).style(muted),
             mask_controls,
             row![
                 text("Saved layer values").size(12),
-                Space::new().width(Fill),
+                Space::new().width(sizing.width),
                 text_input("Search layers…", filter)
                     .on_input(Message::LayerStateEditorFilter)
                     .size(11)
@@ -564,14 +568,14 @@ pub fn view_editor<'a>(
             ]
             .align_y(iced::Center),
             container(
-                column![editor_header(), scrollable(rows).height(Fill)]
+                column![editor_header(), scrollable(rows).height(sizing.height)]
                     .spacing(0)
-                    .height(Fill),
+                    .height(sizing.height),
             )
-            .height(Fill)
+            .height(sizing.height)
             .style(|theme: &Theme| container::Style {
                 border: Border {
-                    color: theme.extended_palette().background.neutral.color,
+                    color: theme.palette().background.neutral.color,
                     width: 1.0,
                     radius: 3.0.into(),
                 },
@@ -581,7 +585,7 @@ pub fn view_editor<'a>(
                 text("Changes affect the saved state only; the drawing is unchanged until Restore.")
                     .size(10)
                     .style(muted),
-                Space::new().width(Fill),
+                Space::new().width(sizing.width),
                 button(text("Cancel").size(11))
                     .on_press(Message::LayerStateEditorCancel)
                     .style(button_style(false))
@@ -595,10 +599,10 @@ pub fn view_editor<'a>(
             .align_y(iced::Center),
         ]
         .spacing(8)
-        .height(Fill),
+        .height(sizing.height),
     )
     .padding(12)
-    .width(Fill)
-    .height(Fill)
+    .width(sizing.width)
+    .height(sizing.height)
     .into()
 }

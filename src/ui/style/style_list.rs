@@ -49,7 +49,7 @@ pub fn item<'a>(
             .padding([4, 8])
             .width(Fill)
             .style(move |theme: &Theme| {
-                let pair = theme.extended_palette().primary.strong;
+                let pair = theme.palette().primary.strong;
                 container::Style {
                 background: is_selected.then_some(Background::Color(pair.color)),
                 text_color: is_selected.then_some(pair.text),

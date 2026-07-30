@@ -9,7 +9,7 @@
 use crate::app::Message;
 use crate::plugin::external::{ExternalPlugin, RegistryEntry};
 use iced::widget::{
-    button, column, container, markdown, pick_list, row, rule, scrollable, text, text_input, Space,
+    button, column, container, markdown, row, rule, scrollable, text, text_input, Space,
 };
 use iced::{Background, Border, Element, Fill, Length, Theme};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -48,13 +48,13 @@ inventory::submit!(crate::command::CommandRegistration {
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
@@ -62,7 +62,7 @@ fn badge<'a>(label: String) -> Element<'a, Message> {
     container(text(label).size(11))
         .padding([2, 8])
         .style(|theme: &Theme| {
-            let pair = theme.extended_palette().primary.weak;
+            let pair = theme.palette().primary.weak;
             container::Style {
             background: Some(Background::Color(pair.color)),
             text_color: Some(pair.text),
@@ -105,7 +105,7 @@ fn status_badge<'a>(label: &str, kind: StatusKind) -> Element<'a, Message> {
     container(text(label.to_string()).size(11))
         .padding([2, 8])
         .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             let pair = match kind {
                 StatusKind::Muted => palette.background.weak,
                 StatusKind::Success => palette.success.weak,
@@ -126,7 +126,7 @@ fn status_badge<'a>(label: &str, kind: StatusKind) -> Element<'a, Message> {
 }
 
 fn card_style(theme: &Theme, selected: bool) -> container::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     container::Style {
         background: selected
             .then(|| Background::Color(palette.primary.weak.color.scale_alpha(0.18))),
@@ -325,7 +325,7 @@ fn install_controls<'a>(
         text("no releases").size(11).style(muted_style).into()
     } else {
         let r = repo_s.clone();
-        pick_list(tags, selected, move |tag| {
+        crate::ui::pick_list(tags, selected, move |tag| {
             Message::PluginReleaseSelect(r.clone(), tag)
         })
         .text_size(12)
@@ -490,7 +490,7 @@ fn registry_notice<'a>(m: &MarketView) -> Option<Element<'a, Message>> {
             container(body.padding([10, 12]))
                 .width(Fill)
                 .style(|theme: &Theme| {
-                    let pair = theme.extended_palette().warning.weak;
+                    let pair = theme.palette().warning.weak;
                     container::Style {
                         background: Some(Background::Color(pair.color.scale_alpha(0.16))),
                         border: Border {
@@ -638,7 +638,12 @@ fn resolve_readme_link(repo: &str, uri: &str) -> String {
     }
 }
 
-fn readme_panel<'a>(market: &MarketView<'a>, theme: &Theme) -> Element<'a, Message> {
+fn readme_panel<'a>(
+    market: &MarketView<'a>,
+    theme: &Theme,
+    width: Length,
+    height: Length,
+) -> Element<'a, Message> {
     let Some(repo) = market.selected_repo else {
         return container(
             column![
@@ -649,9 +654,10 @@ fn readme_panel<'a>(market: &MarketView<'a>, theme: &Theme) -> Element<'a, Messa
             ]
             .spacing(8),
         )
-        .center(Fill)
-        .width(Fill)
-        .height(Fill)
+        .center_x(width)
+        .center_y(height)
+        .width(width)
+        .height(height)
         .style(container::bordered_box)
         .into();
     };
@@ -667,7 +673,7 @@ fn readme_panel<'a>(market: &MarketView<'a>, theme: &Theme) -> Element<'a, Messa
             text(repo.to_string()).size(11).style(primary_style),
         ]
         .spacing(3)
-        .width(Fill),
+        .width(width),
         pill_button(
             "View on GitHub",
             Message::OpenUrl(format!("https://github.com/{repo}")),
@@ -686,9 +692,10 @@ fn readme_panel<'a>(market: &MarketView<'a>, theme: &Theme) -> Element<'a, Messa
             ]
             .spacing(6),
         )
-        .center(Fill)
-        .width(Fill)
-        .height(Fill)
+        .center_x(width)
+        .center_y(height)
+        .width(width)
+        .height(height)
         .into()
     } else {
         match market.readmes.get(repo) {
@@ -715,18 +722,20 @@ fn readme_panel<'a>(market: &MarketView<'a>, theme: &Theme) -> Element<'a, Messa
                 ]
                 .spacing(6),
             )
-            .center(Fill)
-            .width(Fill)
-            .height(Fill)
+            .center_x(width)
+            .center_y(height)
+            .width(width)
+            .height(height)
             .into(),
             None => container(
                 text("Select the plugin again to load its README.")
                     .size(12)
                     .style(muted_style),
             )
-            .center(Fill)
-            .width(Fill)
-            .height(Fill)
+            .center_x(width)
+            .center_y(height)
+            .width(width)
+            .height(height)
             .into(),
         }
     };
@@ -738,18 +747,18 @@ fn readme_panel<'a>(market: &MarketView<'a>, theme: &Theme) -> Element<'a, Messa
         left: 0.0,
     };
     let readme = scrollable(container(content).padding(gutter))
-        .height(Fill)
-        .width(Fill);
+        .height(height)
+        .width(width);
 
     container(
         column![header, rule::horizontal(1), readme]
             .spacing(10)
             .padding([12, 14])
-            .width(Fill)
-            .height(Fill),
+            .width(width)
+            .height(height),
     )
-    .width(Fill)
-    .height(Fill)
+    .width(width)
+    .height(height)
     .style(container::bordered_box)
     .into()
 }
@@ -760,7 +769,10 @@ pub fn view_window<'a>(
     loaded: &FxHashSet<String>,
     market: MarketView<'a>,
     theme: &'a Theme,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
+    let width = sizing.width;
+    let height = sizing.height;
     let title = text("Plugins").size(20);
     let subtitle = text("Browse, install, and manage add-ons. Select one to view its README.")
         .size(12)
@@ -813,40 +825,43 @@ pub fn view_window<'a>(
         left: 0.0,
     };
     let catalog = scrollable(container(list.width(Fill)).padding(gutter))
-        .height(Fill)
+        .height(height)
         .width(Fill);
     let search = text_input("Search plugins…", market.search)
         .on_input(Message::PluginSearchInput)
         .size(13)
         .padding([7, 10])
         .width(Fill);
-    let catalog_pane = column![search, catalog].spacing(10).width(Fill).height(Fill);
-    let details = readme_panel(&market, theme);
+    let catalog_pane = column![search, catalog]
+        .spacing(10)
+        .width(Fill)
+        .height(height);
+    let details = readme_panel(&market, theme, width, height);
     let body = row![
         container(catalog_pane)
             .width(Length::Fixed(410.0))
-            .height(Fill),
+            .height(height),
         details,
     ]
     .spacing(14)
-    .height(Fill)
-    .width(Fill);
+    .height(height)
+    .width(width);
 
     container(
         column![title, subtitle, Space::new().height(12), body]
             .spacing(4)
             .padding(18)
-            .width(Fill)
-            .height(Fill),
+            .width(width)
+            .height(height),
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.base.color,
+            theme.palette().background.base.color,
         )),
         ..Default::default()
     })
-    .width(Fill)
-    .height(Fill)
+    .width(width)
+    .height(height)
     .into()
 }
 
@@ -855,28 +870,58 @@ pub fn view_window<'a>(
 pub fn view_web_notice<'a>() -> Element<'a, Message> {
     let download = button(text("Download desktop app").size(13))
         .on_press(Message::OpenUrl(DESKTOP_DOWNLOAD_URL.to_string()))
-        .padding([8, 16])
-        .style(button::primary);
+        .padding([9, 18])
+        .style(|theme: &Theme, status| {
+            let mut style = button::primary(theme, status);
+            style.text_color = iced::Color::WHITE;
+            style
+        });
 
-    container(
+    let icon = container(crate::ui::icons::themed_primary(
+        crate::ui::icons::GEAR,
+        26.0,
+    ))
+    .center(Length::Fixed(44.0))
+    .style(|theme: &Theme| container::Style {
+        background: Some(Background::Color(
+            theme.palette().primary.weak.color,
+        )),
+        border: Border {
+            radius: 12.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let notice = container(
         column![
-            text("Plugins require the desktop app").size(20),
+            icon,
+            text("Plugins are available in the desktop app")
+                .size(20)
+                .width(Length::Fit)
+                .align_x(iced::alignment::Horizontal::Center),
             text(
                 "Open CAD Studio plugins are native packages and cannot run inside a browser. \
-                 Install the desktop app to browse, install, and use plugins.",
+                 Download the desktop app to browse, install, and use plugins.",
             )
             .size(13)
+            .width(Length::Fit)
+            .align_x(iced::alignment::Horizontal::Center)
             .style(muted_style),
-            Space::new().height(8),
+            Space::new().height(4),
             download,
         ]
-        .spacing(8)
-        .padding(24)
-        .width(Fill),
+        .spacing(10)
+        .align_x(iced::alignment::Horizontal::Center)
+        .width(Length::Fit),
     )
-    .center(Fill)
-    .width(Fill)
-    .height(Fill)
+    .width(Length::Fit.max(380.0));
+
+    container(notice)
+    .center_x(Length::Fit)
+    .padding([16, 20])
+    .width(Length::Fit)
+    .height(Length::Fit)
     .into()
 }
 

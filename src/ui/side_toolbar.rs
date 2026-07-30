@@ -29,7 +29,7 @@ fn tip_panel(label: &'static str) -> Element<'static, Message> {
     container(text(label).size(11))
         .padding([2, 6])
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.strong.color)),
             border: Border {
@@ -62,7 +62,7 @@ pub fn view(tools: &[ToolDef]) -> Option<Element<'static, Message>> {
             .width(Length::Fixed(BTN_SIZE))
             .height(Length::Fixed(BTN_SIZE))
             .style(|theme: &Theme, status| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let hovered = matches!(
                     status,
                     button::Status::Hovered | button::Status::Pressed
@@ -85,7 +85,7 @@ pub fn view(tools: &[ToolDef]) -> Option<Element<'static, Message>> {
     }
 
     let panel = container(col).padding(4).style(|theme: &Theme| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         container::Style {
         background: Some(Background::Color(palette.background.weak.color)),
         border: Border {

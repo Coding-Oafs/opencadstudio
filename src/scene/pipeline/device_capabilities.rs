@@ -31,7 +31,7 @@ impl DeviceCapabilities {
     fn from_limits(limits: &wgpu::Limits) -> Self {
         Self {
             max_storage_buffers_per_shader_stage: limits.max_storage_buffers_per_shader_stage,
-            max_inter_stage_shader_components: limits.max_inter_stage_shader_components,
+            max_inter_stage_shader_components: limits.max_inter_stage_shader_variables,
             max_vertex_attributes: limits.max_vertex_attributes,
         }
     }

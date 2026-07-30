@@ -50,7 +50,9 @@ fn instance_buffer_mapped<T: bytemuck::Pod>(
     });
     {
         let mut view = buf.slice(..).get_mapped_range_mut();
-        view[..bytes.len()].copy_from_slice(bytes);
+        if !bytes.is_empty() {
+            view.slice(..bytes.len()).copy_from_slice(bytes);
+        }
     }
     buf.unmap();
     buf

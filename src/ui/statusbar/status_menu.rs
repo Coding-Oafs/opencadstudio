@@ -52,7 +52,7 @@ pub fn menu_bar<'a>(
         .close_on_background_click_global(true)
         .draw_path(DrawPath::Backdrop)
         .style(|theme: &Theme, _| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             iced_aw::style::menu_bar::Style {
                 bar_background: Background::Color(Color::TRANSPARENT),
                 bar_border: Border::default(),

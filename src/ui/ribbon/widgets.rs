@@ -146,7 +146,7 @@ pub(super) fn make_icon_dim(icon: IconKind, size: f32, dim: bool) -> Element<'st
         IconKind::Glyph(s) => text(s)
             .size(size * 0.7)
             .style(|theme: &Theme| iced::widget::text::Style {
-                color: Some(theme.extended_palette().background.base.text.scale_alpha(0.42)),
+                color: Some(theme.palette().background.base.text.scale_alpha(0.42)),
             })
             .into(),
         IconKind::Svg(bytes) => icons::semantic_disabled(bytes, size),
@@ -179,7 +179,7 @@ pub(super) fn tool_btn_style(
     is_active: bool,
     status: button::Status,
 ) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let pair = match (is_active, status) {
         (true, _) => palette.primary.weak,
         (_, button::Status::Hovered) => palette.background.weak,
@@ -208,7 +208,7 @@ pub(super) fn combo_btn_style(
     status: button::Status,
     radius: f32,
 ) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let pair = if is_open {
         palette.primary.weak
     } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
@@ -233,7 +233,7 @@ pub(super) fn combo_btn_style(
 }
 
 pub(super) fn popup_row_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let pair = if matches!(status, button::Status::Hovered | button::Status::Pressed) {
         palette.background.weak
     } else {
@@ -247,7 +247,7 @@ pub(super) fn popup_row_style(theme: &Theme, status: button::Status) -> button::
 }
 
 pub(super) fn popup_panel_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     container::Style {
         background: Some(Background::Color(palette.background.base.color)),
         border: Border {
@@ -261,14 +261,14 @@ pub(super) fn popup_panel_style(theme: &Theme) -> container::Style {
 
 pub(super) fn muted_text_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.72)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.72)),
     }
 }
 
 pub(super) fn tool_label_style(theme: &Theme, dim: bool) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: dim.then_some(
-            theme.extended_palette().background.base.text.scale_alpha(0.42),
+            theme.palette().background.base.text.scale_alpha(0.42),
         ),
     }
 }
@@ -280,7 +280,7 @@ pub(super) fn make_tip(tip: String) -> Element<'static, Message> {
 }
 
 pub(super) fn tip_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     container::Style {
         background: Some(Background::Color(palette.background.strong.color)),
         border: Border {
@@ -632,7 +632,7 @@ pub(super) fn render_large<'a>(
                 .style(move |theme: &Theme| container::Style {
                     background: Some(Background::Color(lc)),
                     border: Border {
-                        color: theme.extended_palette().background.strong.color,
+                        color: theme.palette().background.strong.color,
                         width: 1.0,
                         radius: 1.0.into(),
                     },
@@ -778,7 +778,7 @@ pub(super) fn render_large<'a>(
                         .style(move |theme: &Theme| container::Style {
                             background: Some(Background::Color(c)),
                             border: Border {
-                                color: theme.extended_palette().background.strong.color,
+                                color: theme.palette().background.strong.color,
                                 width: 1.0,
                                 radius: 1.0.into(),
                             },
@@ -1088,7 +1088,7 @@ pub(super) fn top_hist_btn_style(
     open: bool,
     status: button::Status,
 ) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let pair = match (active, open, status) {
         (false, _, _) => palette.background.weakest,
         (_, true, _) => palette.primary.weak,

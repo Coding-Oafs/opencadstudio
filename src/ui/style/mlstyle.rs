@@ -2,11 +2,11 @@
 
 use crate::app::Message;
 use iced::widget::{column, container, row, scrollable, text};
-use iced::{Element, Fill, Theme};
+use iced::{Element, Theme};
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
@@ -17,6 +17,7 @@ pub fn view_window<'a>(
     current_style: String,
     rename_active: Option<&'a str>,
     rename_buf: &'a str,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     // ── Right: Details panel ──────────────────────────────────────────────
     let info_row = |label: &'static str, val: String| -> Element<'_, Message> {
@@ -69,7 +70,7 @@ pub fn view_window<'a>(
         ];
         col_items.extend(elem_rows);
         scrollable(column(col_items).spacing(6).padding([12, 12]))
-            .height(Fill)
+            .height(sizing.height)
             .into()
     } else {
         container(text("Select a style to view details.").size(11).style(muted_style))
@@ -77,9 +78,12 @@ pub fn view_window<'a>(
             .into()
     };
 
-    let right_panel = container(details).width(Fill).height(Fill);
+    let right_panel = container(details)
+        .width(sizing.width)
+        .height(sizing.height);
 
     crate::ui::style::style_manager::view(crate::ui::style::style_manager::Scaffold {
+        sizing,
         kind: crate::app::StyleKind::MLine,
         styles: &styles,
         selected,

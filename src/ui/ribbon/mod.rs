@@ -423,7 +423,7 @@ impl Ribbon {
                     button(text(module.title()).size(12))
                         .on_press(Message::RibbonSelectTab(i))
                         .style(move |theme: &Theme, status| {
-                            let palette = theme.extended_palette();
+                            let palette = theme.palette();
                             let accent = if is_contextual {
                                 palette.warning.base
                             } else {
@@ -470,9 +470,9 @@ impl Ribbon {
                     border: Border {
                         color: if is_active {
                             if is_contextual {
-                                theme.extended_palette().warning.base.color
+                                theme.palette().warning.base.color
                             } else {
-                                theme.extended_palette().primary.base.color
+                                theme.palette().primary.base.color
                             }
                         } else {
                             Color::TRANSPARENT
@@ -526,7 +526,7 @@ impl Ribbon {
         let tab_bar = container(tab_row)
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
-                    theme.extended_palette().background.base.color,
+                    theme.palette().background.base.color,
                 )),
                 ..Default::default()
             })
@@ -647,10 +647,10 @@ impl Ribbon {
                         ))
                         .style(|theme: &Theme| container::Style {
                             background: Some(Background::Color(
-                                theme.extended_palette().background.weakest.color,
+                                theme.palette().background.weakest.color,
                             )),
                             border: Border {
-                                color: theme.extended_palette().background.neutral.color,
+                                color: theme.palette().background.neutral.color,
                                 width: 1.0,
                                 radius: 0.0.into(),
                             },
@@ -672,10 +672,10 @@ impl Ribbon {
         let tool_bar = container(tool_area)
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
-                    theme.extended_palette().background.weakest.color,
+                    theme.palette().background.weakest.color,
                 )),
                 border: Border {
-                    color: theme.extended_palette().background.neutral.color,
+                    color: theme.palette().background.neutral.color,
                     width: 1.0,
                     radius: 0.0.into(),
                 },
@@ -827,7 +827,7 @@ impl Ribbon {
                         .style(move |theme: &Theme| iced::widget::text::Style {
                             color: (!is_current).then_some(
                                 theme
-                                    .extended_palette()
+                                    .palette()
                                     .background
                                     .base
                                     .text
@@ -895,7 +895,7 @@ impl Ribbon {
                     .style(move |theme: &Theme| container::Style {
                         background: Some(Background::Color(lc)),
                         border: Border {
-                            color: theme.extended_palette().background.strong.color,
+                            color: theme.palette().background.strong.color,
                             width: 1.0,
                             radius: 1.0.into(),
                         },
@@ -924,7 +924,7 @@ impl Ribbon {
                         .style(move |theme: &Theme| iced::widget::text::Style {
                             color: (!is_active).then_some(
                                 theme
-                                    .extended_palette()
+                                    .palette()
                                     .background
                                     .base
                                     .text
@@ -981,7 +981,7 @@ impl Ribbon {
                     .padding([3, 4])
                     .style(|theme: &Theme| container::Style {
                         border: Border {
-                            color: theme.extended_palette().background.neutral.color,
+                            color: theme.palette().background.neutral.color,
                             width: 1.0,
                             radius: 0.0.into(),
                         },
@@ -1055,7 +1055,7 @@ impl Ribbon {
                             .style(move |theme: &Theme| iced::widget::text::Style {
                                 color: (!is_sel).then_some(
                                     theme
-                                        .extended_palette()
+                                        .palette()
                                         .background
                                         .base
                                         .text
@@ -1154,7 +1154,7 @@ impl Ribbon {
                     .style(move |theme: &Theme| iced::widget::text::Style {
                         color: (!is_cur).then_some(
                             theme
-                                .extended_palette()
+                                .palette()
                                 .background
                                 .base
                                 .text
@@ -1207,7 +1207,7 @@ impl Ribbon {
                             .style(move |theme: &Theme| iced::widget::text::Style {
                                 color: (!is_cur).then_some(
                                     theme
-                                        .extended_palette()
+                                        .palette()
                                         .background
                                         .base
                                         .text

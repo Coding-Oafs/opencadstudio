@@ -23,7 +23,7 @@ use rustc_hash::FxHashMap;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, tree, Widget};
-use iced::advanced::{mouse, overlay, renderer, Clipboard, Renderer as _, Shell};
+use iced::advanced::{mouse, overlay, renderer, Renderer as _, Shell};
 use iced::{
     Background, Border, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size,
     Theme, Vector,
@@ -121,13 +121,9 @@ impl<'a> WrapBar<'a> {
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for WrapBar<'a> {
-    fn children(&self) -> Vec<widget::Tree> {
-        self.refs().iter().map(|e| widget::Tree::new(*e)).collect()
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        let refs: Vec<_> = self.refs().iter().map(|e| e.as_widget()).collect();
-        tree.diff_children(&refs);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        let mut refs = self.refs_mut();
+        tree.diff_children(&mut refs);
     }
 
     fn size(&self) -> Size<Length> {
@@ -300,7 +296,6 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapBar<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -316,7 +311,6 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapBar<'a> {
                 child_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -529,13 +523,8 @@ impl<'a> WrapFlow<'a> {
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
-    fn children(&self) -> Vec<widget::Tree> {
-        self.items.iter().map(widget::Tree::new).collect()
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        let refs: Vec<_> = self.items.iter().map(|e| e.as_widget()).collect();
-        tree.diff_children(&refs);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut self.items);
     }
 
     fn size(&self) -> Size<Length> {
@@ -633,7 +622,6 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -649,7 +637,6 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
                 child_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -789,13 +776,8 @@ impl<'a> DensitySwap<'a> {
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for DensitySwap<'a> {
-    fn children(&self) -> Vec<widget::Tree> {
-        self.variants.iter().map(widget::Tree::new).collect()
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        let refs: Vec<_> = self.variants.iter().map(|e| e.as_widget()).collect();
-        tree.diff_children(&refs);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut self.variants);
     }
 
     fn size(&self) -> Size<Length> {
@@ -847,7 +829,6 @@ impl<'a> Widget<Message, Theme, Renderer> for DensitySwap<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -859,7 +840,6 @@ impl<'a> Widget<Message, Theme, Renderer> for DensitySwap<'a> {
                 child_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -980,20 +960,12 @@ impl<'a> PosReport<'a> {
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for PosReport<'a> {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.child)]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[self.child.as_widget()]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(std::slice::from_mut(&mut self.child));
     }
 
     fn size(&self) -> Size<Length> {
         self.child.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.child.as_widget().size_hint()
     }
 
     fn layout(
@@ -1014,7 +986,6 @@ impl<'a> Widget<Message, Theme, Renderer> for PosReport<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -1024,7 +995,6 @@ impl<'a> Widget<Message, Theme, Renderer> for PosReport<'a> {
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -1211,20 +1181,12 @@ impl<'a> Widget<Message, Theme, Renderer> for ReorderTab<'a> {
         tree::State::new(ReorderState::default())
     }
 
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.child)]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[self.child.as_widget()]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(std::slice::from_mut(&mut self.child));
     }
 
     fn size(&self) -> Size<Length> {
         self.child.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.child.as_widget().size_hint()
     }
 
     fn layout(
@@ -1245,7 +1207,6 @@ impl<'a> Widget<Message, Theme, Renderer> for ReorderTab<'a> {
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -1295,7 +1256,6 @@ impl<'a> Widget<Message, Theme, Renderer> for ReorderTab<'a> {
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -1374,7 +1334,7 @@ impl<'a> Widget<Message, Theme, Renderer> for ReorderTab<'a> {
                             shadow: Shadow::default(),
                             snap: true,
                         },
-                        Background::Color(theme.extended_palette().primary.base.color),
+                        Background::Color(theme.palette().primary.base.color),
                     );
                 }
             }

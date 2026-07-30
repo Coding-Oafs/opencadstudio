@@ -60,7 +60,7 @@ impl Default for UiThemeConfig {
         let theme = iced::Theme::Oxocarbon;
         Self {
             name: theme.to_string(),
-            palette: UiThemePalette::from_iced(theme.palette()),
+            palette: UiThemePalette::from_iced(theme.seed()),
         }
     }
 }
@@ -88,12 +88,12 @@ pub struct UiThemePalette {
 
 impl Default for UiThemePalette {
     fn default() -> Self {
-        Self::from_iced(iced::Theme::Oxocarbon.palette())
+        Self::from_iced(iced::Theme::Oxocarbon.seed())
     }
 }
 
 impl UiThemePalette {
-    pub fn from_iced(palette: iced::theme::Palette) -> Self {
+    pub fn from_iced(palette: iced::theme::palette::Seed) -> Self {
         Self {
             background: color_to_rgb(palette.background),
             text: color_to_rgb(palette.text),
@@ -104,8 +104,8 @@ impl UiThemePalette {
         }
     }
 
-    pub fn to_iced(self) -> iced::theme::Palette {
-        iced::theme::Palette {
+    pub fn to_iced(self) -> iced::theme::palette::Seed {
+        iced::theme::palette::Seed {
             background: rgb_to_color(self.background),
             text: rgb_to_color(self.text),
             primary: rgb_to_color(self.primary),

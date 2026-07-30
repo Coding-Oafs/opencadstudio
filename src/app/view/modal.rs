@@ -1,10 +1,15 @@
 use super::super::{Message, OpenCADStudio};
-use iced::widget::{button, column, container, pick_list, row, text, Space};
-use iced::{Background, Element, Fill, Theme};
+use iced::widget::{button, column, container, row, text, Space};
+use iced::{Background, Element, Fit, Theme};
 
 impl OpenCADStudio {
-    /// Title shown in the active modal's title bar, left of the move/close
-    /// buttons. Keep in sync with the [`Self::modal_content`] dispatch.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn web_plugin_notice_width(&self) -> u16 {
+        (self.win_size.0 - 48.0).clamp(280.0, 460.0) as u16
+    }
+
+    /// Title shown in the active modal's title bar. Keep in sync with the
+    /// [`Self::modal_content`] dispatch.
     pub(super) fn modal_title(&self) -> &'static str {
         use super::super::ModalKind as K;
         match self.active_modal {
@@ -43,96 +48,138 @@ impl OpenCADStudio {
     }
 
     /// Build the currently-open modal dialog's content (Plan B), or `None`.
-    /// Each former pop-up window is constructed here and given a bounded size
-    /// (About shrinks to its content). Rendered as an overlay by `view_main`.
+    /// Each former pop-up window is constructed here and given a maximum size.
+    /// Iced 0.15 measures the content first, so smaller dialogs stop at their
+    /// intrinsic size while overflowing regions become scrollable at the cap.
     pub(super) fn modal_content<'s>(&'s self) -> Option<Element<'s, Message>> {
-        // Grow every dialog by the shared corner-resize delta (grow-only, so the
-        // natural size is the floor). The delta resets to zero whenever a modal
-        // opens/closes, so each dialog starts at its own size.
         let ex = self.modal_resize;
         let sized = |e: Element<'s, Message>, w: u16, h: u16| -> Element<'s, Message> {
-            iced::widget::container(e)
-                .width(iced::Length::Fixed(w as f32 + ex.x))
-                .height(iced::Length::Fixed(h as f32 + ex.y))
+            container(e)
+                .width(Fit.max(w as f32 + ex.x))
+                .height(Fit.max(h as f32 + ex.y))
                 .into()
         };
         Some(match self.active_modal? {
-            super::super::ModalKind::About => crate::ui::window::about::view_window(),
+            super::super::ModalKind::About => {
+                sized(crate::ui::window::about::view_window(), 440, 360)
+            }
             super::super::ModalKind::Shortcuts => {
-                sized(crate::ui::window::shortcuts::view_window(&self.shortcut_overrides), 720, 520)
+                sized_flow(
+                    ex,
+                    720,
+                    520,
+                    |flow| {
+                        crate::ui::window::shortcuts::view_window(
+                            &self.shortcut_overrides,
+                            flow,
+                        )
+                    },
+                )
             }
             super::super::ModalKind::Aliases => {
-                sized(crate::ui::window::alias_editor::view_window(&self.alias_editor_rows), 480, 520)
+                sized_flow(
+                    ex,
+                    480,
+                    520,
+                    |flow| {
+                        crate::ui::window::alias_editor::view_window(
+                            &self.alias_editor_rows,
+                            flow,
+                        )
+                    },
+                )
             }
-            super::super::ModalKind::Options => sized(
-                crate::ui::window::options::view_window(
-                    &self.default_save_format,
-                    &self.ui_theme,
-                    &self.theme_color_inputs,
-                ),
+            super::super::ModalKind::Options => sized_flow(
+                ex,
                 520,
                 500,
+                |flow| {
+                    crate::ui::window::options::view_window(
+                        &self.default_save_format,
+                        &self.ui_theme,
+                        &self.theme_color_inputs,
+                        flow,
+                    )
+                },
             ),
             super::super::ModalKind::PluginManager => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    sized(
-                        crate::ui::window::plugin_manager::view_window(
-                            &self.disabled_plugins,
-                            &self.external_plugins,
-                            &self.loaded_plugin_ids,
-                            crate::ui::window::plugin_manager::MarketView {
-                                registry: &self.plugin_registry,
-                                registry_loading: self.plugin_registry_loading,
-                                registry_error: self.plugin_registry_error.as_deref(),
-                                registry_error_details_open: self
-                                    .plugin_registry_error_details_open,
-                                input: &self.plugin_repo_input,
-                                search: &self.plugin_search_input,
-                                repos: &self.plugin_repos,
-                                release_tags: &self.repo_release_tags,
-                                selected_tag: &self.repo_selected_tag,
-                                selected_repo: self.selected_plugin_repo.as_deref(),
-                                readmes: &self.plugin_readmes,
-                                readme_loading: &self.plugin_readme_loading,
-                                status: &self.marketplace_status,
-                            },
-                            &self.active_theme,
-                        ),
+                    sized_flow(
+                        ex,
                         940,
                         600,
+                        |flow| {
+                            crate::ui::window::plugin_manager::view_window(
+                                &self.disabled_plugins,
+                                &self.external_plugins,
+                                &self.loaded_plugin_ids,
+                                crate::ui::window::plugin_manager::MarketView {
+                                    registry: &self.plugin_registry,
+                                    registry_loading: self.plugin_registry_loading,
+                                    registry_error: self.plugin_registry_error.as_deref(),
+                                    registry_error_details_open: self
+                                        .plugin_registry_error_details_open,
+                                    input: &self.plugin_repo_input,
+                                    search: &self.plugin_search_input,
+                                    repos: &self.plugin_repos,
+                                    release_tags: &self.repo_release_tags,
+                                    selected_tag: &self.repo_selected_tag,
+                                    selected_repo: self.selected_plugin_repo.as_deref(),
+                                    readmes: &self.plugin_readmes,
+                                    readme_loading: &self.plugin_readme_loading,
+                                    status: &self.marketplace_status,
+                                },
+                                &self.active_theme,
+                                flow,
+                            )
+                        },
                     )
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
                     sized(
                         crate::ui::window::plugin_manager::view_web_notice(),
-                        520,
-                        260,
+                        self.web_plugin_notice_width(),
+                        230,
                     )
                 }
             }
             super::super::ModalKind::UpdateNotice => {
                 let latest = self.update_notice_version.as_deref().unwrap_or("?");
                 let body = self.update_notice_body.as_deref().unwrap_or("");
-                sized(crate::ui::window::update_notice::view_window(latest, body), 560, 460)
+                sized_flow(
+                    ex,
+                    560,
+                    460,
+                    |flow| crate::ui::window::update_notice::view_window(latest, body, flow),
+                )
             }
             super::super::ModalKind::Layers => {
                 let tab = &self.tabs[self.active_tab];
-                sized(tab.layers.view_window(self.layer_name_col_w), 900, 360)
+                sized_flow(
+                    ex,
+                    900,
+                    360,
+                    |flow| tab.layers.view_window(self.layer_name_col_w, flow),
+                )
             }
             super::super::ModalKind::LayerStateManager => {
                 let states = self.tabs[self.active_tab].scene.document.layer_states();
-                sized(
-                    crate::ui::window::layer_state_manager::view_window(
-                        states,
-                        self.layer_state_selected.as_deref(),
-                        &self.layer_state_name_buf,
-                        &self.layer_state_description_buf,
-                        &self.layer_state_filter,
-                    ),
+                sized_flow(
+                    ex,
                     720,
                     420,
+                    |flow| {
+                        crate::ui::window::layer_state_manager::view_window(
+                            states.clone(),
+                            self.layer_state_selected.as_deref(),
+                            &self.layer_state_name_buf,
+                            &self.layer_state_description_buf,
+                            &self.layer_state_filter,
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::LayerStateEditor => {
@@ -155,15 +202,19 @@ impl OpenCADStudio {
                         }
                     }
                     linetypes.sort_by_key(|name| name.to_lowercase());
-                    sized(
-                        crate::ui::window::layer_state_manager::view_editor(
-                            state,
-                            &self.layer_state_edit_filter,
-                            self.layer_state_edit_color_open,
-                            linetypes,
-                        ),
+                    sized_flow(
+                        ex,
                         1180,
                         560,
+                        |flow| {
+                            crate::ui::window::layer_state_manager::view_editor(
+                                state,
+                                &self.layer_state_edit_filter,
+                                self.layer_state_edit_color_open,
+                                linetypes.clone(),
+                                flow,
+                            )
+                        },
                     )
                 } else {
                     sized(
@@ -176,21 +227,30 @@ impl OpenCADStudio {
                 }
             }
             super::super::ModalKind::Plot => {
-                sized(crate::ui::window::plot::view_window(&self.plot_dialog), 760, 540)
+                sized_flow(
+                    ex,
+                    760,
+                    540,
+                    |flow| crate::ui::window::plot::view_window(&self.plot_dialog, flow),
+                )
             }
             super::super::ModalKind::LayoutManager => {
                 let i = self.active_tab;
                 let layouts = self.tabs[i].scene.layout_names();
                 let current = self.tabs[i].scene.current_layout.clone();
-                sized(
-                    crate::ui::window::layout_manager::view_window(
-                        layouts,
-                        &self.layout_manager_selected,
-                        &self.layout_manager_rename_buf,
-                        current,
-                    ),
+                sized_flow(
+                    ex,
                     640,
                     320,
+                    |flow| {
+                        crate::ui::window::layout_manager::view_window(
+                            layouts.clone(),
+                            &self.layout_manager_selected,
+                            &self.layout_manager_rename_buf,
+                            current.clone(),
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::ScaleManager => {
@@ -206,21 +266,25 @@ impl OpenCADStudio {
                             .map(|(p, d)| format!("{p}:{d}"))
                             .unwrap_or_default();
                         (name, ratio)
-                    })
+                })
                     .collect();
                 let current = tab.scene.document.header.current_annotation_scale.clone();
-                sized(
-                    crate::ui::style::scale_manager::view_window(
-                        &scales,
-                        &self.scale_manager_selected,
-                        &current,
-                        self.scale_rename.as_deref(),
-                        &self.scale_rename_buf,
-                        &self.scale_manager_paper_buf,
-                        &self.scale_manager_drawing_buf,
-                    ),
+                sized_flow(
+                    ex,
                     520,
                     360,
+                    |flow| {
+                        crate::ui::style::scale_manager::view_window(
+                            &scales,
+                            &self.scale_manager_selected,
+                            &current,
+                            self.scale_rename.as_deref(),
+                            &self.scale_rename_buf,
+                            &self.scale_manager_paper_buf,
+                            &self.scale_manager_drawing_buf,
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::AnnoObjectScale => {
@@ -263,22 +327,33 @@ impl OpenCADStudio {
                         (name, ratio, is_member)
                     })
                     .collect();
-                sized(
-                    crate::ui::style::anno_object_scale::view_window(&label, &scales),
+                sized_flow(
+                    ex,
                     360,
                     420,
+                    |flow| {
+                        crate::ui::style::anno_object_scale::view_window(
+                            &label,
+                            &scales,
+                            flow,
+                        )
+                    },
                 )
             }
-            super::super::ModalKind::Plotstyle => sized(
-                crate::ui::style::plotstyle::view_window(
-                    self.active_plot_style.as_ref(),
-                    self.plotstyle_panel_aci,
-                    &self.ps_color_buf,
-                    &self.ps_lineweight_buf,
-                    &self.ps_screening_buf,
-                ),
+            super::super::ModalKind::Plotstyle => sized_flow(
+                ex,
                 780,
                 540,
+                |flow| {
+                    crate::ui::style::plotstyle::view_window(
+                        self.active_plot_style.as_ref(),
+                        self.plotstyle_panel_aci,
+                        &self.ps_color_buf,
+                        &self.ps_lineweight_buf,
+                        &self.ps_screening_buf,
+                        flow,
+                    )
+                },
             ),
             super::super::ModalKind::TextStyle => {
                 let tab = &self.tabs[self.active_tab];
@@ -296,27 +371,31 @@ impl OpenCADStudio {
                     .get(&self.textstyle_selected)
                     .map(|s| (s.flags.backward, s.flags.upside_down, s.annotative))
                     .unwrap_or((false, false, false));
-                sized(
-                    crate::ui::style::textstyle::view_window(crate::ui::style::textstyle::TextStyleView {
-                        styles,
-                        selected: &self.textstyle_selected,
-                        current: &tab.scene.document.header.current_text_style_name,
-                        font_buf: &self.textstyle_font,
-                        width_buf: &self.textstyle_width,
-                        oblique_buf: &self.textstyle_oblique,
-                        height_buf: &self.textstyle_height,
-                        bigfont_buf: &self.textstyle_bigfont,
-                        ttf_buf: &self.textstyle_ttf,
-                        backward,
-                        upside_down,
-                        annotative,
-                        rename_active: self.style_rename.as_deref(),
-                        rename_buf: &self.style_rename_buf,
-                    }),
-                    // Wider than the old 620 window: the TTF system-font panel
-                    // (Plan B / web fonts) added a column.
+                sized_flow(
+                    ex,
                     860,
                     480,
+                    |flow| {
+                        crate::ui::style::textstyle::view_window(
+                            crate::ui::style::textstyle::TextStyleView {
+                                styles: styles.clone(),
+                                selected: &self.textstyle_selected,
+                                current: &tab.scene.document.header.current_text_style_name,
+                                font_buf: &self.textstyle_font,
+                                width_buf: &self.textstyle_width,
+                                oblique_buf: &self.textstyle_oblique,
+                                height_buf: &self.textstyle_height,
+                                bigfont_buf: &self.textstyle_bigfont,
+                                ttf_buf: &self.textstyle_ttf,
+                                backward,
+                                upside_down,
+                                annotative,
+                                rename_active: self.style_rename.as_deref(),
+                                rename_buf: &self.style_rename_buf,
+                            },
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::MlStyle => {
@@ -336,17 +415,21 @@ impl OpenCADStudio {
                     ObjectType::MLineStyle(s) if s.name == self.mlstyle_selected => Some(s),
                     _ => None,
                 });
-                sized(
-                    crate::ui::style::mlstyle::view_window(
-                        styles,
-                        &self.mlstyle_selected,
-                        selected_style,
-                        tab.scene.document.header.multiline_style.clone(),
-                        self.style_rename.as_deref(),
-                        &self.style_rename_buf,
-                    ),
+                sized_flow(
+                    ex,
                     620,
                     420,
+                    |flow| {
+                        crate::ui::style::mlstyle::view_window(
+                            styles.clone(),
+                            &self.mlstyle_selected,
+                            selected_style,
+                            tab.scene.document.header.multiline_style.clone(),
+                            self.style_rename.as_deref(),
+                            &self.style_rename_buf,
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::TableStyle => {
@@ -366,31 +449,35 @@ impl OpenCADStudio {
                     ObjectType::TableStyle(s) if s.name == self.tablestyle_selected => Some(s),
                     _ => None,
                 });
-                sized(
-                    crate::ui::style::tablestyle::view_window(
-                        styles,
-                        &self.tablestyle_selected,
-                        &self.ribbon.active_table_style,
-                        selected_style,
-                        &self.ts_hmargin,
-                        &self.ts_vmargin,
-                        &self.ts_description,
-                        &self.ts_cell_textstyle,
-                        &self.ts_cell_height,
-                        &self.ts_cell_textcolor,
-                        &self.ts_cell_fillcolor,
-                        &self.ts_cell_datatype,
-                        &self.ts_cell_unittype,
-                        &self.ts_cell_format,
-                        &self.ts_border_lw,
-                        &self.ts_border_color,
-                        &self.ts_border_spacing,
-                        self.style_rename.as_deref(),
-                        &self.style_rename_buf,
-                        self.ts_color_open,
-                    ),
+                sized_flow(
+                    ex,
                     620,
                     420,
+                    |flow| {
+                        crate::ui::style::tablestyle::view_window(
+                            styles.clone(),
+                            &self.tablestyle_selected,
+                            &self.ribbon.active_table_style,
+                            selected_style,
+                            &self.ts_hmargin,
+                            &self.ts_vmargin,
+                            &self.ts_description,
+                            &self.ts_cell_textstyle,
+                            &self.ts_cell_height,
+                            &self.ts_cell_textcolor,
+                            &self.ts_cell_fillcolor,
+                            &self.ts_cell_datatype,
+                            &self.ts_cell_unittype,
+                            &self.ts_cell_format,
+                            &self.ts_border_lw,
+                            &self.ts_border_color,
+                            &self.ts_border_spacing,
+                            self.style_rename.as_deref(),
+                            &self.style_rename_buf,
+                            self.ts_color_open,
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::MLeaderStyle => {
@@ -462,44 +549,50 @@ impl OpenCADStudio {
                         ),
                         None => Default::default(),
                     };
-                sized(
-                    crate::ui::style::mleaderstyle::view_window(crate::ui::style::mleaderstyle::MLeaderStyleView {
-                        styles,
-                        selected: &self.mleaderstyle_selected,
-                        style: selected_style,
-                        current: tab.active_mleader_style.clone(),
-                        landing_distance: &self.mls_landing_distance,
-                        landing_gap: &self.mls_landing_gap,
-                        arrowhead_size: &self.mls_arrowhead_size,
-                        text_height: &self.mls_text_height,
-                        scale_factor: &self.mls_scale_factor,
-                        break_gap: &self.mls_break_gap,
-                        first_seg_angle: &self.mls_first_seg_angle,
-                        second_seg_angle: &self.mls_second_seg_angle,
-                        max_points: &self.mls_max_points,
-                        default_text: &self.mls_default_text,
-                        line_color: &self.mls_line_color,
-                        text_color: &self.mls_text_color,
-                        description: &self.mls_description,
-                        align_space: &self.mls_align_space,
-                        block_color: &self.mls_block_color,
-                        block_rotation: &self.mls_block_rotation,
-                        block_scale_x: &self.mls_block_scale_x,
-                        block_scale_y: &self.mls_block_scale_y,
-                        block_scale_z: &self.mls_block_scale_z,
-                        block_opts,
-                        lt_opts,
-                        textstyle_opts,
-                        line_type_name,
-                        arrowhead_name,
-                        text_style_name,
-                        block_content_name,
-                        rename_active: self.style_rename.as_deref(),
-                        rename_buf: &self.style_rename_buf,
-                        color_open: self.mls_color_open,
-                    }),
+                sized_flow(
+                    ex,
                     560,
                     560,
+                    |flow| {
+                        crate::ui::style::mleaderstyle::view_window(
+                            crate::ui::style::mleaderstyle::MLeaderStyleView {
+                                styles: styles.clone(),
+                                selected: &self.mleaderstyle_selected,
+                                style: selected_style,
+                                current: tab.active_mleader_style.clone(),
+                                landing_distance: &self.mls_landing_distance,
+                                landing_gap: &self.mls_landing_gap,
+                                arrowhead_size: &self.mls_arrowhead_size,
+                                text_height: &self.mls_text_height,
+                                scale_factor: &self.mls_scale_factor,
+                                break_gap: &self.mls_break_gap,
+                                first_seg_angle: &self.mls_first_seg_angle,
+                                second_seg_angle: &self.mls_second_seg_angle,
+                                max_points: &self.mls_max_points,
+                                default_text: &self.mls_default_text,
+                                line_color: &self.mls_line_color,
+                                text_color: &self.mls_text_color,
+                                description: &self.mls_description,
+                                align_space: &self.mls_align_space,
+                                block_color: &self.mls_block_color,
+                                block_rotation: &self.mls_block_rotation,
+                                block_scale_x: &self.mls_block_scale_x,
+                                block_scale_y: &self.mls_block_scale_y,
+                                block_scale_z: &self.mls_block_scale_z,
+                                block_opts: block_opts.clone(),
+                                lt_opts: lt_opts.clone(),
+                                textstyle_opts: textstyle_opts.clone(),
+                                line_type_name: line_type_name.clone(),
+                                arrowhead_name: arrowhead_name.clone(),
+                                text_style_name: text_style_name.clone(),
+                                block_content_name: block_content_name.clone(),
+                                rename_active: self.style_rename.as_deref(),
+                                rename_buf: &self.style_rename_buf,
+                                color_open: self.mls_color_open,
+                            },
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::DimStyle => {
@@ -562,8 +655,9 @@ impl OpenCADStudio {
                 ),
                 None => Default::default(),
             };
-            sized(crate::ui::style::dimstyle::view_window(
-                styles,
+            sized_flow(ex, 720, 560, |flow| {
+                crate::ui::style::dimstyle::view_window(
+                styles.clone(),
                 &self.dimstyle_selected,
                 &self.tabs[self.active_tab]
                     .scene
@@ -642,20 +736,22 @@ impl OpenCADStudio {
                     dimalttz: &self.ds_dimalttz,
                     dimtolj: &self.ds_dimtolj,
                     dimtzin: &self.ds_dimtzin,
-                    dimblk_name,
-                    dimblk1_name,
-                    dimblk2_name,
-                    dimldrblk_name,
-                    dimltex_name,
-                    dimltex1_name,
-                    dimltex2_name,
-                    block_opts,
-                    lt_opts,
+                    dimblk_name: dimblk_name.clone(),
+                    dimblk1_name: dimblk1_name.clone(),
+                    dimblk2_name: dimblk2_name.clone(),
+                    dimldrblk_name: dimldrblk_name.clone(),
+                    dimltex_name: dimltex_name.clone(),
+                    dimltex1_name: dimltex1_name.clone(),
+                    dimltex2_name: dimltex2_name.clone(),
+                    block_opts: block_opts.clone(),
+                    lt_opts: lt_opts.clone(),
                     color_open: self.ds_color_open.clone(),
                 },
                 self.style_rename.as_deref(),
                 &self.style_rename_buf,
-            ), 720, 560)
+                flow,
+                )
+            })
             }
             super::super::ModalKind::AssocPrompt => sized(default_assoc_dialog_window(), 440, 210),
             super::super::ModalKind::AecDropWarning => {
@@ -738,14 +834,22 @@ impl OpenCADStudio {
                 };
                 sized(unsaved_changes_dialog_window(&tab_name), 420, 160)
             }
-            super::super::ModalKind::PointStyle => sized(
-                crate::ui::style::point_style::view_window(
-                    self.tabs[self.active_tab].scene.document.header.point_display_mode,
-                    self.point_size_relative,
-                    &self.point_size_buf,
-                ),
+            super::super::ModalKind::PointStyle => sized_flow(
+                ex,
                 360,
                 470,
+                |flow| {
+                    crate::ui::style::point_style::view_window(
+                        self.tabs[self.active_tab]
+                            .scene
+                            .document
+                            .header
+                            .point_display_mode,
+                        self.point_size_relative,
+                        &self.point_size_buf,
+                        flow,
+                    )
+                },
             ),
             super::super::ModalKind::AttributeEditor => {
                 let doc = &self.tabs[self.active_tab].scene.document;
@@ -763,18 +867,22 @@ impl OpenCADStudio {
                     .map(|s| s.name.trim().to_string())
                     .filter(|n| !n.is_empty())
                     .collect();
-                sized(
-                    crate::ui::window::attribute_editor::view_window(
-                        &self.attr_editor_block,
-                        &self.attr_editor_rows,
-                        self.attr_editor_selected,
-                        self.attr_editor_tab,
-                        layers,
-                        linetypes,
-                        styles,
-                    ),
+                sized_flow(
+                    ex,
                     640,
                     500,
+                    |flow| {
+                        crate::ui::window::attribute_editor::view_window(
+                            &self.attr_editor_block,
+                            &self.attr_editor_rows,
+                            self.attr_editor_selected,
+                            self.attr_editor_tab,
+                            layers.clone(),
+                            linetypes.clone(),
+                            styles.clone(),
+                            flow,
+                        )
+                    },
                 )
             }
             super::super::ModalKind::SaveDialog => {
@@ -794,6 +902,20 @@ impl OpenCADStudio {
     }
 }
 
+fn sized_flow<'a>(
+    extra: iced::Vector,
+    max_width: u16,
+    max_height: u16,
+    mut build: impl FnMut(crate::ui::modal::ModalSizing) -> Element<'a, Message>,
+) -> Element<'a, Message> {
+    crate::ui::modal::intrinsic(
+        build(crate::ui::modal::ModalSizing::INTRINSIC),
+        build(crate::ui::modal::ModalSizing::FILL),
+        iced::Size::new(max_width as f32, max_height as f32),
+        extra,
+    )
+}
+
 fn dialog_button(
     label: &'static str,
     message: Message,
@@ -807,7 +929,7 @@ fn dialog_button(
 }
 
 fn dialog_body_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     container::Style {
         background: Some(Background::Color(palette.background.base.color)),
         text_color: Some(palette.background.base.text),
@@ -817,7 +939,7 @@ fn dialog_body_style(theme: &Theme) -> container::Style {
 
 fn dialog_muted_text_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
@@ -846,7 +968,7 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
                     .on_input(Message::SaveDialogFilenameChanged)
                     .size(13)
                     .padding([5, 8])
-                    .width(Fill),
+                    .width(Fit),
             ]
             .align_y(iced::Alignment::Center)
             .spacing(6)
@@ -860,10 +982,10 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
     items.push(
         row![
             label("Format:").width(70),
-            pick_list(crate::io::SAVE_FORMAT_OPTIONS, sel_fmt, |s: &str| {
+            crate::ui::pick_list(crate::io::SAVE_FORMAT_OPTIONS, sel_fmt, |s: &str| {
                 Message::SaveDialogFormatChanged(s.to_string())
             })
-            .width(Fill),
+            .width(Fit),
         ]
         .align_y(iced::Alignment::Center)
         .spacing(6)
@@ -872,7 +994,7 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
     items.push(Space::new().height(16).into());
     items.push(
         row![
-            Space::new().width(Fill),
+            Space::new().width(Fit),
             dialog_button("Save as...", Message::SaveDialogConfirm, button::primary),
             Space::new().width(8),
             dialog_button("Cancel", Message::SaveDialogCancel, button::secondary),
@@ -885,8 +1007,8 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
     container(body)
         .style(dialog_body_style)
         .padding([14, 16])
-        .width(Fill)
-        .height(Fill)
+        .width(Fit)
+        .height(Fit)
         .into()
 }
 
@@ -908,7 +1030,7 @@ fn unsaved_changes_dialog_window(name: &str) -> Element<'static, Message> {
         .spacing(0),
     )
     .style(dialog_body_style)
-    .center(Fill)
+    .center(Fit)
     .padding([24, 28])
     .into()
 }
@@ -932,11 +1054,11 @@ fn file_in_use_dialog_window(path: &str, error: &str) -> Element<'static, Messag
                  Close it there and retry, or save this drawing under a different name."
             )
             .size(13)
-            .width(Fill),
+            .width(Fit),
             Space::new().height(12),
-            text(path_line).size(11).style(dialog_muted_text_style).width(Fill),
+            text(path_line).size(11).style(dialog_muted_text_style).width(Fit),
             Space::new().height(4),
-            text(details).size(11).style(dialog_muted_text_style).width(Fill),
+            text(details).size(11).style(dialog_muted_text_style).width(Fit),
             Space::new().height(18),
             row![
                 dialog_button(
@@ -962,8 +1084,8 @@ fn file_in_use_dialog_window(path: &str, error: &str) -> Element<'static, Messag
     )
     .style(dialog_body_style)
     .padding([18, 20])
-    .width(Fill)
-    .height(Fill)
+    .width(Fit)
+    .height(Fit)
     .into()
 }
 
@@ -985,9 +1107,9 @@ fn external_change_dialog_window(path: &str) -> Element<'static, Message> {
                  save your local work elsewhere, or explicitly overwrite it."
             )
             .size(13)
-            .width(Fill),
+            .width(Fit),
             Space::new().height(12),
-            text(path_line).size(11).style(dialog_muted_text_style).width(Fill),
+            text(path_line).size(11).style(dialog_muted_text_style).width(Fit),
             Space::new().height(18),
             row![
                 dialog_button(
@@ -1019,8 +1141,8 @@ fn external_change_dialog_window(path: &str) -> Element<'static, Message> {
     )
     .style(dialog_body_style)
     .padding([18, 20])
-    .width(Fill)
-    .height(Fill)
+    .width(Fit)
+    .height(Fit)
     .into()
 }
 
@@ -1054,7 +1176,7 @@ fn aec_drop_dialog_window(count: usize, target: &str, src_version: &str) -> Elem
         .spacing(0),
     )
     .style(dialog_body_style)
-    .center(Fill)
+    .center(Fit)
     .padding([24, 28])
     .into()
 }
@@ -1093,7 +1215,7 @@ fn layer_delete_warning_window(names: &[String], count: usize) -> Element<'stati
         .spacing(0),
     )
     .style(dialog_body_style)
-    .center(Fill)
+    .center(Fit)
     .padding([24, 28])
     .into()
 }
@@ -1113,7 +1235,7 @@ fn default_assoc_dialog_window() -> Element<'static, Message> {
                 .style(dialog_muted_text_style),
             iced::widget::Space::new().height(22),
             row![
-                iced::widget::Space::new().width(Fill),
+                iced::widget::Space::new().width(Fit),
                 dialog_button("Not now", Message::AssocPromptNo, button::secondary),
                 iced::widget::Space::new().width(8),
                 dialog_button(
@@ -1127,7 +1249,7 @@ fn default_assoc_dialog_window() -> Element<'static, Message> {
         .spacing(0),
     )
     .style(dialog_body_style)
-    .center(Fill)
+    .center(Fit)
     .padding([24, 28])
     .into()
 }

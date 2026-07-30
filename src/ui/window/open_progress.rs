@@ -62,7 +62,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
     )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().primary.base.color
+                theme.palette().primary.base.color
             )),
             border: Border {
                 radius: 3.0.into(),
@@ -85,7 +85,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
             container(Space::new().width(Length::Fixed(BAR_TRACK_WIDTH)).height(Length::Fixed(BAR_TRACK_HEIGHT)))
                 .style(|theme: &Theme| container::Style {
                     background: Some(Background::Color(
-                        theme.extended_palette().background.strong.color
+                        theme.palette().background.strong.color
                     )),
                     border: Border {
                         radius: 3.0.into(),
@@ -110,7 +110,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
     ))
     .size(13)
     .style(|theme: &Theme| iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.82)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.82)),
     });
 
     let phase_line = text(format!(
@@ -120,7 +120,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
     ))
         .size(12)
         .style(|theme: &Theme| iced::widget::text::Style {
-            color: Some(theme.extended_palette().primary.base.color),
+            color: Some(theme.palette().primary.base.color),
         });
 
     let cancel_btn: Element<'_, Message> = button(text("Cancel").size(12))
@@ -138,7 +138,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
     )
     .padding([18, 22])
     .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         container::Style {
         background: Some(Background::Color(palette.background.weak.color)),
         border: Border {
@@ -154,7 +154,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
     let backdrop: Element<'_, Message> = container(Space::new().width(Fill).height(Fill))
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.strong.color.scale_alpha(0.72)
+                theme.palette().background.strong.color.scale_alpha(0.72)
             )),
             ..Default::default()
         })

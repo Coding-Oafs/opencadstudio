@@ -223,7 +223,7 @@ impl TextAtlasGpu {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -267,8 +267,8 @@ pub fn create_pipelines(
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("text.pipeline.layout"),
-        bind_group_layouts: &[frame_bgl, atlas_bgl],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[frame_bgl, atlas_bgl].map(Some),
+        immediate_size: 0,
     });
     let create = |label, depth_write_enabled, depth_compare| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -306,16 +306,20 @@ pub fn create_pipelines(
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         })
     };
     (
-        create("text.pipeline", true, wgpu::CompareFunction::LessEqual),
+        create(
+            "text.pipeline",
+            Some(true),
+            Some(wgpu::CompareFunction::LessEqual),
+        ),
         create(
             "text.highlight.pipeline",
-            false,
-            wgpu::CompareFunction::Always,
+            Some(false),
+            Some(wgpu::CompareFunction::Always),
         ),
     )
 }

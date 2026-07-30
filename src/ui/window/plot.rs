@@ -7,10 +7,10 @@
 use crate::app::Message;
 use crate::io::paper_sizes::PaperSize;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, row, scrollable, text, text_input,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
     Space,
 };
-use iced::{Background, Border, Element, Fill, Length, Theme};
+use iced::{Background, Border, Element, Fit, Length, Theme};
 
 /// Sentinel entries in the printer dropdown (not real printer names).
 pub const OUT_DEFAULT: &str = "System default printer";
@@ -212,7 +212,7 @@ impl PlotDialogState {
 
 fn btn(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match (accent, st) {
             (true, button::Status::Hovered | button::Status::Pressed) => palette.primary.strong,
             (false, button::Status::Hovered | button::Status::Pressed) => {
@@ -236,7 +236,7 @@ fn btn(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
 }
 
 fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let border = match status {
         text_input::Status::Focused { .. } => palette.primary.base.color,
         _ => palette.background.neutral.color,
@@ -253,17 +253,17 @@ fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
-fn hdivider<'a>() -> Element<'a, Message> {
-    container(Space::new().width(Fill).height(1))
-        .width(Fill)
+fn hdivider<'a>(width: Length) -> Element<'a, Message> {
+    container(Space::new().width(width).height(1))
+        .width(width)
         .height(1)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color
+                theme.palette().background.neutral.color
             )),
             ..Default::default()
         })
@@ -274,13 +274,13 @@ fn section_label<'a>(s: &'static str) -> Element<'a, Message> {
     text(s).size(11).style(muted_style).into()
 }
 
-fn vsep<'a>() -> Element<'a, Message> {
-    container(Space::new().width(1).height(Fill))
+fn vsep<'a>(height: Length) -> Element<'a, Message> {
+    container(Space::new().width(1).height(height))
         .width(1)
-        .height(Fill)
+        .height(height)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color
+                theme.palette().background.neutral.color
             )),
             ..Default::default()
         })
@@ -302,15 +302,15 @@ fn setup_row<'a>(
             .style(field_style)
             .size(11)
             .padding([4, 8])
-            .width(Fill)
+            .width(Fit)
             .into();
     }
     let is_sel = name == selected;
     let cell = container(text(name.to_string()).size(11))
         .padding([4, 8])
-        .width(Fill)
+        .width(Fit)
         .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: is_sel.then_some(Background::Color(palette.primary.strong.color)),
             text_color: is_sel.then_some(palette.primary.strong.text),
@@ -330,11 +330,12 @@ fn drop_row<'a>(
     options: Vec<String>,
     selected: Option<String>,
     ctor: fn(String) -> PlotDlgMsg,
+    width: Length,
 ) -> Element<'a, Message> {
-    let pl = pick_list(options, selected, move |s| Message::PlotDlg(ctor(s)))
+    let pl = crate::ui::pick_list(options, selected, move |s| Message::PlotDlg(ctor(s)))
         .text_size(12)
         .padding([3, 6])
-        .width(Length::Fill);
+        .width(width);
     row![text(label).size(11).style(muted_style).width(92), pl]
         .spacing(8)
         .align_y(iced::Center)
@@ -375,7 +376,12 @@ fn strs(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
-pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
+pub fn view_window(
+    s: &PlotDialogState,
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'_, Message> {
+    let width = sizing.width;
+    let height = sizing.height;
     // ── Toolbar: Cancel … Preview  Print/Export ──────────────────────────
     let action = if s.to_file { "Export PDF" } else { "Print" };
     // `<none>` / `<previous>` are pseudo-entries; layout rows are `*name*`.
@@ -409,7 +415,7 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
     let toolbar = container(
         row![
             left_bar,
-            Space::new().width(Fill),
+            Space::new().width(width),
             button(text("Set current").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::SetCurrent))
                 .style(btn(false))
@@ -429,11 +435,11 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.weak.color
+            theme.palette().background.weak.color
         )),
         ..Default::default()
     })
-    .width(Fill)
+    .width(width)
     .padding([5, 10]);
 
     // ── Printer dropdown: default + discovered printers + PDF sentinel ────
@@ -465,14 +471,14 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
             .padding([6, 8])
             .into()
     } else {
-        scrollable(column(rows).spacing(1)).height(Fill).into()
+        scrollable(column(rows).spacing(1)).height(height).into()
     };
     let list_panel = container(
         column![
             text("Page setups").size(10).style(muted_style),
             container(list_body)
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.weak.color)),
                     border: Border {
@@ -483,15 +489,15 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
                     ..Default::default()
                     }
                 })
-                .width(Fill)
-                .height(Fill)
+                .width(Length::Fill)
+                .height(height)
                 .padding(2),
         ]
         .spacing(4)
-        .height(Fill),
+        .height(height),
     )
     .width(160)
-    .height(Fill)
+    .height(height)
     .padding(iced::Padding {
         top: 12.0,
         right: 8.0,
@@ -507,37 +513,39 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
     };
     let left = column![
         section_label("Printer / plotter"),
-        drop_row("Output", printer_opts, printer_sel, PlotDlgMsg::Printer),
+        drop_row("Output", printer_opts, printer_sel, PlotDlgMsg::Printer, width),
         field_row("Copies", &s.copies, PlotDlgMsg::Copies, 60),
-        hdivider(),
+        hdivider(width),
         section_label("Paper"),
-        drop_row("Size", paper_opts, Some(s.paper.clone()), PlotDlgMsg::Paper),
+        drop_row("Size", paper_opts, Some(s.paper.clone()), PlotDlgMsg::Paper, width),
         drop_row(
             "Orientation",
             strs(&["Portrait", "Landscape"]),
             Some(s.orientation.clone()),
             PlotDlgMsg::Orientation,
+            width,
         ),
         drop_row(
             "Rotation",
             strs(&["0°", "90°", "180°", "270°"]),
             Some(s.rotation.clone()),
             PlotDlgMsg::Rotation,
+            width,
         ),
-        hdivider(),
+        hdivider(width),
         section_label("Plot area"),
         row![
             container(
-                pick_list(
+                crate::ui::pick_list(
                     strs(&["Layout", "Extents", "Display", "Window"]),
                     Some(s.area.clone()),
                     move |v| Message::PlotDlg(PlotDlgMsg::Area(v)),
                 )
                 .text_size(12)
                 .padding([3, 6])
-                .width(Length::Fill)
+                .width(width)
             )
-            .width(Fill),
+            .width(width),
             button(text("Pick…").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::PickWindow))
                 .style(btn(false))
@@ -554,7 +562,7 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
         check("Center the plot", s.center, PlotFlag::Center),
     ]
     .spacing(9)
-    .width(Fill);
+    .width(width);
 
     // ── Right column ─────────────────────────────────────────────────────
     let right = column![
@@ -564,14 +572,15 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
             strs(&["Fit", "1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100", "2:1"]),
             Some(s.scale.clone()),
             PlotDlgMsg::Scale,
+            width,
         ),
         check("Scale lineweights", s.scale_lw, PlotFlag::ScaleLw),
-        hdivider(),
+        hdivider(width),
         section_label("Plot style table (pen assignments)"),
         row![
             container(text(style_label).size(12))
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.base.color)),
                     border: Border {
@@ -583,7 +592,7 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
                     }
                 })
                 .padding([4, 8])
-                .width(Fill),
+                .width(width),
             button(text("Load…").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::LoadStyle))
                 .style(btn(false))
@@ -595,20 +604,20 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
         ]
         .spacing(6)
         .align_y(iced::Center),
-        hdivider(),
+        hdivider(width),
         section_label("Quality"),
         row![
             container(
-                pick_list(
+                crate::ui::pick_list(
                     strs(&["Draft", "Normal", "High", "Maximum"]),
                     Some(s.quality.clone()),
                     move |v| Message::PlotDlg(PlotDlgMsg::Quality(v)),
                 )
                 .text_size(12)
                 .padding([3, 6])
-                .width(Length::Fill)
+                .width(width)
             )
-            .width(Fill),
+            .width(width),
             text("DPI").size(11).style(muted_style),
             text_input("", &s.dpi)
                 .on_input(move |v| Message::PlotDlg(PlotDlgMsg::Dpi(v)))
@@ -623,8 +632,9 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
             strs(&["As displayed", "Wireframe", "Hidden", "Rendered"]),
             Some(s.shade.clone()),
             PlotDlgMsg::Shade,
+            width,
         ),
-        hdivider(),
+        hdivider(width),
         section_label("Plot options"),
         row![
             column![
@@ -634,7 +644,7 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
                 check("Plot transparency", s.transparency, PlotFlag::Transparency),
             ]
             .spacing(6)
-            .width(Fill),
+            .width(width),
             column![
                 check("Paperspace last", s.paperspace_last, PlotFlag::PaperspaceLast),
                 check("Hide paperspace", s.hide_paperspace, PlotFlag::HidePaperspace),
@@ -642,28 +652,30 @@ pub fn view_window(s: &PlotDialogState) -> Element<'_, Message> {
                 check("Save to layout", s.save_layout, PlotFlag::SaveLayout),
             ]
             .spacing(6)
-            .width(Fill),
+            .width(width),
         ]
         .spacing(10),
     ]
     .spacing(9)
-    .width(Fill);
+    .width(width);
 
     let detail = scrollable(
-        container(row![left, right].spacing(18).width(Fill)).padding(14),
+        container(row![left, right].spacing(18).width(width)).padding(14),
     )
-    .width(Fill)
-    .height(Fill);
-    let body = row![list_panel, vsep(), detail].height(Fill);
+    .width(width)
+    .height(height);
+    let body = row![list_panel, vsep(height), detail]
+        .width(width)
+        .height(height);
 
-    container(column![toolbar, hdivider(), body].spacing(0))
+    container(column![toolbar, hdivider(width), body].spacing(0))
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.base.color
+                theme.palette().background.base.color
             )),
             ..Default::default()
         })
-        .width(Fill)
-        .height(Fill)
+        .width(width)
+        .height(height)
         .into()
 }

@@ -470,7 +470,7 @@ impl StatusBar {
 
         container(wrap)
             .style(|theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 container::Style {
                 background: Some(Background::Color(palette.background.base.color)),
                 border: Border {
@@ -581,7 +581,7 @@ fn toggle_pill(icon: &'static [u8], active: bool, msg: Message) -> Element<'stat
         .style(move |theme: &Theme, status| {
             let mut style = button::subtle(theme, status);
             if active {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 style.background = Some(Background::Color(match status {
                     button::Status::Hovered => palette.primary.base.color,
                     _ => palette.primary.weak.color,
@@ -612,7 +612,7 @@ fn split_pill<'a>(
 ) -> Element<'a, Message> {
     container(row![main, caret].spacing(3).align_y(iced::Center))
         .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(if active {
                 palette.primary.weak.color
@@ -667,7 +667,7 @@ fn polar_pill<'a>(
         row![
             polar_icon,
             text(angle).size(11).style(move |theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 text::Style {
                     color: Some(if active {
                         palette.primary.base.color
@@ -796,7 +796,7 @@ fn space_tab<'a>(
     report_key_prefix: &'static str,
 ) -> Element<'a, Message> {
     let tab_style = move |theme: &Theme| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let text_color = if !enabled {
             palette.background.base.text.scale_alpha(0.42)
         } else if is_active {
@@ -912,7 +912,7 @@ fn space_mode_btn(current_layout: &str, in_mspace: bool) -> Element<'static, Mes
         .style(move |theme: &Theme, status| {
             let mut style = button::subtle(theme, status);
             if active {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 style.background = Some(Background::Color(match status {
                     button::Status::Hovered if clickable => palette.primary.base.color,
                     _ => palette.primary.weak.color,

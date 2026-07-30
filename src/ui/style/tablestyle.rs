@@ -2,13 +2,13 @@
 
 use crate::app::Message;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Column,
+    button, checkbox, column, container, row, scrollable, text, text_input, Column,
 };
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Theme};
 
 fn btn_s(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match (accent, st) {
             (true, button::Status::Hovered | button::Status::Pressed) => palette.primary.strong,
             (false, button::Status::Hovered | button::Status::Pressed) => {
@@ -32,13 +32,13 @@ fn btn_s(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
@@ -63,6 +63,7 @@ pub fn view_window<'a>(
     rename_active: Option<&'a str>,
     rename_buf: &'a str,
     color_open: Option<(u8, &'static str)>,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     // ── Right: Details panel ──────────────────────────────────────────────
     let info_row = |label: &'static str, val: String| -> Element<'_, Message> {
@@ -140,7 +141,7 @@ pub fn view_window<'a>(
             .push(
                 row![
                     text("  Alignment:").size(11).style(muted_style).width(150),
-                    pick_list(
+                    crate::ui::pick_list(
                         [
                             "TopLeft",
                             "TopCenter",
@@ -193,7 +194,7 @@ pub fn view_window<'a>(
             col = col.push(
                 row![
                     text(format!("   {bname}")).size(11).style(muted_style).width(28),
-                    pick_list(
+                    crate::ui::pick_list(
                         ["Single", "Double"]
                             .iter()
                             .map(|s| s.to_string())
@@ -273,7 +274,7 @@ pub fn view_window<'a>(
                 .align_y(iced::Center),
                 row![
                     text("Flow direction:").size(11).style(muted_style).width(160),
-                    pick_list(
+                    crate::ui::pick_list(
                         ["Down", "Up"]
                             .iter()
                             .map(|s| s.to_string())
@@ -336,8 +337,8 @@ pub fn view_window<'a>(
             .spacing(6)
             .padding([12, 12]),
         )
-        .width(Fill)
-        .height(Fill)
+        .width(sizing.width)
+        .height(sizing.height)
         .into()
     } else {
         container(text("Select a style to view details.").size(11).style(muted_style))
@@ -345,9 +346,12 @@ pub fn view_window<'a>(
             .into()
     };
 
-    let right_panel = container(details).width(Fill).height(Fill);
+    let right_panel = container(details)
+        .width(sizing.width)
+        .height(sizing.height);
 
     crate::ui::style::style_manager::view(crate::ui::style::style_manager::Scaffold {
+        sizing,
         kind: crate::app::StyleKind::Table,
         styles: &styles,
         selected,

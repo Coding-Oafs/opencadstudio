@@ -109,7 +109,7 @@ impl OpenCADStudio {
     pub fn view_main(&self) -> Element<'_, Message> {
         let i = self.active_tab;
         let tab = &self.tabs[i];
-        let theme_text = self.active_theme.extended_palette().background.base.text;
+        let theme_text = self.active_theme.palette().background.base.text;
         let viewcube_text_color = [
             theme_text.r,
             theme_text.g,
@@ -197,7 +197,7 @@ impl OpenCADStudio {
                     sel.vp_size = (size.width, size.height);
                 }
                 scene.sync_tiles_from_panes(size.width, size.height);
-                Space::new().width(Fill).height(Fill).into()
+                Space::new().width(Fill).height(Fill)
             })
             .into();
             let shaders = pane_grid::PaneGrid::new(
@@ -978,7 +978,7 @@ impl OpenCADStudio {
                         .padding([3, 10])
                         .width(Fill)
                         .style(move |theme: &Theme, status| {
-                            let palette = theme.extended_palette();
+                            let palette = theme.palette();
                             let pair = match (is_sel, status) {
                                 (true, _) => Some(palette.primary.strong),
                                 (_, iced::widget::button::Status::Hovered) => {
@@ -1004,7 +1004,7 @@ impl OpenCADStudio {
                 let menu_panel = container(col)
                     .padding(2)
                     .style(|theme: &Theme| {
-                        let palette = theme.extended_palette();
+                        let palette = theme.palette();
                         container::Style {
                         background: Some(Background::Color(palette.background.weak.color)),
                         border: Border {
@@ -1055,7 +1055,7 @@ impl OpenCADStudio {
                         .padding([3, 10])
                         .width(Fill)
                         .style(move |theme: &Theme, status| {
-                            let palette = theme.extended_palette();
+                            let palette = theme.palette();
                             iced::widget::button::Style {
                             background: matches!(
                                 status,
@@ -1074,10 +1074,10 @@ impl OpenCADStudio {
                     col = col.push(btn);
                 }
                 let panel = container(iced::widget::scrollable(col).height(iced::Length::Shrink))
-                    .max_height(360.0)
+                    .height(iced::Length::Fit.max(360.0))
                     .padding(2)
                     .style(|theme: &Theme| {
-                        let palette = theme.extended_palette();
+                        let palette = theme.palette();
                         container::Style {
                         background: Some(Background::Color(palette.background.weak.color)),
                         border: Border {
@@ -1154,7 +1154,7 @@ impl OpenCADStudio {
                 trace
             };
             let perf_button_style = |theme: &Theme, status: button::Status| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let pair = if matches!(status, button::Status::Hovered) {
                     palette.background.strong
                 } else {
@@ -1195,7 +1195,7 @@ impl OpenCADStudio {
             .padding([2, 6]);
             let header = row![
                 text("PERF").size(12).style(|theme: &Theme| iced::widget::text::Style {
-                    color: Some(theme.extended_palette().success.base.color),
+                    color: Some(theme.palette().success.base.color),
                 }),
                 Space::new().width(iced::Length::Fill),
                 copy_btn,
@@ -1210,7 +1210,7 @@ impl OpenCADStudio {
                 column![
                     header,
                     text(summary).size(11).style(|theme: &Theme| iced::widget::text::Style {
-                        color: Some(theme.extended_palette().success.base.color),
+                        color: Some(theme.palette().success.base.color),
                     }),
                     log,
                 ]
@@ -1486,7 +1486,7 @@ impl OpenCADStudio {
         })
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.base.color
+                theme.palette().background.base.color
             )),
             ..Default::default()
         })
@@ -1536,15 +1536,20 @@ impl OpenCADStudio {
         // the native (single main window) and web builds.
         let base: Element<'_, Message> = match self.modal_content() {
             Some(content) => {
+                let modal_options = if cfg!(target_arch = "wasm32")
+                    && matches!(self.active_modal, Some(super::ModalKind::PluginManager))
+                {
+                    crate::ui::modal::ModalOptions::NOTICE
+                } else {
+                    crate::ui::modal::ModalOptions::STANDARD
+                };
                 crate::ui::modal::modal(
                     composed,
                     self.modal_title(),
-                    // Content width — outer size minus the frame padding.
-                    self.modal_outer_size().map(|s| s.0 - 20.0).unwrap_or(420.0),
                     content,
                     Message::CloseModal,
                     self.modal_offset,
-                    true,
+                    modal_options,
                 )
             }
             None => composed.into(),
@@ -1555,25 +1560,24 @@ impl OpenCADStudio {
             crate::ui::modal::modal(
                 base,
                 "Select Color",
-                420.0,
                 iced::widget::container(crate::ui::color_select::color_grid_window(
                     Message::ColorWindowPick,
                 ))
-                .width(iced::Length::Fixed(420.0))
-                .height(iced::Length::Fixed(470.0)),
+                .width(iced::Length::Fit.max(420.0))
+                .height(iced::Length::Fit.max(470.0)),
                 Message::CloseColorPicker,
                 iced::Vector::ZERO,
-                false,
+                crate::ui::modal::ModalOptions::MOVABLE_FIXED,
             )
         } else {
             base
         }
     }
 
-    /// Outer pixel size (content + title-bar/padding chrome) of the active
-    /// modal, used to clamp drag so it cannot be pushed off-screen. Mirrors the
-    /// `sized(..)` dimensions in [`Self::modal_content`]; keep the two in sync.
-    /// `None` has no active modal. About (content-sized) uses a safe estimate.
+    /// Conservative outer pixel bounds for the active modal, used to clamp drag
+    /// so it cannot be pushed off-screen. Mirrors the maximum dimensions in
+    /// [`Self::modal_content`]; content-sized dialogs may render smaller.
+    /// `None` has no active modal. About uses a safe estimate.
     pub(crate) fn modal_outer_size(&self) -> Option<(f32, f32)> {
         use super::ModalKind::*;
         // Title bar (~26) + spacing (6) + frame padding (10·2) → ~52 vertical;
@@ -1583,8 +1587,17 @@ impl OpenCADStudio {
         let (w, h) = match self.active_modal? {
             About => (440, 360),
             Shortcuts => (720, 520),
-            Options => (480, 190),
-            PluginManager => (940, 600),
+            Options => (520, 500),
+            PluginManager => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    (self.web_plugin_notice_width(), 230)
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    (940, 600)
+                }
+            }
             UpdateNotice => (560, 460),
             Layers => (900, 360),
             LayerStateManager => (720, 420),
@@ -2005,7 +2018,7 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
             .height(Fill)
             .padding([4, 12])
             .style(move |theme: &Theme, status| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let background = match (is_active, status) {
                     (false, button::Status::Hovered) => {
                         Some(Background::Color(palette.background.weak.color))
@@ -2053,7 +2066,7 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
         let tab_container = container(row_inner)
             .height(iced::Length::Fixed(23.0))
             .style(move |theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 container::Style {
                     background: Some(Background::Color(if is_active {
                         palette.primary.weak.color
@@ -2112,10 +2125,10 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
     container(WrapFlow::new(items).spacing_x(0.0).row_h(30.0))
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.base.color,
+                theme.palette().background.base.color,
             )),
             border: Border {
-                color: theme.extended_palette().background.neutral.color,
+                color: theme.palette().background.neutral.color,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -2146,13 +2159,13 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
 //
 fn start_muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn start_primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
@@ -2196,7 +2209,7 @@ impl canvas::Program<Message> for VBarLabel {
             frame.fill_text(canvas::Text {
                 content: self.text.clone(),
                 position: iced::Point::ORIGIN,
-                color: theme.extended_palette().background.base.text.scale_alpha(0.72),
+                color: theme.palette().background.base.text.scale_alpha(0.72),
                 size: iced::Pixels(13.0),
                 align_x: iced::advanced::text::Alignment::Center,
                 align_y: iced::alignment::Vertical::Center,
@@ -2223,10 +2236,10 @@ pub(super) fn collapse_bar<'a>(name: &str, on_press: Message) -> Element<'a, Mes
             .height(Fill)
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
-                    theme.extended_palette().background.base.color,
+                    theme.palette().background.base.color,
                 )),
                 border: Border {
-                    color: theme.extended_palette().background.neutral.color,
+                    color: theme.palette().background.neutral.color,
                     width: 1.0,
                     radius: 0.0.into(),
                 },
@@ -2264,7 +2277,7 @@ pub(super) fn start_page_view<'a>(
             .on_press(msg)
             .padding([10, 22])
             .style(move |theme: &Theme, status| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let pair = match status {
                     button::Status::Hovered => palette.background.strong,
                     _ => palette.background.weak,
@@ -2354,8 +2367,7 @@ pub(super) fn start_page_view<'a>(
                 .height(iced::Length::Fixed(120.0))
                 .content_fit(iced::ContentFit::Contain),
             )
-            .width(Fill)
-            .max_width(300.0),
+            .width(Fill.max(300.0)),
         )
         .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenUrl("https://open-aec.com/".to_string())),
@@ -2469,7 +2481,7 @@ pub(super) fn start_page_view<'a>(
                     .height(iced::Length::Fixed(thumb_h))
                     .style(|theme: &Theme| container::Style {
                         border: Border {
-                            color: theme.extended_palette().background.neutral.color,
+                            color: theme.palette().background.neutral.color,
                             width: 1.0,
                             radius: 6.0.into(),
                         },
@@ -2499,7 +2511,7 @@ pub(super) fn start_page_view<'a>(
             .width(Fill)
             .center_x(Fill)
             .style(|theme: &Theme| {
-                let pair = theme.extended_palette().danger.base;
+                let pair = theme.palette().danger.base;
                 container::Style {
                 background: Some(Background::Color(pair.color)),
                 border: Border {
@@ -2529,7 +2541,7 @@ pub(super) fn start_page_view<'a>(
         .height(Fill)
         .padding(VIDEO_PANEL_PADDING)
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
@@ -2582,7 +2594,7 @@ pub(super) fn start_page_view<'a>(
             .padding([8, 10])
             .width(Fill)
             .style(|theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 container::Style {
                     background: Some(Background::Color(
                         palette.background.base.color.scale_alpha(0.42),
@@ -2615,7 +2627,7 @@ pub(super) fn start_page_view<'a>(
                 .width(Fill)
                 .center_x(Fill)
                 .style(|theme: &Theme| {
-                    let pair = theme.extended_palette().primary.base;
+                    let pair = theme.palette().primary.base;
                     container::Style {
                         background: Some(Background::Color(pair.color)),
                         border: Border {
@@ -2648,7 +2660,7 @@ pub(super) fn start_page_view<'a>(
         .height(Fill)
         .padding(16)
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
                 background: Some(Background::Color(palette.background.weak.color)),
                 border: Border {
@@ -2697,7 +2709,7 @@ pub(super) fn start_page_view<'a>(
             .width(Fill)
             .center_x(Fill)
             .style(|theme: &Theme| {
-                let pair = theme.extended_palette().danger.base;
+                let pair = theme.palette().danger.base;
                 container::Style {
                 background: Some(Background::Color(pair.color)),
                 border: Border {
@@ -2731,7 +2743,7 @@ pub(super) fn start_page_view<'a>(
         .height(Fill)
         .padding(20)
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.weak.color)),
             border: Border {
@@ -2779,7 +2791,7 @@ pub(super) fn start_page_view<'a>(
                     .on_press(Message::StartSectionSelect(section))
                     .padding([8, 18])
                     .style(move |theme: &Theme, status| {
-                        let palette = theme.extended_palette();
+                        let palette = theme.palette();
                         let pair = match (is_active, status) {
                             (true, _) => Some(palette.primary.weak),
                             (false, button::Status::Hovered) => {
@@ -2851,7 +2863,7 @@ pub(super) fn start_page_view<'a>(
     container(body)
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.base.color
+            theme.palette().background.base.color
         )),
         ..Default::default()
     })
@@ -2956,7 +2968,7 @@ pub(super) fn recent_files_panel<'a>(
             .padding([6, 12])
             .width(Fill)
             .style(move |theme: &Theme, status| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 button::Style {
                 background: matches!(status, button::Status::Hovered).then_some(
                     Background::Color(palette.background.strong.color)
@@ -2979,7 +2991,7 @@ pub(super) fn recent_files_panel<'a>(
                 .on_press(Message::RecentRemove(path_for_remove))
                 .padding([4, 8])
                 .style(|theme: &Theme, status| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     button::Style {
                     background: matches!(status, button::Status::Hovered)
                         .then_some(Background::Color(palette.danger.weak.color)),
@@ -3004,7 +3016,7 @@ pub(super) fn recent_files_panel<'a>(
     // so an over-max entry snaps to the max.
     const STEP: usize = 5;
     let step_style = |theme: &Theme, status: button::Status| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         button::Style {
         background: matches!(status, button::Status::Hovered).then_some(
             Background::Color(palette.background.strong.color)
@@ -3058,7 +3070,7 @@ pub(super) fn recent_files_panel<'a>(
     .height(Fill)
     .padding(20)
     .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         container::Style {
         background: Some(Background::Color(palette.background.weak.color)),
         border: Border {

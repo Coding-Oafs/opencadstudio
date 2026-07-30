@@ -402,7 +402,7 @@ impl CommandLine {
                         .on_press(Message::CommandOptionPick(opt.keyword.clone()))
                         .padding([1, 6])
                         .style(|theme: &Theme, status| {
-                            let palette = theme.extended_palette();
+                            let palette = theme.palette();
                             let pair = if matches!(
                                 status,
                                 button::Status::Hovered | button::Status::Pressed
@@ -431,7 +431,7 @@ impl CommandLine {
             });
         let prompt = container(
             text("Command:").size(11).style(|theme: &Theme| iced::widget::text::Style {
-                color: Some(theme.extended_palette().success.base.color),
+                color: Some(theme.palette().success.base.color),
             }),
         )
         .padding([5, 8]);
@@ -445,7 +445,7 @@ impl CommandLine {
         .on_press(Message::CommandLiteralToggle)
         .padding([2, 6])
         .style(move |theme: &Theme, status| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             let pair = if literal_active {
                 palette.primary.weak
             } else if matches!(
@@ -508,7 +508,7 @@ impl CommandLine {
                         .width(Length::Fill)
                         .padding([2, 8])
                         .style(move |theme: &Theme, status| {
-                            let palette = theme.extended_palette();
+                            let palette = theme.palette();
                             let pair = if is_selected {
                                 palette.primary.weak
                             } else if matches!(
@@ -567,9 +567,9 @@ impl CommandLine {
                 .on_action(Message::CommandHistoryEdit)
                 .size(11)
                 .padding([2, 8])
-                .max_height(180.0)
+                .height(Length::Fit.max(180.0))
                 .style(|theme: &Theme, _status| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     text_editor::Style {
                         background: Background::Color(palette.background.base.color),
                         border: Border::default(),
@@ -625,7 +625,7 @@ impl CommandLine {
             container(history_rows)
                 .style(|theme: &Theme| container::Style {
                     background: Some(Background::Color(
-                        theme.extended_palette().background.base.color,
+                        theme.palette().background.base.color,
                     )),
                     ..Default::default()
                 })
@@ -646,7 +646,7 @@ impl CommandLine {
             history_divider,
             container(input_row)
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.weakest.color)),
                     ..Default::default()
@@ -658,7 +658,7 @@ impl CommandLine {
                 .center_y(Length::Fixed(30.0)),
         ])
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.base.color)),
             border: Border {
@@ -669,8 +669,7 @@ impl CommandLine {
             ..Default::default()
             }
         })
-        .width(Length::Fill)
-        .max_width(720.0)
+        .width(Length::Fill.max(720.0))
         .into()
     }
 }
@@ -733,7 +732,7 @@ pub fn ranked_matches(
 /// Flat button style for the history dropdown's Copy / Clear strip: a subtle
 /// filled pill that brightens on hover.
 fn header_btn_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let pair = if matches!(status, button::Status::Hovered | button::Status::Pressed) {
         palette.background.weak
     } else {
@@ -752,7 +751,7 @@ fn header_btn_style(theme: &Theme, status: button::Status) -> button::Style {
 }
 
 fn history_color(theme: &Theme, kind: &EntryKind) -> Color {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     match kind {
         EntryKind::Command => palette.background.base.text,
         EntryKind::Output => palette.background.base.text.scale_alpha(0.72),

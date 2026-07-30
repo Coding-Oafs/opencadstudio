@@ -1,23 +1,28 @@
 use crate::app::Message;
 use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Theme};
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
 /// Renders one of the two "Installed" / "Latest" cards. The `highlight`
 /// flag tints the border + label with the accent colour, making the new
 /// version the visual anchor of the row.
-fn version_card<'a>(label: &'static str, value: String, highlight: bool) -> Element<'a, Message> {
+fn version_card<'a>(
+    label: &'static str,
+    value: String,
+    highlight: bool,
+    width: iced::Length,
+) -> Element<'a, Message> {
     container(
         column![
             text(label)
@@ -32,7 +37,7 @@ fn version_card<'a>(label: &'static str, value: String, highlight: bool) -> Elem
         .spacing(4)
         .align_x(iced::Center),
     )
-    .width(Fill)
+    .width(width)
     .padding(iced::Padding {
         top: 14.0,
         right: 12.0,
@@ -41,7 +46,7 @@ fn version_card<'a>(label: &'static str, value: String, highlight: bool) -> Elem
     })
     .align_x(iced::Center)
     .style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = if highlight {
             palette.primary.weak
         } else {
@@ -120,7 +125,11 @@ fn strip_inline_md(s: &str) -> String {
     out
 }
 
-pub fn view_window<'a>(latest: &'a str, body: &'a str) -> Element<'a, Message> {
+pub fn view_window<'a>(
+    latest: &'a str,
+    body: &'a str,
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'a, Message> {
     let header = container(
         column![
             text("New Release Available").size(20).style(primary_style),
@@ -131,7 +140,7 @@ pub fn view_window<'a>(latest: &'a str, body: &'a str) -> Element<'a, Message> {
         .spacing(4)
         .align_x(iced::Center),
     )
-    .width(Fill)
+    .width(sizing.width)
     .padding(iced::Padding {
         top: 14.0,
         right: 0.0,
@@ -147,20 +156,21 @@ pub fn view_window<'a>(latest: &'a str, body: &'a str) -> Element<'a, Message> {
         "Installed",
         format!("v{}", env!("CARGO_PKG_VERSION")),
         false,
+        sizing.width,
     );
-    let latest_card = version_card("Latest", format!("v{}", latest), true);
+    let latest_card = version_card("Latest", format!("v{}", latest), true, sizing.width);
     let arrow = container(crate::ui::icons::themed_secondary(
         crate::ui::icons::ARROW_LONG_RIGHT,
         20.0,
     ))
     .width(iced::Length::Fixed(32.0))
-        .height(Fill)
+        .height(sizing.height)
         .align_x(iced::Center)
         .align_y(iced::Center);
     let info_block = row![installed, arrow, latest_card]
         .spacing(0)
         .align_y(iced::Center)
-        .width(Fill);
+        .width(sizing.width);
 
     let later_btn = button(text("Later").size(11))
         .on_press(Message::UpdateNoticeClose)
@@ -172,7 +182,7 @@ pub fn view_window<'a>(latest: &'a str, body: &'a str) -> Element<'a, Message> {
         .style(button::primary)
         .padding([6, 16]);
 
-    let footer = row![Space::new().width(Fill), later_btn, open_btn]
+    let footer = row![Space::new().width(sizing.width), later_btn, open_btn]
         .spacing(8)
         .align_y(iced::Center)
         .padding(iced::Padding {
@@ -203,27 +213,26 @@ pub fn view_window<'a>(latest: &'a str, body: &'a str) -> Element<'a, Message> {
         for line in body.lines() {
             col = col.push(render_notes_line(line));
         }
-        scrollable(container(col).padding([10, 14])).height(Fill).into()
+        scrollable(container(col).padding([10, 14]))
+            .height(sizing.height)
+            .into()
     };
 
     let notes_block = container(notes_body)
-        .width(Fill)
-        .height(Fill)
+        .width(sizing.width)
+        .height(sizing.height)
         .style(container::bordered_box);
 
-    // Wrap notes_block in a Fill-height container outside the column so it
-    // greedily claims every pixel left over after the fixed-height rows
-    // (header, version cards, heading, footer). Without this iced lets the
-    // notes panel shrink to its content height, leaving a gap above the
-    // footer.
+    // Keep the notes panel content-sized. The outer modal supplies the maximum
+    // height, so long release notes scroll instead of stretching the dialog.
     let notes_fill = container(notes_block)
-        .width(Fill)
-        .height(Fill);
+        .width(sizing.width)
+        .height(sizing.height);
 
     container(
         column![header, info_block, notes_heading, notes_fill, footer]
             .spacing(0)
-            .height(Fill)
+            .height(sizing.height)
             .padding(iced::Padding {
                 top: 0.0,
                 right: 20.0,
@@ -233,11 +242,11 @@ pub fn view_window<'a>(latest: &'a str, body: &'a str) -> Element<'a, Message> {
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.base.color,
+            theme.palette().background.base.color,
         )),
         ..Default::default()
     })
-    .width(Fill)
-    .height(Fill)
+    .width(sizing.width)
+    .height(sizing.height)
     .into()
 }

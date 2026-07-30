@@ -2,9 +2,9 @@
 
 use crate::app::{ColorPickTarget, DsField, Message};
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
+    button, checkbox, column, container, row, scrollable, text, text_input, Space,
 };
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Theme};
 
 /// All DimStyle field values needed by the view.
 pub struct DimStyleValues<'a> {
@@ -95,7 +95,7 @@ pub struct DimStyleValues<'a> {
 
 fn tab_btn_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match (active, st) {
             (true, _) => palette.primary.strong,
             (false, button::Status::Hovered | button::Status::Pressed) => {
@@ -117,7 +117,7 @@ fn tab_btn_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Sty
 }
 
 fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let border = match status {
         text_input::Status::Focused { .. } => palette.primary.base.color,
         _ => palette.background.neutral.color,
@@ -138,23 +138,23 @@ fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
-fn hdivider<'a>() -> Element<'a, Message> {
-    container(Space::new().width(Fill).height(1))
-        .width(Fill)
+fn hdivider<'a>(width: iced::Length) -> Element<'a, Message> {
+    container(Space::new().width(width).height(1))
+        .width(width)
         .height(1)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color
+                theme.palette().background.neutral.color
             )),
             ..Default::default()
         })
@@ -169,6 +169,7 @@ pub fn view_window<'a>(
     vals: DimStyleValues<'a>,
     rename_active: Option<&'a str>,
     rename_buf: &'a str,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     // ── Tab bar ───────────────────────────────────────────────────────────
     let tabs = row![
@@ -234,7 +235,7 @@ pub fn view_window<'a>(
             .unwrap_or_else(|| val.to_string());
         row![
             lbl(label),
-            pick_list(labels, Some(cur), move |chosen| {
+            crate::ui::pick_list(labels, Some(cur), move |chosen| {
                 let code = opts
                     .iter()
                     .find(|(_, l)| *l == chosen.as_str())
@@ -288,7 +289,7 @@ pub fn view_window<'a>(
             Message::DsColorMore(fld.clone()),
             Message::OpenColorWindow(ColorPickTarget::DimStyle(fld.clone())),
         );
-        row![lbl(label), selector]
+        row![lbl(label), container(selector).width(150)]
             .spacing(8)
             .align_y(iced::Center)
             .into()
@@ -303,7 +304,7 @@ pub fn view_window<'a>(
           -> Element<'a, Message> {
         row![
             lbl(label),
-            pick_list(options, Some(selected), move |value| {
+            crate::ui::pick_list(options, Some(selected), move |value| {
                 Message::DsSetHandle { field, value }
             })
             .text_size(11)
@@ -753,16 +754,16 @@ pub fn view_window<'a>(
         column![
             text(format!("Editing: {selected}")).size(11).style(muted_style),
             tabs,
-            hdivider(),
-            scrollable(container(tab_content).padding([12, 12]).width(Fill))
-                .width(Fill)
-                .height(Fill),
+            hdivider(sizing.width),
+            scrollable(container(tab_content).padding([12, 12]).width(sizing.width))
+                .width(sizing.width)
+                .height(sizing.height),
         ]
         .spacing(6)
-        .height(Fill),
+        .height(sizing.height),
     )
-    .height(Fill)
-    .width(Fill)
+    .height(sizing.height)
+    .width(sizing.width)
     .padding(iced::Padding {
         top: 12.0,
         right: 0.0,
@@ -771,6 +772,7 @@ pub fn view_window<'a>(
     });
 
     crate::ui::style::style_manager::view(crate::ui::style::style_manager::Scaffold {
+        sizing,
         kind: crate::app::StyleKind::Dim,
         styles: &styles,
         selected,

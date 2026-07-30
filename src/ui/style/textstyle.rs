@@ -5,7 +5,7 @@ use crate::app::StyleKind;
 use iced::widget::{
     button, canvas, checkbox, column, container, row, scrollable, text, text_input, Space,
 };
-use iced::{mouse, Background, Border, Element, Fill, Length, Point, Rectangle, Theme};
+use iced::{mouse, Background, Border, Element, Length, Point, Rectangle, Theme};
 
 /// View-model for the Text Style editor window.
 pub struct TextStyleView<'a> {
@@ -36,7 +36,7 @@ const BUILTIN_FONTS: &[&str] = &[
 
 fn list_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match (active, st) {
             (true, _) => Some(palette.primary.strong),
             (false, button::Status::Hovered | button::Status::Pressed) => {
@@ -53,7 +53,7 @@ fn list_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
 }
 
 fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let border = match status {
         text_input::Status::Focused { .. } => palette.primary.base.color,
         _ => palette.background.neutral.color,
@@ -74,23 +74,23 @@ fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
-fn vsep<'a>() -> Element<'a, Message> {
-    container(Space::new().width(1).height(Fill))
+fn vsep<'a>(height: Length) -> Element<'a, Message> {
+    container(Space::new().width(1).height(height))
         .width(1)
-        .height(Fill)
+        .height(height)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color
+                theme.palette().background.neutral.color
             )),
             ..Default::default()
         })
@@ -162,7 +162,7 @@ impl canvas::Program<Message> for TextPreviewCanvas {
         };
         let stroke = canvas::Stroke {
             width: 1.4,
-            style: canvas::Style::Solid(theme.extended_palette().background.base.text),
+            style: canvas::Style::Solid(theme.palette().background.base.text),
             ..Default::default()
         };
         for s in &strokes {
@@ -181,7 +181,10 @@ impl canvas::Program<Message> for TextPreviewCanvas {
     }
 }
 
-pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
+pub fn view_window<'a>(
+    v: TextStyleView<'a>,
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'a, Message> {
     let TextStyleView {
         styles,
         selected,
@@ -207,7 +210,7 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                 .on_press(Message::TextStyleFontPick(f.to_string()))
                 .style(list_item(is_sel))
                 .padding([3, 8])
-                .width(Fill)
+                .width(sizing.width)
                 .into()
         })
         .collect();
@@ -215,9 +218,9 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
     let font_panel = container(
         column![
             text("Font File").size(10).style(muted_style),
-            container(scrollable(column(font_items).spacing(1)).height(Fill))
+            container(scrollable(column(font_items).spacing(1)).height(sizing.height))
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.weak.color)),
                     border: Border {
@@ -228,8 +231,8 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                     ..Default::default()
                     }
                 })
-                .width(Fill)
-                .height(Fill)
+                .width(sizing.width)
+                .height(sizing.height)
                 .padding(2),
             text_input("font file…", font_buf)
                 .on_input(|v| Message::TextStyleEdit {
@@ -238,13 +241,13 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                 })
                 .style(field_style)
                 .size(11)
-                .width(Fill),
+                .width(sizing.width),
         ]
         .spacing(6)
-        .height(Fill),
+        .height(sizing.height),
     )
     .width(190)
-    .height(Fill)
+    .height(sizing.height)
     .padding([12, 8]);
 
     // Labeled numeric/text field row → TextStyleEdit { field, value }.
@@ -286,7 +289,7 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
         oblique: oblique_buf.trim().parse::<f32>().unwrap_or(0.0).to_radians(),
         rotation: if upside_down { std::f32::consts::PI } else { 0.0 },
     })
-    .width(Fill)
+    .width(sizing.width)
     .height(Length::Fixed(56.0));
 
     // ── Right: Properties ─────────────────────────────────────────────────
@@ -320,7 +323,7 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
             text("Preview").size(10).style(muted_style),
             container(preview)
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.base.color)),
                     border: Border {
@@ -332,13 +335,13 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                     }
                 })
                 .padding(8)
-                .width(Fill),
+                .width(sizing.width),
         ]
         .spacing(10)
-        .height(Fill),
+        .height(sizing.height),
     )
-    .width(Fill)
-    .height(Fill)
+    .width(sizing.width)
+    .height(sizing.height)
     .padding(iced::Padding {
         top: 12.0,
         right: 12.0,
@@ -358,7 +361,7 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                 })
                 .style(list_item(is_sel))
                 .padding([3, 8])
-                .width(Fill)
+                .width(sizing.width)
                 .into()
         })
         .collect();
@@ -366,9 +369,9 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
     let ttf_panel = container(
         column![
             text("TrueType (system)").size(10).style(muted_style),
-            container(scrollable(column(ttf_items).spacing(1)).height(Fill))
+            container(scrollable(column(ttf_items).spacing(1)).height(sizing.height))
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.weak.color)),
                     border: Border {
@@ -379,8 +382,8 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                     ..Default::default()
                     }
                 })
-                .width(Fill)
-                .height(Fill)
+                .width(sizing.width)
+                .height(sizing.height)
                 .padding(2),
             text_input("TrueType font…", ttf_buf)
                 .on_input(|v| Message::TextStyleEdit {
@@ -389,18 +392,26 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
                 })
                 .style(field_style)
                 .size(11)
-                .width(Fill),
+                .width(sizing.width),
         ]
         .spacing(6)
-        .height(Fill),
+        .height(sizing.height),
     )
     .width(190)
-    .height(Fill)
+    .height(sizing.height)
     .padding([12, 8]);
 
-    let editor = row![font_panel, vsep(), ttf_panel, vsep(), props_panel].height(Fill);
+    let editor = row![
+        font_panel,
+        vsep(sizing.height),
+        ttf_panel,
+        vsep(sizing.height),
+        props_panel
+    ]
+    .height(sizing.height);
 
     crate::ui::style::style_manager::view(crate::ui::style::style_manager::Scaffold {
+        sizing,
         kind: StyleKind::Text,
         styles: &styles,
         selected,

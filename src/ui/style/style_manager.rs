@@ -10,7 +10,7 @@
 use crate::app::{Message, StyleKind};
 use iced::widget::button::{Status, Style};
 use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Theme};
 
 /// Everything the shared frame needs. The per-manager `editor` element is the
 /// only bespoke part.
@@ -24,6 +24,7 @@ use iced::{Background, Border, Element, Fill, Theme};
 /// list data (`styles`, `selected`, …) that the frame only reads while building
 /// rows, so callers may pass a locally-built `Vec`.
 pub struct Scaffold<'a, 'b> {
+    pub sizing: crate::ui::modal::ModalSizing,
     pub kind: StyleKind,
     pub styles: &'b [String],
     pub selected: &'b str,
@@ -46,12 +47,14 @@ pub struct Scaffold<'a, 'b> {
 }
 
 pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
+    let width = s.sizing.width;
+    let height = s.sizing.height;
     // ── Toolbar: New / Copy / Delete | … | Set Current / Apply ────────────
     let bar = row![
         tb_button("New", s.on_new, false),
         tb_button("Copy", s.on_copy, false),
         tb_button("Delete", s.on_delete, false),
-        Space::new().width(Fill),
+        Space::new().width(width),
         tb_button("Set Current", s.on_set_current, false),
         tb_button("Apply", s.on_apply, true),
     ]
@@ -60,11 +63,11 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
     let toolbar = container(bar)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.weak.color
+                theme.palette().background.weak.color
             )),
             ..Default::default()
         })
-        .width(Fill)
+        .width(width)
         .padding([5, 8]);
 
     // ── Left: style list (single click selects, double click renames) ─────
@@ -89,9 +92,9 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
     let list_panel = container(
         column![
             text("Styles").size(10).style(muted_text_style),
-            container(scrollable(column(rows).spacing(1)).height(Fill))
+            container(scrollable(column(rows).spacing(1)).height(height))
                 .style(|theme: &Theme| {
-                    let palette = theme.extended_palette();
+                    let palette = theme.palette();
                     container::Style {
                     background: Some(Background::Color(palette.background.weak.color)),
                     border: Border {
@@ -102,15 +105,15 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
                     ..Default::default()
                     }
                 })
-                .width(Fill)
-                .height(Fill)
+                .width(width)
+                .height(height)
                 .padding(2),
         ]
         .spacing(4)
-        .height(Fill),
+        .height(height),
     )
     .width(170)
-    .height(Fill)
+    .height(height)
     .padding(iced::Padding {
         top: 12.0,
         right: 8.0,
@@ -118,17 +121,17 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
         left: 12.0,
     });
 
-    let body = row![list_panel, vsep(), s.editor].height(Fill);
+    let body = row![list_panel, vsep(height), s.editor].height(height);
 
-    container(column![toolbar, hdivider(), body])
+    container(column![toolbar, hdivider(width), body])
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.base.color
+                theme.palette().background.base.color
             )),
             ..Default::default()
         })
-        .width(Fill)
-        .height(Fill)
+        .width(width)
+        .height(height)
         .into()
 }
 
@@ -145,7 +148,7 @@ pub(crate) fn tb_button<'a>(label: &'a str, msg: Message, accent: bool) -> Eleme
 
 fn btn_s(accent: bool) -> impl Fn(&Theme, Status) -> Style {
     move |theme: &Theme, st| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match (accent, st) {
             (true, Status::Hovered | Status::Pressed) => palette.primary.strong,
             (false, Status::Hovered | Status::Pressed) => palette.background.strong,
@@ -167,30 +170,30 @@ fn btn_s(accent: bool) -> impl Fn(&Theme, Status) -> Style {
 
 pub(crate) fn muted_text_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
-pub(crate) fn hdivider<'a>() -> Element<'a, Message> {
-    container(Space::new().width(Fill).height(1))
-        .width(Fill)
+pub(crate) fn hdivider<'a>(width: iced::Length) -> Element<'a, Message> {
+    container(Space::new().width(width).height(1))
+        .width(width)
         .height(1)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color
+                theme.palette().background.neutral.color
             )),
             ..Default::default()
         })
         .into()
 }
 
-pub(crate) fn vsep<'a>() -> Element<'a, Message> {
-    container(Space::new().width(1).height(Fill))
+pub(crate) fn vsep<'a>(height: iced::Length) -> Element<'a, Message> {
+    container(Space::new().width(1).height(height))
         .width(1)
-        .height(Fill)
+        .height(height)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.neutral.color
+                theme.palette().background.neutral.color
             )),
             ..Default::default()
         })

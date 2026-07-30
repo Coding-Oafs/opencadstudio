@@ -49,7 +49,7 @@ pub const LAYER_TABLE_SCROLL_ID: &str = "layer-manager-table-scroll";
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
@@ -57,7 +57,7 @@ fn table_input_style(
     theme: &Theme,
     status: iced::widget::text_input::Status,
 ) -> iced::widget::text_input::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let border = match status {
         iced::widget::text_input::Status::Focused { .. } => palette.primary.base.color,
         _ => palette.background.neutral.color,
@@ -308,11 +308,19 @@ impl LayerPanel {
     }
 
     /// Render the layer panel as the full content of its own OS window.
-    pub fn view_window(&self, name_col_w: f32) -> Element<'_, Message> {
-        self.view_content(name_col_w)
+    pub fn view_window(
+        &self,
+        name_col_w: f32,
+        sizing: crate::ui::modal::ModalSizing,
+    ) -> Element<'_, Message> {
+        self.view_content(name_col_w, sizing)
     }
 
-    fn view_content(&self, name_col_w: f32) -> Element<'_, Message> {
+    fn view_content(
+        &self,
+        name_col_w: f32,
+        sizing: crate::ui::modal::ModalSizing,
+    ) -> Element<'_, Message> {
         let has_sel = self.selected.is_some();
         let sel_is_zero = self
             .selected
@@ -335,7 +343,7 @@ impl LayerPanel {
                     Message::LayerSetCurrent,
                     has_sel,
                 ),
-                iced::widget::Space::new().width(Fill),
+                iced::widget::Space::new().width(sizing.width),
                 // Search box: filters rows by name as the user types (#343).
                 text_input("Search…", &self.filter)
                     .on_input(Message::LayerManagerFilterChanged)
@@ -349,11 +357,11 @@ impl LayerPanel {
         )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.weak.color
+                theme.palette().background.weak.color
             )),
             ..Default::default()
         })
-        .width(Fill)
+        .width(sizing.width)
         .padding([4, 8]);
 
         // ── Column header ─────────────────────────────────────────────────
@@ -367,7 +375,7 @@ impl LayerPanel {
                 container(iced::widget::Space::new().width(2).height(14)).style(
                     |theme: &Theme| container::Style {
                         background: Some(Background::Color(
-                            theme.extended_palette().background.neutral.color
+                            theme.palette().background.neutral.color
                         )),
                         ..Default::default()
                     },
@@ -390,7 +398,7 @@ impl LayerPanel {
             ),
         ]
         .spacing(4)
-        .width(Fill)
+        .width(sizing.width)
         .align_y(iced::Center);
 
         for vp in &self.vp_cols {
@@ -404,7 +412,7 @@ impl LayerPanel {
 
         let col_header = container(header_row)
             .style(|theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 container::Style {
                 background: Some(Background::Color(palette.background.weak.color)),
                 border: Border {
@@ -416,7 +424,7 @@ impl LayerPanel {
                 }
             })
             .padding([4, 8])
-            .width(Fill);
+            .width(sizing.width);
 
         // ── Layer rows ────────────────────────────────────────────────────
         let mut rows_col = column![].spacing(0);
@@ -457,18 +465,18 @@ impl LayerPanel {
 
         let table = scrollable(rows_col)
             .id(iced::advanced::widget::Id::new(LAYER_TABLE_SCROLL_ID))
-            .height(Fill);
+            .height(sizing.height.min(240.0));
 
         // ── Full-window frame ─────────────────────────────────────────────
         container(column![toolbar, col_header, table].spacing(0))
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
-                    theme.extended_palette().background.base.color
+                    theme.palette().background.base.color
                 )),
                 ..Default::default()
             })
-            .width(Fill)
-            .height(Fill)
+            .width(sizing.width)
+            .height(sizing.height)
             .into()
     }
 }
@@ -481,7 +489,7 @@ fn layer_cell_button_style(
     is_selected: bool,
     index: usize,
 ) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let highlighted = matches!(status, button::Status::Hovered);
     let pair = if highlighted {
         palette.background.strong
@@ -500,7 +508,7 @@ fn layer_cell_button_style(
 }
 
 fn layer_header_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
+    let palette = theme.palette();
     let highlighted = matches!(
         status,
         button::Status::Hovered | button::Status::Pressed
@@ -568,7 +576,7 @@ fn toolbar_btn<'a>(icon: &'static [u8], label: &'a str, msg: Message) -> Element
     )
     .on_press(msg)
         .style(|theme: &Theme, status| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             let pair = match status {
                 button::Status::Hovered | button::Status::Pressed => {
                     palette.background.strong
@@ -608,7 +616,7 @@ fn toolbar_btn_cond<'a>(
             } else {
                 text(label).size(11).style(|theme: &Theme| iced::widget::text::Style {
                     color: Some(
-                        theme.extended_palette().background.base.text.scale_alpha(0.42)
+                        theme.palette().background.base.text.scale_alpha(0.42)
                     ),
                 })
             },
@@ -617,7 +625,7 @@ fn toolbar_btn_cond<'a>(
         .align_y(iced::Center),
     )
     .style(move |theme: &Theme, status| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match status {
             button::Status::Hovered if enabled => palette.background.strong,
             _ => palette.background.weak,
@@ -657,7 +665,7 @@ fn name_tip<'a>(name: &'a str) -> Element<'a, Message> {
             right: 7.0,
         })
         .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             container::Style {
             background: Some(Background::Color(palette.background.strong.color)),
             border: Border {
@@ -891,7 +899,7 @@ fn layer_row<'a>(
     mouse_area(
         container(row_content)
             .style(move |theme: &Theme| {
-                let palette = theme.extended_palette();
+                let palette = theme.palette();
                 let pair = if is_selected {
                     palette.primary.weak
                 } else if index % 2 == 0 {

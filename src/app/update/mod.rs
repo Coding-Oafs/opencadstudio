@@ -1149,7 +1149,8 @@ impl OpenCADStudio {
                     });
                     self.command_line
                         .push_output(&format!("Copied path: {}", full_path.display()));
-                    return iced::clipboard::write(full_path.to_string_lossy().into_owned());
+                    return iced::clipboard::write(full_path.to_string_lossy().into_owned())
+                        .discard();
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -1319,7 +1320,7 @@ impl OpenCADStudio {
                 if text.is_empty() {
                     Task::none()
                 } else {
-                    iced::clipboard::write(text)
+                    iced::clipboard::write(text).discard()
                 }
             }
 
@@ -1334,7 +1335,7 @@ impl OpenCADStudio {
                 if text.is_empty() {
                     Task::none()
                 } else {
-                    iced::clipboard::write(text)
+                    iced::clipboard::write(text).discard()
                 }
             }
 
@@ -4143,7 +4144,7 @@ impl OpenCADStudio {
             Message::SetTheme(theme) => {
                 self.ui_theme.name = theme.to_string();
                 self.ui_theme.palette =
-                    crate::app::config::UiThemePalette::from_iced(theme.palette());
+                    crate::app::config::UiThemePalette::from_iced(theme.seed());
                 self.theme_color_inputs = self.ui_theme.palette.hex_values();
                 self.active_theme = theme;
                 self.persist_settings_if_changed();
@@ -4225,7 +4226,7 @@ impl OpenCADStudio {
                     crate::app::config::builtin_theme(&self.ui_theme.name)
                 {
                     self.ui_theme.palette =
-                        crate::app::config::UiThemePalette::from_iced(theme.palette());
+                        crate::app::config::UiThemePalette::from_iced(theme.seed());
                     self.theme_color_inputs = self.ui_theme.palette.hex_values();
                     self.active_theme = theme;
                 } else {
@@ -4441,7 +4442,7 @@ impl OpenCADStudio {
                     std::env::consts::OS,
                     std::env::consts::ARCH,
                 );
-                iced::clipboard::write(info)
+                iced::clipboard::write(info).discard()
             }
 
             // ── Plugin Manager window ─────────────────────────────────────
@@ -4652,7 +4653,8 @@ impl OpenCADStudio {
                         std::env::consts::ARCH,
                         crate::plugin::marketplace::REGISTRY_URL,
                         error,
-                    ));
+                    ))
+                    .discard();
                 }
                 Task::none()
             }

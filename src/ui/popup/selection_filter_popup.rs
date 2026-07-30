@@ -39,7 +39,7 @@ pub fn menu_entries(
     let divider = container(iced::widget::Space::new().height(1))
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
-                theme.extended_palette().background.weak.color,
+                theme.palette().background.weak.color,
             )),
             ..Default::default()
         })
@@ -83,7 +83,7 @@ fn empty_row() -> Element<'static, Message> {
         text("No objects").size(11).style(|theme: &Theme| text::Style {
             color: Some(
                 theme
-                    .extended_palette()
+                    .palette()
                     .background
                     .base
                     .text

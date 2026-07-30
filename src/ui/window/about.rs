@@ -7,7 +7,7 @@ fn info_row<'a>(label: &'static str, value: String) -> Element<'a, Message> {
         text(label)
             .size(11)
             .style(|theme: &Theme| iced::widget::text::Style {
-                color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+                color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
             })
             .width(100),
         text(value).size(11),
@@ -28,12 +28,12 @@ pub fn view_window<'a>() -> Element<'a, Message> {
             text("Open CAD Studio")
                 .size(32)
                 .style(|theme: &Theme| iced::widget::text::Style {
-                    color: Some(theme.extended_palette().primary.base.color),
+                    color: Some(theme.palette().primary.base.color),
                 }),
             text("CAD application for Architecture & Engineering")
                 .size(11)
                 .style(|theme: &Theme| iced::widget::text::Style {
-                    color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+                    color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
                 }),
         ]
         .spacing(4)
@@ -84,7 +84,7 @@ pub fn view_window<'a>() -> Element<'a, Message> {
     )
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.base.color,
+            theme.palette().background.base.color,
         )),
         ..Default::default()
     })

@@ -2,13 +2,13 @@
 
 use crate::app::Message;
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_input,
+    button, checkbox, column, container, row, scrollable, text, text_input,
 };
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Theme};
 
 fn btn_s(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
-        let palette = theme.extended_palette();
+        let palette = theme.palette();
         let pair = match (accent, st) {
             (true, button::Status::Hovered | button::Status::Pressed) => palette.primary.strong,
             (false, button::Status::Hovered | button::Status::Pressed) => {
@@ -32,13 +32,13 @@ fn btn_s(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.68)),
+        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
 }
 
 fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
-        color: Some(theme.extended_palette().primary.base.color),
+        color: Some(theme.palette().primary.base.color),
     }
 }
 
@@ -142,7 +142,7 @@ fn enum_row<'a>(
 ) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(150),
-        pick_list(options, Some(selected), move |value| {
+        crate::ui::pick_list(options, Some(selected), move |value| {
             Message::MLeaderStyleSetEnum { field, value }
         })
         .text_size(11)
@@ -157,7 +157,7 @@ fn lineweight_row<'a>(selected: acadrust::types::LineWeight) -> Element<'a, Mess
     let selected = crate::ui::properties::LwItem(selected);
     row![
         text("Line weight:").size(11).style(muted_style).width(150),
-        pick_list(
+        crate::ui::pick_list(
             crate::ui::properties::lw_options(),
             Some(selected),
             |item| Message::MLeaderStyleLineWeightChanged(item.0)
@@ -199,7 +199,7 @@ fn handle_row<'a>(
 ) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(150),
-        pick_list(options, Some(selected), move |value| {
+        crate::ui::pick_list(options, Some(selected), move |value| {
             Message::MLeaderStyleSetHandle { field, value }
         })
         .text_size(11)
@@ -219,7 +219,10 @@ fn chk<'a>(label: &'static str, val: bool, field: &'static str) -> Element<'a, M
         .into()
 }
 
-pub fn view_window<'a>(v: MLeaderStyleView<'a>) -> Element<'a, Message> {
+pub fn view_window<'a>(
+    v: MLeaderStyleView<'a>,
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'a, Message> {
     // ── Right: Details panel ──────────────────────────────────────────────
     let details: Element<'_, Message> = if let Some(s) = v.style {
         scrollable(
@@ -396,8 +399,8 @@ pub fn view_window<'a>(v: MLeaderStyleView<'a>) -> Element<'a, Message> {
             .spacing(6)
             .padding([12, 12]),
         )
-        .width(Fill)
-        .height(Fill)
+        .width(sizing.width)
+        .height(sizing.height)
         .into()
     } else {
         container(text("Select a style to view details.").size(11).style(muted_style))
@@ -405,9 +408,12 @@ pub fn view_window<'a>(v: MLeaderStyleView<'a>) -> Element<'a, Message> {
             .into()
     };
 
-    let right_panel = container(details).width(Fill).height(Fill);
+    let right_panel = container(details)
+        .width(sizing.width)
+        .height(sizing.height);
 
     crate::ui::style::style_manager::view(crate::ui::style::style_manager::Scaffold {
+        sizing,
         kind: crate::app::StyleKind::MLeader,
         styles: &v.styles,
         selected: v.selected,

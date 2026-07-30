@@ -68,8 +68,8 @@ impl HatchGpu {
         };
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hatch.pipeline_layout"),
-            bind_group_layouts: &[frame_bind_group_layout, &bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[frame_bind_group_layout, &bind_group_layout].map(Some),
+            immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(if uses_storage {
@@ -108,8 +108,8 @@ impl HatchGpu {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth24PlusStencil8,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: content_stencil.clone(),
                 bias: wgpu::DepthBiasState {
                     constant: 1,
@@ -132,7 +132,7 @@ impl HatchGpu {
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let backend = match backend_kind {

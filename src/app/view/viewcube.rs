@@ -1,7 +1,7 @@
 use super::super::Message;
 use crate::scene::{VIEWCUBE_PX, VIEWCUBE_REGION_PX};
 use iced::widget::{
-    button, container, mouse_area, pick_list, stack, Space,
+    button, container, mouse_area, stack, Space,
 };
 use iced::{Background, Border, Element, Theme};
 
@@ -36,13 +36,13 @@ fn vc_btn<'a>(content: Element<'a, Message>, size: f32, msg: Message) -> Element
             iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed
         )
         .then_some(Background::Color(
-            theme.extended_palette().primary.weak.color
+            theme.palette().primary.weak.color
         )),
         border: Border {
             radius: 3.0.into(),
             ..Default::default()
         },
-        text_color: theme.extended_palette().background.base.text,
+        text_color: theme.palette().background.base.text,
         ..Default::default()
     })
     .into()
@@ -155,14 +155,14 @@ pub(super) fn viewcube_ucs_picker<'a>(current: String, names: Vec<String>) -> El
     } else {
         current
     };
-    pick_list(options, Some(selected), Message::SetViewcubeUcs)
+    crate::ui::pick_list(options, Some(selected), Message::SetViewcubeUcs)
         .text_size(11)
         .padding([2, 6])
         // Fixed width so the caller can centre it under the cube centre with a
         // simple half-width offset (content-sized width would drift off-centre).
         .width(iced::Length::Fixed(UCS_PICKER_W))
         .style(move |theme: &Theme, _| {
-            let palette = theme.extended_palette();
+            let palette = theme.palette();
             iced::widget::pick_list::Style {
             background: Background::Color(palette.background.weak.color),
             border: Border {
