@@ -1752,8 +1752,79 @@ impl OpenCADStudio {
             }
         }
         self.tabs[i].sync_ucs_to_scene();
-        self.tabs[i].dirty = true;
         self.tabs[i].scene.camera_generation += 1;
+    }
+
+    /// Commit the live UCS to its owning space. Model/viewport panes persist
+    /// their normal UCS fields. A BEDIT pane has no persistent UCS of its own:
+    /// its transient origin and axes are baked into the block definition, then
+    /// the editor returns to canonical local coordinates.
+    pub(in crate::app) fn commit_active_ucs_change(&mut self, i: usize, label: &'static str) {
+        if let Some((session_index, block_record)) = self.tabs[i]
+            .active_block_edit
+            .and_then(|index| {
+                self.tabs[i]
+                    .block_edits
+                    .get(index)
+                    .map(|session| (index, session.br_handle))
+            })
+        {
+            let frame = self.tabs[i].ucs_xform();
+            if !frame.is_identity() {
+                self.push_undo_snapshot(i, label);
+                let local_from_old = frame.to_ucs_transform();
+                let changed = self.tabs[i]
+                    .scene
+                    .reframe_block_definition(block_record, &local_from_old);
+                if changed > 0 {
+                    // Carry the editor camera through the same rigid transform
+                    // so changing the block coordinate frame does not make its
+                    // contents jump on screen.
+                    self.tabs[i]
+                        .scene
+                        .camera
+                        .borrow_mut()
+                        .apply_rigid_transform(&local_from_old);
+                    self.tabs[i].scene.camera_generation += 1;
+                    self.tabs[i].dirty = true;
+                }
+            }
+
+            // Blocks do not own a saved UCS. The chosen frame has now become
+            // their identity coordinates.
+            self.tabs[i].active_ucs = None;
+            let editor_camera = self.tabs[i].scene.camera.borrow().clone();
+            if let Some(session) = self.tabs[i].block_edits.get_mut(session_index) {
+                session.editor_ucs = None;
+                session.editor_camera = editor_camera;
+            }
+            self.tabs[i].sync_ucs_to_scene();
+            return;
+        }
+
+        let persisted = if let Some(handle) = self.tabs[i].scene.active_viewport {
+            self.tabs[i].ucs_from_viewport(handle)
+        } else if self.tabs[i].scene.current_layout == "Model" {
+            self.tabs[i].model_ucs_from_header()
+        } else {
+            None
+        };
+        let same_basis = |a: Option<&acadrust::tables::Ucs>,
+                          b: Option<&acadrust::tables::Ucs>| {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    a.origin == b.origin && a.x_axis == b.x_axis && a.y_axis == b.y_axis
+                }
+                _ => false,
+            }
+        };
+        if !same_basis(self.tabs[i].active_ucs.as_ref(), persisted.as_ref()) {
+            self.push_undo_snapshot(i, label);
+            self.tabs[i].persist_active_ucs();
+            self.tabs[i].dirty = true;
+        }
+        self.tabs[i].sync_ucs_to_scene();
     }
 
     // ── Per-pane Model viewport (pane_grid) ───────────────────────────────
@@ -2033,9 +2104,10 @@ impl OpenCADStudio {
         }
 
         // Commit a UCS icon grip drag: persist the new UCS so it
-        // round-trips, and clear the lingering press state.
+        // round-trips, and clear the lingering press state. In BEDIT this
+        // rebases only the block; elsewhere it writes the model/viewport UCS.
         if self.ucs_grip_drag.take().is_some() {
-            self.tabs[i].persist_active_ucs();
+            self.commit_active_ucs_change(i, "UCS");
             self.tabs[i].snap_result = None;
             self.snapper.from_point = None;
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
@@ -3819,9 +3891,11 @@ impl OpenCADStudio {
 
         let cancel_task = self.cancel_active_command_for_space_change();
         let current_camera = self.tabs[i].scene.camera.borrow().clone();
+        let current_ucs = self.tabs[i].active_ucs.clone();
         if let Some(active_index) = self.tabs[i].active_block_edit {
             if let Some(session) = self.tabs[i].block_edits.get_mut(active_index) {
                 session.editor_camera = current_camera;
+                session.editor_ucs = current_ucs;
             }
         } else {
             self.tabs[i].scene.sync_camera_to_document();
@@ -3902,9 +3976,11 @@ impl OpenCADStudio {
         };
         if let Some(active_index) = self.tabs[i].active_block_edit.take() {
             let camera = self.tabs[i].scene.camera.borrow().clone();
+            let editor_ucs = self.tabs[i].active_ucs.clone();
             let (return_layout, return_camera) = {
                 let session = &mut self.tabs[i].block_edits[active_index];
                 session.editor_camera = camera;
+                session.editor_ucs = editor_ucs;
                 (session.return_layout.clone(), session.return_camera.clone())
             };
             let return_layout = if self.tabs[i].scene.layout_names().contains(&return_layout) {

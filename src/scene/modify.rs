@@ -9,6 +9,44 @@ struct TextOrient {
     x_scale: f64,
 }
 
+fn inverse_affine(
+    transform: &acadrust::types::Transform,
+) -> Option<acadrust::types::Transform> {
+    use acadrust::types::{Matrix3, Matrix4, Transform, Vector3};
+    let matrix = &transform.matrix.m;
+    let linear = Matrix3::from_rows(
+        [matrix[0][0], matrix[0][1], matrix[0][2]],
+        [matrix[1][0], matrix[1][1], matrix[1][2]],
+        [matrix[2][0], matrix[2][1], matrix[2][2]],
+    );
+    let inverse = linear.inverse()?;
+    let translation = Vector3::new(matrix[0][3], matrix[1][3], matrix[2][3]);
+    let inverse_translation = inverse * (translation * -1.0);
+    Some(Transform::from_matrix(Matrix4 {
+        m: [
+            [
+                inverse.m[0][0],
+                inverse.m[0][1],
+                inverse.m[0][2],
+                inverse_translation.x,
+            ],
+            [
+                inverse.m[1][0],
+                inverse.m[1][1],
+                inverse.m[1][2],
+                inverse_translation.y,
+            ],
+            [
+                inverse.m[2][0],
+                inverse.m[2][1],
+                inverse.m[2][2],
+                inverse_translation.z,
+            ],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }))
+}
+
 /// Snapshot the orientation of a text / mtext / shape entity, or `None` for any
 /// other kind.
 fn capture_text_orient(e: &EntityType) -> Option<TextOrient> {
@@ -227,6 +265,164 @@ impl Scene {
         let changes: Vec<(Handle, ChangeKind)> =
             handles.iter().map(|&h| (h, ChangeKind::Modified)).collect();
         self.bump_entities(&changes);
+    }
+
+    /// Entities in anonymous dimension blocks that visually belong to
+    /// dimensions inside `block_record`. They must follow a block-coordinate
+    /// reframe and be included in BEDIT's discard snapshot.
+    pub(crate) fn block_definition_dependent_handles(
+        &self,
+        block_record: Handle,
+    ) -> Vec<Handle> {
+        let Some(record) = self
+            .document
+            .block_records
+            .iter()
+            .find(|record| record.handle == block_record)
+        else {
+            return Vec::new();
+        };
+        let root_handles: HashSet<Handle> = record.entity_handles.iter().copied().collect();
+        let mut result = Vec::new();
+        let mut seen = HashSet::default();
+        for handle in &record.entity_handles {
+            let Some(EntityType::Dimension(dimension)) = self.document.get_entity(*handle) else {
+                continue;
+            };
+            let name = dimension.base().block_name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let Some(dependent) = self
+                .document
+                .block_records
+                .iter()
+                .find(|candidate| candidate.name.eq_ignore_ascii_case(name))
+            else {
+                continue;
+            };
+            for dependent_handle in &dependent.entity_handles {
+                if !root_handles.contains(dependent_handle) && seen.insert(*dependent_handle) {
+                    result.push(*dependent_handle);
+                }
+            }
+        }
+        result
+    }
+
+    /// Bake a transient BEDIT UCS into one block definition.
+    ///
+    /// `local_from_old` maps the currently stored block coordinates into the
+    /// newly selected UCS frame. No UCS record is attached to the block: the
+    /// content is transformed and remains canonical around identity/zero.
+    pub fn reframe_block_definition(
+        &mut self,
+        block_record: Handle,
+        local_from_old: &acadrust::types::Transform,
+    ) -> usize {
+        let Some(record) = self
+            .document
+            .block_records
+            .iter()
+            .find(|record| record.handle == block_record)
+        else {
+            return 0;
+        };
+        let block_name = record.name.clone();
+        let root_handles: HashSet<Handle> = record.entity_handles.iter().copied().collect();
+        let dependent_handles = self.block_definition_dependent_handles(block_record);
+        let mut handles = record.entity_handles.clone();
+        handles.extend(dependent_handles.iter().copied());
+        let owned: HashSet<Handle> = handles.iter().copied().collect();
+        let transform = EntityTransform::Affine(*local_from_old);
+        let matrix = &local_from_old.matrix.m;
+        let dependent_transform =
+            EntityTransform::Affine(acadrust::types::Transform::from_matrix(
+                acadrust::types::Matrix4 {
+                    m: [
+                        [matrix[0][0], matrix[0][1], matrix[0][2], 0.0],
+                        [matrix[1][0], matrix[1][1], matrix[1][2], 0.0],
+                        [matrix[2][0], matrix[2][1], matrix[2][2], 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+            ));
+        let mut changed = Vec::new();
+
+        for handle in handles {
+            let is_structural = self.document.get_entity(handle).is_some_and(|entity| {
+                matches!(entity, EntityType::Block(_) | EntityType::BlockEnd(_))
+            });
+            if is_structural {
+                continue;
+            }
+            if self.is_recording_undo() {
+                let before = self.document.get_entity_arc(handle);
+                self.record_undo_before(handle, before);
+            }
+            if let Some(entity) = self.document.get_entity_mut(handle) {
+                // A nested dimension's anonymous `*D` picture is placed by
+                // adding the dimension insertion point. That point already
+                // receives the affine translation with the root dimension, so
+                // its picture receives only the new basis here; applying the
+                // translation twice would shift dimensions on origin changes.
+                let entity_transform = if root_handles.contains(&handle) {
+                    &transform
+                } else {
+                    &dependent_transform
+                };
+                view::dispatch::apply_transform(entity, entity_transform);
+                changed.push(handle);
+            }
+        }
+
+        // ATTRIBs live inline on each INSERT in that reference's owner space.
+        // Conjugate the block-local reframe through the INSERT transform:
+        // owner' = M · local_from_old · M⁻¹ · owner.
+        let references: Vec<(Handle, acadrust::types::Transform)> = self
+            .document
+            .entities()
+            .filter_map(|entity| match entity {
+                EntityType::Insert(reference)
+                    if reference.block_name.eq_ignore_ascii_case(&block_name)
+                        && !reference.attributes.is_empty()
+                        && !owned.contains(&reference.common.handle) =>
+                {
+                    let insertion = reference.get_transform();
+                    let inverse = inverse_affine(&insertion)?;
+                    Some((
+                        reference.common.handle,
+                        acadrust::types::Transform::from_matrix(
+                            insertion.matrix * local_from_old.matrix * inverse.matrix,
+                        ),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        for (handle, attribute_transform) in references {
+            if self.is_recording_undo() {
+                let before = self.document.get_entity_arc(handle);
+                self.record_undo_before(handle, before);
+            }
+            if let Some(EntityType::Insert(reference)) = self.document.get_entity_mut(handle) {
+                for attribute in &mut reference.attributes {
+                    acadrust::Entity::apply_transform(attribute, &attribute_transform);
+                }
+                changed.push(handle);
+            }
+        }
+
+        for handle in changed.iter().copied() {
+            let _ = crate::scene::annotative::sync_active_context_from_entity(
+                &mut self.document,
+                handle,
+            );
+        }
+        if !changed.is_empty() {
+            self.rebuild_derived_caches();
+        }
+        changed.len()
     }
 
     /// Give a freshly-cloned entity brand-new handles for every *inline*

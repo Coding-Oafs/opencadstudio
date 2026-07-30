@@ -33,6 +33,9 @@ pub enum EntityTransform {
     Scale { center: DVec3, factor: f64 },
     /// Mirror across the line through `p1`→`p2` in the world XY plane.
     Mirror { p1: DVec3, p2: DVec3 },
+    /// General affine transform. Used when a complete UCS basis must be baked
+    /// into block-local geometry instead of stored as drawing UCS state.
+    Affine(acadrust::types::Transform),
 }
 
 // ── Tangent object ─────────────────────────────────────────────────────────

@@ -2466,6 +2466,51 @@ impl Scene {
         self.push_geometry_delta(epoch, changes.to_vec(), false);
     }
 
+    /// True when any changed handle belongs to an ordinary block definition
+    /// rather than model/paper space. History replay needs this distinction:
+    /// restoring a block-local entity must invalidate the assembled definition
+    /// and every INSERT that consumes it, not only that entity's direct wire.
+    ///
+    /// Removed entities may no longer have a live slot, so fall back to the
+    /// BlockRecord membership list, which deliberately retains their handles
+    /// for symmetric undo/redo restoration.
+    pub(crate) fn changes_touch_block_definition(
+        &self,
+        changes: &[(Handle, ChangeKind)],
+    ) -> bool {
+        let layout_blocks: HashSet<Handle> = self
+            .document
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                ObjectType::Layout(layout) if !layout.block_record.is_null() => {
+                    Some(layout.block_record)
+                }
+                _ => None,
+            })
+            .collect();
+        let is_definition = |record: &acadrust::tables::BlockRecord| {
+            let name = record.name.to_ascii_uppercase();
+            !layout_blocks.contains(&record.handle)
+                && !name.starts_with("*MODEL_SPACE")
+                && !name.starts_with("*PAPER_SPACE")
+        };
+
+        changes.iter().any(|(handle, _)| {
+            let owner = self
+                .document
+                .get_entity(*handle)
+                .map(|entity| entity.common().owner_handle);
+            self.document.block_records.iter().any(|record| {
+                is_definition(record)
+                    && (owner == Some(record.handle)
+                        || record.block_entity_handle == *handle
+                        || record.block_end_handle == *handle
+                        || record.entity_handles.contains(handle))
+            })
+        })
+    }
+
     pub fn bump_geometry(&mut self) {
         let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.geometry_epoch = epoch;

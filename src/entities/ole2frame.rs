@@ -161,6 +161,9 @@ fn apply_transform(ole: &mut Ole2Frame, t: &EntityTransform) {
             ole.lower_right_corner.x = scale(ole.lower_right_corner.x, center.x as f64);
             ole.lower_right_corner.y = scale(ole.lower_right_corner.y, center.y as f64);
         }
+        EntityTransform::Affine(transform) => {
+            acadrust::Entity::apply_transform(ole, transform);
+        }
         _ => {}
     }
 }

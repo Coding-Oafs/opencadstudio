@@ -2344,16 +2344,20 @@ impl OpenCADStudio {
 
             Message::SetViewcubeUcs(name) => {
                 let i = self.active_tab;
+                let mut changed = false;
                 if name.is_empty() || name == "WCS" {
                     self.tabs[i].active_ucs = None;
                     self.command_line.push_output("UCS: World");
+                    changed = true;
                 } else if let Some(named) = self.tabs[i].scene.document.ucss.get(&name).cloned() {
                     self.tabs[i].active_ucs = Some(named);
                     self.command_line.push_output(&format!("UCS: {}", name));
+                    changed = true;
                 }
-                self.tabs[i].sync_ucs_to_scene();
-                self.tabs[i].scene.camera_generation += 1;
-                self.tabs[i].dirty = true;
+                if changed {
+                    self.commit_active_ucs_change(i, "UCS");
+                    self.tabs[i].scene.camera_generation += 1;
+                }
                 Task::none()
             }
 

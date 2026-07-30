@@ -406,8 +406,8 @@ impl OpenCADStudio {
                     )));
                 }
 
-                // Snapshot the block's block-local entities so Discard can restore
-                // them (skip structural Block/BlockEnd/AttDef, mirroring REFEDIT).
+                // Snapshot the complete block definition so Discard can restore
+                // structural markers, ATTDEFs and geometry with exact handles.
                 let snapshot: Vec<_> = {
                     let br = self.tabs[i]
                         .scene
@@ -418,26 +418,45 @@ impl OpenCADStudio {
                     br.entity_handles
                         .iter()
                         .filter_map(|h| self.tabs[i].scene.document.get_entity(*h).cloned())
-                        .filter(|e| {
-                            !matches!(
-                                e,
-                                acadrust::EntityType::Block(_)
-                                    | acadrust::EntityType::BlockEnd(_)
-                                    | acadrust::EntityType::AttributeDefinition(_)
-                            )
-                        })
                         .collect()
                 };
+                let dependent_snapshot: Vec<_> = self.tabs[i]
+                    .scene
+                    .block_definition_dependent_handles(br_handle)
+                    .into_iter()
+                    .filter_map(|handle| {
+                        self.tabs[i].scene.document.get_entity_arc(handle)
+                    })
+                    .collect();
+                let reference_attributes: Vec<_> = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .filter_map(|entity| match entity {
+                        acadrust::EntityType::Insert(reference)
+                            if reference.block_name.eq_ignore_ascii_case(&insert.block_name)
+                                && !reference.attributes.is_empty() =>
+                        {
+                            Some((
+                                reference.common.handle,
+                                reference.attributes.clone(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
                 self.push_undo_snapshot(i, "BEDIT");
 
                 // Capture the camera before the editor reframes it, so leaving
                 // the block editor returns the view exactly where it was (#425).
                 let current_camera = self.tabs[i].scene.camera.borrow().clone();
+                let current_ucs = self.tabs[i].active_ucs.clone();
                 let (return_layout, return_block, return_camera) =
                     if let Some(parent_index) = self.tabs[i].active_block_edit {
                         let parent = &mut self.tabs[i].block_edits[parent_index];
                         parent.editor_camera = current_camera.clone();
+                        parent.editor_ucs = current_ucs;
                         (
                             parent.return_layout.clone(),
                             Some(parent.block_name.clone()),
@@ -463,10 +482,16 @@ impl OpenCADStudio {
                     return_layout,
                     return_block,
                     snapshot,
+                    dependent_snapshot,
+                    reference_attributes,
                     return_camera,
                     editor_camera: current_camera,
+                    editor_ucs: None,
                 });
                 self.tabs[i].active_block_edit = Some(self.tabs[i].block_edits.len() - 1);
+                // Every BEDIT tab owns an isolated local UCS. Never inherit or
+                // overwrite the drawing's model-space UCS.
+                self.tabs[i].refresh_active_ucs();
 
                 self.tabs[i].scene.deselect_all();
                 // The first click of a double-click selects the model-space
@@ -574,9 +599,24 @@ impl OpenCADStudio {
                 let return_layout = session.return_layout.clone();
                 let return_camera = session.return_camera.clone();
                 for mut entity in session.snapshot {
-                    entity.common_mut().handle = acadrust::Handle::NULL;
+                    // Preserve the original handle so ATTDEF references and
+                    // other handle-based relationships survive Discard.
                     entity.common_mut().owner_handle = session.br_handle;
                     let _ = self.tabs[i].scene.document.add_entity(entity);
+                }
+                for (handle, attributes) in session.reference_attributes {
+                    if let Some(acadrust::EntityType::Insert(reference)) =
+                        self.tabs[i].scene.document.get_entity_mut(handle)
+                    {
+                        reference.attributes = attributes;
+                    }
+                }
+                for entity in session.dependent_snapshot {
+                    let handle = entity.common().handle;
+                    let _ = self.tabs[i]
+                        .scene
+                        .document
+                        .replace_entity_arc(handle, entity);
                 }
                 self.restore_after_block_edit_close(
                     i,

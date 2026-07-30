@@ -40,6 +40,7 @@ where
         }
         EntityTransform::Scale { center, factor } => apply_standard_scale(entity, *center, *factor),
         EntityTransform::Mirror { p1, p2 } => mirror(entity, *p1, *p2),
+        EntityTransform::Affine(transform) => entity.apply_transform(transform),
     }
 }
 

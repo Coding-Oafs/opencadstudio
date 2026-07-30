@@ -1383,6 +1383,7 @@ fn entity_transform(transform: &EntityTransform) -> Transform {
         EntityTransform::Mirror { p1, p2 } => {
             crate::scene::view::transform::reflection_about_xy_line(*p1, *p2)
         }
+        EntityTransform::Affine(transform) => *transform,
     }
 }
 

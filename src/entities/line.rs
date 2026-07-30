@@ -153,6 +153,9 @@ fn apply_transform(line: &mut Line, t: &EntityTransform) {
         EntityTransform::Mirror { p1, p2 } => {
             crate::scene::view::transform::mirror_xy_line(line, *p1, *p2);
         }
+        EntityTransform::Affine(transform) => {
+            acadrust::Entity::apply_transform(line, transform);
+        }
     }
 }
 

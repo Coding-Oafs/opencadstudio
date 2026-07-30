@@ -607,7 +607,8 @@ impl Scene {
         &mut self,
         handles: &[Handle],
         name: &str,
-        base: glam::DVec3,
+        world_to_block: &acadrust::types::Transform,
+        block_to_world: &acadrust::types::Transform,
     ) -> Result<Handle, String> {
         let name = name.trim();
         if name.is_empty() {
@@ -656,7 +657,7 @@ impl Scene {
             .add_entity(EntityType::BlockEnd(block_end))
             .map_err(|e| e.to_string())?;
 
-        let local = EntityTransform::Translate(-base);
+        let local = EntityTransform::Affine(*world_to_block);
         for (old_handle, mut entity) in source_entities {
             view::dispatch::apply_transform(&mut entity, &local);
             entity = crate::modules::draw::modify::explode::normalize_entity_for_block(entity);
@@ -668,10 +669,8 @@ impl Scene {
             self.erase_entities(&[old_handle]);
         }
 
-        let insert = DxfInsert::new(
-            name,
-            acadrust::types::Vector3::new(base.x, base.y, base.z),
-        );
+        let mut insert = DxfInsert::new(name, acadrust::types::Vector3::ZERO);
+        acadrust::Entity::apply_transform(&mut insert, block_to_world);
         Ok(self.add_entity(EntityType::Insert(insert)))
     }
 

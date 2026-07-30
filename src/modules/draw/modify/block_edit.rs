@@ -55,15 +55,27 @@ pub struct BlockEditSession {
     /// Parent block tab to return to for a nested BEDIT session. `None` returns
     /// to `return_layout`.
     pub return_block: Option<String>,
-    /// The block's block-local entities captured on entry, so Discard can
-    /// restore the definition (structural Block/BlockEnd/AttDef excluded).
+    /// The complete block definition captured on entry, so Discard restores
+    /// structural markers and content with their original handles.
     pub snapshot: Vec<EntityType>,
+    /// Baked anonymous dimension-block entities transformed alongside
+    /// dimensions in this definition. They remain in place, so Discard can
+    /// restore their shared before-images directly.
+    pub dependent_snapshot: Vec<std::sync::Arc<EntityType>>,
+    /// Inline ATTRIB values/positions on every existing INSERT of this block.
+    /// Rebasing the origin moves them with the definition; Discard restores
+    /// their exact on-entry state.
+    pub reference_attributes:
+        Vec<(Handle, Vec<acadrust::entities::AttributeEntity>)>,
     /// Camera state of the space that was active when BEDIT began, restored
     /// on Save/Discard so the view returns exactly where it was (#425).
     pub return_camera: crate::scene::view::camera::Camera,
     /// Camera owned by this block tab. Updated whenever another space tab is
     /// activated, then restored when the user returns to this block.
     pub editor_camera: crate::scene::view::camera::Camera,
+    /// Transient UCS being manipulated in this block tab. On commit its full
+    /// frame is baked into the definition and this returns to `None`.
+    pub editor_ucs: Option<acadrust::tables::Ucs>,
 }
 
 // ── BEDIT pick command ─────────────────────────────────────────────────────

@@ -186,6 +186,7 @@ impl OpenCADStudio {
                 use acadrust::types::Vector3;
                 let parts: Vec<&str> = cmd.splitn(4, ' ').collect();
                 let sub = parts.get(1).map(|s| s.to_uppercase()).unwrap_or_default();
+                let mut active_changed = false;
                 match sub.as_str() {
                     "" | "LIST" | "?" => {
                         let active_name = self.tabs[i]
@@ -248,6 +249,7 @@ impl OpenCADStudio {
                     }
                     "W" | "WORLD" => {
                         self.tabs[i].active_ucs = None;
+                        active_changed = true;
                         self.command_line
                             .push_output("UCS reset to World Coordinate System.");
                     }
@@ -271,6 +273,7 @@ impl OpenCADStudio {
                                 wcs_origin.y as f64,
                                 wcs_origin.z as f64,
                             );
+                            active_changed = true;
                             self.command_line.push_output(&format!(
                                 "UCS origin set to ({:.4}, {:.4}, {:.4}).",
                                 wcs_origin.x, wcs_origin.y, wcs_origin.z
@@ -313,6 +316,7 @@ impl OpenCADStudio {
                                     Vector3::new(ny.x as f64, ny.y as f64, ny.z as f64);
                             }
                             self.tabs[i].active_ucs = Some(new_ucs);
+                            active_changed = true;
                             self.command_line
                                 .push_output(&format!("UCS rotated {:.2}° around Z.", angle_deg));
                         } else {
@@ -340,6 +344,7 @@ impl OpenCADStudio {
                             let rot = glam::Quat::from_axis_angle(x_ax, rad);
                             let ny = rot * old_y;
                             ucs.y_axis = Vector3::new(ny.x as f64, ny.y as f64, ny.z as f64);
+                            active_changed = true;
                             self.command_line
                                 .push_output(&format!("UCS rotated {:.2}° around X.", angle_deg));
                         } else {
@@ -367,6 +372,7 @@ impl OpenCADStudio {
                             let rot = glam::Quat::from_axis_angle(y_ax, rad);
                             let nx = rot * old_x;
                             ucs.x_axis = Vector3::new(nx.x as f64, nx.y as f64, nx.z as f64);
+                            active_changed = true;
                             self.command_line
                                 .push_output(&format!("UCS rotated {:.2}° around Y.", angle_deg));
                         } else {
@@ -378,6 +384,7 @@ impl OpenCADStudio {
                         let name = sub.clone();
                         if let Some(named) = self.tabs[i].scene.document.ucss.get(&name).cloned() {
                             self.tabs[i].active_ucs = Some(named);
+                            active_changed = true;
                             self.command_line
                                 .push_output(&format!("UCS '{}' activated.", name));
                         } else {
@@ -388,11 +395,9 @@ impl OpenCADStudio {
                         }
                     }
                 }
-                // Keep the scene's ViewCube UCS in lock-step with active_ucs and
-                // persist it to the active pane (per-viewport UCS inside a
-                // viewport, header model UCS in the Model tab) so it round-trips.
-                self.tabs[i].sync_ucs_to_scene();
-                self.tabs[i].persist_active_ucs();
+                if active_changed {
+                    self.commit_active_ucs_change(i, "UCS");
+                }
             }
 
             // ── Named Views (VIEW command) ────────────────────────────────

@@ -73,8 +73,14 @@ impl UcsXform {
     pub(super) fn from_ucs(ucs: &Ucs) -> Self {
         let v = |a: acadrust::types::Vector3| glam::DVec3::new(a.x, a.y, a.z);
         let x = v(ucs.x_axis).normalize_or(glam::DVec3::X);
-        let y = v(ucs.y_axis).normalize_or(glam::DVec3::Y);
-        let z = x.cross(y).normalize_or(glam::DVec3::Z);
+        let raw_y = v(ucs.y_axis).normalize_or(glam::DVec3::Y);
+        let fallback_z = if x.dot(glam::DVec3::Z).abs() < 0.999 {
+            glam::DVec3::Z
+        } else {
+            glam::DVec3::Y
+        };
+        let z = x.cross(raw_y).normalize_or(x.cross(fallback_z).normalize());
+        let y = z.cross(x).normalize();
         Self { origin: v(ucs.origin), x, y, z }
     }
 
@@ -126,6 +132,44 @@ impl UcsXform {
             self.z.as_vec3().extend(0.0),
             glam::Vec4::W,
         )
+    }
+
+    /// Full UCS-local → WCS transform, using `origin` as local zero while
+    /// retaining this UCS's orthonormal axes.
+    pub(super) fn to_wcs_transform_at(
+        &self,
+        origin: glam::DVec3,
+    ) -> acadrust::types::Transform {
+        use acadrust::types::{Matrix4, Transform};
+        Transform::from_matrix(Matrix4 {
+            m: [
+                [self.x.x, self.y.x, self.z.x, origin.x],
+                [self.x.y, self.y.y, self.z.y, origin.y],
+                [self.x.z, self.y.z, self.z.z, origin.z],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        })
+    }
+
+    /// Full WCS → UCS-local transform, using `origin` as the local zero.
+    pub(super) fn to_ucs_transform_at(
+        &self,
+        origin: glam::DVec3,
+    ) -> acadrust::types::Transform {
+        use acadrust::types::{Matrix4, Transform};
+        Transform::from_matrix(Matrix4 {
+            m: [
+                [self.x.x, self.x.y, self.x.z, -origin.dot(self.x)],
+                [self.y.x, self.y.y, self.y.z, -origin.dot(self.y)],
+                [self.z.x, self.z.y, self.z.z, -origin.dot(self.z)],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        })
+    }
+
+    /// Convert from the represented UCS into its canonical local frame.
+    pub(super) fn to_ucs_transform(&self) -> acadrust::types::Transform {
+        self.to_ucs_transform_at(self.origin)
     }
 }
 

@@ -493,7 +493,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     && (self.ucs_grip_drag.is_some() || self.ucs_icon_selected)
                 {
                     let i = self.active_tab;
-                    self.ucs_grip_drag = None;
+                    // A UCS grip drag is live-only until mouse release. Reload
+                    // the persisted pane UCS so Escape really cancels it.
+                    if self.ucs_grip_drag.take().is_some() {
+                        self.tabs[i].refresh_active_ucs();
+                        self.tabs[i].scene.camera_generation += 1;
+                    }
                     self.ucs_icon_selected = false;
                     self.ucs_icon_hover = false;
                     self.tabs[i].snap_result = None;
@@ -1319,6 +1324,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     vp.ucs_origin = ucs.origin.clone();
                                     vp.ucs_x_axis = ucs.x_axis.clone();
                                     vp.ucs_y_axis = ucs.y_axis.clone();
+                                    vp.ucs_per_viewport = true;
                                 }
                             }
                         }

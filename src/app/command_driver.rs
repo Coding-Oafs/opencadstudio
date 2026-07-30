@@ -932,9 +932,17 @@ impl OpenCADStudio {
                 base,
             } => {
                 self.push_undo_snapshot(i, "BLOCK");
+                let ucs = self.tabs[i].ucs_xform();
+                let world_to_block = ucs.to_ucs_transform_at(base);
+                let block_to_world = ucs.to_wcs_transform_at(base);
                 match self.tabs[i]
                     .scene
-                    .create_block_from_entities(&handles, &name, base)
+                    .create_block_from_entities(
+                        &handles,
+                        &name,
+                        &world_to_block,
+                        &block_to_world,
+                    )
                 {
                     Ok(insert_handle) => {
                         self.tabs[i].dirty = true;

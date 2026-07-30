@@ -636,6 +636,47 @@ fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
         EntityTransform::Mirror { p1, p2 } => {
             transform_dimension_points(dim, |pt| mirror_point(pt, *p1, *p2))
         }
+        EntityTransform::Affine(transform) => {
+            let old_normal = dim.base().normal;
+            let text_rotation =
+                transformed_dimension_angle(old_normal, dim.base().text_rotation, transform);
+            let horizontal_direction = transformed_dimension_angle(
+                old_normal,
+                dim.base().horizontal_direction,
+                transform,
+            );
+            let insertion_rotation = transformed_dimension_angle(
+                old_normal,
+                dim.base().insertion_rotation,
+                transform,
+            );
+            let linear_angles = match dim {
+                Dimension::Linear(value) => Some((
+                    transformed_dimension_angle(old_normal, value.rotation, transform),
+                    transformed_dimension_angle(old_normal, value.ext_line_rotation, transform),
+                )),
+                _ => None,
+            };
+            transform_dimension_points(dim, |point| {
+                *point = transform.apply(*point);
+            });
+            let transformed_normal = transform.apply_rotation(old_normal);
+            let base = dim.base_mut();
+            base.normal = if transformed_normal.length() > 1e-12 {
+                transformed_normal.normalize()
+            } else {
+                old_normal
+            };
+            base.text_rotation = text_rotation;
+            base.horizontal_direction = horizontal_direction;
+            base.insertion_rotation = insertion_rotation;
+            if let Some((rotation, ext_line_rotation)) = linear_angles {
+                if let Dimension::Linear(value) = dim {
+                    value.rotation = rotation;
+                    value.ext_line_rotation = ext_line_rotation;
+                }
+            }
+        }
     }
     dim.base_mut().actual_measurement = dim.measurement();
 }
@@ -644,6 +685,7 @@ fn transform_dimension_points<F>(dim: &mut Dimension, mut f: F)
 where
     F: FnMut(&mut acadrust::types::Vector3),
 {
+    f(&mut dim.base_mut().definition_point);
     f(&mut dim.base_mut().text_middle_point);
     f(&mut dim.base_mut().insertion_point);
     match dim {
@@ -700,6 +742,32 @@ where
             f(&mut d.jog_point);
         }
     }
+}
+
+fn transformed_dimension_angle(
+    normal: acadrust::types::Vector3,
+    angle: f64,
+    transform: &acadrust::types::Transform,
+) -> f64 {
+    let ((xx, xy, xz), (yx, yy, yz)) =
+        crate::scene::view::transform::ocs_axes((normal.x, normal.y, normal.z));
+    let direction = acadrust::types::Vector3::new(
+        xx * angle.cos() + yx * angle.sin(),
+        xy * angle.cos() + yy * angle.sin(),
+        xz * angle.cos() + yz * angle.sin(),
+    );
+    let transformed_normal = transform.apply_rotation(normal).normalize();
+    let transformed_direction = transform.apply_rotation(direction).normalize();
+    let ((nxx, nxy, nxz), (nyx, nyy, nyz)) = crate::scene::view::transform::ocs_axes((
+        transformed_normal.x,
+        transformed_normal.y,
+        transformed_normal.z,
+    ));
+    let new_x = acadrust::types::Vector3::new(nxx, nxy, nxz);
+    let new_y = acadrust::types::Vector3::new(nyx, nyy, nyz);
+    transformed_direction
+        .dot(&new_y)
+        .atan2(transformed_direction.dot(&new_x))
 }
 
 fn rotate_point(p: &mut acadrust::types::Vector3, center: DVec3, angle_rad: f64) {

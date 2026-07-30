@@ -419,6 +419,9 @@ impl Transformable for Underlay {
                 self.insertion_point.y = by + dx * sin_a + dy * cos_a;
                 self.rotation += a;
             }
+            EntityTransform::Affine(transform) => {
+                acadrust::Entity::apply_transform(self, transform);
+            }
         }
     }
 }

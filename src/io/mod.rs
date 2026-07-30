@@ -371,6 +371,7 @@ pub(crate) fn load_file_with_progress(
                 .map_err(|e| e.to_string())?
                 .read()
                 .map_err(|e| e.to_string())?;
+            normalize_block_origins(&mut doc);
             fix_viewport_status_flags(&mut doc);
             fix_current_style_names(&mut doc);
             resolve_raster_image_paths(&mut doc, path.parent());
@@ -382,6 +383,7 @@ pub(crate) fn load_file_with_progress(
                 .map_err(|e| e.to_string())?
                 .read()
                 .map_err(|e| e.to_string())?;
+            normalize_block_origins(&mut doc);
             fix_dxf_dimension_rotations(&mut doc);
             fix_dxf_layout_plot_settings(&mut doc);
             fix_viewport_status_flags(&mut doc);
@@ -391,6 +393,62 @@ pub(crate) fn load_file_with_progress(
             Ok(doc)
         }
         _ => Err(format!("Unsupported file format: .{ext}")),
+    }
+}
+
+/// Canonicalise legacy block-table origins to the post-R10 representation:
+/// block contents are local around zero and INSERT carries placement.
+///
+/// DWG exposes the legacy point on `BlockRecord::base_point`; DXF exposes it
+/// on the structural BLOCK entity. Rendering, picking, exploding and nested
+/// insertion can then share the ordinary zero-origin transform without each
+/// path having to reinterpret this compatibility field.
+fn normalize_block_origins(doc: &mut CadDocument) {
+    use acadrust::types::Vector3;
+    use acadrust::EntityType;
+
+    let blocks: Vec<_> = doc
+        .block_records
+        .iter()
+        .filter_map(|record| {
+            let marker_point = match doc.get_entity(record.block_entity_handle) {
+                Some(EntityType::Block(block)) => block.base_point,
+                _ => Vector3::ZERO,
+            };
+            let base_point = if marker_point.length() > 1e-12 {
+                marker_point
+            } else {
+                record.base_point
+            };
+            (base_point.length() > 1e-12).then(|| {
+                (
+                    record.name.clone(),
+                    record.block_entity_handle,
+                    record.entity_handles.clone(),
+                    base_point,
+                )
+            })
+        })
+        .collect();
+
+    for (name, marker_handle, handles, base_point) in blocks {
+        let offset = base_point * -1.0;
+        for handle in handles {
+            let Some(entity) = doc.get_entity_mut(handle) else {
+                continue;
+            };
+            match entity {
+                EntityType::Block(block) => block.base_point = Vector3::ZERO,
+                EntityType::BlockEnd(_) => {}
+                _ => entity.translate(offset),
+            }
+        }
+        if let Some(EntityType::Block(block)) = doc.get_entity_mut(marker_handle) {
+            block.base_point = Vector3::ZERO;
+        }
+        if let Some(record) = doc.block_records.get_mut(&name) {
+            record.base_point = Vector3::ZERO;
+        }
     }
 }
 

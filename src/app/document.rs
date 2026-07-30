@@ -241,7 +241,7 @@ impl DocumentTab {
 
     /// The document's saved model-space UCS (header), as a `Ucs`. `None` when it
     /// is identity (plain WCS).
-    fn model_ucs_from_header(&self) -> Option<Ucs> {
+    pub(super) fn model_ucs_from_header(&self) -> Option<Ucs> {
         let h = &self.scene.document.header;
         let mut u = Ucs::new(h.model_space_ucs_name.clone());
         u.origin = h.model_space_ucs_origin;
@@ -281,7 +281,9 @@ impl DocumentTab {
     /// change (enter/exit viewport, layout / tab switch, load) so one field
     /// drives all UCS-aware systems regardless of where editing happens.
     pub(super) fn refresh_active_ucs(&mut self) {
-        self.active_ucs = if let Some(h) = self.scene.active_viewport {
+        self.active_ucs = if let Some(session) = self.active_block_edit_session() {
+            session.editor_ucs.clone()
+        } else if let Some(h) = self.scene.active_viewport {
             self.ucs_from_viewport(h)
         } else if self.scene.current_layout == "Model" {
             self.model_ucs_from_header()
@@ -297,16 +299,28 @@ impl DocumentTab {
     /// any UCS change.
     pub(super) fn persist_active_ucs(&mut self) {
         use acadrust::types::Vector3;
-        if let Some(h) = self.scene.active_viewport {
-            let (o, x, y, per) = match &self.active_ucs {
-                Some(u) => (u.origin, u.x_axis, u.y_axis, true),
-                None => (Vector3::ZERO, Vector3::UNIT_X, Vector3::UNIT_Y, false),
+        if let Some(index) = self.active_block_edit {
+            let active_ucs = self.active_ucs.clone();
+            if let Some(session) = self.block_edits.get_mut(index) {
+                session.editor_ucs = active_ucs;
+            }
+        } else if let Some(h) = self.scene.active_viewport {
+            let (o, x, y, handle, per) = match &self.active_ucs {
+                Some(u) => (u.origin, u.x_axis, u.y_axis, u.handle, true),
+                None => (
+                    Vector3::ZERO,
+                    Vector3::UNIT_X,
+                    Vector3::UNIT_Y,
+                    Handle::NULL,
+                    false,
+                ),
             };
             if let Some(acadrust::EntityType::Viewport(vp)) = self.scene.document.get_entity_mut(h)
             {
                 vp.ucs_origin = o;
                 vp.ucs_x_axis = x;
                 vp.ucs_y_axis = y;
+                vp.ucs_handle = handle;
                 vp.ucs_per_viewport = per;
             }
         } else if self.scene.current_layout == "Model" {
@@ -316,11 +330,13 @@ impl DocumentTab {
                     h.model_space_ucs_origin = u.origin;
                     h.model_space_ucs_x_axis = u.x_axis;
                     h.model_space_ucs_y_axis = u.y_axis;
+                    h.model_space_ucs_name = u.name.clone();
                 }
                 None => {
                     h.model_space_ucs_origin = Vector3::ZERO;
                     h.model_space_ucs_x_axis = Vector3::UNIT_X;
                     h.model_space_ucs_y_axis = Vector3::UNIT_Y;
+                    h.model_space_ucs_name.clear();
                 }
             }
         }

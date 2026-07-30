@@ -969,11 +969,23 @@ impl OpenCADStudio {
                     scene.reseed_derived_caches(handle);
                 }
                 if !final_changes.is_empty() {
-                    scene.bump_entities(&final_changes);
+                    if scene.changes_touch_block_definition(&final_changes) {
+                        // A block-local delta changes the assembled definition
+                        // consumed by every INSERT (including nested blocks).
+                        // Replaying only the child handle leaves those cached
+                        // references visually stale after BEDIT closes.
+                        scene.bump_geometry();
+                    } else {
+                        scene.bump_entities(&final_changes);
+                    }
                 }
             }
             scene.clear_preview_wire();
         }
+        // UCS state is cached separately from its persisted header/viewport
+        // fields. History may just have restored those fields, so adopt them
+        // before drawing the icon/grid or accepting the next coordinate.
+        self.tabs[i].refresh_active_ucs();
         self.tabs[i].active_cmd = None;
         self.tabs[i].snap_result = None;
         self.tabs[i].active_grip = None;

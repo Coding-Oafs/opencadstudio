@@ -273,6 +273,55 @@ impl Camera {
         Mat4::from_quat(self.rotation.conjugate())
     }
 
+    /// Carry the camera through a rigid model-space transform. BEDIT uses this
+    /// when a transient UCS is baked into block-local geometry: the contents
+    /// retain their on-screen framing while their canonical coordinates change.
+    pub fn apply_rigid_transform(&mut self, transform: &acadrust::types::Transform) {
+        let point = acadrust::types::Vector3::new(
+            self.target.x,
+            self.target.y,
+            self.target.z,
+        );
+        let point = transform.apply(point);
+        self.target = DVec3::new(point.x, point.y, point.z);
+
+        let matrix = &transform.matrix.m;
+        let rotation = glam::Mat3::from_cols(
+            Vec3::new(matrix[0][0] as f32, matrix[1][0] as f32, matrix[2][0] as f32),
+            Vec3::new(matrix[0][1] as f32, matrix[1][1] as f32, matrix[2][1] as f32),
+            Vec3::new(matrix[0][2] as f32, matrix[1][2] as f32, matrix[2][2] as f32),
+        );
+        self.rotation = (Quat::from_mat3(&rotation) * self.rotation).normalize();
+        self.sync_yaw_pitch();
+
+        if let Some((min, max)) = self.model_bounds {
+            let corners = [
+                Vec3::new(min.x, min.y, min.z),
+                Vec3::new(max.x, min.y, min.z),
+                Vec3::new(min.x, max.y, min.z),
+                Vec3::new(max.x, max.y, min.z),
+                Vec3::new(min.x, min.y, max.z),
+                Vec3::new(max.x, min.y, max.z),
+                Vec3::new(min.x, max.y, max.z),
+                Vec3::new(max.x, max.y, max.z),
+            ];
+            let mut new_min = Vec3::splat(f32::INFINITY);
+            let mut new_max = Vec3::splat(f32::NEG_INFINITY);
+            for corner in corners {
+                let transformed = transform.apply(acadrust::types::Vector3::new(
+                    corner.x as f64,
+                    corner.y as f64,
+                    corner.z as f64,
+                ));
+                let transformed =
+                    Vec3::new(transformed.x as f32, transformed.y as f32, transformed.z as f32);
+                new_min = new_min.min(transformed);
+                new_max = new_max.max(transformed);
+            }
+            self.model_bounds = Some((new_min, new_max));
+        }
+    }
+
     /// The camera's roll — rotation about the view axis, in radians — the
     /// inverse of the `roll` argument to [`yaw_pitch_to_quat`]. Recovered by
     /// removing the yaw/pitch frame from the live rotation, so a saved view can
