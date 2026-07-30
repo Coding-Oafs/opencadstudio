@@ -3148,7 +3148,11 @@ impl OpenCADStudio {
             crate::discussions::fetch_discussions_web(),
             Message::DiscussionsFetched,
         );
-        (s, Task::batch([focus, patrons, videos, discussions]))
+        let thumbs_fetch = s.refresh_recent_thumbs();
+        (
+            s,
+            Task::batch([focus, patrons, videos, discussions, thumbs_fetch]),
+        )
     }
 }
 
