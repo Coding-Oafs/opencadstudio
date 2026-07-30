@@ -134,7 +134,13 @@ impl EditLease {
         );
         let _ = sidecar.flush();
 
-        let (drawing, platform_warning) = acquire_drawing_lock(&canonical)?;
+        let (drawing, platform_warning) = match acquire_drawing_lock(&canonical) {
+            Ok(lock) => lock,
+            Err(error) => {
+                let _ = std::fs::remove_file(&lock_path);
+                return Err(error);
+            }
+        };
         Ok(Self {
             _sidecar: sidecar,
             drawing,
@@ -159,6 +165,14 @@ impl EditLease {
     #[allow(dead_code)]
     pub fn lock_path(&self) -> &Path {
         &self.lock_path
+    }
+}
+
+impl Drop for EditLease {
+    fn drop(&mut self) {
+        // Remove the path while the exclusive sidecar lock is still held so
+        // another editor cannot acquire it during cleanup.
+        let _ = std::fs::remove_file(&self.lock_path);
     }
 }
 
