@@ -1,20 +1,101 @@
 // Small platform shims for things the desktop build does natively but the web
 // (wasm) build must handle differently or skip.
 
-/// Open a URL in the user's browser. The desktop launches the default handler;
-/// the web opens a new tab (the button click is a user gesture, so it isn't
-/// caught by the pop-up blocker). Focus of the opened page is left to the
-/// OS / browser.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn open_url(url: &str) {
-    let _ = open::that(url);
+/// Open a URL in the user's browser.
+///
+/// Wayland requires an xdg-activation token from the source window before it
+/// will let an existing browser window take focus. Linux obtains that token
+/// from the OCS surface and passes it to xdg-open.
+#[cfg(target_os = "linux")]
+pub fn open_url<Message: Send + 'static>(
+    url: &str,
+    parent: Option<iced::window::Id>,
+) -> iced::Task<Message> {
+    let url = url.to_string();
+    match parent {
+        Some(parent) => iced::window::run(parent, move |window| {
+            open_url_linux(&url, linux_activation_token(window));
+        })
+        .discard(),
+        None => {
+            let _ = open::that_detached(url);
+            iced::Task::none()
+        }
+    }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_activation_token(window: &dyn iced::window::Window) -> Option<String> {
+    use iced::window::raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+
+    let RawWindowHandle::Wayland(window_handle) =
+        window.window_handle().ok()?.as_raw()
+    else {
+        return None;
+    };
+    let RawDisplayHandle::Wayland(display_handle) =
+        window.display_handle().ok()?.as_raw()
+    else {
+        return None;
+    };
+
+    // Keep the iced window borrowed while ashpd uses its raw Wayland surface.
+    // The returned token is an owned string and is immediately handed to the
+    // child process.
+    unsafe {
+        iced::futures::executor::block_on(
+            ashpd::ActivationToken::from_wayland_raw(
+                None,
+                window_handle.surface.as_ptr(),
+                display_handle.display.as_ptr(),
+            ),
+        )
+    }
+    .map(String::from)
+}
+
+#[cfg(target_os = "linux")]
+fn open_url_linux(url: &str, activation_token: Option<String>) {
+    let Some(token) = activation_token else {
+        let _ = open::that_detached(url);
+        return;
+    };
+
+    let mut command = std::process::Command::new("xdg-open");
+    command
+        .arg(url)
+        .env("XDG_ACTIVATION_TOKEN", &token)
+        .env("DESKTOP_STARTUP_ID", token);
+
+    if let Ok(mut child) = command.spawn() {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    } else {
+        let _ = open::that_detached(url);
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
+pub fn open_url<Message>(
+    url: &str,
+    _parent: Option<iced::window::Id>,
+) -> iced::Task<Message> {
+    let _ = open::that_detached(url);
+    iced::Task::none()
+}
+
+/// Web opens the tab synchronously so the browser still sees the click as a
+/// user gesture and does not block it as a pop-up.
 #[cfg(target_arch = "wasm32")]
-pub fn open_url(url: &str) {
+pub fn open_url<Message>(
+    url: &str,
+    _parent: Option<iced::window::Id>,
+) -> iced::Task<Message> {
     if let Some(window) = web_sys::window() {
         let _ = window.open_with_url_and_target(url, "_blank");
     }
+    iced::Task::none()
 }
 
 #[cfg(target_arch = "wasm32")]

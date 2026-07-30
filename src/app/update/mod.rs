@@ -290,10 +290,7 @@ impl OpenCADStudio {
 
             Message::OpenPathPicked(None) => Task::none(),
 
-            Message::OpenUrl(url) => {
-                crate::sys::open_url(&url);
-                Task::none()
-            }
+            Message::OpenUrl(url) => crate::sys::open_url(&url, self.main_window),
 
             Message::StartSectionSelect(section) => {
                 self.start_section = section;
@@ -5040,9 +5037,12 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::UpdateNoticeOpenRelease => {
-                crate::sys::open_url(crate::io::update_check::RELEASES_PAGE);
+                let open = crate::sys::open_url(
+                    crate::io::update_check::RELEASES_PAGE,
+                    self.main_window,
+                );
                 self.close_active_modal();
-                Task::none()
+                open
             }
             Message::AssocPromptYes => {
                 self.file_assoc_enabled = true;

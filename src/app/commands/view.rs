@@ -4,19 +4,28 @@ impl OpenCADStudio {
     pub(super) fn dispatch_view(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             "DONATE" => {
-                crate::sys::open_url("https://patreon.com/HakanSeven12");
                 self.command_line.push_info("Opening Patreon page...");
+                return Some(crate::sys::open_url(
+                    "https://patreon.com/HakanSeven12",
+                    self.main_window,
+                ));
             }
 
             "WEBVERSION" => {
-                crate::sys::open_url("https://hakanseven12.github.io/OpenCADStudio/");
                 self.command_line.push_info("Opening OCS Web...");
+                return Some(crate::sys::open_url(
+                    "https://hakanseven12.github.io/OpenCADStudio/",
+                    self.main_window,
+                ));
             }
 
             "HELP" => {
-                crate::sys::open_url("https://github.com/HakanSeven12/OpenCADStudio/discussions");
                 self.command_line
                     .push_info("Opening OCS Discussions for help and questions...");
+                return Some(crate::sys::open_url(
+                    "https://github.com/HakanSeven12/OpenCADStudio/discussions",
+                    self.main_window,
+                ));
             }
 
             // ── DWGPROPS — print round-trip-only HeaderVariables ─────────
@@ -204,8 +213,8 @@ impl OpenCADStudio {
                     "https://github.com/HakanSeven12/OpenCADStudio/issues/new?body={}",
                     crate::sys::percent_encode(&body)
                 );
-                crate::sys::open_url(&url);
                 self.command_line.push_info("Opening feedback page...");
+                return Some(crate::sys::open_url(&url, self.main_window));
             }
 
             "ABOUT" => {
@@ -217,8 +226,11 @@ impl OpenCADStudio {
             }
 
             "CHANGELOG" => {
-                crate::sys::open_url("https://github.com/HakanSeven12/OpenCADStudio/releases");
                 self.command_line.push_info("Opening release notes...");
+                return Some(crate::sys::open_url(
+                    "https://github.com/HakanSeven12/OpenCADStudio/releases",
+                    self.main_window,
+                ));
             }
 
             // ── ALIASEDIT — command-alias editor ───────────────────────────

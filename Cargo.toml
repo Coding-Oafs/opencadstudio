@@ -101,6 +101,11 @@ naga = { version = "27", features = ["wgsl-in"] }
 #                       "Open with" for the portable .exe.
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Foundation"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Mint an xdg-activation token for external URL handlers on Wayland. The token
+# is passed to xdg-open so an existing browser window may take focus.
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "wayland"] }
+
 [patch.crates-io]
 # Track standard DWG object relationships used by the scene integration.
 acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "a7b1e07" }
