@@ -332,7 +332,8 @@ fn drop_row<'a>(
     ctor: fn(String) -> PlotDlgMsg,
     width: Length,
 ) -> Element<'a, Message> {
-    let pl = crate::ui::pick_list(options, selected, move |s| Message::PlotDlg(ctor(s)))
+    let pl = iced::widget::pick_list(selected, options, |value| value.to_string())
+        .on_select(move |s| Message::PlotDlg(ctor(s)))
         .text_size(12)
         .padding([3, 6])
         .width(width);
@@ -536,11 +537,12 @@ pub fn view_window(
         section_label("Plot area"),
         row![
             container(
-                crate::ui::pick_list(
-                    strs(&["Layout", "Extents", "Display", "Window"]),
+                iced::widget::pick_list(
                     Some(s.area.clone()),
-                    move |v| Message::PlotDlg(PlotDlgMsg::Area(v)),
+                    strs(&["Layout", "Extents", "Display", "Window"]),
+                    |value| value.to_string(),
                 )
+                .on_select(move |v| Message::PlotDlg(PlotDlgMsg::Area(v)))
                 .text_size(12)
                 .padding([3, 6])
                 .width(width)
@@ -608,11 +610,12 @@ pub fn view_window(
         section_label("Quality"),
         row![
             container(
-                crate::ui::pick_list(
-                    strs(&["Draft", "Normal", "High", "Maximum"]),
+                iced::widget::pick_list(
                     Some(s.quality.clone()),
-                    move |v| Message::PlotDlg(PlotDlgMsg::Quality(v)),
+                    strs(&["Draft", "Normal", "High", "Maximum"]),
+                    |value| value.to_string(),
                 )
+                .on_select(move |v| Message::PlotDlg(PlotDlgMsg::Quality(v)))
                 .text_size(12)
                 .padding([3, 6])
                 .width(width)

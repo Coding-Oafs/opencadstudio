@@ -780,7 +780,10 @@ fn layer_row<'a>(
             _ => Message::LayerColorSet(7),
         },
         Message::LayerColorPickerToggle(index),
-        Message::OpenColorWindow(crate::app::ColorPickTarget::Layer(index)),
+        Message::OpenColorWindow(
+            crate::app::ColorPickTarget::Layer(index),
+            acadrust::types::Color::Index(aci),
+        ),
     ))
     .width(Length::Fixed(COL_COLOR))
     .into();

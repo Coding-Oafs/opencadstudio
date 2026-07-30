@@ -413,7 +413,10 @@ fn editor_layer_row<'a>(
         },
         move |color| Message::LayerStateEditorLayerColor(index, color),
         Message::LayerStateEditorLayerColorToggle(index),
-        Message::OpenColorWindow(crate::app::ColorPickTarget::LayerState(index)),
+        Message::OpenColorWindow(
+            crate::app::ColorPickTarget::LayerState(index),
+            layer.color,
+        ),
     );
 
     container(
@@ -432,13 +435,21 @@ fn editor_layer_row<'a>(
                 54.0
             ),
             container(color).width(Length::Fixed(135.0)),
-            crate::ui::pick_list(linetypes, current_linetype, move |value| {
-                Message::LayerStateEditorLayerLinetype(index, value)
-            })
+            iced::widget::pick_list(
+                current_linetype,
+                linetypes,
+                |value| value.to_string(),
+            )
+            .on_select(move |value| Message::LayerStateEditorLayerLinetype(index, value))
             .text_size(11)
             .padding([3, 5])
             .width(Length::Fixed(150.0)),
-            crate::ui::pick_list(lw_options(), current_lineweight, move |item: LwItem| {
+            iced::widget::pick_list(
+                current_lineweight,
+                lw_options(),
+                |value| value.to_string(),
+            )
+            .on_select(move |item: LwItem| {
                 Message::LayerStateEditorLayerLineweight(index, item.0)
             })
             .text_size(11)
@@ -449,11 +460,12 @@ fn editor_layer_row<'a>(
                 .size(11)
                 .padding([3, 5])
                 .width(Length::Fixed(135.0)),
-            crate::ui::pick_list(
-                transparency_options(layer.transparency),
+            iced::widget::pick_list(
                 Some(TransparencyItem(layer.transparency)),
-                move |item| Message::LayerStateEditorLayerTransparency(index, item.0),
+                transparency_options(layer.transparency),
+                |value| value.to_string(),
             )
+            .on_select(move |item| Message::LayerStateEditorLayerTransparency(index, item.0))
             .text_size(11)
             .padding([3, 5])
             .width(Length::Fixed(105.0)),
@@ -543,11 +555,12 @@ pub fn view_editor<'a>(
                     .style(muted),
                 Space::new().width(sizing.width),
                 text("Current layer").size(10).style(muted),
-                crate::ui::pick_list(
-                    layer_names,
+                iced::widget::pick_list(
                     Some(state.current_layer.clone()),
-                    Message::LayerStateEditorCurrentLayer,
+                    layer_names,
+                    |value| value.to_string(),
                 )
+                .on_select(Message::LayerStateEditorCurrentLayer)
                 .text_size(11)
                 .padding([3, 6])
                 .width(Length::Fixed(180.0)),

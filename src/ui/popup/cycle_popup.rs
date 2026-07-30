@@ -22,7 +22,8 @@ pub fn cycle_popup_overlay(
         .style(container::bordered_box)
         .width(Length::Fixed(150.0));
 
-    let positioned = crate::ui::pin_at(anchor, opaque(panel));
+    let positioned = iced::widget::pin(opaque(panel))
+        .position(iced::Point::new(anchor.x.max(0.0), anchor.y.max(0.0)));
 
     mouse_area(positioned).on_press(Message::CycleCancel).into()
 }

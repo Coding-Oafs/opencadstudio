@@ -126,7 +126,10 @@ fn color_row<'a>(
             value: crate::ui::color_select::color_to_aci_string(c),
         },
         Message::MLeaderColorMore(field),
-        Message::OpenColorWindow(crate::app::ColorPickTarget::MLeader(field)),
+        Message::OpenColorWindow(
+            crate::app::ColorPickTarget::MLeader(field),
+            cur,
+        ),
     );
     row![text(label).size(11).style(muted_style).width(150), selector]
         .spacing(8)
@@ -142,9 +145,8 @@ fn enum_row<'a>(
 ) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(150),
-        crate::ui::pick_list(options, Some(selected), move |value| {
-            Message::MLeaderStyleSetEnum { field, value }
-        })
+        iced::widget::pick_list(Some(selected), options, |value| value.to_string())
+        .on_select(move |value| Message::MLeaderStyleSetEnum { field, value })
         .text_size(11)
         .width(190),
     ]
@@ -157,11 +159,12 @@ fn lineweight_row<'a>(selected: acadrust::types::LineWeight) -> Element<'a, Mess
     let selected = crate::ui::properties::LwItem(selected);
     row![
         text("Line weight:").size(11).style(muted_style).width(150),
-        crate::ui::pick_list(
-            crate::ui::properties::lw_options(),
+        iced::widget::pick_list(
             Some(selected),
-            |item| Message::MLeaderStyleLineWeightChanged(item.0)
+            crate::ui::properties::lw_options(),
+            |value| value.to_string(),
         )
+        .on_select(|item| Message::MLeaderStyleLineWeightChanged(item.0))
         .text_size(11)
         .width(190),
     ]
@@ -199,9 +202,8 @@ fn handle_row<'a>(
 ) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(150),
-        crate::ui::pick_list(options, Some(selected), move |value| {
-            Message::MLeaderStyleSetHandle { field, value }
-        })
+        iced::widget::pick_list(Some(selected), options, |value| value.to_string())
+        .on_select(move |value| Message::MLeaderStyleSetHandle { field, value })
         .text_size(11)
         .width(190),
     ]

@@ -119,7 +119,10 @@ pub fn view_window<'a>(
                     value: crate::ui::color_select::color_to_aci_string(c),
                 },
                 Message::TableColorMore(row, field),
-                Message::OpenColorWindow(crate::app::ColorPickTarget::Table(row, field)),
+                Message::OpenColorWindow(
+                    crate::app::ColorPickTarget::Table(row, field),
+                    cur,
+                ),
             );
             row![text(label).size(11).style(muted_style).width(150), selector]
                 .spacing(8)
@@ -141,7 +144,8 @@ pub fn view_window<'a>(
             .push(
                 row![
                     text("  Alignment:").size(11).style(muted_style).width(150),
-                    crate::ui::pick_list(
+                    iced::widget::pick_list(
+                        Some(format!("{:?}", rs.alignment)),
                         [
                             "TopLeft",
                             "TopCenter",
@@ -156,9 +160,9 @@ pub fn view_window<'a>(
                         .iter()
                         .map(|s| s.to_string())
                         .collect::<Vec<_>>(),
-                        Some(format!("{:?}", rs.alignment)),
-                        move |value| Message::TableStyleCellSetAlign { row, value },
+                        |value| value.to_string(),
                     )
+                    .on_select(move |value| Message::TableStyleCellSetAlign { row, value })
                     .text_size(11)
                     .width(140),
                 ]
@@ -194,18 +198,19 @@ pub fn view_window<'a>(
             col = col.push(
                 row![
                     text(format!("   {bname}")).size(11).style(muted_style).width(28),
-                    crate::ui::pick_list(
+                    iced::widget::pick_list(
+                        Some(format!("{:?}", bd.border_type)),
                         ["Single", "Double"]
                             .iter()
                             .map(|s| s.to_string())
                             .collect::<Vec<_>>(),
-                        Some(format!("{:?}", bd.border_type)),
-                        move |value| Message::TableStyleBorderSetType {
+                        |value| value.to_string(),
+                    )
+                    .on_select(move |value| Message::TableStyleBorderSetType {
                             cell: row,
                             border: bu,
                             value
-                        },
-                    )
+                        })
                     .text_size(10)
                     .width(74),
                     text_input("wt", &border_lw[r][b])
@@ -274,14 +279,15 @@ pub fn view_window<'a>(
                 .align_y(iced::Center),
                 row![
                     text("Flow direction:").size(11).style(muted_style).width(160),
-                    crate::ui::pick_list(
+                    iced::widget::pick_list(
+                        Some(format!("{:?}", s.flow_direction)),
                         ["Down", "Up"]
                             .iter()
                             .map(|s| s.to_string())
                             .collect::<Vec<_>>(),
-                        Some(format!("{:?}", s.flow_direction)),
-                        Message::TableStyleSetFlow,
+                        |value| value.to_string(),
                     )
+                    .on_select(Message::TableStyleSetFlow)
                     .text_size(11)
                     .width(100),
                 ]

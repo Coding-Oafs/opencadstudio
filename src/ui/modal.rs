@@ -210,17 +210,42 @@ impl ModalOptions {
         neutral_close: false,
     };
 
-    pub const MOVABLE_FIXED: Self = Self {
-        movable: true,
-        resizable: false,
-        neutral_close: false,
-    };
-
     pub const NOTICE: Self = Self {
         movable: true,
         resizable: false,
         neutral_close: true,
     };
+}
+
+/// Dim and block the application beneath an overlay-owned dialog.
+///
+/// Some third-party overlays ignore pointer movement outside their interactive
+/// controls. The shield owns the cursor and pointer presses across the window,
+/// making such an overlay behave modally.
+pub fn backdrop<'a>(
+    base: impl Into<Element<'a, Message>>,
+    on_close: Message,
+) -> Element<'a, Message> {
+    let shield = mouse_area(
+        container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(
+                    theme
+                        .palette()
+                        .background
+                        .strongest
+                        .color
+                        .scale_alpha(0.55),
+                )),
+                ..Default::default()
+            }),
+    )
+    .on_press(on_close)
+    .interaction(iced::mouse::Interaction::Idle);
+
+    stack![base.into(), opaque(shield)].into()
 }
 
 /// Stack `content` over `base` behind a dimmed backdrop, framed with a title bar

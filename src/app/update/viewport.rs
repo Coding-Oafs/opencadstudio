@@ -435,6 +435,10 @@ impl OpenCADStudio {
     }
 
     pub(super) fn on_cursor_moved(&mut self, p: Point) -> Task<Message> {
+        if self.color_pick_target.is_some() {
+            return Task::none();
+        }
+
         // `p` is relative to the ViewCube hit area's top-left. Map
         // it back to full-canvas coordinates so ViewportClick's
         // hit-test lines up. The hit area sits in the top-right of
@@ -498,7 +502,7 @@ impl OpenCADStudio {
         // leaks through the stack to the pane mouse_area beneath and
         // would track the crosshair over the dropdown's empty areas.
         // Drop the move here instead. (#227)
-        if self.ribbon.open_dropdown.is_some() {
+        if self.ribbon.open_dropdown.is_some() || self.color_pick_target.is_some() {
             return Task::none();
         }
         let i = self.active_tab;

@@ -982,9 +982,12 @@ fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, 
     items.push(
         row![
             label("Format:").width(70),
-            crate::ui::pick_list(crate::io::SAVE_FORMAT_OPTIONS, sel_fmt, |s: &str| {
-                Message::SaveDialogFormatChanged(s.to_string())
-            })
+            iced::widget::pick_list(
+                sel_fmt,
+                crate::io::SAVE_FORMAT_OPTIONS,
+                |value| value.to_string(),
+            )
+            .on_select(|s: &str| Message::SaveDialogFormatChanged(s.to_string()))
             .width(Fit),
         ]
         .align_y(iced::Alignment::Center)

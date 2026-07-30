@@ -70,11 +70,12 @@ pub fn view_window<'a>(
         Space::new().height(10),
         row![
             text("Default save format:").size(12).width(150),
-            crate::ui::pick_list(
-                crate::io::SAVE_FORMAT_OPTIONS,
+            iced::widget::pick_list(
                 selected_format,
-                |format: &str| Message::DefaultSaveFormatChanged(format.to_string())
+                crate::io::SAVE_FORMAT_OPTIONS,
+                |value| value.to_string(),
             )
+            .on_select(|format: &str| Message::DefaultSaveFormatChanged(format.to_string()))
             .width(sizing.width),
         ]
         .spacing(12)
@@ -90,11 +91,12 @@ pub fn view_window<'a>(
         Space::new().height(10),
         row![
             text("Iced theme:").size(12).width(150),
-            crate::ui::pick_list(
-                theme_options,
+            iced::widget::pick_list(
                 selected_theme,
-                Message::OptionsThemeChanged,
+                theme_options,
+                |value| value.to_string(),
             )
+            .on_select(Message::OptionsThemeChanged)
             .width(sizing.width),
         ]
         .spacing(12)

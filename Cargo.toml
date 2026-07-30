@@ -52,7 +52,7 @@ iced = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00
 iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 # iced_aw 0.15 compatibility is pending upstream in PR #432. Pin the exact
 # reviewed pair of commits so Iced and its additional widgets cannot drift.
-iced_aw = { git = "https://github.com/tsuza/iced_aw.git", rev = "a9301708a4d008dc17f63cbbbb2b2aa06e0e7352", features = ["menu", "context_menu"] }
+iced_aw = { git = "https://github.com/tsuza/iced_aw.git", rev = "a9301708a4d008dc17f63cbbbb2b2aa06e0e7352", features = ["menu", "context_menu", "color_picker"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = { version = "0.33", features = ["bytemuck"] }
 truck-modeling = "0.6"

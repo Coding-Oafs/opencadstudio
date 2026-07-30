@@ -79,11 +79,12 @@ pub(super) fn viewport_controls<'a>(
     };
 
     // Render-mode picker, restyled borderless so the outer chip frames it.
-    let picker = crate::ui::pick_list(
-        render_modes,
+    let picker = iced::widget::pick_list(
         Some(RenderModeChoice(render_mode)),
-        |c| Message::SetRenderMode(c.0),
+        render_modes,
+        |value| value.to_string(),
     )
+    .on_select(|c| Message::SetRenderMode(c.0))
     .text_size(11)
     .padding([4, 6])
     .style(move |theme: &Theme, _| {

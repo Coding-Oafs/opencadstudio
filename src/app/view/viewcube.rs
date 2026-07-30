@@ -16,7 +16,9 @@ use iced::{Background, Border, Element, Theme};
 
 /// Place `el` at pixel offset (x, y) inside a fill layer (top-left origin).
 fn vc_place<'a>(x: f32, y: f32, el: Element<'a, Message>) -> Element<'a, Message> {
-    crate::ui::pin_at(iced::Point::new(x, y), el)
+    iced::widget::pin(el)
+        .position(iced::Point::new(x.max(0.0), y.max(0.0)))
+        .into()
 }
 
 /// Borderless square icon button used by the ViewCube nav controls.
@@ -155,7 +157,8 @@ pub(super) fn viewcube_ucs_picker<'a>(current: String, names: Vec<String>) -> El
     } else {
         current
     };
-    crate::ui::pick_list(options, Some(selected), Message::SetViewcubeUcs)
+    iced::widget::pick_list(Some(selected), options, |value| value.to_string())
+        .on_select(Message::SetViewcubeUcs)
         .text_size(11)
         .padding([2, 6])
         // Fixed width so the caller can centre it under the cube centre with a

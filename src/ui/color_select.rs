@@ -9,7 +9,7 @@ use acadrust::types::Color as AcadColor;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{mouse, overlay, renderer, Shell};
-use iced::widget::{button, column, container, row, scrollable, text};
+use iced::widget::{button, column, container, row, text};
 use iced::{Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 /// Which "logical" entries the colour list offers besides the standard ACI
@@ -21,15 +21,45 @@ pub struct ColorExtras {
 }
 
 /// Encode a colour as the ACI integer string the style editors store
-/// (ByBlock=0, ByLayer=256, indexed 1-255; RGB has no ACI slot → ByLayer).
+/// (ByBlock=0, ByLayer=256, indexed 1-255). True colours are mapped to the
+/// closest ACI entry because these fields cannot store RGB values.
 pub fn color_to_aci_string(c: AcadColor) -> String {
     match c {
         AcadColor::ByBlock => "0".to_string(),
         AcadColor::ByLayer => "256".to_string(),
         AcadColor::None => "257".to_string(),
         AcadColor::Index(i) => i.to_string(),
-        AcadColor::Rgb { .. } => "256".to_string(),
+        AcadColor::Rgb { r, g, b } => nearest_aci(r, g, b).to_string(),
     }
+}
+
+/// Convert an Iced colour chosen by `iced_aw::ColorPicker` into a DWG true
+/// colour. ACI-only destinations map it to their closest indexed colour later.
+pub fn iced_to_acad_color(color: Color) -> AcadColor {
+    let [r, g, b, _] = color.into_rgba8();
+    AcadColor::Rgb { r, g, b }
+}
+
+/// Return the closest AutoCAD Color Index for an RGB colour.
+pub fn nearest_aci(r: u8, g: u8, b: u8) -> u8 {
+    let mut best = 7;
+    let mut best_distance = u32::MAX;
+
+    for index in 1..=255 {
+        let Some((ar, ag, ab)) = acadrust::types::aci_table::aci_to_rgb(index) else {
+            continue;
+        };
+        let dr = i32::from(r) - i32::from(ar);
+        let dg = i32::from(g) - i32::from(ag);
+        let db = i32::from(b) - i32::from(ab);
+        let distance = (dr * dr + dg * dg + db * db) as u32;
+        if distance < best_distance {
+            best = index;
+            best_distance = distance;
+        }
+    }
+
+    best
 }
 
 /// Decode an ACI integer string back into an `AcadColor`.
@@ -195,80 +225,6 @@ pub fn color_list<'a>(
             .width(Length::Fill),
     );
     list.into()
-}
-
-/// Full ACI palette as a standalone window body: ByLayer / ByBlock plus the
-/// 256-colour grid. `on_pick` is called with the chosen colour.
-pub fn color_grid_window(on_pick: impl Fn(AcadColor) -> Message) -> Element<'static, Message> {
-    let chip = |color: AcadColor, label: &'static str| -> Element<'static, Message> {
-        let (bg, _) = acad_color_display(color);
-        button(
-            row![swatch(bg), text(label).size(11)]
-                .spacing(5)
-                .align_y(iced::Center),
-        )
-        .on_press(on_pick(color))
-        .padding([3, 6])
-        .into()
-    };
-
-    const COLS: u16 = 16;
-    let mut grid = column![].spacing(2);
-    let mut idx: u16 = 1;
-    while idx <= 255 {
-        let mut r = row![].spacing(2);
-        for _ in 0..COLS {
-            if idx > 255 {
-                break;
-            }
-            let ci = idx as u8;
-            let (bg, _) = acad_color_display(AcadColor::Index(ci));
-            r = r.push(
-                button(text("").width(18).height(18))
-                    .on_press(on_pick(AcadColor::Index(ci)))
-                    .style(move |theme: &Theme, status| button::Style {
-                        background: Some(Background::Color(bg)),
-                        border: Border {
-                            color: if matches!(status, button::Status::Hovered) {
-                                theme.palette().primary.base.color
-                            } else {
-                                theme.palette().background.neutral.color
-                            },
-                            width: if matches!(status, button::Status::Hovered) {
-                                1.5
-                            } else {
-                                1.0
-                            },
-                            radius: 1.0.into(),
-                        },
-                        text_color: theme.palette().background.base.text,
-                        ..Default::default()
-                    })
-                    .padding(0),
-            );
-            idx += 1;
-        }
-        grid = grid.push(r);
-    }
-
-    container(
-        column![
-            text("Select Color").size(13),
-            row![chip(AcadColor::ByLayer, "ByLayer"), chip(AcadColor::ByBlock, "ByBlock")].spacing(6),
-            scrollable(grid).height(Length::Fit),
-        ]
-        .spacing(8),
-    )
-    .style(|theme: &Theme| container::Style {
-        background: Some(Background::Color(
-            theme.palette().background.weak.color
-        )),
-        ..Default::default()
-    })
-    .padding(10)
-    .width(Length::Fit)
-    .height(Length::Fit)
-    .into()
 }
 
 /// Render `base` inline with `popup` floating just below it — the shared

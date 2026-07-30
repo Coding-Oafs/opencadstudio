@@ -465,8 +465,8 @@ pub(super) struct OpenCADStudio {
     /// OS window Id of the primary application window.
     main_window: Option<window::Id>,
     // ── Floating panel windows ────────────────────────────────────────────
-    /// Standalone "Select Color" palette window + the field it targets.
-    color_pick_target: Option<ColorPickTarget>,
+    /// Active `iced_aw` colour picker: destination plus its initial colour.
+    color_pick_target: Option<(ColorPickTarget, AcadColor)>,
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
@@ -2503,11 +2503,11 @@ pub enum Message {
     DsToggle(DsField),
     /// Toggle the expanded colour palette for a DimStyle colour field.
     DsColorMore(DsField),
-    /// Open the standalone palette window targeting the given field.
-    OpenColorWindow(ColorPickTarget),
-    /// Close the nested colour-picker modal without choosing (Plan B).
+    /// Open the `iced_aw` colour picker for a field and its current colour.
+    OpenColorWindow(ColorPickTarget, AcadColor),
+    /// Close the colour picker without choosing.
     CloseColorPicker,
-    /// A colour was chosen in the standalone palette window.
+    /// A colour was chosen in the `iced_aw` picker.
     ColorWindowPick(acadrust::types::Color),
     /// Set a block/linetype Handle field on the selected dim style from a
     /// dropdown of available block-records / linetypes (by name).
@@ -3177,6 +3177,7 @@ pub fn run() -> iced::Result {
         }
     })
     .theme(|state: &OpenCADStudio, _| state.active_theme.clone())
+    .font(iced_aw::ICED_AW_FONT_BYTES)
     .run()
 }
 
@@ -3206,5 +3207,6 @@ pub fn run_web() -> iced::Result {
     .subscription(OpenCADStudio::subscription)
     .title(|_state: &OpenCADStudio| "Open CAD Studio".to_string())
     .theme(|state: &OpenCADStudio| state.active_theme.clone())
+    .font(iced_aw::ICED_AW_FONT_BYTES)
     .run()
 }

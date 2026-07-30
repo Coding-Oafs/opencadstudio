@@ -611,7 +611,10 @@ impl PropertiesPanel {
                 // "More Colors…" opens the full palette window targeting the
                 // background colour — this used to just close the picker
                 // (#415).
-                Message::OpenColorWindow(crate::app::ColorPickTarget::PropertiesBg),
+                Message::OpenColorWindow(
+                    crate::app::ColorPickTarget::PropertiesBg,
+                    color,
+                ),
             );
             return prop_row_widget(label, selector);
         }
@@ -655,7 +658,10 @@ impl PropertiesPanel {
             },
             Message::PropColorChanged,
             Message::PropColorPickerToggle,
-            Message::OpenColorWindow(crate::app::ColorPickTarget::Properties),
+            Message::OpenColorWindow(
+                crate::app::ColorPickTarget::Properties,
+                color,
+            ),
         );
         prop_row_widget(label, selector)
     }

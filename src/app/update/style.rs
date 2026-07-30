@@ -960,7 +960,7 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
 
     pub(super) fn on_color_window_pick(&mut self, color: acadrust::types::Color) -> Task<Message> {
                 let s = crate::ui::color_select::color_to_aci_string(color);
-                let edit = match self.color_pick_target.take() {
+                let edit = match self.color_pick_target.take().map(|(target, _)| target) {
                     Some(crate::app::ColorPickTarget::DimStyle(f)) => Some(Message::DsEdit(f, s)),
                     Some(crate::app::ColorPickTarget::MLeader(f)) => {
                         Some(Message::MLeaderStyleEdit { field: f, value: s })
@@ -986,10 +986,14 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     }
                     Some(crate::app::ColorPickTarget::Layer(idx)) => {
                         self.tabs[self.active_tab].layers.selected = Some(idx);
-                        match color {
-                            acadrust::types::Color::Index(i) => Some(Message::LayerColorSet(i)),
-                            _ => None,
-                        }
+                        let index = match color {
+                            acadrust::types::Color::Index(i) => i,
+                            acadrust::types::Color::Rgb { r, g, b } => {
+                                crate::ui::color_select::nearest_aci(r, g, b)
+                            }
+                            _ => 7,
+                        };
+                        Some(Message::LayerColorSet(index))
                     }
                     Some(crate::app::ColorPickTarget::LayerState(idx)) => {
                         Some(Message::LayerStateEditorLayerColor(idx, color))

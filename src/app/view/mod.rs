@@ -788,10 +788,10 @@ impl OpenCADStudio {
             .into();
             // Pin the bar to the active model tile's top-left corner so it
             // follows the active panel in a tiled layout.
-            let bar_layer = crate::ui::pin_at(
-                iced::Point::new(rect.x, rect.y),
+            let bar_layer = iced::widget::pin(
                 container(adaptive).width(iced::Length::Fixed(rect.width.max(1.0))),
-            );
+            )
+            .position(iced::Point::new(rect.x.max(0.0), rect.y.max(0.0)));
             viewport_stack = viewport_stack.push(bar_layer);
         }
 
@@ -840,7 +840,8 @@ impl OpenCADStudio {
                 },
                 ..Default::default()
             });
-            let border_layer = crate::ui::pin_at(iced::Point::new(x, y), border_frame);
+            let border_layer =
+                iced::widget::pin(border_frame).position(iced::Point::new(x, y));
             viewport_stack = viewport_stack.push(border_layer);
 
             let vp_mode = tab
@@ -866,10 +867,10 @@ impl OpenCADStudio {
             ])
             .report_width0(self.render_bar_w.clone())
             .into();
-            let picker_layer = crate::ui::pin_at(
-                iced::Point::new(x + 4.0, y + 4.0),
+            let picker_layer = iced::widget::pin(
                 container(adaptive).width(iced::Length::Fixed(rect.width.max(1.0))),
-            );
+            )
+            .position(iced::Point::new(x + 4.0, y + 4.0));
             viewport_stack = viewport_stack.push(picker_layer);
 
             // Hide the ViewCube first — before the render bar — when they collide.
@@ -877,10 +878,8 @@ impl OpenCADStudio {
                 let cube_x = (rect.x + rect.width - VIEWCUBE_HIT_SIZE - VIEWCUBE_PAD).max(0.0);
                 let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
 
-                let controls = crate::ui::pin_at(
-                    iced::Point::new(cube_x, cube_y),
-                    viewcube_nav_controls(),
-                );
+                let controls = iced::widget::pin(viewcube_nav_controls())
+                    .position(iced::Point::new(cube_x, cube_y));
                 viewport_stack = viewport_stack.push(controls);
 
                 let ucs_current = tab
@@ -896,13 +895,14 @@ impl OpenCADStudio {
                     .map(|u| u.name.clone())
                     .filter(|n| !n.is_empty())
                     .collect();
-                let picker = crate::ui::pin_at(
-                    iced::Point::new(
+                let picker = iced::widget::pin(iced::widget::opaque(viewcube_ucs_picker(
+                    ucs_current,
+                    ucs_names,
+                )))
+                .position(iced::Point::new(
                         cube_x + VIEWCUBE_HIT_SIZE * 0.5 - UCS_PICKER_W * 0.5,
                         cube_y + VIEWCUBE_HIT_SIZE + 6.0,
-                    ),
-                    iced::widget::opaque(viewcube_ucs_picker(ucs_current, ucs_names)),
-                );
+                    ));
                 viewport_stack = viewport_stack.push(picker);
             }
         }
@@ -917,10 +917,8 @@ impl OpenCADStudio {
             let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
 
             // Cube hit area + nav controls (home / roll / nudge) as one layer.
-            let controls = crate::ui::pin_at(
-                iced::Point::new(cube_x, cube_y),
-                viewcube_nav_controls(),
-            );
+            let controls = iced::widget::pin(viewcube_nav_controls())
+                .position(iced::Point::new(cube_x, cube_y));
             viewport_stack = viewport_stack.push(controls);
 
             // WCS / named-UCS selector under the cube.
@@ -937,13 +935,14 @@ impl OpenCADStudio {
                 .map(|u| u.name.clone())
                 .filter(|n| !n.is_empty())
                 .collect();
-            let picker = crate::ui::pin_at(
-                iced::Point::new(
+            let picker = iced::widget::pin(iced::widget::opaque(viewcube_ucs_picker(
+                ucs_current,
+                ucs_names,
+            )))
+            .position(iced::Point::new(
                     cube_x + VIEWCUBE_HIT_SIZE * 0.5 - UCS_PICKER_W * 0.5,
                     cube_y + VIEWCUBE_HIT_SIZE + 6.0,
-                ),
-                iced::widget::opaque(viewcube_ucs_picker(ucs_current, ucs_names)),
-            );
+                ));
             viewport_stack = viewport_stack.push(picker);
         }
 
@@ -1554,21 +1553,24 @@ impl OpenCADStudio {
             }
             None => composed.into(),
         };
-        // The colour picker is a nested modal: it stacks over whichever dialog
-        // (style editor, properties, …) requested it.
-        if self.color_pick_target.is_some() {
-            crate::ui::modal::modal(
-                base,
-                "Select Color",
-                iced::widget::container(crate::ui::color_select::color_grid_window(
-                    Message::ColorWindowPick,
-                ))
-                .width(iced::Length::Fit.max(420.0))
-                .height(iced::Length::Fit.max(470.0)),
+        // iced_aw owns the colour-picker overlay and keeps it above whichever
+        // application modal requested it.
+        if let Some((_, current)) = self.color_pick_target.as_ref() {
+            let initial = crate::ui::properties::acad_color_display(*current).0;
+            let modal_base =
+                crate::ui::modal::backdrop(base, Message::CloseColorPicker);
+            iced_aw::ColorPicker::new(
+                true,
+                initial,
+                modal_base,
                 Message::CloseColorPicker,
-                iced::Vector::ZERO,
-                crate::ui::modal::ModalOptions::MOVABLE_FIXED,
+                |color| {
+                    Message::ColorWindowPick(
+                        crate::ui::color_select::iced_to_acad_color(color),
+                    )
+                },
             )
+            .into()
         } else {
             base
         }

@@ -1108,7 +1108,10 @@ impl Ribbon {
                 by_block: true,
             },
             Message::RibbonColorChanged,
-            Message::OpenColorWindow(crate::app::ColorPickTarget::Ribbon),
+            Message::OpenColorWindow(
+                crate::app::ColorPickTarget::Ribbon,
+                self.active_color,
+            ),
         );
 
         let panel = container(picker)

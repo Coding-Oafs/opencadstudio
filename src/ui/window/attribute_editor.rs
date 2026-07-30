@@ -210,7 +210,8 @@ fn pick_field<'a>(
     on_select: impl Fn(String) -> Message + 'a,
     width: Length,
 ) -> Element<'a, Message> {
-    let pl = crate::ui::pick_list(options, selected, on_select)
+    let pl = iced::widget::pick_list(selected, options, |value| value.to_string())
+        .on_select(on_select)
         .text_size(13)
         .padding([3, 6])
         .width(width);
@@ -475,9 +476,8 @@ fn properties_tab<'a>(
 
     let lw_opts = lw_options();
     let lw_sel = LwItem(r.line_weight);
-    let lw = crate::ui::pick_list(lw_opts, Some(lw_sel), |it: LwItem| {
-        Message::AttrEditorLineweight(it.0)
-    })
+    let lw = iced::widget::pick_list(Some(lw_sel), lw_opts, |value| value.to_string())
+    .on_select(|it: LwItem| Message::AttrEditorLineweight(it.0))
     .text_size(13)
     .padding([3, 6])
     .width(width);

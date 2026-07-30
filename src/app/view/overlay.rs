@@ -9,7 +9,9 @@ pub(super) fn position_canvas_overlay<'a>(
     anchor: iced::Point,
     panel: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    crate::ui::pin_at(anchor, iced::widget::opaque(panel))
+    iced::widget::pin(iced::widget::opaque(panel))
+        .position(iced::Point::new(anchor.x.max(0.0), anchor.y.max(0.0)))
+        .into()
 }
 
 // ── In-place MText editor overlay ───────────────────────────────────────────
@@ -369,7 +371,12 @@ pub(super) fn mtext_editor_overlay<'a>(
     } else {
         styles
     };
-    let style_pl = crate::ui::pick_list(style_opts, Some(ed.style.clone()), Message::MTextStyle)
+    let style_pl = iced::widget::pick_list(
+        Some(ed.style.clone()),
+        style_opts,
+        |value| value.to_string(),
+    )
+        .on_select(Message::MTextStyle)
         .text_size(11)
         .width(iced::Length::Fixed(96.0));
     let font_sel = if ed.font.trim().is_empty() {
@@ -377,14 +384,15 @@ pub(super) fn mtext_editor_overlay<'a>(
     } else {
         ed.font.clone()
     };
-    let font_pl = crate::ui::pick_list(
+    let font_pl = iced::widget::pick_list(
+        Some(font_sel),
         MTEXT_FONTS
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>(),
-        Some(font_sel),
-        Message::MTextFont,
+        |value| value.to_string(),
     )
+    .on_select(Message::MTextFont)
     .text_size(11)
     .width(iced::Length::Fixed(120.0));
     // Same colour picker as the Properties panel (named swatches + "More…" full
@@ -398,7 +406,10 @@ pub(super) fn mtext_editor_overlay<'a>(
         },
         Message::MTextColorChanged,
         Message::MTextColorPickerToggle,
-        Message::OpenColorWindow(crate::app::ColorPickTarget::MText),
+        Message::OpenColorWindow(
+            crate::app::ColorPickTarget::MText,
+            acadrust::types::Color::from_index(ed.color_aci as i16),
+        ),
     ))
     .width(iced::Length::Fixed(150.0));
 
@@ -443,11 +454,12 @@ pub(super) fn mtext_editor_overlay<'a>(
     .width(width);
 
     // ── Row 2: oblique / width / char-spacing · align · line spacing · OK ─
-    let justify = crate::ui::pick_list(
-        JustifyChoice::ALL,
+    let justify = iced::widget::pick_list(
         Some(JustifyChoice(ed.attachment)),
-        |c| Message::MTextJustify(c.0),
+        JustifyChoice::ALL,
+        |value| value.to_string(),
     )
+    .on_select(|c| Message::MTextJustify(c.0))
     .text_size(11)
     .width(iced::Length::Fixed(112.0));
     let row2 = row![
@@ -1008,7 +1020,12 @@ pub(super) fn qselect_overlay<'a>(
         Space::new().height(10),
         row![
             label("Object type:"),
-            crate::ui::pick_list(type_options, Some(type_sel), |s: String| {
+            iced::widget::pick_list(
+                Some(type_sel),
+                type_options,
+                |value| value.to_string(),
+            )
+            .on_select(|s: String| {
                 if s == QSELECT_ANY_TYPE {
                     Message::QSelectSetType(None)
                 } else {
@@ -1022,17 +1039,18 @@ pub(super) fn qselect_overlay<'a>(
         Space::new().height(6),
         row![
             label("Property:"),
-            crate::ui::pick_list(
-                prop_options,
+            iced::widget::pick_list(
                 Some(prop_sel),
-                |p: crate::app::QSelectPropertyChoice| {
+                prop_options,
+                |value| value.to_string(),
+            )
+            .on_select(|p: crate::app::QSelectPropertyChoice| {
                     if p.field.is_empty() {
                         Message::QSelectSetProperty(None)
                     } else {
                         Message::QSelectSetProperty(Some(p))
                     }
-                }
-            )
+                })
             .width(Fill),
         ]
         .align_y(iced::Alignment::Center)
@@ -1040,11 +1058,12 @@ pub(super) fn qselect_overlay<'a>(
         Space::new().height(6),
         row![
             label("Operator:"),
-            crate::ui::pick_list(
-                op_options,
+            iced::widget::pick_list(
                 Some(state.operator),
-                Message::QSelectSetOperator
+                op_options,
+                |value| value.to_string(),
             )
+            .on_select(Message::QSelectSetOperator)
             .width(Fill),
         ]
         .align_y(iced::Alignment::Center)

@@ -325,9 +325,8 @@ fn install_controls<'a>(
         text("no releases").size(11).style(muted_style).into()
     } else {
         let r = repo_s.clone();
-        crate::ui::pick_list(tags, selected, move |tag| {
-            Message::PluginReleaseSelect(r.clone(), tag)
-        })
+        iced::widget::pick_list(selected, tags, |value| value.to_string())
+        .on_select(move |tag| Message::PluginReleaseSelect(r.clone(), tag))
         .text_size(12)
         .into()
     };

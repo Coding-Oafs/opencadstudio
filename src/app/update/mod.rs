@@ -2120,6 +2120,9 @@ impl OpenCADStudio {
             Message::PaneClicked(pane) => self.on_pane_clicked(pane),
             Message::PaneDragged(ev) => self.on_pane_dragged(ev),
             Message::PaneMove(idx, local) => {
+                if self.color_pick_target.is_some() {
+                    return Task::none();
+                }
                 let p = self.pane_canvas_point(idx, local);
                 // While dragging a pane, just track the cursor (no focus swap or
                 // snap) so the drop target reads cleanly.
@@ -5744,8 +5747,8 @@ impl OpenCADStudio {
                 };
                 Task::none()
             }
-            Message::OpenColorWindow(target) => {
-                self.color_pick_target = Some(target);
+            Message::OpenColorWindow(target, color) => {
+                self.color_pick_target = Some((target, color));
                 self.ds_color_open = None;
                 self.mls_color_open = None;
                 self.ts_color_open = None;
@@ -5753,8 +5756,7 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 self.tabs[i].properties.color_picker_open = false;
                 self.tabs[i].layers.color_picker_row = None;
-                // Shown as a nested modal over the active dialog (Plan B):
-                // `color_pick_target.is_some()` drives the overlay in view_main.
+                // `color_pick_target.is_some()` drives the iced_aw overlay.
                 Task::none()
             }
             Message::CloseColorPicker => {

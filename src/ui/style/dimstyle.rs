@@ -235,7 +235,8 @@ pub fn view_window<'a>(
             .unwrap_or_else(|| val.to_string());
         row![
             lbl(label),
-            crate::ui::pick_list(labels, Some(cur), move |chosen| {
+            iced::widget::pick_list(Some(cur), labels, |value| value.to_string())
+            .on_select(move |chosen| {
                 let code = opts
                     .iter()
                     .find(|(_, l)| *l == chosen.as_str())
@@ -287,7 +288,10 @@ pub fn view_window<'a>(
             },
             move |c| Message::DsEdit(f_sel.clone(), crate::ui::color_select::color_to_aci_string(c)),
             Message::DsColorMore(fld.clone()),
-            Message::OpenColorWindow(ColorPickTarget::DimStyle(fld.clone())),
+            Message::OpenColorWindow(
+                ColorPickTarget::DimStyle(fld.clone()),
+                cur,
+            ),
         );
         row![lbl(label), container(selector).width(150)]
             .spacing(8)
@@ -304,9 +308,8 @@ pub fn view_window<'a>(
           -> Element<'a, Message> {
         row![
             lbl(label),
-            crate::ui::pick_list(options, Some(selected), move |value| {
-                Message::DsSetHandle { field, value }
-            })
+            iced::widget::pick_list(Some(selected), options, |value| value.to_string())
+            .on_select(move |value| Message::DsSetHandle { field, value })
             .text_size(11)
             .width(150),
         ]
