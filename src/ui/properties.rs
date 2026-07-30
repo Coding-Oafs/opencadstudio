@@ -26,6 +26,8 @@ const COMBO_PAD_V: f32 = (ROW_H - FONT_SZ * 1.3 - 2.0) / 2.0; // fills combo to 
 const SWATCH_SZ: f32 = ROW_H * 0.54; // ≈14 px color swatch
 const PATTERN_CARD_W: f32 = 158.0;
 const PATTERN_PREVIEW_H: f32 = 58.0;
+const PATTERN_PICKER_W: f32 = 348.0;
+const PATTERN_PICKER_H: f32 = 720.0;
 
 use crate::app::Message;
 use crate::scene::model::object::{PropSection, PropValue};
@@ -862,8 +864,7 @@ impl PropertiesPanel {
     /// Editable dropdown row (block reference Name): a text field with a caret
     /// button in one bordered control. Typing + Enter commits through the
     /// normal PropGeomCommit path (existing name → re-point, new name →
-    /// rename); the caret opens a floating list of the definitions (always
-    /// downward, via the shared `floating_below` mechanic) and picking one
+    /// rename); the caret opens a dropdown list of the definitions and picking one
     /// applies through PropGeomChoiceChanged. Typed text filters the list.
     fn render_edit_choice_row<'a>(
         &'a self,
@@ -966,7 +967,13 @@ impl PropertiesPanel {
 
         prop_row_widget(
             label,
-            crate::ui::color_select::floating_below(head.into(), popup.into()),
+            crate::ui::color_select::drop_down_below(
+                head.into(),
+                popup.into(),
+                Length::Fixed(200.0),
+                Length::Shrink,
+                Message::PropEditChoiceToggle,
+            ),
         )
     }
 
@@ -1124,19 +1131,25 @@ impl PropertiesPanel {
             .into()
         } else {
             scrollable(grid)
-                .height(Length::Fixed(300.0))
+                .height(Length::Fill)
                 .width(Length::Fill)
                 .into()
         };
         let popup = container(column![search, results].spacing(7))
             .style(container::bordered_box)
             .padding(8)
-            .width(348)
-            .height(Length::Fit.max(360.0));
+            .width(PATTERN_PICKER_W)
+            .height(Length::Fixed(PATTERN_PICKER_H));
 
         prop_row_widget(
             label,
-            crate::ui::color_select::floating_below(head.into(), popup.into()),
+            crate::ui::color_select::drop_down_below(
+                head.into(),
+                popup.into(),
+                Length::Fixed(PATTERN_PICKER_W),
+                Length::Fixed(PATTERN_PICKER_H),
+                Message::PropHatchPatternPickerToggle(current.to_string()),
+            ),
         )
     }
 }

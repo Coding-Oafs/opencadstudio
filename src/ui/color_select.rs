@@ -6,11 +6,8 @@
 use crate::app::Message;
 use crate::ui::properties::acad_color_display;
 use acadrust::types::Color as AcadColor;
-use iced::advanced::layout::{self, Layout};
-use iced::advanced::widget::{self, Widget};
-use iced::advanced::{mouse, overlay, renderer, Shell};
 use iced::widget::{button, column, container, row, text};
-use iced::{Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::{Background, Border, Color, Element, Length, Theme};
 
 /// Which "logical" entries the colour list offers besides the standard ACI
 /// colours.
@@ -127,6 +124,7 @@ pub fn color_selector<'a>(
 ) -> Element<'a, Message> {
     let (cur_bg, _) = acad_color_display(current);
     let cur_name = color_display_name(current);
+    let on_dismiss = on_toggle.clone();
 
     // Closed button: current swatch + name + caret.
     let head = button(
@@ -162,12 +160,14 @@ pub fn color_selector<'a>(
         .padding(5)
         .width(220);
 
-    // The popup is shown as a floating overlay (anchored below the button) so
-    // it doesn't push the surrounding form down.
-    Element::new(Floating {
-        base: head.into(),
-        popup: popup.into(),
-    })
+    // `DropDown` keeps the popup outside the surrounding form layout and
+    // handles viewport placement, Escape, and outside-click dismissal.
+    iced_aw::DropDown::new(head, popup, true)
+        .width(220)
+        .alignment(iced_aw::drop_down::Alignment::Bottom)
+        .offset(2.0)
+        .on_dismiss(on_dismiss)
+        .into()
 }
 
 fn list_row_style(theme: &Theme, status: button::Status) -> button::Style {
@@ -227,224 +227,19 @@ pub fn color_list<'a>(
     list.into()
 }
 
-/// Render `base` inline with `popup` floating just below it — the shared
-/// dropdown mechanic for the panel's custom dropdowns (colour picker, block
-/// Name). Unlike iced's menu overlay it always opens downward.
-pub fn floating_below<'a>(
+/// Render `base` inline with `popup` in an `iced_aw` dropdown.
+pub fn drop_down_below<'a>(
     base: Element<'a, Message>,
     popup: Element<'a, Message>,
+    popup_width: Length,
+    popup_height: Length,
+    on_dismiss: Message,
 ) -> Element<'a, Message> {
-    Element::new(Floating { base, popup })
-}
-
-/// A widget that renders `base` inline and `popup` as a floating overlay
-/// anchored just below it.
-struct Floating<'a> {
-    base: Element<'a, Message>,
-    popup: Element<'a, Message>,
-}
-
-impl<'a> Widget<Message, Theme, Renderer> for Floating<'a> {
-    fn diff(&mut self, tree: &mut widget::Tree) {
-        tree.diff_children(&mut [&mut self.base, &mut self.popup]);
-    }
-
-    fn size(&self) -> Size<Length> {
-        self.base.as_widget().size()
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut widget::Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        self.base
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
-    }
-
-    fn update(
-        &mut self,
-        tree: &mut widget::Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        shell: &mut Shell<'_, Message>,
-        viewport: &Rectangle,
-    ) {
-        self.base.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            shell,
-            viewport,
-        );
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &widget::Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.base.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
-    }
-
-    fn operate(
-        &mut self,
-        tree: &mut widget::Tree,
-        layout: Layout<'_>,
-        renderer: &Renderer,
-        operation: &mut dyn widget::Operation,
-    ) {
-        self.base
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
-    }
-
-    fn draw(
-        &self,
-        tree: &widget::Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.base.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
-    }
-
-    fn overlay<'b>(
-        &'b mut self,
-        tree: &'b mut widget::Tree,
-        layout: Layout<'b>,
-        _renderer: &Renderer,
-        _viewport: &Rectangle,
-        translation: Vector,
-    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        let bounds = layout.bounds();
-        let anchor = Point::new(
-            bounds.x + translation.x,
-            bounds.y + bounds.height + translation.y + 2.0,
-        );
-        Some(overlay::Element::new(Box::new(FloatingOverlay {
-            popup: &mut self.popup,
-            tree: &mut tree.children[1],
-            anchor,
-        })))
-    }
-}
-
-impl<'a> From<Floating<'a>> for Element<'a, Message> {
-    fn from(f: Floating<'a>) -> Self {
-        Element::new(f)
-    }
-}
-
-struct FloatingOverlay<'a, 'b> {
-    popup: &'b mut Element<'a, Message>,
-    tree: &'b mut widget::Tree,
-    anchor: Point,
-}
-
-impl overlay::Overlay<Message, Theme, Renderer> for FloatingOverlay<'_, '_> {
-    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
-        let viewport = Rectangle::with_size(bounds);
-        let limits = layout::Limits::new(Size::ZERO, viewport.size());
-        let node = self
-            .popup
-            .as_widget_mut()
-            .layout(self.tree, renderer, &limits);
-        let size = node.size();
-        let mut x = self.anchor.x;
-        let mut y = self.anchor.y;
-        if x + size.width > viewport.width {
-            x = (viewport.width - size.width).max(0.0);
-        }
-        if y + size.height > viewport.height {
-            // Not enough room below — flip above the anchor.
-            y = (self.anchor.y - bounds.height.min(0.0) - size.height).max(0.0);
-        }
-        layout::Node::with_children(size, vec![node]).translate(Vector::new(x, y))
-    }
-
-    fn draw(
-        &self,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-    ) {
-        let child = layout.children().next().unwrap();
-        self.popup.as_widget().draw(
-            self.tree,
-            renderer,
-            theme,
-            style,
-            child,
-            cursor,
-            &child.bounds(),
-        );
-    }
-
-    fn update(
-        &mut self,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        shell: &mut Shell<'_, Message>,
-    ) {
-        let child = layout.children().next().unwrap();
-        let vp = child.bounds();
-        self.popup.as_widget_mut().update(
-            self.tree, event, child, cursor, renderer, shell, &vp,
-        );
-    }
-
-    fn operate(
-        &mut self,
-        layout: Layout<'_>,
-        renderer: &Renderer,
-        operation: &mut dyn widget::Operation,
-    ) {
-        let child = layout.children().next().unwrap();
-        self.popup
-            .as_widget_mut()
-            .operate(self.tree, child, renderer, operation);
-    }
-
-    fn mouse_interaction(
-        &self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let child = layout.children().next().unwrap();
-        self.popup
-            .as_widget()
-            .mouse_interaction(self.tree, child, cursor, &child.bounds(), renderer)
-    }
+    iced_aw::DropDown::new(base, popup, true)
+        .width(popup_width)
+        .height(popup_height)
+        .alignment(iced_aw::drop_down::Alignment::Bottom)
+        .offset(2.0)
+        .on_dismiss(on_dismiss)
+        .into()
 }

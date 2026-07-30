@@ -150,24 +150,20 @@ impl OpenCADStudio {
         // viewport draws the layout's own geometry (white sheet + entities +
         // borders) and the floating content viewports blit on top.
         let viewport_3d: Element<'_, Message> = if tab.is_start {
-            responsive(|size| {
-                start_page_view(
-                    &self.patrons,
-                    &self.videos,
-                    self.videos_loading,
-                    &self.video_thumbs,
-                    &self.discussions,
-                    self.discussions_loading,
-                    &self.recent_files,
-                    &self.recent_thumbs,
-                    self.recent_limit,
-                    &self.recent_limit_input,
-                    size.width,
-                    self.start_action_w.clone(),
-                    self.start_section,
-                )
-            })
-            .into()
+            start_page_view(
+                &self.patrons,
+                &self.videos,
+                self.videos_loading,
+                &self.video_thumbs,
+                &self.discussions,
+                self.discussions_loading,
+                &self.recent_files,
+                &self.recent_thumbs,
+                self.recent_limit,
+                &self.recent_limit_input,
+                self.start_action_w.clone(),
+                self.start_section,
+            )
         } else if is_paper {
             shader(ViewportPane::model(
                 &tab.scene,
@@ -2124,7 +2120,13 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
 
     items.push(new_btn.into());
 
-    container(WrapFlow::new(items).spacing_x(0.0).row_h(30.0))
+    container(
+        Row::with_children(items)
+            .spacing(0.0)
+            .align_y(iced::Center)
+            .wrap()
+            .vertical_spacing(0.0),
+    )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
                 theme.palette().background.base.color,
@@ -2254,6 +2256,43 @@ pub(super) fn collapse_bar<'a>(name: &str, on_press: Message) -> Element<'a, Mes
 }
 
 pub(super) fn start_page_view<'a>(
+    patrons: &'a [(String, i64)],
+    videos: &'a [crate::videos::VideoEntry],
+    videos_loading: bool,
+    video_thumbs: &'a std::collections::HashMap<String, iced::widget::image::Handle>,
+    discussions: &'a [crate::discussions::DiscussionEntry],
+    discussions_loading: bool,
+    recents: &'a [std::path::PathBuf],
+    thumbs: &'a std::collections::HashMap<
+        std::path::PathBuf,
+        Option<iced::widget::image::Handle>,
+    >,
+    recent_limit: usize,
+    recent_limit_input: &'a str,
+    action_width_out: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    active: super::StartSection,
+) -> Element<'a, Message> {
+    responsive(move |size| {
+        start_page_content(
+            patrons,
+            videos,
+            videos_loading,
+            video_thumbs,
+            discussions,
+            discussions_loading,
+            recents,
+            thumbs,
+            recent_limit,
+            recent_limit_input,
+            size.width,
+            action_width_out.clone(),
+            active,
+        )
+    })
+    .into()
+}
+
+fn start_page_content<'a>(
     patrons: &'a [(String, i64)],
     videos: &'a [crate::videos::VideoEntry],
     videos_loading: bool,
@@ -2819,15 +2858,17 @@ pub(super) fn start_page_view<'a>(
                         }
                     })
             };
-            let tab_bar = WrapFlow::new(vec![
+            let tab_bar = Row::with_children(vec![
                 tab_btn("Recent Files", super::StartSection::Recent).into(),
                 tab_btn("Videos", super::StartSection::Videos).into(),
                 tab_btn("Welcome", super::StartSection::Welcome).into(),
                 tab_btn("Discussions", super::StartSection::Discussions).into(),
                 tab_btn("Supporters", super::StartSection::Supporters).into(),
             ])
-            .spacing_x(6.0)
-            .row_h(38.0);
+            .spacing(6.0)
+            .align_y(iced::Center)
+            .wrap()
+            .vertical_spacing(0.0);
             let section_body: Element<'a, Message> = match active {
                 super::StartSection::Recent => container(recent)
                     .width(Fill)

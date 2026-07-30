@@ -25,7 +25,7 @@ use crate::app::Message;
 use crate::snap::Snapper;
 use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
 use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
-use crate::ui::wrap_bar::{WrapBar, WrapFlow};
+use crate::ui::wrap_bar::WrapBar;
 
 pub struct StatusMenuData<'a> {
     pub layout_names: Vec<String>,
@@ -412,10 +412,12 @@ impl StatusBar {
             )
             .into(),
         );
-        let right_status = WrapFlow::new(pills)
-            .spacing_x(2.0)
-            .row_h(30.0)
-            .justify_end(true);
+        let right_status = iced::widget::Row::with_children(pills)
+            .spacing(2.0)
+            .align_y(iced::Center)
+            .wrap()
+            .vertical_spacing(0.0)
+            .align_x(iced::alignment::Horizontal::Right);
 
         // Left area: hamburger menu + Model/layout tabs in a flex-wrap flow, so
         // they spill onto lower rows when narrow (no scroll arrows). The pills
@@ -462,7 +464,11 @@ impl StatusBar {
             }
             left.push(add_btn.into());
         }
-        let left_area = WrapFlow::new(left).spacing_x(2.0).row_h(30.0);
+        let left_area = iced::widget::Row::with_children(left)
+            .spacing(2.0)
+            .align_y(iced::Center)
+            .wrap()
+            .vertical_spacing(0.0);
 
         let wrap = WrapBar::new(left_area.into(), right_status.into())
             .min_row_h(30.0)

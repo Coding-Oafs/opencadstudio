@@ -393,7 +393,7 @@ impl Ribbon {
         redo_count: usize,
     ) -> Element<'_, Message> {
         // ── Quick-access file commands + undo/redo, one merged flow ────────
-        let lead = WrapFlow::new(vec![
+        let lead = iced::widget::Row::with_children(vec![
             quick_access_btn(crate::ui::icons::DOC_NEW, "New", "NEW", is_start).into(),
             quick_access_btn(crate::ui::icons::FOLDER_OPEN, "Open", "OPEN", is_start).into(),
             quick_access_btn(crate::ui::icons::SAVE, "Save", "SAVE", is_start).into(),
@@ -402,8 +402,10 @@ impl Ribbon {
             render_history_control("Undo", UNDO_HISTORY_ID, undo_count, &self.open_dropdown).into(),
             render_history_control("Redo", REDO_HISTORY_ID, redo_count, &self.open_dropdown).into(),
         ])
-        .spacing_x(TOP_HIST_GAP)
-        .row_h(28.0);
+        .spacing(TOP_HIST_GAP)
+        .align_y(iced::Center)
+        .wrap()
+        .vertical_spacing(0.0);
 
         // The quick-access flow and the tabs flow each flex-wrap; WrapBar stacks
         // them so a wrapped tab never shares a row with a quick-access button.
