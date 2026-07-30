@@ -64,7 +64,7 @@ impl OpenCADStudio {
             .iter()
             .map(|l| crate::ui::ribbon::LayerInfo {
                 name: l.name.clone(),
-                color: l.color,
+                color: crate::ui::window::layers::iced_color_from_acad(&l.color),
                 visible: l.visible,
                 frozen: l.frozen,
                 locked: l.locked,

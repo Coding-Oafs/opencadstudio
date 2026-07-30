@@ -1708,7 +1708,7 @@ pub enum Message {
     LayerRenameEdit(String),
     LayerColorPickerToggle(usize),
     LayerColorMorePalette,
-    LayerColorSet(u8),
+    LayerColorSet(acadrust::types::Color),
     LayerLinetypeSet(String),
     LayerLineweightSet(LineWeight),
     LayerTransparencyEdit(usize, String),

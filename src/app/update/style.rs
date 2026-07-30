@@ -986,14 +986,7 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     }
                     Some(crate::app::ColorPickTarget::Layer(idx)) => {
                         self.tabs[self.active_tab].layers.selected = Some(idx);
-                        let index = match color {
-                            acadrust::types::Color::Index(i) => i,
-                            acadrust::types::Color::Rgb { r, g, b } => {
-                                crate::ui::color_select::nearest_aci(r, g, b)
-                            }
-                            _ => 7,
-                        };
-                        Some(Message::LayerColorSet(index))
+                        Some(Message::LayerColorSet(color))
                     }
                     Some(crate::app::ColorPickTarget::LayerState(idx)) => {
                         Some(Message::LayerStateEditorLayerColor(idx, color))

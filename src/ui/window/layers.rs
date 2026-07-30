@@ -84,7 +84,7 @@ pub struct Layer {
     pub visible: bool,
     pub frozen: bool,
     pub locked: bool,
-    pub color: Color,
+    pub color: AcadColor,
     pub linetype: String,
     pub lineweight: LineWeight,
     pub transparency: i32,
@@ -93,7 +93,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn new(name: &str, color: Color) -> Self {
+    pub fn new(name: &str, color: AcadColor) -> Self {
         Self {
             name: name.to_string(),
             visible: true,
@@ -143,7 +143,7 @@ impl Default for LayerPanel {
     fn default() -> Self {
         Self {
             visible: false,
-            layers: vec![Layer::new("0", Color::WHITE)],
+            layers: vec![Layer::new("0", AcadColor::Index(7))],
             selected: None,
             selected_multi: Vec::new(),
             editing: None,
@@ -212,7 +212,7 @@ impl LayerPanel {
                     visible: !l.flags.off,
                     frozen: l.flags.frozen,
                     locked: l.flags.locked,
-                    color: iced_color_from_acad(&l.color),
+                    color: l.color,
                     linetype: if l.line_type.is_empty() {
                         "Continuous".to_string()
                     } else {
@@ -526,7 +526,8 @@ fn layer_header_button_style(theme: &Theme, status: button::Status) -> button::S
 }
 
 /// Packed RGB key for ordering colours deterministically by hue-ish bytes.
-fn color_sort_key(c: Color) -> u32 {
+fn color_sort_key(c: AcadColor) -> u32 {
+    let c = iced_color_from_acad(&c);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
     (q(c.r) << 16) | (q(c.g) << 8) | q(c.b)
 }
@@ -763,26 +764,20 @@ fn layer_row<'a>(
     };
 
     // Color cell — looks like a combo_box input; click opens swatch dropdown below row.
-    let aci = iced_to_aci(layer.color);
-    let cur_color_name = color_label_aci(aci).to_string();
-    let _ = cur_color_name;
     // Shared colour selector. Layers carry a concrete colour (no ByLayer /
-    // ByBlock); the chosen index is applied to this row.
+    // ByBlock); true colours stay RGB instead of being collapsed to ACI 7.
     let color_cell: Element<'_, Message> = container(crate::ui::color_select::color_selector(
-        acadrust::types::Color::Index(aci),
+        layer.color,
         color_picker_open,
         crate::ui::color_select::ColorExtras {
             by_layer: false,
             by_block: false,
         },
-        |c| match c {
-            acadrust::types::Color::Index(i) => Message::LayerColorSet(i),
-            _ => Message::LayerColorSet(7),
-        },
+        Message::LayerColorSet,
         Message::LayerColorPickerToggle(index),
         Message::OpenColorWindow(
             crate::app::ColorPickTarget::Layer(index),
-            acadrust::types::Color::Index(aci),
+            layer.color,
         ),
     ))
     .width(Length::Fixed(COL_COLOR))
@@ -939,44 +934,6 @@ fn combo_input_style(
 }
 
 // ── Display helpers ───────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-fn aci_color_display(i: u8) -> (Color, &'static str) {
-    let (r, g, b) = aci_to_rgb(i).unwrap_or((200, 200, 200));
-    (
-        Color::from_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0),
-        "",
-    )
-}
-
-fn iced_to_aci(c: Color) -> u8 {
-    let r = (c.r * 255.0) as u8;
-    let g = (c.g * 255.0) as u8;
-    let b = (c.b * 255.0) as u8;
-    for i in 1u8..=255 {
-        if let Some((ar, ag, ab)) = aci_to_rgb(i) {
-            if ar == r && ag == g && ab == b {
-                return i;
-            }
-        }
-    }
-    7
-}
-
-fn color_label_aci(i: u8) -> &'static str {
-    match i {
-        1 => "red",
-        2 => "yellow",
-        3 => "green",
-        4 => "cyan",
-        5 => "blue",
-        6 => "magenta",
-        7 => "white",
-        8 => "dark gray",
-        9 => "gray",
-        _ => "white",
-    }
-}
 
 pub fn iced_color_from_acad(c: &AcadColor) -> Color {
     match c {

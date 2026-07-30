@@ -1,7 +1,6 @@
 use super::{Message, OpenCADStudio};
 use crate::scene::VIEWCUBE_DRAW_PX;
 use crate::ui::PropertiesPanel;
-use acadrust::types::Color as AcadColor;
 use iced::time::Instant;
 use iced::Task;
 
@@ -1998,22 +1997,20 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::LayerColorSet(aci) => {
+            Message::LayerColorSet(color) => {
                 let i = self.active_tab;
                 // Apply to every selected layer (multi-select), not just one.
                 let names = self.selected_layer_names(i);
                 if !names.is_empty() {
                     let undo = self.begin_layer_undo(i, "LAYER COLOR", &names);
-                    use crate::ui::window::layers::iced_color_from_acad;
-                    let new_color = iced_color_from_acad(&AcadColor::Index(aci));
                     for name in &names {
                         if let Some(dl) = self.tabs[i].scene.document.layers.get_mut(name) {
-                            dl.color = AcadColor::Index(aci);
+                            dl.color = color;
                         }
                     }
                     for pl in self.tabs[i].layers.layers.iter_mut() {
                         if names.contains(&pl.name) {
-                            pl.color = new_color;
+                            pl.color = color;
                         }
                     }
                     self.tabs[i].dirty = true;
