@@ -1434,7 +1434,7 @@ impl OpenCADStudio {
                         layout_names: layout_names.clone(),
                         polar_custom_input: &self.polar_custom_input,
                         scale_is_model: is_model,
-                        scale_list: tab.scene.scale_list(),
+                        scale_list: tab.scene.scale_picker_list(),
                         has_selection: !tab.scene.selected.is_empty(),
                         selection_types: tab
                             .scene

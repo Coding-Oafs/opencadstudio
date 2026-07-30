@@ -3425,14 +3425,17 @@ impl Scene {
     /// ratio (0.02 for "1:50"). Sorted smallest ratio first (1:100 … 1:1 …
     /// 10:1). Falls back to a standard ratio set when the drawing carries no
     /// scale list of its own, so the scale picker is always usable. (#154)
-    /// Standard fallback ratio set as (label, paper/drawing factor). Shown when
-    /// the drawing defines no annotation scales of its own, and materialised as
-    /// real `Scale` objects on demand by [`Scene::ensure_real_scale_list`].
-    const DEFAULT_SCALES: &'static [(&'static str, f64)] = &[
+    /// Standard fallback sets as (label, paper/drawing factor). The drawing's
+    /// INSUNITS selects metric ratios or imperial architectural labels. Used
+    /// when no file scales exist and materialised on demand by
+    /// [`Scene::ensure_real_scale_list`].
+    const DEFAULT_METRIC_SCALES: &'static [(&'static str, f64)] = &[
+        ("1:1000", 0.001),
         ("1:500", 0.002),
         ("1:200", 0.005),
         ("1:100", 0.01),
         ("1:50", 0.02),
+        ("1:25", 0.04),
         ("1:20", 0.05),
         ("1:10", 0.1),
         ("1:5", 0.2),
@@ -3442,6 +3445,57 @@ impl Scene {
         ("5:1", 5.0),
         ("10:1", 10.0),
     ];
+
+    const DEFAULT_IMPERIAL_SCALES: &'static [(&'static str, f64)] = &[
+        ("1/128\" = 1'-0\"", 1.0 / 1536.0),
+        ("1/64\" = 1'-0\"", 1.0 / 768.0),
+        ("1/32\" = 1'-0\"", 1.0 / 384.0),
+        ("1/16\" = 1'-0\"", 1.0 / 192.0),
+        ("3/32\" = 1'-0\"", 1.0 / 128.0),
+        ("1/8\" = 1'-0\"", 1.0 / 96.0),
+        ("3/16\" = 1'-0\"", 1.0 / 64.0),
+        ("1/4\" = 1'-0\"", 1.0 / 48.0),
+        ("3/8\" = 1'-0\"", 1.0 / 32.0),
+        ("1/2\" = 1'-0\"", 1.0 / 24.0),
+        ("3/4\" = 1'-0\"", 1.0 / 16.0),
+        ("1\" = 1'-0\"", 1.0 / 12.0),
+        ("1-1/2\" = 1'-0\"", 1.0 / 8.0),
+        ("3\" = 1'-0\"", 1.0 / 4.0),
+        ("6\" = 1'-0\"", 1.0 / 2.0),
+        ("1'-0\" = 1'-0\"", 1.0),
+    ];
+
+    fn prefers_imperial_scales(&self) -> Option<bool> {
+        match self.document.header.insertion_units {
+            1..=3 | 8..=10 | 21..=24 => Some(true),
+            4..=7 | 11..=20 => Some(false),
+            0 if self.document.header.measurement == 1 => Some(false),
+            _ => None,
+        }
+    }
+
+    fn default_scales(&self) -> &'static [(&'static str, f64)] {
+        if self.prefers_imperial_scales() == Some(true) {
+            Self::DEFAULT_IMPERIAL_SCALES
+        } else {
+            Self::DEFAULT_METRIC_SCALES
+        }
+    }
+
+    fn is_architectural_scale_name(name: &str) -> bool {
+        name.contains('=') && name.contains('"') && name.contains('\'')
+    }
+
+    fn is_ratio_scale_name(name: &str) -> bool {
+        name.split_once(':')
+            .and_then(|(paper, drawing)| {
+                Some((
+                    paper.trim().parse::<f64>().ok()?,
+                    drawing.trim().parse::<f64>().ok()?,
+                ))
+            })
+            .is_some_and(|(paper, drawing)| paper > 0.0 && drawing > 0.0)
+    }
 
     /// True when the drawing owns at least one annotation scale of its own
     /// (i.e. `scale_list` returns real objects rather than the fallback set).
@@ -3465,7 +3519,7 @@ impl Scene {
         if self.has_own_scales() {
             return false;
         }
-        for &(label, factor) in Self::DEFAULT_SCALES {
+        for &(label, factor) in self.default_scales() {
             // Fallback labels are "paper:drawing"; parse them for tidy whole
             // units, else derive drawing units from the factor (paper = 1).
             let (paper, drawing) = label
@@ -3507,12 +3561,70 @@ impl Scene {
             // annotation / viewport scale picker would be empty and so appear
             // broken. Substitute the standard ratio set — file scales still
             // win whenever the drawing actually defines any. (#154)
-            list = Self::DEFAULT_SCALES
+            list = self
+                .default_scales()
                 .iter()
                 .map(|&(label, vp)| (label.to_string(), (1.0 / vp) as f32, vp))
                 .collect();
         }
         list
+    }
+
+    /// Scale list for the status-bar picker. Some DWGs carry both the standard
+    /// metric and architectural sets in `ACAD_SCALELIST`; show only the family
+    /// matching INSUNITS while retaining custom names. The complete file list
+    /// remains available to the scale manager and is written back unchanged.
+    pub fn scale_picker_list(&self) -> Vec<(String, f32, f64)> {
+        let all = self.scale_list();
+        let Some(imperial) = self.prefers_imperial_scales() else {
+            return all;
+        };
+
+        let mut visible: Vec<_> = all
+            .iter()
+            .filter(|(name, _, _)| {
+                let architectural = Self::is_architectural_scale_name(name);
+                let ratio = Self::is_ratio_scale_name(name);
+                if imperial {
+                    architectural || (!architectural && !ratio)
+                } else {
+                    ratio || (!architectural && !ratio)
+                }
+            })
+            .cloned()
+            .collect();
+
+        let has_matching_family = visible.iter().any(|(name, _, _)| {
+            if imperial {
+                Self::is_architectural_scale_name(name)
+            } else {
+                Self::is_ratio_scale_name(name)
+            }
+        });
+        if !has_matching_family {
+            visible.extend(
+                self.default_scales()
+                    .iter()
+                    .map(|&(label, vp)| (label.to_string(), (1.0 / vp) as f32, vp)),
+            );
+        }
+
+        // If the current scale belongs to the opposite family and has no
+        // equivalent factor in the visible family, keep that one active entry
+        // visible instead of silently hiding the drawing's current state.
+        if let Some(active) = all.iter().find(|(name, _, _)| {
+            name.eq_ignore_ascii_case(&self.document.header.current_annotation_scale)
+        }) {
+            let has_equivalent = visible
+                .iter()
+                .any(|(_, _, vp)| (vp - active.2).abs() < 0.001 * active.2.max(0.001));
+            if !has_equivalent {
+                visible.push(active.clone());
+            }
+        }
+
+        visible.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        visible
     }
 
     /// Handle of the drawing's `ACAD_SCALELIST` dictionary, located robustly.
