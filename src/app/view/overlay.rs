@@ -79,7 +79,11 @@ const MTEXT_FONTS: [&str; 10] = [
 /// Canvas program that renders the tessellated MText strokes inside the
 /// editor's own preview area (never on the drawing). Strokes lie in the
 /// world XY plane; the program fits + vertically flips them into the box.
-const MTEXT_PREVIEW_PAD: f32 = 12.0;
+pub(in crate::app) const MTEXT_PREVIEW_PAD: f32 = 12.0;
+pub(in crate::app) const MTEXT_PREVIEW_EM_PX: f32 = 15.0;
+pub(in crate::app) const MTEXT_EDITOR_BASE_WIDTH: f32 = 660.0;
+pub(in crate::app) const MTEXT_EDITOR_WRITING_WIDTH: f32 =
+    MTEXT_EDITOR_BASE_WIDTH - 2.0 * MTEXT_PREVIEW_PAD;
 
 struct MTextPreview {
     /// Disconnected polylines as (x, y) world points + colour (NaN-split done).
@@ -97,6 +101,8 @@ struct MTextPreview {
     miny: f32,
     scale: f32,
     content_h: f32,
+    /// On-screen width of the MText wrapping rectangle.
+    wrap_width_px: f32,
 }
 
 impl MTextPreview {
@@ -201,6 +207,18 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
                 self.content_h - (pad + (y - self.miny) * self.scale),
             )
         };
+        // Wrap ruler: same screen-space position as the width slider handle.
+        let wrap_x = (pad + self.wrap_width_px).clamp(pad, bounds.width.max(pad));
+        let wrap_line = Path::new(|path| {
+            path.move_to(iced::Point::new(wrap_x, 0.0));
+            path.line_to(iced::Point::new(wrap_x, self.content_h));
+        });
+        frame.stroke(
+            &wrap_line,
+            Stroke::default()
+                .with_color(theme.palette().primary.base.color.scale_alpha(0.65))
+                .with_width(1.0),
+        );
         // Selection highlight behind the glyphs.
         if let Some((a, b)) = self.sel {
             for bx in &self.boxes {
@@ -506,6 +524,34 @@ pub(super) fn mtext_editor_overlay<'a>(
     .align_y(iced::Alignment::Center)
     .width(width);
 
+    let writing_area_px =
+        (MTEXT_EDITOR_BASE_WIDTH + modal_resize.x - 2.0 * MTEXT_PREVIEW_PAD).max(80.0);
+    let preview_scale = ed.preview_scale();
+    let slider_min = 1e-6_f64;
+    let slider_max =
+        f64::from(writing_area_px / preview_scale).max(slider_min * 2.0);
+    let width_slider = column![
+        row![
+            text(format!("Width: {:.3}", ed.rect_width)).size(11),
+            Space::new().width(Fill),
+            text(format!("{:.0}%", ed.rect_width / slider_max * 100.0)).size(11),
+        ]
+        .width(Fill),
+        container(
+            iced::widget::slider(
+                slider_min..=slider_max,
+                ed.rect_width.clamp(slider_min, slider_max),
+                Message::MTextRectWidth,
+            )
+            .step((slider_max * 0.01).max(1e-6))
+            .width(Fill),
+        )
+        .padding([0.0, MTEXT_PREVIEW_PAD])
+        .width(Fill),
+    ]
+    .spacing(2)
+    .width(width);
+
     // ── Body: the rendered preview (the editor is preview-only). It fills the
     // space left by the toolbars, so the resizable modal's extra height flows
     // into the text area. ─────────────────────────────────────────────────
@@ -528,45 +574,7 @@ pub(super) fn mtext_editor_overlay<'a>(
             maxx = maxx.max(b.xmax);
             maxy = maxy.max(b.ymax);
         }
-        // Normalize the display by the DOMINANT rendered text height — the run
-        // height the most glyphs share (the body) — NOT the entity's base height
-        // field. That field can be many times the visible text: `\H…x;` runs
-        // compound, so an entity of height 1 whose body is `\H0.2x` renders at
-        // 0.2, and normalizing by 1 would shrink everything 5×. The mode lands
-        // the body at EM_PX while headings / fine print keep their proportions
-        // (one uniform factor, so no height is distorted). Zero-width boxes —
-        // the empty-line caret slots, which carry the raw entity height — are
-        // skipped so they can't skew it.
-        let h_unit = {
-            let mut heights: Vec<f32> = ed
-                .glyph_boxes
-                .iter()
-                .filter(|b| b.xmax - b.xmin > 1e-6)
-                .map(|b| b.ymax - b.ymin)
-                .filter(|h| h.is_finite() && *h > 1e-6)
-                .collect();
-            if heights.is_empty() {
-                ed.height_value() as f32
-            } else {
-                heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                // Largest cluster of near-equal heights (within 5%) = the body.
-                let (mut best_h, mut best_n, mut i) = (heights[0], 0usize, 0usize);
-                while i < heights.len() {
-                    let mut j = i;
-                    while j < heights.len() && heights[j] <= heights[i] * 1.05 {
-                        j += 1;
-                    }
-                    if j - i > best_n {
-                        best_n = j - i;
-                        best_h = heights[(i + j - 1) / 2];
-                    }
-                    i = j;
-                }
-                best_h
-            }
-        };
-        const EM_PX: f32 = 15.0;
-        let scale = (EM_PX / h_unit.max(1e-6)).clamp(1e-4, 1e6);
+        let scale = preview_scale;
         let content_h = if maxx >= minx {
             ((maxy - miny) * scale + 2.0 * MTEXT_PREVIEW_PAD).max(40.0)
         } else {
@@ -576,9 +584,11 @@ pub(super) fn mtext_editor_overlay<'a>(
         // can be wider than the editor; size the canvas to the real content
         // width and let the scroll area pan horizontally to reach later columns.
         let content_w = if maxx >= minx {
-            (maxx - minx) * scale + 2.0 * MTEXT_PREVIEW_PAD
+            ((maxx - minx).max(ed.rect_width as f32) * scale
+                + 2.0 * MTEXT_PREVIEW_PAD)
+                .max(40.0)
         } else {
-            40.0
+            ed.rect_width as f32 * scale + 2.0 * MTEXT_PREVIEW_PAD
         };
         let prog = MTextPreview {
             segments,
@@ -590,6 +600,7 @@ pub(super) fn mtext_editor_overlay<'a>(
             miny,
             scale,
             content_h,
+            wrap_width_px: ed.rect_width as f32 * scale,
         };
         let cv = canvas(prog)
             .width(iced::Length::Fixed(content_w))
@@ -648,12 +659,12 @@ pub(super) fn mtext_editor_overlay<'a>(
     // ✕ (which also cancels) and the resize grip. Iced 0.15 measures this
     // content first and clamps it to the user-growable maximum.
     let content = container(
-        column![action_bar, row1, row2, body]
+        column![action_bar, row1, row2, width_slider, body]
             .spacing(6)
             .width(width)
             .height(height),
     )
-    .width(iced::Length::Fit.max(660.0 + modal_resize.x))
+    .width(iced::Length::Fit.max(MTEXT_EDITOR_BASE_WIDTH + modal_resize.x))
     .height(iced::Length::Fit.max(480.0 + modal_resize.y));
 
     let _ = canvas_size; // positioned & sized by the modal frame now

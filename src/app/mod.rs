@@ -2256,6 +2256,8 @@ pub enum Message {
     MTextFmt(mtext_editor::MTextFmt),
     /// Toolbar height field changed.
     MTextHeight(String),
+    /// MText wrapping width changed from the editor slider.
+    MTextRectWidth(f64),
     /// Toolbar text-style dropdown changed.
     MTextStyle(String),
     /// Toolbar font dropdown changed.

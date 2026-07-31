@@ -17,7 +17,7 @@ use iced_aw::ContextMenu;
 
 mod controls;
 mod modal;
-mod overlay;
+pub(in crate::app) mod overlay;
 mod viewcube;
 
 use controls::{dyn_component_value, viewport_controls};
