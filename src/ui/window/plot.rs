@@ -168,7 +168,7 @@ impl Default for PlotDialogState {
             scale: "1:1".into(),
             fit_to_paper: true,
             scales: Vec::new(),
-            scale_lw: true,
+            scale_lw: false,
             quality: "Normal".into(),
             shade: "As displayed".into(),
             background: true,
@@ -677,7 +677,12 @@ pub fn view_window(
             width,
             common_area && !s.fit_to_paper,
         ),
-        check_enabled("Scale lineweights", s.scale_lw, PlotFlag::ScaleLw, common_area),
+        check_enabled(
+            "Scale lineweights",
+            s.scale_lw && !s.fit_to_paper,
+            PlotFlag::ScaleLw,
+            common_area && !s.fit_to_paper,
+        ),
     ].spacing(7));
 
     // ── Style and shaded viewport settings ───────────────────────────────

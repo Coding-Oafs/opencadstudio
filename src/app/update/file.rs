@@ -2167,10 +2167,19 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &mut self,
         path: std::path::PathBuf,
     ) -> Task<Message> {
-        let (wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip) =
-            self.layout_plot_params();
+        let paper_space = self.tabs[self.active_tab].scene.current_layout != "Model";
+        let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
+            self.direct_plot_params()
+        else {
+            self.command_line
+                .push_error("Nothing to plot: model space contains no printable geometry.");
+            return Task::none();
+        };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
+        let mut render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
+        if paper_space {
+            render_options.scale_lineweights = false;
+        }
         let worker_path = path.clone();
         let work = move || {
             crate::io::pdf_export::export_pdf(
@@ -2281,6 +2290,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// draw-origin offset, rotation, unit scale, and optional clip. Shared by
     /// PDF export, preview, and printer output so all three render identically.
     pub(super) fn layout_plot_params(&self) -> LayoutPlotParams {
+        self.layout_plot_params_for(&self.plot_dialog.area)
+    }
+
+    fn layout_plot_params_for(&self, plot_area: &str) -> LayoutPlotParams {
         let i = self.active_tab;
         let scene = &self.tabs[i].scene;
         let paper_space = scene.current_layout != "Model";
@@ -2320,8 +2333,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             // area keeps the sheet's current physical bounds; the other area
             // modes use the dialog paper size through `area_plot_job`.
             let dialog_rotation = if self.plot_dialog.upside_down { 180 } else { 0 };
-            let plot_extents = self.plot_dialog.area == "Extents";
-            let plot_layout = self.plot_dialog.area == "Layout";
+            let plot_extents = plot_area == "Extents";
+            let plot_layout = plot_area == "Layout";
             // Page orientation is already represented by the sheet bounds.
             // Only the explicit upside-down choice rotates layout content here.
             let rotation = dialog_rotation;
@@ -2454,11 +2467,46 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         )
     }
 
-    pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
+    /// Build direct PDF/printer output using the physical layout sheet in
+    /// paper space and the selected ISO sheet/scale around Model extents.
+    fn direct_plot_params(&self) -> Option<LayoutPlotParams> {
+        if self.tabs[self.active_tab].scene.current_layout != "Model" {
+            return Some(self.layout_plot_params_for("Layout"));
+        }
         let (wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip) =
-            self.layout_plot_params();
+            self.extents_plot_job()?;
+        if wires.is_empty() && hatches.is_empty() && wipeouts.is_empty() {
+            return None;
+        }
+        Some((
+            std::sync::Arc::new(wires),
+            hatches,
+            wipeouts,
+            group_splits,
+            page_w,
+            page_h,
+            ox,
+            oy,
+            rotation,
+            scale,
+            clip,
+        ))
+    }
+
+    pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
+        let paper_space = self.tabs[self.active_tab].scene.current_layout != "Model";
+        let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
+            self.direct_plot_params()
+        else {
+            self.command_line
+                .push_error("Nothing to plot: model space contains no printable geometry.");
+            return Task::none();
+        };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let options = self.plot_print_options(&self.plot_dialog, group_splits);
+        let mut options = self.plot_print_options(&self.plot_dialog, group_splits);
+        if paper_space {
+            options.render.scale_lineweights = false;
+        }
         self.command_line.push_info("Sending to system printer…");
         background_task(
             move || {
@@ -2578,6 +2626,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         d.scales = scales;
         if d.scale.eq_ignore_ascii_case("fit") {
             d.fit_to_paper = true;
+            d.scale_lw = false;
             d.scale = one_to_one.clone();
         } else if !d.scales.iter().any(|(name, _)| name == &d.scale) {
             d.scale = one_to_one;
@@ -2627,6 +2676,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
         self.plot_dialog.name_input = None;
         self.plot_dialog.name_rename = false;
+        if self.plot_dialog.fit_to_paper {
+            self.plot_dialog.scale_lw = false;
+        }
         // Refresh the list (<none> / <previous> / layouts / named setups) and
         // snapshot the just-loaded settings as the `<previous>` restore point.
         self.refresh_page_setups();
@@ -2659,6 +2711,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.plot_dialog.offset_x = "0.0".into();
         self.plot_dialog.offset_y = "0.0".into();
         self.plot_dialog.fit_to_paper = true;
+        self.plot_dialog.scale_lw = false;
     }
 
     /// Handle one edit / action from the Plot dialog.
@@ -2758,10 +2811,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     PlotFlag::Background => d.background = !d.background,
                     PlotFlag::MergeLines => d.merge_lines = !d.merge_lines,
                     PlotFlag::FitToPaper if d.area != "Layout" => {
-                        d.fit_to_paper = !d.fit_to_paper
+                        d.fit_to_paper = !d.fit_to_paper;
+                        if d.fit_to_paper {
+                            d.scale_lw = false;
+                        }
                     }
                     PlotFlag::Center if d.area != "Layout" => d.center = !d.center,
-                    PlotFlag::ScaleLw if d.area != "Layout" => d.scale_lw = !d.scale_lw,
+                    PlotFlag::ScaleLw if d.area != "Layout" && !d.fit_to_paper => {
+                        d.scale_lw = !d.scale_lw
+                    }
                     PlotFlag::UpsideDown => {
                         d.upside_down = !d.upside_down;
                     }
@@ -2946,6 +3004,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             d.offset_y = "0.0".into();
             d.upside_down = false;
             d.fit_to_paper = is_model;
+            d.scale_lw = false;
             d.scale = scale_name_for_factor(&d.scales, 1.0)
                 .or_else(|| d.scales.first().map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| "1:1".into());
@@ -3152,7 +3211,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .or_else(|| d.scales.first().map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| "1:1".into());
         }
-        d.scale_lw = ps.flags.scale_lineweights;
+        d.scale_lw = ps.flags.scale_lineweights && !d.fit_to_paper && d.area != "Layout";
         d.lineweights = ps.flags.print_lineweights;
         d.paperspace_last = ps.flags.draw_viewports_first;
         d.shade = match ps.shade_plot_mode {
@@ -3367,7 +3426,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     ) -> crate::io::pdf_export::PdfPlotOptions {
         crate::io::pdf_export::PdfPlotOptions {
             object_lineweights: d.lineweights,
-            scale_lineweights: d.scale_lw,
+            scale_lineweights: d.scale_lw && !d.fit_to_paper && d.area != "Layout",
             transparency: d.transparency,
             stamp: d.stamp,
             merge_lines: d.merge_lines,
