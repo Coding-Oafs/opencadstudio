@@ -213,9 +213,6 @@ pub fn create_annotation_context(
         is_default,
         scale: scale_handle,
         kind,
-        source_raw: None,
-        source_handle_bits: 0,
-        source_version: None,
     };
     doc.objects
         .insert(leaf_h, ObjectType::ObjectContextData(leaf));
