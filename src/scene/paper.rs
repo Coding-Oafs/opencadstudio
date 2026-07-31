@@ -20,6 +20,7 @@ impl Scene {
 
         let layout_block = self.current_layout_block_handle();
         let sheet = self.current_layout_sheet_viewport_handle();
+        let paper_limits = self.paper_limits();
         let is_content = |handle: Handle| {
             let Some(EntityType::Viewport(vp)) = self.document.get_entity(handle) else {
                 return false;
@@ -62,6 +63,7 @@ impl Scene {
                 layout_block,
                 sheet,
                 content: Arc::clone(&content),
+                paper_limits,
             },
         );
         (layout_block, sheet, content)
@@ -322,6 +324,43 @@ impl Scene {
             y: y0,
             width: w,
             height: h,
+        })
+    }
+
+    /// Physical sheet bounds in canvas pixels. Uses the same forced top-down
+    /// paper transform as the GPU sheet viewport, ignoring stored camera twist.
+    pub fn paper_sheet_screen_rect(
+        &self,
+        canvas_px: (f32, f32),
+    ) -> Option<iced::Rectangle> {
+        let ((x0, y0), (x1, y1)) = self.paper_limits()?;
+        let (canvas_w, canvas_h) = canvas_px;
+        if canvas_w < 1.0 || canvas_h < 1.0 {
+            return None;
+        }
+
+        let cam = self.camera.borrow();
+        let half_h = cam.ortho_size();
+        let half_w = half_h * canvas_w / canvas_h;
+        let tx = cam.target.x as f32;
+        let ty = cam.target.y as f32;
+        drop(cam);
+        let to_px = |wx: f32, wy: f32| -> (f32, f32) {
+            let x = (wx - tx + half_w) / (2.0 * half_w) * canvas_w;
+            let y = (ty + half_h - wy) / (2.0 * half_h) * canvas_h;
+            (x, y)
+        };
+        let min_x = x0.min(x1) as f32;
+        let max_x = x0.max(x1) as f32;
+        let min_y = y0.min(y1) as f32;
+        let max_y = y0.max(y1) as f32;
+        let (left, top) = to_px(min_x, max_y);
+        let (right, bottom) = to_px(max_x, min_y);
+        Some(iced::Rectangle {
+            x: left,
+            y: top,
+            width: (right - left).max(0.0),
+            height: (bottom - top).max(0.0),
         })
     }
     // ── Paper-space helpers ───────────────────────────────────────────────

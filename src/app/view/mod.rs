@@ -39,6 +39,40 @@ const PAPER_SPACE_BACKGROUND: Color = Color {
     a: 1.0,
 };
 
+/// Base surface directly under the crosshair. Paper content viewports render
+/// transparently over the sheet/desk, including while MSPACE input is active.
+fn crosshair_background(tab: &DocumentTab, is_paper: bool) -> [f32; 4] {
+    if !is_paper {
+        return tab.scene.bg_color;
+    }
+
+    let desk = [
+        PAPER_SPACE_BACKGROUND.r,
+        PAPER_SPACE_BACKGROUND.g,
+        PAPER_SPACE_BACKGROUND.b,
+        PAPER_SPACE_BACKGROUND.a,
+    ];
+    let (cursor, viewport_size) = {
+        let selection = tab.scene.selection.borrow();
+        (selection.last_move_pos, selection.vp_size)
+    };
+    let Some(cursor) = cursor else {
+        return desk;
+    };
+    if viewport_size.0 <= 0.0 || viewport_size.1 <= 0.0 {
+        return desk;
+    }
+    let on_sheet = tab
+        .scene
+        .paper_sheet_screen_rect(viewport_size)
+        .is_some_and(|rect| rect.contains(cursor));
+    if on_sheet {
+        tab.scene.paper_bg_color
+    } else {
+        desk
+    }
+}
+
 /// Clear gap (px) kept between the render-mode bar (top-left) and the ViewCube
 /// (top-right) before the cube is judged to collide and hides.
 const VIEWCUBE_GAP: f32 = 12.0;
@@ -592,11 +626,7 @@ impl OpenCADStudio {
                 tab.pan_mode,
                 self.ribbon.open_dropdown.is_some(),
                 hover_locked,
-                if tab.scene.input_uses_model_space() {
-                    tab.scene.bg_color
-                } else {
-                    tab.scene.paper_bg_color
-                },
+                crosshair_background(tab, is_paper),
             )
         };
 

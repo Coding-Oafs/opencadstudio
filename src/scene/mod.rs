@@ -458,6 +458,7 @@ struct PaperViewportCache {
     layout_block: Handle,
     sheet: Handle,
     content: Arc<Vec<Handle>>,
+    paper_limits: Option<((f64, f64), (f64, f64))>,
 }
 
 struct PaperSheetRenderCache {
@@ -3352,6 +3353,12 @@ impl Scene {
     pub fn paper_limits(&self) -> Option<((f64, f64), (f64, f64))> {
         if self.current_layout == "Model" {
             return None;
+        }
+
+        if let Some(cache) = self.paper_viewport_cache.borrow().get(&self.current_layout) {
+            if cache.epoch == self.geometry_epoch && cache.layout == self.current_layout {
+                return cache.paper_limits;
+            }
         }
 
         self.document
