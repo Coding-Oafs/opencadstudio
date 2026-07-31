@@ -6,11 +6,10 @@
 //! [`CadDocument::dgn_ls_definitions`] / `dgn_ls_components` instead. See
 //! `objects/dgn_linestyle.rs` in acadrust and `~/Documents/OCS/DGN_LINESTYLE_PLAN.md`.
 //!
-//! The visible content is the **symbol components**, each of which references an
-//! anonymous block (e.g. a pipe's end circle). This renders those blocks at the
-//! host polyline's endpoints. The exact placement / scale / dash pattern live in
-//! the components' leaf data-stream fields, which are not decoded yet, so this is
-//! an approximation: symbols at native scale on the first and last vertices.
+//! The visible content combines **symbol components**, each of which references
+//! an anonymous block (e.g. a pipe's end circle), with typed stroke patterns.
+//! Symbols are rendered at the host polyline's endpoints and stroke dash/gap
+//! lengths are carried through to the pipe walls.
 
 use acadrust::objects::DgnLsComponentType;
 use acadrust::types::{Handle, Transform, Vector3};
@@ -73,36 +72,30 @@ fn walk(doc: &CadDocument, h: Handle, out: &mut Vec<DgnSymbol>, seen: &mut HashS
     }
 }
 
-/// Native dash lengths in a stroke component's leaf. The DGN line-style leaf is
-/// byte-aligned big-endian f64 (MicroStation origin, not DWG bit-codes); the
-/// stroke's dash/gap values sit in an 8-byte-aligned run after the shared
-/// 16-byte class GUID (whose fixed tail is `ae da 14`). Values outside a sane
-/// size band are skipped (denormals / stream-boundary bytes). Empty when the
-/// object carries no raw snapshot or no plausible lengths.
+/// Signed native dash lengths in a typed stroke component: dashes are positive
+/// and gaps negative. Empty when the component has no usable stroke lengths.
 fn stroke_dashes(doc: &CadDocument, h: Handle) -> Vec<f64> {
-    use acadrust::objects::ObjectType;
-    let Some(ObjectType::Unknown {
-        raw_dwg_data: Some(d),
-        ..
-    }) = doc.objects.get(&h)
+    use acadrust::objects::{DgnLineStyleData, DgnLsComponentData, ObjectType};
+    let Some(ObjectType::DgnLineStyle(style)) = doc.objects.get(&h)
     else {
         return Vec::new();
     };
-    let Some(gi) = d.windows(3).position(|w| w == [0xae, 0xda, 0x14]) else {
+    let DgnLineStyleData::Component {
+        component: DgnLsComponentData::Stroke(pattern),
+        ..
+    } = &style.data
+    else {
         return Vec::new();
     };
-    // GUID tail (3) + version/type bytes (3) → the first length field.
-    let start = gi + 6;
-    let mut out = Vec::new();
-    let mut i = start;
-    while i + 8 <= d.len() {
-        let v = f64::from_be_bytes(d[i..i + 8].try_into().unwrap());
-        if v.is_finite() && v.abs() >= 0.01 && v.abs() < 1.0e4 {
-            out.push(v);
-        }
-        i += 8;
-    }
-    out
+    pattern
+        .strokes
+        .iter()
+        .filter_map(|stroke| {
+            let length = stroke.length.abs();
+            (length.is_finite() && length > 0.0)
+                .then_some(if stroke.is_dash { length } else { -length })
+        })
+        .collect()
 }
 
 /// Native dash pattern of a DGN line style's pipe walls: the dash lengths of the

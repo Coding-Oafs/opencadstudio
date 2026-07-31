@@ -1329,46 +1329,45 @@ pub(crate) fn tessellate_entity(
 
     // DGN line-style: the linetype's real pattern lives in DGN line-style objects
     // (empty standard LTYPE), so `resolve_complex_lt` sees nothing. Render its
-    // symbol blocks (e.g. a pipe's end circles) at the polyline endpoints. First
-    // pass — exact dash pattern / placement need the undecoded leaf data.
+    // symbol blocks (e.g. a pipe's end circles) at the polyline endpoints and
+    // apply the typed DGN stroke pattern to its parallel walls.
     let dgn_syms = convert::dgn_linestyle::symbol_blocks(document, lt_name);
     if !dgn_syms.is_empty() {
         let verts = convert::dgn_linestyle::polyline_points(e);
         if verts.len() >= 2 {
+            let display_scale = lt_scale.max(1.0e-4) as f64;
             // The pipe body is drawn as two parallel walls, not a single centre
             // line: offset the host polyline by ±(symbol radius) so each wall
             // sits tangent to the end circles, and replace the centre line with
-            // them. The radius is the rendered symbol extent (block / scale).
+            // them. The radius is the rendered symbol extent after applying the
+            // entity/global linetype display scale.
             let radius = dgn_syms
                 .iter()
-                .map(|s| convert::dgn_linestyle::symbol_radius(document, s.block, s.scale))
+                .map(|s| {
+                    convert::dgn_linestyle::symbol_radius(
+                        document,
+                        s.block,
+                        s.scale / display_scale,
+                    )
+                })
                 .fold(0.0_f64, f64::max);
             if radius > 1e-6 {
-                // The walls carry the line style's dash pattern. Its native
-                // lengths scale to drawing units by f = radius / symbol-scale
-                // (the same factor that turns the compound's native offset into
-                // the measured wall offset). Sign-alternate: dash, gap, dash…
-                let scale = dgn_syms
-                    .iter()
-                    .map(|s| s.scale)
-                    .find(|s| *s > 1e-9)
-                    .unwrap_or(1.0);
-                let f = radius / scale;
-                // The wall stroke's dash length (`wall_dashes[0]`) renders as an
-                // equal dash/gap: dash-first `[+dash, -dash]`. Combined with the
-                // `dash_from_start` flag set below, each wall tiles from its own
-                // start vertex with a dash, no A-type end alignment.
+                // Preserve the typed stroke's signed dash/gap sequence and scale
+                // every element by the linetype display scale. Combined with the
+                // `dash_from_start` flag below, each wall tiles from its own start
+                // vertex with no A-type end alignment.
                 let native = convert::dgn_linestyle::wall_dashes(document, lt_name);
-                let (wall_pat, wall_pat_len) = if f > 1e-9 && !native.is_empty() {
-                    let dash = (native[0] * f) as f32;
-                    if dash > 1e-6 {
-                        let mut pat = [0.0_f32; 8];
-                        pat[0] = dash;
-                        pat[1] = -dash;
-                        (pat, 2.0 * dash)
-                    } else {
-                        ([0.0_f32; 8], 0.0)
+                let (wall_pat, wall_pat_len) = if !native.is_empty() {
+                    let mut pat = [0.0_f32; 8];
+                    let mut length = 0.0_f32;
+                    for (slot, value) in pat.iter_mut().zip(native.iter().take(8)) {
+                        let scaled = (*value * display_scale) as f32;
+                        if scaled.is_finite() && scaled.abs() > 1.0e-6 {
+                            *slot = scaled;
+                            length += scaled.abs();
+                        }
                     }
+                    (pat, length)
                 } else {
                     ([0.0_f32; 8], 0.0)
                 };
@@ -1414,7 +1413,7 @@ pub(crate) fn tessellate_entity(
                 let mut wires = convert::dgn_linestyle::place_block_wires(
                     document,
                     sym.block,
-                    sym.scale,
+                    sym.scale / display_scale,
                     at,
                     entity_color,
                     line_weight_px,
