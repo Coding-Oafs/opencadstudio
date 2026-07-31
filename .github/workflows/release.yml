@@ -66,8 +66,7 @@ jobs:
         run: |
           ASSET=OpenCADStudio-${{ github.ref_name }}-linux-x86_64.AppImage
           mv OpenCADStudio.AppImage "$ASSET"
-          sha256sum "$ASSET" > "$ASSET.sha256"
-          gh release upload ${{ github.ref_name }} "$ASSET" "$ASSET.sha256" --clobber --repo ${{ github.repository }}
+          gh release upload ${{ github.ref_name }} "$ASSET" --clobber --repo ${{ github.repository }}
 
   build-windows:
     runs-on: windows-latest
@@ -207,12 +206,8 @@ jobs:
           $msi = "OpenCADStudio-$tag-windows-x86_64-installer.msi"
           Move-Item target\release\OpenCADStudio.exe $exe
           Move-Item OpenCADStudio.msi $msi
-          # SHA256 sidecars so downloads can be verified.
-          (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower() + "  $exe" | Out-File -Encoding ascii "$exe.sha256"
-          (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLower() + "  $msi" | Out-File -Encoding ascii "$msi.sha256"
           gh release upload $tag `
-            $exe "$exe.sha256" `
-            $msi "$msi.sha256" `
+            $exe $msi `
             --clobber --repo ${{ github.repository }}
 
   build-macos:
@@ -357,8 +352,7 @@ jobs:
         run: |
           ASSET=OpenCADStudio-${{ github.ref_name }}-macos-arm64.dmg
           mv OpenCADStudio.dmg "$ASSET"
-          shasum -a 256 "$ASSET" > "$ASSET.sha256"
-          gh release upload ${{ github.ref_name }} "$ASSET" "$ASSET.sha256" --clobber --repo ${{ github.repository }}
+          gh release upload ${{ github.ref_name }} "$ASSET" --clobber --repo ${{ github.repository }}
 
       - name: Emit Homebrew cask sha256
         if: github.event_name == 'release'
