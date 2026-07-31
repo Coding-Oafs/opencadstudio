@@ -1,6 +1,6 @@
 //! Plot Style Table — CTB (color-based) and STB (named) file support.
 //!
-//! CTB files map AutoCAD Color Index (ACI, 1-255) to pen properties:
+//! CTB files map indexed drawing colors (ACI, 1-255) to pen properties:
 //! RGB color override, lineweight, and screeing percentage.
 //!
 //! File format: deflate-compressed text (key = value pairs) with
@@ -13,9 +13,9 @@ use rustc_hash::FxHashMap as HashMap;
 use std::io::Read;
 use std::path::Path;
 
-// ── AutoCAD standard lineweight table (index → mm) ───────────────────────────
+// ── Standard lineweight table (index → mm) ───────────────────────────────────
 
-/// Lineweight table: index value → mm, matching AutoCAD's LWEIGHT codes.
+/// Lineweight table: index value → mm, matching the stored LWEIGHT codes.
 /// Index 0 = 0.00 mm (hairline), others follow the DXF lineweight enum.
 pub const LW_TABLE: &[f32] = &[
     0.00, 0.05, 0.09, 0.10, 0.13, 0.15, 0.18, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.53, 0.60, 0.70,
@@ -115,6 +115,14 @@ impl PlotStyleTable {
         } else {
             LW_TABLE.get(entry.lineweight as usize).copied()
         }
+    }
+
+    /// Resolve the screening factor for the given ACI index.
+    pub fn resolve_screening(&self, aci: u8) -> f32 {
+        self.aci_entries
+            .get(aci as usize)
+            .map(|entry| entry.screening.min(100) as f32 / 100.0)
+            .unwrap_or(1.0)
     }
 
     // ── Internal serialisation ────────────────────────────────────────────
@@ -256,7 +264,7 @@ fn parse_plot_style_text(text: &str, name: String, is_stb: bool) -> Result<PlotS
                         let b = u8::from_str_radix(&val[5..7], 16).unwrap_or(0);
                         entry.color = Some([r, g, b]);
                     } else if let Ok(packed) = val.parse::<i32>() {
-                        // AutoCAD packs RGB as 0xC0RRGGBB negative int.
+                        // The file packs RGB as a 0xC0RRGGBB negative integer.
                         // Value 0xC2000000 (-1056964608) = use object color.
                         if packed != -1056964608i32 {
                             let u = packed as u32;

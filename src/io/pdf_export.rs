@@ -15,8 +15,9 @@ use crate::scene::model::hatch_model::HatchPattern;
 use crate::scene::WireModel;
 #[cfg(not(target_arch = "wasm32"))]
 use printpdf::{
-    Color, Line, LineCapStyle, LineDashPattern, LineJoinStyle, LinePoint, Mm, Op, PaintMode,
-    PdfDocument, PdfPage, PdfSaveOptions, Point, Polygon, PolygonRing, Pt, Rgb, WindingOrder,
+    BuiltinFont, Color, Line, LineCapStyle, LineDashPattern, LineJoinStyle, LinePoint, Mm, Op,
+    PaintMode, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Polygon, PolygonRing,
+    Pt, Rgb, TextItem, WindingOrder,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
@@ -39,6 +40,7 @@ pub fn export_pdf(
     _clip: Option<(f32, f32, f32, f32)>,
     _path: &Path,
     _plot_style: Option<&PlotStyleTable>,
+    _options: PdfPlotOptions,
 ) -> Result<(), String> {
     Err("PDF export is not available in the web version.".into())
 }
@@ -58,6 +60,40 @@ const MM_TO_PT: f32 = 2.834645;
 /// (and the old `× 0.35278` left them inconsistent with the physical mm).
 #[cfg(not(target_arch = "wasm32"))]
 const LW_PX_TO_PT: f32 = MM_TO_PT / ((96.0 / 25.4) * 2.0);
+
+/// Output controls shared by preview, PDF export, and printer rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdfPlotOptions {
+    pub object_lineweights: bool,
+    pub scale_lineweights: bool,
+    pub transparency: bool,
+    pub monochrome: bool,
+    pub wireframe: bool,
+    pub stamp: bool,
+    pub group_splits: PlotGroupSplits,
+}
+
+/// End indexes of the first paper/model render group in each flat input list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlotGroupSplits {
+    pub wires: usize,
+    pub hatches: usize,
+    pub wipeouts: usize,
+}
+
+impl Default for PdfPlotOptions {
+    fn default() -> Self {
+        Self {
+            object_lineweights: true,
+            scale_lineweights: false,
+            transparency: false,
+            monochrome: false,
+            wireframe: false,
+            stamp: false,
+            group_splits: PlotGroupSplits::default(),
+        }
+    }
+}
 
 // ── Public entry point ────────────────────────────────────────────────────
 
@@ -81,6 +117,7 @@ pub fn export_pdf(
     clip: Option<(f32, f32, f32, f32)>,
     path: &Path,
     plot_style: Option<&PlotStyleTable>,
+    options: PdfPlotOptions,
 ) -> Result<(), String> {
     let bytes = build_pdf(
         wires,
@@ -94,6 +131,7 @@ pub fn export_pdf(
         scale,
         clip,
         plot_style,
+        options,
     );
     let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())
@@ -139,6 +177,7 @@ fn build_pdf(
     scale: f32,
     clip: Option<(f32, f32, f32, f32)>,
     plot_style: Option<&PlotStyleTable>,
+    options: PdfPlotOptions,
 ) -> Vec<u8> {
     let mut doc = PdfDocument::new("Open CAD Studio Export");
     let mut ops: Vec<Op> = Vec::new();
@@ -230,11 +269,21 @@ fn build_pdf(
     }
 
 
-    // ── Hatch / wipeout fills (rendered before wires so wires draw on top,
-    //    matching paper_canvas ordering). Each `emit_hatch` sets its own
-    //    fill / stroke colour, so the wire pass below starts fresh.
+    let (first_wires, second_wires) =
+        wires.split_at(options.group_splits.wires.min(wires.len()));
+    let (first_hatches, second_hatches) =
+        hatches.split_at(options.group_splits.hatches.min(hatches.len()));
+    let (first_wipeouts, second_wipeouts) =
+        wipeouts.split_at(options.group_splits.wipeouts.min(wipeouts.len()));
+    for (wires, hatches, wipeouts) in [
+        (first_wires, first_hatches, first_wipeouts),
+        (second_wires, second_hatches, second_wipeouts),
+    ] {
+    emit_wire_fills(&mut ops, wires, ox, oy, plot_style, options);
+
+    // Hatch / wipeout fills render before wires so linework stays visible.
     for hatch in wipeouts.iter().chain(hatches.iter()) {
-        emit_hatch(&mut ops, hatch, ox, oy);
+        emit_hatch(&mut ops, hatch, ox, oy, plot_style, options);
     }
 
     let mut last_color: Option<[f32; 3]> = None;
@@ -255,21 +304,25 @@ fn build_pdf(
         }
         // Apply CTB plot style table overrides (color + lineweight).
         let mut lw_override: Option<f32> = None;
+        let mut screening = 1.0;
+        let mut color_overridden = false;
         if let Some(ctb) = plot_style {
             if wire.aci > 0 {
                 if let Some([cr, cg, cb]) = ctb.resolve_color(wire.aci) {
                     r = cr;
                     g = cg;
                     b = cb;
+                    color_overridden = true;
                 }
                 lw_override = ctb
                     .resolve_lineweight(wire.aci)
-                    .map(|mm| (mm * MM_TO_PT).max(0.1) / scale.max(1e-6));
+                    .map(|mm| (mm * MM_TO_PT).max(0.1));
+                screening = ctb.resolve_screening(wire.aci);
             }
         }
         // Near-white and near-yellow (viewport active border) → dark grey for print
         // (only when no CTB override was applied).
-        if lw_override.is_none() {
+        if !color_overridden {
             let is_light = r > 0.80 && g > 0.80 && b > 0.80;
             let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
             let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;
@@ -284,6 +337,7 @@ fn build_pdf(
                 b = 0.50;
             }
         }
+        [r, g, b] = plotted_color([r, g, b], a, screening, options, false);
 
         if last_color
             .map(|c| (c[0] - r).abs() > 0.01 || (c[1] - g).abs() > 0.01 || (c[2] - b).abs() > 0.01)
@@ -300,10 +354,9 @@ fn build_pdf(
             last_color = Some([r, g, b]);
         }
 
-        // Line weight: CTB override (in pt) or screen px → points. Divided by
-        // `scale` in both branches so pen widths stay absolute under the scaled
-        // CTM above — lineweights are independent of plot scale, so without this
-        // a Fit plot of a large window renders near-invisible hairlines.
+        // Line weight: style override or object weight. Normal output divides
+        // by the page transform so physical pen widths stay constant; the
+        // scale-lineweights option deliberately keeps the transformed width.
         //
         // A wide polyline is the exception: its band is a geometric width in
         // drawing units, so it must SCALE with the plot (no `/ scale`). Stroke
@@ -313,11 +366,22 @@ fn build_pdf(
         // replaces the model-space hatch band that the shader-band change
         // dropped, and overrides any CTB pen weight (the width is geometry, not
         // a lineweight).
+        let pen_divisor = if options.scale_lineweights {
+            1.0
+        } else {
+            scale.max(1e-6)
+        };
         let lw_pt = if wire.world_width > 0.0 {
             wire.world_width * MM_TO_PT
         } else {
-            lw_override
-                .unwrap_or_else(|| (wire.line_weight_px * LW_PX_TO_PT).max(0.1) / scale.max(1e-6))
+            let physical = lw_override.unwrap_or_else(|| {
+                if options.object_lineweights {
+                    (wire.line_weight_px * LW_PX_TO_PT).max(0.1)
+                } else {
+                    0.1
+                }
+            });
+            physical / pen_divisor
         };
         if last_lw.map(|l| (l - lw_pt).abs() > 0.01).unwrap_or(true) {
             ops.push(Op::SetOutlineThickness { pt: Pt(lw_pt) });
@@ -367,10 +431,14 @@ fn build_pdf(
     // this CPU exporter can't sample, so without this pass all text — including
     // dimension text — is missing from the PDF (issue #385). Drawn after the
     // wires (on top) and under the same rotation/scale/clip CTM.
-    emit_text(&mut ops, wires, ox, oy, scale, plot_style);
+    emit_text(&mut ops, wires, ox, oy, scale, plot_style, options);
+    }
 
     if needs_state {
         ops.push(Op::RestoreGraphicsState);
+    }
+    if options.stamp {
+        emit_plot_stamp(&mut ops);
     }
 
     let page = PdfPage::new(Mm(paper_w), Mm(paper_h), ops);
@@ -418,13 +486,144 @@ fn flush_line(ops: &mut Vec<Op>, pts: &[LinePoint]) {
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn plotted_color(
+    mut rgb: [f32; 3],
+    alpha: f32,
+    screening: f32,
+    options: PdfPlotOptions,
+    preserve_white: bool,
+) -> [f32; 3] {
+    if options.monochrome && !preserve_white {
+        rgb = [0.0, 0.0, 0.0];
+    }
+    let amount = screening.clamp(0.0, 1.0)
+        * if options.transparency {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    [
+        1.0 - (1.0 - rgb[0]) * amount,
+        1.0 - (1.0 - rgb[1]) * amount,
+        1.0 - (1.0 - rgb[2]) * amount,
+    ]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_wire_fills(
+    ops: &mut Vec<Op>,
+    wires: &[WireModel],
+    ox: f64,
+    oy: f64,
+    plot_style: Option<&PlotStyleTable>,
+    options: PdfPlotOptions,
+) {
+    for wire in wires {
+        if wire.fill_tris.is_empty() || (options.wireframe && wire.fill_is_3d) {
+            continue;
+        }
+        let [mut r, mut g, mut b, a] = wire.color;
+        if a < 0.01 {
+            continue;
+        }
+        let mut screening = 1.0;
+        let mut color_overridden = false;
+        if let Some(table) = plot_style {
+            if wire.aci > 0 {
+                if let Some(color) = table.resolve_color(wire.aci) {
+                    [r, g, b] = color;
+                    color_overridden = true;
+                }
+                screening = table.resolve_screening(wire.aci);
+            }
+        }
+        if !color_overridden {
+            [r, g, b] = adapt_text_color([r, g, b]);
+        }
+        [r, g, b] = plotted_color([r, g, b], a, screening, options, false);
+        ops.push(Op::SetFillColor {
+            col: Color::Rgb(Rgb {
+                r,
+                g,
+                b,
+                icc_profile: None,
+            }),
+        });
+        for (triangle_index, triangle) in wire.fill_tris.chunks_exact(3).enumerate() {
+            let mut points = Vec::with_capacity(3);
+            for (point_index, &[x, y, _]) in triangle.iter().enumerate() {
+                let index = triangle_index * 3 + point_index;
+                let low = wire.fill_tris_low.get(index).copied().unwrap_or([0.0; 3]);
+                points.push(LinePoint {
+                    p: Point::new(
+                        Mm((x as f64 + low[0] as f64 + ox) as f32),
+                        Mm((y as f64 + low[1] as f64 + oy) as f32),
+                    ),
+                    bezier: false,
+                });
+            }
+            ops.push(Op::DrawPolygon {
+                polygon: Polygon {
+                    rings: vec![PolygonRing { points }],
+                    mode: PaintMode::Fill,
+                    winding_order: WindingOrder::NonZero,
+                },
+            });
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_plot_stamp(ops: &mut Vec<Op>) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".into());
+    let label = format!("Open CAD Studio | {user} | {timestamp}");
+    ops.extend([
+        Op::SaveGraphicsState,
+        Op::StartTextSection,
+        Op::SetTextCursor {
+            pos: Point::new(Mm(4.0), Mm(3.0)),
+        },
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            size: Pt(6.0),
+        },
+        Op::SetFillColor {
+            col: Color::Rgb(Rgb {
+                r: 0.25,
+                g: 0.25,
+                b: 0.25,
+                icc_profile: None,
+            }),
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text(label)],
+        },
+        Op::EndTextSection,
+        Op::RestoreGraphicsState,
+    ]);
+}
+
 /// Emit a single hatch / wipeout as a filled (or stroked, for pattern fills)
 /// polygon. NaN sentinels in `hatch.boundary` split the path into multiple
 /// rings so islands and holes render correctly under the even-odd rule.
 /// Mirrors `scene::paper_canvas::draw_hatch`: solid → fill, pattern → outline,
 /// gradient → solid fill of the averaged colour.
 #[cfg(not(target_arch = "wasm32"))]
-fn emit_hatch(ops: &mut Vec<Op>, hatch: &HatchModel, ox: f64, oy: f64) {
+fn emit_hatch(
+    ops: &mut Vec<Op>,
+    hatch: &HatchModel,
+    ox: f64,
+    oy: f64,
+    plot_style: Option<&PlotStyleTable>,
+    options: PdfPlotOptions,
+) {
     if hatch.boundary.is_empty() {
         return;
     }
@@ -435,15 +634,31 @@ fn emit_hatch(ops: &mut Vec<Op>, hatch: &HatchModel, ox: f64, oy: f64) {
     // Adapt hatch fills to the white sheet, mirroring the wire pass: colours
     // arrive adapted to the (dark) screen background, so a white/ACI-7 fill
     // would vanish white-on-white on paper. Force near-white/near-yellow → black
-    // and near-cyan → dark blue, matching AutoCAD's colour-7-on-white plotting.
+    // and near-cyan → dark blue for a readable white-sheet result.
     // Genuine colours are untouched; WIPEOUTS keep their paper-white mask.
-    if hatch.name == "WIPEOUT_FILL" {
+    let is_wipeout = hatch.name == "WIPEOUT_FILL";
+    let mut screening = 1.0;
+    let mut color_overridden = false;
+    if !is_wipeout {
+        if let Some(table) = plot_style {
+            if hatch.aci > 0 {
+                if let Some([cr, cg, cb]) = table.resolve_color(hatch.aci) {
+                    r = cr;
+                    g = cg;
+                    b = cb;
+                    color_overridden = true;
+                }
+                screening = table.resolve_screening(hatch.aci);
+            }
+        }
+    }
+    if is_wipeout {
         // Screen wipeouts match the configured canvas colour; printed
         // wipeouts must mask with the white paper colour.
         r = 1.0;
         g = 1.0;
         b = 1.0;
-    } else {
+    } else if !color_overridden {
         let is_light = r > 0.80 && g > 0.80 && b > 0.80;
         let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
         let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;
@@ -457,6 +672,13 @@ fn emit_hatch(ops: &mut Vec<Op>, hatch: &HatchModel, ox: f64, oy: f64) {
             b = 0.50;
         }
     }
+    [r, g, b] = plotted_color(
+        [r, g, b],
+        a,
+        screening,
+        options,
+        is_wipeout,
+    );
     // `boundary` holds f32 offsets from the f64 `world_origin`, so resolve the
     // pair in f64 and only narrow once the offset has cancelled — casting
     // `world_origin` to f32 first re-introduces the ~0.5 m UTM quantisation the
@@ -501,10 +723,17 @@ fn emit_hatch(ops: &mut Vec<Op>, hatch: &HatchModel, ox: f64, oy: f64) {
         HatchPattern::Gradient { color2, .. } => {
             // PDF gradients are stored in resource dictionaries; for the
             // fast path we average the two colours, matching paper_canvas.
+            let second = plotted_color(
+                adapt_text_color([color2[0], color2[1], color2[2]]),
+                color2[3],
+                1.0,
+                options,
+                false,
+            );
             let avg = [
-                (r + color2[0]) * 0.5,
-                (g + color2[1]) * 0.5,
-                (b + color2[2]) * 0.5,
+                (r + second[0]) * 0.5,
+                (g + second[1]) * 0.5,
+                (b + second[2]) * 0.5,
             ];
             (PaintMode::Fill, avg)
         }
@@ -616,6 +845,7 @@ fn emit_text(
     oy: f64,
     scale: f32,
     plot_style: Option<&PlotStyleTable>,
+    options: PdfPlotOptions,
 ) {
     use crate::scene::text::sdf_atlas;
 
@@ -643,17 +873,24 @@ fn emit_text(
         if verts.is_empty() {
             continue;
         }
-        // Mirror the wire pass: CTB colour/lineweight override by ACI, and the
-        // `/ scale` that keeps pen widths absolute under the scaled CTM (a Fit
-        // plot would otherwise render text as near-invisible hairlines).
+        // Mirror the wire pass: indexed style color, screening, and pen width.
         let mut ctb_color: Option<[f32; 3]> = None;
         let mut lw_override: Option<f32> = None;
+        let mut screening = 1.0;
         if let Some(ctb) = plot_style {
             if wire.aci > 0 {
                 ctb_color = ctb.resolve_color(wire.aci);
                 lw_override = ctb
                     .resolve_lineweight(wire.aci)
-                    .map(|mm| (mm * MM_TO_PT).max(0.1) / scale.max(1e-6));
+                    .map(|mm| {
+                        let divisor = if options.scale_lineweights {
+                            1.0
+                        } else {
+                            scale.max(1e-6)
+                        };
+                        (mm * MM_TO_PT).max(0.1) / divisor
+                    });
+                screening = ctb.resolve_screening(wire.aci);
             }
         }
         let mut gi = 0;
@@ -668,9 +905,10 @@ fn emit_text(
             // A CTB colour override wins over the white-sheet adaptation, exactly
             // as in the wire pass — else a monochrome.ctb plot plots the lines
             // black and leaves the text on its screen colour.
-            let [r, g, b] = ctb_color.unwrap_or_else(|| {
+            let rgb = ctb_color.unwrap_or_else(|| {
                 adapt_text_color([quad[0].color[0], quad[0].color[1], quad[0].color[2]])
             });
+            let [r, g, b] = plotted_color(rgb, a, screening, options, false);
 
             // Quad corners in world XY: verts run [bl, br, tr, bl, tr, tl].
             let bl = glyph_world_xy(&quad[0]);
@@ -811,6 +1049,7 @@ mod tests {
             2.0,
             Some((10.0, 10.0, 100.0, 100.0)),
             None,
+            PdfPlotOptions::default(),
         );
         // A valid PDF is produced (starts with the PDF header) and is non-trivial.
         assert!(bytes.starts_with(b"%PDF"), "not a PDF");
@@ -843,8 +1082,34 @@ mod tests {
         let mut blank = wire.clone();
         blank.text_verts.clear();
 
-        let with_text = build_pdf(&[wire], &[], &[], 210.0, 297.0, 0.0, 0.0, 0, 1.0, None, None);
-        let no_text = build_pdf(&[blank], &[], &[], 210.0, 297.0, 0.0, 0.0, 0, 1.0, None, None);
+        let with_text = build_pdf(
+            &[wire],
+            &[],
+            &[],
+            210.0,
+            297.0,
+            0.0,
+            0.0,
+            0,
+            1.0,
+            None,
+            None,
+            PdfPlotOptions::default(),
+        );
+        let no_text = build_pdf(
+            &[blank],
+            &[],
+            &[],
+            210.0,
+            297.0,
+            0.0,
+            0.0,
+            0,
+            1.0,
+            None,
+            None,
+            PdfPlotOptions::default(),
+        );
         assert!(with_text.starts_with(b"%PDF"));
         assert!(
             with_text.len() > no_text.len(),

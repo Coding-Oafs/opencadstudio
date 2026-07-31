@@ -1238,7 +1238,7 @@ impl Scene {
                         // Resolve ByBlock / layer-0 inheritance for this block
                         // child, then adapt to the background (#221). Pattern /
                         // lineweight args are unused by a hatch's colour.
-                        let color = crate::scene::view::render::render_style_for_block_sub(
+                        let style = crate::scene::view::render::render_style_for_block_sub(
                             &self.document,
                             &EntityType::Hatch(dxf.clone()),
                             sub_ins_color,
@@ -1246,13 +1246,14 @@ impl Scene {
                             [0.0; 8],
                             0.0,
                             sub_l0,
-                        )
-                        .0;
+                        );
+                        let color = style.0;
                         let color =
                             crate::scene::view::render::adapt_to_bg(color, hatch_bg);
                         if let Some(mut model) =
                             Self::hatch_model_from_dxf(&dxf, color)
                         {
+                            model.aci = style.4;
                             // In-block rank → within the insert's depth slot.
                             model.draw_depth = d_base
                                 + depth_map
@@ -1358,6 +1359,7 @@ impl Scene {
                     pattern: model::hatch_model::HatchPattern::Solid,
                     name: "WIPEOUT_FILL".into(),
                     color: fill_color,
+                    aci: 0,
                     angle_offset: 0.0,
                     scale: 1.0,
                     world_origin: fill_origin,
@@ -1475,6 +1477,7 @@ impl Scene {
                             pattern: model::hatch_model::HatchPattern::Solid,
                             name: "WIPEOUT_FILL".into(),
                             color: fill_color,
+                            aci: 0,
                             angle_offset: 0.0,
                             scale: 1.0,
                             world_origin: fill_origin,
@@ -2034,6 +2037,7 @@ impl Scene {
             // A gradient starts from its first stop; other fills use the
             // entity colour.
             color: gradient_color1.unwrap_or(color),
+            aci: 0,
             angle_offset: if prebaked { 0.0 } else { dxf.pattern_angle as f32 },
             scale: if prebaked { 1.0 } else { dxf.pattern_scale as f32 },
             world_origin,
@@ -2338,6 +2342,7 @@ impl Scene {
             pattern: model::hatch_model::HatchPattern::Solid,
             name: "SOLID".into(),
             color,
+            aci: 0,
             angle_offset: 0.0,
             scale: 1.0,
             world_origin,

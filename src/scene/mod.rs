@@ -3159,6 +3159,7 @@ impl Scene {
             pattern: crate::scene::model::hatch_model::HatchPattern::Solid,
             name: "SOLID".to_string(),
             color: self.paper_bg_color,
+            aci: 0,
             angle_offset: 0.0,
             scale: 1.0,
             // Draw-order bias is signed: entity fills/wires land in (-1, 1)
@@ -4821,6 +4822,20 @@ impl Scene {
     /// (hundreds of MB on large mesh imports, #358).
     pub fn entity_wires(&self) -> Arc<Vec<WireModel>> {
         self.entity_wires_arc()
+    }
+
+    /// Return paper entities and projected model-viewport entities separately.
+    /// Keeping the two groups distinct lets non-GPU plotters honor the requested
+    /// paper/model draw order.
+    pub fn plot_wire_groups(&self) -> (Vec<WireModel>, Vec<WireModel>) {
+        if self.current_layout == "Model" {
+            return (self.entity_wires_arc().as_ref().clone(), Vec::new());
+        }
+        let paper_block = self.current_layout_block_handle();
+        (
+            self.paper_sheet_wires_arc().as_ref().clone(),
+            self.viewport_content_wires(paper_block, None, None),
+        )
     }
 
     /// Per-entity stable draw-order depth, keyed by entity handle value.

@@ -177,6 +177,8 @@ pub struct HatchModel {
     pub name: String,
     /// RGBA color in [0,1].
     pub color: [f32; 4],
+    /// Effective indexed color used by plot style tables; 0 means RGB/default.
+    pub aci: u8,
     /// Pattern rotation offset in radians (from DXF `pattern_angle`).
     /// Applied on top of each family's base angle at render time.
     pub angle_offset: f32,

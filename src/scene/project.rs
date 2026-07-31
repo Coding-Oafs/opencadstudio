@@ -468,6 +468,7 @@ impl Scene {
                             hatch.color,
                             false,
                         );
+                        wire.aci = hatch.aci;
                         wire.aabb = aabb;
                         pattern_wires.push(wire);
                     }

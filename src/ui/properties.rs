@@ -130,6 +130,7 @@ impl canvas::Program<Message> for HatchPatternPreview {
                     pattern: self.pattern.clone(),
                     name: String::new(),
                     color: [1.0; 4],
+                    aci: 0,
                     angle_offset: 0.0,
                     scale: hatch_preview_scale(&self.pattern),
                     draw_depth: 0.0,

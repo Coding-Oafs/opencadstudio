@@ -240,8 +240,8 @@ impl OpenCADStudio {
             super::super::ModalKind::Plot => {
                 sized_flow(
                     ex,
-                    760,
-                    540,
+                    820,
+                    610,
                     |flow| crate::ui::window::plot::view_window(&self.plot_dialog, flow),
                 )
             }

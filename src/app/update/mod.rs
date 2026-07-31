@@ -5168,6 +5168,15 @@ impl OpenCADStudio {
                 Task::perform(crate::io::pick_plot_style(), Message::PlotStyleLoaded)
             }
             Message::PlotStyleLoaded(Some(table)) => {
+                if table.is_stb {
+                    self.command_line.push_error(
+                        "Named plot style tables are not supported by the vector plotter.",
+                    );
+                    return Task::none();
+                }
+                self.plot_dialog.style_name = table.name.clone();
+                self.plot_dialog.style_missing = false;
+                self.plot_dialog.with_styles = true;
                 self.command_line.push_output(&format!(
                     "Plot style '{}' loaded ({} color entries).",
                     table.name,
@@ -5183,6 +5192,9 @@ impl OpenCADStudio {
             Message::PlotStyleLoaded(None) => Task::none(),
             Message::PlotStyleClear => {
                 self.active_plot_style = None;
+                self.plot_dialog.style_name.clear();
+                self.plot_dialog.style_missing = false;
+                self.plot_dialog.with_styles = false;
                 self.command_line.push_output("Plot style table cleared.");
                 Task::none()
             }
