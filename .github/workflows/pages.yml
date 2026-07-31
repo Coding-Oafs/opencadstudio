@@ -39,10 +39,18 @@ jobs:
         with:
           tool: trunk
 
+      - name: Read wasm-bindgen version
+        id: wasm-bindgen-version
+        shell: bash
+        run: |
+          VERSION=$(sed -n '/name = "wasm-bindgen"/{n;s/version = "\(.*\)"/\1/p;q;}' Cargo.lock)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Install wasm-bindgen CLI
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.126
+          tool: wasm-bindgen@${{ steps.wasm-bindgen-version.outputs.version }}
 
       # The rust <link> in index.html sets `data-cargo-no-default-features`,
       # so this drops the `solid3d` feature (truck-meshalgo → lzma-sys C deps
