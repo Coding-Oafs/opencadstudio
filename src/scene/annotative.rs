@@ -4,7 +4,9 @@
 //! tessellation bake (which scales annotative content by the current annotation
 //! scale) must agree on *which* entities are annotative — so that logic lives
 //! here, once. An entity is annotative if it carries a per-object annotation
-//! context, the legacy annotative XDATA, or an annotative style.
+//! context, legacy annotative XDATA, or an entity-level annotative flag. Text
+//! style state is consulted only while creating a new text object: changing a
+//! style later must not retroactively scale existing text.
 
 use acadrust::entities::{EntityCommon, EntityType};
 use acadrust::objects::{
@@ -73,8 +75,8 @@ pub fn root_named_dict_handle(doc: &mut CadDocument) -> Handle {
 /// (MTEXT, MULTILEADER). Turning it off also strips the per-object annotation
 /// context and legacy markers via [`clear_annotation_context`] so the object
 /// stops resolving annotative; turning it on leaves the base geometry as the
-/// single (implicit, current-scale) representation. Other entity types get
-/// their annotative state from a style and are not toggled here.
+/// single (implicit, current-scale) representation. TEXT uses a context rather
+/// than a native flag; other entity types are not toggled here.
 pub fn set_entity_annotative(doc: &mut CadDocument, handle: Handle, want: bool) {
     if let Some(e) = doc.get_entity_mut(handle) {
         match e {
@@ -963,7 +965,12 @@ fn name_matches(style_name: &str, name: &str) -> bool {
         || (name.trim().is_empty() && style_name.eq_ignore_ascii_case("Standard"))
 }
 
-fn text_style_annotative(doc: &CadDocument, name: &str) -> bool {
+/// Whether `name` currently names an annotative text style.
+///
+/// Creation paths use this to stamp a new TEXT/MTEXT with its own annotation
+/// context. Render-time detection deliberately does not use it: an existing
+/// non-annotative object may still reference a style later made annotative.
+pub fn text_style_is_annotative(doc: &CadDocument, name: &str) -> bool {
     doc.text_styles
         .iter()
         .find(|s| name_matches(&s.name, name))
@@ -1037,10 +1044,12 @@ pub fn is_annotative(doc: &CadDocument, entity: &EntityType) -> bool {
     if xd.get_record("AcAnnoPO").is_some() || xd.get_record("AcAnnotativeData").is_some() {
         return true;
     }
-    // Annotative via the assigned style (or the entity's own flag).
+    // Annotative via the entity's own flag or assigned non-text style.
+    // Text styles can be made annotative without converting existing text;
+    // those objects must keep their stored height until explicitly updated.
     match entity {
-        EntityType::Text(t) => text_style_annotative(doc, &t.style),
-        EntityType::MText(t) => t.is_annotative || text_style_annotative(doc, &t.style),
+        EntityType::Text(_) => false,
+        EntityType::MText(t) => t.is_annotative,
         EntityType::Dimension(d) => dim_style_annotative(doc, &d.base().style_name),
         EntityType::Leader(l) => dim_style_annotative(doc, &l.dimension_style),
         EntityType::MultiLeader(ml) => {

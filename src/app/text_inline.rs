@@ -227,10 +227,24 @@ impl super::OpenCADStudio {
             if !cur_style.is_empty() {
                 t.style = cur_style;
             }
+            let annotative = crate::scene::annotative::text_style_is_annotative(
+                &self.tabs[i].scene.document,
+                &t.style,
+            );
             // Align new text to the active UCS (baseline along the UCS X axis).
             t.rotation = self.tabs[i].ucs_rotation_angle();
             self.push_undo_snapshot(i, "TEXT");
-            self.commit_entity(EntityType::Text(t));
+            let handle = self.commit_entity_handle(EntityType::Text(t));
+            if annotative {
+                let scale = self.tabs[i].scene.current_annotation_scale_handle();
+                if let (Some(handle), Some(scale)) = (handle, scale) {
+                    crate::scene::annotative::create_annotation_context(
+                        &mut self.tabs[i].scene.document,
+                        handle,
+                        scale,
+                    );
+                }
+            }
             self.tabs[i].dirty = true;
         }
         self.refresh_properties();
