@@ -4825,17 +4825,49 @@ impl Scene {
     }
 
     /// Return paper entities and projected model-viewport entities separately.
-    /// Keeping the two groups distinct lets non-GPU plotters honor the requested
-    /// paper/model draw order.
-    pub fn plot_wire_groups(&self) -> (Vec<WireModel>, Vec<WireModel>) {
+    /// A plot-only render override is applied to cloned wires; viewport entities
+    /// and their saved display modes remain unchanged.
+    pub fn plot_wire_groups(
+        &self,
+        render_mode_override: Option<acadrust::entities::ViewportRenderMode>,
+    ) -> (Vec<WireModel>, Vec<WireModel>) {
+        let apply_mode = |wires: &mut Vec<WireModel>, mode| {
+            let flags = view::render::render_mode_flags(mode);
+            for wire in wires.iter_mut().filter(|wire| wire.fill_is_3d) {
+                if !flags.face3d_fill && !flags.mesh_fill {
+                    wire.fill_tris.clear();
+                    wire.fill_tris_low.clear();
+                }
+                if !flags.show_3d_edges {
+                    wire.points.clear();
+                    wire.points_low.clear();
+                }
+            }
+        };
         if self.current_layout == "Model" {
-            return (self.entity_wires_arc().as_ref().clone(), Vec::new());
+            let mut wires = self.entity_wires_arc().as_ref().clone();
+            apply_mode(
+                &mut wires,
+                render_mode_override.unwrap_or_else(|| self.active_model_tile_render_mode()),
+            );
+            return (wires, Vec::new());
         }
         let paper_block = self.current_layout_block_handle();
-        (
-            self.paper_sheet_wires_arc().as_ref().clone(),
-            self.viewport_content_wires(paper_block, None, None),
-        )
+        let (_, _, viewport_handles) = self.paper_viewport_handles();
+        let mut model_wires = Vec::new();
+        for handle in viewport_handles.iter().copied() {
+            let Some(EntityType::Viewport(viewport)) = self.document.get_entity(handle) else {
+                continue;
+            };
+            if viewport.common.owner_handle != paper_block || !viewport.status.is_on {
+                continue;
+            }
+            let mode = render_mode_override.unwrap_or(viewport.render_mode);
+            let mut wires = self.viewport_content_wires(paper_block, Some(handle), None);
+            apply_mode(&mut wires, mode);
+            model_wires.extend(wires);
+        }
+        (self.paper_sheet_wires_arc().as_ref().clone(), model_wires)
     }
 
     /// Per-entity stable draw-order depth, keyed by entity handle value.

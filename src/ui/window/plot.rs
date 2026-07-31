@@ -20,21 +20,22 @@ pub const OUT_PDF: &str = "Save to PDF file…";
 /// settings captured when the dialog opened.
 pub const SETUP_NONE: &str = "<none>";
 pub const SETUP_PREV: &str = "<previous>";
+pub const STYLE_NONE: &str = "<none>";
 
 /// One of the many boolean plot options (folded into a single message so the
 /// dialog needn't carry a variant per checkbox).
 #[derive(Debug, Clone, Copy)]
 pub enum PlotFlag {
+    Background,
+    MergeLines,
+    FitToPaper,
     Center,
     ScaleLw,
     UpsideDown,
-    Mono,
     Lineweights,
-    WithStyles,
     Transparency,
     PaperspaceLast,
     Stamp,
-    SaveLayout,
 }
 
 /// Every edit the Plot dialog can emit. Wrapped in `Message::PlotDlg` so the
@@ -55,10 +56,10 @@ pub enum PlotDlgMsg {
     Copies(String),
     OffsetX(String),
     OffsetY(String),
-    Dpi(String),
     Flag(PlotFlag),
     LoadStyle,
-    ClearStyle,
+    SaveStyle,
+    Style(String),
     PickWindow,
     // ── Named page-setup manager ─────────────────────────────────────────
     /// Pick a named page setup (loads its values into the editor).
@@ -112,19 +113,24 @@ pub struct PlotDialogState {
     #[serde(skip)]
     pub offset_y: String,
     pub scale: String,
+    #[serde(default = "legacy_fit_to_paper_default")]
+    pub fit_to_paper: bool,
+    #[serde(skip)]
+    pub scales: Vec<(String, f64)>,
     pub scale_lw: bool,
     pub quality: String,
-    pub dpi: String,
     pub shade: String,
-    pub mono: bool,
+    pub background: bool,
+    pub merge_lines: bool,
     pub lineweights: bool,
-    pub with_styles: bool,
     pub transparency: bool,
     pub paperspace_last: bool,
     pub stamp: bool,
-    pub save_layout: bool,
     /// Display name of the active plot style table ("" = none).
     pub style_name: String,
+    /// CTB file names discovered in the per-user plot styles folder.
+    #[serde(skip)]
+    pub plot_styles: Vec<String>,
     /// The selected setup references a style table that is not loaded.
     #[serde(skip)]
     pub style_missing: bool,
@@ -159,19 +165,20 @@ impl Default for PlotDialogState {
             center: true,
             offset_x: "0.0".into(),
             offset_y: "0.0".into(),
-            scale: "Fit".into(),
+            scale: "1:1".into(),
+            fit_to_paper: true,
+            scales: Vec::new(),
             scale_lw: true,
             quality: "Normal".into(),
-            dpi: "300".into(),
             shade: "As displayed".into(),
-            mono: false,
+            background: true,
+            merge_lines: false,
             lineweights: true,
-            with_styles: true,
             transparency: false,
             paperspace_last: false,
             stamp: false,
-            save_layout: false,
             style_name: String::new(),
+            plot_styles: Vec::new(),
             style_missing: false,
             page_setups: Vec::new(),
             selected_setup: String::new(),
@@ -198,21 +205,24 @@ impl PlotDialogState {
         self.offset_x = o.offset_x.clone();
         self.offset_y = o.offset_y.clone();
         self.scale = o.scale.clone();
+        self.fit_to_paper = o.fit_to_paper;
         self.scale_lw = o.scale_lw;
         self.quality = o.quality.clone();
-        self.dpi = o.dpi.clone();
         self.shade = o.shade.clone();
-        self.mono = o.mono;
+        self.background = o.background;
+        self.merge_lines = o.merge_lines;
         self.lineweights = o.lineweights;
-        self.with_styles = o.with_styles;
         self.transparency = o.transparency;
         self.paperspace_last = o.paperspace_last;
         self.stamp = o.stamp;
-        self.save_layout = o.save_layout;
         self.style_name = o.style_name.clone();
         self.style_missing = o.style_missing;
     }
 
+}
+
+fn legacy_fit_to_paper_default() -> bool {
+    false
 }
 
 fn btn(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -436,15 +446,6 @@ fn check_enabled<'a>(
         .into()
 }
 
-fn check_static<'a>(label: &'a str, on: bool) -> Element<'a, Message> {
-    checkbox(on)
-        .label(label)
-        .size(14)
-        .text_size(11)
-        .style(checkbox::primary)
-        .into()
-}
-
 fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
         .width(Length::Fill)
@@ -545,29 +546,27 @@ pub fn view_window(
         left: 12.0,
     });
 
-    let mut left_bar = row![
+    let mut copy_button = button(text("Copy").size(11))
+        .style(btn(false))
+        .padding([4, 12]);
+    if can_copy {
+        copy_button = copy_button.on_press(Message::PlotDlg(PlotDlgMsg::CopySetup));
+    }
+    let mut delete_button = button(text("Delete").size(11))
+        .style(btn(false))
+        .padding([4, 12]);
+    if is_named {
+        delete_button = delete_button.on_press(Message::PlotDlg(PlotDlgMsg::DeleteSetup));
+    }
+    let left_bar = row![
         button(text("New").size(11))
             .on_press(Message::PlotDlg(PlotDlgMsg::NewSetup))
             .style(btn(false))
             .padding([4, 12]),
+        copy_button,
+        delete_button,
     ]
     .spacing(4);
-    if can_copy {
-        left_bar = left_bar.push(
-            button(text("Copy").size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::CopySetup))
-                .style(btn(false))
-                .padding([4, 12]),
-        );
-    }
-    if is_named {
-        left_bar = left_bar.push(
-            button(text("Delete").size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::DeleteSetup))
-                .style(btn(false))
-                .padding([4, 12]),
-        );
-    }
 
     // ── Printer / plotter ─────────────────────────────────────────────────
     let mut printer_opts = vec![OUT_DEFAULT.to_string()];
@@ -580,7 +579,7 @@ pub fn view_window(
     };
     let paper_opts: Vec<String> = PaperSize::ALL.iter().map(|p| p.label().to_string()).collect();
     let paper_note: Element<'_, Message> = if s.area == "Layout" {
-        text("Layout plots the current sheet; Apply to layout updates its paper size.")
+        text("Layout plots the current sheet using the selected paper size.")
             .size(10)
             .style(muted_style)
             .width(width)
@@ -606,19 +605,16 @@ pub fn view_window(
                 .padding([4, 8]),
         );
     }
-    let destination = if s.to_file {
-        "Destination: PDF file"
-    } else if s.printer.is_some() {
-        "Destination: selected system printer"
+    let copies_row: Element<'_, Message> = if s.to_file {
+        Space::new().height(0).into()
     } else {
-        "Destination: system default printer"
+        field_row("Copies", &s.copies, PlotDlgMsg::Copies, 60)
     };
     let printer_panel = panel(
         column![
             section_label("Printer / plotter"),
             output_row,
-            field_row_enabled("Copies", &s.copies, PlotDlgMsg::Copies, 60, !s.to_file),
-            text(destination).size(10).style(muted_style),
+            copies_row,
         ]
         .spacing(7),
     );
@@ -664,51 +660,57 @@ pub fn view_window(
         .spacing(7),
         check_enabled("Center the plot", s.center, PlotFlag::Center, common_area),
     ].spacing(7));
+    let scale_options = s.scales.iter().map(|(name, _)| name.clone()).collect();
     let scale_panel = panel(column![
         section_label("Plot scale"),
+        check_enabled(
+            "Fit to paper",
+            s.fit_to_paper,
+            PlotFlag::FitToPaper,
+            common_area,
+        ),
         drop_row_enabled(
             "Scale",
-            strs(&["Fit", "1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100", "2:1"]),
-            Some(if common_area { s.scale.clone() } else { "1:1".into() }),
+            scale_options,
+            Some(s.scale.clone()),
             PlotDlgMsg::Scale,
             width,
-            common_area,
+            common_area && !s.fit_to_paper,
         ),
         check_enabled("Scale lineweights", s.scale_lw, PlotFlag::ScaleLw, common_area),
     ].spacing(7));
 
     // ── Style and shaded viewport settings ───────────────────────────────
-    let style_label = if s.style_name.is_empty() {
-        "(none)".to_string()
-    } else if s.style_missing {
-        format!("{} (not loaded)", s.style_name)
+    let mut style_options = vec![STYLE_NONE.to_string()];
+    style_options.extend(s.plot_styles.iter().cloned());
+    if !s.style_name.is_empty()
+        && !style_options
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&s.style_name))
+    {
+        style_options.push(s.style_name.clone());
+    }
+    let style_selected = if s.style_name.is_empty() {
+        STYLE_NONE.to_string()
     } else {
         s.style_name.clone()
     };
     let style_panel = panel(column![
         section_label("Plot style table (pen assignments)"),
+        drop_row(
+            "Table",
+            style_options,
+            Some(style_selected),
+            PlotDlgMsg::Style,
+            width,
+        ),
         row![
-            container(text(style_label).size(12))
-                .style(|theme: &Theme| {
-                    let palette = theme.palette();
-                    container::Style {
-                    background: Some(Background::Color(palette.background.base.color)),
-                    border: Border {
-                        color: palette.background.neutral.color,
-                        width: 1.0,
-                        radius: 3.0.into(),
-                    },
-                    ..Default::default()
-                    }
-                })
-                .padding([4, 8])
-                .width(width),
             button(text("Load…").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::LoadStyle))
                 .style(btn(false))
                 .padding([4, 10]),
-            button(text("Clear").size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::ClearStyle))
+            button(text("Save…").size(11))
+                .on_press(Message::PlotDlg(PlotDlgMsg::SaveStyle))
                 .style(btn(false))
                 .padding([4, 10]),
         ]
@@ -720,62 +722,53 @@ pub fn view_window(
         section_label("Shaded viewport options"),
         drop_row(
             "Shade plot",
-            strs(&["As displayed", "Wireframe"]),
+            strs(&[
+                "As displayed",
+                "2D Wireframe",
+                "3D Wireframe",
+                "Hidden Line",
+                "Flat Shaded",
+                "Gouraud Shaded",
+                "Flat Shaded + Edges",
+                "Gouraud Shaded + Edges",
+            ]),
             Some(s.shade.clone()),
             PlotDlgMsg::Shade,
             width,
         ),
         drop_row(
             "Quality",
-            strs(&["Draft", "Preview", "Normal", "Presentation", "Maximum", "Custom"]),
+            strs(&["Low", "Normal", "High"]),
             Some(s.quality.clone()),
             PlotDlgMsg::Quality,
             width,
         ),
-        field_row_enabled("DPI", &s.dpi, PlotDlgMsg::Dpi, 70, s.quality == "Custom"),
-        text("Vector PDF stays resolution-independent; quality controls printer rasterization.")
-            .size(10)
-            .style(muted_style)
-            .width(width),
-        text("Hidden-line and rendered raster modes need a raster viewport backend.")
-            .size(10)
-            .style(muted_style)
-            .width(width),
     ].spacing(7));
 
     // ── Output options and orientation ────────────────────────────────────
+    let paper_order_option: Element<'_, Message> = if s.paper_space {
+        check(
+            "Paper space last",
+            s.paperspace_last,
+            PlotFlag::PaperspaceLast,
+        )
+    } else {
+        Space::new().height(0).into()
+    };
     let options_panel = panel(column![
         section_label("Plot options"),
         row![
             column![
-                check_static("Plot in background", true),
+                check("Plot in background", s.background, PlotFlag::Background),
                 check("Object lineweights", s.lineweights, PlotFlag::Lineweights),
-                check_enabled(
-                    "Plot with styles",
-                    s.with_styles,
-                    PlotFlag::WithStyles,
-                    !s.style_name.is_empty(),
-                ),
-                check("Monochrome", s.mono, PlotFlag::Mono),
                 check("Plot transparency", s.transparency, PlotFlag::Transparency),
             ]
             .spacing(6)
             .width(width),
             column![
-                check_enabled(
-                    "Paper space last",
-                    s.paperspace_last,
-                    PlotFlag::PaperspaceLast,
-                    s.paper_space,
-                ),
-                check_static("Hide paper objects (unavailable)", false),
+                paper_order_option,
+                check("Merge overlapping lines", s.merge_lines, PlotFlag::MergeLines),
                 check("Plot stamp", s.stamp, PlotFlag::Stamp),
-                check_enabled(
-                    "Save changes to layout",
-                    s.save_layout,
-                    PlotFlag::SaveLayout,
-                    s.paper_space,
-                ),
             ]
             .spacing(6)
             .width(width),
@@ -784,7 +777,6 @@ pub fn view_window(
     ].spacing(7));
 
     let orientation_panel = panel(column![
-        section_label("Drawing orientation"),
         drop_row(
             "Orientation",
             strs(&["Portrait", "Landscape"]),

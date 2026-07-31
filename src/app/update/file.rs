@@ -43,6 +43,44 @@ where
     }
 }
 
+fn plot_dialog_scale_factor(d: &crate::ui::window::plot::PlotDialogState) -> f64 {
+    d.scales
+        .iter()
+        .find(|(name, _)| name == &d.scale)
+        .map(|(_, factor)| *factor)
+        .or_else(|| {
+            let (paper, drawing) = parse_plot_scale(&d.scale);
+            (paper > 0.0 && drawing > 0.0).then_some(paper / drawing)
+        })
+        .unwrap_or(1.0)
+        .max(1e-9)
+}
+
+fn scale_name_for_factor(scales: &[(String, f64)], factor: f64) -> Option<String> {
+    scales
+        .iter()
+        .find(|(_, candidate)| {
+            (*candidate - factor).abs() <= 1e-6 * factor.abs().max(1.0)
+        })
+        .map(|(name, _)| name.clone())
+}
+
+fn plot_render_mode_override(
+    d: &crate::ui::window::plot::PlotDialogState,
+) -> Option<acadrust::entities::ViewportRenderMode> {
+    use acadrust::entities::ViewportRenderMode as Mode;
+    match d.shade.as_str() {
+        "2D Wireframe" => Some(Mode::Wireframe2D),
+        "3D Wireframe" => Some(Mode::Wireframe3D),
+        "Hidden Line" => Some(Mode::HiddenLine),
+        "Flat Shaded" => Some(Mode::FlatShaded),
+        "Gouraud Shaded" => Some(Mode::GouraudShaded),
+        "Flat Shaded + Edges" => Some(Mode::FlatShadedWithEdges),
+        "Gouraud Shaded + Edges" => Some(Mode::GouraudShadedWithEdges),
+        _ => None,
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
     match (
@@ -123,13 +161,14 @@ fn plot_content_extents(
 fn plot_scene_content(
     scene: &crate::scene::Scene,
     paper_space_last: bool,
+    render_mode_override: Option<acadrust::entities::ViewportRenderMode>,
 ) -> (
     std::sync::Arc<Vec<crate::scene::WireModel>>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     crate::io::pdf_export::PlotGroupSplits,
 ) {
-    let (paper_wires, model_wires) = scene.plot_wire_groups();
+    let (paper_wires, model_wires) = scene.plot_wire_groups(render_mode_override);
     let paper_hatches = scene.paper_canvas_hatches().as_ref().clone();
     let paper_wipeouts = scene.paper_canvas_wipeouts().as_ref().clone();
     if scene.current_layout == "Model" {
@@ -1984,7 +2023,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// Write the given plot page settings into the active layout's Layout +
     /// PlotSettings objects (paper size, plot area, offset, rotation, scale).
     /// No-op on the Model tab (which has no paper layout). Marks the tab dirty
-    /// and re-tessellates the sheet. Called by the Plot dialog on commit.
+    /// and re-tessellates the sheet. Called by the Plot dialog's Set current action.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_plot_page_settings(
         &mut self,
@@ -1995,151 +2034,133 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         offset_x: f64,
         offset_y: f64,
         rotation: i16,
-        scale_str: &str,
     ) {
-                let i = self.active_tab;
-                let dialog = self.plot_dialog.clone();
-                let layout_name = self.tabs[i].scene.current_layout.clone();
-                let plot_window = self.plot_window;
-                if layout_name != "Model" {
-                    let w: f64 = w.max(1.0);
-                    let h: f64 = h.max(1.0);
-                    // Update the Layout object's limits AND its embedded
-                    // PlotSettings fields. `paper_limits()` (sheet rendering) and
-                    // the DWG writer both read these from the Layout, so a page
-                    // setup that only touched a side PlotSettings object would not
-                    // reflect on screen or survive a save. The dialog's w/h are
-                    // the final sheet dimensions, so store them verbatim with no
-                    // further rotation swap (#156).
-                    for obj in self.tabs[i].scene.document.objects.values_mut() {
-                        if let acadrust::objects::ObjectType::Layout(l) = obj {
-                            if l.name == layout_name {
-                                l.min_limits = (0.0, 0.0);
-                                l.max_limits = (w, h);
-                                l.min_extents = (0.0, 0.0, 0.0);
-                                l.max_extents = (w, h, 0.0);
-                                l.paper_width = w;
-                                l.paper_height = h;
-                                l.plot_rotation = 0;
-                                l.plot_paper_units = 1; // millimetres
-                                l.plot_origin_x = offset_x;
-                                l.plot_origin_y = offset_y;
-                                // Custom dimensions no longer match a named size.
-                                l.paper_size = String::new();
-                                break;
-                            }
-                        }
+        let i = self.active_tab;
+        let dialog = self.plot_dialog.clone();
+        let layout_name = self.tabs[i].scene.current_layout.clone();
+        let plot_window = self.plot_window;
+        if layout_name != "Model" {
+            let w: f64 = w.max(1.0);
+            let h: f64 = h.max(1.0);
+            for obj in self.tabs[i].scene.document.objects.values_mut() {
+                if let acadrust::objects::ObjectType::Layout(l) = obj {
+                    if l.name == layout_name {
+                        l.min_limits = (0.0, 0.0);
+                        l.max_limits = (w, h);
+                        l.min_extents = (0.0, 0.0, 0.0);
+                        l.max_extents = (w, h, 0.0);
+                        l.paper_width = w;
+                        l.paper_height = h;
+                        l.plot_rotation = 0;
+                        l.plot_paper_units = 1;
+                        l.plot_origin_x = offset_x;
+                        l.plot_origin_y = offset_y;
+                        l.paper_size = String::new();
+                        break;
                     }
-
-                    // Find or create the PlotSettings object for this layout.
-                    use acadrust::objects::{
-                        ObjectType, PlotPaperUnits, PlotRotation, PlotSettings, PlotType,
-                        ShadePlotMode, ShadePlotResolutionLevel,
-                    };
-                    let plot_handle =
-                        self.tabs[i]
-                            .scene
-                            .document
-                            .objects
-                            .iter()
-                            .find_map(|(h, obj)| {
-                                if let ObjectType::PlotSettings(ps) = obj {
-                                    if ps.page_name == layout_name {
-                                        Some(*h)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            });
-
-                    let ps_entry = if let Some(h) = plot_handle {
-                        self.tabs[i].scene.document.objects.get_mut(&h)
-                    } else {
-                        // Create a new PlotSettings object and insert it.
-                        let mut ps = PlotSettings::new(layout_name.clone());
-                        ps.handle = self.tabs[i].scene.document.allocate_handle();
-                        let h = ps.handle;
-                        self.tabs[i]
-                            .scene
-                            .document
-                            .objects
-                            .insert(h, ObjectType::PlotSettings(ps));
-                        self.tabs[i].scene.document.objects.get_mut(&h)
-                    };
-
-                    if let Some(ObjectType::PlotSettings(ps)) = ps_entry {
-                        ps.paper_width = w;
-                        ps.paper_height = h;
-                        ps.paper_size = dialog.paper.clone();
-                        ps.paper_units = PlotPaperUnits::Millimeters;
-                        ps.plot_type = match plot_area {
-                            "Window" => PlotType::Window,
-                            "Display" => PlotType::LastScreenDisplay,
-                            "Extents" => PlotType::Extents,
-                            _ => PlotType::Layout,
-                        };
-                        if plot_area == "Window" {
-                            if let Some((x0, y0, x1, y1)) = plot_window {
-                                ps.set_plot_window(x0, y0, x1, y1);
-                            }
-                        }
-                        ps.flags.plot_centered = center && plot_area != "Layout";
-                        ps.origin_x = if plot_area == "Layout" { 0.0 } else { offset_x };
-                        ps.origin_y = if plot_area == "Layout" { 0.0 } else { offset_y };
-                        ps.rotation = match rotation {
-                            90 => PlotRotation::Degrees90,
-                            180 => PlotRotation::Degrees180,
-                            270 => PlotRotation::Degrees270,
-                            _ => PlotRotation::None,
-                        };
-                        // Apply plot scale.
-                        use acadrust::objects::ScaledType;
-                        let (num, den) = parse_plot_scale(scale_str);
-                        if scale_str == "Fit" {
-                            ps.set_scale_to_fit();
-                        } else {
-                            ps.scale_type = ScaledType::CustomScale;
-                            ps.scale_numerator = num;
-                            ps.scale_denominator = den;
-                        }
-                        ps.printer_name = if dialog.to_file {
-                            crate::ui::window::plot::OUT_PDF.into()
-                        } else {
-                            dialog.printer.clone().unwrap_or_default()
-                        };
-                        ps.current_style_sheet = dialog.style_name.clone();
-                        ps.flags.scale_lineweights = dialog.scale_lw;
-                        ps.flags.print_lineweights = dialog.lineweights;
-                        ps.flags.plot_plot_styles = dialog.with_styles;
-                        ps.flags.draw_viewports_first = dialog.paperspace_last;
-                        ps.flags.plot_hidden = false;
-                        ps.shade_plot_mode = match dialog.shade.as_str() {
-                            "Wireframe" => ShadePlotMode::Wireframe,
-                            _ => ShadePlotMode::AsDisplayed,
-                        };
-                        ps.shade_plot_resolution = match dialog.quality.as_str() {
-                            "Draft" => ShadePlotResolutionLevel::Draft,
-                            "Preview" => ShadePlotResolutionLevel::Preview,
-                            "Presentation" => ShadePlotResolutionLevel::Presentation,
-                            "Maximum" => ShadePlotResolutionLevel::Maximum,
-                            "Custom" => ShadePlotResolutionLevel::Custom,
-                            _ => ShadePlotResolutionLevel::Normal,
-                        };
-                        ps.shade_plot_dpi =
-                            dialog.dpi.parse::<i16>().unwrap_or(300).clamp(1, 32767);
-                    }
-
-                    self.tabs[i].dirty = true;
-                    // The paper sheet fill is cached by epoch, while document
-                    // entity tessellation is unaffected by the paper size.
-                    self.tabs[i].scene.bump_geometry_no_blocks();
-                    self.command_line.push_info(&format!(
-                        "Page setup: {w:.1}×{h:.1} mm  area={plot_area}  \
-                         center={center}  rot={rotation}°"
-                    ));
                 }
+            }
+
+            use acadrust::objects::{
+                ObjectType, PlotPaperUnits, PlotRotation, PlotSettings, PlotType, ScaledType,
+                ShadePlotMode, ShadePlotResolutionLevel,
+            };
+            let plot_handle = self.tabs[i]
+                .scene
+                .document
+                .objects
+                .iter()
+                .find_map(|(h, obj)| {
+                    if let ObjectType::PlotSettings(ps) = obj {
+                        (ps.page_name == layout_name).then_some(*h)
+                    } else {
+                        None
+                    }
+                });
+
+            let ps_entry = if let Some(h) = plot_handle {
+                self.tabs[i].scene.document.objects.get_mut(&h)
+            } else {
+                let mut ps = PlotSettings::new(layout_name.clone());
+                ps.handle = self.tabs[i].scene.document.allocate_handle();
+                let h = ps.handle;
+                self.tabs[i]
+                    .scene
+                    .document
+                    .objects
+                    .insert(h, ObjectType::PlotSettings(ps));
+                self.tabs[i].scene.document.objects.get_mut(&h)
+            };
+
+            if let Some(ObjectType::PlotSettings(ps)) = ps_entry {
+                ps.paper_width = w;
+                ps.paper_height = h;
+                ps.paper_size = dialog.paper.clone();
+                ps.paper_units = PlotPaperUnits::Millimeters;
+                ps.plot_type = match plot_area {
+                    "Window" => PlotType::Window,
+                    "Display" => PlotType::LastScreenDisplay,
+                    "Extents" => PlotType::Extents,
+                    _ => PlotType::Layout,
+                };
+                if plot_area == "Window" {
+                    if let Some((x0, y0, x1, y1)) = plot_window {
+                        ps.set_plot_window(x0, y0, x1, y1);
+                    }
+                }
+                ps.flags.plot_centered = center && plot_area != "Layout";
+                ps.origin_x = if plot_area == "Layout" { 0.0 } else { offset_x };
+                ps.origin_y = if plot_area == "Layout" { 0.0 } else { offset_y };
+                ps.rotation = match rotation {
+                    90 => PlotRotation::Degrees90,
+                    180 => PlotRotation::Degrees180,
+                    270 => PlotRotation::Degrees270,
+                    _ => PlotRotation::None,
+                };
+                if dialog.fit_to_paper && plot_area != "Layout" {
+                    ps.set_scale_to_fit();
+                } else {
+                    let factor = if plot_area == "Layout" {
+                        1.0
+                    } else {
+                        plot_dialog_scale_factor(&dialog)
+                    };
+                    ps.scale_type = ScaledType::CustomScale;
+                    ps.scale_numerator = factor;
+                    ps.scale_denominator = 1.0;
+                }
+                ps.printer_name = if dialog.to_file {
+                    crate::ui::window::plot::OUT_PDF.into()
+                } else {
+                    dialog.printer.clone().unwrap_or_default()
+                };
+                ps.current_style_sheet = dialog.style_name.clone();
+                ps.flags.scale_lineweights = dialog.scale_lw;
+                ps.flags.print_lineweights = dialog.lineweights;
+                ps.flags.plot_plot_styles = !dialog.style_name.is_empty();
+                ps.flags.draw_viewports_first = dialog.paperspace_last;
+                ps.flags.plot_hidden = false;
+                ps.shade_plot_mode = match dialog.shade.as_str() {
+                    "2D Wireframe" | "3D Wireframe" => ShadePlotMode::Wireframe,
+                    "Hidden Line" => ShadePlotMode::Hidden,
+                    "As displayed" => ShadePlotMode::AsDisplayed,
+                    _ => ShadePlotMode::Rendered,
+                };
+                ps.shade_plot_resolution = match dialog.quality.as_str() {
+                    "Low" => ShadePlotResolutionLevel::Draft,
+                    "High" => ShadePlotResolutionLevel::Presentation,
+                    _ => ShadePlotResolutionLevel::Normal,
+                };
+                ps.shade_plot_dpi = 300;
+            }
+
+            self.tabs[i].dirty = true;
+            self.tabs[i].scene.bump_geometry_no_blocks();
+            self.command_line.push_info(&format!(
+                "Page setup: {w:.1}×{h:.1} mm  area={plot_area}  \
+                 center={center}  rot={rotation}°"
+            ));
+        }
     }
 
     pub(in crate::app) fn on_plot_export_path_some(
@@ -2151,9 +2172,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
         let render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
         let worker_path = path.clone();
-        background_task(
-            move || {
-                crate::io::pdf_export::export_pdf(
+        let work = move || {
+            crate::io::pdf_export::export_pdf(
                     &wires,
                     &hatches,
                     &wipeouts,
@@ -2170,9 +2190,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 )
                 .map(|_| format!("Exported: {}", worker_path.display()))
                 .map_err(|e| format!("Export failed: {e}"))
-            },
-            |result| Message::BackgroundIoFinished(result, false),
-        )
+        };
+        self.run_plot_work(self.plot_dialog.background, false, work)
     }
 
     /// Export the pending Extents/Window/Display area using the same clipped
@@ -2197,9 +2216,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
         let worker_path = path.clone();
         self.close_active_modal();
-        background_task(
-            move || {
-                crate::io::pdf_export::export_pdf(
+        let work = move || {
+            crate::io::pdf_export::export_pdf(
                     &wires,
                     &hatches,
                     &wipeouts,
@@ -2220,9 +2238,42 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             .file_name().unwrap_or_default().to_string_lossy()
                         )
                 }).map_err(|e| format!("Plot failed: {e}"))
-            },
-            |result| Message::BackgroundIoFinished(result, false),
-        )
+        };
+        self.run_plot_work(self.plot_dialog.background, false, work)
+    }
+
+    pub(super) fn report_plot_result(
+        &mut self,
+        result: Result<String, String>,
+        reopen_plot: bool,
+    ) {
+        match result {
+            Ok(message) => self.command_line.push_info(&message),
+            Err(error) => self.command_line.push_error(&error),
+        }
+        if reopen_plot {
+            self.active_modal = Some(crate::app::ModalKind::Plot);
+        }
+    }
+
+    fn run_plot_work<F>(
+        &mut self,
+        background: bool,
+        reopen_plot: bool,
+        work: F,
+    ) -> Task<Message>
+    where
+        F: FnOnce() -> Result<String, String> + Send + 'static,
+    {
+        if background {
+            background_task(work, move |result| {
+                Message::BackgroundIoFinished(result, reopen_plot)
+            })
+        } else {
+            let result = work();
+            self.report_plot_result(result, reopen_plot);
+            Task::none()
+        }
     }
 
     /// Build the render inputs and page geometry for a full-layout plot: wires
@@ -2234,7 +2285,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let scene = &self.tabs[i].scene;
         let paper_space = scene.current_layout != "Model";
         let (source_wires, hatches, wipeouts, mut group_splits) =
-            plot_scene_content(scene, self.plot_dialog.paperspace_last);
+            plot_scene_content(
+                scene,
+                self.plot_dialog.paperspace_last,
+                plot_render_mode_override(&self.plot_dialog),
+            );
         // The printable-area rectangle is an on-screen guide, not drawing
         // content. It used to leak into every paper-space PDF/preview/print.
         let wires = if paper_space {
@@ -2288,14 +2343,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         .unwrap_or((x0, y0, x1, y1));
                 let content_w = (max_x - min_x).max(1e-9);
                 let content_h = (max_y - min_y).max(1e-9);
-                let scale = if self.plot_dialog.scale == "Fit" {
+                let scale = if self.plot_dialog.fit_to_paper {
                     const MARGIN: f64 = 1.05;
                     ((paper_w / MARGIN) / content_w)
                         .min((paper_h / MARGIN) / content_h)
                         .max(1e-9)
                 } else {
-                    let (num, den) = parse_plot_scale(&self.plot_dialog.scale);
-                    ((num / den) * mm_per_unit).max(1e-9)
+                    (plot_dialog_scale_factor(&self.plot_dialog) * mm_per_unit).max(1e-9)
                 };
                 let target_x = if centered {
                     (paper_w - content_w * scale) * 0.5
@@ -2505,12 +2559,29 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// layout's plot settings and the printers found on the system.
     pub(super) fn on_plot_dialog_open(&mut self) -> Task<Message> {
         use crate::io::paper_sizes::Orientation;
+        let scales: Vec<(String, f64)> = self.tabs[self.active_tab]
+            .scene
+            .scale_list()
+            .into_iter()
+            .map(|(name, _, factor)| (name, factor))
+            .collect();
+        let one_to_one = scale_name_for_factor(&scales, 1.0)
+            .or_else(|| scales.first().map(|(name, _)| name.clone()))
+            .unwrap_or_else(|| "1:1".into());
         // Keep the user's last print preferences (printer, copies, quality,
         // output options — persisted in `self.plot_dialog`); only refresh the
         // runtime printer list and reseed the drawing-specific fields from the
         // active layout.
         let d = &mut self.plot_dialog;
         d.printers = crate::io::print_to_printer::list_printers();
+        d.plot_styles = crate::io::plot_style::available_ctb_names();
+        d.scales = scales;
+        if d.scale.eq_ignore_ascii_case("fit") {
+            d.fit_to_paper = true;
+            d.scale = one_to_one.clone();
+        } else if !d.scales.iter().any(|(name, _)| name == &d.scale) {
+            d.scale = one_to_one;
+        }
         d.paper_space = self.tabs[self.active_tab].scene.current_layout != "Model";
         d.paper = self.plot_format.label().to_string();
         d.orientation = match self.plot_orientation {
@@ -2518,14 +2589,32 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Orientation::Landscape => "Landscape",
         }
         .to_string();
+        d.quality = match d.quality.as_str() {
+            "Low" | "Draft" => "Low",
+            "High" | "Presentation" | "Maximum" | "Custom" => "High",
+            _ => "Normal",
+        }
+        .into();
+        d.shade = match d.shade.as_str() {
+            "Wireframe" => "2D Wireframe",
+            value if value.starts_with("As displayed") => "As displayed",
+            "2D Wireframe"
+            | "3D Wireframe"
+            | "Hidden Line"
+            | "Flat Shaded"
+            | "Gouraud Shaded"
+            | "Flat Shaded + Edges"
+            | "Gouraud Shaded + Edges" => d.shade.as_str(),
+            _ => "As displayed",
+        }
+        .into();
         d.style_name = self
             .active_plot_style
             .as_ref()
             .map(|t| t.name.clone())
             .unwrap_or_default();
         d.style_missing = false;
-        d.with_styles &= !d.style_name.is_empty();
-        // `area` and `scale` are remembered user choices (default Window / Fit),
+        // `area`, scale and fit are remembered user choices,
         // not reseeded from the layout. Offset / center / rotation ARE layout
         // properties, so reflect them.
         if let Some(ps) = self.tabs[self.active_tab].scene.effective_plot_settings() {
@@ -2569,7 +2658,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.plot_dialog.center = true;
         self.plot_dialog.offset_x = "0.0".into();
         self.plot_dialog.offset_y = "0.0".into();
-        self.plot_dialog.scale = "Fit".into();
+        self.plot_dialog.fit_to_paper = true;
     }
 
     /// Handle one edit / action from the Plot dialog.
@@ -2577,7 +2666,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &mut self,
         msg: crate::ui::window::plot::PlotDlgMsg,
     ) -> Task<Message> {
-        use crate::ui::window::plot::{PlotDlgMsg as M, PlotFlag, OUT_DEFAULT, OUT_PDF};
+        use crate::ui::window::plot::{
+            PlotDlgMsg as M, PlotFlag, OUT_DEFAULT, OUT_PDF, STYLE_NONE,
+        };
         match msg {
             M::Close => {
                 self.close_active_modal();
@@ -2625,7 +2716,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.plot_dialog.center = false;
                     self.plot_dialog.offset_x = "0.0".into();
                     self.plot_dialog.offset_y = "0.0".into();
-                    self.plot_dialog.scale = "1:1".into();
+                    self.plot_dialog.fit_to_paper = false;
+                    self.plot_dialog.scale = scale_name_for_factor(
+                        &self.plot_dialog.scales,
+                        1.0,
+                    )
+                    .unwrap_or_else(|| "1:1".into());
                 }
                 self.plot_dialog.area = s;
                 Task::none()
@@ -2637,15 +2733,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 Task::none()
             }
             M::Quality(s) => {
-                self.plot_dialog.quality = s.clone();
-                self.plot_dialog.dpi = match s.as_str() {
-                    "Draft" | "Preview" => "150",
-                    "Presentation" => "600",
-                    "Maximum" => "",
-                    "Custom" => return Task::none(),
-                    _ => "300",
-                }
-                .into();
+                self.plot_dialog.quality = s;
                 Task::none()
             }
             M::Shade(s) => {
@@ -2664,39 +2752,50 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.plot_dialog.offset_y = s;
                 Task::none()
             }
-            M::Dpi(s) => {
-                self.plot_dialog.dpi = s;
-                Task::none()
-            }
             M::Flag(f) => {
                 let d = &mut self.plot_dialog;
                 match f {
+                    PlotFlag::Background => d.background = !d.background,
+                    PlotFlag::MergeLines => d.merge_lines = !d.merge_lines,
+                    PlotFlag::FitToPaper if d.area != "Layout" => {
+                        d.fit_to_paper = !d.fit_to_paper
+                    }
                     PlotFlag::Center if d.area != "Layout" => d.center = !d.center,
                     PlotFlag::ScaleLw if d.area != "Layout" => d.scale_lw = !d.scale_lw,
                     PlotFlag::UpsideDown => {
                         d.upside_down = !d.upside_down;
                     }
-                    PlotFlag::Mono => d.mono = !d.mono,
                     PlotFlag::Lineweights => d.lineweights = !d.lineweights,
-                    PlotFlag::WithStyles if !d.style_name.is_empty() => {
-                        d.with_styles = !d.with_styles
-                    }
                     PlotFlag::Transparency => d.transparency = !d.transparency,
                     PlotFlag::PaperspaceLast if d.paper_space => {
                         d.paperspace_last = !d.paperspace_last
                     }
                     PlotFlag::Stamp => d.stamp = !d.stamp,
-                    PlotFlag::SaveLayout if d.paper_space => d.save_layout = !d.save_layout,
                     _ => {}
                 }
                 Task::none()
             }
             M::LoadStyle => Task::done(Message::PlotStyleLoad),
-            M::ClearStyle => {
-                self.active_plot_style = None;
-                self.plot_dialog.style_name.clear();
-                self.plot_dialog.style_missing = false;
-                self.plot_dialog.with_styles = false;
+            M::SaveStyle => Task::done(Message::PlotStylePanelSave),
+            M::Style(name) => {
+                if name == STYLE_NONE {
+                    self.active_plot_style = None;
+                    self.plot_dialog.style_name.clear();
+                    self.plot_dialog.style_missing = false;
+                } else {
+                    match crate::io::plot_style::PlotStyleTable::load_named(&name) {
+                        Ok(table) => {
+                            self.plot_dialog.style_name = table.name.clone();
+                            self.plot_dialog.style_missing = false;
+                            self.active_plot_style = Some(table);
+                        }
+                        Err(error) => {
+                            self.plot_dialog.style_name = name;
+                            self.plot_dialog.style_missing = true;
+                            self.command_line.push_error(&error);
+                        }
+                    }
+                }
                 Task::none()
             }
             M::PickWindow => {
@@ -2846,7 +2945,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             d.offset_x = "0.0".into();
             d.offset_y = "0.0".into();
             d.upside_down = false;
-            d.scale = "Fit".into();
+            d.fit_to_paper = is_model;
+            d.scale = scale_name_for_factor(&d.scales, 1.0)
+                .or_else(|| d.scales.first().map(|(name, _)| name.clone()))
+                .unwrap_or_else(|| "1:1".into());
         } else if name == SETUP_PREV {
             if let Some(prev) = self.plot_prev.clone() {
                 self.plot_dialog.copy_settings_from(&prev);
@@ -2935,13 +3037,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
         if d.area == "Layout" {
             ps.set_standard_scale(ScaledType::OneToOne);
-        } else if d.scale == "Fit" {
+        } else if d.fit_to_paper {
             ps.set_scale_to_fit();
         } else {
-            let (num, den) = parse_plot_scale(&d.scale);
+            let factor = plot_dialog_scale_factor(d);
             ps.scale_type = ScaledType::CustomScale;
-            ps.scale_numerator = num;
-            ps.scale_denominator = den;
+            ps.scale_numerator = factor;
+            ps.scale_denominator = 1.0;
         }
         ps.printer_name = if d.to_file {
             crate::ui::window::plot::OUT_PDF.into()
@@ -2951,22 +3053,21 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         ps.current_style_sheet = d.style_name.clone();
         ps.flags.scale_lineweights = d.scale_lw;
         ps.flags.print_lineweights = d.lineweights;
-        ps.flags.plot_plot_styles = d.with_styles;
+        ps.flags.plot_plot_styles = !d.style_name.is_empty();
         ps.flags.draw_viewports_first = d.paperspace_last;
         ps.flags.plot_hidden = false;
         ps.shade_plot_mode = match d.shade.as_str() {
-            "Wireframe" => ShadePlotMode::Wireframe,
-            _ => ShadePlotMode::AsDisplayed,
+            "2D Wireframe" | "3D Wireframe" => ShadePlotMode::Wireframe,
+            "Hidden Line" => ShadePlotMode::Hidden,
+            "As displayed" => ShadePlotMode::AsDisplayed,
+            _ => ShadePlotMode::Rendered,
         };
         ps.shade_plot_resolution = match d.quality.as_str() {
-            "Draft" => ShadePlotResolutionLevel::Draft,
-            "Preview" => ShadePlotResolutionLevel::Preview,
-            "Presentation" => ShadePlotResolutionLevel::Presentation,
-            "Maximum" => ShadePlotResolutionLevel::Maximum,
-            "Custom" => ShadePlotResolutionLevel::Custom,
+            "Low" => ShadePlotResolutionLevel::Draft,
+            "High" => ShadePlotResolutionLevel::Presentation,
             _ => ShadePlotResolutionLevel::Normal,
         };
-        ps.shade_plot_dpi = d.dpi.parse::<i16>().unwrap_or(300).clamp(1, 32767);
+        ps.shade_plot_dpi = 300;
         ps
     }
 
@@ -2983,11 +3084,33 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 ps.plot_window.upper_right_y,
             ));
         }
-        let style_loaded = !ps.current_style_sheet.is_empty()
+        if !ps.current_style_sheet.is_empty()
             && self
-                .active_plot_style
-                .as_ref()
-                .is_some_and(|table| table.name == ps.current_style_sheet);
+            .active_plot_style
+            .as_ref()
+            .is_none_or(|table| !table.name.eq_ignore_ascii_case(&ps.current_style_sheet))
+        {
+            if let Ok(table) = crate::io::plot_style::PlotStyleTable::load_named(
+                &ps.current_style_sheet,
+            ) {
+                self.active_plot_style = Some(table);
+            }
+        }
+        let active_style_name = self.active_plot_style.as_ref().map(|table| table.name.clone());
+        let style_name = if ps.current_style_sheet.is_empty() {
+            active_style_name.clone().unwrap_or_default()
+        } else if active_style_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&ps.current_style_sheet))
+        {
+            active_style_name.clone().unwrap_or_default()
+        } else {
+            ps.current_style_sheet.clone()
+        };
+        let style_loaded = !style_name.is_empty()
+            && active_style_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(&style_name));
         let (paper, orient) = paper_label_from_dims(ps.paper_width, ps.paper_height);
         let d = &mut self.plot_dialog;
         d.paper = paper;
@@ -3015,44 +3138,38 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             .into();
         }
         d.upside_down = matches!(deg, 180 | 270);
-        d.scale = if d.area == "Layout" {
-            "1:1".into()
-        } else if ps.is_scale_to_fit() {
-            "Fit".into()
+        d.fit_to_paper = d.area != "Layout" && ps.is_scale_to_fit();
+        let target_factor = if d.area == "Layout" {
+            1.0
+        } else if ps.scale_denominator.abs() > 1e-9 {
+            ps.scale_numerator / ps.scale_denominator
         } else {
-            let n = ps.scale_numerator;
-            let m = ps.scale_denominator;
-            if (n - 1.0).abs() < 1e-9 {
-                format!("1:{}", m as i64)
-            } else if (m - 1.0).abs() < 1e-9 {
-                format!("{}:1", n as i64)
-            } else {
-                "Fit".into()
-            }
+            1.0
         };
+        if !d.fit_to_paper || !d.scales.iter().any(|(name, _)| name == &d.scale) {
+            d.scale = scale_name_for_factor(&d.scales, target_factor)
+                .or_else(|| scale_name_for_factor(&d.scales, 1.0))
+                .or_else(|| d.scales.first().map(|(name, _)| name.clone()))
+                .unwrap_or_else(|| "1:1".into());
+        }
         d.scale_lw = ps.flags.scale_lineweights;
         d.lineweights = ps.flags.print_lineweights;
-        d.with_styles = ps.flags.plot_plot_styles;
         d.paperspace_last = ps.flags.draw_viewports_first;
         d.shade = match ps.shade_plot_mode {
-            ShadePlotMode::Wireframe => "Wireframe",
-            _ => "As displayed",
+            ShadePlotMode::Wireframe => "2D Wireframe",
+            ShadePlotMode::Hidden => "Hidden Line",
+            ShadePlotMode::Rendered => "Gouraud Shaded",
+            ShadePlotMode::AsDisplayed => "As displayed",
         }
         .into();
         d.quality = match ps.shade_plot_resolution {
-            ShadePlotResolutionLevel::Draft => "Draft",
-            ShadePlotResolutionLevel::Preview => "Preview",
-            ShadePlotResolutionLevel::Presentation => "Presentation",
-            ShadePlotResolutionLevel::Maximum => "Maximum",
-            ShadePlotResolutionLevel::Custom => "Custom",
+            ShadePlotResolutionLevel::Draft => "Low",
+            ShadePlotResolutionLevel::Presentation
+            | ShadePlotResolutionLevel::Maximum
+            | ShadePlotResolutionLevel::Custom => "High",
             _ => "Normal",
         }
         .into();
-        d.dpi = if d.quality == "Maximum" {
-            String::new()
-        } else {
-            ps.shade_plot_dpi.max(1).to_string()
-        };
         if ps.printer_name.to_ascii_lowercase().contains("pdf") {
             d.to_file = true;
             d.printer = None;
@@ -3060,7 +3177,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             d.to_file = false;
             d.printer = (!ps.printer_name.is_empty()).then(|| ps.printer_name.clone());
         }
-        d.style_name = ps.current_style_sheet.clone();
+        d.style_name = style_name;
         d.style_missing = !d.style_name.is_empty() && !style_loaded;
     }
 
@@ -3083,11 +3200,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
         self.plot_format = paper;
         self.plot_orientation = orient;
-        self.plot_scale = if d.area == "Layout" {
-            "1:1".into()
-        } else {
-            d.scale.clone()
-        };
     }
 
     fn apply_dialog_to_layout(&mut self) {
@@ -3106,15 +3218,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             off_x,
             off_y,
             rotation,
-            if d.area == "Layout" { "1:1" } else { &d.scale },
         );
     }
 
     /// Open a preview PDF, export a PDF, or send the job to the chosen printer.
-    /// The active layout changes only when "Save to layout" is checked.
     fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
         let d = self.plot_dialog.clone();
-        if d.with_styles && d.style_missing {
+        if d.style_missing {
             self.command_line.push_error(&format!(
                 "Plot style table '{}' is not loaded.",
                 d.style_name
@@ -3123,13 +3233,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
         // Remember the user's print preferences across sessions.
         self.save_config();
-        // Preview and normal printing must not resize/mutate the live layout.
-        // Persist only when explicitly requested; the runtime paper/scale
-        // choices still drive this one plot operation.
+        // Preview and normal printing must not resize/mutate the live layout;
+        // the runtime paper/scale choices still drive this one plot operation.
         self.sync_dialog_plot_runtime();
-        if !preview && d.save_layout {
-            self.apply_dialog_to_layout();
-        }
         self.active_modal = None;
 
         let plot_style = self.dialog_plot_style(&d);
@@ -3165,17 +3271,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             if preview {
                 let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
                 let render_options = Self::pdf_plot_options(&d, wgroup_splits);
-                return background_task(
-                    move || {
-                        crate::io::pdf_export::export_pdf(
+                let work = move || {
+                    crate::io::pdf_export::export_pdf(
                     &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, wrotation, wscale, wclip, &tmp,
                     plot_style.as_ref(),
                     render_options,
                 ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
                         .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
-                    },
-                    |result| Message::BackgroundIoFinished(result, true),
-                );
+                };
+                return self.run_plot_work(d.background, true, work);
             }
             if d.to_file {
                 // Tested clipped export (opens a save dialog).
@@ -3184,18 +3288,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             let tmp = std::env::temp_dir().join("open_cad_studio_print.pdf");
             let render_options = Self::pdf_plot_options(&d, wgroup_splits);
             let opts = self.plot_print_options(&d, wgroup_splits);
-            return background_task(
-                move || {
-                    crate::io::pdf_export::export_pdf(
+            let work = move || {
+                crate::io::pdf_export::export_pdf(
                 &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, wrotation, wscale, wclip, &tmp,
                 plot_style.as_ref(),
                 render_options,
             ).and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
                     .map(|printer| format!("Sent to printer: {printer}"))
                     .map_err(|e| format!("Print failed: {e}"))
-                },
-                |result| Message::BackgroundIoFinished(result, false),
-            );
+            };
+            return self.run_plot_work(d.background, false, work);
         }
 
         let (wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip) =
@@ -3204,9 +3306,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         if preview {
             let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
             let render_options = Self::pdf_plot_options(&d, group_splits);
-            return background_task(
-                move || {
-                    crate::io::pdf_export::export_pdf(
+            let work = move || {
+                crate::io::pdf_export::export_pdf(
                 &wires,
                 &hatches,
                 &wipeouts,
@@ -3222,9 +3323,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 render_options,
             ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
                     .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
-                },
-                |result| Message::BackgroundIoFinished(result, true),
-            );
+            };
+            return self.run_plot_work(d.background, true, work);
         }
 
         if d.to_file {
@@ -3234,16 +3334,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
         let opts = self.plot_print_options(&d, group_splits);
         self.command_line.push_info("Sending to system printer…");
-        background_task(
-            move || {
-                iced::futures::executor::block_on(
-                crate::io::print_to_printer::print_wires_with(
+        let work = move || {
+            iced::futures::executor::block_on(
+                    crate::io::print_to_printer::print_wires_with(
                     wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
                     plot_style, opts,
                 ))
-            },
-            Message::PrintResult,
-        )
+                .map(|printer| format!("Sent to printer: {printer}"))
+                .map_err(|error| format!("Print failed: {error}"))
+        };
+        self.run_plot_work(d.background, false, work)
     }
 
     /// Build a [`PrintOptions`](crate::io::print_to_printer::PrintOptions) from
@@ -3253,20 +3353,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         d: &crate::ui::window::plot::PlotDialogState,
         group_splits: crate::io::pdf_export::PlotGroupSplits,
     ) -> crate::io::print_to_printer::PrintOptions {
-        let dpi = match d.quality.as_str() {
-            "Draft" | "Preview" => Some(150),
-            "Normal" => Some(300),
-            "Presentation" => Some(600),
-            "Maximum" => None,
-            "Custom" => d.dpi.trim().parse::<u32>().ok().filter(|value| *value > 0),
-            _ => Some(300),
-        };
         crate::io::print_to_printer::PrintOptions {
             printer: d.printer.clone(),
             copies: d.copies.trim().parse::<u32>().unwrap_or(1).max(1),
-            mono: d.mono,
             quality: Some(d.quality.clone()),
-            dpi,
             render: Self::pdf_plot_options(d, group_splits),
         }
     }
@@ -3279,9 +3369,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             object_lineweights: d.lineweights,
             scale_lineweights: d.scale_lw,
             transparency: d.transparency,
-            monochrome: d.mono,
-            wireframe: d.shade == "Wireframe",
             stamp: d.stamp,
+            merge_lines: d.merge_lines,
             group_splits,
         }
     }
@@ -3290,12 +3379,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &self,
         d: &crate::ui::window::plot::PlotDialogState,
     ) -> Option<crate::io::plot_style::PlotStyleTable> {
-        if !d.with_styles || d.style_missing {
+        if d.style_name.is_empty() || d.style_missing {
             return None;
         }
         self.active_plot_style
             .as_ref()
-            .filter(|table| table.name == d.style_name)
+            .filter(|table| table.name.eq_ignore_ascii_case(&d.style_name))
             .cloned()
     }
 
@@ -3319,7 +3408,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             ));
         }
         let (wires, hatches, wipeouts, _) =
-            plot_scene_content(scene, self.plot_dialog.paperspace_last);
+            plot_scene_content(
+                scene,
+                self.plot_dialog.paperspace_last,
+                plot_render_mode_override(&self.plot_dialog),
+            );
         let extents = plot_content_extents(
             &wires
                 .iter()
@@ -3400,17 +3493,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let (sheet_w, sheet_h) = sheet_mm(self.plot_format, self.plot_orientation);
         let win_w = (x1 - x0).max(1e-9);
         let win_h = (y1 - y0).max(1e-9);
-        let scale_sel = if self.plot_scale.trim().eq_ignore_ascii_case("fit") {
+        let scale_sel = if self.plot_dialog.fit_to_paper {
             PlotScale::Fit
         } else {
-            let (num, den) = parse_plot_scale(&self.plot_scale);
-            if num > 0.0 && den > 0.0 {
+            let factor = plot_dialog_scale_factor(&self.plot_dialog);
+            if factor > 0.0 {
                 let mm_per_unit = if self.tabs[i].scene.current_layout == "Model" {
                     1.0
                 } else {
                     1.0 / self.tabs[i].scene.paper_space_unit_factor().max(1e-9)
                 };
-                PlotScale::Ratio((num / den) * mm_per_unit)
+                PlotScale::Ratio(factor * mm_per_unit)
             } else {
                 PlotScale::Fit
             }
@@ -3430,7 +3523,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let scene = &self.tabs[i].scene;
         let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
         let (all_wires, hatches, wipeouts, mut group_splits) =
-            plot_scene_content(scene, self.plot_dialog.paperspace_last);
+            plot_scene_content(
+                scene,
+                self.plot_dialog.paperspace_last,
+                plot_render_mode_override(&self.plot_dialog),
+            );
         let first_wire_count = all_wires[..group_splits.wires.min(all_wires.len())]
             .iter()
             .filter(|w| w.name != "paper_printable_area")
@@ -3532,13 +3629,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .unwrap_or("export.ctb".into());
                 Task::perform(
                     async move {
-                        crate::sys::file_dialog()
+                        let mut dialog = crate::sys::file_dialog()
                             .set_title("Save Plot Style Table")
                             .set_file_name(&default_name)
-                            .add_filter("Plot Style Files", &["ctb", "stb", "CTB", "STB"])
-                            .add_filter("All Files", &["*"])
-                            .save_file()
-                            .await
+                            .add_filter("Plot Style Files", &["ctb", "CTB"])
+                            .add_filter("All Files", &["*"]);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Ok(dir) = crate::io::plot_style::ensure_plot_styles_dir() {
+                            dialog = dialog.set_directory(dir);
+                        }
+                        dialog.save_file().await
                             .map(|h| crate::sys::handle_path(&h))
                     },
                     Message::PlotStylePanelSavePath,

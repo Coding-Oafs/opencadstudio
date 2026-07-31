@@ -15,7 +15,8 @@ use crate::scene::WireModel;
 
 /// Extra options for a print job. On CUPS (Linux/macOS) these map to `lp`
 /// flags / `-o` options. On Windows the generated PDF already carries render
-/// options, while copies and driver quality are not exposed by the shell verb.
+/// options. Windows queues repeated jobs when more than one copy is requested;
+/// driver quality remains managed by the selected printer.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct PrintOptions {
@@ -23,12 +24,8 @@ pub struct PrintOptions {
     pub printer: Option<String>,
     /// Number of copies (treated as at least 1).
     pub copies: u32,
-    /// Force grayscale output.
-    pub mono: bool,
     /// Print quality label selected in the plot dialog.
     pub quality: Option<String>,
-    /// Rasterisation resolution in DPI.
-    pub dpi: Option<u32>,
     /// Controls applied while building the intermediate PDF.
     pub render: crate::io::pdf_export::PdfPlotOptions,
 }
@@ -215,8 +212,7 @@ fn dispatch_to_printer_opts(
     #[cfg(target_os = "windows")]
     {
         // Target a named printer via the "printto" verb; fall back to the
-        // default-printer "print" verb. Copies / quality / colour aren't
-        // expressible through a shell verb, so they are ignored here.
+        // default-printer "print" verb.
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
         let wide = |s: &str| -> Vec<u16> { OsStr::new(s).encode_wide().chain(Some(0)).collect() };
@@ -226,21 +222,22 @@ fn dispatch_to_printer_opts(
             _ => (wide("print"), None, "default printer".to_string()),
         };
         let params_ptr = params.as_ref().map(|v| v.as_ptr()).unwrap_or(std::ptr::null());
-        let result = unsafe {
-            windows_sys::Win32::UI::Shell::ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                path_wide.as_ptr(),
-                params_ptr,
-                std::ptr::null(),
-                windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE,
-            ) as usize
-        };
-        if result > 32 {
-            Ok(label)
-        } else {
-            Err(format!("ShellExecute failed (code {result})"))
+        for _ in 0..opts.copies.max(1) {
+            let result = unsafe {
+                windows_sys::Win32::UI::Shell::ShellExecuteW(
+                    std::ptr::null_mut(),
+                    verb.as_ptr(),
+                    path_wide.as_ptr(),
+                    params_ptr,
+                    std::ptr::null(),
+                    windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE,
+                ) as usize
+            };
+            if result <= 32 {
+                return Err(format!("ShellExecute failed (code {result})"));
+            }
         }
+        Ok(label)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -256,17 +253,11 @@ fn dispatch_to_printer_opts(
         if copies > 1 {
             cmd.arg("-n").arg(copies.to_string());
         }
-        if opts.mono {
-            cmd.arg("-o").arg("ColorModel=Gray");
-        }
-        if let Some(dpi) = opts.dpi {
-            cmd.arg("-o").arg(format!("Resolution={dpi}dpi"));
-        }
         if let Some(q) = opts.quality.as_deref() {
             // CUPS print-quality: 3 = draft, 4 = normal, 5 = high / best.
             let pq = match q {
-                "Draft" => "3",
-                "Presentation" | "Maximum" => "5",
+                "Low" => "3",
+                "High" => "5",
                 _ => "4",
             };
             cmd.arg("-o").arg(format!("print-quality={pq}"));

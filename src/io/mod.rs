@@ -776,14 +776,16 @@ mod save_failure_tests {
 
 /// Show a file-open dialog and load the selected CTB or STB file.
 pub async fn pick_plot_style() -> Option<plot_style::PlotStyleTable> {
-    let handle = crate::sys::file_dialog()
+    let mut dialog = crate::sys::file_dialog()
         .set_title("Load Plot Style Table")
-        .add_filter("Plot Style Tables", &["ctb", "stb", "CTB", "STB"])
+        .add_filter("Plot Style Tables", &["ctb", "CTB"])
         .add_filter("CTB Files", &["ctb", "CTB"])
-        .add_filter("STB Files", &["stb", "STB"])
-        .add_filter("All Files", &["*"])
-        .pick_file()
-        .await?;
+        .add_filter("All Files", &["*"]);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(dir) = plot_style::ensure_plot_styles_dir() {
+        dialog = dialog.set_directory(dir);
+    }
+    let handle = dialog.pick_file().await?;
     plot_style::PlotStyleTable::load(&crate::sys::handle_path(&handle)).ok()
 }
 

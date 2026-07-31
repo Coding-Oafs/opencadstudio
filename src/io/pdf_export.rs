@@ -15,9 +15,10 @@ use crate::scene::model::hatch_model::HatchPattern;
 use crate::scene::WireModel;
 #[cfg(not(target_arch = "wasm32"))]
 use printpdf::{
-    BuiltinFont, Color, Line, LineCapStyle, LineDashPattern, LineJoinStyle, LinePoint, Mm, Op,
-    PaintMode, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Polygon, PolygonRing,
-    Pt, Rgb, TextItem, WindingOrder,
+    BlendMode, BuiltinFont, Color, ExtendedGraphicsState, ExtendedGraphicsStateId, Line,
+    LineCapStyle, LineDashPattern, LineJoinStyle, LinePoint, Mm, Op, PaintMode, PdfDocument,
+    PdfFontHandle, PdfPage, PdfSaveOptions, Point, Polygon, PolygonRing, Pt, Rgb, TextItem,
+    WindingOrder,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
@@ -67,9 +68,8 @@ pub struct PdfPlotOptions {
     pub object_lineweights: bool,
     pub scale_lineweights: bool,
     pub transparency: bool,
-    pub monochrome: bool,
-    pub wireframe: bool,
     pub stamp: bool,
+    pub merge_lines: bool,
     pub group_splits: PlotGroupSplits,
 }
 
@@ -87,9 +87,8 @@ impl Default for PdfPlotOptions {
             object_lineweights: true,
             scale_lineweights: false,
             transparency: false,
-            monochrome: false,
-            wireframe: false,
             stamp: false,
+            merge_lines: false,
             group_splits: PlotGroupSplits::default(),
         }
     }
@@ -195,6 +194,20 @@ fn build_pdf(
         rectangle: printpdf::Rect::from_wh(Mm(paper_w).into(), Mm(paper_h).into()),
     });
 
+    let normal_blend = if options.merge_lines {
+        let merge = doc.add_graphics_state(
+            ExtendedGraphicsState::default().with_blend_mode(BlendMode::multiply()),
+        );
+        let normal = doc.add_graphics_state(
+            ExtendedGraphicsState::default().with_blend_mode(BlendMode::normal()),
+        );
+        ops.push(Op::SaveGraphicsState);
+        ops.push(Op::LoadGraphicsState { gs: merge });
+        Some(normal)
+    } else {
+        None
+    };
+
     // Round line caps/joins for CAD aesthetics.
     ops.push(Op::SetLineCapStyle {
         cap: LineCapStyle::Round,
@@ -283,7 +296,15 @@ fn build_pdf(
 
     // Hatch / wipeout fills render before wires so linework stays visible.
     for hatch in wipeouts.iter().chain(hatches.iter()) {
-        emit_hatch(&mut ops, hatch, ox, oy, plot_style, options);
+        emit_hatch(
+            &mut ops,
+            hatch,
+            ox,
+            oy,
+            plot_style,
+            options,
+            normal_blend.as_ref(),
+        );
     }
 
     let mut last_color: Option<[f32; 3]> = None;
@@ -337,7 +358,7 @@ fn build_pdf(
                 b = 0.50;
             }
         }
-        [r, g, b] = plotted_color([r, g, b], a, screening, options, false);
+        [r, g, b] = plotted_color([r, g, b], a, screening, options);
 
         if last_color
             .map(|c| (c[0] - r).abs() > 0.01 || (c[1] - g).abs() > 0.01 || (c[2] - b).abs() > 0.01)
@@ -437,6 +458,9 @@ fn build_pdf(
     if needs_state {
         ops.push(Op::RestoreGraphicsState);
     }
+    if options.merge_lines {
+        ops.push(Op::RestoreGraphicsState);
+    }
     if options.stamp {
         emit_plot_stamp(&mut ops);
     }
@@ -488,15 +512,11 @@ fn flush_line(ops: &mut Vec<Op>, pts: &[LinePoint]) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn plotted_color(
-    mut rgb: [f32; 3],
+    rgb: [f32; 3],
     alpha: f32,
     screening: f32,
     options: PdfPlotOptions,
-    preserve_white: bool,
 ) -> [f32; 3] {
-    if options.monochrome && !preserve_white {
-        rgb = [0.0, 0.0, 0.0];
-    }
     let amount = screening.clamp(0.0, 1.0)
         * if options.transparency {
             alpha.clamp(0.0, 1.0)
@@ -520,7 +540,7 @@ fn emit_wire_fills(
     options: PdfPlotOptions,
 ) {
     for wire in wires {
-        if wire.fill_tris.is_empty() || (options.wireframe && wire.fill_is_3d) {
+        if wire.fill_tris.is_empty() {
             continue;
         }
         let [mut r, mut g, mut b, a] = wire.color;
@@ -541,7 +561,7 @@ fn emit_wire_fills(
         if !color_overridden {
             [r, g, b] = adapt_text_color([r, g, b]);
         }
-        [r, g, b] = plotted_color([r, g, b], a, screening, options, false);
+        [r, g, b] = plotted_color([r, g, b], a, screening, options);
         ops.push(Op::SetFillColor {
             col: Color::Rgb(Rgb {
                 r,
@@ -623,6 +643,7 @@ fn emit_hatch(
     oy: f64,
     plot_style: Option<&PlotStyleTable>,
     options: PdfPlotOptions,
+    normal_blend: Option<&ExtendedGraphicsStateId>,
 ) {
     if hatch.boundary.is_empty() {
         return;
@@ -672,13 +693,7 @@ fn emit_hatch(
             b = 0.50;
         }
     }
-    [r, g, b] = plotted_color(
-        [r, g, b],
-        a,
-        screening,
-        options,
-        is_wipeout,
-    );
+    [r, g, b] = plotted_color([r, g, b], a, screening, options);
     // `boundary` holds f32 offsets from the f64 `world_origin`, so resolve the
     // pair in f64 and only narrow once the offset has cancelled — casting
     // `world_origin` to f32 first re-introduces the ~0.5 m UTM quantisation the
@@ -728,7 +743,6 @@ fn emit_hatch(
                 color2[3],
                 1.0,
                 options,
-                false,
             );
             let avg = [
                 (r + second[0]) * 0.5,
@@ -789,6 +803,12 @@ fn emit_hatch(
             }),
         });
     }
+    if is_wipeout {
+        if let Some(gs) = normal_blend {
+            ops.push(Op::SaveGraphicsState);
+            ops.push(Op::LoadGraphicsState { gs: gs.clone() });
+        }
+    }
     ops.push(Op::DrawPolygon {
         polygon: Polygon {
             rings,
@@ -796,6 +816,9 @@ fn emit_hatch(
             winding_order: WindingOrder::EvenOdd,
         },
     });
+    if is_wipeout && normal_blend.is_some() {
+        ops.push(Op::RestoreGraphicsState);
+    }
 }
 
 // ── Text (SDF glyph quads → vector strokes / fills) ────────────────────────
@@ -908,7 +931,7 @@ fn emit_text(
             let rgb = ctb_color.unwrap_or_else(|| {
                 adapt_text_color([quad[0].color[0], quad[0].color[1], quad[0].color[2]])
             });
-            let [r, g, b] = plotted_color(rgb, a, screening, options, false);
+            let [r, g, b] = plotted_color(rgb, a, screening, options);
 
             // Quad corners in world XY: verts run [bl, br, tr, bl, tr, tl].
             let bl = glyph_world_xy(&quad[0]);

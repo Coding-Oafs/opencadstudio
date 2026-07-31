@@ -5176,7 +5176,6 @@ impl OpenCADStudio {
                 }
                 self.plot_dialog.style_name = table.name.clone();
                 self.plot_dialog.style_missing = false;
-                self.plot_dialog.with_styles = true;
                 self.command_line.push_output(&format!(
                     "Plot style '{}' loaded ({} color entries).",
                     table.name,
@@ -5187,6 +5186,7 @@ impl OpenCADStudio {
                         .count()
                 ));
                 self.active_plot_style = Some(table);
+                self.plot_dialog.plot_styles = crate::io::plot_style::available_ctb_names();
                 Task::none()
             }
             Message::PlotStyleLoaded(None) => Task::none(),
@@ -5194,7 +5194,6 @@ impl OpenCADStudio {
                 self.active_plot_style = None;
                 self.plot_dialog.style_name.clear();
                 self.plot_dialog.style_missing = false;
-                self.plot_dialog.with_styles = false;
                 self.command_line.push_output("Plot style table cleared.");
                 Task::none()
             }
@@ -5264,12 +5263,34 @@ impl OpenCADStudio {
             Message::PlotStylePanelSave => self.on_plot_style_panel_save(),
 
             Message::PlotStylePanelSavePath(Some(path)) => {
+                let path = if path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("ctb"))
+                {
+                    path
+                } else {
+                    path.with_extension("ctb")
+                };
                 if let Some(table) = &self.active_plot_style {
                     match table.save(&path) {
-                        Ok(()) => self.command_line.push_output(&format!(
-                            "Plot style table saved to \"{}\".",
-                            path.display()
-                        )),
+                        Ok(()) => {
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned();
+                            if let Some(table) = self.active_plot_style.as_mut() {
+                                table.name = name.clone();
+                            }
+                            self.plot_dialog.style_name = name;
+                            self.plot_dialog.style_missing = false;
+                            self.plot_dialog.plot_styles =
+                                crate::io::plot_style::available_ctb_names();
+                            self.command_line.push_output(&format!(
+                                "Plot style table saved to \"{}\".",
+                                path.display()
+                            ));
+                        }
                         Err(e) => self.command_line.push_error(&format!("Save error: {e}")),
                     }
                 }

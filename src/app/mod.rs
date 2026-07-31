@@ -647,8 +647,6 @@ pub(super) struct OpenCADStudio {
     mtext_click_time: Option<Instant>,
     mtext_click_off: usize,
     mtext_click_count: u8,
-    /// Plot scale for model-space window plots: "Fit" | "1:1" | … | "2:1".
-    plot_scale: String,
     /// Pending model-space plot window (x0, y0, x1, y1) in world XY, or None.
     plot_window: Option<(f64, f64, f64, f64)>,
     plot_format: crate::io::paper_sizes::PaperSize,
@@ -2773,7 +2771,6 @@ impl OpenCADStudio {
             mtext_click_time: None,
             mtext_click_off: 0,
             mtext_click_count: 0,
-            plot_scale: "Fit".to_string(),
             plot_window: None,
             plot_format: crate::io::paper_sizes::PaperSize::A4,
             plot_orientation: crate::io::paper_sizes::Orientation::Landscape,
@@ -2800,7 +2797,15 @@ impl OpenCADStudio {
             save_dialog_for_unsaved: false,
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             // Plot style
-            active_plot_style: None,
+            active_plot_style: crate::io::plot_style::PlotStyleTable::load_named(
+                crate::io::plot_style::DEFAULT_PLOT_STYLE,
+            )
+            .or_else(|_| {
+                crate::io::plot_style::PlotStyleTable::builtin(
+                    crate::io::plot_style::DEFAULT_PLOT_STYLE,
+                )
+            })
+            .ok(),
             // Color scheme (default: Oxocarbon)
             active_theme: Theme::Oxocarbon,
             ui_theme: config::UiThemeConfig::default(),
