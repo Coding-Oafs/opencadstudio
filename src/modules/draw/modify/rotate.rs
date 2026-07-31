@@ -3,8 +3,11 @@
 // Command:  ROTATE (RO)
 //   Requires at least one entity selected before starting.
 //   Step 1: pick rotation center
-//   Step 2: pick reference point (defines the 0° direction)
-//   Step 3: pick destination point → rotates by (dest_angle - ref_angle)
+//   Step 2: specify a relative rotation angle, or choose Reference
+//
+//   Reference rotation: the reference angle may be typed or measured between
+//   two points. The new absolute angle is then typed or picked from the center;
+//   the applied rotation is new-angle - reference-angle.
 
 use acadrust::Handle;
 use glam::DVec3;
@@ -29,8 +32,10 @@ pub fn tool() -> ToolDef {
 
 enum Step {
     Center,
-    RefPoint { center: DVec3 },
-    Angle { center: DVec3, ref_angle: f64 },
+    Angle { center: DVec3 },
+    RefFirst { center: DVec3 },
+    RefSecond { center: DVec3, first: DVec3 },
+    RefNew { center: DVec3, ref_angle: f64 },
 }
 
 pub struct RotateCommand {
@@ -49,6 +54,14 @@ impl RotateCommand {
             default_angle: defaults::get_rotate_angle(),
         }
     }
+
+    fn commit(&self, center: DVec3, angle_rad: f64) -> CmdResult {
+        defaults::set_rotate_angle(angle_rad.to_degrees());
+        CmdResult::TransformSelected(
+            self.handles.clone(),
+            EntityTransform::Rotate { center, angle_rad },
+        )
+    }
 }
 
 impl CadCommand for RotateCommand {
@@ -62,56 +75,76 @@ impl CadCommand for RotateCommand {
                 "ROTATE  Specify rotation center  [{} objects]:",
                 self.handles.len()
             ),
-            Step::RefPoint { .. } => {
-                "ROTATE  Specify reference point  (or skip: type angle directly):".into()
+            Step::Angle { .. } => format!(
+                "ROTATE  Specify rotation angle  <{:.4}>:",
+                self.default_angle
+            ),
+            Step::RefFirst { .. } => {
+                "ROTATE  Specify first reference point or type reference angle:".into()
             }
-            Step::Angle { ref_angle, .. } => format!(
-                "ROTATE  Specify destination or type angle in degrees  <{:.4}>  [ref={:.1}°]:",
-                self.default_angle,
+            Step::RefSecond { .. } => "ROTATE  Specify second reference point:".into(),
+            Step::RefNew { ref_angle, .. } => format!(
+                "ROTATE  Specify new absolute angle  [ref={:.1}°]:",
                 ref_angle.to_degrees()
             ),
+        }
+    }
+
+    fn options(&self) -> Vec<crate::command::CmdOption> {
+        use crate::command::CmdOption;
+        match self.step {
+            Step::Angle { .. } => vec![CmdOption::new("Reference", "R")],
+            _ => vec![],
         }
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.step {
             Step::Center => {
-                self.step = Step::RefPoint { center: pt };
+                self.step = Step::Angle { center: pt };
                 CmdResult::NeedPoint
             }
-            Step::RefPoint { center } => {
+            Step::Angle { center } => {
                 let center = *center;
-                let ref_angle = (pt.y - center.y).atan2(pt.x - center.x);
-                self.step = Step::Angle { center, ref_angle };
+                let direction = pt - center;
+                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                    return CmdResult::NeedPoint;
+                }
+                let angle_rad = direction.y.atan2(direction.x);
+                self.commit(center, angle_rad)
+            }
+            Step::RefFirst { center } => {
+                let center = *center;
+                self.step = Step::RefSecond { center, first: pt };
                 CmdResult::NeedPoint
             }
-            Step::Angle { center, ref_angle } => {
+            Step::RefSecond { center, first } => {
+                let direction = pt - *first;
+                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                    return CmdResult::NeedPoint;
+                }
                 let center = *center;
-                let ref_angle = *ref_angle;
-                let dest_angle = (pt.y - center.y).atan2(pt.x - center.x);
-                let delta = dest_angle - ref_angle;
-                defaults::set_rotate_angle(delta.to_degrees());
-                self.default_angle = delta.to_degrees();
-                CmdResult::TransformSelected(
-                    self.handles.clone(),
-                    EntityTransform::Rotate {
-                        center,
-                        angle_rad: delta,
-                    },
-                )
+                let ref_angle = direction.y.atan2(direction.x);
+                self.step = Step::RefNew { center, ref_angle };
+                CmdResult::NeedPoint
+            }
+            Step::RefNew { center, ref_angle } => {
+                let center = *center;
+                let direction = pt - center;
+                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                    return CmdResult::NeedPoint;
+                }
+                let new_angle = direction.y.atan2(direction.x);
+                self.commit(center, new_angle - *ref_angle)
             }
         }
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        // At Angle step: Enter uses the stored default angle.
-        if let Step::Angle { center, .. } = &self.step {
+        // At the normal angle step, Enter uses the stored default angle.
+        if let Step::Angle { center } = &self.step {
             let center = *center;
-            let angle_rad = self.default_angle.to_radians();
-            return CmdResult::TransformSelected(
-                self.handles.clone(),
-                EntityTransform::Rotate { center, angle_rad },
-            );
+            return self.commit(center, self.default_angle.to_radians());
         }
         CmdResult::Cancel
     }
@@ -120,52 +153,67 @@ impl CadCommand for RotateCommand {
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        // A typed angle rotates directly about the centre. Accept it at the
-        // reference-point step too (the prompt offers "skip: type angle
-        // directly") — otherwise typing the angle there did nothing and the
-        // command cancelled on the next Enter, so the objects never rotated.
-        let center = match &self.step {
-            Step::RefPoint { center } => *center,
-            Step::Angle { center, .. } => *center,
-            Step::Center => return None,
-        };
-        // The value already carries the correct sign (the dynamic-input
-        // layer applies the cursor's side for a bare magnitude).
-        let deg: f64 = text.trim().replace(',', ".").parse().ok()?;
-        defaults::set_rotate_angle(deg);
-        Some(CmdResult::TransformSelected(
-            self.handles.clone(),
-            EntityTransform::Rotate {
-                center,
-                angle_rad: deg.to_radians(),
-            },
-        ))
+        let t = text.trim();
+        match &self.step {
+            Step::Angle { center } => {
+                let center = *center;
+                let low = t.to_ascii_lowercase();
+                if low == "r" || low == "reference" {
+                    self.step = Step::RefFirst { center };
+                    return Some(CmdResult::NeedPoint);
+                }
+                // The value already carries the correct sign when it comes
+                // from dynamic input.
+                let deg: f64 = t.replace(',', ".").parse().ok()?;
+                Some(self.commit(center, deg.to_radians()))
+            }
+            Step::RefFirst { center } => {
+                let center = *center;
+                let ref_deg: f64 = t.replace(',', ".").parse().ok()?;
+                self.step = Step::RefNew {
+                    center,
+                    ref_angle: ref_deg.to_radians(),
+                };
+                Some(CmdResult::NeedPoint)
+            }
+            Step::RefNew { center, ref_angle } => {
+                let (center, ref_angle) = (*center, *ref_angle);
+                let new_deg: f64 = t.replace(',', ".").parse().ok()?;
+                Some(self.commit(center, new_deg.to_radians() - ref_angle))
+            }
+            Step::Center | Step::RefSecond { .. } => None,
+        }
     }
 
     fn on_preview_wires(&mut self, pt: DVec3) -> Vec<WireModel> {
-        let (center, ref_angle) = match &self.step {
-            Step::Angle { center, ref_angle } => (*center, *ref_angle),
-            Step::RefPoint { center } => {
-                // Show a reference line from center to cursor only.
+        let (center, angle_rad) = match &self.step {
+            Step::Angle { center } => {
+                let direction = pt - *center;
+                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                    return vec![];
+                }
+                (*center, direction.y.atan2(direction.x))
+            }
+            Step::RefSecond { first, .. } => {
                 return vec![WireModel::solid(
                     "rubber_band".into(),
                     vec![
-                        [center.x as f32, center.y as f32, center.z as f32],
+                        [first.x as f32, first.y as f32, first.z as f32],
                         [pt.x as f32, pt.y as f32, pt.z as f32],
                     ],
                     WireModel::CYAN,
                     false,
                 )];
             }
+            Step::RefNew { center, ref_angle } => {
+                let direction = pt - *center;
+                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                    return vec![];
+                }
+                (*center, direction.y.atan2(direction.x) - *ref_angle)
+            }
             _ => return vec![],
         };
-        let dest_angle = (pt.y - center.y).atan2(pt.x - center.x);
-        let angle_rad = dest_angle - ref_angle;
-        // Track the live SIGNED rotation (relative to the reference) so that
-        // committing with Enter rotates the way the cursor is dragging — the
-        // dynamic-input box shows the unsigned magnitude, but the committed
-        // value must keep its direction (clockwise = negative).
-        self.default_angle = angle_rad.to_degrees();
         // Object ghosts rotated to the new angle. The rotation sweep arc is
         // drawn by the dynamic-input overlay (polar guide), not here.
         self.wire_models
@@ -176,41 +224,43 @@ impl CadCommand for RotateCommand {
 
     fn dyn_field(&self) -> DynField {
         match self.step {
-            Step::Angle { .. } => DynField::Angle,
+            Step::Angle { .. } | Step::RefNew { .. } => DynField::Angle,
+            Step::RefFirst { .. } => DynField::Scalar,
             _ => DynField::Point,
         }
     }
 
     fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
         use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
-        // Rotation angle is measured about the CENTRE, swept from the reference
-        // direction. The polar guide arc is anchored at the centre and starts
-        // at the reference (via ref_point), with the value box centred on it.
-        if let Step::Angle { center, ref_angle } = self.step {
-            let ref_dir = DVec3::new(center.x + ref_angle.cos(), center.y + ref_angle.sin(), center.z);
-            Some(DynSpec {
+        // Both normal rotation and Reference's new angle are absolute cursor
+        // directions from the center. Reference mode subtracts its stored
+        // reference angle only when previewing or committing the transform.
+        match self.step {
+            Step::Angle { center } | Step::RefNew { center, .. } => Some(DynSpec {
                 anchor: DynAnchor::Point(center),
                 fields: vec![DynFieldSpec::new(DynRole::Angle)],
                 guide: DynGuide::Polar,
-                ref_point: Some(ref_dir),
-            })
-        } else {
-            None
+                ref_point: Some(center + DVec3::X),
+            }),
+            _ => None,
         }
     }
 
     fn dyn_commit_as_text(&self) -> bool {
-        matches!(self.step, Step::Angle { .. })
+        matches!(self.step, Step::Angle { .. } | Step::RefFirst { .. })
     }
 
     fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
-        // The rotation amount = cursor direction from the centre minus the
-        // reference angle, so the box reads the actual rotation.
-        if let Step::Angle { center, ref_angle } = &self.step {
-            let dest = (cursor.y - center.y).atan2(cursor.x - center.x);
-            Some(crate::command::dyn_display_angle_deg((dest - ref_angle) as f32) as f64)
-        } else {
-            None
+        match self.step {
+            Step::Angle { center } | Step::RefNew { center, .. } => {
+                let direction = cursor - center;
+                (direction.x.hypot(direction.y) > f64::EPSILON).then(|| {
+                    crate::command::dyn_display_angle_deg(
+                        direction.y.atan2(direction.x) as f32,
+                    ) as f64
+                })
+            }
+            _ => None,
         }
     }
 }

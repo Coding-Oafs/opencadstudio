@@ -8,14 +8,14 @@
 //           selection tracks the cursor from the first move onward.
 //
 //   Reference scaling: type `R` at step 2 to define the factor as
-//   new-length / reference-length:
-//     Step 2a: specify reference length (pick a point or type a length)
-//     Step 2b: specify new length      (pick a point or type a length)
+//   new-length / reference-length. The reference length may be typed or
+//   measured between two points; the new length may be typed or measured
+//   from the scale base.
 
 use acadrust::Handle;
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult, EntityTransform};
+use crate::command::{CadCommand, CmdResult, DynField, EntityTransform};
 use crate::modules::draw::defaults;
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
@@ -34,8 +34,11 @@ enum Step {
     Base,
     /// Default flow: factor is the cursor distance from `base`.
     Factor { base: DVec3 },
-    /// Reference flow: defining the reference length from `base`.
-    RefLen { base: DVec3 },
+    /// Reference flow: waiting for the first of two independent points, or a
+    /// typed reference length.
+    RefFirst { base: DVec3 },
+    /// Reference flow: measuring the reference length from `first`.
+    RefSecond { base: DVec3, first: DVec3 },
     /// Reference flow: factor is `cursor_dist / ref_dist` from `base`.
     RefNew { base: DVec3, ref_dist: f64 },
 }
@@ -85,11 +88,12 @@ impl CadCommand for ScaleCommand {
                 "SCALE  Specify scale factor  <{:.4}>:",
                 self.default_factor
             ),
-            Step::RefLen { .. } => {
-                "SCALE  Specify reference length  (pick a point or type a length):".into()
+            Step::RefFirst { .. } => {
+                "SCALE  Specify first reference point or type reference length:".into()
             }
+            Step::RefSecond { .. } => "SCALE  Specify second reference point:".into(),
             Step::RefNew { ref_dist, .. } => format!(
-                "SCALE  Specify new length  (pick a point or type a length)  [ref={:.3}]:",
+                "SCALE  Specify new length from base or type a length  [ref={:.3}]:",
                 ref_dist
             ),
         }
@@ -112,18 +116,32 @@ impl CadCommand for ScaleCommand {
             }
             Step::Factor { base } => {
                 let base = *base;
-                let factor = base.distance(pt).max(1e-6);
+                let factor = base.distance(pt);
+                if factor <= f64::EPSILON {
+                    return CmdResult::NeedPoint;
+                }
                 self.commit(base, factor)
             }
-            Step::RefLen { base } => {
+            Step::RefFirst { base } => {
                 let base = *base;
-                let ref_dist = base.distance(pt).max(1e-6);
+                self.step = Step::RefSecond { base, first: pt };
+                CmdResult::NeedPoint
+            }
+            Step::RefSecond { base, first } => {
+                let base = *base;
+                let ref_dist = first.distance(pt);
+                if ref_dist <= f64::EPSILON {
+                    return CmdResult::NeedPoint;
+                }
                 self.step = Step::RefNew { base, ref_dist };
                 CmdResult::NeedPoint
             }
             Step::RefNew { base, ref_dist } => {
                 let base = *base;
-                let new_dist = base.distance(pt).max(1e-6);
+                let new_dist = base.distance(pt);
+                if new_dist <= f64::EPSILON {
+                    return CmdResult::NeedPoint;
+                }
                 self.commit(base, new_dist / *ref_dist)
             }
         }
@@ -149,13 +167,13 @@ impl CadCommand for ScaleCommand {
                 // `R` / `Reference` switches to reference scaling.
                 let low = t.to_ascii_lowercase();
                 if low == "r" || low == "reference" {
-                    self.step = Step::RefLen { base };
+                    self.step = Step::RefFirst { base };
                     return Some(CmdResult::NeedPoint);
                 }
                 let factor: f64 = t.replace(',', ".").parse().ok()?;
                 (factor > 0.0).then(|| self.commit(base, factor))
             }
-            Step::RefLen { base } => {
+            Step::RefFirst { base } => {
                 let base = *base;
                 let ref_dist: f64 = t.replace(',', ".").parse().ok()?;
                 if ref_dist > 0.0 {
@@ -164,6 +182,7 @@ impl CadCommand for ScaleCommand {
                 }
                 None
             }
+            Step::RefSecond { .. } => None,
             Step::RefNew { base, ref_dist } => {
                 let (base, ref_dist) = (*base, *ref_dist);
                 let new_len: f64 = t.replace(',', ".").parse().ok()?;
@@ -179,21 +198,22 @@ impl CadCommand for ScaleCommand {
             Step::Factor { base } => (*base, base.distance(pt).max(1e-6) as f32),
             // Reference flow, new-length step: factor = cursor_dist / ref_dist.
             Step::RefNew { base, ref_dist } => {
-                (*base, (base.distance(pt).max(1e-6) / ref_dist) as f32)
+                (*base, (base.distance(pt) / ref_dist) as f32)
             }
-            // Reference-length step: rubber-band only, no factor defined yet.
-            Step::RefLen { base } => {
+            // The reference length is measured between two points independent
+            // of the scale base.
+            Step::RefSecond { first, .. } => {
                 return vec![WireModel::solid(
                     "rubber_band".into(),
                     vec![
-                        [base.x as f32, base.y as f32, base.z as f32],
+                        [first.x as f32, first.y as f32, first.z as f32],
                         [pt.x as f32, pt.y as f32, pt.z as f32],
                     ],
                     WireModel::CYAN,
                     false,
                 )];
             }
-            Step::Base => return vec![],
+            Step::Base | Step::RefFirst { .. } => return vec![],
         };
         let mut out: Vec<WireModel> = self
             .wire_models
@@ -210,5 +230,52 @@ impl CadCommand for ScaleCommand {
             false,
         ));
         out
+    }
+
+    fn dyn_field(&self) -> DynField {
+        match self.step {
+            Step::Factor { .. } => DynField::Scalar,
+            Step::RefFirst { .. } | Step::RefNew { .. } => DynField::Distance,
+            _ => DynField::Point,
+        }
+    }
+
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        match self.step {
+            Step::Factor { base } => Some(DynSpec {
+                anchor: DynAnchor::Point(base),
+                fields: vec![DynFieldSpec::new(DynRole::Factor)],
+                guide: DynGuide::Radius,
+                ref_point: None,
+            }),
+            Step::RefFirst { base } => Some(DynSpec {
+                anchor: DynAnchor::Point(base),
+                fields: vec![DynFieldSpec::new(DynRole::Distance)],
+                guide: DynGuide::None,
+                ref_point: None,
+            }),
+            Step::RefNew { base, .. } => Some(DynSpec {
+                anchor: DynAnchor::Point(base),
+                fields: vec![DynFieldSpec::new(DynRole::Distance)],
+                guide: DynGuide::Radius,
+                ref_point: None,
+            }),
+            _ => None,
+        }
+    }
+
+    fn dyn_commit_as_text(&self) -> bool {
+        matches!(
+            self.step,
+            Step::Factor { .. } | Step::RefFirst { .. } | Step::RefNew { .. }
+        )
+    }
+
+    fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
+        match self.step {
+            Step::Factor { base } | Step::RefNew { base, .. } => Some(base.distance(cursor)),
+            _ => None,
+        }
     }
 }
