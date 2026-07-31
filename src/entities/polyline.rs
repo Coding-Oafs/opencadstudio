@@ -95,12 +95,13 @@ impl Grippable for Polyline {
         let n = self.vertices.len();
         match action {
             A::AddVertex if grip_id < n => {
-                let i1 = (grip_id + 1) % n;
-                if i1 == 0 && grip_id + 1 == n {
+                if grip_id == n - 1 && !self.is_closed() {
+                    self.vertices.push(self.vertices[grip_id].clone());
                     return;
                 }
-                let v0 = &self.vertices[grip_id];
-                let v1 = &self.vertices[i1];
+                let i1 = (grip_id + 1) % n;
+                let v0 = self.vertices[grip_id].clone();
+                let v1 = self.vertices[i1].clone();
                 let mx = (v0.location.x + v1.location.x) * 0.5;
                 let my = (v0.location.y + v1.location.y) * 0.5;
                 let mz = (v0.location.z + v1.location.z) * 0.5;
@@ -383,14 +384,23 @@ fn tessellate_polyline2d(pl: &Polyline2D) -> TruckEntity {
 fn tapered_band_verts_2d(
     pl: &acadrust::entities::Polyline2D,
 ) -> Option<Vec<([f64; 2], f64, f64, f64)>> {
-    let d = pl.start_width.max(pl.end_width);
+    let default_start = pl.start_width;
+    let default_end = pl.end_width;
     let filtered = drawn_vertices2d(pl);
     let verts: &[acadrust::entities::Vertex2D] = filtered.as_deref().unwrap_or(&pl.vertices);
     let band: Vec<([f64; 2], f64, f64, f64)> = verts
         .iter()
         .map(|v| {
-            let sw = if v.start_width > 1e-9 { v.start_width } else { d };
-            let ew = if v.end_width > 1e-9 { v.end_width } else { d };
+            let sw = if v.start_width > 1e-9 {
+                v.start_width
+            } else {
+                default_start
+            };
+            let ew = if v.end_width > 1e-9 {
+                v.end_width
+            } else {
+                default_end
+            };
             ([v.location.x, v.location.y], v.bulge, sw, ew)
         })
         .collect();
@@ -460,19 +470,59 @@ impl Grippable for Polyline2D {
         let elev = self.elevation;
         match action {
             A::AddVertex if grip_id < n => {
-                let i1 = (grip_id + 1) % n;
-                if i1 == 0 && grip_id + 1 == n {
+                if grip_id == n - 1 && !self.is_closed() {
+                    self.vertices[grip_id].bulge = 0.0;
+                    let mut new_v = self.vertices[grip_id].clone();
+                    new_v.bulge = 0.0;
+                    new_v.id = 0;
+                    self.vertices.push(new_v);
                     return;
                 }
-                let v0 = &self.vertices[grip_id];
-                let v1 = &self.vertices[i1];
-                let mx = (v0.location.x + v1.location.x) * 0.5;
-                let my = (v0.location.y + v1.location.y) * 0.5;
+                let i1 = (grip_id + 1) % n;
+                let v0 = self.vertices[grip_id].clone();
+                let v1 = self.vertices[i1].clone();
+                let midpoint = if v0.bulge.abs() >= 1e-9 {
+                    crate::entities::common::BulgeArc::from_bulge(
+                        [v0.location.x, v0.location.y],
+                        [v1.location.x, v1.location.y],
+                        v0.bulge,
+                    )
+                    .map(|arc| arc.sample(0.5))
+                    .unwrap_or([
+                        (v0.location.x + v1.location.x) * 0.5,
+                        (v0.location.y + v1.location.y) * 0.5,
+                    ])
+                } else {
+                    [
+                        (v0.location.x + v1.location.x) * 0.5,
+                        (v0.location.y + v1.location.y) * 0.5,
+                    ]
+                };
                 let mut new_v = v0.clone();
-                new_v.location.x = mx;
-                new_v.location.y = my;
+                new_v.location.x = midpoint[0];
+                new_v.location.y = midpoint[1];
                 new_v.location.z = elev;
+                new_v.id = 0;
+                let effective_start = if v0.start_width > 1e-9 {
+                    v0.start_width
+                } else {
+                    self.start_width
+                };
+                let effective_end = if v0.end_width > 1e-9 {
+                    v0.end_width
+                } else {
+                    self.end_width
+                };
+                let middle_width = (effective_start + effective_end) * 0.5;
+                self.vertices[grip_id].end_width = middle_width;
+                new_v.start_width = middle_width;
+                if v0.bulge.abs() >= 1e-9 {
+                    new_v.bulge = (v0.bulge.atan() * 0.5).tan();
+                }
                 let insert_at = (grip_id + 1).min(self.vertices.len());
+                if v0.bulge.abs() >= 1e-9 {
+                    self.vertices[grip_id].bulge = new_v.bulge;
+                }
                 self.vertices.insert(insert_at, new_v);
             }
             A::RemoveVertex if grip_id < n && n > 2 => {
@@ -743,10 +793,13 @@ impl Grippable for Polyline3D {
         let n = self.vertices.len();
         match action {
             A::AddVertex if grip_id < n => {
-                let i1 = (grip_id + 1) % n;
-                if i1 == 0 && grip_id + 1 == n {
+                if grip_id == n - 1 && !self.is_closed() {
+                    let mut new_v = self.vertices[grip_id].clone();
+                    new_v.handle = acadrust::Handle::NULL;
+                    self.vertices.push(new_v);
                     return;
                 }
+                let i1 = (grip_id + 1) % n;
                 let v0 = &self.vertices[grip_id];
                 let v1 = &self.vertices[i1];
                 let mx = (v0.position.x + v1.position.x) * 0.5;
@@ -756,6 +809,7 @@ impl Grippable for Polyline3D {
                 new_v.position.x = mx;
                 new_v.position.y = my;
                 new_v.position.z = mz;
+                new_v.handle = acadrust::Handle::NULL;
                 let insert_at = (grip_id + 1).min(self.vertices.len());
                 self.vertices.insert(insert_at, new_v);
             }
@@ -864,7 +918,8 @@ impl Transformable for Polyline3D {
 pub(crate) fn wide_fills(pl: &acadrust::entities::Polyline2D) -> ([f64; 2], Vec<Vec<[f32; 2]>>) {
     // The stored widths are the band's FULL width and `polyline_segment_fill`
     // offsets ±hw about the centreline — halve them. See `lwpolyline::wide_fills`.
-    let hw_default = pl.start_width.max(pl.end_width) as f32 * 0.5;
+    let hw_default_start = pl.start_width as f32 * 0.5;
+    let hw_default_end = pl.end_width as f32 * 0.5;
     let filtered = drawn_vertices2d(pl);
     let verts: &[acadrust::entities::Vertex2D] = filtered.as_deref().unwrap_or(&pl.vertices);
     let n = verts.len();
@@ -880,12 +935,12 @@ pub(crate) fn wide_fills(pl: &acadrust::entities::Polyline2D) -> ([f64; 2], Vec<
         let hw0 = if v0.start_width > 1e-9 {
             v0.start_width as f32 * 0.5
         } else {
-            hw_default
+            hw_default_start
         };
         let hw1 = if v0.end_width > 1e-9 {
             v0.end_width as f32 * 0.5
         } else {
-            hw_default
+            hw_default_end
         };
         if hw0 < 1e-6 && hw1 < 1e-6 {
             continue;

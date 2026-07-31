@@ -5,13 +5,14 @@
 // and swaps it in via `CmdResult::ReplaceEntity`. Supported curve types:
 //
 //   * Line        — swap start / end.
-//   * LwPolyline  — reverse the vertex list. The bulge stored at a vertex
+//   * LwPolyline / Polyline2D — reverse the vertex list. The bulge stored at a
+//                   vertex
 //                   describes the arc on the segment *starting* at that vertex,
 //                   so a plain `vertices.reverse()` would attach each bulge to
 //                   the wrong segment (and with the wrong sense). We therefore
 //                   recompute every bulge from the original segment bulges (see
 //                   `reverse_lwpolyline`).
-//   * Polyline3D  — reverse the vertex list (no bulges to reconcile).
+//   * Polyline / Polyline3D — reverse the vertex list (no bulges to reconcile).
 //   * Spline      — reverse control points and fit points, then regenerate the
 //                   clamped knot vector (mirrors the REVERSE branch of
 //                   `splinedit::apply_spline_op`).
@@ -60,6 +61,14 @@ impl ReverseCommand {
                 Some(EntityType::Line(out))
             }
             EntityType::LwPolyline(pl) => Some(EntityType::LwPolyline(reverse_lwpolyline(pl))),
+            EntityType::Polyline2D(pl) => {
+                Some(EntityType::Polyline2D(reverse_polyline2d(pl)))
+            }
+            EntityType::Polyline(pl) => {
+                let mut out = pl.clone();
+                out.vertices.reverse();
+                Some(EntityType::Polyline(out))
+            }
             EntityType::Polyline3D(pl) => {
                 let mut out = pl.clone();
                 out.vertices.reverse();
@@ -91,8 +100,8 @@ impl ReverseCommand {
 /// For a closed polyline the closing segment wraps, so the general modular form
 /// is used: new seg `i` (from new vertex `i`) corresponds to original segment
 /// starting at original vertex `(n-1-i-1).rem_euclid(n)`. The widths follow the
-/// vertex they are attached to and are carried along with the reversed order;
-/// they are not segment-relative, so they need no shift.
+/// Widths are segment-relative. Reversing a segment swaps its start and end
+/// widths in addition to moving them to the corresponding reversed segment.
 fn reverse_lwpolyline(pl: &acadrust::LwPolyline) -> acadrust::LwPolyline {
     let mut out = pl.clone();
     let n = pl.vertices.len();
@@ -100,13 +109,9 @@ fn reverse_lwpolyline(pl: &acadrust::LwPolyline) -> acadrust::LwPolyline {
         return out;
     }
 
-    // Reverse vertex positions and per-vertex widths by cloning in reverse.
-    for i in 0..n {
-        let src = &pl.vertices[n - 1 - i];
-        out.vertices[i].location = src.location;
-        out.vertices[i].start_width = src.start_width;
-        out.vertices[i].end_width = src.end_width;
-    }
+    // Reverse the complete vertex payload first. Live segment attributes are
+    // remapped below; the open terminal vertex keeps its unused payload.
+    out.vertices = pl.vertices.iter().rev().copied().collect();
 
     // Recompute bulges from the original segment bulges.
     if pl.is_closed {
@@ -114,17 +119,59 @@ fn reverse_lwpolyline(pl: &acadrust::LwPolyline) -> acadrust::LwPolyline {
         for i in 0..n {
             let src_seg_start = (n - 1 - i + n - 1) % n; // = (2n - 2 - i) % n
             out.vertices[i].bulge = -pl.vertices[src_seg_start].bulge;
+            out.vertices[i].start_width = pl.vertices[src_seg_start].end_width;
+            out.vertices[i].end_width = pl.vertices[src_seg_start].start_width;
         }
     } else {
         // n - 1 segments. New segment i (for i in 0..n-1) maps to original
         // segment starting at vertex n-2-i. The trailing vertex's bulge is
         // unused for an open polyline; clear it for cleanliness.
         for i in 0..n - 1 {
-            out.vertices[i].bulge = -pl.vertices[n - 2 - i].bulge;
+            let src_seg_start = n - 2 - i;
+            out.vertices[i].bulge = -pl.vertices[src_seg_start].bulge;
+            out.vertices[i].start_width = pl.vertices[src_seg_start].end_width;
+            out.vertices[i].end_width = pl.vertices[src_seg_start].start_width;
         }
         out.vertices[n - 1].bulge = 0.0;
     }
 
+    out
+}
+
+/// Reverse a heavy 2D polyline with the same segment semantics as LWPolyline.
+fn reverse_polyline2d(pl: &acadrust::entities::Polyline2D) -> acadrust::entities::Polyline2D {
+    let mut out = pl.clone();
+    let n = pl.vertices.len();
+    if n < 2 {
+        return out;
+    }
+
+    out.vertices = pl.vertices.iter().rev().cloned().collect();
+    out.start_width = pl.end_width;
+    out.end_width = pl.start_width;
+    for vertex in &mut out.vertices {
+        let tangent_flag = acadrust::entities::VertexFlags::CURVE_FIT_TANGENT.bits();
+        if vertex.flags.bits() & tangent_flag != 0 {
+            vertex.curve_tangent = (vertex.curve_tangent + std::f64::consts::PI)
+                .rem_euclid(std::f64::consts::TAU);
+        }
+    }
+    if pl.is_closed() {
+        for i in 0..n {
+            let src_seg_start = (n - 1 - i + n - 1) % n;
+            out.vertices[i].bulge = -pl.vertices[src_seg_start].bulge;
+            out.vertices[i].start_width = pl.vertices[src_seg_start].end_width;
+            out.vertices[i].end_width = pl.vertices[src_seg_start].start_width;
+        }
+    } else {
+        for i in 0..n - 1 {
+            let src_seg_start = n - 2 - i;
+            out.vertices[i].bulge = -pl.vertices[src_seg_start].bulge;
+            out.vertices[i].start_width = pl.vertices[src_seg_start].end_width;
+            out.vertices[i].end_width = pl.vertices[src_seg_start].start_width;
+        }
+        out.vertices[n - 1].bulge = 0.0;
+    }
     out
 }
 

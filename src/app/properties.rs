@@ -136,6 +136,21 @@ impl OpenCADStudio {
         } else {
             0
         };
+        let prop_vertex = if cur_handles.len() == 1 {
+            let vertex_count = self.tabs[i]
+                .scene
+                .document
+                .get_entity(cur_handles[0])
+                .and_then(|entity| match entity {
+                    acadrust::EntityType::LwPolyline(polyline) => Some(polyline.vertices.len()),
+                    acadrust::EntityType::Polyline2D(polyline) => Some(polyline.vertices.len()),
+                    acadrust::EntityType::Leader(leader) => Some(leader.vertices.len()),
+                    _ => None,
+                });
+            vertex_count.map_or(prop_vertex, |count| prop_vertex.min(count.saturating_sub(1)))
+        } else {
+            prop_vertex
+        };
         let prop_vertex_indicator_active = if cur_handles == prev_handles {
             self.tabs[i].properties.prop_vertex_indicator_active
         } else {

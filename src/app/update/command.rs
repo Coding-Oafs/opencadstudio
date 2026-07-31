@@ -21,6 +21,49 @@ use acadrust::{EntityType as AcadEntityType, Handle};
 use iced::time::Instant;
 use iced::{mouse, Point, Task};
 
+/// Return `(new vertex grip id, old vertex count)` for polyline Add Vertex.
+/// LWPolyline segment grips live after the vertex grips, so translate their id
+/// back to the segment before selecting the inserted vertex.
+fn polyline_add_vertex_target(entity: &AcadEntityType, grip_id: usize) -> Option<(usize, usize)> {
+    match entity {
+        AcadEntityType::LwPolyline(polyline) => {
+            let n = polyline.vertices.len();
+            if n == 0 {
+                None
+            } else if grip_id < n {
+                Some((grip_id + 1, n))
+            } else {
+                let segment = grip_id - n;
+                let segment_count = if polyline.is_closed {
+                    n
+                } else {
+                    n.saturating_sub(1)
+                };
+                (segment < segment_count).then_some((segment + 1, n))
+            }
+        }
+        AcadEntityType::Polyline(polyline) if grip_id < polyline.vertices.len() => {
+            Some((grip_id + 1, polyline.vertices.len()))
+        }
+        AcadEntityType::Polyline2D(polyline) if grip_id < polyline.vertices.len() => {
+            Some((grip_id + 1, polyline.vertices.len()))
+        }
+        AcadEntityType::Polyline3D(polyline) if grip_id < polyline.vertices.len() => {
+            Some((grip_id + 1, polyline.vertices.len()))
+        }
+        _ => None,
+    }
+}
+
+fn polyline_vertex_count(entity: &AcadEntityType) -> Option<usize> {
+    match entity {
+        AcadEntityType::LwPolyline(polyline) => Some(polyline.vertices.len()),
+        AcadEntityType::Polyline(polyline) => Some(polyline.vertices.len()),
+        AcadEntityType::Polyline2D(polyline) => Some(polyline.vertices.len()),
+        AcadEntityType::Polyline3D(polyline) => Some(polyline.vertices.len()),
+        _ => None,
+    }
+}
 
 impl OpenCADStudio {
 pub(super) fn begin_tab_close_queue(&mut self, tab_ids: Vec<u64>) -> Task<Message> {
@@ -965,6 +1008,93 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             .push_error("Cannot break at this vertex."),
                     }
                     return Task::none();
+                }
+                // Polyline Add Vertex is an interactive placement, not an
+                // immediate midpoint edit. Seed the undo snapshot before the
+                // provisional vertex exists, then engage its new grip so the
+                // regular snap/ortho/polar preview follows the cursor. One
+                // click commits the whole append+move; Escape restores the
+                // original entity.
+                if matches!(item.action, GripMenuAction::AddVertex) {
+                    let placement = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(popup.handle)
+                        .cloned()
+                        .and_then(|original| {
+                            polyline_add_vertex_target(&original, popup.grip_id)
+                                .map(|(new_gid, old_len)| (original, new_gid, old_len))
+                        });
+                    if let Some((original, new_gid, old_len)) = placement {
+                        let dirty_before = self.tabs[i].dirty;
+                        if let Some(entity) =
+                            self.tabs[i].scene.document.get_entity_mut(popup.handle)
+                        {
+                            entity.apply_grip_menu(popup.grip_id, item.action);
+                        }
+                        let inserted = self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(popup.handle)
+                            .and_then(polyline_vertex_count)
+                            .is_some_and(|len| len == old_len + 1);
+                        if !inserted {
+                            if let Some(entity) =
+                                self.tabs[i].scene.document.get_entity_mut(popup.handle)
+                            {
+                                *entity = original;
+                            }
+                            self.tabs[i].scene.bump_entities(&[
+                                (popup.handle, crate::scene::ChangeKind::Modified),
+                            ]);
+                            self.tabs[i].dirty = dirty_before;
+                            self.refresh_selected_grips();
+                            self.refresh_properties();
+                            self.command_line.push_error("Cannot add a vertex here.");
+                            return Task::none();
+                        }
+                        self.tabs[i]
+                            .scene
+                            .bump_entities(&[(popup.handle, crate::scene::ChangeKind::Modified)]);
+                        self.tabs[i].dirty = true;
+                        self.refresh_selected_grips();
+                        self.refresh_properties();
+                        let grip_world = self.tabs[i]
+                            .selected_grip_handles
+                            .iter()
+                            .zip(self.tabs[i].selected_grips.iter())
+                            .find(|(owner, grip)| {
+                                **owner == popup.handle && grip.id == new_gid
+                            })
+                            .map(|(_, grip)| grip.world);
+                        if let Some(grip_world) = grip_world {
+                            self.grip_originals = vec![(popup.handle, original)];
+                            self.grip_dirty_before = Some(dirty_before);
+                            self.tabs[i].active_grip = Some(GripEdit::single(
+                                popup.handle,
+                                new_gid,
+                                false,
+                                grip_world,
+                            ));
+                            self.command_line
+                                .push_info("Specify new vertex location:");
+                        } else {
+                            if let Some(entity) =
+                                self.tabs[i].scene.document.get_entity_mut(popup.handle)
+                            {
+                                *entity = original;
+                            }
+                            self.tabs[i].scene.bump_entities(&[
+                                (popup.handle, crate::scene::ChangeKind::Modified),
+                            ]);
+                            self.tabs[i].dirty = dirty_before;
+                            self.refresh_selected_grips();
+                            self.refresh_properties();
+                            self.command_line
+                                .push_error("Cannot place the new vertex.");
+                        }
+                        return Task::none();
+                    }
                 }
                 // One-shot action — apply immediately.
                 self.push_undo_snapshot(i, item.label);

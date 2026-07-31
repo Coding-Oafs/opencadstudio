@@ -34,6 +34,51 @@ fn pt_pt_d2(a: Point, b: Point) -> f32 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
 }
 
+fn is_added_polyline_vertex(
+    original: &AcadEntityType,
+    current: &AcadEntityType,
+    vertex_id: usize,
+) -> bool {
+    match (original, current) {
+        (AcadEntityType::LwPolyline(before), AcadEntityType::LwPolyline(after)) => {
+            after.vertices.len() == before.vertices.len() + 1
+                && vertex_id < after.vertices.len()
+        }
+        (AcadEntityType::Polyline2D(before), AcadEntityType::Polyline2D(after)) => {
+            after.vertices.len() == before.vertices.len() + 1
+                && vertex_id < after.vertices.len()
+        }
+        _ => false,
+    }
+}
+
+/// Return the source bulge when `vertex_id` is the provisional point inserted
+/// into an arc segment. Straight segments stay straight during placement.
+fn added_arc_bulge(
+    original: &AcadEntityType,
+    current: &AcadEntityType,
+    vertex_id: usize,
+) -> Option<f64> {
+    if !is_added_polyline_vertex(original, current, vertex_id) {
+        return None;
+    }
+    let prev = vertex_id.checked_sub(1)?;
+    let (n, closed, bulge) = match original {
+        AcadEntityType::LwPolyline(polyline) => (
+            polyline.vertices.len(),
+            polyline.is_closed,
+            polyline.vertices.get(prev)?.bulge,
+        ),
+        AcadEntityType::Polyline2D(polyline) => (
+            polyline.vertices.len(),
+            polyline.is_closed(),
+            polyline.vertices.get(prev)?.bulge,
+        ),
+        _ => return None,
+    };
+    ((closed || prev + 1 < n) && bulge.abs() >= 1e-9).then_some(bulge)
+}
+
 /// Squared distance from `p` to the segment `a`–`b`.
 fn pt_seg_d2(p: Point, a: Point, b: Point) -> f32 {
     let (vx, vy) = (b.x - a.x, b.y - a.y);
@@ -820,17 +865,22 @@ impl OpenCADStudio {
                 for handle in std::mem::take(&mut self.grip_preview_handles) {
                     self.tabs[i].scene.preview_hidden.remove(&handle);
                 }
-                self.grip_originals = edited_handles
-                    .iter()
-                    .filter_map(|&handle| {
-                        self.tabs[i]
-                            .scene
-                            .document
-                            .get_entity(handle)
-                            .cloned()
-                            .map(|entity| (handle, entity))
-                    })
-                    .collect();
+                // Interactive Add Vertex seeds this with the entity from
+                // before insertion so append + placement is one undo step.
+                // Normal grip drags still snapshot their current entities here.
+                if self.grip_originals.is_empty() {
+                    self.grip_originals = edited_handles
+                        .iter()
+                        .filter_map(|&handle| {
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .get_entity(handle)
+                                .cloned()
+                                .map(|entity| (handle, entity))
+                        })
+                        .collect();
+                }
                 for &handle in &edited_handles {
                     self.tabs[i].scene.preview_hidden.insert(handle);
                 }
@@ -960,8 +1010,34 @@ impl OpenCADStudio {
                     (target.handle, target.grip_id, apply)
                 })
                 .collect();
+            let refit_arc_targets: Vec<_> = grip
+                .targets
+                .iter()
+                .filter_map(|target| {
+                    let original = self
+                        .grip_originals
+                        .iter()
+                        .find(|(handle, _)| *handle == target.handle)
+                        .map(|(_, entity)| entity)?;
+                    let current = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(target.handle)?;
+                    added_arc_bulge(original, current, target.grip_id)
+                        .map(|bulge| (target.handle, target.grip_id, bulge))
+                })
+                .collect();
             for (handle, grip_id, apply) in actions {
                 self.tabs[i].scene.apply_grip(handle, grip_id, apply);
+            }
+            for (handle, vertex_id, original_bulge) in refit_arc_targets {
+                if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                    crate::entities::lwpolyline::refit_added_arc_vertex(
+                        entity,
+                        vertex_id,
+                        original_bulge,
+                    );
+                }
             }
             self.tabs[i].scene.set_preview_hatches(&edited_handles);
             self.tabs[i].dirty = true;
@@ -2253,6 +2329,19 @@ impl OpenCADStudio {
                 // Engaging click — stay hot, wait for the placement click.
                 return Task::none();
             }
+            let added_vertex_focus = grip.targets.iter().find_map(|target| {
+                let original = self
+                    .grip_originals
+                    .iter()
+                    .find(|(handle, _)| *handle == target.handle)
+                    .map(|(_, entity)| entity)?;
+                let current = self.tabs[i]
+                    .scene
+                    .document
+                    .get_entity(target.handle)?;
+                is_added_polyline_vertex(original, current, target.grip_id)
+                    .then_some(target.grip_id)
+            });
             self.tabs[i].active_grip = None;
             // Commit the grip drag as one undoable group, then put every
             // edited entity back into the resident tessellation.
@@ -2287,6 +2376,11 @@ impl OpenCADStudio {
             // Placement confirmed — keep the just-added leader.
             self.grip_add_provisional = None;
             self.tabs[i].snap_result = None;
+            if let Some(vertex_id) = added_vertex_focus {
+                self.tabs[i].properties.prop_vertex = vertex_id;
+                self.tabs[i].properties.prop_vertex_indicator_active = true;
+                crate::scene::view::dispatch::set_prop_current_vertex(vertex_id);
+            }
             self.refresh_properties();
             return Task::none();
         }

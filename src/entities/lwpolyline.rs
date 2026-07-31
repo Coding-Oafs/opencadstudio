@@ -62,6 +62,113 @@ fn bulge_from_midpoint(p0: [f64; 2], p1: [f64; 2], mid: [f64; 2]) -> Option<f64>
     Some(if cross > 0.0 { bulge } else { -bulge })
 }
 
+/// Bulges for the two consecutive arcs `p0 → mid` and `mid → p1` on the
+/// circle through all three points. Used while placing a vertex inserted into
+/// an arc segment so both halves keep meeting at the cursor.
+fn split_bulges_from_point(
+    p0: [f64; 2],
+    mid: [f64; 2],
+    p1: [f64; 2],
+    original_bulge: f64,
+) -> (f64, f64) {
+    let d0 = (mid[0] - p0[0]).hypot(mid[1] - p0[1]);
+    let d1 = (p1[0] - mid[0]).hypot(p1[1] - mid[1]);
+    if d0 < 1e-12 {
+        return (0.0, original_bulge);
+    }
+    if d1 < 1e-12 {
+        return (original_bulge, 0.0);
+    }
+    let ax = 2.0 * (mid[0] - p0[0]);
+    let ay = 2.0 * (mid[1] - p0[1]);
+    let bx = 2.0 * (p1[0] - p0[0]);
+    let by = 2.0 * (p1[1] - p0[1]);
+    let ca = mid[0] * mid[0] + mid[1] * mid[1] - p0[0] * p0[0] - p0[1] * p0[1];
+    let cb = p1[0] * p1[0] + p1[1] * p1[1] - p0[0] * p0[0] - p0[1] * p0[1];
+    let det = ax * by - ay * bx;
+    if det.abs() < 1e-12 {
+        return (0.0, 0.0);
+    }
+    let cx = (ca * by - cb * ay) / det;
+    let cy = (ax * cb - bx * ca) / det;
+    let a0 = (p0[1] - cy).atan2(p0[0] - cx);
+    let am = (mid[1] - cy).atan2(mid[0] - cx);
+    let a1 = (p1[1] - cy).atan2(p1[0] - cx);
+    let cross =
+        (mid[0] - p0[0]) * (p1[1] - mid[1]) - (mid[1] - p0[1]) * (p1[0] - mid[0]);
+    let bulge = |from: f64, to: f64| {
+        if cross > 0.0 {
+            ((to - from).rem_euclid(TAU) / 4.0).tan()
+        } else {
+            -((from - to).rem_euclid(TAU) / 4.0).tan()
+        }
+    };
+    (bulge(a0, am), bulge(am, a1))
+}
+
+/// Refit the two arc segments around a newly inserted vertex. The caller
+/// ensures this placement originated from an arc, so straight-segment Add
+/// Vertex remains two straight segments when the cursor moves off the chord.
+pub(crate) fn refit_added_arc_vertex(
+    entity: &mut acadrust::EntityType,
+    vertex_id: usize,
+    original_bulge: f64,
+) {
+    match entity {
+        acadrust::EntityType::LwPolyline(polyline) => {
+            let n = polyline.vertices.len();
+            if vertex_id == 0 || vertex_id >= n {
+                return;
+            }
+            let next = if vertex_id + 1 < n {
+                vertex_id + 1
+            } else if polyline.is_closed {
+                0
+            } else {
+                return;
+            };
+            let prev = vertex_id - 1;
+            let p0 = polyline.vertices[prev].location;
+            let mid = polyline.vertices[vertex_id].location;
+            let p1 = polyline.vertices[next].location;
+            let (first, second) = split_bulges_from_point(
+                [p0.x, p0.y],
+                [mid.x, mid.y],
+                [p1.x, p1.y],
+                original_bulge,
+            );
+            polyline.vertices[prev].bulge = first.clamp(-1e6, 1e6);
+            polyline.vertices[vertex_id].bulge = second.clamp(-1e6, 1e6);
+        }
+        acadrust::EntityType::Polyline2D(polyline) => {
+            let n = polyline.vertices.len();
+            if vertex_id == 0 || vertex_id >= n {
+                return;
+            }
+            let next = if vertex_id + 1 < n {
+                vertex_id + 1
+            } else if polyline.is_closed() {
+                0
+            } else {
+                return;
+            };
+            let prev = vertex_id - 1;
+            let p0 = &polyline.vertices[prev].location;
+            let mid = &polyline.vertices[vertex_id].location;
+            let p1 = &polyline.vertices[next].location;
+            let (first, second) = split_bulges_from_point(
+                [p0.x, p0.y],
+                [mid.x, mid.y],
+                [p1.x, p1.y],
+                original_bulge,
+            );
+            polyline.vertices[prev].bulge = first.clamp(-1e6, 1e6);
+            polyline.vertices[vertex_id].bulge = second.clamp(-1e6, 1e6);
+        }
+        _ => {}
+    }
+}
+
 /// Tessellate a thick polyline segment list into NaN-separated Lines geometry.
 /// Shared by LwPolyline and Polyline2D thickness paths.
 fn thick_segments(
@@ -774,10 +881,23 @@ impl crate::entities::traits::Grippable for LwPolyline {
         match action {
             A::Stretch => {}
             A::AddVertex => {
-                // Insert a new vertex at the chord midpoint between the
-                // hovered vertex (or segment) and its neighbour. The new
-                // vertex inherits the previous vertex's bulge so an
-                // existing arc is split into two arcs of the same chord.
+                if n == 0 {
+                    return;
+                }
+                // The last vertex of an open polyline extends the path. Start
+                // the provisional vertex on the endpoint; the grip driver then
+                // moves it with the cursor until the placement click.
+                if grip_id == n - 1 && !self.is_closed {
+                    self.vertices[grip_id].bulge = 0.0;
+                    let mut new_v = self.vertices[grip_id].clone();
+                    new_v.bulge = 0.0;
+                    new_v.vertex_id = 0;
+                    self.vertices.push(new_v);
+                    return;
+                }
+                // Insert a provisional vertex midway along the following
+                // segment. Arc segments are split into two arcs; the grip
+                // driver refits both halves while the cursor moves.
                 let (i0, i1) = if grip_id < n {
                     let i0 = grip_id;
                     let i1 = (grip_id + 1) % n;
@@ -789,14 +909,42 @@ impl crate::entities::traits::Grippable for LwPolyline {
                 if i1 == 0 && !self.is_closed {
                     return;
                 }
-                let v0 = &self.vertices[i0];
-                let v1 = &self.vertices[i1];
-                let mx = (v0.location.x + v1.location.x) * 0.5;
-                let my = (v0.location.y + v1.location.y) * 0.5;
-                let inherited = v0.clone();
-                let mut new_v = inherited.clone();
-                new_v.location.x = mx;
-                new_v.location.y = my;
+                let v0 = self.vertices[i0];
+                let v1 = self.vertices[i1];
+                let midpoint = if v0.bulge.abs() >= 1e-9 {
+                    arc_midpoint(
+                        [v0.location.x, v0.location.y],
+                        [v1.location.x, v1.location.y],
+                        v0.bulge,
+                    )
+                } else {
+                    [
+                        (v0.location.x + v1.location.x) * 0.5,
+                        (v0.location.y + v1.location.y) * 0.5,
+                    ]
+                };
+                let mut new_v = v0;
+                new_v.location.x = midpoint[0];
+                new_v.location.y = midpoint[1];
+                new_v.vertex_id = 0;
+                let effective_start = if v0.start_width > 1e-9 {
+                    v0.start_width
+                } else {
+                    self.constant_width
+                };
+                let effective_end = if v0.end_width > 1e-9 {
+                    v0.end_width
+                } else {
+                    self.constant_width
+                };
+                let middle_width = (effective_start + effective_end) * 0.5;
+                self.vertices[i0].end_width = middle_width;
+                new_v.start_width = middle_width;
+                if v0.bulge.abs() >= 1e-9 {
+                    let half_bulge = (v0.bulge.atan() * 0.5).tan();
+                    self.vertices[i0].bulge = half_bulge;
+                    new_v.bulge = half_bulge;
+                }
                 let insert_at = (i0 + 1).min(self.vertices.len());
                 self.vertices.insert(insert_at, new_v);
             }

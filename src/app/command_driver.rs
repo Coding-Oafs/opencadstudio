@@ -56,7 +56,9 @@ impl OpenCADStudio {
 
         let handles = std::mem::take(&mut self.grip_preview_handles);
         let originals = std::mem::take(&mut self.grip_originals);
+        let mut changed_handles: rustc_hash::FxHashSet<_> = handles.iter().copied().collect();
         for (handle, original) in originals {
+            changed_handles.insert(handle);
             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
                 *entity = original;
             }
@@ -64,7 +66,7 @@ impl OpenCADStudio {
         for &handle in &handles {
             self.tabs[i].scene.preview_hidden.remove(&handle);
         }
-        let changes: Vec<_> = handles
+        let changes: Vec<_> = changed_handles
             .into_iter()
             .map(|handle| (handle, crate::scene::ChangeKind::Modified))
             .collect();
