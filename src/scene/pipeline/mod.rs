@@ -3046,6 +3046,7 @@ impl Pipeline {
                     }
                 }
                 pass.set_pipeline(&self.mesh_wireframe_pipeline);
+                pass.set_bind_group(1, &self.mesh_default_material_bind_group, &[]);
                 for (mesh_command, c) in self.active_mesh_chunks_indexed() {
                     if !c.visible {
                         continue;
@@ -3104,6 +3105,7 @@ impl Pipeline {
             } else {
                 if mesh_wireframe {
                     pass.set_pipeline(&self.mesh_wireframe_pipeline);
+                    pass.set_bind_group(1, &self.mesh_default_material_bind_group, &[]);
                     for (mesh_command, c) in self.active_mesh_chunks_indexed() {
                         if !c.visible {
                             continue;
