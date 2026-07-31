@@ -1948,7 +1948,6 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::SetPlotWindow { p1, p2 } => {
-                use acadrust::objects::{ObjectType, PlotSettings};
                 let layout_name = self.tabs[i].scene.current_layout.clone();
                 if layout_name == "Model" {
                     // Model space: remember the window (world X/Y) for the plot dialog.
@@ -1965,42 +1964,21 @@ impl OpenCADStudio {
                     self.plot_dialog.area = "Window".to_string();
                     self.active_modal = Some(super::ModalKind::Plot);
                 } else {
-                    let block_handle = self.tabs[i].scene.current_layout_block_handle_pub();
-                    let doc = &mut self.tabs[i].scene.document;
-                    let ps_handle = doc.objects.iter().find_map(|(h, obj)| {
-                        if let ObjectType::PlotSettings(ps) = obj {
-                            if ps.page_name == layout_name {
-                                Some(*h)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    });
-                    let ps_entry = match ps_handle {
-                        Some(h) => doc.objects.get_mut(&h),
-                        None => {
-                            let nh = acadrust::Handle::new(doc.next_handle());
-                            let ps = PlotSettings::new(layout_name.clone());
-                            doc.objects.insert(nh, ObjectType::PlotSettings(ps));
-                            doc.objects.get_mut(&nh)
-                        }
-                    };
-                    let _ = block_handle;
-                    if let Some(ObjectType::PlotSettings(ps)) = ps_entry {
-                        // Convert world-space points to DXF coordinates (X, Z plane → DXF X, Y).
-                        let x1 = p1.x.min(p2.x) as f64;
-                        let y1 = p1.z.min(p2.z) as f64;
-                        let x2 = p1.x.max(p2.x) as f64;
-                        let y2 = p1.z.max(p2.z) as f64;
-                        ps.set_plot_window(x1, y1, x2, y2);
-                        self.push_undo_snapshot(i, "PLOTWINDOW");
-                        self.tabs[i].dirty = true;
-                        self.command_line.push_output(&format!(
-                            "PLOTWINDOW: ({x1:.3},{y1:.3}) → ({x2:.3},{y2:.3})"
-                        ));
-                    }
+                    // PLOTWINDOW always describes the plotted layout. In MSPACE
+                    // the command points are model coordinates, so map them back
+                    // through the active floating viewport first.
+                    let p1 = self.tabs[i].scene.model_to_paper(p1);
+                    let p2 = self.tabs[i].scene.model_to_paper(p2);
+                    let x1 = p1.x.min(p2.x);
+                    let y1 = p1.y.min(p2.y);
+                    let x2 = p1.x.max(p2.x);
+                    let y2 = p1.y.max(p2.y);
+                    self.plot_window = Some((x1, y1, x2, y2));
+                    self.command_line.push_output(&format!(
+                        "Plot window: {x1:.2},{y1:.2} to {x2:.2},{y2:.2}"
+                    ));
+                    self.plot_dialog.area = "Window".to_string();
+                    self.active_modal = Some(super::ModalKind::Plot);
                 }
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;

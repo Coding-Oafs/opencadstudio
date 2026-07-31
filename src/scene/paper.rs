@@ -409,6 +409,149 @@ impl Scene {
         Arc::new(models)
     }
 
+    /// Plot-only hatch set for a specific block. Paper PDF generation uses this
+    /// for the model block behind each floating viewport; unlike
+    /// `paper_canvas_hatches`, it must not include the active paper block.
+    pub(super) fn plot_hatches_for_block(
+        &self,
+        block: Handle,
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+    ) -> Vec<HatchModel> {
+        let layer_hidden = |layer: &str| {
+            self.document
+                .layers
+                .get(layer)
+                .map(|l| l.flags.off || l.flags.frozen)
+                .unwrap_or(false)
+        };
+        let mut models = Vec::new();
+        for (&handle, model) in self.hatches.iter() {
+            let Some(source) = self.document.get_entity(handle) else {
+                continue;
+            };
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, source);
+            let entity = contextual.as_ref();
+            let common = entity.common();
+            if common.invisible
+                || self.entity_temporarily_hidden(handle)
+                || layer_hidden(&common.layer)
+                || self.layer_frozen_in(&common.layer, frozen)
+                || !self.belongs_to_visible_block(handle, common.owner_handle, block)
+            {
+                continue;
+            }
+            let mut hatch = match entity {
+                EntityType::Hatch(dxf)
+                    if crate::scene::annotative::active_object_context(
+                        &self.document,
+                        handle,
+                    )
+                    .is_some() =>
+                {
+                    Self::hatch_model_from_dxf(dxf, model.color)
+                        .unwrap_or_else(|| model.clone())
+                }
+                _ => model.clone(),
+            };
+            hatch.color = self.render_style(entity).0;
+            if let EntityType::Hatch(dxf) = entity {
+                if let model::hatch_model::HatchPattern::Pattern(_) = &hatch.pattern {
+                    if dxf.pattern.lines.is_empty() {
+                        hatch.angle_offset = dxf.pattern_angle as f32;
+                        hatch.scale = dxf.pattern_scale as f32;
+                    }
+                }
+            }
+            models.push(hatch);
+        }
+        models.extend(self.exploded_insert_hatch_models(
+            block,
+            self.paper_bg_color,
+            false,
+            frozen,
+        ));
+        models
+    }
+
+    /// Plot-only wipeout masks for a specific block. Nested inserts follow the
+    /// same recursive collector as the on-screen model path.
+    pub(super) fn plot_wipeouts_for_block(
+        &self,
+        block: Handle,
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+    ) -> Vec<HatchModel> {
+        let depth_map = self.draw_depth_map();
+        let mut models = Vec::new();
+        for entity in self.document.entities() {
+            let EntityType::Wipeout(wipeout) = entity else {
+                continue;
+            };
+            let common = &wipeout.common;
+            if common.invisible
+                || self.entity_temporarily_hidden(common.handle)
+                || self
+                    .document
+                    .layers
+                    .get(&common.layer)
+                    .map(|layer| layer.flags.off || layer.flags.frozen)
+                    .unwrap_or(false)
+                || self.layer_frozen_in(&common.layer, frozen)
+                || !self.belongs_to_visible_block(common.handle, common.owner_handle, block)
+            {
+                continue;
+            }
+            let (world_origin, boundary) = Self::wipeout_boundary_2d(wipeout);
+            if boundary.len() < 3 {
+                continue;
+            }
+            models.push(HatchModel {
+                boundary: Arc::new(boundary),
+                boundary_wcs: None,
+                pattern: model::hatch_model::HatchPattern::Solid,
+                name: "WIPEOUT_FILL".into(),
+                color: self.paper_bg_color,
+                angle_offset: 0.0,
+                scale: 1.0,
+                world_origin,
+                draw_depth: depth_map
+                    .get(&common.handle.value())
+                    .map_or(0.0, |depth| depth[0]),
+            });
+        }
+        for entity in self.document.entities() {
+            let contextual =
+                crate::scene::annotative::entity_for_active_context(&self.document, entity);
+            let EntityType::Insert(insert) = contextual.as_ref() else {
+                continue;
+            };
+            let common = &insert.common;
+            if common.invisible
+                || self.entity_temporarily_hidden(common.handle)
+                || self
+                    .document
+                    .layers
+                    .get(&common.layer)
+                    .map(|layer| layer.flags.off || layer.flags.frozen)
+                    .unwrap_or(false)
+                || self.layer_frozen_in(&common.layer, frozen)
+                || !self.belongs_to_visible_block(common.handle, common.owner_handle, block)
+            {
+                continue;
+            }
+            self.collect_block_wipeouts(
+                &insert.get_transform(),
+                &insert.block_name,
+                0,
+                frozen,
+                self.paper_bg_color,
+                &depth_map,
+                &mut models,
+            );
+        }
+        models
+    }
+
     /// Paper-layout wipeout fills (paper hit-testing / export). Same rationale as
     /// `paper_canvas_hatches` — only include wipeouts owned by the
     /// active paper layout block, so model wipeouts (drawn through their

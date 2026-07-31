@@ -170,9 +170,12 @@ fn build_pdf(
     let needs_state = rotation_deg != 0 || (scale - 1.0).abs() > 1e-6 || clip.is_some();
     if needs_state {
         let (cos_a, sin_a, tx, ty) = match rotation_deg {
-            90 => (0.0_f64, 1.0_f64, 0.0, paper_h as f64),
+            // `paper_w`/`paper_h` are already the effective, rotation-swapped
+            // page dimensions. A 90° turn maps x' = page_w - y, y' = x;
+            // 270° maps x' = y, y' = page_h - x.
+            90 => (0.0_f64, 1.0_f64, paper_w as f64, 0.0),
             180 => (-1.0_f64, 0.0_f64, paper_w as f64, paper_h as f64),
-            270 => (0.0_f64, -1.0_f64, paper_w as f64, 0.0),
+            270 => (0.0_f64, -1.0_f64, 0.0, paper_h as f64),
             _ => (1.0_f64, 0.0_f64, 0.0, 0.0),
         };
         let s = scale as f64;
@@ -245,8 +248,9 @@ fn build_pdf(
         if a < 0.01 {
             continue;
         }
-        // Skip the paper-boundary wire — the white PDF background already provides it.
-        if wire.name == "__paper_boundary__" {
+        // Skip screen-only paper helpers. The PDF page supplies its own white
+        // boundary, and the printable-area rectangle is a UI guide, not ink.
+        if matches!(wire.name.as_str(), "__paper_boundary__" | "paper_printable_area") {
             continue;
         }
         // Apply CTB plot style table overrides (color + lineweight).
@@ -433,7 +437,13 @@ fn emit_hatch(ops: &mut Vec<Op>, hatch: &HatchModel, ox: f64, oy: f64) {
     // would vanish white-on-white on paper. Force near-white/near-yellow → black
     // and near-cyan → dark blue, matching AutoCAD's colour-7-on-white plotting.
     // Genuine colours are untouched; WIPEOUTS keep their paper-white mask.
-    if hatch.name != "WIPEOUT_FILL" {
+    if hatch.name == "WIPEOUT_FILL" {
+        // Screen wipeouts match the configured canvas colour; printed
+        // wipeouts must mask with the white paper colour.
+        r = 1.0;
+        g = 1.0;
+        b = 1.0;
+    } else {
         let is_light = r > 0.80 && g > 0.80 && b > 0.80;
         let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
         let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;

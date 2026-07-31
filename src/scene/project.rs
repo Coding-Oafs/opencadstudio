@@ -349,6 +349,149 @@ impl Scene {
         result
     }
 
+    /// Model-space fills projected into every active paper viewport for vector
+    /// plotting. The screen renderer projects these on the GPU; PDF generation
+    /// needs the equivalent paper-space geometry explicitly.
+    pub fn viewport_plot_fills(
+        &self,
+    ) -> (Vec<WireModel>, Vec<HatchModel>, Vec<HatchModel>) {
+        use acadrust::entities::Viewport;
+        use model::hatch_model::HatchPattern;
+
+        if self.current_layout == "Model" {
+            return (Vec::new(), Vec::new(), Vec::new());
+        }
+        let paper_block = self.current_layout_block_handle();
+        let model_block = self.model_space_block_handle();
+        let (_, _, viewport_handles) = self.paper_viewport_handles();
+        let viewports: Vec<&Viewport> = viewport_handles
+            .iter()
+            .filter_map(|handle| match self.document.get_entity(*handle) {
+                Some(EntityType::Viewport(viewport))
+                    if viewport.common.owner_handle == paper_block && viewport.status.is_on =>
+                {
+                    Some(viewport)
+                }
+                _ => None,
+            })
+            .collect();
+
+        let mut pattern_wires = Vec::new();
+        let mut projected_hatches = Vec::new();
+        let mut projected_wipeouts = Vec::new();
+
+        for viewport in viewports {
+            let Some(camera) = self.camera_for_viewport(viewport.common.handle) else {
+                continue;
+            };
+            let view_right = camera.rotation * glam::Vec3::X;
+            let view_up = camera.rotation * glam::Vec3::Y;
+            let view_forward = camera.rotation * glam::Vec3::Z;
+            let view_height = (camera.ortho_size() * 2.0) as f64;
+            let viewport_scale = if view_height > 1e-9 {
+                viewport.height / view_height
+            } else {
+                1.0
+            };
+            let center_x = viewport.center.x;
+            let center_y = viewport.center.y;
+            let half_w = viewport.width * 0.5;
+            let half_h = viewport.height * 0.5;
+            let (xmin, ymin, xmax, ymax) = (
+                (center_x - half_w) as f32,
+                (center_y - half_h) as f32,
+                (center_x + half_w) as f32,
+                (center_y + half_h) as f32,
+            );
+            let perspective = viewport.status.perspective && viewport.lens_length > 1.0;
+            let camera_distance = if perspective {
+                (viewport.view_height * viewport.lens_length / 24.0).max(0.001)
+            } else {
+                0.0
+            };
+            let project = |x: f64, y: f64| -> Option<[f32; 2]> {
+                let delta = glam::DVec3::new(x, y, 0.0) - camera.target;
+                let u = delta.dot(view_right.as_dvec3());
+                let v = delta.dot(view_up.as_dvec3());
+                let factor = if perspective {
+                    let depth = camera_distance - delta.dot(view_forward.as_dvec3());
+                    if depth <= 0.001 {
+                        return None;
+                    }
+                    camera_distance / depth
+                } else {
+                    1.0
+                };
+                Some([
+                    (center_x + u * factor * viewport_scale) as f32,
+                    (center_y + v * factor * viewport_scale) as f32,
+                ])
+            };
+
+            let frozen: rustc_hash::FxHashSet<Handle> =
+                viewport.frozen_layers.iter().copied().collect();
+            let hatches = self.plot_hatches_for_block(model_block, Some(&frozen));
+            for hatch in hatches {
+                if matches!(&hatch.pattern, HatchPattern::Pattern(_)) {
+                    let mut points = Vec::new();
+                    let mut aabb = [
+                        f32::INFINITY,
+                        f32::INFINITY,
+                        f32::NEG_INFINITY,
+                        f32::NEG_INFINITY,
+                    ];
+                    for [a, b] in hatch.pattern_segments() {
+                        let (Some(a), Some(b)) =
+                            (project(a[0], a[1]), project(b[0], b[1]))
+                        else {
+                            continue;
+                        };
+                        let Some((ax, ay, bx, by)) =
+                            cs_clip(a[0], a[1], b[0], b[1], xmin, ymin, xmax, ymax)
+                        else {
+                            continue;
+                        };
+                        if !points.is_empty() {
+                            points.push([f32::NAN, f32::NAN, f32::NAN]);
+                        }
+                        points.push([ax, ay, viewport.center.z as f32]);
+                        points.push([bx, by, viewport.center.z as f32]);
+                        aabb[0] = aabb[0].min(ax).min(bx);
+                        aabb[1] = aabb[1].min(ay).min(by);
+                        aabb[2] = aabb[2].max(ax).max(bx);
+                        aabb[3] = aabb[3].max(ay).max(by);
+                    }
+                    if !points.is_empty() {
+                        let mut wire = WireModel::solid(
+                            "viewport_hatch_pattern".into(),
+                            points,
+                            hatch.color,
+                            false,
+                        );
+                        wire.aabb = aabb;
+                        pattern_wires.push(wire);
+                    }
+                    continue;
+                }
+                if let Some(hatch) =
+                    project_plot_fill(hatch, &project, xmin, ymin, xmax, ymax)
+                {
+                    projected_hatches.push(hatch);
+                }
+            }
+
+            for wipeout in self.plot_wipeouts_for_block(model_block, Some(&frozen)) {
+                if let Some(wipeout) =
+                    project_plot_fill(wipeout, &project, xmin, ymin, xmax, ymax)
+                {
+                    projected_wipeouts.push(wipeout);
+                }
+            }
+        }
+
+        (pattern_wires, projected_hatches, projected_wipeouts)
+    }
+
     /// A content viewport's clip boundary, projected into that viewport's
     /// render-target normalized device coords. Every content viewport goes
     /// through the same stencil path: a rectangular viewport contributes its
@@ -590,6 +733,125 @@ fn sample_polyline_clip_boundary(
         }
     }
     output
+}
+
+fn project_plot_fill<F>(
+    mut fill: HatchModel,
+    project: &F,
+    xmin: f32,
+    ymin: f32,
+    xmax: f32,
+    ymax: f32,
+) -> Option<HatchModel>
+where
+    F: Fn(f64, f64) -> Option<[f32; 2]>,
+{
+    let mut output = Vec::new();
+    let mut ring = Vec::new();
+    let flush_ring = |ring: &mut Vec<[f32; 2]>, output: &mut Vec<[f32; 2]>| {
+        if ring.len() < 3 {
+            ring.clear();
+            return;
+        }
+        if ring.first() == ring.last() {
+            ring.pop();
+        }
+        let mut clipped = clip_polygon_to_rect(ring, xmin, ymin, xmax, ymax);
+        ring.clear();
+        if clipped.len() < 3 {
+            return;
+        }
+        if clipped.first() != clipped.last() {
+            clipped.push(clipped[0]);
+        }
+        if !output.is_empty() {
+            output.push([f32::NAN, f32::NAN]);
+        }
+        output.extend(clipped);
+    };
+    for &[x, y] in fill.boundary.iter() {
+        if x.is_nan() || y.is_nan() {
+            flush_ring(&mut ring, &mut output);
+            continue;
+        }
+        let absolute_x = fill.world_origin[0] + x as f64;
+        let absolute_y = fill.world_origin[1] + y as f64;
+        if let Some(point) = project(absolute_x, absolute_y) {
+            ring.push(point);
+        }
+    }
+    flush_ring(&mut ring, &mut output);
+    if output.is_empty() {
+        return None;
+    }
+    fill.world_origin = [0.0, 0.0];
+    fill.boundary = std::sync::Arc::new(output);
+    fill.boundary_wcs = None;
+    Some(fill)
+}
+
+fn clip_polygon_to_rect(
+    polygon: &[[f32; 2]],
+    xmin: f32,
+    ymin: f32,
+    xmax: f32,
+    ymax: f32,
+) -> Vec<[f32; 2]> {
+    let mut output = polygon.to_vec();
+    for (edge, value) in [(0u8, xmin), (1, xmax), (2, ymin), (3, ymax)] {
+        if output.is_empty() {
+            break;
+        }
+        let input = std::mem::take(&mut output);
+        let mut previous = *input.last().unwrap();
+        let mut previous_inside = polygon_edge_inside(previous, edge, value);
+        for current in input {
+            let current_inside = polygon_edge_inside(current, edge, value);
+            if current_inside != previous_inside {
+                output.push(polygon_edge_intersection(previous, current, edge, value));
+            }
+            if current_inside {
+                output.push(current);
+            }
+            previous = current;
+            previous_inside = current_inside;
+        }
+    }
+    output
+}
+
+fn polygon_edge_inside(point: [f32; 2], edge: u8, value: f32) -> bool {
+    match edge {
+        0 => point[0] >= value,
+        1 => point[0] <= value,
+        2 => point[1] >= value,
+        _ => point[1] <= value,
+    }
+}
+
+fn polygon_edge_intersection(
+    start: [f32; 2],
+    end: [f32; 2],
+    edge: u8,
+    value: f32,
+) -> [f32; 2] {
+    if edge <= 1 {
+        let dx = end[0] - start[0];
+        let t = if dx.abs() > 1e-12 {
+            (value - start[0]) / dx
+        } else {
+            0.0
+        };
+        [value, start[1] + (end[1] - start[1]) * t]
+    } else {
+        let dy = end[1] - start[1];
+        let t = if dy.abs() > 1e-12 {
+            (value - start[1]) / dy
+        } else {
+            0.0
+        };
+        [start[0] + (end[0] - start[0]) * t, value]
+    }
 }
 
 // ── Paper boundary wire ────────────────────────────────────────────────────

@@ -1420,7 +1420,7 @@ impl Scene {
     /// Recursively collect wipeout masks defined inside a block, transformed to
     /// world space by the accumulated insert transform. See `wipeout_models`.
     #[allow(clippy::too_many_arguments)]
-    fn collect_block_wipeouts(
+    pub(super) fn collect_block_wipeouts(
         &self,
         xform: &acadrust::types::Transform,
         block_name: &str,

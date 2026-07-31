@@ -54,6 +54,90 @@ fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
     }
 }
 
+type LayoutPlotParams = (
+    std::sync::Arc<Vec<crate::scene::WireModel>>,
+    Vec<crate::scene::model::hatch_model::HatchModel>,
+    Vec<crate::scene::model::hatch_model::HatchModel>,
+    f64,
+    f64,
+    f64,
+    f64,
+    i32,
+    f32,
+    Option<(f32, f32, f32, f32)>,
+);
+
+type ClippedPlotParams = (
+    Vec<crate::scene::WireModel>,
+    Vec<crate::scene::model::hatch_model::HatchModel>,
+    Vec<crate::scene::model::hatch_model::HatchModel>,
+    f64,
+    f64,
+    f64,
+    f64,
+    i32,
+    f32,
+    Option<(f32, f32, f32, f32)>,
+);
+
+fn plot_content_extents(
+    wires: &[crate::scene::WireModel],
+    hatches: &[crate::scene::model::hatch_model::HatchModel],
+    wipeouts: &[crate::scene::model::hatch_model::HatchModel],
+) -> Option<(f64, f64, f64, f64)> {
+    let mut bounds = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    let mut include = |x: f64, y: f64| {
+        if x.is_finite() && y.is_finite() {
+            bounds.0 = bounds.0.min(x);
+            bounds.1 = bounds.1.min(y);
+            bounds.2 = bounds.2.max(x);
+            bounds.3 = bounds.3.max(y);
+        }
+    };
+    for wire in wires {
+        let [x0, y0, x1, y1] = wire.aabb;
+        include(x0 as f64, y0 as f64);
+        include(x1 as f64, y1 as f64);
+    }
+    for hatch in wipeouts.iter().chain(hatches.iter()) {
+        for &[x, y] in hatch.boundary.iter() {
+            include(hatch.world_origin[0] + x as f64, hatch.world_origin[1] + y as f64);
+        }
+    }
+    (bounds.0.is_finite()
+        && bounds.1.is_finite()
+        && bounds.2.is_finite()
+        && bounds.3.is_finite()
+        && bounds.2 > bounds.0
+        && bounds.3 > bounds.1)
+        .then_some(bounds)
+}
+
+fn plot_scene_content(
+    scene: &crate::scene::Scene,
+) -> (
+    std::sync::Arc<Vec<crate::scene::WireModel>>,
+    Vec<crate::scene::model::hatch_model::HatchModel>,
+    Vec<crate::scene::model::hatch_model::HatchModel>,
+) {
+    let mut wires = scene.entity_wires().as_ref().clone();
+    let mut hatches = scene.paper_canvas_hatches().as_ref().clone();
+    let mut wipeouts = scene.paper_canvas_wipeouts().as_ref().clone();
+    if scene.current_layout != "Model" {
+        let (pattern_wires, viewport_hatches, viewport_wipeouts) =
+            scene.viewport_plot_fills();
+        wires.extend(pattern_wires);
+        hatches.extend(viewport_hatches);
+        wipeouts.extend(viewport_wipeouts);
+    }
+    (std::sync::Arc::new(wires), hatches, wipeouts)
+}
+
 impl OpenCADStudio {
     /// Before a save, give every cached truck solid that still has no ACIS
     /// geometry (EXTRUDE/REVOLVE/SWEEP/LOFT/boolean results) an exact modeler
@@ -1864,7 +1948,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &mut self,
         w: f64,
         h: f64,
-        extents: bool,
+        plot_area: &str,
         center: bool,
         offset_x: f64,
         offset_y: f64,
@@ -1873,11 +1957,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     ) {
                 let i = self.active_tab;
                 let layout_name = self.tabs[i].scene.current_layout.clone();
+                let plot_window = self.plot_window;
                 if layout_name != "Model" {
                     let w: f64 = w.max(1.0);
                     let h: f64 = h.max(1.0);
-                    let plot_area = if extents { "Extents" } else { "Layout" };
-
                     // Update the Layout object's limits AND its embedded
                     // PlotSettings fields. `paper_limits()` (sheet rendering) and
                     // the DWG writer both read these from the Layout, so a page
@@ -1946,11 +2029,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         ps.paper_width = w;
                         ps.paper_height = h;
                         ps.paper_units = PlotPaperUnits::Millimeters;
-                        ps.plot_type = if plot_area == "Extents" {
-                            PlotType::Extents
-                        } else {
-                            PlotType::Layout
+                        ps.plot_type = match plot_area {
+                            "Window" => PlotType::Window,
+                            "Display" => PlotType::LastScreenDisplay,
+                            "Extents" => PlotType::Extents,
+                            _ => PlotType::Layout,
                         };
+                        if plot_area == "Window" {
+                            if let Some((x0, y0, x1, y1)) = plot_window {
+                                ps.set_plot_window(x0, y0, x1, y1);
+                            }
+                        }
                         ps.flags.plot_centered = center;
                         ps.origin_x = offset_x;
                         ps.origin_y = offset_y;
@@ -1987,113 +2076,27 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &mut self,
         path: std::path::PathBuf,
     ) -> Task<Message> {
-                let i = self.active_tab;
-                let scene = &self.tabs[i].scene;
-                let wires = scene.entity_wires();
-                let hatches = scene.paper_canvas_hatches();
-                let wipeouts = scene.paper_canvas_wipeouts();
-
-                // Read PlotSettings for current layout (if available).
-                use acadrust::objects::PlotType;
-                let ps_snap = scene.effective_plot_settings();
-
-                // Determine paper size and drawing offset.
-                let (paper_w, paper_h, mut draw_ox, mut draw_oy, rotation_deg) =
-                    if let Some(((x0, y0), (x1, y1))) = scene.paper_limits() {
-                        // `paper_limits()` is in paper-space units; the PDF page is
-                // physical millimetres, so scale the sheet size back to mm via
-                // the layout's unit factor (identity for millimetre layouts).
-                let uf = scene.paper_space_unit_factor();
-                let (pw, ph) = ((x1 - x0) / uf, (y1 - y0) / uf);
-
-                        // If PlotSettings says Extents, use model space extents instead.
-                        let use_extents = ps_snap
-                            .as_ref()
-                            .map(|ps| matches!(ps.plot_type, PlotType::Extents))
-                            .unwrap_or(false);
-
-                        let (ox, oy) = if use_extents {
-                            if let Some((mn, _mx)) = scene.model_space_extents() {
-                                (-mn.x as f64, -mn.y as f64)
-                            } else {
-                                (-x0, -y0)
-                            }
-                        } else {
-                            (-x0, -y0)
-                        };
-
-                        let rot = ps_snap
-                            .as_ref()
-                            .map(|ps| ps.rotation.to_degrees() as i32)
-                            .unwrap_or(0);
-
-                        (pw, ph, ox, oy, rot)
-                    } else {
-                        // Model space: fit with 5% margin.
-                        let margin = 1.05_f64;
-                        if let Some((mn, mx)) = scene.model_space_extents() {
-                            let w = ((mx.x - mn.x) as f64 * margin).max(1.0);
-                            let h = ((mx.y - mn.y) as f64 * margin).max(1.0);
-                            let pad_x = (w - (mx.x - mn.x) as f64) * 0.5;
-                            let pad_y = (h - (mx.y - mn.y) as f64) * 0.5;
-                            (w, h, -(mn.x as f64) + pad_x, -(mn.y as f64) + pad_y, 0)
-                        } else {
-                            (297.0, 210.0, 0.0, 0.0, 0)
-                        }
-                    };
-
-                // Apply PlotSettings offset and centering.
-                if let Some(ref ps) = ps_snap {
-                    if ps.flags.plot_centered {
-                        // Centering: compute wire extents and re-centre.
-                        let all_x: Vec<f32> = wires
-                            .iter()
-                            .flat_map(|w| w.points.iter().map(|p| p[0]))
-                            .filter(|v| !v.is_nan())
-                            .collect();
-                        let all_y: Vec<f32> = wires
-                            .iter()
-                            .flat_map(|w| w.points.iter().map(|p| p[1]))
-                            .filter(|v| !v.is_nan())
-                            .collect();
-                        if let (Some(&min_x), Some(&max_x), Some(&min_y), Some(&max_y)) = (
-                            all_x.iter().copied().reduce(f32::min).as_ref(),
-                            all_x.iter().copied().reduce(f32::max).as_ref(),
-                            all_y.iter().copied().reduce(f32::min).as_ref(),
-                            all_y.iter().copied().reduce(f32::max).as_ref(),
-                        ) {
-                            let cx = (min_x + max_x) as f64 / 2.0;
-                            let cy = (min_y + max_y) as f64 / 2.0;
-                            draw_ox += paper_w / 2.0 - cx;
-                            draw_oy += paper_h / 2.0 - cy;
-                        }
-                    } else {
-                        draw_ox += ps.origin_x;
-                        draw_oy += ps.origin_y;
-                    }
-                }
-
-                // For rotation: swap paper dimensions and note angle for export.
-                let (eff_w, eff_h) = match rotation_deg {
-                    90 | 270 => (paper_h, paper_w),
-                    _ => (paper_w, paper_h),
-                };
-
-        let plot_style = self.active_plot_style.clone();
+        let (wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip) =
+            self.layout_plot_params();
+        let plot_style = if self.plot_dialog.with_styles {
+            self.active_plot_style.clone()
+        } else {
+            None
+        };
         let worker_path = path.clone();
         background_task(
             move || {
                 crate::io::pdf_export::export_pdf(
                     &wires,
-                    hatches.as_slice(),
-                    wipeouts.as_slice(),
-                    eff_w,
-                    eff_h,
-                    draw_ox,
-                    draw_oy,
-                    rotation_deg,
-                    1.0,
-                    None,
+                    &hatches,
+                    &wipeouts,
+                    page_w,
+                    page_h,
+                    ox,
+                    oy,
+                    rotation,
+                    scale,
+                    clip,
                     &worker_path,
                     plot_style.as_ref(),
                 )
@@ -2104,82 +2107,43 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         )
     }
 
-    /// Export the pending model-space plot window (set by PLOTWINDOW while on
-    /// the Model tab) to PDF, using the chosen paper size/orientation/scale.
-    pub(super) fn on_plot_window_export_path_some(&mut self, path: std::path::PathBuf,
+    /// Export the pending Extents/Window/Display area using the same clipped
+    /// render path in model space and paper space.
+    pub(super) fn on_plot_window_export_path_some(
+        &mut self,
+        path: std::path::PathBuf,
     ) -> Task<Message> {
-                use crate::io::paper_sizes::{sheet_mm, window_to_sheet, PlotScale};
-                let i = self.active_tab;
-                if self.tabs[i].scene.current_layout != "Model" {
-                    self.command_line
-                        .push_error("Plot window export is for model space.");
-                    return Task::none();
-                }
-                let Some((x0, y0, x1, y1)) = self.plot_window else {
-                    self.command_line.push_error("No plot window. Pick one first.");
-                    return Task::none();
-                };
-                if (x1 - x0) < 1e-6 || (y1 - y0) < 1e-6 {
-                    self.command_line
-                        .push_error("Plot window is empty. Pick a larger window.");
-                    return Task::none();
-                }
-                let (sheet_w, sheet_h) = sheet_mm(self.plot_format, self.plot_orientation);
-                let win_w = (x1 - x0).max(1e-9);
-                let win_h = (y1 - y0).max(1e-9);
-                let scale_sel = if self.plot_scale.trim().eq_ignore_ascii_case("fit") {
-                    PlotScale::Fit
-                } else {
-                    let (num, den) = parse_plot_scale(&self.plot_scale);
-                    if num > 0.0 && den > 0.0 {
-                        PlotScale::Ratio(num / den)
-                    } else {
-                        PlotScale::Fit
-                    }
-                };
-                let (scale, ox, oy) = window_to_sheet((win_w, win_h), (sheet_w, sheet_h), scale_sel);
-
-                let scene = &self.tabs[i].scene;
-                // Cull to the window so a small-area plot doesn't write the whole
-                // drawing into the PDF; the clip below trims the partial crossers.
-                // aabb is world X/Y [minx, miny, maxx, maxy].
-                let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
-                let wires: Vec<_> = scene
-                    .entity_wires()
-                    .iter()
-                    .filter(|w| {
-                        w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0
-                    })
-                    .cloned()
-                    .collect();
-                let hatches = scene.paper_canvas_hatches();
-                let wipeouts = scene.paper_canvas_wipeouts();
-
-                // build_pdf maps a wire coordinate to sheet mm as (coord + offset) *
-                // scale (rotation_deg == 0 adds no further CTM translation).
-                // window_to_sheet's (ox, oy) is the sheet-mm target for the window's
-                // min corner, so: scale * (x0 + offset_x) = ox  =>  offset_x = ox/scale - x0.
-                let offset_x = (ox / scale) - x0;
-                let offset_y = (oy / scale) - y0;
-                // Clip rect in pre-scale space (build_pdf's CTM applies `scale` to it,
-                // same as the wires) so the final sheet-mm rect lands at (ox, oy).
-                let clip = Some(((ox / scale) as f32, (oy / scale) as f32, win_w as f32, win_h as f32));
-
-                let plot_style = self.active_plot_style.clone();
+        let job = match self.plot_dialog.area.as_str() {
+            "Display" => self.display_plot_job(),
+            "Extents" => self.extents_plot_job(),
+            _ => self.window_plot_job(),
+        };
+        let Some((wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip)) =
+            job
+        else {
+            self.command_line
+                .push_error("Plot area is empty. Pick a larger window.");
+            return Task::none();
+        };
+        let plot_style = if self.plot_dialog.with_styles {
+            self.active_plot_style.clone()
+        } else {
+            None
+        };
         let worker_path = path.clone();
         self.close_active_modal();
         background_task(
             move || {
                 crate::io::pdf_export::export_pdf(
                     &wires,
-                    hatches.as_slice(),
-                    wipeouts.as_slice(),
-                    sheet_w,
-                    sheet_h,
-                    offset_x,
-                    offset_y,
-                    0,
-                    scale as f32,
+                    &hatches,
+                    &wipeouts,
+                    page_w,
+                    page_h,
+                    ox,
+                    oy,
+                    rotation,
+                    scale,
                     clip,
                     &worker_path,
                     plot_style.as_ref(),
@@ -2197,91 +2161,194 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
     /// Build the render inputs and page geometry for a full-layout plot: wires
     /// plus hatch / wipeout fills, the effective (rotation-swapped) sheet size,
-    /// the draw-origin offset, and the rotation. Shared by print + preview so
-    /// the Plot dialog reuses the same tested derivation.
-    #[allow(clippy::type_complexity)]
-    pub(super) fn layout_plot_params(
-        &self,
-    ) -> (
-        std::sync::Arc<Vec<crate::scene::WireModel>>,
-        Vec<crate::scene::model::hatch_model::HatchModel>,
-        Vec<crate::scene::model::hatch_model::HatchModel>,
-        f64,
-        f64,
-        // Draw offsets stay f64: they cancel an absolute world coordinate that
-        // an f32 cannot hold at UTM scale.
-        f64,
-        f64,
-        i32,
-    ) {
+    /// draw-origin offset, rotation, unit scale, and optional clip. Shared by
+    /// PDF export, preview, and printer output so all three render identically.
+    pub(super) fn layout_plot_params(&self) -> LayoutPlotParams {
         let i = self.active_tab;
         let scene = &self.tabs[i].scene;
-        let wires = scene.entity_wires();
-        let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
-        let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();
-        use acadrust::objects::PlotType;
-        let ps_snap = scene.effective_plot_settings();
-        let (paper_w, paper_h, draw_ox, draw_oy, rotation_deg) =
-            if let Some(((x0, y0), (x1, y1))) = scene.paper_limits() {
-                // `paper_limits()` is in paper-space units; the PDF page is
-                // physical millimetres, so scale the sheet size back to mm via
-                // the layout's unit factor (identity for millimetre layouts).
-                let uf = scene.paper_space_unit_factor();
-                let (pw, ph) = ((x1 - x0) / uf, (y1 - y0) / uf);
-                let use_extents = ps_snap
-                    .as_ref()
-                    .map(|ps| matches!(ps.plot_type, PlotType::Extents))
-                    .unwrap_or(false);
-                let (ox, oy) = if use_extents {
-                    if let Some((mn, _mx)) = scene.model_space_extents() {
-                        (-mn.x as f64, -mn.y as f64)
-                    } else {
-                        (-x0, -y0)
-                    }
-                } else {
-                    (-x0, -y0)
-                };
-                let rot = ps_snap
-                    .as_ref()
-                    .map(|ps| ps.rotation.to_degrees() as i32)
-                    .unwrap_or(0);
-                (pw, ph, ox, oy, rot)
-            } else if let Some((mn, mx)) = scene.model_space_extents() {
-                let margin = 1.05_f64;
-                let w = ((mx.x - mn.x) as f64 * margin).max(1.0);
-                let h = ((mx.y - mn.y) as f64 * margin).max(1.0);
-                let pad_x = (w - (mx.x - mn.x) as f64) * 0.5;
-                let pad_y = (h - (mx.y - mn.y) as f64) * 0.5;
-                (w, h, -(mn.x as f64) + pad_x, -(mn.y as f64) + pad_y, 0)
-            } else {
-                (297.0, 210.0, 0.0, 0.0, 0)
-            };
-        let (eff_w, eff_h) = match rotation_deg {
-            90 | 270 => (paper_h, paper_w),
-            _ => (paper_w, paper_h),
+        let paper_space = scene.current_layout != "Model";
+        let (source_wires, hatches, wipeouts) = plot_scene_content(scene);
+        // The printable-area rectangle is an on-screen guide, not drawing
+        // content. It used to leak into every paper-space PDF/preview/print.
+        let wires = if paper_space {
+            std::sync::Arc::new(
+                source_wires
+                    .iter()
+                    .filter(|wire| wire.name != "paper_printable_area")
+                    .cloned()
+                    .collect(),
+            )
+        } else {
+            source_wires
         };
+        if let Some(((x0, y0), (x1, y1))) = scene.paper_limits() {
+            // Paper geometry is stored in layout units; PDF pages use mm.
+            // Scale both geometry and offsets by the same unit conversion.
+            // The old path converted only page width/height, so inch/scaled
+            // layouts placed tiny or 25.4×-shifted content on the page.
+            let units_per_mm = scene.paper_space_unit_factor().max(1e-9);
+            let mm_per_unit = 1.0 / units_per_mm;
+            let paper_w = ((x1 - x0) * mm_per_unit).max(1.0);
+            let paper_h = ((y1 - y0) * mm_per_unit).max(1.0);
+            // Preview/print is a read-only operation unless "Save to layout" is
+            // checked. Therefore its transient choices must come from the dialog,
+            // not the layout's previously persisted PlotSettings.
+            let dialog_rotation = self
+                .plot_dialog
+                .rotation
+                .trim_end_matches('°')
+                .parse::<i32>()
+                .unwrap_or(0);
+            let plot_extents = self.plot_dialog.area == "Extents";
+            let plot_layout = self.plot_dialog.area == "Layout";
+            // `paper_limits()` already returns the current layout's final,
+            // rotation-adjusted sheet bounds. Applying its persisted plot
+            // rotation again swaps the page and rotates the printable clip out
+            // of view, producing a blank PDF for rotated custom sheets.
+            let rotation = if plot_layout { 0 } else { dialog_rotation };
+            let centered = self.plot_dialog.center;
+            let origin_x = self
+                .plot_dialog
+                .offset_x
+                .parse::<f64>()
+                .unwrap_or(0.0);
+            let origin_y = self
+                .plot_dialog
+                .offset_y
+                .parse::<f64>()
+                .unwrap_or(0.0);
+
+            let (scale, offset_x, offset_y) = if plot_extents {
+                let (min_x, min_y, max_x, max_y) =
+                    plot_content_extents(&wires, &hatches, &wipeouts)
+                        .unwrap_or((x0, y0, x1, y1));
+                let content_w = (max_x - min_x).max(1e-9);
+                let content_h = (max_y - min_y).max(1e-9);
+                let scale = if self.plot_dialog.scale == "Fit" {
+                    const MARGIN: f64 = 1.05;
+                    ((paper_w / MARGIN) / content_w)
+                        .min((paper_h / MARGIN) / content_h)
+                        .max(1e-9)
+                } else {
+                    let (num, den) = parse_plot_scale(&self.plot_dialog.scale);
+                    ((num / den) * mm_per_unit).max(1e-9)
+                };
+                let target_x = if centered {
+                    (paper_w - content_w * scale) * 0.5
+                } else {
+                    origin_x
+                };
+                let target_y = if centered {
+                    (paper_h - content_h * scale) * 0.5
+                } else {
+                    origin_y
+                };
+                (
+                    scale,
+                    target_x / scale - min_x,
+                    target_y / scale - min_y,
+                )
+            } else if plot_layout {
+                // Layout is the one Paper-only plot mode: reproduce the sheet
+                // exactly. Its lower-left paper bound maps to PDF (0, 0);
+                // persisted plot origins/centering are already represented by
+                // the layout geometry and must not shift the sheet again.
+                (mm_per_unit, -x0, -y0)
+            } else {
+                // Legacy direct callers still get dialog positioning. Normal
+                // Display/Window paths use `area_plot_job` instead.
+                let scale = mm_per_unit;
+                let target_x = if centered {
+                    (paper_w - (x1 - x0) * scale) * 0.5
+                } else {
+                    origin_x
+                };
+                let target_y = if centered {
+                    (paper_h - (y1 - y0) * scale) * 0.5
+                } else {
+                    origin_y
+                };
+                (scale, target_x / scale - x0, target_y / scale - y0)
+            };
+            let (page_w, page_h) = match rotation {
+                90 | 270 => (paper_h, paper_w),
+                _ => (paper_w, paper_h),
+            };
+            // Layout plots keep the full physical sheet as the PDF page, but
+            // ink is restricted to the device's printable rectangle. Extents
+            // has its own fitted area and must not inherit this paper clip.
+            let clip = if plot_layout {
+                scene.printable_area_limits().map(|((px0, py0), (px1, py1))| {
+                    (
+                        (px0 + offset_x) as f32,
+                        (py0 + offset_y) as f32,
+                        (px1 - px0) as f32,
+                        (py1 - py0) as f32,
+                    )
+                })
+            } else {
+                None
+            };
+            return (
+                wires,
+                hatches,
+                wipeouts,
+                page_w,
+                page_h,
+                offset_x,
+                offset_y,
+                rotation,
+                scale as f32,
+                clip,
+            );
+        }
+
+        // Model space keeps its established extents + 5% margin behaviour.
+        let (page_w, page_h, offset_x, offset_y) =
+            if let Some((min, max)) = scene.model_space_extents() {
+                let margin = 1.05_f64;
+                let width = ((max.x - min.x) as f64 * margin).max(1.0);
+                let height = ((max.y - min.y) as f64 * margin).max(1.0);
+                let pad_x = (width - (max.x - min.x) as f64) * 0.5;
+                let pad_y = (height - (max.y - min.y) as f64) * 0.5;
+                (
+                    width,
+                    height,
+                    -(min.x as f64) + pad_x,
+                    -(min.y as f64) + pad_y,
+                )
+            } else {
+                (297.0, 210.0, 0.0, 0.0)
+            };
         (
             wires,
             hatches,
             wipeouts,
-            eff_w,
-            eff_h,
-            draw_ox,
-            draw_oy,
-            rotation_deg,
+            page_w,
+            page_h,
+            offset_x,
+            offset_y,
+            0,
+            1.0,
+            None,
         )
     }
 
     pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
-        let (wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rotation_deg) =
+        let (wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip) =
             self.layout_plot_params();
-        let plot_style = self.active_plot_style.clone();
+        let plot_style = if self.plot_dialog.with_styles {
+            self.active_plot_style.clone()
+        } else {
+            None
+        };
         self.command_line.push_info("Sending to system printer…");
         background_task(
             move || {
                 iced::futures::executor::block_on(
                 crate::io::print_to_printer::print_wires(
-                    wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rotation_deg, plot_style,
+                    wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
+                    plot_style,
                 ))
             },
             Message::PrintResult,
@@ -2415,9 +2482,38 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             self.select_page_setup(crate::ui::window::plot::SETUP_NONE);
         } else {
             self.select_page_setup(&format!("*{cur}*"));
+            if self.plot_dialog.area != "Layout" {
+                // A layout may persist Window/Extents/Display together with its
+                // sheet-only origin/rotation. Start common area modes with the
+                // same neutral transform as Model even when no Area-change event
+                // fires after opening the dialog.
+                self.normalize_common_plot_dialog();
+            }
         }
         self.active_modal = Some(crate::app::ModalKind::Plot);
         Task::none()
+    }
+
+    fn normalize_common_plot_dialog(&mut self) {
+        let layout_rotation = self
+            .plot_dialog
+            .rotation
+            .trim_end_matches('°')
+            .parse::<i32>()
+            .unwrap_or(0);
+        if matches!(layout_rotation, 90 | 270) {
+            self.plot_dialog.orientation = if self.plot_dialog.orientation == "Portrait" {
+                "Landscape"
+            } else {
+                "Portrait"
+            }
+            .into();
+        }
+        self.plot_dialog.center = true;
+        self.plot_dialog.offset_x = "0.0".into();
+        self.plot_dialog.offset_y = "0.0".into();
+        self.plot_dialog.rotation = "0°".into();
+        self.plot_dialog.scale = "Fit".into();
     }
 
     /// Handle one edit / action from the Plot dialog.
@@ -2456,6 +2552,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 Task::none()
             }
             M::Area(s) => {
+                // A paper Layout page setup commonly carries physical-sheet
+                // rotation, origin and 1:1 scale. Those values are correct only
+                // for Layout; carrying them into Window/Extents/Display moves a
+                // large selected area off-page. Enter the three common area
+                // modes with the same neutral defaults used in Model space.
+                if self.plot_dialog.area == "Layout" && s != "Layout" {
+                    self.normalize_common_plot_dialog();
+                }
                 self.plot_dialog.area = s;
                 Task::none()
             }
@@ -2510,6 +2614,21 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 Task::none()
             }
             M::PickWindow => {
+                let i = self.active_tab;
+                if self.tabs[i].scene.current_layout != "Model"
+                    && self.tabs[i].scene.active_viewport.is_some()
+                {
+                    // A layout Window is selected in paper coordinates and may
+                    // extend anywhere on the canvas, including outside the sheet.
+                    // Leave MSPACE so the floating viewport cannot constrain the
+                    // two picks to its model view.
+                    self.tabs[i].scene.deselect_all();
+                    self.tabs[i].scene.active_viewport = None;
+                    self.adopt_view_display(i);
+                    self.tabs[i].refresh_active_ucs();
+                    self.refresh_properties();
+                    self.sync_dyn_fields();
+                }
                 self.close_active_modal();
                 Task::done(Message::Command("PLOTWINDOW".into()))
             }
@@ -2700,8 +2819,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         ps.plot_type = match d.area.as_str() {
             "Window" => PlotType::Window,
             "Layout" => PlotType::Layout,
+            "Display" => PlotType::LastScreenDisplay,
             _ => PlotType::Extents,
         };
+        if d.area == "Window" {
+            if let Some((x0, y0, x1, y1)) = self.plot_window {
+                ps.set_plot_window(x0, y0, x1, y1);
+            }
+        }
         ps.flags.plot_centered = d.center;
         ps.origin_x = d.offset_x.parse::<f64>().unwrap_or(0.0);
         ps.origin_y = d.offset_y.parse::<f64>().unwrap_or(0.0);
@@ -2728,6 +2853,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// Load a `PlotSettings` into the dialog editor fields.
     fn load_plotsettings_into_dialog(&mut self, ps: &acadrust::objects::PlotSettings) {
         use acadrust::objects::PlotType;
+        if matches!(ps.plot_type, PlotType::Window) && !ps.plot_window.is_empty() {
+            self.plot_window = Some((
+                ps.plot_window.lower_left_x,
+                ps.plot_window.lower_left_y,
+                ps.plot_window.upper_right_x,
+                ps.plot_window.upper_right_y,
+            ));
+        }
         let (paper, orient) = paper_label_from_dims(ps.paper_width, ps.paper_height);
         let d = &mut self.plot_dialog;
         d.paper = paper;
@@ -2735,6 +2868,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         d.area = match ps.plot_type {
             PlotType::Window => "Window",
             PlotType::Layout => "Layout",
+            PlotType::LastScreenDisplay => "Display",
             _ => "Extents",
         }
         .to_string();
@@ -2758,10 +2892,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
     }
 
-    /// Write the current dialog fields into the active layout's plot settings.
-    /// Shared by the "Set current" action and the print/export commit.
-    fn apply_dialog_to_layout(&mut self) {
-        use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
+    /// Copy transient paper/scale choices out of the dialog without changing
+    /// the active layout.
+    fn sync_dialog_plot_runtime(&mut self) {
+        use crate::io::paper_sizes::{Orientation, PaperSize};
         let d = self.plot_dialog.clone();
         let paper = match d.paper.as_str() {
             "A3" => PaperSize::A3,
@@ -2775,28 +2909,44 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         } else {
             Orientation::Landscape
         };
-        let (sheet_w, sheet_h) = sheet_mm(paper, orient);
         self.plot_format = paper;
         self.plot_orientation = orient;
         self.plot_scale = d.scale.clone();
+    }
+
+    fn apply_dialog_to_layout(&mut self) {
+        use crate::io::paper_sizes::sheet_mm;
+        self.sync_dialog_plot_runtime();
+        let d = self.plot_dialog.clone();
+        let (sheet_w, sheet_h) = sheet_mm(self.plot_format, self.plot_orientation);
         let rotation: i16 = d.rotation.trim_end_matches('°').parse().unwrap_or(0);
         let off_x = d.offset_x.parse::<f64>().unwrap_or(0.0);
         let off_y = d.offset_y.parse::<f64>().unwrap_or(0.0);
-        let extents = d.area != "Layout";
         self.apply_plot_page_settings(
-            sheet_w, sheet_h, extents, d.center, off_x, off_y, rotation, &d.scale,
+            sheet_w,
+            sheet_h,
+            &d.area,
+            d.center,
+            off_x,
+            off_y,
+            rotation,
+            &d.scale,
         );
     }
 
-    /// Apply the dialog's page settings to the layout, then either open a
-    /// preview PDF, export a PDF, or send the job to the chosen printer.
+    /// Open a preview PDF, export a PDF, or send the job to the chosen printer.
+    /// The active layout changes only when "Save to layout" is checked.
     fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
         // Remember the user's print preferences across sessions.
         self.save_config();
         let d = self.plot_dialog.clone();
-        // Persist the dialog's page settings into the layout, then reuse the
-        // tested layout-plot derivation.
-        self.apply_dialog_to_layout();
+        // Preview and normal printing must not resize/mutate the live layout.
+        // Persist only when explicitly requested; the runtime paper/scale
+        // choices still drive this one plot operation.
+        self.sync_dialog_plot_runtime();
+        if !preview && d.save_layout {
+            self.apply_dialog_to_layout();
+        }
         self.active_modal = None;
 
         let plot_style = if d.with_styles {
@@ -2805,24 +2955,40 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             None
         };
 
-        // ── Window area: clipped model-space plot ────────────────────────────
-        if d.area == "Window" {
+        // Extents, Window and Display use one plot path in both spaces. Only
+        // Paper-space Layout is special: it uses the physical sheet bounds.
+        if matches!(d.area.as_str(), "Extents" | "Window" | "Display") {
+            let job = match d.area.as_str() {
+                "Display" => self.display_plot_job(),
+                "Extents" => self.extents_plot_job(),
+                _ => self.window_plot_job(),
+            };
+            let Some((
+                w_wires,
+                w_hatches,
+                w_wipeouts,
+                sw,
+                sh,
+                wox,
+                woy,
+                wrotation,
+                wscale,
+                wclip,
+            )) = job
+            else {
+                self.command_line
+                    .push_error("Plot area is empty. Pick a larger window.");
+                self.active_modal = Some(crate::app::ModalKind::Plot);
+                return Task::none();
+            };
             // Preview renders to a temp PDF and opens it — never a save dialog,
             // whatever the output target is.
             if preview {
-                let Some((w_wires, w_hatches, w_wipeouts, sw, sh, wox, woy, wscale, wclip)) =
-                    self.window_plot_job()
-                else {
-                    self.command_line
-                        .push_error("Pick a plot window first (model space).");
-                    self.active_modal = Some(crate::app::ModalKind::Plot);
-                    return Task::none();
-                };
                 let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
                 return background_task(
                     move || {
                         crate::io::pdf_export::export_pdf(
-                    &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, 0, wscale, wclip, &tmp,
+                    &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, wrotation, wscale, wclip, &tmp,
                     plot_style.as_ref(),
                 ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
                         .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
@@ -2834,20 +3000,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 // Tested clipped export (opens a save dialog).
                 return Task::done(Message::PlotWindowExport);
             }
-            let Some((w_wires, w_hatches, w_wipeouts, sw, sh, wox, woy, wscale, wclip)) =
-                self.window_plot_job()
-            else {
-                self.command_line
-                    .push_error("Pick a plot window first (model space).");
-                self.active_modal = Some(crate::app::ModalKind::Plot);
-                return Task::none();
-            };
             let tmp = std::env::temp_dir().join("open_cad_studio_print.pdf");
             let opts = self.plot_print_options(&d);
             return background_task(
                 move || {
                     crate::io::pdf_export::export_pdf(
-                &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, 0, wscale, wclip, &tmp,
+                &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, wrotation, wscale, wclip, &tmp,
                 plot_style.as_ref(),
             ).and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
                     .map(|printer| format!("Sent to printer: {printer}"))
@@ -2857,7 +3015,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             );
         }
 
-        let (wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rot) = self.layout_plot_params();
+        let (wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip) =
+            self.layout_plot_params();
 
         if preview {
             let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
@@ -2867,13 +3026,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 &wires,
                 &hatches,
                 &wipeouts,
-                eff_w,
-                eff_h,
+                page_w,
+                page_h,
                 ox,
                 oy,
-                rot,
-                1.0,
-                None,
+                rotation,
+                scale,
+                clip,
                 &tmp,
                 plot_style.as_ref(),
             ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
@@ -2894,7 +3053,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             move || {
                 iced::futures::executor::block_on(
                 crate::io::print_to_printer::print_wires_with(
-                    wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rot, plot_style, opts,
+                    wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
+                    plot_style, opts,
                 ))
             },
             Message::PrintResult,
@@ -2916,33 +3076,100 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
     }
 
-    /// Render inputs + page geometry for a clipped model-space window plot
-    /// (the pending `plot_window`, fitted onto the dialog's sheet). Returns
-    /// `None` when not in model space or no window has been picked. Mirrors
-    /// [`Self::on_plot_window_export_path_some`] but hands back the params so
-    /// the plot can go to a printer or preview, not only a save-dialog PDF.
-    #[allow(clippy::type_complexity)]
-    fn window_plot_job(
-        &self,
-    ) -> Option<(
-        Vec<crate::scene::WireModel>,
-        Vec<crate::scene::model::hatch_model::HatchModel>,
-        Vec<crate::scene::model::hatch_model::HatchModel>,
-        f64,
-        f64,
-        // Offsets stay f64 (they cancel a UTM-scale world coordinate); the plot
-        // scale is a small ratio and stays f32.
-        f64,
-        f64,
-        f32,
-        Option<(f32, f32, f32, f32)>,
-    )> {
-        use crate::io::paper_sizes::{sheet_mm, window_to_sheet, PlotScale};
-        let i = self.active_tab;
-        if self.tabs[i].scene.current_layout != "Model" {
+    fn window_plot_job(&self) -> Option<ClippedPlotParams> {
+        self.area_plot_job(self.plot_window?)
+    }
+
+    fn display_plot_job(&self) -> Option<ClippedPlotParams> {
+        self.area_plot_job(self.display_plot_window()?)
+    }
+
+    fn extents_plot_job(&self) -> Option<ClippedPlotParams> {
+        let scene = &self.tabs[self.active_tab].scene;
+        if scene.current_layout == "Model" {
+            let (min, max) = scene.model_space_extents()?;
+            return self.area_plot_job((
+                min.x as f64,
+                min.y as f64,
+                max.x as f64,
+                max.y as f64,
+            ));
+        }
+        let (wires, hatches, wipeouts) = plot_scene_content(scene);
+        let extents = plot_content_extents(
+            &wires
+                .iter()
+                .filter(|wire| wire.name != "paper_printable_area")
+                .cloned()
+                .collect::<Vec<_>>(),
+            &hatches,
+            &wipeouts,
+        )?;
+        self.area_plot_job(extents)
+    }
+
+    /// Current visible rectangle in the active space. The result is deliberately
+    /// not clamped to the paper sheet: Display and Window may include the grey
+    /// canvas outside the sheet, matching Model-space plotting.
+    fn display_plot_window(&self) -> Option<(f64, f64, f64, f64)> {
+        let scene = &self.tabs[self.active_tab].scene;
+        let (canvas_w, canvas_h) = scene.selection.borrow().vp_size;
+        let viewport = if scene.current_layout == "Model" {
+            scene.active_model_tile_bounds(canvas_w, canvas_h)
+        } else {
+            iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: canvas_w,
+                height: canvas_h,
+            }
+        };
+        if viewport.width < 1.0 || viewport.height < 1.0 {
             return None;
         }
-        let (x0, y0, x1, y1) = self.plot_window?;
+        let bounds = iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: viewport.width,
+            height: viewport.height,
+        };
+        let camera = scene.camera.borrow();
+        let mut x0 = f64::INFINITY;
+        let mut y0 = f64::INFINITY;
+        let mut x1 = f64::NEG_INFINITY;
+        let mut y1 = f64::NEG_INFINITY;
+        for point in [
+            iced::Point::new(0.0, 0.0),
+            iced::Point::new(bounds.width, 0.0),
+            iced::Point::new(bounds.width, bounds.height),
+            iced::Point::new(0.0, bounds.height),
+        ] {
+            let world = camera.unproject_on_plane(
+                point,
+                bounds,
+                glam::Vec3::Z,
+                glam::DVec3::ZERO,
+            );
+            x0 = x0.min(world.x);
+            y0 = y0.min(world.y);
+            x1 = x1.max(world.x);
+            y1 = y1.max(world.y);
+        }
+        (x0.is_finite()
+            && y0.is_finite()
+            && x1.is_finite()
+            && y1.is_finite()
+            && x1 - x0 > 1e-6
+            && y1 - y0 > 1e-6)
+            .then_some((x0, y0, x1, y1))
+    }
+
+    /// Render a selected rectangle through one shared Model/Paper path. The
+    /// window may lie partly or wholly outside a paper sheet.
+    fn area_plot_job(&self, window: (f64, f64, f64, f64)) -> Option<ClippedPlotParams> {
+        use crate::io::paper_sizes::{sheet_mm, window_to_sheet, PlotScale};
+        let i = self.active_tab;
+        let (x0, y0, x1, y1) = window;
         if (x1 - x0) < 1e-6 || (y1 - y0) < 1e-6 {
             return None;
         }
@@ -2954,32 +3181,66 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         } else {
             let (num, den) = parse_plot_scale(&self.plot_scale);
             if num > 0.0 && den > 0.0 {
-                PlotScale::Ratio(num / den)
+                let mm_per_unit = if self.tabs[i].scene.current_layout == "Model" {
+                    1.0
+                } else {
+                    1.0 / self.tabs[i].scene.paper_space_unit_factor().max(1e-9)
+                };
+                PlotScale::Ratio((num / den) * mm_per_unit)
             } else {
                 PlotScale::Fit
             }
         };
-        let (scale, ox, oy) = window_to_sheet((win_w, win_h), (sheet_w, sheet_h), scale_sel);
+        let (scale, centered_x, centered_y) =
+            window_to_sheet((win_w, win_h), (sheet_w, sheet_h), scale_sel);
+        let target_x = if self.plot_dialog.center {
+            centered_x
+        } else {
+            self.plot_dialog.offset_x.parse::<f64>().unwrap_or(0.0)
+        };
+        let target_y = if self.plot_dialog.center {
+            centered_y
+        } else {
+            self.plot_dialog.offset_y.parse::<f64>().unwrap_or(0.0)
+        };
         let scene = &self.tabs[i].scene;
         let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
-        let wires: Vec<_> = scene
-            .entity_wires()
+        let (all_wires, hatches, wipeouts) = plot_scene_content(scene);
+        let wires: Vec<_> = all_wires
             .iter()
+            .filter(|w| w.name != "paper_printable_area")
             .filter(|w| w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0)
             .cloned()
             .collect();
-        let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
-        let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();
-        let offset_x = (ox / scale) - x0;
-        let offset_y = (oy / scale) - y0;
+        let offset_x = (target_x / scale) - x0;
+        let offset_y = (target_y / scale) - y0;
         let clip = Some((
-            (ox / scale) as f32,
-            (oy / scale) as f32,
+            (target_x / scale) as f32,
+            (target_y / scale) as f32,
             win_w as f32,
             win_h as f32,
         ));
+        let rotation = self
+            .plot_dialog
+            .rotation
+            .trim_end_matches('°')
+            .parse::<i32>()
+            .unwrap_or(0);
+        let (page_w, page_h) = match rotation {
+            90 | 270 => (sheet_h, sheet_w),
+            _ => (sheet_w, sheet_h),
+        };
         Some((
-            wires, hatches, wipeouts, sheet_w, sheet_h, offset_x, offset_y, scale as f32, clip,
+            wires,
+            hatches,
+            wipeouts,
+            page_w,
+            page_h,
+            offset_x,
+            offset_y,
+            rotation,
+            scale as f32,
+            clip,
         ))
     }
 

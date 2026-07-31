@@ -44,6 +44,8 @@ pub async fn print_wires(
     _offset_x: f64,
     _offset_y: f64,
     _rotation_deg: i32,
+    _scale: f32,
+    _clip: Option<(f32, f32, f32, f32)>,
     _plot_style: Option<PlotStyleTable>,
 ) -> Result<String, String> {
     Err("Printing is not available in the web version.".into())
@@ -65,6 +67,8 @@ pub async fn print_wires_with(
     _offset_x: f64,
     _offset_y: f64,
     _rotation_deg: i32,
+    _scale: f32,
+    _clip: Option<(f32, f32, f32, f32)>,
     _plot_style: Option<PlotStyleTable>,
     _opts: PrintOptions,
 ) -> Result<String, String> {
@@ -95,6 +99,8 @@ pub async fn print_wires(
     offset_x: f64,
     offset_y: f64,
     rotation_deg: i32,
+    scale: f32,
+    clip: Option<(f32, f32, f32, f32)>,
     plot_style: Option<PlotStyleTable>,
 ) -> Result<String, String> {
     // ── 1. Write to a named temp file ─────────────────────────────────────
@@ -108,8 +114,8 @@ pub async fn print_wires(
         offset_x,
         offset_y,
         rotation_deg,
-        1.0,
-        None,
+        scale,
+        clip,
         &tmp_path,
         plot_style.as_ref(),
     )?;
@@ -158,6 +164,8 @@ pub async fn print_wires_with(
     offset_x: f64,
     offset_y: f64,
     rotation_deg: i32,
+    scale: f32,
+    clip: Option<(f32, f32, f32, f32)>,
     plot_style: Option<PlotStyleTable>,
     opts: PrintOptions,
 ) -> Result<String, String> {
@@ -171,8 +179,8 @@ pub async fn print_wires_with(
         offset_x,
         offset_y,
         rotation_deg,
-        1.0,
-        None,
+        scale,
+        clip,
         &tmp_path,
         plot_style.as_ref(),
     )?;
