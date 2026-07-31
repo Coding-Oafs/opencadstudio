@@ -697,24 +697,6 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
             ]);
         }
     }
-    props.extend([
-        ro(
-            "Raw DWG Body",
-            "srf_raw_dwg",
-            surface.raw_dwg_data.as_ref().map_or_else(
-                || "None".to_string(),
-                |bytes| format!("{} bytes; {} handle bits", bytes.len(), surface.dwg_handle_bits),
-            ),
-        ),
-        ro(
-            "Raw Source Version",
-            "srf_raw_version",
-            surface
-                .dwg_source_version
-                .map(|version| format!("{version:?}"))
-                .unwrap_or_else(|| "None".to_string()),
-        ),
-    ]);
     PropSection {
         title: "Surface Construction".into(),
         props,
