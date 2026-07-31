@@ -220,6 +220,7 @@ pub fn selection_overlay<'a>(
     pan_mode: bool,
     suppressed: bool,
     hover_locked: bool,
+    crosshair_bg: [f32; 4],
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -239,6 +240,7 @@ pub fn selection_overlay<'a>(
         pan_mode,
         suppressed,
         hover_locked,
+        crosshair_bg,
     })
     .width(Length::Fill)
     .height(Length::Fill)
@@ -290,6 +292,9 @@ struct SelectionCanvas {
     /// The entity under the crosshair is on a locked layer — draw a small lock
     /// badge by the cursor so the user knows it can't be selected/edited.
     hover_locked: bool,
+    /// Background of the active drawing space. Crosshair contrast follows this
+    /// rather than the UI theme, which may be light over a dark model viewport.
+    crosshair_bg: [f32; 4],
 }
 
 fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme) {
@@ -908,12 +913,11 @@ impl canvas::Program<Message> for SelectionCanvas {
         // PAN mode replaces the crosshair with a hand cursor.
         if !over_viewcube && !over_divider && !self.pan_mode && !self.suppressed {
             if let Some(cp) = self.selection.last_move_pos {
-                let color = theme
-                    .palette()
-                    .background
-                    .base
-                    .text
-                    .scale_alpha(0.90);
+                let [r, g, b, a] = crate::scene::view::render::adapt_to_bg(
+                    [1.0, 1.0, 1.0, 0.90],
+                    self.crosshair_bg,
+                );
+                let color = Color { r, g, b, a };
                 let stroke = canvas::Stroke {
                     width: 1.0,
                     style: canvas::Style::Solid(color),

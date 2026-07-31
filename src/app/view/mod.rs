@@ -32,6 +32,12 @@ use viewcube::{viewcube_nav_controls, viewcube_ucs_picker, UCS_PICKER_W};
 pub(in crate::app) use overlay::{MTEXT_TEXT_ID, TEXT_INLINE_ID};
 
 const VIEWCUBE_HIT_SIZE: f32 = VIEWCUBE_REGION_PX;
+const PAPER_SPACE_BACKGROUND: Color = Color {
+    r: 138.0 / 255.0,
+    g: 138.0 / 255.0,
+    b: 138.0 / 255.0,
+    a: 1.0,
+};
 
 /// Clear gap (px) kept between the render-mode bar (top-left) and the ViewCube
 /// (top-right) before the cube is judged to collide and hides.
@@ -574,6 +580,11 @@ impl OpenCADStudio {
                 tab.pan_mode,
                 self.ribbon.open_dropdown.is_some(),
                 hover_locked,
+                if tab.scene.input_uses_model_space() {
+                    tab.scene.bg_color
+                } else {
+                    tab.scene.paper_bg_color
+                },
             )
         };
 
@@ -591,13 +602,7 @@ impl OpenCADStudio {
         .on_exit(Message::ViewportExit);
 
         let bg_color = if is_paper {
-            // Desk color — matches the DESK constant in paper_canvas.rs.
-            Color {
-                r: 0.22,
-                g: 0.24,
-                b: 0.28,
-                a: 1.0,
-            }
+            PAPER_SPACE_BACKGROUND
         } else {
             tab.bg_color
                 .map(|[r, g, b, a]| Color { r, g, b, a })
@@ -706,16 +711,10 @@ impl OpenCADStudio {
             // container background, the white sheet + paper entities + borders
             // come from the full-canvas top-locked "sheet" viewport, and the
             // floating content viewports overlay it (same path as model space).
-            const DESK: Color = Color {
-                r: 0.22,
-                g: 0.24,
-                b: 0.28,
-                a: 1.0,
-            };
             stack![
                 container(grid_overlay)
                     .style(move |_: &Theme| container::Style {
-                        background: Some(Background::Color(DESK)),
+                        background: Some(Background::Color(PAPER_SPACE_BACKGROUND)),
                         ..Default::default()
                     })
                     .width(Fill)
