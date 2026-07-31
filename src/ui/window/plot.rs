@@ -7,9 +7,10 @@
 use crate::app::Message;
 use crate::io::paper_sizes::PaperSize;
 use iced::widget::{
-    button, checkbox, column, container, row, scrollable, text, text_input, Space,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
+    Space,
 };
-use iced::{Background, Border, Element, Length, Theme};
+use iced::{Background, Border, Element, Fit, Length, Theme};
 
 /// Sentinel entries in the printer dropdown (not real printer names).
 pub const OUT_DEFAULT: &str = "System default printer";
@@ -278,6 +279,53 @@ fn section_label<'a>(s: &'static str) -> Element<'a, Message> {
     text(s).size(11).style(muted_style).into()
 }
 
+fn vsep<'a>(height: Length) -> Element<'a, Message> {
+    container(Space::new().width(1).height(height))
+        .width(1)
+        .height(height)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.palette().background.neutral.color
+            )),
+            ..Default::default()
+        })
+        .into()
+}
+
+fn setup_row<'a>(
+    name: &'a str,
+    selected: &str,
+    renaming: Option<&str>,
+    rename_buf: &'a str,
+) -> Element<'a, Message> {
+    if renaming == Some(name) {
+        return text_input("", rename_buf)
+            .on_input(|value| Message::PlotDlg(PlotDlgMsg::NameInput(value)))
+            .on_submit(Message::PlotDlg(PlotDlgMsg::NameCommit))
+            .style(field_style)
+            .size(11)
+            .padding([4, 8])
+            .width(Fit)
+            .into();
+    }
+    let is_selected = name == selected;
+    let cell = container(text(name.to_string()).size(11))
+        .padding([4, 8])
+        .width(Fit)
+        .style(move |theme: &Theme| {
+            let palette = theme.palette();
+            container::Style {
+                background: is_selected.then_some(Background::Color(palette.primary.strong.color)),
+                text_color: is_selected.then_some(palette.primary.strong.text),
+                ..Default::default()
+            }
+        });
+    mouse_area(cell)
+        .on_press(Message::PlotDlg(PlotDlgMsg::SelectSetup(name.to_string())))
+        .on_double_click(Message::PlotDlg(PlotDlgMsg::RenameStart(name.to_string())))
+        .into()
+}
+
 /// A `label : dropdown` row. `ctor` turns the picked string into a dialog
 /// message.
 fn drop_row<'a>(
@@ -399,20 +447,7 @@ fn check_static<'a>(label: &'a str, on: bool) -> Element<'a, Message> {
 
 fn panel<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
-        .padding(10)
         .width(Length::Fill)
-        .style(|theme: &Theme| {
-            let palette = theme.palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.weak.color)),
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..Default::default()
-            }
-        })
         .into()
 }
 
@@ -434,82 +469,105 @@ pub fn view_window(
     let can_copy = !s.selected_setup.is_empty() && !is_special;
     let is_named = can_copy && !sel_is_layout;
 
-    // ── Page setup ────────────────────────────────────────────────────────
-    let setup_selected = (!s.selected_setup.is_empty()).then(|| s.selected_setup.clone());
-    let mut setup_actions = row![
-        text("Name").size(11).style(muted_style).width(56),
-        iced::widget::pick_list(setup_selected, s.page_setups.clone(), |value| value.to_string())
-            .on_select(|value| Message::PlotDlg(PlotDlgMsg::SelectSetup(value)))
-            .text_size(12)
-            .padding([3, 6])
-            .width(Length::Fill),
-        button(text("Add…").size(11))
+    // ── Page setup sidebar ────────────────────────────────────────────────
+    let renaming = if s.name_rename && !s.selected_setup.is_empty() {
+        Some(s.selected_setup.as_str())
+    } else {
+        None
+    };
+    let rename_buf = s.name_input.as_deref().unwrap_or("");
+    let rows: Vec<Element<'_, Message>> = s
+        .page_setups
+        .iter()
+        .map(|name| setup_row(name, &s.selected_setup, renaming, rename_buf))
+        .collect();
+    let list_body: Element<'_, Message> = if rows.is_empty() {
+        container(text("(no page setups)").size(11).style(muted_style))
+            .padding([6, 8])
+            .into()
+    } else {
+        scrollable(column(rows).spacing(1)).height(height).into()
+    };
+    let new_name: Element<'_, Message> =
+        if !s.name_rename && s.name_input.is_some() {
+            row![
+                text_input("", rename_buf)
+                    .on_input(|value| Message::PlotDlg(PlotDlgMsg::NameInput(value)))
+                    .on_submit(Message::PlotDlg(PlotDlgMsg::NameCommit))
+                    .style(field_style)
+                    .size(11)
+                    .padding([4, 8])
+                    .width(Length::Fill),
+                button(text("Save").size(11))
+                    .on_press(Message::PlotDlg(PlotDlgMsg::NameCommit))
+                    .style(btn(true))
+                    .padding([4, 8]),
+                button(text("×").size(11))
+                    .on_press(Message::PlotDlg(PlotDlgMsg::NameCancel))
+                    .style(btn(false))
+                    .padding([4, 8]),
+            ]
+            .spacing(4)
+            .into()
+        } else {
+            Space::new().height(0).into()
+        };
+    let list_panel = container(
+        column![
+            text("Page setups").size(10).style(muted_style),
+            new_name,
+            container(list_body)
+                .style(|theme: &Theme| {
+                    let palette = theme.palette();
+                    container::Style {
+                        background: Some(Background::Color(palette.background.weak.color)),
+                        border: Border {
+                            color: palette.background.neutral.color,
+                            width: 1.0,
+                            radius: 3.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .width(Length::Fill)
+                .height(height)
+                .padding(2),
+        ]
+        .spacing(4)
+        .height(height),
+    )
+    .width(160)
+    .height(height)
+    .padding(iced::Padding {
+        top: 12.0,
+        right: 8.0,
+        bottom: 12.0,
+        left: 12.0,
+    });
+
+    let mut left_bar = row![
+        button(text("New").size(11))
             .on_press(Message::PlotDlg(PlotDlgMsg::NewSetup))
             .style(btn(false))
-            .padding([4, 10]),
+            .padding([4, 12]),
     ]
-    .spacing(6)
-    .align_y(iced::Center);
+    .spacing(4);
     if can_copy {
-        setup_actions = setup_actions.push(
+        left_bar = left_bar.push(
             button(text("Copy").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::CopySetup))
                 .style(btn(false))
-                .padding([4, 10]),
+                .padding([4, 12]),
         );
     }
     if is_named {
-        setup_actions = setup_actions
-            .push(
-                button(text("Rename").size(11))
-                    .on_press(Message::PlotDlg(PlotDlgMsg::RenameStart(
-                        s.selected_setup.clone(),
-                    )))
-                    .style(btn(false))
-                    .padding([4, 10]),
-            )
-            .push(
+        left_bar = left_bar.push(
             button(text("Delete").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::DeleteSetup))
                 .style(btn(false))
-                    .padding([4, 10]),
-            );
+                .padding([4, 12]),
+        );
     }
-    let name_editor: Element<'_, Message> = if let Some(value) = s.name_input.as_deref() {
-        row![
-            text(if s.name_rename { "Setup name" } else { "New setup" })
-                .size(11)
-                .style(muted_style)
-                .width(82),
-            text_input("", value)
-                .on_input(|value| Message::PlotDlg(PlotDlgMsg::NameInput(value)))
-                .on_submit(Message::PlotDlg(PlotDlgMsg::NameCommit))
-                .style(field_style)
-                .size(12)
-                .width(Length::Fill),
-            button(text("Save").size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::NameCommit))
-                .style(btn(true))
-                .padding([4, 10]),
-            button(text("Cancel").size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::NameCancel))
-                .style(btn(false))
-                .padding([4, 10]),
-        ]
-        .spacing(6)
-        .align_y(iced::Center)
-        .into()
-    } else {
-        Space::new().height(0).into()
-    };
-    let setup_panel = panel(
-        column![
-            section_label("Page setup"),
-            setup_actions,
-            name_editor,
-        ]
-        .spacing(7),
-    );
 
     // ── Printer / plotter ─────────────────────────────────────────────────
     let mut printer_opts = vec![OUT_DEFAULT.to_string()];
@@ -605,6 +663,8 @@ pub fn view_window(
         ]
         .spacing(7),
         check_enabled("Center the plot", s.center, PlotFlag::Center, common_area),
+    ].spacing(7));
+    let scale_panel = panel(column![
         section_label("Plot scale"),
         drop_row_enabled(
             "Scale",
@@ -735,61 +795,64 @@ pub fn view_window(
         check("Plot upside-down", s.upside_down, PlotFlag::UpsideDown),
     ].spacing(7));
 
-    let left = column![printer_panel, paper_panel, area_panel]
-        .spacing(10)
+    let left = column![
+        printer_panel,
+        hdivider(width),
+        paper_panel,
+        orientation_panel,
+        hdivider(width),
+        area_panel,
+    ]
+        .spacing(9)
         .width(width);
-    let right = column![style_panel, shaded_panel, options_panel, orientation_panel]
-        .spacing(10)
+    let right = column![
+        scale_panel,
+        hdivider(width),
+        style_panel,
+        hdivider(width),
+        shaded_panel,
+        hdivider(width),
+        options_panel,
+    ]
+        .spacing(9)
         .width(width);
     let detail = scrollable(
-        container(column![
-            setup_panel,
-            row![left, right].spacing(12).width(width),
-        ].spacing(10))
-        .padding(12),
+        container(row![left, right].spacing(18).width(width)).padding(14),
     )
     .width(width)
     .height(height);
-
-    let mut actions = row![
-        button(text("Preview").size(11))
-            .on_press(Message::PlotDlg(PlotDlgMsg::Preview))
-            .style(btn(false))
-            .padding([5, 14]),
-        Space::new().width(Length::Fill),
-    ]
-    .spacing(6)
-    .align_y(iced::Center);
-    if s.paper_space {
-        actions = actions.push(
-            button(text("Apply to layout").size(11))
+    let body = row![list_panel, vsep(height), detail]
+        .width(width)
+        .height(height);
+    let toolbar = container(
+        row![
+            left_bar,
+            Space::new().width(width),
+            button(text("Set current").size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::SetCurrent))
                 .style(btn(false))
-                .padding([5, 12]),
-        );
-    }
-    actions = actions
-        .push(
-            button(text("Cancel").size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::Close))
+                .padding([4, 12]),
+            Space::new().width(6),
+            button(text("Preview").size(11))
+                .on_press(Message::PlotDlg(PlotDlgMsg::Preview))
                 .style(btn(false))
-                .padding([5, 14]),
-        )
-        .push(
+                .padding([4, 12]),
+            Space::new().width(6),
             button(text(action).size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::Commit))
                 .style(btn(true))
-                .padding([5, 18]),
-        );
-    let footer = container(actions)
+                .padding([4, 18]),
+        ]
+        .align_y(iced::Center),
+    )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(theme.palette().background.weak.color)),
             ..Default::default()
         })
-        .padding([7, 10])
+        .padding([5, 10])
         .width(width);
 
-    container(column![detail, hdivider(width), footer].spacing(0))
+    container(column![toolbar, hdivider(width), body].spacing(0))
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
                 theme.palette().background.base.color
