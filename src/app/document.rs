@@ -410,6 +410,12 @@ impl DocumentTab {
                     l.max_limits = (297.0, 210.0);
                     l.min_extents = (0.0, 0.0, 0.0);
                     l.max_extents = (297.0, 210.0, 0.0);
+                    l.paper_width = 297.0;
+                    l.paper_height = 210.0;
+                    l.plot_paper_units = 1;
+                    l.plot_scale_numerator = 1.0;
+                    l.plot_scale_denominator = 1.0;
+                    l.paper_size = "ISO_A4_(297.00_x_210.00_MM)".into();
                 }
             }
         }

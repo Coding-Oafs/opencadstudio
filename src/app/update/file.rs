@@ -2294,9 +2294,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     fn layout_plot_params_for(&self, plot_area: &str) -> LayoutPlotParams {
+        use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
         let i = self.active_tab;
         let scene = &self.tabs[i].scene;
         let paper_space = scene.current_layout != "Model";
+        let selected_paper = match self.plot_dialog.paper.as_str() {
+            "A3" => PaperSize::A3,
+            "A2" => PaperSize::A2,
+            "A1" => PaperSize::A1,
+            "A0" => PaperSize::A0,
+            _ => PaperSize::A4,
+        };
+        let selected_orientation = if self.plot_dialog.orientation == "Portrait" {
+            Orientation::Portrait
+        } else {
+            Orientation::Landscape
+        };
+        let selected_sheet = sheet_mm(selected_paper, selected_orientation);
         let (source_wires, hatches, wipeouts, mut group_splits) =
             plot_scene_content(
                 scene,
@@ -2380,11 +2394,24 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     target_y / scale - min_y,
                 )
             } else if plot_layout {
-                // Layout is the one Paper-only plot mode: reproduce the sheet
-                // exactly. Its lower-left paper bound maps to PDF (0, 0);
-                // persisted plot origins/centering are already represented by
-                // the layout geometry and must not shift the sheet again.
-                (mm_per_unit, -x0, -y0)
+                // Map the complete paper-space sheet to the physical paper
+                // selected in the dialog. Layout bounds can be stored in mm,
+                // inches, or carry incomplete legacy metadata; deriving the
+                // scale from the visible sheet avoids applying a stale unit
+                // factor twice while preserving loaded layouts exactly when
+                // their metadata is valid.
+                let bounds_w = (x1 - x0).max(1e-9);
+                let bounds_h = (y1 - y0).max(1e-9);
+                let scale = (selected_sheet.0 / bounds_w)
+                    .min(selected_sheet.1 / bounds_h)
+                    .max(1e-9);
+                let target_x = (selected_sheet.0 - bounds_w * scale) * 0.5;
+                let target_y = (selected_sheet.1 - bounds_h * scale) * 0.5;
+                (
+                    scale,
+                    target_x / scale - x0,
+                    target_y / scale - y0,
+                )
             } else {
                 // Legacy direct callers still get dialog positioning. Normal
                 // Display/Window paths use `area_plot_job` instead.
@@ -2401,9 +2428,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 };
                 (scale, target_x / scale - x0, target_y / scale - y0)
             };
+            let (base_page_w, base_page_h) = if plot_layout {
+                selected_sheet
+            } else {
+                (paper_w, paper_h)
+            };
             let (page_w, page_h) = match rotation {
-                90 | 270 => (paper_h, paper_w),
-                _ => (paper_w, paper_h),
+                90 | 270 => (base_page_h, base_page_w),
+                _ => (base_page_w, base_page_h),
             };
             // Layout plots keep the full physical sheet as the PDF page, but
             // ink is restricted to the device's printable rectangle. Extents

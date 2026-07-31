@@ -179,6 +179,9 @@ pub struct HatchModel {
     pub color: [f32; 4],
     /// Effective indexed color used by plot style tables; 0 means RGB/default.
     pub aci: u8,
+    /// Effective display lineweight used by pattern strokes. PDF export converts
+    /// this back to a physical thickness unless a plot style overrides it.
+    pub line_weight_px: f32,
     /// Pattern rotation offset in radians (from DXF `pattern_angle`).
     /// Applied on top of each family's base angle at render time.
     pub angle_offset: f32,

@@ -880,11 +880,14 @@ impl Scene {
                 // emitted first so LessEqual layering keeps it underneath.
                 let mut backdrop: Option<HatchModel> = None;
                 if let Some(e) = entity {
+                    let style = self.render_style(e);
+                    m.aci = style.4;
+                    m.line_weight_px = style.3;
                     // A gradient's colour is its first stop (already baked into
                     // the cached model); only solid / pattern fills take the
                     // entity's resolved colour.
                     if !matches!(m.pattern, model::hatch_model::HatchPattern::Gradient { .. }) {
-                        m.color = self.render_style(e).0;
+                        m.color = style.0;
                     }
                     if let EntityType::Hatch(dxf) = e {
                         if let Some(bg) = crate::entities::hatch::background_color(dxf) {
@@ -893,19 +896,38 @@ impl Scene {
                             // ByLayer / ByBlock backgrounds resolve through the
                             // normal style chain instead of the raw ACI table
                             // (#415).
-                            b.color = match bg {
+                            let (bg_color, bg_aci) = match bg {
                                 acadrust::types::Color::ByLayer => {
-                                    crate::scene::view::render::layer_render_style(
-                                        &self.document,
-                                        &dxf.common.layer,
+                                    let layer = self.document.layers.get(&dxf.common.layer);
+                                    let aci = layer
+                                        .and_then(|layer| match &layer.color {
+                                            acadrust::types::Color::Index(index) => Some(*index),
+                                            _ => None,
+                                        })
+                                        .unwrap_or(0);
+                                    (
+                                        crate::scene::view::render::layer_render_style(
+                                            &self.document,
+                                            &dxf.common.layer,
+                                        )
+                                        .color,
+                                        aci,
                                     )
-                                    .color
                                 }
-                                acadrust::types::Color::ByBlock => self.render_style(e).0,
-                                other => {
-                                    crate::scene::convert::tess_util::aci_to_rgba(&other)
-                                }
+                                acadrust::types::Color::ByBlock => (style.0, style.4),
+                                acadrust::types::Color::Index(index) => (
+                                    crate::scene::convert::tess_util::aci_to_rgba(
+                                        &acadrust::types::Color::Index(index),
+                                    ),
+                                    index,
+                                ),
+                                other => (
+                                    crate::scene::convert::tess_util::aci_to_rgba(&other),
+                                    0,
+                                ),
                             };
+                            b.color = bg_color;
+                            b.aci = bg_aci;
                             b.name = "SOLID".into();
                             backdrop = Some(b);
                         }
@@ -1120,16 +1142,27 @@ impl Scene {
             // hatches land in the correct world position. A depth guard keeps
             // a malformed cyclic block reference from looping forever.
             let normalize = crate::modules::draw::modify::explode::normalize_insert_entity;
-            // Block-child colour inheritance sources (#221), kept RAW and
-            // adapted at the leaf. `ins_color` feeds ByBlock; `l0` (the
-            // INSERT's *layer* style) feeds the layer-0 rule. Both chain
-            // through nested inserts, mirroring expand_insert.
-            let ins_color =
-                crate::scene::view::render::render_style_for(&self.document, entity).0;
+            // Block-child style inheritance sources (#221), kept raw and
+            // adapted at the leaf. The INSERT style feeds ByBlock; `l0` (the
+            // INSERT's layer style) feeds the layer-0 rule. Colour, ACI,
+            // linetype, and lineweight all chain through nested inserts.
+            let ins_style =
+                crate::scene::view::render::render_style_for(&self.document, entity);
             let l0 = crate::scene::view::render::layer_render_style(
                 &self.document,
                 &ins.common.layer,
             );
+            let layer_aci = |layer: &str| -> u8 {
+                self.document
+                    .layers
+                    .get(layer)
+                    .and_then(|layer| match &layer.color {
+                        acadrust::types::Color::Index(index) => Some(*index),
+                        _ => None,
+                    })
+                    .unwrap_or(0)
+            };
+            let l0_aci = layer_aci(&ins.common.layer);
             let [base_depth, half_gap] = depth_map
                 .get(&ins.common.handle.value())
                 .copied()
@@ -1145,11 +1178,13 @@ impl Scene {
                     && matches!(e, EntityType::Insert(ni)
                         if crate::scene::annotative::annotative_offscale(&self.document, &ni.common))
             };
+            type ResolvedStyle = ([f32; 4], f32, [f32; 8], f32, u8);
             let mut stack: Vec<(
                 EntityType,
                 usize,
-                [f32; 4],
+                ResolvedStyle,
                 crate::scene::view::render::InheritStyle,
+                u8,
                 (f32, f32),
             )> = explode_including_dims(ins, &self.document)
                 .into_iter()
@@ -1158,9 +1193,26 @@ impl Scene {
                     crate::scene::annotative::entity_for_active_context(&self.document, &e)
                         .into_owned()
                 })
-                .map(|e| (normalize(e), 0usize, ins_color, l0, (base_depth, half_gap)))
+                .map(|e| {
+                    (
+                        normalize(e),
+                        0usize,
+                        ins_style,
+                        l0,
+                        l0_aci,
+                        (base_depth, half_gap),
+                    )
+                })
                 .collect();
-            while let Some((sub, depth, sub_ins_color, sub_l0, (d_base, d_half))) = stack.pop() {
+            while let Some((
+                sub,
+                depth,
+                sub_ins_style,
+                sub_l0,
+                sub_l0_aci,
+                (d_base, d_half),
+            )) = stack.pop()
+            {
                 match sub {
                     EntityType::Insert(nins) => {
                         if depth >= 32 {
@@ -1180,21 +1232,27 @@ impl Scene {
                                 &self.document,
                                 &nested_entity,
                             );
-                        let child_ins_color = if !has_book_color
+                        let mut child_ins_style =
+                            crate::scene::view::render::render_style_for_block_sub(
+                                &self.document,
+                                &nested_entity,
+                                sub_ins_style.0,
+                                sub_ins_style.1,
+                                sub_ins_style.2,
+                                sub_ins_style.3,
+                                sub_l0,
+                            );
+                        child_ins_style.4 = if !has_book_color
                             && nins.common.color == Color::ByBlock
                         {
-                            sub_ins_color
+                            sub_ins_style.4
                         } else if !has_book_color
                             && on_l0
                             && nins.common.color == Color::ByLayer
                         {
-                            sub_l0.color
+                            sub_l0_aci
                         } else {
-                            crate::scene::view::render::render_style_for(
-                                &self.document,
-                                &nested_entity,
-                            )
-                            .0
+                            child_ins_style.4
                         };
                         let child_l0 = if on_l0 {
                             sub_l0
@@ -1203,6 +1261,11 @@ impl Scene {
                                 &self.document,
                                 &nins.common.layer,
                             )
+                        };
+                        let child_l0_aci = if on_l0 {
+                            sub_l0_aci
+                        } else {
+                            layer_aci(&nins.common.layer)
                         };
                         // Nested insert: its slot = parent slot + its rank in
                         // the parent block, subdivided by its own block size.
@@ -1225,8 +1288,9 @@ impl Scene {
                             stack.push((
                                 normalize(e),
                                 depth + 1,
-                                child_ins_color,
+                                child_ins_style,
                                 child_l0,
+                                child_l0_aci,
                                 (nd_base, nd_half),
                             ));
                         }
@@ -1236,17 +1300,38 @@ impl Scene {
                             continue;
                         }
                         // Resolve ByBlock / layer-0 inheritance for this block
-                        // child, then adapt to the background (#221). Pattern /
-                        // lineweight args are unused by a hatch's colour.
-                        let style = crate::scene::view::render::render_style_for_block_sub(
+                        // child, including the pattern-stroke lineweight and
+                        // effective ACI used by plot style tables.
+                        let hatch_entity = EntityType::Hatch(dxf.clone());
+                        let mut style = crate::scene::view::render::render_style_for_block_sub(
                             &self.document,
-                            &EntityType::Hatch(dxf.clone()),
-                            sub_ins_color,
-                            0.0,
-                            [0.0; 8],
-                            0.0,
+                            &hatch_entity,
+                            sub_ins_style.0,
+                            sub_ins_style.1,
+                            sub_ins_style.2,
+                            sub_ins_style.3,
                             sub_l0,
                         );
+                        let has_book_color =
+                            crate::scene::view::render::has_resolved_book_color(
+                                &self.document,
+                                &hatch_entity,
+                            );
+                        let on_l0 = crate::scene::view::render::is_effective_layer_zero(
+                            &dxf.common.layer,
+                        );
+                        style.4 = if !has_book_color
+                            && dxf.common.color == acadrust::types::Color::ByBlock
+                        {
+                            sub_ins_style.4
+                        } else if !has_book_color
+                            && on_l0
+                            && dxf.common.color == acadrust::types::Color::ByLayer
+                        {
+                            sub_l0_aci
+                        } else {
+                            style.4
+                        };
                         let color = style.0;
                         let color =
                             crate::scene::view::render::adapt_to_bg(color, hatch_bg);
@@ -1254,6 +1339,7 @@ impl Scene {
                             Self::hatch_model_from_dxf(&dxf, color)
                         {
                             model.aci = style.4;
+                            model.line_weight_px = style.3;
                             // In-block rank → within the insert's depth slot.
                             model.draw_depth = d_base
                                 + depth_map
@@ -1360,6 +1446,7 @@ impl Scene {
                     name: "WIPEOUT_FILL".into(),
                     color: fill_color,
                     aci: 0,
+                    line_weight_px: 1.0,
                     angle_offset: 0.0,
                     scale: 1.0,
                     world_origin: fill_origin,
@@ -1478,6 +1565,7 @@ impl Scene {
                             name: "WIPEOUT_FILL".into(),
                             color: fill_color,
                             aci: 0,
+                            line_weight_px: 1.0,
                             angle_offset: 0.0,
                             scale: 1.0,
                             world_origin: fill_origin,
@@ -2038,6 +2126,7 @@ impl Scene {
             // entity colour.
             color: gradient_color1.unwrap_or(color),
             aci: 0,
+            line_weight_px: 1.0,
             angle_offset: if prebaked { 0.0 } else { dxf.pattern_angle as f32 },
             scale: if prebaked { 1.0 } else { dxf.pattern_scale as f32 },
             world_origin,
@@ -2343,6 +2432,7 @@ impl Scene {
             name: "SOLID".into(),
             color,
             aci: 0,
+            line_weight_px: 1.0,
             angle_offset: 0.0,
             scale: 1.0,
             world_origin,

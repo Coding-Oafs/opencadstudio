@@ -131,6 +131,7 @@ impl canvas::Program<Message> for HatchPatternPreview {
                     name: String::new(),
                     color: [1.0; 4],
                     aci: 0,
+                    line_weight_px: 1.0,
                     angle_offset: 0.0,
                     scale: hatch_preview_scale(&self.pattern),
                     draw_depth: 0.0,

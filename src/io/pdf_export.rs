@@ -302,6 +302,7 @@ fn build_pdf(
             ox,
             oy,
             plot_style,
+            scale,
             options,
             normal_blend.as_ref(),
         );
@@ -642,6 +643,7 @@ fn emit_hatch(
     ox: f64,
     oy: f64,
     plot_style: Option<&PlotStyleTable>,
+    scale: f32,
     options: PdfPlotOptions,
     normal_blend: Option<&ExtendedGraphicsStateId>,
 ) {
@@ -659,6 +661,7 @@ fn emit_hatch(
     // Genuine colours are untouched; WIPEOUTS keep their paper-white mask.
     let is_wipeout = hatch.name == "WIPEOUT_FILL";
     let mut screening = 1.0;
+    let mut lw_override = None;
     let mut color_overridden = false;
     if !is_wipeout {
         if let Some(table) = plot_style {
@@ -670,6 +673,9 @@ fn emit_hatch(
                     color_overridden = true;
                 }
                 screening = table.resolve_screening(hatch.aci);
+                lw_override = table
+                    .resolve_lineweight(hatch.aci)
+                    .map(|mm| (mm * MM_TO_PT).max(0.1));
             }
         }
     }
@@ -738,12 +744,16 @@ fn emit_hatch(
         HatchPattern::Gradient { color2, .. } => {
             // PDF gradients are stored in resource dictionaries; for the
             // fast path we average the two colours, matching paper_canvas.
-            let second = plotted_color(
-                adapt_text_color([color2[0], color2[1], color2[2]]),
-                color2[3],
-                1.0,
-                options,
-            );
+            let second = if color_overridden {
+                [r, g, b]
+            } else {
+                plotted_color(
+                    adapt_text_color([color2[0], color2[1], color2[2]]),
+                    color2[3],
+                    screening,
+                    options,
+                )
+            };
             let avg = [
                 (r + second[0]) * 0.5,
                 (g + second[1]) * 0.5,
@@ -767,6 +777,26 @@ fn emit_hatch(
                 b,
                 icc_profile: None,
             }),
+        });
+        let physical = lw_override.unwrap_or_else(|| {
+            if options.object_lineweights {
+                (hatch.line_weight_px * LW_PX_TO_PT).max(0.1)
+            } else {
+                0.1
+            }
+        });
+        let divisor = if options.scale_lineweights {
+            1.0
+        } else {
+            scale.max(1e-6)
+        };
+        ops.push(Op::SetOutlineThickness {
+            pt: Pt(physical / divisor),
+        });
+        // Pattern dashes are already materialized by `pattern_segments`.
+        // Clear any linetype left by the preceding paper/model render group.
+        ops.push(Op::SetLineDashPattern {
+            dash: LineDashPattern::default(),
         });
         for [a, b_pt] in segments {
             // `pattern_segments` returns absolute world f64; cancel the offset

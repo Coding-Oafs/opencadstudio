@@ -3160,6 +3160,7 @@ impl Scene {
             name: "SOLID".to_string(),
             color: self.paper_bg_color,
             aci: 0,
+            line_weight_px: 1.0,
             angle_offset: 0.0,
             scale: 1.0,
             // Draw-order bias is signed: entity fills/wires land in (-1, 1)

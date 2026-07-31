@@ -379,6 +379,7 @@ impl Scene {
             let style = self.render_style(entity);
             m.color = style.0;
             m.aci = style.4;
+            m.line_weight_px = style.3;
             if let EntityType::Hatch(dxf) = entity {
                 // Only re-apply pattern_scale/angle for catalog-derived patterns
                 // (empty stored lines). A pattern built from the hatch's own
@@ -459,6 +460,7 @@ impl Scene {
             let style = self.render_style(entity);
             hatch.color = style.0;
             hatch.aci = style.4;
+            hatch.line_weight_px = style.3;
             if let EntityType::Hatch(dxf) = entity {
                 if let model::hatch_model::HatchPattern::Pattern(_) = &hatch.pattern {
                     if dxf.pattern.lines.is_empty() {
@@ -516,6 +518,7 @@ impl Scene {
                 name: "WIPEOUT_FILL".into(),
                 color: self.paper_bg_color,
                 aci: 0,
+                line_weight_px: 1.0,
                 angle_offset: 0.0,
                 scale: 1.0,
                 world_origin,
@@ -604,6 +607,7 @@ impl Scene {
                 name: "WIPEOUT_FILL".into(),
                 color: fill_color,
                 aci: 0,
+                line_weight_px: 1.0,
                 angle_offset: 0.0,
                 scale: 1.0,
                 world_origin: fill_origin,

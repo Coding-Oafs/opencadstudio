@@ -31,11 +31,14 @@ impl Scene {
             return;
         };
 
+        let style = self.render_style(entity);
+        model.aci = style.4;
+        model.line_weight_px = style.3;
         if !matches!(
             model.pattern,
             crate::scene::model::hatch_model::HatchPattern::Gradient { .. }
         ) {
-            model.color = self.render_style(entity).0;
+            model.color = style.0;
         }
         if self.selected.contains(&handle) {
             model.color = [0.15, 0.55, 1.00, model.color[3]];
@@ -50,17 +53,38 @@ impl Scene {
                 let mut backdrop = model.clone();
                 backdrop.pattern =
                     crate::scene::model::hatch_model::HatchPattern::Solid;
-                backdrop.color = match background {
+                let (background_color, background_aci) = match background {
                     acadrust::types::Color::ByLayer => {
-                        crate::scene::view::render::layer_render_style(
-                            &self.document,
-                            &hatch.common.layer,
+                        let layer = self.document.layers.get(&hatch.common.layer);
+                        let aci = layer
+                            .and_then(|layer| match &layer.color {
+                                acadrust::types::Color::Index(index) => Some(*index),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        (
+                            crate::scene::view::render::layer_render_style(
+                                &self.document,
+                                &hatch.common.layer,
+                            )
+                            .color,
+                            aci,
                         )
-                        .color
                     }
-                    acadrust::types::Color::ByBlock => self.render_style(entity).0,
-                    other => crate::scene::convert::tess_util::aci_to_rgba(&other),
+                    acadrust::types::Color::ByBlock => (style.0, style.4),
+                    acadrust::types::Color::Index(index) => (
+                        crate::scene::convert::tess_util::aci_to_rgba(
+                            &acadrust::types::Color::Index(index),
+                        ),
+                        index,
+                    ),
+                    other => (
+                        crate::scene::convert::tess_util::aci_to_rgba(&other),
+                        0,
+                    ),
                 };
+                backdrop.color = background_color;
+                backdrop.aci = background_aci;
                 backdrop.name = "SOLID".into();
                 models.push(backdrop);
             }
