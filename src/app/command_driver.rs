@@ -35,7 +35,7 @@ impl OpenCADStudio {
         let i = self.active_tab;
         let had_grip = self.tabs[i].active_grip.take().is_some()
             || self.grip_add_provisional.is_some()
-            || self.grip_preview_handle.is_some();
+            || !self.grip_preview_handles.is_empty();
         if !had_grip {
             return false;
         }
@@ -54,18 +54,23 @@ impl OpenCADStudio {
                 .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
         }
 
-        if let Some(handle) = self.grip_preview_handle.take() {
-            if let Some(original) = self.grip_original.take() {
-                if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
-                    *entity = original;
-                }
+        let handles = std::mem::take(&mut self.grip_preview_handles);
+        let originals = std::mem::take(&mut self.grip_originals);
+        for (handle, original) in originals {
+            if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
+                *entity = original;
             }
+        }
+        for &handle in &handles {
             self.tabs[i].scene.preview_hidden.remove(&handle);
-            self.tabs[i]
-                .scene
-                .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
-        } else {
-            self.grip_original = None;
+        }
+        let changes: Vec<_> = handles
+            .into_iter()
+            .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+            .collect();
+        self.tabs[i].scene.bump_entities(&changes);
+        if let Some(dirty_before) = self.grip_dirty_before.take() {
+            self.tabs[i].dirty = dirty_before;
         }
 
         self.grip_text_verts.clear();

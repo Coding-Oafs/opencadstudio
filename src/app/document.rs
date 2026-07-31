@@ -135,6 +135,10 @@ pub(super) struct DocumentTab {
     pub(super) snap_result: Option<SnapResult>,
     pub(super) active_grip: Option<GripEdit>,
     pub(super) selected_grips: Vec<GripDef>,
+    /// Entity handle for each entry in `selected_grips`.
+    pub(super) selected_grip_handles: Vec<Handle>,
+    /// Shift-selected grips, keyed by entity and object-local grip id.
+    pub(super) hot_grips: rustc_hash::FxHashSet<(Handle, usize)>,
     pub(super) selected_handle: Option<Handle>,
     /// Dynamic-block visibility grip for the current single selection.
     pub(super) visibility_grip: Option<super::visibility::VisibilityGrip>,
@@ -430,6 +434,8 @@ impl DocumentTab {
             snap_result: None,
             active_grip: None,
             selected_grips: vec![],
+            selected_grip_handles: vec![],
+            hot_grips: rustc_hash::FxHashSet::default(),
             selected_handle: None,
             visibility_grip: None,
             wireframe: false,

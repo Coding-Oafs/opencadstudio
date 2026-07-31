@@ -429,23 +429,20 @@ pub(super) struct OpenCADStudio {
     /// being placed (follows the cursor). `(entity handle, new-arrow grip id)`.
     /// Esc before the placement click removes it again.
     grip_add_provisional: Option<(acadrust::Handle, usize)>,
-    /// Handle hidden from the base tessellation during an in-progress grip
-    /// drag. While dragging, the edited entity is excluded from the cached
-    /// wire set and shown as a cheap overlay preview instead, so each move
-    /// updates only the overlay rather than re-tessellating the whole model.
-    /// Committed (un-hidden + one re-tess) when the drag ends. `None` = idle.
-    grip_preview_handle: Option<acadrust::Handle>,
+    /// Handles hidden from the base tessellation during an in-progress grip
+    /// drag. The edited entities are shown in the overlay until commit.
+    grip_preview_handles: Vec<acadrust::Handle>,
     /// Pending rollover hit-test. Each idle cursor move stashes
     /// `(last_move_at, point, tab)` here and clears the live highlight;
     /// `HoverDwellTick` runs the pick once the cursor has been still for
     /// `HOVER_DWELL_MS`. Skipping the pick mid-stroke avoids the per-frame
     /// O(N) wire+hatch+mesh sweep that froze the cursor on large drawings.
     hover_dwell: Option<HoverDwell>,
-    /// Snapshot of the edited entity taken at the start of a grip drag, used to
-    /// restore it if the user presses Esc to cancel the drag. The drag mutates
-    /// the document live (so grips / properties track), so cancel reverts from
-    /// this backup. Dropped (kept) on a normal commit.
-    grip_original: Option<acadrust::EntityType>,
+    /// Snapshots of edited entities taken at the start of a grip drag. The drag
+    /// mutates the document live, so Escape restores this group atomically.
+    grip_originals: Vec<(acadrust::Handle, acadrust::EntityType)>,
+    /// Document dirty state before the live grip mutation began.
+    grip_dirty_before: Option<bool>,
     /// Drag-start snapshot of the dragged entity's SDF glyph quads. A whole-
     /// entity text move slides these each frame (translating the already-shaped
     /// glyphs) instead of re-tessellating the run every cursor move (issue #316).
@@ -2700,9 +2697,10 @@ impl OpenCADStudio {
             grip_pending: None,
             visibility_popup: None,
             grip_add_provisional: None,
-            grip_preview_handle: None,
+            grip_preview_handles: Vec::new(),
             hover_dwell: None,
-            grip_original: None,
+            grip_originals: Vec::new(),
+            grip_dirty_before: None,
             grip_text_verts: Vec::new(),
             grip_text_slide: false,
             qselect: None,

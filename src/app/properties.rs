@@ -136,6 +136,11 @@ impl OpenCADStudio {
         } else {
             0
         };
+        let prop_vertex_indicator_active = if cur_handles == prev_handles {
+            self.tabs[i].properties.prop_vertex_indicator_active
+        } else {
+            false
+        };
         crate::scene::view::dispatch::set_prop_current_vertex(prop_vertex);
 
         let new_panel = {
@@ -1540,6 +1545,7 @@ impl OpenCADStudio {
             panel.expanded_groups = expanded_groups;
             panel.source_handles = new_handles;
             panel.prop_vertex = prop_vertex;
+            panel.prop_vertex_indicator_active = prop_vertex_indicator_active;
             panel
         };
 
@@ -1666,33 +1672,40 @@ impl OpenCADStudio {
         } else {
             [0.0_f64; 3]
         };
-        let (new_handle, new_grips) = {
+        let (new_handle, new_grips, new_grip_handles) = {
             let selected = self.tabs[i].scene.selected_entities();
-            if selected.len() == 1 {
-                let (handle, entity) = selected[0];
+            let single_handle = (selected.len() == 1).then(|| selected[0].0);
+            let mut grips = Vec::new();
+            let mut handles = Vec::new();
+            for (handle, entity) in selected {
                 let contextual = crate::scene::annotative::entity_for_active_context(
                     &self.tabs[i].scene.document,
                     entity,
                 );
-                let grips = dispatch::grips(contextual.as_ref())
-                    .into_iter()
-                    .map(|mut g| {
-                        // Subtract in f64: at UTM magnitudes an f32 cast before
-                        // the offset costs ~1 unit and draws the grip off the
-                        // wire.
-                        g.world.x -= wo[0];
-                        g.world.y -= wo[1];
-                        g.world.z -= wo[2];
-                        g
-                    })
-                    .collect();
-                (Some(handle), grips)
-            } else {
-                (None, vec![])
+                for mut grip in dispatch::grips(contextual.as_ref()) {
+                    // Subtract in f64: at UTM magnitudes an f32 cast before
+                    // the offset costs ~1 unit and draws the grip off the wire.
+                    grip.world.x -= wo[0];
+                    grip.world.y -= wo[1];
+                    grip.world.z -= wo[2];
+                    handles.push(handle);
+                    grips.push(grip);
+                }
             }
+            (single_handle, grips, handles)
         };
         self.tabs[i].selected_handle = new_handle;
         self.tabs[i].selected_grips = new_grips;
+        self.tabs[i].selected_grip_handles = new_grip_handles;
+        let available: rustc_hash::FxHashSet<_> = self.tabs[i]
+            .selected_grip_handles
+            .iter()
+            .copied()
+            .zip(self.tabs[i].selected_grips.iter().map(|grip| grip.id))
+            .collect();
+        self.tabs[i]
+            .hot_grips
+            .retain(|key| available.contains(key));
         // Append the dynamic-block visibility (lookup) grip, if the lone
         // selection is a visibility-parametric block reference.
         self.refresh_visibility_grip(wo);

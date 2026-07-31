@@ -898,10 +898,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     // click places it (click-move-click) — same as picking the
                     // grip directly in the viewport. Without this the menu just
                     // closed and the grip never became hot (issue #48).
-                    if let Some(g) = self.tabs[i]
-                        .selected_grips
+                    if let Some((_, g)) = self.tabs[i]
+                        .selected_grip_handles
                         .iter()
-                        .find(|g| g.id == popup.grip_id)
+                        .zip(self.tabs[i].selected_grips.iter())
+                        .find(|(owner, g)| **owner == popup.handle && g.id == popup.grip_id)
                     {
                         // "Move with Leader" drags the whole multileader; the
                         // others move just the picked grip.
@@ -911,13 +912,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             } else {
                                 (popup.grip_id, g.is_midpoint)
                             };
-                        self.tabs[i].active_grip = Some(GripEdit {
-                            handle: popup.handle,
+                        self.tabs[i].active_grip = Some(GripEdit::single(
+                            popup.handle,
                             grip_id,
                             is_translate,
-                            origin_world: g.world,
-                            last_world: g.world,
-                        });
+                            g.world,
+                        ));
                     }
                     return Task::none();
                 }
@@ -1006,14 +1006,18 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // Grab the new arrow so it follows the cursor (click places it,
                 // Esc removes it).
                 if let Some(new_gid) = add_leader_gid {
-                    if let Some(g) = self.tabs[i].selected_grips.iter().find(|g| g.id == new_gid) {
-                        self.tabs[i].active_grip = Some(GripEdit {
-                            handle: popup.handle,
-                            grip_id: new_gid,
-                            is_translate: false,
-                            origin_world: g.world,
-                            last_world: g.world,
-                        });
+                    if let Some((_, g)) = self.tabs[i]
+                        .selected_grip_handles
+                        .iter()
+                        .zip(self.tabs[i].selected_grips.iter())
+                        .find(|(owner, g)| **owner == popup.handle && g.id == new_gid)
+                    {
+                        self.tabs[i].active_grip = Some(GripEdit::single(
+                            popup.handle,
+                            new_gid,
+                            false,
+                            g.world,
+                        ));
                         self.grip_add_provisional = Some((popup.handle, new_gid));
                     }
                 }
@@ -1021,18 +1025,18 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // in Absolute mode, so the arc re-fits through the cursor as
                 // it moves and the next click seats it (#339).
                 if matches!(item.action, GripMenuAction::ConvertToArc) {
-                    if let Some(g) = self.tabs[i]
-                        .selected_grips
+                    if let Some((_, g)) = self.tabs[i]
+                        .selected_grip_handles
                         .iter()
-                        .find(|g| g.id == popup.grip_id)
+                        .zip(self.tabs[i].selected_grips.iter())
+                        .find(|(owner, g)| **owner == popup.handle && g.id == popup.grip_id)
                     {
-                        self.tabs[i].active_grip = Some(GripEdit {
-                            handle: popup.handle,
-                            grip_id: popup.grip_id,
-                            is_translate: false,
-                            origin_world: g.world,
-                            last_world: g.world,
-                        });
+                        self.tabs[i].active_grip = Some(GripEdit::single(
+                            popup.handle,
+                            popup.grip_id,
+                            false,
+                            g.world,
+                        ));
                     }
                 }
                 Task::none()

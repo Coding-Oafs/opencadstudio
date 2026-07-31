@@ -152,6 +152,7 @@ impl OpenCADStudio {
             shape: GripShape::Triangle,
             dir: None,
         });
+        self.tabs[i].selected_grip_handles.push(handle);
         self.tabs[i].visibility_grip = Some(VisibilityGrip {
             insert_handle: handle,
             state_names,

@@ -20,12 +20,42 @@ pub struct GripEdit {
     pub handle: Handle,
     /// Index into the entity's grip list.
     pub grip_id: usize,
-    /// `true` → midpoint / translate grip; `false` → endpoint / absolute grip.
-    pub is_translate: bool,
     /// World-space position of the grip when the drag started (ortho/polar base).
     pub origin_world: DVec3,
     /// Last world-space cursor position (needed for incremental delta on translate drags).
     pub last_world: DVec3,
+    /// Every hot grip moved by this edit. A normal grip edit contains one target.
+    pub targets: Vec<GripTarget>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GripTarget {
+    pub handle: Handle,
+    pub grip_id: usize,
+    pub is_translate: bool,
+    pub last_world: DVec3,
+}
+
+impl GripEdit {
+    pub fn single(
+        handle: Handle,
+        grip_id: usize,
+        is_translate: bool,
+        world: DVec3,
+    ) -> Self {
+        Self {
+            handle,
+            grip_id,
+            origin_world: world,
+            last_world: world,
+            targets: vec![GripTarget {
+                handle,
+                grip_id,
+                is_translate,
+                last_world: world,
+            }],
+        }
+    }
 }
 
 // ── Screen-space helpers ───────────────────────────────────────────────────
@@ -83,11 +113,11 @@ pub fn find_hit_grip_paper(
     half_w: f32,
     half_h: f32,
     bounds: Rectangle,
-) -> Option<(usize, bool, DVec3)> {
+) -> Option<(usize, usize, bool, DVec3)> {
     let mut best_dist = GRIP_THRESHOLD_PX;
-    let mut best: Option<(usize, bool, DVec3)> = None;
+    let mut best: Option<(usize, usize, bool, DVec3)> = None;
 
-    for g in grips {
+    for (index, g) in grips.iter().enumerate() {
         let screen = Point::new(
             (g.world.x as f32 - tx + half_w) / (2.0 * half_w) * bounds.width,
             (ty + half_h - g.world.y as f32) / (2.0 * half_h) * bounds.height,
@@ -97,7 +127,7 @@ pub fn find_hit_grip_paper(
         let d = (dx * dx + dy * dy).sqrt();
         if d < best_dist {
             best_dist = d;
-            best = Some((g.id, g.is_midpoint, g.world));
+            best = Some((index, g.id, g.is_midpoint, g.world));
         }
     }
     best
@@ -110,11 +140,11 @@ pub fn find_hit_grip(
     grips: &[GripDef],
     camera: &crate::scene::view::camera::Camera,
     bounds: Rectangle,
-) -> Option<(usize, bool, DVec3)> {
+) -> Option<(usize, usize, bool, DVec3)> {
     let mut best_dist = GRIP_THRESHOLD_PX;
-    let mut best: Option<(usize, bool, DVec3)> = None;
+    let mut best: Option<(usize, usize, bool, DVec3)> = None;
 
-    for g in grips {
+    for (index, g) in grips.iter().enumerate() {
         let Some(screen) = camera.project(g.world, bounds) else {
             continue;
         };
@@ -124,7 +154,7 @@ pub fn find_hit_grip(
         let d = (dx * dx + dy * dy).sqrt();
         if d < best_dist {
             best_dist = d;
-            best = Some((g.id, g.is_midpoint, g.world));
+            best = Some((index, g.id, g.is_midpoint, g.world));
         }
     }
     best
@@ -176,11 +206,11 @@ pub fn find_hit_grip_rte(
     view_rot: Mat4,
     eye: DVec3,
     bounds: Rectangle,
-) -> Option<(usize, bool, DVec3)> {
+) -> Option<(usize, usize, bool, DVec3)> {
     let mut best_dist = GRIP_THRESHOLD_PX;
-    let mut best: Option<(usize, bool, DVec3)> = None;
+    let mut best: Option<(usize, usize, bool, DVec3)> = None;
 
-    for g in grips {
+    for (index, g) in grips.iter().enumerate() {
         let Some(screen) = project_rte(g.world, view_rot, eye, bounds) else {
             continue;
         };
@@ -189,7 +219,7 @@ pub fn find_hit_grip_rte(
         let d = (dx * dx + dy * dy).sqrt();
         if d < best_dist {
             best_dist = d;
-            best = Some((g.id, g.is_midpoint, g.world));
+            best = Some((index, g.id, g.is_midpoint, g.world));
         }
     }
     best

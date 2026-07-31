@@ -3727,6 +3727,7 @@ impl OpenCADStudio {
                     // Wrap around so ◀ from the first vertex lands on the last.
                     let next = (cur + delta as i64).rem_euclid(n as i64) as usize;
                     self.tabs[i].properties.prop_vertex = next;
+                    self.tabs[i].properties.prop_vertex_indicator_active = next != cur as usize;
                     self.refresh_properties();
                 }
                 Task::none()

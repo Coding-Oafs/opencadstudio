@@ -315,14 +315,19 @@ impl OpenCADStudio {
                     // mark that grip hot so the navigated vertex is visible in
                     // the drawing. Only for a single selected polyline, whose
                     // vertex grips are ids 0..n. (Properties vertex stepper)
-                    let current_vertex_grip: Option<usize> = sel_h.and_then(|h| {
+                    let current_vertex_grip: Option<usize> = tab
+                        .properties
+                        .prop_vertex_indicator_active
+                        .then(|| sel_h)
+                        .flatten()
+                        .and_then(|h| {
                         matches!(
                             tab.scene.document.get_entity(h),
                             Some(acadrust::EntityType::LwPolyline(_))
                                 | Some(acadrust::EntityType::Polyline2D(_))
                         )
                         .then_some(tab.properties.prop_vertex)
-                    });
+                        });
                     // In-viewport grips are model-space; project them with the
                     // viewport camera so they sit on the wire the GPU draws.
                     // Paper entities use the 2-D paper transform; the model tab
@@ -349,7 +354,8 @@ impl OpenCADStudio {
                     };
                     screen_grips
                         .into_iter()
-                        .filter(|(_, screen, _, _, _)| {
+                        .enumerate()
+                        .filter(|(_, (_, screen, _, _, _))| {
                             screen.x.is_finite()
                                 && screen.y.is_finite()
                                 && screen.x >= -bounds.width
@@ -357,12 +363,18 @@ impl OpenCADStudio {
                                 && screen.y >= -bounds.height
                                 && screen.y <= bounds.height * 2.0
                         })
-                        .map(|(grip_id, screen, _is_midpoint, shape, dir)| {
-                            let is_hot = tab
-                                .active_grip
-                                .as_ref()
-                                .map_or(false, |g| Some(g.handle) == sel_h && g.grip_id == grip_id)
-                                || Some(grip_id) == current_vertex_grip;
+                        .map(|(index, (grip_id, screen, _is_midpoint, shape, dir))| {
+                            let owner = tab.selected_grip_handles.get(index).copied();
+                            let is_hot = owner.is_some_and(|handle| {
+                                tab.hot_grips.contains(&(handle, grip_id))
+                                    || tab.active_grip.as_ref().is_some_and(|edit| {
+                                        edit.targets.iter().any(|target| {
+                                            target.handle == handle && target.grip_id == grip_id
+                                        })
+                                    })
+                                    || (Some(handle) == sel_h
+                                        && Some(grip_id) == current_vertex_grip)
+                            });
                             crate::ui::overlay::GripMarker {
                                 pos: screen,
                                 shape,

@@ -287,6 +287,9 @@ pub struct PropertiesPanel {
     /// Which vertex a multi-vertex entity (polyline) is focused on — driven by
     /// the Current Vertex ◀ / ▶ stepper. Reset to 0 when the selection changes.
     pub prop_vertex: usize,
+    /// Draw the Current Vertex indicator only after the user changes the
+    /// stepper for the current selection.
+    pub prop_vertex_indicator_active: bool,
     /// Coordinate groups ("Position", "Scale", …) the user expanded into their
     /// component X/Y/Z rows. Collapsed by default; keyed `section:base` and
     /// carried across panel rebuilds so the state survives edits and selection
@@ -319,6 +322,7 @@ impl Default for PropertiesPanel {
             bg_color_picker_open: false,
             open_color_field: None,
             prop_vertex: 0,
+            prop_vertex_indicator_active: false,
             expanded_groups: HashSet::default(),
             edit_choice_open: false,
         }

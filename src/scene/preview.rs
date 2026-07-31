@@ -14,16 +14,20 @@ impl Scene {
         self.preview_wires = wires;
     }
 
-    /// Publish the current cached hatch as a one-entity live fill overlay.
-    /// The edited hatch is hidden from the resident set during a grip drag;
-    /// this keeps its pattern visible without rebuilding the full hatch batch.
-    pub fn set_preview_hatch(&mut self, handle: Handle) {
+    /// Publish all edited hatches as one live fill overlay.
+    pub fn set_preview_hatches(&mut self, handles: &[Handle]) {
+        let mut models = Vec::new();
+        for &handle in handles {
+            self.append_preview_hatch(handle, &mut models);
+        }
+        self.preview_hatches = std::sync::Arc::new(models);
+    }
+
+    fn append_preview_hatch(&self, handle: Handle, models: &mut Vec<HatchModel>) {
         let Some(mut model) = self.hatches.get(&handle).cloned() else {
-            self.preview_hatches = std::sync::Arc::new(Vec::new());
             return;
         };
         let Some(entity) = self.document.get_entity(handle) else {
-            self.preview_hatches = std::sync::Arc::new(Vec::new());
             return;
         };
 
@@ -41,7 +45,6 @@ impl Scene {
             .get(&handle.value())
             .map_or(0.0, |depth| depth[0]);
 
-        let mut models = Vec::with_capacity(2);
         if let EntityType::Hatch(hatch) = entity {
             if let Some(background) = crate::entities::hatch::background_color(hatch) {
                 let mut backdrop = model.clone();
@@ -63,7 +66,6 @@ impl Scene {
             }
         }
         models.push(model);
-        self.preview_hatches = std::sync::Arc::new(models);
     }
 
     pub fn set_preview_text(&mut self, verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>) {

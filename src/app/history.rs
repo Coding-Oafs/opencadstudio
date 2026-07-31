@@ -184,21 +184,27 @@ impl OpenCADStudio {
         );
     }
 
-    pub(super) fn push_single_entity_history(
+    pub(super) fn push_entity_group_history(
         &mut self,
         i: usize,
         label: impl Into<String>,
-        handle: Handle,
-        before: Arc<EntityType>,
+        before: Vec<(Handle, Arc<EntityType>)>,
+        dirty_before: bool,
     ) {
         self.finish_pending_history(i);
-        let Some(after) = self.tabs[i].scene.document.get_entity_arc(handle) else {
+        let entities: Vec<_> = before
+            .into_iter()
+            .filter_map(|(handle, original)| {
+                let after = self.tabs[i].scene.document.get_entity_arc(handle)?;
+                Some((handle, Some(original), Some(after)))
+            })
+            .collect();
+        if entities.is_empty() {
             return;
-        };
+        }
         let selected: Vec<Handle> = self.tabs[i].scene.selected.iter().copied().collect();
-        let dirty_before = self.tabs[i].dirty;
         let delta = DeltaSnapshot {
-            entities: vec![(handle, Some(before), Some(after))],
+            entities,
             current_layout_before: self.tabs[i].scene.current_layout.clone(),
             current_layout_after: self.tabs[i].scene.current_layout.clone(),
             selected_before: selected.clone(),
