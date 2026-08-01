@@ -18,8 +18,12 @@ impl Scene {
     pub fn set_preview_hatches(&mut self, handles: &[Handle]) {
         let mut models = Vec::new();
         for &handle in handles {
+            // Keep the existing direct Hatch/Solid preview path. INSERT has no
+            // entry in `self.hatches`, so this is a no-op for it and the full
+            // block expansion below supplies its fills.
             self.append_preview_hatch(handle, &mut models);
         }
+        models.extend(self.preview_insert_hatch_models(handles));
         self.preview_hatches = std::sync::Arc::new(models);
     }
 

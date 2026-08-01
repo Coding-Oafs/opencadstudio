@@ -1027,6 +1027,61 @@ impl Scene {
         tint_selected: bool,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
     ) -> Vec<HatchModel> {
+        self.exploded_insert_hatch_models_filtered(
+            layout_block,
+            hatch_bg,
+            tint_selected,
+            frozen,
+            None,
+            false,
+        )
+    }
+
+    /// Build live hatch overlays for INSERT grip previews. The edited INSERT
+    /// is intentionally hidden from the resident scene while its current
+    /// document entity moves, so include that hidden target and reuse the full
+    /// block-expansion path for nested inserts, inherited styles and XCLIP.
+    pub(super) fn preview_insert_hatch_models(&self, handles: &[Handle]) -> Vec<HatchModel> {
+        let targets: rustc_hash::FxHashSet<Handle> = handles
+            .iter()
+            .copied()
+            .filter(|&handle| {
+                matches!(self.document.get_entity(handle), Some(EntityType::Insert(_)))
+            })
+            .collect();
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        let hatch_bg = if self.current_layout != "Model" {
+            self.paper_bg_color
+        } else {
+            self.bg_color
+        };
+        let frozen: rustc_hash::FxHashSet<Handle> = self
+            .interaction_viewport_frozen_layers()
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect();
+        self.exploded_insert_hatch_models_filtered(
+            self.interaction_block_handle(),
+            hatch_bg,
+            true,
+            (!frozen.is_empty()).then_some(&frozen),
+            Some(&targets),
+            true,
+        )
+    }
+
+    fn exploded_insert_hatch_models_filtered(
+        &self,
+        layout_block: Handle,
+        hatch_bg: [f32; 4],
+        tint_selected: bool,
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        targets: Option<&rustc_hash::FxHashSet<Handle>>,
+        include_preview_hidden: bool,
+    ) -> Vec<HatchModel> {
         let layer_hidden = |layer: &str| {
             self.document
                 .layers
@@ -1117,8 +1172,13 @@ impl Scene {
             let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
+            if targets.is_some_and(|targets| !targets.contains(&ins.common.handle)) {
+                continue;
+            }
+            let temporarily_hidden = self.object_isolation.hides(ins.common.handle)
+                || (!include_preview_hidden && self.preview_hidden.contains(&ins.common.handle));
             if ins.common.invisible
-                || self.entity_temporarily_hidden(ins.common.handle)
+                || temporarily_hidden
                 || layer_hidden(&ins.common.layer)
             {
                 continue;

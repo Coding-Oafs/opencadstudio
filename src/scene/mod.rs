@@ -5104,14 +5104,19 @@ impl Scene {
                 let cache = self.hatch_cache.borrow();
                 match cache.get(&space) {
                     // Selection tint is baked in, so the selected set must also
-                    // match; category = a changed handle that is a hatch/solid fill.
+                    // match; category = a changed direct fill or an INSERT
+                    // whose expanded block tree can contain hatch fills.
                     Some((cached_epoch, cached_sel, arc))
                         if *cached_sel == sel_sig
                             && self.category_cache_valid(
                                 *cached_epoch,
-                                CACHE_CATEGORY_HATCH,
+                                CACHE_CATEGORY_HATCH | CACHE_CATEGORY_INSERT_HATCH,
                                 |h| {
-                                self.hatches.contains_key(&h)
+                                    self.hatches.contains_key(&h)
+                                        || matches!(
+                                            self.document.get_entity(h),
+                                            Some(EntityType::Insert(_))
+                                        )
                                 },
                             ) =>
                     {
@@ -5149,11 +5154,12 @@ impl Scene {
     fn selected_hatch_sig(&self) -> u64 {
         let mut sig = 0u64;
         let mut count = 0u64;
-        for h in self
-            .selected
-            .iter()
-            .filter(|handle| self.hatches.contains_key(handle))
-        {
+        for &h in &self.selected {
+            if !self.hatches.contains_key(&h)
+                && !matches!(self.document.get_entity(h), Some(EntityType::Insert(_)))
+            {
+                continue;
+            }
             count += 1;
             sig ^= h.value().wrapping_mul(0x9E37_79B9_7F4A_7C15);
         }
