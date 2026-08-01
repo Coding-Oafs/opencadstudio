@@ -355,6 +355,10 @@ impl CadCommand for PlineCommand {
         }
     }
 
+    fn enter_accepts_default_start(&self) -> bool {
+        self.vertices.is_empty()
+    }
+
     fn on_escape(&mut self) -> CmdResult {
         match self.live_handle {
             Some(handle) => CmdResult::FinalizeLiveEntity(handle),

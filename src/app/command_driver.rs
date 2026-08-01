@@ -4,6 +4,68 @@ use acadrust::Handle;
 use iced::Task;
 
 impl OpenCADStudio {
+    /// Point supplied by a bare Enter before LINE/PLINE's first click. Prefer
+    /// the current endpoint of the most recently created path drawable in the
+    /// active space. A loaded drawing has no runtime anchor, so recover its
+    /// newest line/arc/polyline endpoint. An empty space starts at the active
+    /// UCS origin (0,0,0 in user coordinates).
+    fn default_draw_start(&self, i: usize) -> glam::DVec3 {
+        let tab = &self.tabs[i];
+        let endpoint = |entity: &acadrust::EntityType| {
+            let last_grip = match entity {
+                acadrust::EntityType::Line(line) => {
+                    return Some(glam::DVec3::new(
+                        line.end.x,
+                        line.end.y,
+                        line.end.z,
+                    ));
+                }
+                acadrust::EntityType::Arc(_) => Some(2),
+                acadrust::EntityType::LwPolyline(polyline) => {
+                    polyline.vertices.len().checked_sub(1)
+                }
+                acadrust::EntityType::Polyline(polyline) => {
+                    polyline.vertices.len().checked_sub(1)
+                }
+                acadrust::EntityType::Polyline2D(polyline) => {
+                    polyline.vertices.len().checked_sub(1)
+                }
+                acadrust::EntityType::Polyline3D(polyline) => {
+                    polyline.vertices.len().checked_sub(1)
+                }
+                _ => None,
+            }?;
+            crate::scene::view::dispatch::grips(entity)
+                .into_iter()
+                .find(|grip| grip.id == last_grip)
+                .map(|grip| grip.world)
+        };
+
+        if let Some(handle) = tab.last_draw_anchor {
+            if tab.scene.entity_belongs_to_active_space(handle) {
+                if let Some(point) = tab.scene.document.get_entity(handle).and_then(endpoint) {
+                    return point;
+                }
+            }
+        }
+
+        let recovered = tab
+            .scene
+            .document
+            .entities()
+            .filter_map(|entity| {
+                let handle = entity.common().handle;
+                tab.scene
+                    .entity_belongs_to_active_space(handle)
+                    .then(|| endpoint(entity).map(|point| (handle, point)))
+                    .flatten()
+            })
+            .max_by_key(|(handle, _)| handle.value())
+            .map(|(_, point)| point);
+
+        recovered.unwrap_or_else(|| tab.ucs_origin_world())
+    }
+
     /// Drop cursor-relative state that was computed in the drawing space being
     /// left. This is also used by MVIEW, whose command object survives its
     /// intentional paper/model round-trip while its old-space overlays cannot.
@@ -169,10 +231,30 @@ impl OpenCADStudio {
             }
         }
         let i = self.active_tab;
+        let default_start = matches!(&input, StepInput::Enter)
+            && self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .is_some_and(|command| command.enter_accepts_default_start());
+        let input = if default_start {
+            StepInput::Point(self.default_draw_start(i))
+        } else {
+            input
+        };
         if let StepInput::Point(point) = &input {
             if !self.command_point_allowed(i, *point) {
                 return Task::none();
             }
+        }
+        if default_start {
+            let StepInput::Point(point) = &input else {
+                unreachable!("default command start must be a point");
+            };
+            self.last_point = Some(*point);
+            self.dyn_user_reshaped = false;
+            self.sync_dyn_fields();
+            self.reset_tracking_after_point();
+            self.push_ucs_to_cmd(i);
         }
         let ctrl = self.ctrl_down;
         let shift = self.shift_down;
@@ -1245,6 +1327,15 @@ impl OpenCADStudio {
                 entity,
                 finish,
             } => {
+                let tracks_draw_anchor = matches!(
+                    &entity,
+                    acadrust::EntityType::Line(_)
+                        | acadrust::EntityType::Arc(_)
+                        | acadrust::EntityType::LwPolyline(_)
+                        | acadrust::EntityType::Polyline(_)
+                        | acadrust::EntityType::Polyline2D(_)
+                        | acadrust::EntityType::Polyline3D(_)
+                );
                 // Replace the live entity's geometry in place, preserving its
                 // handle and layer (the fresh entity from the command carries
                 // defaults — a NULL handle would desync it from the document
@@ -1262,6 +1353,9 @@ impl OpenCADStudio {
                         .scene
                         .bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
                     self.tabs[i].dirty = true;
+                }
+                if tracks_draw_anchor {
+                    self.tabs[i].last_draw_anchor = Some(handle);
                 }
                 if finish {
                     self.finish_live_entity_history(i, handle);
@@ -1292,6 +1386,12 @@ impl OpenCADStudio {
                 // document, drop its provisional history entry and keep
                 // prompting. A later second point creates one fresh entry.
                 self.tabs[i].scene.erase_entities(&[handle]);
+                if self.tabs[i]
+                    .last_draw_anchor
+                    .is_some_and(|anchor_handle| anchor_handle == handle)
+                {
+                    self.tabs[i].last_draw_anchor = None;
+                }
                 self.discard_last_undo_entry(i);
                 self.tabs[i].dirty = true;
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());

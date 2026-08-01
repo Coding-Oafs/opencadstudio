@@ -132,6 +132,9 @@ pub(super) struct DocumentTab {
     /// "Previous" keyword at any Select objects prompt (#426).
     pub(super) prev_selection: Vec<acadrust::Handle>,
     pub(super) last_cmd: Option<String>,
+    /// Most recently created path drawable. A fresh LINE/PLINE can accept its
+    /// current final endpoint with Enter before the first click.
+    pub(super) last_draw_anchor: Option<Handle>,
     pub(super) snap_result: Option<SnapResult>,
     pub(super) active_grip: Option<GripEdit>,
     pub(super) selected_grips: Vec<GripDef>,
@@ -437,6 +440,7 @@ impl DocumentTab {
             layers: LayerPanel::default(),
             active_cmd: None,
             last_cmd: None,
+            last_draw_anchor: None,
             snap_result: None,
             active_grip: None,
             selected_grips: vec![],

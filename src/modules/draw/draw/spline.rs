@@ -143,6 +143,10 @@ impl CadCommand for SplineCommand {
         }
     }
 
+    fn enter_accepts_default_start(&self) -> bool {
+        self.pts.is_empty()
+    }
+
     fn on_escape(&mut self) -> CmdResult {
         match self.build(false) {
             Some(e) => CmdResult::CommitAndExit(e),
