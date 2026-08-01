@@ -580,6 +580,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // Cancel layout rename first, then fall through.
                 let i_e = self.active_tab;
                 if self.qselect.take().is_some() {
+                    self.reset_modal_geometry();
                     return Task::none();
                 }
                 {
@@ -779,8 +780,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     pub(super) fn on_layer_delete_confirm(&mut self) -> Task<Message> {
         let i = self.active_tab;
         self.active_modal = None;
-        self.modal_offset = iced::Vector::ZERO;
-        self.modal_resize = iced::Vector::ZERO;
+        self.reset_modal_geometry();
         let Some((names, _)) = self.layer_delete_pending.take() else {
             return Task::none();
         };
@@ -1224,6 +1224,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     value: String::new(),
                     append: false,
                 });
+                self.reset_modal_geometry();
                 Task::none()
     }
 
@@ -2041,8 +2042,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     pub(super) fn cancel_attr_editor(&mut self) {
         if self.active_modal == Some(crate::app::ModalKind::AttributeEditor) {
             self.active_modal = None;
-            self.modal_offset = iced::Vector::ZERO;
-            self.modal_resize = iced::Vector::ZERO;
+            self.reset_modal_geometry();
         }
         self.attr_editor_handle = None;
         self.attr_editor_block.clear();

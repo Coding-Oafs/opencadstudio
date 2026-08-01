@@ -1,6 +1,6 @@
 use crate::app::Message;
 use iced::widget::{button, column, row, text, text_input, Space};
-use iced::{Element, Fill};
+use iced::{Element, Fill, Length, Shrink};
 
 pub const FIND_INPUT_ID: &str = "find-replace-search";
 
@@ -8,7 +8,13 @@ pub fn view_window<'a>(
     search: &'a str,
     replacement: &'a str,
     status: &'a str,
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
+    let field_width = if matches!(sizing.width, Length::Fill) {
+        Fill
+    } else {
+        Shrink
+    };
     let find_input = text_input("Text to find", search)
         .id(iced::widget::Id::new(FIND_INPUT_ID))
         .on_input(Message::FindReplaceSearchChanged)
@@ -33,13 +39,13 @@ pub fn view_window<'a>(
     column![
         row![
             text("Find:").size(12).width(90),
-            find_input.width(Fill),
+            find_input.width(field_width),
         ]
         .spacing(8)
         .align_y(iced::Center),
         row![
             text("Replace with:").size(12).width(90),
-            replacement_input.width(Fill),
+            replacement_input.width(field_width),
         ]
         .spacing(8)
         .align_y(iced::Center),
@@ -47,7 +53,7 @@ pub fn view_window<'a>(
             .size(11),
         text(status).size(11),
         row![
-            Space::new().width(Fill),
+            Space::new().width(field_width),
             button(text("Close").size(12))
                 .on_press(Message::CloseModal)
                 .padding([6, 12])
@@ -61,6 +67,7 @@ pub fn view_window<'a>(
     ]
     .spacing(10)
     .padding(12)
-    .width(Fill)
+    .width(sizing.width)
+    .height(sizing.height)
     .into()
 }

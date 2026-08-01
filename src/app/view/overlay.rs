@@ -81,9 +81,10 @@ const MTEXT_FONTS: [&str; 10] = [
 /// world XY plane; the program fits + vertically flips them into the box.
 pub(in crate::app) const MTEXT_PREVIEW_PAD: f32 = 12.0;
 pub(in crate::app) const MTEXT_PREVIEW_EM_PX: f32 = 15.0;
-pub(in crate::app) const MTEXT_EDITOR_BASE_WIDTH: f32 = 660.0;
+// Used only until the shared modal sensor reports the first real layout width.
+const MTEXT_EDITOR_FALLBACK_WIDTH: f32 = 660.0;
 pub(in crate::app) const MTEXT_EDITOR_WRITING_WIDTH: f32 =
-    MTEXT_EDITOR_BASE_WIDTH - 2.0 * MTEXT_PREVIEW_PAD;
+    MTEXT_EDITOR_FALLBACK_WIDTH - 2.0 * MTEXT_PREVIEW_PAD;
 
 struct MTextPreview {
     /// Disconnected polylines as (x, y) world points + colour (NaN-split done).
@@ -334,13 +335,59 @@ fn mtext_preview_segments(
 pub(super) fn mtext_editor_overlay<'a>(
     ed: &'a super::super::mtext_editor::MTextEditorState,
     styles: Vec<String>,
-    canvas_size: (f32, f32),
     modal_offset: iced::Vector,
     modal_resize: iced::Vector,
+    modal_content_size: Option<iced::Size>,
 ) -> Element<'a, Message> {
-    let sizing = crate::ui::modal::ModalSizing::from_resize(modal_resize);
+    let writing_area_px = modal_content_size
+        .map(|size| size.width - 2.0 * MTEXT_PREVIEW_PAD)
+        .unwrap_or(MTEXT_EDITOR_WRITING_WIDTH)
+        .max(80.0);
+    let measurement = mtext_editor_content(
+        ed,
+        &styles,
+        crate::ui::modal::ModalSizing::INTRINSIC,
+        writing_area_px,
+        (writing_area_px * 0.5).max(1.0),
+    );
+    let content = mtext_editor_content(
+        ed,
+        &styles,
+        crate::ui::modal::ModalSizing::FILL,
+        writing_area_px,
+        (writing_area_px * 0.5).max(1.0),
+    );
+    let content = crate::ui::modal::intrinsic(
+        measurement,
+        content,
+        iced::Size::INFINITE,
+        modal_resize,
+    );
+
+    crate::ui::modal::modal(
+        iced::widget::Space::new().width(Fill).height(Fill),
+        "Text Editor",
+        content,
+        Message::MTextCancel,
+        modal_offset,
+        crate::ui::modal::ModalOptions::STANDARD,
+    )
+}
+
+fn mtext_editor_content<'a>(
+    ed: &'a super::super::mtext_editor::MTextEditorState,
+    styles: &[String],
+    sizing: crate::ui::modal::ModalSizing,
+    writing_area_px: f32,
+    intrinsic_preview_height: f32,
+) -> Element<'a, Message> {
     let width = sizing.width;
     let height = sizing.height;
+    let preview_height = if matches!(height, iced::Length::Fill) {
+        iced::Length::Fill
+    } else {
+        iced::Length::Fixed(intrinsic_preview_height)
+    };
     use super::super::mtext_editor::{JustifyChoice, MTextFmt, ParaAlign};
     use iced::widget::canvas;
 
@@ -387,7 +434,7 @@ pub(super) fn mtext_editor_overlay<'a>(
     let style_opts: Vec<String> = if styles.is_empty() {
         vec!["Standard".to_string()]
     } else {
-        styles
+        styles.to_vec()
     };
     let style_pl = iced::widget::pick_list(
         Some(ed.style.clone()),
@@ -524,8 +571,6 @@ pub(super) fn mtext_editor_overlay<'a>(
     .align_y(iced::Alignment::Center)
     .width(width);
 
-    let writing_area_px =
-        (MTEXT_EDITOR_BASE_WIDTH + modal_resize.x - 2.0 * MTEXT_PREVIEW_PAD).max(80.0);
     let preview_scale = ed.preview_scale();
     let slider_min = 1e-6_f64;
     let slider_max =
@@ -533,10 +578,10 @@ pub(super) fn mtext_editor_overlay<'a>(
     let width_slider = column![
         row![
             text(format!("Width: {:.3}", ed.rect_width)).size(11),
-            Space::new().width(Fill),
+            Space::new().width(width),
             text(format!("{:.0}%", ed.rect_width / slider_max * 100.0)).size(11),
         ]
-        .width(Fill),
+        .width(width),
         container(
             iced::widget::slider(
                 slider_min..=slider_max,
@@ -544,10 +589,10 @@ pub(super) fn mtext_editor_overlay<'a>(
                 Message::MTextRectWidth,
             )
             .step((slider_max * 0.01).max(1e-6))
-            .width(Fill),
+            .width(width),
         )
         .padding([0.0, MTEXT_PREVIEW_PAD])
-        .width(Fill),
+        .width(width),
     ]
     .spacing(2)
     .width(width);
@@ -555,7 +600,29 @@ pub(super) fn mtext_editor_overlay<'a>(
     // ── Body: the rendered preview (the editor is preview-only). It fills the
     // space left by the toolbars, so the resizable modal's extra height flows
     // into the text area. ─────────────────────────────────────────────────
-    let body: Element<'a, Message> = {
+    let body: Element<'a, Message> = if !matches!(height, iced::Length::Fill) {
+        // The preview is a flexible scroll viewport. Measuring its real canvas
+        // would make long/wide MText dictate the dialog size, so the intrinsic
+        // pass uses an empty viewport proxy. The toolbars alone determine its
+        // width; the preview height follows that measured writing width.
+        container(Space::new())
+            .style(move |theme: &Theme| {
+                let palette = theme.palette();
+                container::Style {
+                background: Some(Background::Color(palette.background.base.color)),
+                border: Border {
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                    radius: 3.0.into(),
+                },
+                ..Default::default()
+                }
+            })
+            .padding(2)
+            .width(width)
+            .height(preview_height)
+            .into()
+    } else {
         let segments = mtext_preview_segments(ed);
         let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (seg, _, _) in &segments {
@@ -616,7 +683,7 @@ pub(super) fn mtext_editor_overlay<'a>(
                     horizontal: Scrollbar::default(),
                 })
                 .width(width)
-                .height(height),
+                .height(preview_height),
         )
             .style(move |theme: &Theme| {
                 let palette = theme.palette();
@@ -632,7 +699,7 @@ pub(super) fn mtext_editor_overlay<'a>(
             })
             .padding(2)
             .width(width)
-            .height(height)
+            .height(preview_height)
             .into()
     };
 
@@ -655,30 +722,15 @@ pub(super) fn mtext_editor_overlay<'a>(
     .width(width)
     .padding([5, 8]);
 
-    // The shared modal frame supplies the panel background, drag title bar,
-    // ✕ (which also cancels) and the resize grip. Iced 0.15 measures this
-    // content first and clamps it to the user-growable maximum.
-    let content = container(
+    container(
         column![action_bar, row1, row2, width_slider, body]
             .spacing(6)
             .width(width)
             .height(height),
     )
-    .width(iced::Length::Fit.max(MTEXT_EDITOR_BASE_WIDTH + modal_resize.x))
-    .height(iced::Length::Fit.max(480.0 + modal_resize.y));
-
-    let _ = canvas_size; // positioned & sized by the modal frame now
-    // `modal` sizes its stack from the base layer, so the base must fill the
-    // area (a zero-size base collapses the whole overlay to nothing). The
-    // transparent fill lets the dimmed viewport show through beneath.
-    crate::ui::modal::modal(
-        iced::widget::Space::new().width(Fill).height(Fill),
-        "Text Editor",
-        content,
-        Message::MTextCancel,
-        modal_offset,
-        crate::ui::modal::ModalOptions::STANDARD,
-    )
+    .width(width)
+    .height(height)
+    .into()
 }
 
 // ── Viewport right-click context menu ──────────────────────────────────────
@@ -944,6 +996,43 @@ pub(super) fn qselect_overlay<'a>(
     state: &'a crate::app::QSelectState,
     types: &[String],
     properties: &[(String, String)],
+    modal_offset: iced::Vector,
+    modal_resize: iced::Vector,
+) -> Element<'a, Message> {
+    let measurement = qselect_content(
+        state,
+        types,
+        properties,
+        crate::ui::modal::ModalSizing::INTRINSIC,
+    );
+    let content = qselect_content(
+        state,
+        types,
+        properties,
+        crate::ui::modal::ModalSizing::FILL,
+    );
+    let content = crate::ui::modal::intrinsic(
+        measurement,
+        content,
+        iced::Size::INFINITE,
+        modal_resize,
+    );
+
+    crate::ui::modal::modal(
+        Space::new().width(Fill).height(Fill),
+        "Quick Select",
+        content,
+        Message::QSelectClose,
+        modal_offset,
+        crate::ui::modal::ModalOptions::STANDARD,
+    )
+}
+
+fn qselect_content<'a>(
+    state: &'a crate::app::QSelectState,
+    types: &[String],
+    properties: &[(String, String)],
+    sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     use iced::widget::{checkbox};
     let mut type_options: Vec<String> = vec![QSELECT_ANY_TYPE.to_string()];
@@ -986,6 +1075,11 @@ pub(super) fn qselect_overlay<'a>(
     // operator is "*Any value" — both of those skip the value test.
     let value_enabled =
         state.property.is_some() && !matches!(state.operator, crate::app::QSelectOp::Any);
+    let field_width = if matches!(sizing.width, iced::Length::Fill) {
+        Fill
+    } else {
+        iced::Length::Shrink
+    };
 
     let label = |s: &'static str| {
         text(s)
@@ -1021,14 +1115,14 @@ pub(super) fn qselect_overlay<'a>(
             .padding([4, 14])
     };
 
-    let mut value_input = text_input("", &state.value).size(12);
+    let mut value_input = text_input("", &state.value)
+        .size(12)
+        .width(field_width);
     if value_enabled {
         value_input = value_input.on_input(Message::QSelectSetValue);
     }
 
     let panel_body = column![
-        text("Quick Select").size(14),
-        Space::new().height(10),
         row![
             label("Object type:"),
             iced::widget::pick_list(
@@ -1043,10 +1137,11 @@ pub(super) fn qselect_overlay<'a>(
                     Message::QSelectSetType(Some(s))
                 }
             })
-            .width(Fill),
+            .width(field_width),
         ]
         .align_y(iced::Alignment::Center)
-        .spacing(8),
+        .spacing(8)
+        .width(sizing.width),
         Space::new().height(6),
         row![
             label("Property:"),
@@ -1062,10 +1157,11 @@ pub(super) fn qselect_overlay<'a>(
                         Message::QSelectSetProperty(Some(p))
                     }
                 })
-            .width(Fill),
+            .width(field_width),
         ]
         .align_y(iced::Alignment::Center)
-        .spacing(8),
+        .spacing(8)
+        .width(sizing.width),
         Space::new().height(6),
         row![
             label("Operator:"),
@@ -1075,14 +1171,16 @@ pub(super) fn qselect_overlay<'a>(
                 |value| value.to_string(),
             )
             .on_select(Message::QSelectSetOperator)
-            .width(Fill),
+            .width(field_width),
         ]
         .align_y(iced::Alignment::Center)
-        .spacing(8),
+        .spacing(8)
+        .width(sizing.width),
         Space::new().height(6),
         row![label("Value:"), value_input,]
             .align_y(iced::Alignment::Center)
-            .spacing(8),
+            .spacing(8)
+            .width(sizing.width),
         Space::new().height(10),
         row![
             checkbox(state.append)
@@ -1094,18 +1192,21 @@ pub(super) fn qselect_overlay<'a>(
         .align_y(iced::Alignment::Center),
         Space::new().height(14),
         row![
-            Space::new().width(Fill),
+            Space::new().width(field_width),
             btn("Cancel", Message::QSelectClose, false),
             Space::new().width(8),
             btn("Apply", Message::QSelectApply, true),
         ]
         .align_y(iced::Alignment::Center),
     ]
-    .spacing(0);
+    .spacing(0)
+    .width(sizing.width)
+    .height(sizing.height);
 
     let panel = container(panel_body)
         .padding(16)
-        .width(iced::Length::Fixed(400.0))
+        .width(sizing.width)
+        .height(sizing.height)
         .style(|theme: &Theme| {
             let palette = theme.palette();
             container::Style {
@@ -1119,18 +1220,5 @@ pub(super) fn qselect_overlay<'a>(
             }
         });
 
-    // Outside-click catcher — fills the whole screen, sits below the
-    // panel. The panel itself is rendered above and absorbs its own
-    // clicks via standard widget event handling.
-    let catcher = mouse_area(
-        container(iced::widget::Space::new().width(Fill).height(Fill))
-            .width(Fill)
-            .height(Fill),
-    )
-    .on_press(Message::QSelectClose)
-    .on_right_press(Message::QSelectClose);
-
-    let centered = container(iced::widget::opaque(panel)).center(Fill);
-
-    stack![catcher, centered].into()
+    panel.into()
 }

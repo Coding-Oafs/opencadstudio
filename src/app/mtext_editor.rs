@@ -594,8 +594,7 @@ impl super::OpenCADStudio {
         // Open centred at the editor's natural size: it renders through the
         // shared modal frame, which `modal_offset` positions and `modal_resize`
         // grows (both draggable, so reset on open).
-        self.modal_offset = iced::Vector::ZERO;
-        self.modal_resize = iced::Vector::ZERO;
+        self.reset_modal_geometry();
         self.rebuild_mtext_preview();
         // The preview uses a fixed on-screen text size. Therefore the initial
         // wrap width is the drawing-unit span that exactly reaches the right
@@ -1242,6 +1241,7 @@ impl super::OpenCADStudio {
     /// Discard the editor without changing the drawing.
     pub(super) fn mtext_cancel(&mut self) {
         self.mtext_editor = None;
+        self.reset_modal_geometry();
     }
 }
 

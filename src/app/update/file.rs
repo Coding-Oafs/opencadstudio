@@ -399,6 +399,7 @@ impl OpenCADStudio {
     /// Check if a suspended command exists on the active tab and resume it
     /// with the outcome of the text editor.
     pub(in crate::app) fn post_editor_closed(&mut self, committed: bool) -> Task<Message> {
+        self.reset_modal_geometry();
         let i = self.active_tab;
         if let Some(mut cmd) = self.tabs[i].suspended_cmd.take() {
             let res = cmd.on_editor_closed(committed);
@@ -3328,6 +3329,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         // the runtime paper/scale choices still drive this one plot operation.
         self.sync_dialog_plot_runtime();
         self.active_modal = None;
+        self.reset_modal_geometry();
 
         let plot_style = self.dialog_plot_style(&d);
         // Extents, Window and Display use one plot path in both spaces. Only

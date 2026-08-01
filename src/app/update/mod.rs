@@ -93,6 +93,15 @@ mod util;
 mod viewport;
 
 impl OpenCADStudio {
+    pub(in crate::app) fn reset_modal_geometry(&mut self) {
+        self.modal_offset = iced::Vector::ZERO;
+        self.modal_resize = iced::Vector::ZERO;
+        self.modal_content_size = None;
+        self.modal_drag_last = None;
+        self.modal_dragging = false;
+        self.modal_resizing = false;
+    }
+
     fn sync_open_command_history(&mut self) {
         if !self.command_line.history_open {
             return;
@@ -167,10 +176,7 @@ impl OpenCADStudio {
         }
         self.active_modal = None;
         // Recentre / reset the size of the next dialog and drop any drag.
-        self.modal_offset = iced::Vector::ZERO;
-        self.modal_resize = iced::Vector::ZERO;
-        self.modal_drag_last = None;
-        self.modal_dragging = false;
+        self.reset_modal_geometry();
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
@@ -1423,6 +1429,7 @@ impl OpenCADStudio {
                 if self.active_modal == Some(super::ModalKind::Layers) {
                     self.ribbon.deactivate_tool_if("LAYERS");
                     self.active_modal = None;
+                    self.reset_modal_geometry();
                 } else {
                     self.sync_ribbon_layers();
                     self.active_modal = Some(super::ModalKind::Layers);
@@ -3335,6 +3342,7 @@ impl OpenCADStudio {
 
             Message::QSelectClose => {
                 self.qselect = None;
+                self.reset_modal_geometry();
                 Task::none()
             }
 
@@ -3390,6 +3398,7 @@ impl OpenCADStudio {
                 let Some(state) = self.qselect.take() else {
                     return Task::none();
                 };
+                self.reset_modal_geometry();
                 let i = self.active_tab;
                 let matched = self.tabs[i].scene.qselect(
                     state.type_filter.as_deref(),
@@ -4402,6 +4411,32 @@ impl OpenCADStudio {
                 self.modal_drag_last = None;
                 Task::none()
             }
+            Message::ModalContentResized(size) => {
+                if !size.width.is_finite()
+                    || !size.height.is_finite()
+                    || size.width <= 0.0
+                    || size.height <= 0.0
+                {
+                    return Task::none();
+                }
+                let first_measurement = self.modal_content_size.replace(size).is_none();
+                if first_measurement {
+                    let initial_width = self.mtext_editor.as_ref().and_then(|editor| {
+                        editor.editing.is_none().then(|| {
+                            (size.width - 2.0 * super::view::overlay::MTEXT_PREVIEW_PAD)
+                                .max(80.0)
+                                / editor.preview_scale()
+                        })
+                    });
+                    if let (Some(editor), Some(width)) =
+                        (self.mtext_editor.as_mut(), initial_width)
+                    {
+                        editor.rect_width = f64::from(width.max(1e-6));
+                        self.rebuild_mtext_preview();
+                    }
+                }
+                Task::none()
+            }
             Message::RibbonLayerFilterChanged(f) => {
                 self.ribbon.layer_filter = f;
                 Task::none()
@@ -4444,8 +4479,11 @@ impl OpenCADStudio {
                         // of being squeezed (the off-centre padding shrinks the
                         // dialog once it overlaps a border).
                         if let Some((cw, ch)) = self.modal_outer_size() {
-                            let ww = self.vp_size.0 + 440.0;
-                            let wh = self.vp_size.1;
+                            let (ww, wh) = if self.mtext_editor.is_some() {
+                                self.vp_size
+                            } else {
+                                self.win_size
+                            };
                             let max_x = ((ww - cw) * 0.5).max(0.0);
                             let max_y = ((wh - ch) * 0.5).max(0.0);
                             self.modal_offset.x = self.modal_offset.x.clamp(-max_x, max_x);
@@ -5056,6 +5094,7 @@ impl OpenCADStudio {
                 self.file_assoc_enabled = true;
                 self.mark_assoc_prompted();
                 self.active_modal = None;
+                self.reset_modal_geometry();
                 // set_default_app registers the handler first, then makes us the
                 // default — boot no longer does this automatically.
                 Task::perform(
@@ -5067,6 +5106,7 @@ impl OpenCADStudio {
                 self.file_assoc_enabled = false;
                 self.mark_assoc_prompted();
                 self.active_modal = None;
+                self.reset_modal_geometry();
                 Task::none()
             }
             Message::AssocResult(result) => {

@@ -65,6 +65,7 @@ impl OpenCADStudio {
         self.aec_drop_acknowledged = false;
         if self.active_modal == Some(crate::app::ModalKind::SaveDialog) {
             self.active_modal = None;
+            self.reset_modal_geometry();
         }
         Task::none()
     }
@@ -94,6 +95,7 @@ impl OpenCADStudio {
     pub(in crate::app) fn close_unsaved_dialog_window(&mut self) -> Task<Message> {
         if self.active_modal == Some(crate::app::ModalKind::Unsaved) {
             self.active_modal = None;
+            self.reset_modal_geometry();
         }
         Task::none()
     }

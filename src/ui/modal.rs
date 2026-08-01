@@ -9,7 +9,7 @@ use crate::app::Message;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{mouse, overlay, renderer, Shell};
-use iced::widget::{button, column, container, mouse_area, opaque, row, stack, Space};
+use iced::widget::{button, column, container, mouse_area, opaque, row, sensor, stack, Space};
 use iced::{
     Background, Border, Element, Event, Length, Padding, Rectangle, Renderer, Size, Theme, Vector,
 };
@@ -42,10 +42,6 @@ impl ModalSizing {
         width: Length::Fill,
         height: Length::Fill,
     };
-
-    pub fn from_resize(_resize: Vector) -> Self {
-        Self::FILL
-    }
 }
 
 /// Measure an intrinsic copy of `content`, then lay the fill copy out in the
@@ -326,9 +322,10 @@ pub fn modal<'a>(
     // The first stack layer dictates its intrinsic size. Its top spacer reserves
     // room for the title, while the actual title bar and resize grip overlay it
     // without influencing the modal dimensions.
+    let measured_content = sensor(content).on_resize(Message::ModalContentResized);
     let body_base = column![
         Space::new().height(Length::Fixed(24.0)),
-        content.into(),
+        measured_content,
     ]
     .spacing(6);
     let mut body = stack![body_base, title_bar];

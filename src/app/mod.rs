@@ -515,9 +515,12 @@ pub(super) struct OpenCADStudio {
     /// Layer Manager Name column width in px, adjusted by the divider drag.
     layer_name_col_w: f32,
     /// How far the user has dragged the modal's corner resize grip from the
-    /// dialog's natural size (added to each modal's default width/height). Reset
+    /// dialog's natural size (added to its measured width/height). Reset
     /// with `modal_offset` so every dialog opens at its own size.
     modal_resize: iced::Vector,
+    /// Last body size reported by the shared modal frame. Used for drag bounds
+    /// and controls whose range follows the real, automatically measured width.
+    modal_content_size: Option<iced::Size>,
     /// True while the modal's corner resize grip is held.
     modal_resizing: bool,
     // ── Attribute editor dialog (ATTEDIT / double-click a block) ───────────
@@ -2293,6 +2296,8 @@ pub enum Message {
     MTextApply,
     /// Grab the resizable modal's corner grip (a drag resizes it).
     ModalResizeGrab,
+    /// The shared modal body finished layout at this size.
+    ModalContentResized(iced::Size),
     /// Discard the editor without creating / changing the entity.
     MTextCancel,
     // ── In-place single-line TEXT editor ────────────────────────────────
@@ -2725,6 +2730,7 @@ impl OpenCADStudio {
             layer_col_dragging: false,
             layer_name_col_w: 130.0,
             modal_resize: iced::Vector::ZERO,
+            modal_content_size: None,
             modal_resizing: false,
             attr_editor_handle: None,
             attr_editor_block: String::new(),
