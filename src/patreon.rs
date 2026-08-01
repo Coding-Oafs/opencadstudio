@@ -15,7 +15,7 @@
 /// To add a supporter, add a `("Display name", cents)` line below. The amount is
 /// in **cents**: a $25 donation is `2500`, €10 is `1000`.
 const MANUAL_SUPPORTERS: &[(&str, i64)] = &[
-    ("Stefano", 6000), // $60
+    ("Stefano", 8750), // $87.50
 ];
 
 /// Append the hand-maintained [`MANUAL_SUPPORTERS`] to `patrons` and sort the
