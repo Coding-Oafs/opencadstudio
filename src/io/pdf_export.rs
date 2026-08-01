@@ -766,18 +766,6 @@ fn emit_hatch(
     // Pattern hatches: rasterise the family lines clipped to the boundary
     // and emit each as a stroked line. Skips the polygon outline entirely.
     if matches!(hatch.pattern, HatchPattern::Pattern(_)) {
-        let segments = hatch.pattern_segments();
-        if segments.is_empty() {
-            return;
-        }
-        ops.push(Op::SetOutlineColor {
-            col: Color::Rgb(Rgb {
-                r,
-                g,
-                b,
-                icc_profile: None,
-            }),
-        });
         let physical = lw_override.unwrap_or_else(|| {
             if options.object_lineweights {
                 (hatch.line_weight_px * LW_PX_TO_PT).max(0.1)
@@ -790,6 +778,21 @@ fn emit_hatch(
         } else {
             scale.max(1e-6)
         };
+        let screen_dot_mm = 25.4 / 96.0;
+        let dot_length = (physical / MM_TO_PT / divisor)
+            .max(screen_dot_mm / scale.max(1e-6));
+        let segments = hatch.pattern_segments_for_plot(dot_length as f64);
+        if segments.is_empty() {
+            return;
+        }
+        ops.push(Op::SetOutlineColor {
+            col: Color::Rgb(Rgb {
+                r,
+                g,
+                b,
+                icc_profile: None,
+            }),
+        });
         ops.push(Op::SetOutlineThickness {
             pt: Pt(physical / divisor),
         });

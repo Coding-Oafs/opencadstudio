@@ -681,7 +681,7 @@ pub fn view_window(
             "Scale lineweights",
             s.scale_lw && !s.fit_to_paper,
             PlotFlag::ScaleLw,
-            common_area && !s.fit_to_paper,
+            !s.fit_to_paper,
         ),
     ].spacing(7));
 

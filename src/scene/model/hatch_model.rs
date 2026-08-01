@@ -203,11 +203,29 @@ impl HatchModel {
     /// `world_origin + boundary[i]` resolved. Solid / gradient hatches return an
     /// empty vec — callers fall back to their solid-fill path.
     ///
-    /// The whole rasterisation is f64 because the pattern is anchored at world
-    /// (0, 0): a hatch at UTM sits ~5e5 away from that anchor, so the line index
-    /// `k` runs to ~1e7 and `origin + k · step` in f32 quantises the family lines
-    /// into visible garbage, as does the `edge − line` cancellation below.
+    /// The whole rasterisation is f64 because boundaries and family origins are
+    /// resolved in absolute WCS. Narrowing them first at UTM magnitudes would
+    /// quantise both the generated lines and the `edge − line` intersections.
     pub fn pattern_segments(&self) -> Vec<[[f64; 2]; 2]> {
+        self.pattern_segments_with_dot_length(None)
+    }
+
+    /// Plot variant of [`Self::pattern_segments`] that renders PAT zero-length
+    /// dash entries at a caller-provided world length. Screen rendering snaps
+    /// these entries to one pixel; plot callers know the model-to-paper scale
+    /// and can therefore choose the equivalent physical mark without tying its
+    /// size to the pattern period.
+    pub(crate) fn pattern_segments_for_plot(
+        &self,
+        dot_length: f64,
+    ) -> Vec<[[f64; 2]; 2]> {
+        self.pattern_segments_with_dot_length(Some(dot_length.max(1e-9)))
+    }
+
+    fn pattern_segments_with_dot_length(
+        &self,
+        plot_dot_length: Option<f64>,
+    ) -> Vec<[[f64; 2]; 2]> {
         let HatchPattern::Pattern(families) = &self.pattern else {
             return Vec::new();
         };
@@ -308,8 +326,8 @@ impl HatchModel {
             // on-screen render.
             let (fx0, fy0) = (family.x0 as f64, family.y0 as f64);
             let origin = [
-                (fx0 * cos_off - fy0 * sin_off) * scale,
-                (fx0 * sin_off + fy0 * cos_off) * scale,
+                ox + (fx0 * cos_off - fy0 * sin_off) * scale,
+                oy + (fx0 * sin_off + fy0 * cos_off) * scale,
             ];
             let mut p_min = f64::INFINITY;
             let mut p_max = f64::NEG_INFINITY;
@@ -394,10 +412,10 @@ impl HatchModel {
                         // absolute phase (so the pattern aligns across spans,
                         // matching the GPU shader). Positive entries are
                         // dashes, negative are gaps, and a zero-length entry is
-                        // a dot — rendered as a short mark so dot patterns
-                        // (e.g. DOTS) are visible instead of drawing nothing.
+                        // a round-capped point.
                         let n = family.dashes.len();
-                        let dot_len: f64 = (period * 0.06).max(1e-3);
+                        let dot_len = plot_dot_length
+                            .unwrap_or_else(|| (period * 0.06).max(1e-3));
                         let phase = t0.rem_euclid(period);
                         // Start at the period boundary at or before t0; the
                         // span clip below drops anything before t0.
@@ -418,7 +436,6 @@ impl HatchModel {
                                     ]);
                                 }
                             } else if d == 0.0 && seg_t >= t0 - 1e-6 && seg_t <= t1 + 1e-6 {
-                                // Short centered mark for the dot.
                                 let a = (seg_t - dot_len * 0.5).max(t0);
                                 let b = (seg_t + dot_len * 0.5).min(t1);
                                 if b > a {

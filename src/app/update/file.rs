@@ -2168,7 +2168,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &mut self,
         path: std::path::PathBuf,
     ) -> Task<Message> {
-        let paper_space = self.tabs[self.active_tab].scene.current_layout != "Model";
         let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
             self.direct_plot_params()
         else {
@@ -2177,10 +2176,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let mut render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
-        if paper_space {
-            render_options.scale_lineweights = false;
-        }
+        let render_options = Self::pdf_plot_options(&self.plot_dialog, group_splits);
         let worker_path = path.clone();
         let work = move || {
             crate::io::pdf_export::export_pdf(
@@ -2527,7 +2523,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
-        let paper_space = self.tabs[self.active_tab].scene.current_layout != "Model";
         let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
             self.direct_plot_params()
         else {
@@ -2536,10 +2531,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
-        let mut options = self.plot_print_options(&self.plot_dialog, group_splits);
-        if paper_space {
-            options.render.scale_lineweights = false;
-        }
+        let options = self.plot_print_options(&self.plot_dialog, group_splits);
         self.command_line.push_info("Sending to system printer…");
         background_task(
             move || {
@@ -2850,7 +2842,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         }
                     }
                     PlotFlag::Center if d.area != "Layout" => d.center = !d.center,
-                    PlotFlag::ScaleLw if d.area != "Layout" && !d.fit_to_paper => {
+                    PlotFlag::ScaleLw if !d.fit_to_paper => {
                         d.scale_lw = !d.scale_lw
                     }
                     PlotFlag::UpsideDown => {
@@ -3244,7 +3236,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .or_else(|| d.scales.first().map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| "1:1".into());
         }
-        d.scale_lw = ps.flags.scale_lineweights && !d.fit_to_paper && d.area != "Layout";
+        d.scale_lw = ps.flags.scale_lineweights && !d.fit_to_paper;
         d.lineweights = ps.flags.print_lineweights;
         d.paperspace_last = ps.flags.draw_viewports_first;
         d.shade = match ps.shade_plot_mode {
@@ -3460,7 +3452,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     ) -> crate::io::pdf_export::PdfPlotOptions {
         crate::io::pdf_export::PdfPlotOptions {
             object_lineweights: d.lineweights,
-            scale_lineweights: d.scale_lw && !d.fit_to_paper && d.area != "Layout",
+            scale_lineweights: d.scale_lw && !d.fit_to_paper,
             transparency: d.transparency,
             stamp: d.stamp,
             merge_lines: d.merge_lines,

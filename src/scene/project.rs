@@ -433,6 +433,13 @@ impl Scene {
             let hatches = self.plot_hatches_for_block(model_block, Some(&frozen));
             for hatch in hatches {
                 if matches!(&hatch.pattern, HatchPattern::Pattern(_)) {
+                    // The GPU draws PAT zero-length dash entries as one-pixel
+                    // dots. Convert that display pixel to model units before
+                    // projecting so vector output keeps the same dot size
+                    // instead of expanding it from the pattern period.
+                    let dot_length = (25.4 / 96.0)
+                        * self.paper_space_unit_factor()
+                        / viewport_scale.max(1e-9);
                     let mut points = Vec::new();
                     let mut aabb = [
                         f32::INFINITY,
@@ -440,7 +447,7 @@ impl Scene {
                         f32::NEG_INFINITY,
                         f32::NEG_INFINITY,
                     ];
-                    for [a, b] in hatch.pattern_segments() {
+                    for [a, b] in hatch.pattern_segments_for_plot(dot_length) {
                         let (Some(a), Some(b)) =
                             (project(a[0], a[1]), project(b[0], b[1]))
                         else {
