@@ -974,10 +974,20 @@ impl Scene {
             self.bg_color
         };
         // Block-internal hatch fills: explode every visible INSERT of this
-        // layout block and materialize its fills at world position. Shared with
-        // the export path so a plot draws them identically. (tint_selected =
-        // true applies the screen selection highlight.)
+        // layout block and materialize its fills at world position. Paper
+        // content viewports also need the model block's INSERT fills; without
+        // them the screen showed an empty/white block while plotting correctly
+        // materialized its solid hatch. (tint_selected = true applies the
+        // screen selection highlight.)
         models.extend(self.exploded_insert_hatch_models(layout_block, hatch_bg, true, frozen));
+        if self.current_layout != "Model" {
+            models.extend(self.exploded_insert_hatch_models(
+                self.model_space_block_handle(),
+                hatch_bg,
+                true,
+                frozen,
+            ));
+        }
 
         // Wide LwPolyline / Polyline2D bands are no longer hatch fills at
         // model level: a flat band is drawn by expanding its centre-line wire
