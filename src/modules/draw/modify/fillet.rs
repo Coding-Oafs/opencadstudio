@@ -91,19 +91,31 @@ fn compute_fillet(
     click2: [f64; 2],
     radius: f64,
 ) -> Option<(EntityType, EntityType, Option<EntityType>)> {
-    let (p1, _p2, u1, _len1) = line_geom(l1);
-    let (p3, _p4, u2, _len2) = line_geom(l2);
+    let (p1, p2, u1, _len1) = line_geom(l1);
+    let (p3, p4, u2, _len2) = line_geom(l2);
 
     // Intersection of infinite lines
-    let (t_p, u_p) = ll(p1[0], p1[1], u1[0], u1[1], p3[0], p3[1], u2[0], u2[1])?;
+    let (t_p, _u_p) = ll(p1[0], p1[1], u1[0], u1[1], p3[0], p3[1], u2[0], u2[1])?;
 
     // Intersection point
     let px = p1[0] + t_p * u1[0];
     let py = p1[1] + t_p * u1[1];
 
     // Direction from P toward each click (the "keep" side)
-    let s1 = project_click(click1, [px, py], u1); // positive = along u1
-    let s2 = project_click(click2, [px, py], u2);
+    let picked_side = |click: [f64; 2], a: [f64; 2], b: [f64; 2], unit: [f64; 2]| {
+        let picked = project_click(click, [px, py], unit);
+        if picked.abs() > 1e-9 {
+            picked
+        } else {
+            // Clicking exactly on the intersection is common when the two
+            // entities already meet. Fall back to the existing segment's
+            // midpoint so entity start/end storage order cannot flip the side
+            // FILLET keeps (#616).
+            project_click([(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5], [px, py], unit)
+        }
+    };
+    let s1 = picked_side(click1, p1, p2, u1); // positive = along u1
+    let s2 = picked_side(click2, p3, p4, u2);
     let dir1 = if s1 >= 0.0 {
         [u1[0], u1[1]]
     } else {
@@ -128,8 +140,13 @@ fn compute_fillet(
     let z = l1.start.z;
 
     if radius < 1e-9 {
-        // r = 0: just extend/trim both lines to the intersection
-        let (new_l1, new_l2) = trim_to_point(l1, t_p, p1, u1, l2, u_p, p3, u2)?;
+        // r = 0: extend/trim the endpoint opposite each clicked keep-side.
+        // The old path chose by the sign of t_p/u_p, so reversing an entity's
+        // stored direction changed the result and an intersection at its start
+        // could collapse the whole line (#616).
+        let intersection = [px, py];
+        let new_l1 = trim_to_xy(l1, intersection, dir1, u1)?;
+        let new_l2 = trim_to_xy(l2, intersection, dir2, u2)?;
         return Some((EntityType::Line(new_l1), EntityType::Line(new_l2), None));
     }
 
@@ -163,8 +180,8 @@ fn compute_fillet(
     };
 
     // Trim l1 to T1 and l2 to T2
-    let new_l1 = trim_to_xy(l1, t_p, t1, dir1, p1, u1)?;
-    let new_l2 = trim_to_xy(l2, u_p, t2, dir2, p3, u2)?;
+    let new_l1 = trim_to_xy(l1, t1, dir1, u1)?;
+    let new_l2 = trim_to_xy(l2, t2, dir2, u2)?;
 
     // Build arc entity
     let mut arc = ArcEnt::new();
@@ -182,30 +199,20 @@ fn compute_fillet(
     ))
 }
 
-/// Trim a line's parameter to an intersection t on the same side as dir (keep side).
+/// Move the endpoint opposite the selected keep-side to the tangent point.
 fn trim_to_xy(
     orig: &LineEnt,
-    t_isect: f64,
     tangent: [f64; 2],
     dir: [f64; 2],
-    p1: [f64; 2],
     unit: [f64; 2],
 ) -> Option<LineEnt> {
     let z = orig.start.z;
     let mut l = orig.clone();
     l.common.handle = Handle::NULL;
 
-    // t_tangent: parameter of the tangent point along the line from start
-    let t_tan = (tangent[0] - p1[0]) * unit[0] + (tangent[1] - p1[1]) * unit[1];
-
-    // dir is positive along unit → we keep the portion BEYOND t_tan in that direction
+    // dir is positive along unit → keep the portion beyond the tangent in that direction
     // dir positive: keep from t_tan to +∞ (i.e. set start to tangent point)
     // dir negative: keep from -∞ to t_tan (i.e. set end to tangent point)
-    let len = {
-        let dx = orig.end.x - orig.start.x;
-        let dy = orig.end.y - orig.start.y;
-        (dx * dx + dy * dy).sqrt().max(1e-12)
-    };
     let dot = dir[0] * unit[0] + dir[1] * unit[1]; // +1 or -1
 
     if dot > 0.0 {
@@ -215,46 +222,7 @@ fn trim_to_xy(
         // keep from start to tangent → move end to tangent point
         l.end = Vector3::new(tangent[0], tangent[1], z);
     }
-    let _ = (t_isect, len, t_tan); // used implicitly via `dot`
     Some(l)
-}
-
-/// Trim both lines exactly to their intersection point (r=0 case).
-fn trim_to_point(
-    l1: &LineEnt,
-    t_p: f64,
-    p1: [f64; 2],
-    u1: [f64; 2],
-    l2: &LineEnt,
-    u_p: f64,
-    _p3: [f64; 2],
-    _u2: [f64; 2],
-) -> Option<(LineEnt, LineEnt)> {
-    let px = p1[0] + t_p * u1[0];
-    let py = p1[1] + t_p * u1[1];
-    let z1 = l1.start.z;
-    let z2 = l2.start.z;
-
-    // For l1: if t_p is past the midpoint, keep start…P; else keep P…end
-    // We use the same "which end is P closer to" logic
-    let mut ll1 = l1.clone();
-    ll1.common.handle = Handle::NULL;
-    let mut ll2 = l2.clone();
-    ll2.common.handle = Handle::NULL;
-
-    if t_p >= 0.0 {
-        ll1.end = Vector3::new(px, py, z1);
-    } else {
-        ll1.start = Vector3::new(px, py, z1);
-    }
-
-    if u_p >= 0.0 {
-        ll2.end = Vector3::new(px, py, z2);
-    } else {
-        ll2.start = Vector3::new(px, py, z2);
-    }
-
-    Some((ll1, ll2))
 }
 
 // ── Point-generation helpers ──────────────────────────────────────────────
@@ -1148,7 +1116,7 @@ fn compute_chamfer(
     let (p1, _, u1, _) = line_geom(l1);
     let (p3, _, u2, _) = line_geom(l2);
 
-    let (t_p, u_p) = ll(p1[0], p1[1], u1[0], u1[1], p3[0], p3[1], u2[0], u2[1])?;
+    let (t_p, _u_p) = ll(p1[0], p1[1], u1[0], u1[1], p3[0], p3[1], u2[0], u2[1])?;
 
     let px = p1[0] + t_p * u1[0];
     let py = p1[1] + t_p * u1[1];
@@ -1172,8 +1140,8 @@ fn compute_chamfer(
     let c2 = [px + dist2 * dir2[0], py + dist2 * dir2[1]];
 
     // Trim l1 to c1 and l2 to c2
-    let new_l1 = trim_to_xy(l1, t_p, c1, dir1, p1, u1)?;
-    let new_l2 = trim_to_xy(l2, u_p, c2, dir2, p3, u2)?;
+    let new_l1 = trim_to_xy(l1, c1, dir1, u1)?;
+    let new_l2 = trim_to_xy(l2, c2, dir2, u2)?;
 
     // Chamfer line
     let mut cline = l1.clone();
