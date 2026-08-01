@@ -210,16 +210,12 @@ impl HatchModel {
         self.pattern_segments_with_dot_length(None)
     }
 
-    /// Plot variant of [`Self::pattern_segments`] that renders PAT zero-length
-    /// dash entries at a caller-provided world length. Screen rendering snaps
-    /// these entries to one pixel; plot callers know the model-to-paper scale
-    /// and can therefore choose the equivalent physical mark without tying its
-    /// size to the pattern period.
-    pub(crate) fn pattern_segments_for_plot(
-        &self,
-        dot_length: f64,
-    ) -> Vec<[[f64; 2]; 2]> {
-        self.pattern_segments_with_dot_length(Some(dot_length.max(1e-9)))
+    /// Plot variant of [`Self::pattern_segments`] that preserves PAT
+    /// zero-length dash entries as coincident endpoints. The PDF exporter can
+    /// then paint a round point; turning them into short segments here makes
+    /// point-only patterns such as AR-CONC visibly look like tiny lines.
+    pub(crate) fn pattern_segments_for_plot(&self) -> Vec<[[f64; 2]; 2]> {
+        self.pattern_segments_with_dot_length(Some(0.0))
     }
 
     fn pattern_segments_with_dot_length(
@@ -436,13 +432,18 @@ impl HatchModel {
                                     ]);
                                 }
                             } else if d == 0.0 && seg_t >= t0 - 1e-6 && seg_t <= t1 + 1e-6 {
-                                let a = (seg_t - dot_len * 0.5).max(t0);
-                                let b = (seg_t + dot_len * 0.5).min(t1);
-                                if b > a {
-                                    segments.push([
-                                        [lx + a * cos_a, ly + a * sin_a],
-                                        [lx + b * cos_a, ly + b * sin_a],
-                                    ]);
+                                if plot_dot_length == Some(0.0) {
+                                    let point = [lx + seg_t * cos_a, ly + seg_t * sin_a];
+                                    segments.push([point, point]);
+                                } else {
+                                    let a = (seg_t - dot_len * 0.5).max(t0);
+                                    let b = (seg_t + dot_len * 0.5).min(t1);
+                                    if b > a {
+                                        segments.push([
+                                            [lx + a * cos_a, ly + a * sin_a],
+                                            [lx + b * cos_a, ly + b * sin_a],
+                                        ]);
+                                    }
                                 }
                             }
                             seg_t += dl;

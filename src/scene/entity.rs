@@ -1343,8 +1343,20 @@ impl Scene {
                             style.4
                         };
                         let color = style.0;
-                        let color =
-                            crate::scene::view::render::adapt_to_bg(color, hatch_bg);
+                        // Explicit ACI 7 solid fills inside blocks are often
+                        // white masks. Keep the explicit white on a light
+                        // layout; adapting it to paper turns the mask into a
+                        // black rectangle unlike the viewport (#618).
+                        let preserve_white_mask = dxf.is_solid
+                            && matches!(
+                                dxf.common.color,
+                                acadrust::types::Color::Index(7)
+                            );
+                        let color = if preserve_white_mask {
+                            color
+                        } else {
+                            crate::scene::view::render::adapt_to_bg(color, hatch_bg)
+                        };
                         if let Some(mut model) =
                             Self::hatch_model_from_dxf(&dxf, color)
                         {

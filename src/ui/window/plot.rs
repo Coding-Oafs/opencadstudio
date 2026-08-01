@@ -99,18 +99,13 @@ pub struct PlotDialogState {
     pub printer: Option<String>,
     /// Output goes to a PDF file instead of a printer.
     pub to_file: bool,
-    #[serde(skip)]
     pub paper: String,
-    #[serde(skip)]
     pub orientation: String,
     pub upside_down: bool,
     pub copies: String,
     pub area: String,
-    #[serde(skip)]
     pub center: bool,
-    #[serde(skip)]
     pub offset_x: String,
-    #[serde(skip)]
     pub offset_y: String,
     pub scale: String,
     #[serde(default = "legacy_fit_to_paper_default")]

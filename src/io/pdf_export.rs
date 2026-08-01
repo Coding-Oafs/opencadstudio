@@ -54,13 +54,15 @@ pub async fn pick_pdf_path_owned(_stem: String) -> Option<std::path::PathBuf> {
 /// mm to PDF points (1 mm = 2.834645 pt).
 #[cfg(not(target_arch = "wasm32"))]
 const MM_TO_PT: f32 = 2.834645;
-/// `wire.line_weight_px` is the on-screen pixel weight: mm × (96/25.4) × 2.0,
-/// where the ×2 is a screen-legibility boost (see render.rs). Print wants the
-/// true physical weight, so undo both the 96-dpi scaling and the boost before
-/// converting to points — otherwise weights export ~2× too heavy in pixels
-/// (and the old `× 0.35278` left them inconsistent with the physical mm).
+/// `wire.line_weight_px` is the on-screen pixel weight. Convert the 96-dpi
+/// pixels to points while retaining the viewport's lineweight visibility
+/// boost, so "As displayed" output has the same visual hierarchy as the
+/// canvas instead of making 0.35 mm ByLayer outlines look half as thick.
 #[cfg(not(target_arch = "wasm32"))]
-const LW_PX_TO_PT: f32 = MM_TO_PT / ((96.0 / 25.4) * 2.0);
+const LW_PX_TO_PT: f32 = MM_TO_PT / (96.0 / 25.4);
+
+#[cfg(not(target_arch = "wasm32"))]
+const SCREEN_DOT_MM: f32 = 25.4 / 96.0;
 
 /// Output controls shared by preview, PDF export, and printer rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,14 +367,16 @@ fn build_pdf(
             .map(|c| (c[0] - r).abs() > 0.01 || (c[1] - g).abs() > 0.01 || (c[2] - b).abs() > 0.01)
             .unwrap_or(true)
         {
-            ops.push(Op::SetOutlineColor {
-                col: Color::Rgb(Rgb {
-                    r,
-                    g,
-                    b,
-                    icc_profile: None,
-                }),
+            let color = Color::Rgb(Rgb {
+                r,
+                g,
+                b,
+                icc_profile: None,
             });
+            ops.push(Op::SetOutlineColor {
+                col: color.clone(),
+            });
+            ops.push(Op::SetFillColor { col: color });
             last_color = Some([r, g, b]);
         }
 
@@ -431,9 +435,11 @@ fn build_pdf(
         // low-coordinate drawings came out clean. The result is a sheet-mm value
         // in single digits, so f32 is lossless from here.
         let mut segment: Vec<LinePoint> = Vec::new();
+        let dot_radius = (wire.name == "viewport_hatch_pattern")
+            .then_some(Pt(SCREEN_DOT_MM * MM_TO_PT / (2.0 * scale.max(1e-6))));
         for (pi, &[x, y, _z]) in wire.points.iter().enumerate() {
             if x.is_nan() || y.is_nan() {
-                flush_line(&mut ops, &segment);
+                flush_line(&mut ops, &segment, dot_radius);
                 segment.clear();
             } else {
                 let lo = wire.points_low.get(pi).copied().unwrap_or([0.0; 3]);
@@ -445,7 +451,7 @@ fn build_pdf(
                 });
             }
         }
-        flush_line(&mut ops, &segment);
+        flush_line(&mut ops, &segment, dot_radius);
     }
 
     // Text (SDF glyph quads) — re-emitted as vector strokes / fills. Text now
@@ -499,14 +505,49 @@ fn dash_array_from_pattern(pattern_length: f32, pattern: &[f32; 8], mm_to_pt: f3
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn flush_line(ops: &mut Vec<Op>, pts: &[LinePoint]) {
+fn flush_line(ops: &mut Vec<Op>, pts: &[LinePoint], dot_radius: Option<Pt>) {
     if pts.len() < 2 {
         return;
+    }
+    if let Some(radius) = dot_radius {
+        let first = pts[0].p;
+        let coincident = pts.iter().skip(1).all(|point| {
+            (point.p.x.0 - first.x.0).abs() <= 1e-6
+                && (point.p.y.0 - first.y.0).abs() <= 1e-6
+        });
+        if coincident {
+            emit_round_dot(ops, first, radius);
+            return;
+        }
     }
     ops.push(Op::DrawLine {
         line: Line {
             points: pts.to_vec(),
             is_closed: false,
+        },
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_round_dot(ops: &mut Vec<Op>, center: Point, radius: Pt) {
+    const SIDES: usize = 12;
+    let points = (0..SIDES)
+        .map(|index| {
+            let angle = std::f32::consts::TAU * index as f32 / SIDES as f32;
+            LinePoint {
+                p: Point {
+                    x: Pt(center.x.0 + radius.0 * angle.cos()),
+                    y: Pt(center.y.0 + radius.0 * angle.sin()),
+                },
+                bezier: false,
+            }
+        })
+        .collect();
+    ops.push(Op::DrawPolygon {
+        polygon: Polygon {
+            rings: vec![PolygonRing { points }],
+            mode: PaintMode::Fill,
+            winding_order: WindingOrder::NonZero,
         },
     });
 }
@@ -685,7 +726,9 @@ fn emit_hatch(
         r = 1.0;
         g = 1.0;
         b = 1.0;
-    } else if !color_overridden {
+    } else if !color_overridden
+        && !(hatch.aci == 7 && matches!(hatch.pattern, HatchPattern::Solid))
+    {
         let is_light = r > 0.80 && g > 0.80 && b > 0.80;
         let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
         let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;
@@ -778,21 +821,20 @@ fn emit_hatch(
         } else {
             scale.max(1e-6)
         };
-        let screen_dot_mm = 25.4 / 96.0;
-        let dot_length = (physical / MM_TO_PT / divisor)
-            .max(screen_dot_mm / scale.max(1e-6));
-        let segments = hatch.pattern_segments_for_plot(dot_length as f64);
+        let segments = hatch.pattern_segments_for_plot();
         if segments.is_empty() {
             return;
         }
-        ops.push(Op::SetOutlineColor {
-            col: Color::Rgb(Rgb {
-                r,
-                g,
-                b,
-                icc_profile: None,
-            }),
+        let color = Color::Rgb(Rgb {
+            r,
+            g,
+            b,
+            icc_profile: None,
         });
+        ops.push(Op::SetOutlineColor {
+            col: color.clone(),
+        });
+        ops.push(Op::SetFillColor { col: color });
         ops.push(Op::SetOutlineThickness {
             pt: Pt(physical / divisor),
         });
@@ -806,21 +848,18 @@ fn emit_hatch(
             // before narrowing, as everywhere else in this file.
             let (ax, ay) = ((a[0] + ox) as f32, (a[1] + oy) as f32);
             let (bx, by) = ((b_pt[0] + ox) as f32, (b_pt[1] + oy) as f32);
-            ops.push(Op::DrawLine {
-                line: Line {
-                    points: vec![
-                        LinePoint {
-                            p: Point::new(Mm(ax), Mm(ay)),
-                            bezier: false,
-                        },
-                        LinePoint {
-                            p: Point::new(Mm(bx), Mm(by)),
-                            bezier: false,
-                        },
-                    ],
-                    is_closed: false,
+            let points = vec![
+                LinePoint {
+                    p: Point::new(Mm(ax), Mm(ay)),
+                    bezier: false,
                 },
-            });
+                LinePoint {
+                    p: Point::new(Mm(bx), Mm(by)),
+                    bezier: false,
+                },
+            ];
+            let dot_radius = Pt(SCREEN_DOT_MM * MM_TO_PT / (2.0 * scale.max(1e-6)));
+            flush_line(ops, &points, Some(dot_radius));
         }
         return;
     }

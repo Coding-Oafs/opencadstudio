@@ -2632,6 +2632,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// layout's plot settings and the printers found on the system.
     pub(super) fn on_plot_dialog_open(&mut self) -> Task<Message> {
         use crate::io::paper_sizes::Orientation;
+        let previous = self.plot_dialog.clone();
         let scales: Vec<(String, f64)> = self.tabs[self.active_tab]
             .scene
             .scale_list()
@@ -2654,7 +2655,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             d.scale_lw = false;
             d.scale = one_to_one.clone();
         } else if !d.scales.iter().any(|(name, _)| name == &d.scale) {
-            d.scale = one_to_one;
+            d.scale = one_to_one.clone();
         }
         d.paper_space = self.tabs[self.active_tab].scene.current_layout != "Model";
         d.paper = self.plot_format.label().to_string();
@@ -2704,26 +2705,37 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         if self.plot_dialog.fit_to_paper {
             self.plot_dialog.scale_lw = false;
         }
-        // Refresh the list (<none> / <previous> / layouts / named setups) and
-        // snapshot the just-loaded settings as the `<previous>` restore point.
+        // Refresh document/runtime lists, then restore the live choices from
+        // the preceding dialog session. Previously the snapshot happened
+        // after the layout values above were reloaded, so opening Plot itself
+        // destroyed the user's last paper, area, scale and output choices.
         self.refresh_page_setups();
-        self.plot_prev = Some(self.plot_dialog.clone());
-        // Model space keeps the last-used setup; a paper layout starts from its
-        // embedded setup.
+        self.plot_prev = Some(previous);
+        self.select_page_setup(crate::ui::window::plot::SETUP_PREV);
+        // `<previous>` may come from another tab/drawing whose custom scale is
+        // not present in this document. Validate again after restoring it; the
+        // pre-restore validation above only saw the temporarily reseeded state.
+        if self.plot_dialog.scale.eq_ignore_ascii_case("fit") {
+            self.plot_dialog.fit_to_paper = true;
+            self.plot_dialog.scale = one_to_one.clone();
+        } else if !self
+            .plot_dialog
+            .scales
+            .iter()
+            .any(|(name, _)| name == &self.plot_dialog.scale)
+        {
+            self.plot_dialog.scale = one_to_one;
+        }
+        if self.plot_dialog.fit_to_paper {
+            self.plot_dialog.scale_lw = false;
+        }
+        // A model-space plot cannot use the paper-only Layout area. Other
+        // values remain exactly as the user left them; selecting a layout or
+        // named setup explicitly still reloads that setup below.
         let cur = self.tabs[self.active_tab].scene.current_layout.clone();
         if cur == "Model" {
-            self.select_page_setup(crate::ui::window::plot::SETUP_PREV);
             if self.plot_dialog.area == "Layout" {
                 self.plot_dialog.area = "Window".into();
-                self.normalize_common_plot_dialog();
-            }
-        } else {
-            self.select_page_setup(&format!("*{cur}*"));
-            if self.plot_dialog.area != "Layout" {
-                // A layout may persist Window/Extents/Display together with its
-                // sheet-only origin/rotation. Start common area modes with the
-                // same neutral transform as Model even when no Area-change event
-                // fires after opening the dialog.
                 self.normalize_common_plot_dialog();
             }
         }
