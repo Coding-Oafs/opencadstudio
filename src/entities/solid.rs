@@ -1,11 +1,10 @@
 // SOLID entity — 2D filled quadrilateral (or triangle when p3 == p4).
 //
 // Wireframe: the 4 perimeter edges as TruckObject::Lines.
-// Filled:    two triangles on `fill_tris`, so a SOLID nested in a block (e.g.
-//            a `_BoxFilled` dimension arrowhead) renders filled — block
-//            expansion has no separate hatch-model injection. Top-level SOLIDs
-//            also get a solid-fill HatchModel; the duplicate fill is invisible
-//            for the opaque solids these are (arrowheads, cell fills).
+// Filled:    two triangles on `fill_tris`, preserving the entity's full WCS
+//            plane both at top level and through block expansion. The scene
+//            keeps a separate 2-D HatchModel only for plot projection; screen
+//            rendering filters that flattened copy out.
 // Grips:     4 corner grip points.
 
 use acadrust::entities::Solid;
@@ -21,55 +20,95 @@ fn dvec3(v: &acadrust::types::Vector3) -> glam::DVec3 {
     glam::DVec3::new(v.x, v.y, v.z)
 }
 
+pub(crate) fn wcs_corners(solid: &Solid) -> [[f64; 3]; 4] {
+    let n = (solid.normal.x, solid.normal.y, solid.normal.z);
+    let w = |v: &acadrust::types::Vector3| {
+        let (x, y, z) = crate::scene::view::transform::ocs_point_to_wcs((v.x, v.y, v.z), n);
+        [x, y, z]
+    };
+    [
+        w(&solid.first_corner),
+        w(&solid.second_corner),
+        w(&solid.third_corner),
+        w(&solid.fourth_corner),
+    ]
+}
+
+/// Return a non-self-intersecting perimeter for either conventional DXF SOLID
+/// Z-order or older/perimeter-ordered data. Prefer DXF order when both are
+/// valid, but recover legacy solids whose 1-2-4-3 walk forms a bow-tie.
+pub(crate) fn perimeter_indices(corners: &[[f64; 3]; 4]) -> [usize; 4] {
+    let p = |index: usize| glam::DVec3::from_array(corners[index]);
+    let edge = p(1) - p(0);
+    let mut normal = edge.cross(p(2) - p(0));
+    if normal.length_squared() < 1.0e-20 {
+        normal = edge.cross(p(3) - p(0));
+    }
+    if normal.length_squared() < 1.0e-20 {
+        return [0, 1, 3, 2];
+    }
+    let orient = |a: usize, b: usize, c: usize| {
+        (p(b) - p(a)).cross(p(c) - p(a)).dot(normal)
+    };
+    let segments_cross = |a: usize, b: usize, c: usize, d: usize| {
+        let ab_c = orient(a, b, c);
+        let ab_d = orient(a, b, d);
+        let cd_a = orient(c, d, a);
+        let cd_b = orient(c, d, b);
+        ((ab_c > 0.0 && ab_d < 0.0) || (ab_c < 0.0 && ab_d > 0.0))
+            && ((cd_a > 0.0 && cd_b < 0.0) || (cd_a < 0.0 && cd_b > 0.0))
+    };
+    let order_crosses = |order: [usize; 4]| {
+        segments_cross(order[0], order[1], order[2], order[3])
+            || segments_cross(order[1], order[2], order[3], order[0])
+    };
+    let dxf = [0, 1, 3, 2];
+    let perimeter = [0, 1, 2, 3];
+    if order_crosses(dxf) && !order_crosses(perimeter) {
+        perimeter
+    } else {
+        dxf
+    }
+}
+
 impl TruckConvertible for Solid {
     fn to_truck(&self, _document: &acadrust::CadDocument) -> Option<TruckEntity> {
-        // SOLID corners are OCS (planar entity) — map through the arbitrary
-        // axis so mirrored solids (normal 0,0,-1) land on the correct side.
-        let n = (self.normal.x, self.normal.y, self.normal.z);
-        let w = |v: &acadrust::types::Vector3| -> [f64; 3] {
-            let (x, y, z) = crate::scene::view::transform::ocs_point_to_wcs((v.x, v.y, v.z), n);
-            [x, y, z]
-        };
-        let p0 = w(&self.first_corner);
-        let p1 = w(&self.second_corner);
-        let p2 = w(&self.third_corner);
-        let p3 = w(&self.fourth_corner);
-
-        // DXF SOLID vertex order: 1-2-4-3 (Z-shaped), render as closed quad outline.
-        // AutoCAD stores corners in "Z" order: p0-p1 are top edge, p2-p3 are bottom edge,
-        // so the visual quad is p0→p1→p3→p2→p0.
+        // SOLID corners are OCS. Map them to WCS, then resolve either the DXF
+        // Z-order or legacy perimeter order before building edges and fill.
+        let corners = wcs_corners(self);
+        let order = perimeter_indices(&corners);
+        let [p0, p1, p2, p3] = order.map(|index| corners[index]);
         let pts = vec![
             p0,
             p1,
             [f64::NAN; 3],
             p1,
-            p3,
-            [f64::NAN; 3],
-            p3,
             p2,
             [f64::NAN; 3],
             p2,
+            p3,
+            [f64::NAN; 3],
+            p3,
             p0,
         ];
 
-        let dvp = |p: [f64; 3]| glam::DVec3::new(p[0], p[1], p[2]);
-        let snap = vec![
-            (dvp(p0), SnapHint::Node),
-            (dvp(p1), SnapHint::Node),
-            (dvp(p2), SnapHint::Node),
-            (dvp(p3), SnapHint::Node),
-        ];
+        let dvp = |p: [f64; 3]| glam::DVec3::from_array(p);
+        let snap = corners
+            .iter()
+            .copied()
+            .map(|point| (dvp(point), SnapHint::Node))
+            .collect();
 
-        // Fill the visual quad p0→p1→p3→p2 (Z-order) as two triangles; a
-        // triangle SOLID (p2 == p3) degenerates the second, which is harmless.
-        let fill_tris = vec![p0, p1, p3, p0, p3, p2];
+        // Fill the resolved perimeter as two triangles. For a triangle the last
+        // two points coincide and the second triangle degenerates harmlessly.
+        let fill_tris = vec![p0, p1, p2, p0, p2, p3];
 
         Some(TruckEntity {
             pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: snap,
             tangent_geoms: vec![],
-            key_vertices: vec![p0, p1, p2, p3],
+            key_vertices: corners.to_vec(),
             fill_tris,
         })
     }

@@ -392,6 +392,13 @@ impl Scene {
             let contextual =
                 crate::scene::annotative::entity_for_active_context(&self.document, source);
             let entity = contextual.as_ref();
+            // Paper-space SOLIDs already carry WCS-aware wire fill triangles.
+            // Keep their cached XY HatchModel out of the sheet set so the same
+            // entity is not emitted twice (#617). Model fills projected through
+            // floating viewports still use `plot_hatches_for_block` below.
+            if matches!(entity, EntityType::Solid(_)) {
+                continue;
+            }
             let c = entity.common();
             if c.invisible
                 || self.entity_temporarily_hidden(handle)

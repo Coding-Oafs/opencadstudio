@@ -5989,13 +5989,16 @@ impl Scene {
     }
 
     fn hatch_visible_for_interaction(&self, handle: Handle) -> bool {
-        let Some(common) = self
-            .document
-            .get_entity(handle)
-            .map(|entity| entity.common())
-        else {
+        let Some(entity) = self.document.get_entity(handle) else {
             return false;
         };
+        // Use the SOLID's WCS-aware wire fill for interaction as well as
+        // drawing. Its cached HatchModel is flattened to XY for plotting and
+        // must not leave an invisible selection target at z=0 (#617).
+        if matches!(entity, EntityType::Solid(_)) {
+            return false;
+        }
+        let common = entity.common();
         if common.invisible
             || self.entity_temporarily_hidden(handle)
             || self.layer_hidden(&common.layer)

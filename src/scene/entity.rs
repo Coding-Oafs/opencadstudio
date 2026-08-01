@@ -827,6 +827,13 @@ impl Scene {
                 let Some(entity) = self.document.get_entity(handle) else {
                     return true;
                 };
+                // SOLID already renders through its WCS-aware fill triangles.
+                // Its cached HatchModel is an XY-only plot fallback; sending
+                // that to the screen too adds a flattened, grip-less copy at
+                // z=0 for elevated or angled geometry (#617).
+                if matches!(entity, EntityType::Solid(_)) {
+                    return false;
+                }
                 let c = entity.common();
                 if c.invisible
                     || self.entity_temporarily_hidden(handle)
@@ -2398,29 +2405,17 @@ impl Scene {
     }
 
     /// Build a solid-fill HatchModel for a DXF Solid entity.
-    /// DXF SOLID corners are in "Z-order": p0-p1 top, p2-p3 bottom.
-    /// Visual quad is p0→p1→p3→p2 (closed).
+    /// Conventional DXF SOLID corners use Z-order; legacy entities may already
+    /// be in perimeter order. Use the same non-crossing resolver as wire fill.
     pub(super) fn solid_hatch_model(solid: &DxfSolid, color: [f32; 4]) -> HatchModel {
         // Keep the corners in f64 until the AABB centre is known, then store
         // each as a small f32 offset from it — same precision-preserving anchor
         // `hatch_model_from_dxf` uses. Casting the absolute WCS corner straight
         // to f32 costs ~0.06 units of resolution at UTM magnitudes (~1e6), so
         // the quad snapped to a grid and the fill drifted off its outline.
-        // SOLID corners are stored in OCS (like ARC/LWPOLYLINE) — map through
-        // the arbitrary axis so a mirrored solid (normal 0,0,-1) fills on the
-        // correct side of the drawing.
-        let n = (solid.normal.x, solid.normal.y, solid.normal.z);
-        let w = |v: &acadrust::types::Vector3| -> [f64; 2] {
-            let (x, y, _) =
-                crate::scene::view::transform::ocs_point_to_wcs((v.x, v.y, v.z), n);
-            [x, y]
-        };
-        let corners: [[f64; 2]; 4] = [
-            w(&solid.first_corner),
-            w(&solid.second_corner),
-            w(&solid.fourth_corner),
-            w(&solid.third_corner),
-        ];
+        let wcs = crate::entities::solid::wcs_corners(solid);
+        let order = crate::entities::solid::perimeter_indices(&wcs);
+        let corners: [[f64; 2]; 4] = order.map(|index| [wcs[index][0], wcs[index][1]]);
         let mut min = [f64::INFINITY; 2];
         let mut max = [f64::NEG_INFINITY; 2];
         for c in &corners {
