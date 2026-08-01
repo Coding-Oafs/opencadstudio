@@ -150,6 +150,10 @@ impl CadCommand for LineCommand {
         CmdResult::Cancel
     }
 
+    fn enter_accepts_default_start(&self) -> bool {
+        self.points.is_empty()
+    }
+
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }

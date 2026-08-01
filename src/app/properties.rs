@@ -1775,6 +1775,16 @@ impl OpenCADStudio {
         mut entity: acadrust::EntityType,
     ) -> Option<Handle> {
         let i = self.active_tab;
+        let tracks_draw_anchor = self.tabs[i].active_cmd.is_some()
+            && matches!(
+                &entity,
+                acadrust::EntityType::Line(_)
+                    | acadrust::EntityType::Arc(_)
+                    | acadrust::EntityType::LwPolyline(_)
+                    | acadrust::EntityType::Polyline(_)
+                    | acadrust::EntityType::Polyline2D(_)
+                    | acadrust::EntityType::Polyline3D(_)
+            );
         let layer = &self.tabs[i].active_layer;
         if layer != "0" || entity.as_entity().layer().is_empty() {
             entity.as_entity_mut().set_layer(layer.clone());
@@ -1946,7 +1956,7 @@ impl OpenCADStudio {
         }
 
 
-        if matches!(&entity, acadrust::EntityType::Viewport(_))
+        let new_handle = if matches!(&entity, acadrust::EntityType::Viewport(_))
             && self.tabs[i].scene.current_layout != "Model"
         {
             // Assign a unique viewport ID (max existing id + 1, min 2).
@@ -1999,7 +2009,14 @@ impl OpenCADStudio {
             }
         } else {
             Some(self.tabs[i].scene.add_entity(entity))
+        };
+
+        if tracks_draw_anchor {
+            if let Some(handle) = new_handle {
+                self.tabs[i].last_draw_anchor = Some(handle);
+            }
         }
+        new_handle
     }
 }
 

@@ -247,7 +247,7 @@ impl OpenCADStudio {
     /// point has been committed to the active command. Temporary tracking
     /// points are reset on every input so they don't pile up across a
     /// multi-point command and overwhelm the next pick (issue #85).
-    fn reset_tracking_after_point(&mut self) {
+    pub(in crate::app) fn reset_tracking_after_point(&mut self) {
         self.snapper.clear_tracking();
         self.otrack_active = None;
     }

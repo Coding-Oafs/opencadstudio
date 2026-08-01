@@ -1279,6 +1279,14 @@ pub trait CadCommand: Send {
     /// Called when the user presses Enter (finalize / next option).
     fn on_enter(&mut self) -> CmdResult;
 
+    /// Whether a bare Enter should supply the drawing's continuation point as
+    /// this command's first point instead of calling [`Self::on_enter`]. Draw
+    /// commands opt in only while their first point is still unset; later
+    /// Enter presses retain their normal finish/cancel meaning.
+    fn enter_accepts_default_start(&self) -> bool {
+        false
+    }
+
     /// Called when the user presses Escape (cancel).
     #[allow(dead_code)]
     fn on_escape(&mut self) -> CmdResult {

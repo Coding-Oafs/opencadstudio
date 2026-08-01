@@ -356,11 +356,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
 
                     if text.is_empty() {
-                        let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_enter());
-                        if let Some(r) = result {
-                            return self.apply_cmd_result(r);
-                        }
-                        return Task::none();
+                        return self.feed_command(crate::command::StepInput::Enter);
                     }
 
                     // OTRACK: while aligned to a tracking ray, a bare distance
@@ -494,11 +490,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 let i = self.active_tab;
                 if self.tabs[i].active_cmd.is_some() {
-                    let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_enter());
-                    if let Some(r) = result {
-                        return self.apply_cmd_result(r);
-                    }
-                    Task::none()
+                    self.feed_command(crate::command::StepInput::Enter)
                 } else if let Some(cmd) = self.tabs[i].last_cmd.clone() {
                     self.dispatch_command(&cmd)
                 } else {

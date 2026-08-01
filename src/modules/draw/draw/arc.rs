@@ -369,6 +369,9 @@ impl CadCommand for ArcCommand {
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
+    }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
@@ -467,6 +470,9 @@ impl CadCommand for Arc3PCommand {
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.pts.is_empty()
+    }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
@@ -563,6 +569,9 @@ impl CadCommand for ArcSCECommand {
     }
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
@@ -663,6 +672,9 @@ impl CadCommand for ArcSCACommand {
     }
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
@@ -787,6 +799,9 @@ impl CadCommand for ArcSCLCommand {
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
+    }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
@@ -886,6 +901,9 @@ impl CadCommand for ArcSEACommand {
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
+    }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
@@ -960,6 +978,9 @@ impl CadCommand for ArcSERCommand {
     }
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
@@ -1074,6 +1095,9 @@ impl CadCommand for ArcSEDCommand {
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
+    }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
@@ -1159,6 +1183,9 @@ impl CadCommand for ArcCSACommand {
     }
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
@@ -1278,6 +1305,9 @@ impl CadCommand for ArcCSLCommand {
     }
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+    fn enter_accepts_default_start(&self) -> bool {
+        self.step == 0
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
