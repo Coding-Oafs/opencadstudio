@@ -1095,14 +1095,44 @@ fn vardict_value(doc: &CadDocument, name: &str) -> Option<String> {
     }
 }
 
-/// Write a value into an existing variable-dictionary entry. No-op when the
-/// entry is absent (e.g. a brand-new document with no variable dictionary).
-fn set_vardict_value(doc: &mut CadDocument, name: &str, value: &str) {
-    use acadrust::objects::ObjectType;
+/// Write a drawing variable, creating the variable dictionary and record when
+/// needed so new drawings preserve the value too.
+pub(crate) fn set_drawing_variable(doc: &mut CadDocument, name: &str, value: &str) {
+    use acadrust::objects::{Dictionary, DictionaryVariable, ObjectType};
     if let Some(h) = vardict_handle(doc, name) {
         if let Some(ObjectType::DictionaryVariable(v)) = doc.objects.get_mut(&h) {
             v.value = value.to_string();
         }
+        return;
+    }
+
+    let root = crate::scene::annotative::root_named_dict_handle(doc);
+    let variable_dictionary = crate::scene::annotative::as_dict(doc, root)
+        .and_then(|dictionary| dictionary.get("AcDbVariableDictionary"))
+        .filter(|handle| {
+            matches!(doc.objects.get(handle), Some(ObjectType::Dictionary(_)))
+        })
+        .unwrap_or_else(|| {
+            let handle = doc.allocate_handle();
+            let mut dictionary = Dictionary::new();
+            dictionary.handle = handle;
+            dictionary.owner = root;
+            doc.objects
+                .insert(handle, ObjectType::Dictionary(dictionary));
+            if let Some(ObjectType::Dictionary(root_dictionary)) = doc.objects.get_mut(&root) {
+                root_dictionary.add_entry("AcDbVariableDictionary", handle);
+            }
+            handle
+        });
+
+    let handle = doc.allocate_handle();
+    let mut variable = DictionaryVariable::new(name, value);
+    variable.handle = handle;
+    variable.owner_handle = variable_dictionary;
+    doc.objects
+        .insert(handle, ObjectType::DictionaryVariable(variable));
+    if let Some(ObjectType::Dictionary(dictionary)) = doc.objects.get_mut(&variable_dictionary) {
+        dictionary.add_entry(name, handle);
     }
 }
 
@@ -1119,26 +1149,7 @@ pub fn saved_active_layout(doc: &CadDocument) -> Option<String> {
 /// carried it (e.g. a document authored here from scratch) — otherwise the exact
 /// paper layout would be lost and reopening fell back to the first paper tab.
 pub fn set_saved_active_layout(doc: &mut CadDocument, name: &str) {
-    use acadrust::objects::{DictionaryVariable, ObjectType};
-    if let Some(h) = vardict_handle(doc, "CTAB") {
-        if let Some(ObjectType::DictionaryVariable(v)) = doc.objects.get_mut(&h) {
-            v.value = name.to_string();
-        }
-        return;
-    }
-    // Attach a new CTAB entry to the root named-object dictionary. Resolve it
-    // robustly (or synthesise one) so the current-tab record persists even on a
-    // from-scratch document, or a foreign DWG whose header root pointer is
-    // unresolvable. See `annotative::root_named_dict_handle`.
-    let root = crate::scene::annotative::root_named_dict_handle(doc);
-    let handle = doc.allocate_handle();
-    let mut var = DictionaryVariable::new("CTAB", name);
-    var.handle = handle;
-    var.owner_handle = root;
-    doc.objects.insert(handle, ObjectType::DictionaryVariable(var));
-    if let Some(ObjectType::Dictionary(rd)) = doc.objects.get_mut(&root) {
-        rd.entries.push(("CTAB".to_string(), handle));
-    }
+    set_drawing_variable(doc, "CTAB", name);
 }
 
 /// Materialise the current-style choices into their format-specific storage
@@ -1181,8 +1192,10 @@ fn sync_current_styles_on_save(doc: &mut CadDocument) {
 
     let table = doc.header.current_table_style_name.clone();
     let mleader = doc.header.current_mleader_style_name.clone();
-    set_vardict_value(doc, "CTABLESTYLE", &table);
-    set_vardict_value(doc, "CMLEADERSTYLE", &mleader);
+    set_drawing_variable(doc, "CTABLESTYLE", &table);
+    set_drawing_variable(doc, "CMLEADERSTYLE", &mleader);
+    let annotation = doc.header.current_annotation_scale.clone();
+    set_drawing_variable(doc, "CANNOSCALE", &annotation);
 }
 
 // ── Corrupt-entity guard ──────────────────────────────────────────────────

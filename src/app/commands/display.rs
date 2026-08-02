@@ -624,12 +624,9 @@ impl OpenCADStudio {
             // still being built. Acknowledge them with an honest status so the
             // button responds instead of reporting an unknown command; each is
             // replaced by its real handler as the feature lands.
-            // OBJECTSCALE ADD — the ribbon "Add Scale" quick action: mark the
-            // selected objects annotative by attaching the AcAnnotativeData XData
-            // record the tessellator already honours, so they scale with the
-            // current annotation scale. Bare OBJECTSCALE opens the dialog below.
+            // OBJECTSCALE ADD — add the active scale representation to every
+            // selected object that supports per-scale context data.
             "OBJECTSCALE ADD" => {
-                use acadrust::xdata::{ExtendedDataRecord, XDataValue};
                 let handles: Vec<acadrust::Handle> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -642,15 +639,23 @@ impl OpenCADStudio {
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "OBJECTSCALE");
+                let Some(scale) = self.tabs[i].scene.creation_annotation_scale_handle() else {
+                    self.command_line
+                        .push_error("OBJECTSCALE: the active annotation scale is unavailable.");
+                    return Some(Task::none());
+                };
                 let mut n = 0usize;
                 for h in &handles {
-                    if let Some(e) = self.tabs[i].scene.document.get_entity_mut(*h) {
-                        let xd = &mut e.common_mut().extended_data;
-                        if xd.get_record("AcAnnotativeData").is_none() {
-                            let mut rec = ExtendedDataRecord::new("AcAnnotativeData");
-                            rec.add_value(XDataValue::String("1".to_string()));
-                            xd.add_record(rec);
-                        }
+                    if crate::scene::annotative::create_annotation_context(
+                        &mut self.tabs[i].scene.document,
+                        *h,
+                        scale,
+                    ) {
+                        crate::scene::annotative::set_entity_annotative(
+                            &mut self.tabs[i].scene.document,
+                            *h,
+                            true,
+                        );
                         n += 1;
                     }
                 }
@@ -661,7 +666,7 @@ impl OpenCADStudio {
                 self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
                 self.command_line.push_output(&format!(
-                    "OBJECTSCALE: marked {n} object(s) annotative (they scale with the annotation scale)."
+                    "OBJECTSCALE: added the active scale to {n} object(s)."
                 ));
                 return Some(Task::none());
             }
@@ -810,6 +815,85 @@ impl OpenCADStudio {
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
+            "ANNOALLVISIBLE" => {
+                use crate::command::ValuePromptCommand;
+                let c = ValuePromptCommand::new(
+                    "ANNOALLVISIBLE",
+                    "ANNOALLVISIBLE  new value [0/1]:",
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("ANNOALLVISIBLE ") => {
+                let value = cmd.split_whitespace().nth(1).unwrap_or("");
+                match value {
+                    "0" | "OFF" | "FALSE" => {
+                        self.tabs[i].scene.set_annotation_all_visible(false);
+                        self.tabs[i].dirty = true;
+                    }
+                    "1" | "ON" | "TRUE" => {
+                        self.tabs[i].scene.set_annotation_all_visible(true);
+                        self.tabs[i].dirty = true;
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("ANNOALLVISIBLE: enter 0 or 1."),
+                }
+            }
+            "ANNOAUTOSCALE" => {
+                use crate::command::ValuePromptCommand;
+                let c = ValuePromptCommand::new(
+                    "ANNOAUTOSCALE",
+                    "ANNOAUTOSCALE  new value [-4..4]:",
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("ANNOAUTOSCALE ") => {
+                let value = cmd.split_whitespace().nth(1).unwrap_or("");
+                match value.parse::<i8>() {
+                    Ok(mode @ -4..=4) => self.annotation_auto_scale = mode,
+                    _ => self.command_line.push_error(
+                        "ANNOAUTOSCALE: enter an integer from -4 through 4.",
+                    ),
+                }
+            }
+            "ANNOUPDATE" => {
+                let handles: Vec<_> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .iter()
+                    .map(|(handle, _)| *handle)
+                    .collect();
+                if handles.is_empty() {
+                    self.command_line
+                        .push_error("ANNOUPDATE: select annotation objects first.");
+                    return Some(Task::none());
+                }
+                self.push_undo_snapshot(i, "ANNOUPDATE");
+                let scale = self.tabs[i].scene.creation_annotation_scale_handle();
+                let mut updated = 0usize;
+                for handle in &handles {
+                    if crate::scene::annotative::update_entity_from_annotation_style(
+                        &mut self.tabs[i].scene.document,
+                        *handle,
+                        scale,
+                    ) {
+                        updated += 1;
+                    }
+                }
+                if updated > 0 {
+                    let changes: Vec<_> = handles
+                        .into_iter()
+                        .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                        .collect();
+                    self.tabs[i].scene.bump_entities(&changes);
+                    self.tabs[i].dirty = true;
+                }
+                self.command_line
+                    .push_output(&format!("ANNOUPDATE: updated {updated} object(s)."));
+                return Some(Task::none());
+            }
             cmd if cmd.starts_with("ANNOSCALE ") || cmd.starts_with("CANNOSCALE ") => {
                 let arg = cmd
                     .split_whitespace()
@@ -828,27 +912,21 @@ impl OpenCADStudio {
                         .push_output(&format!("Current annotation scale: {name}"));
                     return Some(Task::none());
                 }
-                // anno multiplier = denominator / numerator: 1:50 → 50, 2:1 → 0.5.
-                let anno = if let Some((a, b)) = arg.split_once(':') {
-                    match (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
-                        (Ok(a), Ok(b)) if a != 0.0 => Some((b / a) as f32),
-                        _ => None,
-                    }
-                } else {
-                    arg.parse::<f32>().ok()
-                };
-                match anno {
-                    Some(v) if v > 0.0 => {
-                        self.tabs[i].scene.annotation_scale = v;
-                        let hdr = &mut self.tabs[i].scene.document.header;
-                        hdr.current_annotation_scale = arg.clone();
-                        hdr.annotation_scale_value = 1.0 / v as f64;
-                        self.tabs[i].scene.invalidate_annotation_dependencies();
+                let previous = self.tabs[i].scene.displayed_annotation_scale_handle();
+                match self.tabs[i].scene.set_annotation_scale_named(&arg) {
+                    Some(handle) => {
+                        if self.annotation_auto_scale > 0 {
+                            self.tabs[i].scene.add_annotation_scale_to_objects(
+                                handle,
+                                previous,
+                                self.annotation_auto_scale as u8,
+                            );
+                        }
                         self.tabs[i].dirty = true;
                         self.command_line
                             .push_output(&format!("Annotation scale: {arg}"));
                     }
-                    _ => self
+                    None => self
                         .command_line
                         .push_error("Usage: ANNOSCALE <ratio>  e.g. 1:50, 2:1, or a factor"),
                 }

@@ -321,6 +321,7 @@ pub fn place_block_wires(
             [0.0; 8],
             line_weight_px,
             anno_scale,
+            None,
             world_per_pixel,
             bg_color,
             false,

@@ -2243,15 +2243,15 @@ impl Scene {
             (hatches, wipeouts, Some(images))
         } else {
             (
-                self.hatch_models_for_viewport(&vp_frozen),
-                self.wipeout_models_for_viewport(&vp_frozen),
+                self.hatch_models_for_viewport(inst.handle, &vp_frozen),
+                self.wipeout_models_for_viewport(inst.handle, &vp_frozen),
                 None,
             )
         };
         let images = if let Some(images) = paper_images {
             images
         } else {
-            self.images_for_viewport(&vp_frozen)
+            self.images_for_viewport(inst.handle, &vp_frozen)
         };
         // The paper sheet shows the layout's own 2-D content (fills, borders,
         // annotation) — never the model's 3-D solids. Those are drawn inside
@@ -2263,7 +2263,7 @@ impl Scene {
         let meshes = if inst.paper_sheet {
             Arc::new(Vec::new())
         } else {
-            self.meshes_for_viewport(&vp_frozen)
+            self.meshes_for_viewport(inst.handle, &vp_frozen)
         };
 
         // SDF text quads (behind OCS_TEXT_SDF). The glyph quads ride on each

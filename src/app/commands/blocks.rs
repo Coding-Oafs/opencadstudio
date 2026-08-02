@@ -246,7 +246,7 @@ impl OpenCADStudio {
                     let name = self.unique_block_name("Block");
                     let base = self.clipboard_base;
                     let mut entities = self.clipboard.clone();
-                    for (idx, root) in ext_roots {
+                    for (&idx, &root) in &ext_roots {
                         if let Some(e) = entities.get_mut(idx) {
                             e.common_mut().xdictionary_handle = Some(root);
                         }
@@ -255,7 +255,32 @@ impl OpenCADStudio {
                         .scene
                         .define_block_from_owned_entities(entities, &name, base)
                     {
-                        Ok(()) => {
+                        Ok(entity_handles) => {
+                            let remaps: Vec<_> = ext_roots
+                                .iter()
+                                .filter_map(|(&idx, &root)| {
+                                    Some((
+                                        root,
+                                        self.clipboard.get(idx)?.common().handle,
+                                        *entity_handles.get(idx)?,
+                                    ))
+                                })
+                                .collect();
+                            let scene = &mut self.tabs[i].scene;
+                            for (root, source, target) in remaps {
+                                super::super::command_driver::remap_ext_subtree_reference(
+                                    &mut scene.document,
+                                    root,
+                                    source,
+                                    target,
+                                );
+                                crate::scene::annotative::translate_annotation_contexts(
+                                    &mut scene.document,
+                                    target,
+                                    -base,
+                                );
+                            }
+                            scene.bump_geometry();
                             // Block defined; now place it interactively so the
                             // user picks the drop point (insertion uses the
                             // clipboard lower-left corner as the block's base). The

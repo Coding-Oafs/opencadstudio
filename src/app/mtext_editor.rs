@@ -657,6 +657,7 @@ impl super::OpenCADStudio {
             1.0,
             anno,
             None,
+            None,
             bg,
             // Editor preview draws on a 2D canvas with no SDF shader — force the
             // glyph outline strokes so the text is visible (#308).

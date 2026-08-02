@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub start: StartConfig,
     /// Which status-bar pills the user has hidden.
     pub statusbar: StatusBarConfig,
+    /// Add a newly selected annotation scale to existing annotative objects.
+    pub annotation_auto_scale: i8,
     /// Ribbon collapse density.
     pub ribbon: RibbonConfig,
     /// Print dialog preferences (only the persisted fields; runtime state is
@@ -42,6 +44,7 @@ impl Default for AppConfig {
             recent: RecentConfig::default(),
             start: StartConfig::default(),
             statusbar: StatusBarConfig::default(),
+            annotation_auto_scale: -4,
             ribbon: RibbonConfig::default(),
             plot: PlotDialogState::default(),
         }

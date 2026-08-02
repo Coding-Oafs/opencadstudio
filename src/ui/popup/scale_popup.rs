@@ -14,24 +14,28 @@ use crate::ui::statusbar::status_menu::Entry;
 ///   scales of its own.
 pub fn menu_entries(
     is_model: bool,
-    current_anno_scale: f32,
+    current_scale_name: &str,
     viewport_scale: Option<f64>,
     file_scales: Vec<(String, f32, f64)>,
 ) -> Vec<Entry<'static>> {
     let mut entries: Vec<Entry<'static>> = file_scales
         .into_iter()
-        .map(|(label, anno_scale, vp_scale)| {
+        .map(|(label, _anno_scale, vp_scale)| {
             let active = if is_model {
-                (current_anno_scale - anno_scale).abs() < 0.001 * current_anno_scale.max(0.001)
+                label.eq_ignore_ascii_case(current_scale_name)
             } else {
-                viewport_scale
-                    .map(|vs| (vs - vp_scale).abs() < 0.001 * vp_scale.max(0.001))
-                    .unwrap_or(false)
+                label.eq_ignore_ascii_case(current_scale_name)
+                    || (current_scale_name.is_empty()
+                        && viewport_scale
+                            .map(|vs| {
+                                (vs - vp_scale).abs() < 0.001 * vp_scale.max(0.001)
+                            })
+                            .unwrap_or(false))
             };
             let msg = if is_model {
-                Message::SetAnnotationScale(anno_scale)
+                Message::SetAnnotationScale(label.clone())
             } else {
-                Message::SetViewportScale(vp_scale)
+                Message::SetViewportScale(label.clone())
             };
             Entry::close(scale_row(label, active, msg))
         })

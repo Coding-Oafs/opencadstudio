@@ -105,6 +105,16 @@ fn num_row<'a>(
     .into()
 }
 
+fn readonly_num_row<'a>(label: &'static str, value: &'a str) -> Element<'a, Message> {
+    row![
+        text(label).size(11).style(muted_style).width(150),
+        text(value).size(11).style(muted_style),
+    ]
+    .spacing(8)
+    .align_y(iced::Center)
+    .into()
+}
+
 /// Shared colour selector row. Reuses MLeaderStyleEdit by sending the chosen
 /// colour as an ACI string; `open` shows the expanded palette.
 fn color_row<'a>(
@@ -288,7 +298,11 @@ pub fn view_window<'a>(
                     v.second_seg_angle,
                     "second_seg_angle"
                 ),
-                num_row("Scale factor:", "1.0", v.scale_factor, "scale_factor"),
+                if s.is_annotative {
+                    readonly_num_row("Scale factor:", "By annotation scale")
+                } else {
+                    num_row("Scale factor:", "1.0", v.scale_factor, "scale_factor")
+                },
                 num_row("Align space:", "4.0", v.align_space, "align_space"),
                 enum_row(
                     "Leader draw order:",

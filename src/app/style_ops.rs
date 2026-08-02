@@ -301,6 +301,124 @@ impl OpenCADStudio {
         }
     }
 
+    fn style_in_use(&self, kind: StyleKind, name: &str) -> bool {
+        use acadrust::entities::EntityType;
+
+        let i = self.active_tab;
+        let doc = &self.tabs[i].scene.document;
+        match kind {
+            StyleKind::Text => {
+                if doc.header.current_text_style_name.eq_ignore_ascii_case(name) {
+                    return true;
+                }
+                let style_handle = doc.text_styles.get(name).map(|style| style.handle);
+                let referenced_by_entity = doc.entities().any(|entity| match entity {
+                    EntityType::Text(text) => text.style.eq_ignore_ascii_case(name),
+                    EntityType::MText(text) => text.style.eq_ignore_ascii_case(name),
+                    EntityType::AttributeEntity(attribute) => {
+                        attribute.text_style.eq_ignore_ascii_case(name)
+                    }
+                    EntityType::AttributeDefinition(attribute) => {
+                        attribute.text_style.eq_ignore_ascii_case(name)
+                    }
+                    EntityType::Insert(insert) => insert.attributes.iter().any(|attribute| {
+                        attribute.text_style.eq_ignore_ascii_case(name)
+                    }),
+                    EntityType::MultiLeader(leader) => [
+                        leader.text_style_handle,
+                        leader.context.text_style_handle,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|handle| Some(handle) == style_handle),
+                    EntityType::Table(table) => table.rows.iter().any(|row| {
+                        row.style
+                            .as_ref()
+                            .and_then(|style| style.text_style_handle)
+                            .is_some_and(|handle| Some(handle) == style_handle)
+                            || row.cells.iter().any(|cell| {
+                                cell.style
+                                    .as_ref()
+                                    .and_then(|style| style.text_style_handle)
+                                    .is_some_and(|handle| Some(handle) == style_handle)
+                                    || cell.contents.iter().any(|content| {
+                                        content
+                                            .text_style_handle
+                                            .is_some_and(|handle| Some(handle) == style_handle)
+                                    })
+                            })
+                    }),
+                    _ => false,
+                });
+                referenced_by_entity
+                    || doc
+                        .dim_styles
+                        .iter()
+                        .any(|style| style.dimtxsty.eq_ignore_ascii_case(name))
+                    || doc.objects.values().any(|object| match object {
+                        ObjectType::TableStyle(style) => [
+                            &style.data_row_style,
+                            &style.header_row_style,
+                            &style.title_row_style,
+                        ]
+                        .into_iter()
+                        .any(|row| row.text_style_name.eq_ignore_ascii_case(name)),
+                        ObjectType::MultiLeaderStyle(style) => {
+                            style.text_style_handle == style_handle
+                        }
+                        _ => false,
+                    })
+            }
+            StyleKind::Dim => {
+                doc.header.current_dimstyle_name.eq_ignore_ascii_case(name)
+                    || doc.entities().any(|entity| match entity {
+                        EntityType::Dimension(dimension) => {
+                            dimension.base().style_name.eq_ignore_ascii_case(name)
+                        }
+                        EntityType::Leader(leader) => {
+                            leader.dimension_style.eq_ignore_ascii_case(name)
+                        }
+                        EntityType::Tolerance(tolerance) => tolerance
+                            .dimension_style_name
+                            .eq_ignore_ascii_case(name),
+                        _ => false,
+                    })
+            }
+            StyleKind::Table | StyleKind::MLeader | StyleKind::MLine => {
+                let Some(handle) = object_handle(doc, name, kind) else {
+                    return false;
+                };
+                let is_current = match kind {
+                    StyleKind::Table => {
+                        doc.header.current_table_style_name.eq_ignore_ascii_case(name)
+                    }
+                    StyleKind::MLeader => {
+                        doc.header.current_mleader_style_name.eq_ignore_ascii_case(name)
+                            || self.tabs[i]
+                                .active_mleader_style
+                                .eq_ignore_ascii_case(name)
+                    }
+                    StyleKind::MLine => doc.header.multiline_style.eq_ignore_ascii_case(name),
+                    StyleKind::Text | StyleKind::Dim => false,
+                };
+                is_current
+                    || doc.entities().any(|entity| match (kind, entity) {
+                        (StyleKind::Table, EntityType::Table(table)) => {
+                            table.table_style_handle == Some(handle)
+                        }
+                        (StyleKind::MLeader, EntityType::MultiLeader(leader)) => {
+                            leader.style_handle == Some(handle)
+                        }
+                        (StyleKind::MLine, EntityType::MLine(line)) => {
+                            line.style_handle == Some(handle)
+                                || line.style_name.eq_ignore_ascii_case(name)
+                        }
+                        _ => false,
+                    })
+            }
+        }
+    }
+
     /// Rename `old`→`new` in the backing store, re-keying table entries and
     /// rewriting name-based references + current-style pointers.
     fn rename_style_storage(&mut self, kind: StyleKind, old: &str, new: &str) {
@@ -331,7 +449,38 @@ impl OpenCADStudio {
                         {
                             t.style = new.to_string();
                         }
+                        acadrust::entities::EntityType::AttributeEntity(a)
+                            if a.text_style.eq_ignore_ascii_case(old) =>
+                        {
+                            a.text_style = new.to_string();
+                        }
+                        acadrust::entities::EntityType::AttributeDefinition(a)
+                            if a.text_style.eq_ignore_ascii_case(old) =>
+                        {
+                            a.text_style = new.to_string();
+                        }
+                        acadrust::entities::EntityType::Insert(insert) => {
+                            for attribute in &mut insert.attributes {
+                                if attribute.text_style.eq_ignore_ascii_case(old) {
+                                    attribute.text_style = new.to_string();
+                                }
+                            }
+                        }
                         _ => {}
+                    }
+                }
+                for object in doc.objects.values_mut() {
+                    let ObjectType::TableStyle(style) = object else {
+                        continue;
+                    };
+                    for row in [
+                        &mut style.data_row_style,
+                        &mut style.header_row_style,
+                        &mut style.title_row_style,
+                    ] {
+                        if row.text_style_name.eq_ignore_ascii_case(old) {
+                            row.text_style_name = new.to_string();
+                        }
                     }
                 }
             }
@@ -349,10 +498,23 @@ impl OpenCADStudio {
                     doc.header.current_dimstyle_name = new.to_string();
                 }
                 for e in doc.entities_mut() {
-                    if let acadrust::entities::EntityType::Dimension(d) = e {
-                        if d.base().style_name.eq_ignore_ascii_case(old) {
+                    match e {
+                        acadrust::entities::EntityType::Dimension(d)
+                            if d.base().style_name.eq_ignore_ascii_case(old) =>
+                        {
                             d.base_mut().style_name = new.to_string();
                         }
+                        acadrust::entities::EntityType::Leader(l)
+                            if l.dimension_style.eq_ignore_ascii_case(old) =>
+                        {
+                            l.dimension_style = new.to_string();
+                        }
+                        acadrust::entities::EntityType::Tolerance(t)
+                            if t.dimension_style_name.eq_ignore_ascii_case(old) =>
+                        {
+                            t.dimension_style_name = new.to_string();
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -366,12 +528,24 @@ impl OpenCADStudio {
                 if self.ribbon.active_table_style.eq_ignore_ascii_case(old) {
                     self.ribbon.active_table_style = new.to_string();
                 }
+                if doc.header.current_table_style_name.eq_ignore_ascii_case(old) {
+                    doc.header.current_table_style_name = new.to_string();
+                }
             }
             StyleKind::MLeader => {
-                let doc = &mut self.tabs[i].scene.document;
-                if let Some(h) = object_handle(doc, old, kind) {
-                    if let Some(ObjectType::MultiLeaderStyle(s)) = doc.objects.get_mut(&h) {
-                        s.name = new.to_string();
+                {
+                    let doc = &mut self.tabs[i].scene.document;
+                    if let Some(h) = object_handle(doc, old, kind) {
+                        if let Some(ObjectType::MultiLeaderStyle(s)) = doc.objects.get_mut(&h) {
+                            s.name = new.to_string();
+                        }
+                    }
+                    if doc
+                        .header
+                        .current_mleader_style_name
+                        .eq_ignore_ascii_case(old)
+                    {
+                        doc.header.current_mleader_style_name = new.to_string();
                     }
                 }
                 if self.tabs[i].active_mleader_style.eq_ignore_ascii_case(old) {
@@ -390,6 +564,13 @@ impl OpenCADStudio {
                 }
                 if doc.header.multiline_style.eq_ignore_ascii_case(old) {
                     doc.header.multiline_style = new.to_string();
+                }
+                for entity in doc.entities_mut() {
+                    if let acadrust::entities::EntityType::MLine(line) = entity {
+                        if line.style_name.eq_ignore_ascii_case(old) {
+                            line.style_name = new.to_string();
+                        }
+                    }
                 }
             }
         }
@@ -435,6 +616,11 @@ impl OpenCADStudio {
         if name.eq_ignore_ascii_case("Standard") {
             self.command_line
                 .push_error("Cannot delete the Standard style.");
+            return;
+        }
+        if self.style_in_use(kind, &name) {
+            self.command_line
+                .push_error("Cannot delete a style that is current or in use.");
             return;
         }
         if !self.remove_style_storage(kind, &name) {

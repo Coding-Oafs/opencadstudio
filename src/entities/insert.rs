@@ -274,6 +274,7 @@ pub(crate) fn append_insert_attribute_wires(
             // above, so the text path must not scale it a second time.
             1.0,
             None,
+            None,
             bg_color,
             false,
         );

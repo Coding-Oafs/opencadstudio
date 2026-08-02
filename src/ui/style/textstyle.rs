@@ -298,7 +298,16 @@ pub fn view_window<'a>(
             text("Properties").size(11).style(primary_style),
             frow("Big Font:", "big-font file…", bigfont_buf, "bigfont"),
             frow("TrueType Font:", "e.g. Arial", ttf_buf, "ttf"),
-            frow("Fixed Height:", "0 = variable", height_buf, "height"),
+            frow(
+                if annotative {
+                    "Paper Text Height:"
+                } else {
+                    "Fixed Height:"
+                },
+                "0 = variable",
+                height_buf,
+                "height",
+            ),
             frow("Width Factor:", "1.0", width_buf, "width"),
             frow("Oblique (°):", "0.0", oblique_buf, "oblique"),
             row![

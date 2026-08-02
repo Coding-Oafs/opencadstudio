@@ -115,6 +115,15 @@ fn mirror_true_text_flags(e: &mut EntityType) {
 }
 
 impl Scene {
+    pub(crate) fn sync_displayed_annotation_context(&mut self, handle: Handle) -> bool {
+        let scale = self.displayed_annotation_scale_handle();
+        crate::scene::annotative::sync_annotation_context_from_entity(
+            &mut self.document,
+            handle,
+            scale,
+        )
+    }
+
     /// Invalidate a dimension's baked block while capturing every removed
     /// sub-entity for an active history transaction.
     pub fn invalidate_dim_block_recorded(&mut self, handle: Handle) {
@@ -239,10 +248,7 @@ impl Scene {
             }
         }
         for &h in handles {
-            if crate::scene::annotative::sync_active_context_from_entity(
-                &mut self.document,
-                h,
-            ) {
+            if self.sync_displayed_annotation_context(h) {
                 self.poison_undo_recording();
             }
         }
@@ -414,10 +420,7 @@ impl Scene {
         }
 
         for handle in changed.iter().copied() {
-            let _ = crate::scene::annotative::sync_active_context_from_entity(
-                &mut self.document,
-                handle,
-            );
+            let _ = self.sync_displayed_annotation_context(handle);
         }
         if !changed.is_empty() {
             self.rebuild_derived_caches();
@@ -639,10 +642,7 @@ impl Scene {
         if let Some(entity) = self.document.get_entity_mut(handle) {
             view::dispatch::apply_grip(entity, grip_id, apply);
         }
-        if crate::scene::annotative::sync_active_context_from_entity(
-            &mut self.document,
-            handle,
-        ) {
+        if self.sync_displayed_annotation_context(handle) {
             self.poison_undo_recording();
         }
         // A dimension loaded from a file renders through its baked *D block;

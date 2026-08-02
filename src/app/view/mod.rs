@@ -1470,6 +1470,7 @@ impl OpenCADStudio {
                         layout_names: layout_names.clone(),
                         polar_custom_input: &self.polar_custom_input,
                         scale_is_model: is_model,
+                        current_scale_name: tab.scene.displayed_annotation_scale_name(),
                         scale_list: tab.scene.scale_picker_list(),
                         has_selection: !tab.scene.selected.is_empty(),
                         selection_types: tab
@@ -1501,6 +1502,9 @@ impl OpenCADStudio {
                         self.show_layout_tabs,
                         tab.scene.annotation_scale,
                         scale_pill_enabled,
+                        tab.scene.annotation_all_visible(),
+                        self.annotation_auto_scale > 0,
+                        tab.scene.viewport_annotation_scale_synced(),
                         tab.scene.document.header.lineweight_display,
                         cursor_coord,
                         coords_mode,

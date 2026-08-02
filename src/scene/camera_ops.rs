@@ -920,7 +920,23 @@ impl Scene {
 
             // Paper entities and viewport borders belong to the sheet. Model
             // content projected through those viewports deliberately does not.
-            for wire in self.wires_for_block_culled(layout_block, None, None, None, None) {
+            let scale = if self.current_layout == "Model" {
+                crate::scene::annotative::scale_handle_by_name(
+                    &self.document,
+                    &self.document.header.current_annotation_scale,
+                )
+            } else {
+                self.paper_annotation_scale_handle()
+            };
+            for wire in self.wires_for_block_culled(
+                layout_block,
+                None,
+                None,
+                None,
+                None,
+                scale,
+                self.annotation_all_visible(),
+            ) {
                 let is_infinite = Self::handle_from_wire_name(&wire.name)
                     .and_then(|handle| self.document.get_entity(handle))
                     .is_some_and(|entity| {
@@ -1000,7 +1016,23 @@ impl Scene {
         // (issue #51). `wpp = None` also tessellates at a fixed tolerance so
         // the bounds don't drift with zoom-adaptive curve sampling.
         let layout_block = self.current_layout_block_handle();
-        let mut wires = self.wires_for_block_culled(layout_block, None, None, None, None);
+        let scale = if self.current_layout == "Model" {
+            crate::scene::annotative::scale_handle_by_name(
+                &self.document,
+                &self.document.header.current_annotation_scale,
+            )
+        } else {
+            self.paper_annotation_scale_handle()
+        };
+        let mut wires = self.wires_for_block_culled(
+            layout_block,
+            None,
+            None,
+            None,
+            None,
+            scale,
+            self.annotation_all_visible(),
+        );
         // Ray / XLine tessellate as ±DISPLAY_EXTENT display segments
         // (entities/ray.rs) — their endpoints are rendering artifacts, not
         // drawing extent. A construction line through the drawing defeats

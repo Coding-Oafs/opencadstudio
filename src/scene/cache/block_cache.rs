@@ -196,6 +196,8 @@ impl BlockCache {
     pub fn build(
         doc: &CadDocument,
         anno_scale: f32,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
         bg_color: [f32; 4],
         // Scene draw-depth map ([depth, half] per handle) — source of each
         // block child's in-block rank, so band depth composition agrees with
@@ -228,7 +230,15 @@ impl BlockCache {
             .map(|name| {
                 (
                     name.clone(),
-                    Arc::new(build_defn(doc, name, anno_scale, bg_color, depth_map)),
+                    Arc::new(build_defn(
+                        doc,
+                        name,
+                        anno_scale,
+                        annotation_scale_handle,
+                        all_visible,
+                        bg_color,
+                        depth_map,
+                    )),
                 )
             })
             .collect();
@@ -345,6 +355,8 @@ fn build_defn(
     doc: &CadDocument,
     block_name: &str,
     anno_scale: f32,
+    annotation_scale_handle: Option<Handle>,
+    all_visible: bool,
     bg_color: [f32; 4],
     depth_map: &HashMap<u64, [f32; 2]>,
 ) -> BlockDefn {
@@ -362,8 +374,11 @@ fn build_defn(
         let Some(source_entity) = doc.get_entity(eh) else {
             continue;
         };
-        let contextual =
-            crate::scene::annotative::entity_for_active_context(doc, source_entity);
+        let contextual = crate::scene::annotative::entity_for_annotation_context(
+            doc,
+            source_entity,
+            annotation_scale_handle,
+        );
         let entity = contextual.as_ref();
         // Skip entities flagged invisible. Dynamic blocks (e.g. a visibility-
         // state parametric block) keep the geometry for every state in one
@@ -383,7 +398,12 @@ fn build_defn(
         // Annotative scale representation: bake only the current scale's copy
         // into the defn so off-scale representations don't stack (e.g. a 1×
         // copy under a 10×). See `annotative::annotative_offscale`.
-        if crate::scene::annotative::annotative_offscale(doc, entity.common()) {
+        if crate::scene::annotative::annotative_offscale_for(
+            doc,
+            entity.common(),
+            annotation_scale_handle,
+            all_visible,
+        ) {
             continue;
         }
         match entity {
@@ -452,7 +472,12 @@ fn build_defn(
                             )));
                         } else {
                             for lw in tessellate_sub_local(
-                                doc, &placed, anno_scale, bg_color, depth_map,
+                                doc,
+                                &placed,
+                                anno_scale,
+                                annotation_scale_handle,
+                                bg_color,
+                                depth_map,
                             ) {
                                 subs.push(LocalSub::Wire(lw));
                             }
@@ -504,7 +529,14 @@ fn build_defn(
                             )));
                         } else {
                             for lw in
-                                tessellate_sub_local(doc, &placed, anno_scale, bg_color, depth_map)
+                                tessellate_sub_local(
+                                    doc,
+                                    &placed,
+                                    anno_scale,
+                                    annotation_scale_handle,
+                                    bg_color,
+                                    depth_map,
+                                )
                             {
                                 subs.push(LocalSub::Wire(lw));
                             }
@@ -513,7 +545,14 @@ fn build_defn(
                 }
                 if !used_baked {
                     for lw in
-                        tessellate_sub_local(doc, entity, anno_scale, bg_color, depth_map)
+                        tessellate_sub_local(
+                            doc,
+                            entity,
+                            anno_scale,
+                            annotation_scale_handle,
+                            bg_color,
+                            depth_map,
+                        )
                     {
                         subs.push(LocalSub::Wire(lw));
                     }
@@ -536,7 +575,14 @@ fn build_defn(
                 // the LocalWire; `emit_wire` scales it by the insert transform
                 // so the shader band matches the scaled geometry (same band the
                 // top-level path draws — depth-tested + linetype-dashed).
-                for lw in tessellate_sub_local(doc, entity, anno_scale, bg_color, depth_map) {
+                for lw in tessellate_sub_local(
+                    doc,
+                    entity,
+                    anno_scale,
+                    annotation_scale_handle,
+                    bg_color,
+                    depth_map,
+                ) {
                     subs.push(LocalSub::Wire(lw));
                 }
             }
@@ -609,6 +655,7 @@ fn tessellate_sub_local(
     doc: &CadDocument,
     sub: &EntityType,
     anno_scale: f32,
+    annotation_scale_handle: Option<Handle>,
     bg_color: [f32; 4],
     depth_map: &HashMap<u64, [f32; 2]>,
 ) -> Vec<LocalWire> {
@@ -657,7 +704,19 @@ fn tessellate_sub_local(
     // before casting to f32 — same precision-preservation trick used for
     // top-level entities, applied per-defn.
     let wires_out = tessellate::tessellate(
-        doc, h, sub, false, sub_color, pat_len, pat, lw_px, anno_scale, None, bg_color, false,
+        doc,
+        h,
+        sub,
+        false,
+        sub_color,
+        pat_len,
+        pat,
+        lw_px,
+        anno_scale,
+        annotation_scale_handle,
+        None,
+        bg_color,
+        false,
     );
     if wires_out.is_empty() {
         return vec![];

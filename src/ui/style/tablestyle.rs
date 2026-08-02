@@ -293,11 +293,6 @@ pub fn view_window<'a>(
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
-                checkbox(s.annotative)
-                    .label("Annotative")
-                    .on_toggle(|_| Message::TableStyleToggleAnnotative)
-                    .size(14)
-                    .text_size(11),
                 row![
                     text("H Margin:").size(11).style(muted_style).width(160),
                     text_input("1.5", hmargin_buf)

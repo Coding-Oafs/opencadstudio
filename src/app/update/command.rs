@@ -1491,15 +1491,19 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         // take the resolved value directly (None = the default
                         // "Closed filled" / "ByBlock" option).
                         let doc = &self.tabs[i].scene.document;
+                        let resolved_mleader_style = (field == "mleader_style")
+                            .then(|| {
+                                doc.objects.values().find_map(|object| match object {
+                                    acadrust::objects::ObjectType::MultiLeaderStyle(style)
+                                        if style.name == value => Some(style.clone()),
+                                    _ => None,
+                                })
+                            })
+                            .flatten();
                         let resolved: Option<acadrust::Handle> = match field {
-                            "mleader_style" => doc.objects.iter().find_map(|(h, o)| match o {
-                                acadrust::objects::ObjectType::MultiLeaderStyle(s)
-                                    if s.name == value =>
-                                {
-                                    Some(*h)
-                                }
-                                _ => None,
-                            }),
+                            "mleader_style" => {
+                                resolved_mleader_style.as_ref().map(|style| style.handle)
+                            }
                             "text_style_handle" => doc
                                 .text_styles
                                 .iter()
@@ -1531,15 +1535,20 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             if self.tabs[i].scene.is_layer_locked(handle) {
                                 continue;
                             }
-                            if let Some(acadrust::EntityType::MultiLeader(ml)) =
+                            let mut style_annotation = None;
+                            if field == "mleader_style" {
+                                if let Some(style) = &resolved_mleader_style {
+                                    crate::scene::annotative::apply_mleader_style_to_object(
+                                        &mut self.tabs[i].scene.document,
+                                        handle,
+                                        style,
+                                    );
+                                    style_annotation = Some(style.is_annotative);
+                                }
+                            } else if let Some(acadrust::EntityType::MultiLeader(ml)) =
                                 self.tabs[i].scene.document.get_entity_mut(handle)
                             {
                                 match field {
-                                    "mleader_style" => {
-                                        if let Some(h) = resolved {
-                                            ml.style_handle = Some(h);
-                                        }
-                                    }
                                     "text_style_handle" => {
                                         if let Some(h) = resolved {
                                             ml.text_style_handle = Some(h);
@@ -1548,6 +1557,24 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     "arrowhead_handle" => ml.arrowhead_handle = resolved,
                                     "line_type_handle" => ml.line_type_handle = resolved,
                                     _ => {}
+                                }
+                            }
+                            if let Some(annotative) = style_annotation {
+                                if annotative {
+                                    if let Some(scale) =
+                                        self.tabs[i].scene.creation_annotation_scale_handle()
+                                    {
+                                        crate::scene::annotative::create_annotation_context(
+                                            &mut self.tabs[i].scene.document,
+                                            handle,
+                                            scale,
+                                        );
+                                    }
+                                } else {
+                                    crate::scene::annotative::clear_annotation_context(
+                                        &mut self.tabs[i].scene.document,
+                                        handle,
+                                    );
                                 }
                             }
                         }

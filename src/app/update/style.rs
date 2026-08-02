@@ -299,7 +299,12 @@ impl OpenCADStudio {
         set_f64!(dimcen, self.ds_dimcen);
         set_f64!(dimtsz, self.ds_dimtsz);
         set_f64!(dimtxt, self.ds_dimtxt);
-        set_f64!(dimscale, self.ds_dimscale);
+        if self.ds_annotative {
+            ds.dimscale = 0.0;
+            self.ds_dimscale = "0".to_string();
+        } else {
+            set_f64!(dimscale, self.ds_dimscale);
+        }
         set_f64!(dimlfac, self.ds_dimlfac);
         set_f64!(dimtp, self.ds_dimtp);
         set_f64!(dimtm, self.ds_dimtm);
@@ -442,7 +447,12 @@ impl OpenCADStudio {
             Dimtoh => self.ds_dimtoh = !self.ds_dimtoh,
             Dimtol => self.ds_dimtol = !self.ds_dimtol,
             Dimlim => self.ds_dimlim = !self.ds_dimlim,
-            Annotative => self.ds_annotative = !self.ds_annotative,
+            Annotative => {
+                self.ds_annotative = !self.ds_annotative;
+                if self.ds_annotative {
+                    self.ds_dimscale = "0".to_string();
+                }
+            }
             Dimfxlon => self.ds_dimfxlon = !self.ds_dimfxlon,
             Dimsah => self.ds_dimsah = !self.ds_dimsah,
             Dimtxtdirection => self.ds_dimtxtdirection = !self.ds_dimtxtdirection,

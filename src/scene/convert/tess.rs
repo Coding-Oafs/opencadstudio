@@ -321,6 +321,7 @@ pub(crate) fn tessellate_entity_dim_text(
         active_viewport,
         bg_color,
         anno_scale,
+        None,
         e,
         None,
         view_aabb,
@@ -345,6 +346,7 @@ pub(crate) fn tessellate_entity(
     active_viewport: Option<Handle>,
     bg_color: [f32; 4],
     anno_scale: f32,
+    annotation_scale_handle: Option<Handle>,
     e: &EntityType,
     block_cache: Option<&cache::block_cache::BlockCache>,
     // World-space XY view AABB (post `world_offset` subtraction). When
@@ -357,7 +359,11 @@ pub(crate) fn tessellate_entity(
     // by the viewport's GPU uniform so it never changes resident wire content.
     paper_space: bool,
 ) -> Vec<WireModel> {
-    let contextual = crate::scene::annotative::entity_for_active_context(document, e);
+    let contextual = crate::scene::annotative::entity_for_annotation_context(
+        document,
+        e,
+        annotation_scale_handle,
+    );
     let e = contextual.as_ref();
     let h = e.common().handle;
     let sel = selected.contains(&h);
@@ -371,7 +377,12 @@ pub(crate) fn tessellate_entity(
             | EntityType::Dimension(_)
             | EntityType::MultiLeader(_)
     ) {
-        crate::scene::annotative::effective_annotation_scale(document, e, anno_scale)
+        crate::scene::annotative::effective_annotation_scale_for(
+            document,
+            e,
+            anno_scale,
+            annotation_scale_handle,
+        )
     } else {
         anno_scale
     };
@@ -505,6 +516,7 @@ pub(crate) fn tessellate_entity(
             pattern,
             1.5,
             1.0,
+            annotation_scale_handle,
             world_per_pixel,
             bg_color,
             false,
@@ -788,6 +800,7 @@ pub(crate) fn tessellate_entity(
                             // Block contents are baked at the final WCS size —
                             // don't let downstream paths re-apply anno_scale.
                             1.0,
+                            None,
                             sub,
                             block_cache,
                             view_aabb,
@@ -954,6 +967,7 @@ pub(crate) fn tessellate_entity(
                             active_viewport,
                             bg_color,
                             anno_scale,
+                            annotation_scale_handle,
                             &placed,
                             block_cache,
                             view_aabb,
@@ -994,14 +1008,7 @@ pub(crate) fn tessellate_entity(
         // No baked block (e.g. a table created in-app) — synthesise coloured
         // geometry from the rows + TableStyle so fills/colours/borders/margins
         // are honoured instead of the monochrome fallback.
-        // Annotative tables scale with the current annotation scale (their
-        // stored geometry is at paper size); non-annotative tables are already
-        // model-size, so pass 1.0.
-        let table_anno = if crate::scene::annotative::is_annotative(document, e) {
-            anno_scale
-        } else {
-            1.0
-        };
+        let table_anno = 1.0;
         let mut wires = crate::entities::table::tessellate_table(
             tab,
             document,
@@ -1019,6 +1026,7 @@ pub(crate) fn tessellate_entity(
                 active_viewport,
                 bg_color,
                 1.0,
+                None,
                 &EntityType::Insert(insert),
                 block_cache,
                 view_aabb,
@@ -1198,6 +1206,7 @@ pub(crate) fn tessellate_entity(
                     sub_pattern,
                     sub_line_weight_px,
                     anno_scale,
+                    annotation_scale_handle,
                     world_per_pixel,
                     bg_color,
                     false,
@@ -1260,6 +1269,7 @@ pub(crate) fn tessellate_entity(
         pattern,
         line_weight_px,
         anno_scale,
+        annotation_scale_handle,
         world_per_pixel,
         bg_color,
         false,
@@ -1398,6 +1408,7 @@ pub(crate) fn tessellate_entity(
                             pattern,
                             line_weight_px,
                             anno_scale,
+                            annotation_scale_handle,
                             world_per_pixel,
                             bg_color,
                             false,

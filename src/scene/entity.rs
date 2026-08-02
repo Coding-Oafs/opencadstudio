@@ -685,7 +685,7 @@ impl Scene {
         entities: Vec<EntityType>,
         name: &str,
         base: glam::DVec3,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<Handle>, String> {
         let name = name.trim();
         if name.is_empty() {
             return Err("Block name cannot be empty.".into());
@@ -729,20 +729,23 @@ impl Scene {
             .map_err(|e| e.to_string())?;
 
         let local = EntityTransform::Translate(-base);
+        let mut entity_handles = Vec::with_capacity(entities.len());
         for mut entity in entities {
             view::dispatch::apply_transform(&mut entity, &local);
             entity = crate::modules::draw::modify::explode::normalize_entity_for_block(entity);
             Self::reset_clone_subhandles(&mut self.document, &mut entity);
             entity.common_mut().handle = Handle::NULL;
             entity.common_mut().owner_handle = br_handle;
-            self.document
+            let handle = self
+                .document
                 .add_entity(entity)
                 .map_err(|e| e.to_string())?;
+            entity_handles.push(handle);
         }
         // Block defns don't render on their own, but the geometry cache must
         // pick up the new definition so the interactive insert can preview it.
         self.bump_geometry();
-        Ok(())
+        Ok(entity_handles)
     }
 
     /// Recreate a block definition verbatim — the entities are already in
@@ -794,6 +797,8 @@ impl Scene {
         &self,
         target_block: Handle,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
     ) -> Vec<HatchModel> {
         let layer_hidden = |layer: &str| {
             self.document
@@ -832,6 +837,12 @@ impl Scene {
                 if c.invisible
                     || self.entity_temporarily_hidden(handle)
                     || layer_hidden(&c.layer)
+                    || crate::scene::annotative::annotative_offscale_for(
+                        &self.document,
+                        c,
+                        annotation_scale_handle,
+                        all_visible,
+                    )
                 {
                     return false;
                 }
@@ -851,17 +862,19 @@ impl Scene {
                     .document
                     .get_entity(handle)
                     .map(|entity| {
-                        crate::scene::annotative::entity_for_active_context(
+                        crate::scene::annotative::entity_for_annotation_context(
                             &self.document,
                             entity,
+                            annotation_scale_handle,
                         )
                     });
                 let entity = contextual.as_deref();
                 let mut m = match entity {
                     Some(EntityType::Hatch(dxf))
-                        if crate::scene::annotative::active_object_context(
+                        if crate::scene::annotative::active_object_context_for_scale(
                             &self.document,
                             handle,
+                            annotation_scale_handle,
                         )
                         .is_some() =>
                     {
@@ -935,12 +948,7 @@ impl Scene {
                                 if dxf.pattern.lines.is_empty() =>
                             {
                                 m.angle_offset = dxf.pattern_angle as f32;
-                                let anno = if self.current_layout == "Model" {
-                                    self.annotation_scale
-                                } else {
-                                    1.0
-                                };
-                                m.scale = dxf.pattern_scale as f32 * anno;
+                                m.scale = dxf.pattern_scale as f32;
                             }
                             model::hatch_model::HatchPattern::Gradient { angle_deg, .. } => {
                                 *angle_deg = dxf.pattern_angle.to_degrees() as f32;
@@ -975,6 +983,8 @@ impl Scene {
             hatch_bg,
             true,
             frozen,
+            annotation_scale_handle,
+            all_visible,
         ));
 
         // Wide LwPolyline / Polyline2D bands are no longer hatch fills at
@@ -1007,12 +1017,16 @@ impl Scene {
         hatch_bg: [f32; 4],
         tint_selected: bool,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
     ) -> Vec<HatchModel> {
         self.exploded_insert_hatch_models_filtered(
             layout_block,
             hatch_bg,
             tint_selected,
             frozen,
+            annotation_scale_handle,
+            all_visible,
             None,
             false,
         )
@@ -1049,6 +1063,8 @@ impl Scene {
             hatch_bg,
             true,
             (!frozen.is_empty()).then_some(&frozen),
+            self.displayed_annotation_scale_handle(),
+            self.annotation_all_visible(),
             Some(&targets),
             true,
         )
@@ -1060,6 +1076,8 @@ impl Scene {
         hatch_bg: [f32; 4],
         tint_selected: bool,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
         targets: Option<&rustc_hash::FxHashSet<Handle>>,
         include_preview_hidden: bool,
     ) -> Vec<HatchModel> {
@@ -1148,8 +1166,11 @@ impl Scene {
             out
         }
         for entity in self.document.entities() {
-            let contextual =
-                crate::scene::annotative::entity_for_active_context(&self.document, entity);
+            let contextual = crate::scene::annotative::entity_for_annotation_context(
+                &self.document,
+                entity,
+                annotation_scale_handle,
+            );
             let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
@@ -1179,9 +1200,12 @@ impl Scene {
             // Off-scale annotative representation (model space only — paper
             // viewports use their per-viewport frozen scale layers). Skips its
             // whole fill subtree, matching the wire path.
-            if frozen.is_none()
-                && crate::scene::annotative::annotative_offscale(&self.document, &ins.common)
-            {
+            if crate::scene::annotative::annotative_offscale_for(
+                &self.document,
+                &ins.common,
+                annotation_scale_handle,
+                all_visible,
+            ) {
                 continue;
             }
             if !self.block_has_hatch(&ins.block_name, &mut hatch_block_memo)
@@ -1232,9 +1256,13 @@ impl Scene {
             // use their per-viewport frozen scale layers. `explode` preserves
             // the child handle, so the membership lookup still resolves here.
             let offscale = |e: &EntityType| -> bool {
-                frozen.is_none()
-                    && matches!(e, EntityType::Insert(ni)
-                        if crate::scene::annotative::annotative_offscale(&self.document, &ni.common))
+                matches!(e, EntityType::Insert(ni)
+                    if crate::scene::annotative::annotative_offscale_for(
+                        &self.document,
+                        &ni.common,
+                        annotation_scale_handle,
+                        all_visible,
+                    ))
             };
             type ResolvedStyle = ([f32; 4], f32, [f32; 8], f32, u8);
             let mut stack: Vec<(
@@ -1248,7 +1276,11 @@ impl Scene {
                 .into_iter()
                 .filter(|e| !offscale(e))
                 .map(|e| {
-                    crate::scene::annotative::entity_for_active_context(&self.document, &e)
+                    crate::scene::annotative::entity_for_annotation_context(
+                        &self.document,
+                        &e,
+                        annotation_scale_handle,
+                    )
                         .into_owned()
                 })
                 .map(|e| {
@@ -1338,9 +1370,10 @@ impl Scene {
                                 continue;
                             }
                             let e =
-                                crate::scene::annotative::entity_for_active_context(
+                                crate::scene::annotative::entity_for_annotation_context(
                                     &self.document,
                                     &e,
+                                    annotation_scale_handle,
                                 )
                                 .into_owned();
                             stack.push((
@@ -1451,6 +1484,8 @@ impl Scene {
         &self,
         target_block: Handle,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
     ) -> Vec<HatchModel> {
         let is_paper = self.current_layout != "Model";
         let bg_color: [f32; 4] = if is_paper {
@@ -1537,8 +1572,11 @@ impl Scene {
         // apply_rotation) rather than through Insert::explode — the latter
         // double-scales the u/v basis.
         for entity in self.document.entities() {
-            let contextual =
-                crate::scene::annotative::entity_for_active_context(&self.document, entity);
+            let contextual = crate::scene::annotative::entity_for_annotation_context(
+                &self.document,
+                entity,
+                annotation_scale_handle,
+            );
             let EntityType::Insert(ins) = contextual.as_ref() else {
                 continue;
             };
@@ -1558,9 +1596,12 @@ impl Scene {
             if !self.belongs_to_visible_block(c.handle, c.owner_handle, target_block) {
                 continue;
             }
-            if frozen.is_none()
-                && crate::scene::annotative::annotative_offscale(&self.document, c)
-            {
+            if crate::scene::annotative::annotative_offscale_for(
+                &self.document,
+                c,
+                annotation_scale_handle,
+                all_visible,
+            ) {
                 continue;
             }
             self.collect_block_wipeouts(
@@ -1571,6 +1612,8 @@ impl Scene {
                 bg_color,
                 &depth_map,
                 &mut models,
+                annotation_scale_handle,
+                all_visible,
             );
         }
         models
@@ -1588,6 +1631,8 @@ impl Scene {
         bg_color: [f32; 4],
         depth_map: &HashMap<u64, [f32; 2]>,
         models: &mut Vec<HatchModel>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
     ) {
         if depth > 32 {
             return;
@@ -1601,9 +1646,15 @@ impl Scene {
             return;
         };
         for &eh in &br.entity_handles {
-            let Some(e) = self.document.get_entity(eh) else {
+            let Some(source) = self.document.get_entity(eh) else {
                 continue;
             };
+            let contextual = crate::scene::annotative::entity_for_annotation_context(
+                &self.document,
+                source,
+                annotation_scale_handle,
+            );
+            let e = contextual.as_ref();
             let c = e.common();
             if c.invisible
                 || self
@@ -1613,6 +1664,12 @@ impl Scene {
                     .map(|l| l.flags.off || l.flags.frozen)
                     .unwrap_or(false)
                 || self.layer_frozen_in(&c.layer, frozen)
+                || crate::scene::annotative::annotative_offscale_for(
+                    &self.document,
+                    c,
+                    annotation_scale_handle,
+                    all_visible,
+                )
             {
                 continue;
             }
@@ -1655,6 +1712,8 @@ impl Scene {
                         bg_color,
                         depth_map,
                         models,
+                        annotation_scale_handle,
+                        all_visible,
                     );
                 }
                 _ => {}
@@ -2240,7 +2299,11 @@ impl Scene {
             .document
             .get_entity(handle)
             .map(|entity| {
-                crate::scene::annotative::entity_for_active_context(&self.document, entity)
+                crate::scene::annotative::entity_for_annotation_context(
+                    &self.document,
+                    entity,
+                    self.displayed_annotation_scale_handle(),
+                )
             });
         let new_model = match contextual.as_deref() {
             Some(EntityType::Hatch(dxf)) => {
@@ -2272,7 +2335,11 @@ impl Scene {
             .filter_map(|e| match e {
                 EntityType::Hatch(h) => Some((
                     h.common.handle,
-                    crate::scene::annotative::entity_for_active_context(&self.document, e)
+                    crate::scene::annotative::entity_for_annotation_context(
+                        &self.document,
+                        e,
+                        self.displayed_annotation_scale_handle(),
+                    )
                         .into_owned(),
                 )),
                 EntityType::Solid(s) => Some((s.common.handle, e.clone())),

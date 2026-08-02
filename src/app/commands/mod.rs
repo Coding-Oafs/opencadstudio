@@ -336,6 +336,9 @@ inventory::submit!(crate::command::CommandRegistration {
         // Annotation scale.
         "ANNOSCALE",
         "CANNOSCALE",
+        "ANNOALLVISIBLE",
+        "ANNOAUTOSCALE",
+        "ANNOUPDATE",
         "SCALELISTEDIT",
         "OBJECTSCALE",
         // Import CSV into a table + LandXML survey points.

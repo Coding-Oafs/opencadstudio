@@ -2589,17 +2589,60 @@ impl OpenCADStudio {
             }
             Message::SetAnnotationScale(scale) => {
                 self.scale_popup_open = false;
+                let auto_scale = self.annotation_auto_scale;
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                    tab.scene.annotation_scale = scale;
-                    util::sync_annotation_scale_header(&mut tab.scene);
-                    tab.scene.invalidate_annotation_dependencies();
+                    let previous = tab.scene.displayed_annotation_scale_handle();
+                    if let Some(handle) = tab.scene.set_annotation_scale_named(&scale) {
+                        if auto_scale > 0 {
+                            tab.scene.add_annotation_scale_to_objects(
+                                handle,
+                                previous,
+                                auto_scale as u8,
+                            );
+                        }
+                        tab.dirty = true;
+                    }
                 }
                 Task::none()
             }
             Message::SetViewportScale(scale) => {
                 self.scale_popup_open = false;
+                let auto_scale = self.annotation_auto_scale;
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                    tab.scene.set_viewport_scale(scale);
+                    let previous = tab.scene.displayed_annotation_scale_handle();
+                    if let Some(handle) = tab.scene.set_viewport_scale_named(&scale) {
+                        if auto_scale > 0 {
+                            tab.scene.add_annotation_scale_to_objects(
+                                handle,
+                                previous,
+                                auto_scale as u8,
+                            );
+                        }
+                        tab.dirty = true;
+                    }
+                }
+                Task::none()
+            }
+            Message::ToggleAnnotationVisibility => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    let value = !tab.scene.annotation_all_visible();
+                    tab.scene.set_annotation_all_visible(value);
+                    tab.dirty = true;
+                }
+                Task::none()
+            }
+            Message::ToggleAnnotationAutoAdd => {
+                self.annotation_auto_scale = match self.annotation_auto_scale {
+                    0 => 4,
+                    value => -value,
+                };
+                Task::none()
+            }
+            Message::SyncViewportAnnotationScale => {
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    if tab.scene.sync_viewport_annotation_scale() {
+                        tab.dirty = true;
+                    }
                 }
                 Task::none()
             }
@@ -2647,22 +2690,17 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
                 if handles.len() == 1 {
-                    // Only object types that carry a per-object context.
-                    let ok = matches!(
-                        self.tabs[i].scene.document.get_entity(handles[0]),
-                        Some(
-                            acadrust::EntityType::Text(_)
-                                | acadrust::EntityType::MText(_)
-                                | acadrust::EntityType::Insert(_)
-                        )
-                    );
+                    let ok = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(handles[0])
+                        .is_some_and(crate::scene::annotative::supports_annotation_context);
                     if ok {
                         self.anno_object_scale_target = Some(handles[0]);
                         self.active_modal = Some(crate::app::ModalKind::AnnoObjectScale);
                     } else {
-                        self.command_line.push_info(
-                            "OBJECTSCALE applies to a single Text, MText or block reference.",
-                        );
+                        self.command_line
+                            .push_info("The selected object does not support annotation scales.");
                     }
                 } else {
                     self.command_line
@@ -2816,21 +2854,16 @@ impl OpenCADStudio {
                 // never rolled back when the manager closes.
                 let i = self.active_tab;
                 let sel = self.scale_manager_selected.clone();
-                if let Some((_, anno, _)) = self
-                    .tabs[i]
-                    .scene
-                    .scale_list()
-                    .into_iter()
-                    .find(|(n, _, _)| n.eq_ignore_ascii_case(&sel))
-                {
-                    self.tabs[i].scene.annotation_scale = anno;
-                    self.tabs[i].scene.document.header.current_annotation_scale = sel.clone();
-                    if let Some((p, d)) = self.tabs[i].scene.scale_paper_drawing(&sel) {
-                        if d != 0.0 {
-                            self.tabs[i].scene.document.header.annotation_scale_value = p / d;
-                        }
+                let previous = self.tabs[i].scene.displayed_annotation_scale_handle();
+                if let Some(scale) = self.tabs[i].scene.set_annotation_scale_named(&sel) {
+                    if self.annotation_auto_scale > 0 {
+                        self.tabs[i].scene.add_annotation_scale_to_objects(
+                            scale,
+                            previous,
+                            self.annotation_auto_scale as u8,
+                        );
                     }
-                    self.tabs[i].scene.invalidate_annotation_dependencies();
+                    self.tabs[i].dirty = true;
                 }
                 Task::none()
             }
@@ -3657,7 +3690,7 @@ impl OpenCADStudio {
                                 // object. Off is handled inside set_entity_*.
                                 if !cur {
                                     if let Some(sh) =
-                                        self.tabs[i].scene.current_annotation_scale_handle()
+                                        self.tabs[i].scene.creation_annotation_scale_handle()
                                     {
                                         crate::scene::annotative::create_annotation_context(
                                             &mut self.tabs[i].scene.document,

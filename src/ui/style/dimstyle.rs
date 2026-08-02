@@ -537,7 +537,15 @@ pub fn view_window<'a>(
             chk("Annotative", vals.annotative, DsField::Annotative),
             row![
                 lbl("Overall scale (DIMSCALE)"),
-                mk_field(DsField::Dimscale, vals.dimscale)
+                if vals.annotative {
+                    text_input("", "0")
+                        .style(field_style)
+                        .size(11)
+                        .width(100)
+                        .into()
+                } else {
+                    mk_field(DsField::Dimscale, vals.dimscale)
+                }
             ]
             .spacing(8)
             .align_y(iced::Center),

@@ -96,7 +96,7 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
     let nan = [f64::NAN; 3];
     let p3 = |v: &acadrust::types::Vector3| -> [f64; 3] { [v.x, v.y, v.z] };
 
-    let arrow_size = ml.arrowhead_size;
+    let arrow_size = ml.context.arrowhead_size;
     let draw_arrow = arrow_size > 0.0;
     let invisible = ml.path_type == MultiLeaderPathType::Invisible;
 
@@ -191,7 +191,11 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
             None
         };
     let dogleg = if ml.enable_landing && ml.enable_dogleg {
-        ml.dogleg_length.max(0.0)
+        ml.context
+            .leader_roots
+            .first()
+            .map(|root| root.landing_distance.max(0.0))
+            .unwrap_or_else(|| ml.dogleg_length.max(0.0))
     } else {
         0.0
     };
@@ -1317,16 +1321,17 @@ impl MultiLeaderTess for MultiLeader {
         };
 
         // ── Scaling ──────────────────────────────────────────────────────────────
-        // ml.scale_factor is always applied; anno_scale is only applied when the
-        // multileader is marked annotative.
-        let effective_scale = (ml.scale_factor as f32)
+        // Used only when a context omits an already-resolved content size.
+        let fallback_content_scale = (ml.scale_factor as f32)
             * if crate::scene::annotative::mleader_is_annotative(document, ml) {
                 anno_scale
             } else {
                 1.0
             };
 
-        let arrow_size = ml.arrowhead_size as f32 * effective_scale;
+        // The active context stores the resolved world-space arrow size.
+        // Reapplying the entity scale here makes context-sized arrows grow twice.
+        let arrow_size = ml.context.arrowhead_size as f32;
         let draw_arrow = arrow_size > 0.0;
         let invisible = ml.path_type == MultiLeaderPathType::Invisible;
         // arrowhead_handle resolves through the block records to a named arrow
@@ -1452,7 +1457,10 @@ impl MultiLeaderTess for MultiLeader {
                 ml.text_attachment_direction,
                 acadrust::entities::multileader::TextAttachmentDirectionType::Vertical
             );
-            if ml.enable_landing && ml.enable_dogleg && ml.dogleg_length > 0.0 && !vertical_attach
+            if ml.enable_landing
+                && ml.enable_dogleg
+                && root.landing_distance > 0.0
+                && !vertical_attach
             {
                 // Horizontal landing (dogleg) from the leader elbow (connection
                 // point) toward the text side. The stored geometry places the
@@ -1460,7 +1468,9 @@ impl MultiLeaderTess for MultiLeader {
                 // dogleg end, so the dogleg stops here — drawing on to
                 // text_location (the block's top-left insertion) would streak a
                 // stray line up the side of the text.
-                let d = ml.dogleg_length * effective_scale as f64;
+                // Landing distance belongs to the selected leader-root context
+                // and is already resolved in world units.
+                let d = root.landing_distance;
                 // The dogleg runs along the leader root's stored direction —
                 // for a rotated leader that is the angled baseline, not world
                 // X. Roots without a usable direction keep the legacy
@@ -1569,6 +1579,7 @@ impl MultiLeaderTess for MultiLeader {
                         leader_lw_px,
                         1.0,
                         None,
+                        None,
                         bg_color,
                         false,
                     );
@@ -1604,7 +1615,7 @@ impl MultiLeaderTess for MultiLeader {
             let height = if ctx.text_height > 0.0 {
                 ctx.text_height as f32
             } else {
-                ml.text_height as f32 * effective_scale
+                ml.text_height as f32 * fallback_content_scale
             };
 
             let ins = &ctx.text_location;

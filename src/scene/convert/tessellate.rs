@@ -131,6 +131,7 @@ pub fn tessellate(
     pattern: [f32; 8],
     line_weight_px: f32,
     anno_scale: f32,
+    annotation_scale_handle: Option<Handle>,
     world_per_pixel: Option<f32>,
     // Canvas background colour — used for the MTEXT background *mask* fill
     // (flag 0x02, "use drawing window colour") so the mask erases geometry
@@ -156,8 +157,12 @@ pub fn tessellate(
     // oversized text). Annotative-ness is resolved centrally from the entity's
     // per-object context, legacy XDATA, or annotative style (see
     // `scene::annotative::is_annotative`) so the bake and the panel agree.
-    let anno_scale =
-        crate::scene::annotative::effective_annotation_scale(document, entity, anno_scale);
+    let anno_scale = crate::scene::annotative::effective_annotation_scale_for(
+        document,
+        entity,
+        anno_scale,
+        annotation_scale_handle,
+    );
 
     // A HATCH is drawn as a fill by the hatch pipeline and highlighted via a
     // fill tint when selected (issue #71), so it carries no boundary outline in

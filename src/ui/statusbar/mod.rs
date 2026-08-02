@@ -27,10 +27,15 @@ use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
 use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
 use crate::ui::wrap_bar::WrapBar;
 
+const ST_ANNO_VISIBILITY: &[u8] = include_bytes!("../../../assets/icons/scale_list.svg");
+const ST_ANNO_AUTO_ADD: &[u8] = include_bytes!("../../../assets/icons/add_scale.svg");
+const ST_VP_SCALE_SYNC: &[u8] = include_bytes!("../../../assets/icons/sync.svg");
+
 pub struct StatusMenuData<'a> {
     pub layout_names: Vec<String>,
     pub polar_custom_input: &'a str,
     pub scale_is_model: bool,
+    pub current_scale_name: String,
     pub scale_list: Vec<(String, f32, f64)>,
     pub has_selection: bool,
     pub selection_types: Vec<String>,
@@ -80,6 +85,9 @@ impl StatusBar {
         annotation_scale: f32,
         // True when the scale pill is interactive (always model space; paper space only when a viewport is active/selected).
         scale_pill_enabled: bool,
+        annotation_all_visible: bool,
+        annotation_auto_add: bool,
+        viewport_scale_synced: Option<bool>,
         // LWDISPLAY header flag — controls lineweight visibility in the viewport.
         lineweight_display: bool,
         // Live cursor position in model coordinates, for the coordinate readout.
@@ -113,6 +121,7 @@ impl StatusBar {
             layout_names,
             polar_custom_input,
             scale_is_model,
+            current_scale_name,
             scale_list,
             has_selection,
             selection_types,
@@ -175,19 +184,23 @@ impl StatusBar {
         // Keep its text identical to the active drawing-defined scale. Rebuilding
         // the label from the numeric factor turns an architectural
         // `1/2" = 1'-0"` scale into `1:24`, mixing formats in the same control.
-        let scale_label = active_scale_label(
-            scale_is_model,
-            annotation_scale,
-            viewport_scale,
-            &scale_list,
-        )
-        .unwrap_or_else(|| {
-            if scale_is_model {
-                format_scale(Some(1.0 / annotation_scale as f64))
-            } else {
-                format_scale(viewport_scale)
-            }
-        });
+        let scale_label = if current_scale_name.is_empty() {
+            active_scale_label(
+                scale_is_model,
+                annotation_scale,
+                viewport_scale,
+                &scale_list,
+            )
+            .unwrap_or_else(|| {
+                if scale_is_model {
+                    format_scale(Some(1.0 / annotation_scale as f64))
+                } else {
+                    format_scale(viewport_scale)
+                }
+            })
+        } else {
+            current_scale_name.clone()
+        };
         let scale_element: Element<'_, Message> = if scale_pill_enabled {
             status_menu::menu_bar(
                 menu_tip(
@@ -197,7 +210,7 @@ impl StatusBar {
                 ),
                 crate::ui::popup::scale_popup::menu_entries(
                     scale_is_model,
-                    annotation_scale,
+                    &current_scale_name,
                     viewport_scale,
                     scale_list,
                 ),
@@ -293,6 +306,47 @@ impl StatusBar {
         }
         if vis(StatusPill::Scale) {
             pills.push(scale_element);
+        }
+        if vis(StatusPill::AnnoVisibility) {
+            pills.push(
+                tip(
+                    toggle_pill(
+                        ST_ANNO_VISIBILITY,
+                        annotation_all_visible,
+                        Message::ToggleAnnotationVisibility,
+                    ),
+                    "Show Annotation Objects",
+                )
+                .into(),
+            );
+        }
+        if vis(StatusPill::AnnoAutoAdd) {
+            pills.push(
+                tip(
+                    toggle_pill(
+                        ST_ANNO_AUTO_ADD,
+                        annotation_auto_add,
+                        Message::ToggleAnnotationAutoAdd,
+                    ),
+                    "Automatically Add Scales",
+                )
+                .into(),
+            );
+        }
+        if vis(StatusPill::VpScaleSync) {
+            if let Some(synced) = viewport_scale_synced {
+                pills.push(
+                    tip(
+                        toggle_pill(
+                            ST_VP_SCALE_SYNC,
+                            synced,
+                            Message::SyncViewportAnnotationScale,
+                        ),
+                        "Viewport / Annotation Scale Sync",
+                    )
+                    .into(),
+                );
+            }
         }
         if vis(StatusPill::Units) {
             pills.push(

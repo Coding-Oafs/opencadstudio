@@ -4,9 +4,8 @@ use crate::scene::Scene;
 
 /// Parse a scale string like "1:50" or "2:1" into (numerator, denominator).
 /// Returns (1.0, 1.0) for "Fit" or unknown formats.
-/// Sync the model-space annotation scale into the standard CANNOSCALE /
-/// CANNOSCALEVALUE header variables before a save, so the scale round-trips
-/// through the file (and is read correctly by other CAD applications).
+/// Sync the model-space annotation scale into its named drawing variable and
+/// numeric header mirror before a save.
 pub(super) fn sync_annotation_scale_header(scene: &mut Scene) {
     let anno = scene.annotation_scale;
     let value = if anno.abs() > 1e-9 {
@@ -14,17 +13,25 @@ pub(super) fn sync_annotation_scale_header(scene: &mut Scene) {
     } else {
         1.0
     };
-    // Prefer the name of a matching scale already in the drawing's list;
-    // fall back to a formatted ratio when none matches.
-    let name = scene
-        .scale_list()
-        .into_iter()
-        .find(|(_, a, _)| (a - anno).abs() < 0.001 * anno.max(0.001))
-        .map(|(n, _, _)| n)
-        .unwrap_or_else(|| format_annotation_scale_name(anno));
+    let current = scene.document.header.current_annotation_scale.clone();
+    let current_matches = scene.scale_list().into_iter().any(|(name, factor, _)| {
+        name.eq_ignore_ascii_case(&current)
+            && (factor - anno).abs() < 0.001 * anno.max(0.001)
+    });
+    let name = if current_matches {
+        current
+    } else {
+        scene
+            .scale_list()
+            .into_iter()
+            .find(|(_, factor, _)| (factor - anno).abs() < 0.001 * anno.max(0.001))
+            .map(|(name, _, _)| name)
+            .unwrap_or_else(|| format_annotation_scale_name(anno))
+    };
     let hdr = &mut scene.document.header;
-    hdr.current_annotation_scale = name;
+    hdr.current_annotation_scale = name.clone();
     hdr.annotation_scale_value = value;
+    crate::io::set_drawing_variable(&mut scene.document, "CANNOSCALE", &name);
 }
 
 /// Format an annotation-scale multiplier as a ratio name: 50.0 -> "1:50",
@@ -101,4 +108,3 @@ pub(super) fn f4_to_u3([r, g, b, _]: [f32; 4]) -> [u8; 3] {
 pub(super) fn u3_to_f4([r, g, b]: [u8; 3]) -> [f32; 4] {
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }
-

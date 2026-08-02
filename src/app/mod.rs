@@ -349,6 +349,8 @@ pub(super) struct OpenCADStudio {
     cycle_candidates: Option<(iced::Point, Vec<acadrust::Handle>)>,
     /// Which status-bar pills the user has chosen to show (persisted).
     statusbar_config: crate::ui::statusbar::statusbar_config::StatusBarConfig,
+    /// Add selected scales to existing annotative objects.
+    annotation_auto_scale: i8,
     /// Last persisted user preferences (DYN/OSNAP/OTRACK/POLAR/…). Compared
     /// after each message so a change is written to disk exactly once.
     last_saved_config: Option<config::AppConfig>,
@@ -1093,6 +1095,7 @@ pub struct ClipExtObjects {
     pub src_entity_handle: acadrust::Handle,
     pub root: acadrust::Handle,
     pub objects: Vec<(acadrust::Handle, acadrust::objects::ObjectType)>,
+    pub annotation_scales: Vec<(acadrust::Handle, acadrust::objects::Scale)>,
 }
 
 impl ClipboardDeps {
@@ -1154,11 +1157,29 @@ impl ClipboardDeps {
                 }
                 let objects = Self::collect_ext_subtree(doc, root);
                 if !objects.is_empty() {
+                    let mut annotation_scales = Vec::new();
+                    for (_, object) in &objects {
+                        let acadrust::objects::ObjectType::ObjectContextData(context) = object else {
+                            continue;
+                        };
+                        if annotation_scales
+                            .iter()
+                            .any(|(handle, _)| *handle == context.scale)
+                        {
+                            continue;
+                        }
+                        if let Some(acadrust::objects::ObjectType::Scale(scale)) =
+                            doc.objects.get(&context.scale)
+                        {
+                            annotation_scales.push((context.scale, scale.clone()));
+                        }
+                    }
                     ext_objects.push(ClipExtObjects {
                         entity_index,
                         src_entity_handle: c.handle,
                         root,
                         objects,
+                        annotation_scales,
                     });
                 }
             }
@@ -1873,9 +1894,12 @@ pub enum Message {
     /// Apply the typed custom polar angle (Enter in the picker's field).
     SubmitPolarCustom,
     /// Set the model-space annotation scale (CANNOSCALE equivalent).
-    SetAnnotationScale(f32),
+    SetAnnotationScale(String),
     /// Set the active viewport's custom_scale (paper space).
-    SetViewportScale(f64),
+    SetViewportScale(String),
+    ToggleAnnotationVisibility,
+    ToggleAnnotationAutoAdd,
+    SyncViewportAnnotationScale,
     /// Toggle the scale picker popup open/closed.
     ToggleScalePopup,
     /// Close the scale picker popup.
@@ -2667,6 +2691,7 @@ impl OpenCADStudio {
             selection_filter_popup_open: false,
             status_menu_tooltip_hidden: false,
             statusbar_config: crate::ui::statusbar::statusbar_config::StatusBarConfig::default(),
+            annotation_auto_scale: -4,
             last_saved_config: None,
             otrack_active: None,
             clean_screen: false,
