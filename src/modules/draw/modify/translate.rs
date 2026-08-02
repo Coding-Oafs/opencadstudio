@@ -109,4 +109,11 @@ impl CadCommand for MoveCommand {
         ));
         out
     }
+
+    fn preview_hidden_handles(&self) -> &[Handle] {
+        match self.step {
+            Step::Base => &[],
+            Step::Target(_) => &self.handles,
+        }
+    }
 }

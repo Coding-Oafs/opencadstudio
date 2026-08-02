@@ -1532,10 +1532,13 @@ pub struct Scene {
     /// Session-only ISOLATEOBJECTS / HIDEOBJECTS state. Never written to DWG/DXF.
     pub object_isolation: ObjectIsolationState,
     /// Entity handles temporarily removed from the base render while an
-    /// interactive preview (currently grip drag) draws their live replacement.
+    /// interactive grip preview draws their live replacement.
     /// Separate from object isolation so a grip can never activate the
     /// isolation status or be captured in its undo state.
     pub preview_hidden: HashSet<Handle>,
+    /// Source handles replaced by an active command preview. Kept separate
+    /// from grip state so either interaction can clean up only its own hides.
+    command_preview_hidden: HashSet<Handle>,
     /// During in-place block edit (REFEDIT), the handles of the entities being
     /// edited. Everything else is rendered faded toward the background so the
     /// edited geometry stands out while the surrounding drawing stays visible
@@ -1931,6 +1934,7 @@ impl Scene {
             selected: HashSet::default(),
             object_isolation: ObjectIsolationState::default(),
             preview_hidden: HashSet::default(),
+            command_preview_hidden: HashSet::default(),
             refedit_keep: None,
             hover_highlight: None,
             transparency_display: true,
@@ -4173,7 +4177,28 @@ impl Scene {
     /// True when a top-level entity must be omitted for a session-only object
     /// visibility command or an interactive replacement preview.
     fn entity_temporarily_hidden(&self, handle: Handle) -> bool {
-        self.object_isolation.hides(handle) || self.preview_hidden.contains(&handle)
+        self.object_isolation.hides(handle)
+            || self.preview_hidden.contains(&handle)
+            || self.command_preview_hidden.contains(&handle)
+    }
+
+    /// Replace the command-owned source hide set and refresh only handles whose
+    /// visibility changed. An empty slice restores every source on completion.
+    pub fn set_command_preview_hidden(&mut self, handles: &[Handle]) {
+        let desired: HashSet<_> = handles.iter().copied().collect();
+        if desired == self.command_preview_hidden {
+            return;
+        }
+        let changes: Vec<_> = self
+            .command_preview_hidden
+            .symmetric_difference(&desired)
+            .copied()
+            .map(|handle| (handle, ChangeKind::Modified))
+            .collect();
+        self.command_preview_hidden = desired;
+        if !changes.is_empty() {
+            self.bump_entities(&changes);
+        }
     }
 
     /// Set (or clear) the previewed entity that renders with the selection
@@ -4274,6 +4299,7 @@ impl Scene {
     pub fn reset_transient_visibility(&mut self) {
         self.object_isolation = ObjectIsolationState::default();
         self.preview_hidden.clear();
+        self.command_preview_hidden.clear();
     }
 
     /// True if any currently selected entity is a Viewport.

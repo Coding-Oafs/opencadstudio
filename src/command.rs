@@ -1400,6 +1400,13 @@ pub trait CadCommand: Send {
         self.on_mouse_move(pt).into_iter().collect()
     }
 
+    /// Source entities replaced by the current live preview. The host removes
+    /// these from the resident render until the command commits or cancels.
+    /// Commands such as COPY keep their sources visible and use the default.
+    fn preview_hidden_handles(&self) -> &[Handle] {
+        &[]
+    }
+
     /// Returns `true` when the command is waiting for text typed in the command line.
     fn wants_text_input(&self) -> bool {
         false

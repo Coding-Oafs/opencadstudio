@@ -493,6 +493,14 @@ impl OpenCADStudio {
             matches!(result, CmdResult::Relaunch(..) | CmdResult::Dispatch(..));
         let task = self.apply_cmd_result_inner(result);
         let i = self.active_tab;
+        let preview_hidden = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|command| command.preview_hidden_handles().to_vec())
+            .unwrap_or_default();
+        self.tabs[i]
+            .scene
+            .set_command_preview_hidden(&preview_hidden);
         if was_active
             && !preserve_selection
             && self.tabs[i].active_cmd.is_none()
