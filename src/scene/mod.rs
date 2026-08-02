@@ -1515,10 +1515,10 @@ pub struct Scene {
     pub document: CadDocument,
     /// File-open-prepared index for non-graphical semantic object lookups.
     pub(crate) object_data_cache: crate::entities::object_data::ObjectDataCache,
-    /// Native AcDbLight/Sun inputs. Built once after document load, then
-    /// invalidated only when a light entity changes; ordinary geometry edits
-    /// never rescan a million-entity drawing just to rediscover its lights.
-    lighting_cache: RefCell<Option<Vec<SceneLight>>>,
+    /// Native AcDbLight/Sun inputs, separated by rendered block and viewport
+    /// frozen-layer signature. Invalidated only when a light entity changes;
+    /// ordinary geometry edits never rescan the drawing's lights.
+    lighting_cache: RefCell<HashMap<(Handle, u64), Vec<SceneLight>>>,
     /// Currently selected entity handles.
     pub selected: HashSet<Handle>,
     /// Session-only ISOLATEOBJECTS / HIDEOBJECTS state. Never written to DWG/DXF.
@@ -1633,21 +1633,22 @@ pub struct Scene {
     /// constants. `[depth, half]` retains a fixed child sub-range for block
     /// composition. Full sort/layout/block changes rebuild the labels.
     draw_depth_cache: RefCell<Option<DrawDepthCache>>,
-    /// Cached hatch fill models, keyed by geometry_epoch. View culling
+    /// Cached hatch fill models, keyed by target block and geometry_epoch. View culling
     /// is handled at draw time via `hatch_skip_flags` in the pipeline,
     /// not at build time — that lets the GPU buffer stay stable across
     /// pan/zoom while still skipping out-of-view hatches.
     /// Keyed by `(geometry_epoch, selection_generation)` — selected hatches
     /// are tinted, so a select/deselect must rebuild even when the geometry
     /// is unchanged (issue #71).
-    hatch_cache: RefCell<HashMap<String, (u64, u64, Arc<Vec<HatchModel>>)>>,
-    /// Cached wipeout fill models, keyed by geometry_epoch. Same
+    hatch_cache: RefCell<HashMap<(Handle, String), (u64, u64, Arc<Vec<HatchModel>>)>>,
+    /// Cached wipeout fill models, keyed by target block and geometry_epoch. Same
     /// reasoning as `hatch_cache`.
-    wipeout_cache: RefCell<HashMap<String, (u64, Arc<Vec<HatchModel>>)>>,
-    /// Cached image models, keyed by geometry_epoch. No camera key needed here.
-    image_cache: RefCell<Option<(u64, Arc<Vec<ImageModel>>)>>,
-    /// Cached mesh models, keyed by geometry_epoch.
-    mesh_cache: RefCell<HashMap<String, (u64, Arc<Vec<MeshLodSet>>)>>,
+    wipeout_cache: RefCell<HashMap<(Handle, String), (u64, Arc<Vec<HatchModel>>)>>,
+    /// Cached image models, keyed by target block and geometry_epoch. No camera
+    /// key needed here.
+    image_cache: RefCell<HashMap<Handle, (u64, Arc<Vec<ImageModel>>)>>,
+    /// Cached mesh models, keyed by target block and geometry_epoch.
+    mesh_cache: RefCell<HashMap<(Handle, String), (u64, Arc<Vec<MeshLodSet>>)>>,
     /// Picking mesh source for a non-model active space, keyed by geometry epoch
     /// and interaction block. Model/MSPACE reuse `mesh_cache` directly.
     interaction_mesh_cache: RefCell<Option<(u64, u64, Arc<Vec<MeshLodSet>>)>>,
@@ -1669,10 +1670,12 @@ pub struct Scene {
     /// filtered variants. Viewports sharing a frozen set share one entry (like
     /// the resident wire set). Empty for a viewport with no frozen layers (it
     /// reuses the unfiltered `*_arc` sets directly).
-    frozen_hatch_cache: RefCell<HashMap<(String, u64), (u64, u64, Arc<Vec<HatchModel>>)>>,
-    frozen_wipeout_cache: RefCell<HashMap<(String, u64), (u64, Arc<Vec<HatchModel>>)>>,
-    frozen_image_cache: RefCell<HashMap<u64, (u64, Arc<Vec<ImageModel>>)>>,
-    frozen_mesh_cache: RefCell<HashMap<(String, u64), (u64, Arc<Vec<MeshLodSet>>)>>,
+    frozen_hatch_cache:
+        RefCell<HashMap<(Handle, String, u64), (u64, u64, Arc<Vec<HatchModel>>)>>,
+    frozen_wipeout_cache:
+        RefCell<HashMap<(Handle, String, u64), (u64, Arc<Vec<HatchModel>>)>>,
+    frozen_image_cache: RefCell<HashMap<(Handle, u64), (u64, Arc<Vec<ImageModel>>)>>,
+    frozen_mesh_cache: RefCell<HashMap<(Handle, String, u64), (u64, Arc<Vec<MeshLodSet>>)>>,
     /// Cached block-INSERT hatches for hit-testing, keyed by geometry_epoch.
     /// Building this explodes every model-space INSERT, so without the cache a
     /// heavy block-instanced drawing re-explodes thousands of inserts on every
@@ -1915,7 +1918,7 @@ impl Scene {
             selection: Rc::new(RefCell::new(SelectionState::default())),
             document: CadDocument::new(),
             object_data_cache: crate::entities::object_data::ObjectDataCache::default(),
-            lighting_cache: RefCell::new(None),
+            lighting_cache: RefCell::new(HashMap::default()),
             selected: HashSet::default(),
             object_isolation: ObjectIsolationState::default(),
             preview_hidden: HashSet::default(),
@@ -1941,7 +1944,7 @@ impl Scene {
             draw_depth_cache: RefCell::new(None),
             hatch_cache: RefCell::new(HashMap::default()),
             wipeout_cache: RefCell::new(HashMap::default()),
-            image_cache: RefCell::new(None),
+            image_cache: RefCell::new(HashMap::default()),
             mesh_cache: RefCell::new(HashMap::default()),
             interaction_mesh_cache: RefCell::new(None),
             mesh_pick_lookup_cache: RefCell::new(None),
@@ -2382,7 +2385,7 @@ impl Scene {
                     .as_deref()
                     .is_some_and(|entity| matches!(entity, EntityType::Light(_)))
         }) {
-            *self.lighting_cache.borrow_mut() = None;
+            self.lighting_cache.borrow_mut().clear();
         }
         let mut changes: Vec<(Handle, ChangeKind)> = Vec::with_capacity(entities.len());
         for (h, before, after) in entities {
@@ -2426,7 +2429,7 @@ impl Scene {
             // stale ownership.
             self.invalidate_dependency_index();
         }
-        let cached_light_changed = self.lighting_cache.borrow().as_ref().is_some_and(|lights| {
+        let cached_light_changed = self.lighting_cache.borrow().values().any(|lights| {
             changes
                 .iter()
                 .any(|(handle, _)| lights.iter().any(|light| light.handle == *handle))
@@ -2448,7 +2451,7 @@ impl Scene {
                     exists,
                 );
             }
-            *self.lighting_cache.borrow_mut() = None;
+            self.lighting_cache.borrow_mut().clear();
         }
         let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.geometry_epoch = epoch;
@@ -2515,6 +2518,9 @@ impl Scene {
     pub fn bump_geometry(&mut self) {
         let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.geometry_epoch = epoch;
+        // A full structural change may move lights between blocks or alter
+        // layer visibility without naming the affected handles.
+        self.lighting_cache.borrow_mut().clear();
         // Default: also invalidate block definitions. Safe for every caller;
         // operations that know blocks are untouched use `bump_geometry_no_blocks`.
         self.block_epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
@@ -2545,6 +2551,7 @@ impl Scene {
     pub fn bump_geometry_no_blocks(&mut self) {
         let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.geometry_epoch = epoch;
+        self.lighting_cache.borrow_mut().clear();
         self.push_geometry_delta(epoch, Vec::new(), true);
     }
 
@@ -5098,11 +5105,12 @@ impl Scene {
         // drawings. Key on a signature of `selected` instead, so hover (which
         // never changes `selected`) keeps the cache warm.
         let sel_sig = self.selected_hatch_sig();
-        let space = self.current_layout.clone();
+        let target_block = self.content_render_block_handle();
+        let key = (target_block, self.current_layout.clone());
         {
             let reuse = {
                 let cache = self.hatch_cache.borrow();
-                match cache.get(&space) {
+                match cache.get(&key) {
                     // Selection tint is baked in, so the selected set must also
                     // match; category = a changed direct fill or an INSERT
                     // whose expanded block tree can contain hatch fills.
@@ -5126,15 +5134,15 @@ impl Scene {
                 }
             };
             if let Some(arc) = reuse {
-                if let Some((e, _, _)) = self.hatch_cache.borrow_mut().get_mut(&space) {
+                if let Some((e, _, _)) = self.hatch_cache.borrow_mut().get_mut(&key) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
-        let arc = Arc::new(self.synced_hatch_models(None));
+        let arc = Arc::new(self.synced_hatch_models(target_block, None));
         self.hatch_cache.borrow_mut().insert(
-            space,
+            key,
             (self.geometry_epoch, sel_sig, Arc::clone(&arc)),
         );
         arc
@@ -5167,11 +5175,12 @@ impl Scene {
     }
 
     pub(super) fn wipeout_models_arc(&self) -> Arc<Vec<HatchModel>> {
-        let space = self.current_layout.clone();
+        let target_block = self.content_render_block_handle();
+        let key = (target_block, self.current_layout.clone());
         {
             let reuse = {
                 let cache = self.wipeout_cache.borrow();
-                match cache.get(&space) {
+                match cache.get(&key) {
                     Some((cached_epoch, arc))
                         // wipeout_models scans the whole document for Wipeout
                         // entities; relevance = the changed handle is a Wipeout.
@@ -5192,27 +5201,28 @@ impl Scene {
                 }
             };
             if let Some(arc) = reuse {
-                if let Some((e, _)) = self.wipeout_cache.borrow_mut().get_mut(&space) {
+                if let Some((e, _)) = self.wipeout_cache.borrow_mut().get_mut(&key) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
-        let arc = Arc::new(self.wipeout_models(None));
+        let arc = Arc::new(self.wipeout_models(target_block, None));
         self.wipeout_cache
             .borrow_mut()
-            .insert(space, (self.geometry_epoch, Arc::clone(&arc)));
+            .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
     pub(super) fn images_arc(&self) -> Arc<Vec<ImageModel>> {
+        let target_block = self.content_render_block_handle();
         {
             let reuse = {
                 let cache = self.image_cache.borrow();
-                match *cache {
-                    Some((cached_epoch, ref arc))
+                match cache.get(&target_block) {
+                    Some((cached_epoch, arc))
                         if self.category_cache_valid(
-                            cached_epoch,
+                            *cached_epoch,
                             CACHE_CATEGORY_IMAGE,
                             |h| self.images.contains_key(&h),
                         ) =>
@@ -5225,20 +5235,26 @@ impl Scene {
             if let Some(arc) = reuse {
                 // No image changed since — keep it warm, just advance the sync
                 // epoch so the next replay window stays short.
-                if let Some((ref mut e, _)) = *self.image_cache.borrow_mut() {
+                if let Some((e, _)) = self.image_cache.borrow_mut().get_mut(&target_block) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
-        let arc = Arc::new(self.image_models(None));
-        *self.image_cache.borrow_mut() = Some((self.geometry_epoch, Arc::clone(&arc)));
+        let arc = Arc::new(self.image_models(target_block, None));
+        self.image_cache
+            .borrow_mut()
+            .insert(target_block, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
-    /// Model image / OLE-frame models, optionally dropping those whose layer is
-    /// frozen in a content viewport (`frozen`). `None` reproduces the full set.
-    fn image_models(&self, frozen: Option<&HashSet<Handle>>) -> Vec<ImageModel> {
+    /// Image / OLE-frame models owned by `target_block`, optionally dropping
+    /// those whose layer is frozen in a content viewport (`frozen`).
+    fn image_models(
+        &self,
+        target_block: Handle,
+        frozen: Option<&HashSet<Handle>>,
+    ) -> Vec<ImageModel> {
         let depth_map = self.draw_depth_map();
         self.images
             .iter()
@@ -5249,6 +5265,11 @@ impl Scene {
                     || self.entity_temporarily_hidden(*handle)
                     || self.layer_hidden(&common.layer)
                     || self.layer_frozen_in(&common.layer, frozen)
+                    || !self.belongs_to_visible_block(
+                        *handle,
+                        common.owner_handle,
+                        target_block,
+                    )
                 {
                     return None;
                 }
@@ -5287,11 +5308,12 @@ impl Scene {
     }
 
     pub(super) fn meshes_arc(&self) -> Arc<Vec<MeshLodSet>> {
-        let space = self.current_layout.clone();
+        let target_block = self.content_render_block_handle();
+        let key = (target_block, self.current_layout.clone());
         {
             let reuse = {
                 let cache = self.mesh_cache.borrow();
-                match cache.get(&space) {
+                match cache.get(&key) {
                     // Top-level solids seed self.meshes; the instanced_block part
                     // is driven by INSERTs, so an INSERT edit (e.g. a move) must
                     // also invalidate. Block-definition edits route through
@@ -5315,17 +5337,26 @@ impl Scene {
                 }
             };
             if let Some(arc) = reuse {
-                if let Some((e, _)) = self.mesh_cache.borrow_mut().get_mut(&space) {
+                if let Some((e, _)) = self.mesh_cache.borrow_mut().get_mut(&key) {
                     *e = self.geometry_epoch;
                 }
                 return arc;
             }
         }
-        let arc = Arc::new(self.mesh_models(None));
+        let arc = Arc::new(self.mesh_models(target_block, None));
         self.mesh_cache
             .borrow_mut()
-            .insert(space, (self.geometry_epoch, Arc::clone(&arc)));
+            .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
         arc
+    }
+
+    /// Block rendered by model-content viewports. Paper layout entities belong
+    /// only to the sheet viewport; floating paper viewports always show model
+    /// space. BEDIT is the sole exception and renders the edited block itself.
+    fn content_render_block_handle(&self) -> Handle {
+        self.block_edit_block
+            .filter(|block| !block.is_null())
+            .unwrap_or_else(|| self.model_space_block_handle())
     }
 
     fn interaction_block_handle(&self) -> Handle {
@@ -5403,19 +5434,7 @@ impl Scene {
                 return Arc::clone(meshes);
             }
         }
-        let mut all: Vec<MeshLodSet> = self
-            .meshes
-            .iter()
-            .filter(|(&handle, _)| {
-                self.mesh_entity_visible(handle)
-                    && self.document.get_entity(handle).is_some_and(|entity| {
-                        self.belongs_to_visible_block(handle, entity.common().owner_handle, block)
-                    })
-            })
-            .map(|(_, set)| set.clone())
-            .collect();
-        all.extend(self.instanced_block_meshes(block, None));
-        let meshes = Arc::new(all);
+        let meshes = Arc::new(self.mesh_models(block, None));
         *self.interaction_mesh_cache.borrow_mut() =
             Some((self.geometry_epoch, key, Arc::clone(&meshes)));
         meshes
@@ -5458,7 +5477,11 @@ impl Scene {
     /// Solid-mesh set (top-level + block-instanced), optionally dropping those
     /// whose layer is frozen in a content viewport (`frozen`). `None` reproduces
     /// the full set.
-    fn mesh_models(&self, frozen: Option<&HashSet<Handle>>) -> Vec<MeshLodSet> {
+    fn mesh_models(
+        &self,
+        target_block: Handle,
+        frozen: Option<&HashSet<Handle>>,
+    ) -> Vec<MeshLodSet> {
         // Top-level solids: drop those whose layer is off/frozen or that are
         // flagged invisible / isolated-hidden, mirroring the 2D wire path, plus
         // any whose layer is frozen in the requesting viewport.
@@ -5470,8 +5493,15 @@ impl Scene {
                     && self
                         .document
                         .get_entity(h)
-                        .map(|e| !self.layer_frozen_in(&e.common().layer, frozen))
-                        .unwrap_or(true)
+                        .map(|e| {
+                            !self.layer_frozen_in(&e.common().layer, frozen)
+                                && self.belongs_to_visible_block(
+                                    h,
+                                    e.common().owner_handle,
+                                    target_block,
+                                )
+                        })
+                        .unwrap_or(false)
             })
             .map(|(_, set)| set.clone())
             .collect();
@@ -5479,13 +5509,7 @@ impl Scene {
         // block so a block placed at an INSERT scale renders at the right size
         // (#123) — model space normally, the edited block in a BEDIT editor so
         // model-space solids don't leak into it (#261).
-        all.extend(
-            self.instanced_block_meshes(
-                self.block_edit_block
-                    .unwrap_or_else(|| self.model_space_block_handle()),
-                frozen,
-            ),
-        );
+        all.extend(self.instanced_block_meshes(target_block, frozen));
         all
     }
 
@@ -5535,15 +5559,16 @@ impl Scene {
         if frozen.is_empty() {
             return self.hatch_models_arc();
         }
+        let target_block = self.content_render_block_handle();
         let sig = Self::frozen_layers_sig(frozen);
-        let key = (self.current_layout.clone(), sig);
+        let key = (target_block, self.current_layout.clone(), sig);
         let sel = self.selected_hatch_sig();
         if let Some((e, s, arc)) = self.frozen_hatch_cache.borrow().get(&key) {
             if *e == self.geometry_epoch && *s == sel {
                 return Arc::clone(arc);
             }
         }
-        let arc = Arc::new(self.synced_hatch_models(Some(frozen)));
+        let arc = Arc::new(self.synced_hatch_models(target_block, Some(frozen)));
         self.frozen_hatch_cache
             .borrow_mut()
             .insert(key, (self.geometry_epoch, sel, Arc::clone(&arc)));
@@ -5558,14 +5583,15 @@ impl Scene {
         if frozen.is_empty() {
             return self.wipeout_models_arc();
         }
+        let target_block = self.content_render_block_handle();
         let sig = Self::frozen_layers_sig(frozen);
-        let key = (self.current_layout.clone(), sig);
+        let key = (target_block, self.current_layout.clone(), sig);
         if let Some((e, arc)) = self.frozen_wipeout_cache.borrow().get(&key) {
             if *e == self.geometry_epoch {
                 return Arc::clone(arc);
             }
         }
-        let arc = Arc::new(self.wipeout_models(Some(frozen)));
+        let arc = Arc::new(self.wipeout_models(target_block, Some(frozen)));
         self.frozen_wipeout_cache
             .borrow_mut()
             .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
@@ -5577,16 +5603,18 @@ impl Scene {
         if frozen.is_empty() {
             return self.images_arc();
         }
+        let target_block = self.content_render_block_handle();
         let sig = Self::frozen_layers_sig(frozen);
-        if let Some((e, arc)) = self.frozen_image_cache.borrow().get(&sig) {
+        let key = (target_block, sig);
+        if let Some((e, arc)) = self.frozen_image_cache.borrow().get(&key) {
             if *e == self.geometry_epoch {
                 return Arc::clone(arc);
             }
         }
-        let arc = Arc::new(self.image_models(Some(frozen)));
+        let arc = Arc::new(self.image_models(target_block, Some(frozen)));
         self.frozen_image_cache
             .borrow_mut()
-            .insert(sig, (self.geometry_epoch, Arc::clone(&arc)));
+            .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
         arc
     }
 
@@ -5595,14 +5623,15 @@ impl Scene {
         if frozen.is_empty() {
             return self.meshes_arc();
         }
+        let target_block = self.content_render_block_handle();
         let sig = Self::frozen_layers_sig(frozen);
-        let key = (self.current_layout.clone(), sig);
+        let key = (target_block, self.current_layout.clone(), sig);
         if let Some((e, arc)) = self.frozen_mesh_cache.borrow().get(&key) {
             if *e == self.geometry_epoch {
                 return Arc::clone(arc);
             }
         }
-        let arc = Arc::new(self.mesh_models(Some(frozen)));
+        let arc = Arc::new(self.mesh_models(target_block, Some(frozen)));
         self.frozen_mesh_cache
             .borrow_mut()
             .insert(key, (self.geometry_epoch, Arc::clone(&arc)));
@@ -8260,7 +8289,15 @@ impl Scene {
                     // 3D solids render as meshes, not wires, so fold their
                     // XY AABBs in too — otherwise ZOOM EXTENTS ignores them.
                     for (&handle, set) in &self.meshes {
-                        if !self.mesh_entity_visible(handle) {
+                        if !self.mesh_entity_visible(handle)
+                            || !self.document.get_entity(handle).is_some_and(|entity| {
+                                self.belongs_to_visible_block(
+                                    handle,
+                                    entity.common().owner_handle,
+                                    model_block,
+                                )
+                            })
+                        {
                             continue;
                         }
                         let [ax, ay, bx, by] = set.world_aabb;
@@ -8310,7 +8347,15 @@ impl Scene {
         }
         // Same mesh inclusion for the tessellate fallback path.
         for (&handle, set) in &self.meshes {
-            if !self.mesh_entity_visible(handle) {
+            if !self.mesh_entity_visible(handle)
+                || !self.document.get_entity(handle).is_some_and(|entity| {
+                    self.belongs_to_visible_block(
+                        handle,
+                        entity.common().owner_handle,
+                        model_block,
+                    )
+                })
+            {
                 continue;
             }
             let [ax, ay, bx, by] = set.world_aabb;

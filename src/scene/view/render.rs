@@ -1243,7 +1243,11 @@ fn crop_view_proj(view_proj: glam::Mat4, uo: f32, vo: f32, us: f32, vs: f32) -> 
 // ── Render-style helpers (impl Scene) ────────────────────────────────────
 
 impl Scene {
-    fn build_lighting_cache(&self) -> Vec<SceneLight> {
+    fn build_lighting_cache(
+        &self,
+        target_block: Handle,
+        frozen: &rustc_hash::FxHashSet<Handle>,
+    ) -> Vec<SceneLight> {
         use acadrust::objects::{ClassObjectData, ObjectType};
 
         fn normalized(value: [f64; 3], fallback: [f32; 3]) -> [f32; 3] {
@@ -1385,20 +1389,26 @@ impl Scene {
         for &handle in crate::entities::object_data::light_entities(
             &self.object_data_cache,
         ) {
-            if lights.len() >= 4 {
-                break;
-            }
             if let Some(EntityType::Light(light)) = self.document.get_entity(handle) {
+                let common = &light.common;
+                if self.layer_frozen_in(&common.layer, Some(frozen))
+                    || !self.belongs_to_visible_block(
+                        handle,
+                        common.owner_handle,
+                        target_block,
+                    )
+                {
+                    continue;
+                }
                 if let Some(light) = converted(self, light) {
                     lights.push(light);
                 }
             }
         }
 
-        if lights.len() < 4 {
-            let geo = crate::entities::object_data::geo_objects(
-                &self.object_data_cache,
-            )
+        // SUN is document-global. Keep it after entity lights so the four-light
+        // shader limit prefers visible lights owned by this viewport's block.
+        let geo = crate::entities::object_data::geo_objects(&self.object_data_cache)
             .iter()
             .find_map(|handle| match self.document.objects.get(handle) {
                 Some(ObjectType::GeoData(value))
@@ -1409,61 +1419,88 @@ impl Scene {
                         && value.reference_point.y.abs() <= 90.0 => Some(value),
                 _ => None,
             });
-            for handle in crate::entities::object_data::sun_objects(
-                &self.object_data_cache,
-            ) {
-                let Some(ObjectType::ClassObject(value)) =
-                    self.document.objects.get(handle)
-                else {
-                    continue;
-                };
-                let ClassObjectData::Sun(sun) = &value.data else {
-                    continue;
-                };
-                if !sun.is_on {
-                    continue;
-                }
-                let Some(geo) = geo else {
-                    break;
-                };
-                let Some(direction) = solar_direction(sun, geo) else {
-                    break;
-                };
-                let rgba = tess_util::aci_to_rgba(&sun.color);
-                lights.push(SceneLight {
-                    handle: value.handle,
-                    color_layer: None,
-                    light_type: 1.0,
-                    position: [0.0; 3],
-                    direction,
-                    color: [rgba[0], rgba[1], rgba[2]],
-                    intensity: sun.intensity.max(0.0) as f32,
-                    hotspot_cos: 1.0,
-                    falloff_cos: -1.0,
-                    attenuation_type: 0.0,
-                    attenuation_start: 0.0,
-                    attenuation_end: 0.0,
-                });
-                break;
+        for handle in crate::entities::object_data::sun_objects(&self.object_data_cache) {
+            let Some(ObjectType::ClassObject(value)) = self.document.objects.get(handle) else {
+                continue;
+            };
+            let ClassObjectData::Sun(sun) = &value.data else {
+                continue;
+            };
+            if !sun.is_on {
+                continue;
             }
+            let Some(geo) = geo else {
+                break;
+            };
+            let Some(direction) = solar_direction(sun, geo) else {
+                break;
+            };
+            let rgba = tess_util::aci_to_rgba(&sun.color);
+            lights.push(SceneLight {
+                handle: value.handle,
+                color_layer: None,
+                light_type: 1.0,
+                position: [0.0; 3],
+                direction,
+                color: [rgba[0], rgba[1], rgba[2]],
+                intensity: sun.intensity.max(0.0) as f32,
+                hotspot_cos: 1.0,
+                falloff_cos: -1.0,
+                attenuation_type: 0.0,
+                attenuation_start: 0.0,
+                attenuation_end: 0.0,
+            });
+            break;
         }
         lights
     }
 
-    fn apply_document_lighting(&self, uniforms: &mut Uniforms) {
-        if self.lighting_cache.borrow().is_none() {
-            let lights = self.build_lighting_cache();
-            *self.lighting_cache.borrow_mut() = Some(lights);
+    fn apply_document_lighting(
+        &self,
+        uniforms: &mut Uniforms,
+        target_block: Handle,
+        frozen: &rustc_hash::FxHashSet<Handle>,
+    ) {
+        let key = (target_block, Self::frozen_layers_sig(frozen));
+        if !self.lighting_cache.borrow().contains_key(&key) {
+            let lights = self.build_lighting_cache(target_block, frozen);
+            self.lighting_cache.borrow_mut().insert(key, lights);
         }
         let cache = self.lighting_cache.borrow();
-        let lights = cache.as_deref().unwrap_or_default();
+        let lights = cache.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let visible_lights: Vec<&SceneLight> = lights
+            .iter()
+            .filter(|light| match self.document.get_entity(light.handle) {
+                Some(EntityType::Light(entity)) => {
+                    let common = &entity.common;
+                    !common.invisible
+                        && !self.entity_temporarily_hidden(light.handle)
+                        && !self.layer_hidden(&common.layer)
+                        && !self.layer_frozen_in(&common.layer, Some(frozen))
+                        && self.belongs_to_visible_block(
+                            light.handle,
+                            common.owner_handle,
+                            target_block,
+                        )
+                }
+                Some(_) => false,
+                None => self.document.objects.get(&light.handle).is_some_and(|object| {
+                    matches!(
+                        object,
+                        acadrust::objects::ObjectType::ClassObject(value)
+                            if matches!(&value.data, acadrust::objects::ClassObjectData::Sun(_))
+                    )
+                }),
+            })
+            .take(4)
+            .collect();
         let eye = [
             uniforms.eye_high[0] as f64 + uniforms.eye_low[0] as f64,
             uniforms.eye_high[1] as f64 + uniforms.eye_low[1] as f64,
             uniforms.eye_high[2] as f64 + uniforms.eye_low[2] as f64,
         ];
-        uniforms.lighting[0] = lights.len().min(4) as f32;
-        for (index, light) in lights.iter().take(4).enumerate() {
+        uniforms.lighting[0] = visible_lights.len() as f32;
+        for (index, light) in visible_lights.into_iter().enumerate() {
             let color = light
                 .color_layer
                 .as_deref()
@@ -2124,6 +2161,26 @@ impl Scene {
             Arc::new(Vec::new())
         };
 
+        // Per-viewport frozen-layer set for a paper content viewport. Content
+        // viewports hide special fills, media, meshes and lights on VP-frozen
+        // layers too, matching the already-filtered resident wire set.
+        let vp_frozen: rustc_hash::FxHashSet<Handle> = if !inst.paper_sheet
+            && inst.tile_idx.is_none()
+            && inst.handle != acadrust::Handle::NULL
+        {
+            match self.document.get_entity(inst.handle) {
+                Some(EntityType::Viewport(vp)) => vp.frozen_layers.iter().cloned().collect(),
+                _ => rustc_hash::FxHashSet::default(),
+            }
+        } else {
+            rustc_hash::FxHashSet::default()
+        };
+        let lighting_block = if inst.paper_sheet {
+            self.current_layout_block_handle()
+        } else {
+            self.content_render_block_handle()
+        };
+
         // Build the camera at the *full* viewport's aspect so the ortho
         // frustum matches what the viewport entity stores, then post-
         // multiply by a clip-space "zoom into the visible sub-rect" that
@@ -2159,7 +2216,7 @@ impl Scene {
         uniforms.viewport_size = [visible_w, visible_h];
         uniforms.flat_shade = if flags.flat_shade { 1.0 } else { 0.0 };
         uniforms.transparency_enable = if self.transparency_display { 1.0 } else { 0.0 };
-        self.apply_document_lighting(&mut uniforms);
+        self.apply_document_lighting(&mut uniforms, lighting_block, &vp_frozen);
 
         // `screen_rect` carries the *visible* sub-rectangle in normalized
         // canvas coords — that's what `Pipeline::prepare` uses to size
@@ -2179,25 +2236,8 @@ impl Scene {
         // model-block hatches. Those belong inside the floating content
         // viewports; rendering them on the full-canvas sheet would let them
         // bleed past the viewport borders whenever model coords overlap the
-        // paper area. Content viewports keep the full set (the model camera +
-        // per-viewport scissor place / clip them correctly).
-        // Per-viewport frozen-layer set for a paper content viewport. Content
-        // viewports must hide FILLS / IMAGES / SOLIDS on their frozen layers too,
-        // not just wires (which `model_wires_for_viewport_arc` already filters).
-        // Empty for the sheet, model tiles and the implicit-model view — none of
-        // which carry a per-viewport freeze — so those reuse the shared sets.
-        let vp_frozen: rustc_hash::FxHashSet<Handle> = if !inst.paper_sheet
-            && inst.tile_idx.is_none()
-            && inst.handle != acadrust::Handle::NULL
-        {
-            match self.document.get_entity(inst.handle) {
-                Some(EntityType::Viewport(vp)) => vp.frozen_layers.iter().cloned().collect(),
-                _ => rustc_hash::FxHashSet::default(),
-            }
-        } else {
-            rustc_hash::FxHashSet::default()
-        };
-
+        // paper area. Content viewport model builders are block-filtered too;
+        // the scissor only clips their already-correct Model Space set.
         let (hatches, wipeout_hatches, paper_images) = if inst.paper_sheet {
             let (hatches, wipeouts, images) = self.paper_sheet_render_models();
             (hatches, wipeouts, Some(images))

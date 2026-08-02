@@ -792,10 +792,9 @@ impl Scene {
 
     pub(super) fn synced_hatch_models(
         &self,
+        target_block: Handle,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
     ) -> Vec<HatchModel> {
-        let layout_block = self.current_layout_block_handle();
-
         let layer_hidden = |layer: &str| {
             self.document
                 .layers
@@ -811,14 +810,9 @@ impl Scene {
         // culling at draw time, which keeps the GPU upload set stable
         // across pan/zoom.
         //
-        // We INCLUDE hatches from blocks other than `current_layout`'s
-        // own block (specifically: paper-layout content viewports want
-        // model-block hatches). Every hatch's `world_origin` is already
-        // baked into the correct block coord-space at
-        // `populate_hatches_from_document` time (offset for model, 0 for
-        // paper), so projecting them through a camera built for the
-        // wrong block lands them outside the frustum and the per-vp
-        // scissor / LOD culls them out — no double-rendering.
+        // Every content viewport supplies the block it renders. Do not depend
+        // on camera/frustum culling to separate paper and model coordinates:
+        // overlapping coordinates otherwise make foreign fills visible.
         let depth_map = self.draw_depth_map();
         let mut models: Vec<HatchModel> = self
             .hatches
@@ -850,13 +844,7 @@ impl Scene {
                 // BLOCK record that's neither model nor a paper layout
                 // block) — they're tessellated separately via Insert
                 // explosion and only the laid-out copies should appear.
-                self.belongs_to_visible_block(handle, c.owner_handle, layout_block)
-                    || (self.block_edit_block.is_none()
-                        && self.belongs_to_visible_block(
-                            handle,
-                            c.owner_handle,
-                            self.model_space_block_handle(),
-                        ))
+                self.belongs_to_visible_block(handle, c.owner_handle, target_block)
             })
             .flat_map(|(&handle, model)| {
                 let contextual = self
@@ -980,21 +968,14 @@ impl Scene {
         } else {
             self.bg_color
         };
-        // Block-internal hatch fills: explode every visible INSERT of this
-        // layout block and materialize its fills at world position. Paper
-        // content viewports also need the model block's INSERT fills; without
-        // them the screen showed an empty/white block while plotting correctly
-        // materialized its solid hatch. (tint_selected = true applies the
-        // screen selection highlight.)
-        models.extend(self.exploded_insert_hatch_models(layout_block, hatch_bg, true, frozen));
-        if self.current_layout != "Model" {
-            models.extend(self.exploded_insert_hatch_models(
-                self.model_space_block_handle(),
-                hatch_bg,
-                true,
-                frozen,
-            ));
-        }
+        // Block-internal hatch fills: descend INSERTs owned by the requested
+        // target only and materialize their fills at world position.
+        models.extend(self.exploded_insert_hatch_models(
+            target_block,
+            hatch_bg,
+            true,
+            frozen,
+        ));
 
         // Wide LwPolyline / Polyline2D bands are no longer hatch fills at
         // model level: a flat band is drawn by expanding its centre-line wire
@@ -1468,6 +1449,7 @@ impl Scene {
     /// wipeouts correctly mask everything below them in the draw order.
     pub(crate) fn wipeout_models(
         &self,
+        target_block: Handle,
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
     ) -> Vec<HatchModel> {
         let is_paper = self.current_layout != "Model";
@@ -1483,7 +1465,6 @@ impl Scene {
         // pipeline's `wipeout_skip_flags` (compute_wipeout_lod) does
         // the per-frame skip at draw time instead.
         let depth_map = self.draw_depth_map();
-        let layout_block = self.current_layout_block_handle();
         let mut models = Vec::new();
         for entity in self.document.entities() {
             let EntityType::Wipeout(wo) = entity else {
@@ -1501,7 +1482,7 @@ impl Scene {
             if !self.belongs_to_visible_block(
                 wo.common.handle,
                 wo.common.owner_handle,
-                layout_block,
+                target_block,
             ) {
                 continue;
             }
@@ -1574,7 +1555,7 @@ impl Scene {
             {
                 continue;
             }
-            if !self.belongs_to_visible_block(c.handle, c.owner_handle, layout_block) {
+            if !self.belongs_to_visible_block(c.handle, c.owner_handle, target_block) {
                 continue;
             }
             if frozen.is_none()
