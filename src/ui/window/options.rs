@@ -7,17 +7,14 @@ use iced::{Background, Border, Element, Theme};
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ThemeChoice(String);
+struct Labelled<T> {
+    value: T,
+    label: String,
+}
 
-impl fmt::Display for ThemeChoice {
+impl<T> fmt::Display for Labelled<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self.0.as_str() {
-            "Light" => crate::t!("Light"),
-            "Dark" => crate::t!("Dark"),
-            "Custom" => crate::t!("Custom"),
-            _ => std::borrow::Cow::Borrowed(self.0.as_str()),
-        };
-        f.write_str(label.as_ref())
+        f.write_str(&self.label)
     }
 }
 
@@ -37,9 +34,32 @@ pub fn view_window<'a>(
         .iter()
         .map(ToString::to_string)
         .chain(std::iter::once("Custom".to_string()))
-        .map(ThemeChoice)
+        .map(|value| Labelled {
+            label: match value.as_str() {
+                "Light" => crate::t!("Light").into_owned(),
+                "Dark" => crate::t!("Dark").into_owned(),
+                "Custom" => crate::t!("Custom").into_owned(),
+                _ => value.clone(),
+            },
+            value,
+        })
         .collect::<Vec<_>>();
-    let selected_theme = Some(ThemeChoice(ui_theme.name.clone()));
+    let selected_theme = theme_options
+        .iter()
+        .find(|choice| choice.value == ui_theme.name)
+        .cloned();
+
+    let language_options = crate::i18n::Language::ALL
+        .into_iter()
+        .map(|value| Labelled {
+            label: value.label(),
+            value,
+        })
+        .collect::<Vec<_>>();
+    let selected_language = language_options
+        .iter()
+        .find(|choice| choice.value == language)
+        .cloned();
 
     let palette = ui_theme.palette.to_iced();
     let colors = [
@@ -89,11 +109,11 @@ pub fn view_window<'a>(
         row![
             text(crate::tr!("options-language-label")).size(12).width(150),
             iced::widget::pick_list(
-                Some(language),
-                crate::i18n::Language::ALL,
-                |value| value.to_string(),
+                selected_language,
+                language_options,
+                |choice| choice.label.clone(),
             )
-            .on_select(Message::LanguageChanged)
+            .on_select(|choice| Message::LanguageChanged(choice.value))
             .width(sizing.width),
         ]
         .spacing(12)
@@ -125,9 +145,9 @@ pub fn view_window<'a>(
             iced::widget::pick_list(
                 selected_theme,
                 theme_options,
-                |value| value.to_string(),
+                |choice| choice.label.clone(),
             )
-            .on_select(|choice| Message::OptionsThemeChanged(choice.0))
+            .on_select(|choice| Message::OptionsThemeChanged(choice.value))
             .width(sizing.width),
         ]
         .spacing(12)
@@ -143,7 +163,9 @@ pub fn view_window<'a>(
     .width(sizing.width);
 
     let body = column![
-        scrollable(content).height(sizing.height),
+        // Keep the scrollbar in its own lane instead of floating over the
+        // controls at the trailing edge of the Options content.
+        scrollable(content).spacing(8).height(sizing.height),
         Space::new().height(12),
         row![Space::new().width(sizing.width), close],
     ]

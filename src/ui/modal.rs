@@ -322,16 +322,7 @@ pub fn modal<'a>(
     // The first stack layer dictates its intrinsic size. Its top spacer reserves
     // room for the title, while the actual title bar and resize grip overlay it
     // without influencing the modal dimensions.
-    // Iced draws vertical scrollbars inside a scrollable's bounds. Reserve a
-    // shared end gutter at the modal boundary so a scrollbar cannot cover the
-    // last control column in Options or any other dialog.
-    let measured_content = container(sensor(content).on_resize(Message::ModalContentResized))
-        .padding(Padding {
-            top: 0.0,
-            right: 12.0,
-            bottom: 0.0,
-            left: 0.0,
-        });
+    let measured_content = sensor(content).on_resize(Message::ModalContentResized);
     let body_base = column![
         Space::new().height(Length::Fixed(24.0)),
         measured_content,

@@ -7,8 +7,8 @@ use i18n_embed::DesktopLanguageRequester;
 #[cfg(target_arch = "wasm32")]
 use i18n_embed::WebLanguageRequester;
 use rust_embed::RustEmbed;
-use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 #[path = "locale_catalog.rs"]
@@ -69,11 +69,9 @@ impl Language {
             Language::ZhCn => vec!["zh-CN".parse().expect("valid locale")],
         }
     }
-}
 
-impl std::fmt::Display for Language {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let label = match self {
+    pub fn label(self) -> String {
+        match self {
             Language::System => crate::tr!("language-system"),
             Language::EnUs => crate::tr!("language-english"),
             Language::TrTr => crate::tr!("language-turkish"),
@@ -83,16 +81,36 @@ impl std::fmt::Display for Language {
             Language::HiIn => crate::tr!("language-hindi"),
             Language::RuRu => crate::tr!("language-russian"),
             Language::ZhCn => crate::tr!("language-chinese-simplified"),
-        };
+        }
+    }
+}
+
+impl std::fmt::Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = self.label();
         f.write_str(&label)
     }
 }
 
 fn system_languages() -> Vec<i18n_embed::unic_langid::LanguageIdentifier> {
     #[cfg(target_arch = "wasm32")]
-    let requested = WebLanguageRequester::requested_languages();
+    let mut requested = WebLanguageRequester::requested_languages();
     #[cfg(not(target_arch = "wasm32"))]
     let requested = DesktopLanguageRequester::requested_languages();
+
+    // `navigator.languages` may be empty in privacy-restricted browser
+    // contexts. The singular preference is still exposed by mainstream
+    // browsers, so keep it as the first fallback before English.
+    #[cfg(target_arch = "wasm32")]
+    if requested.is_empty() {
+        if let Some(language) = web_sys::window()
+            .and_then(|window| window.navigator().language())
+            .and_then(|language| language.parse().ok())
+        {
+            requested.push(language);
+        }
+    }
+
     requested
 }
 
@@ -104,7 +122,17 @@ fn load_language(
     if requested.is_empty() {
         requested.push(loader.fallback_language().clone());
     }
-    i18n_embed::select(loader, &Localizations, &requested).map(|_| ())
+    let selected = i18n_embed::select(loader, &Localizations, &requested)?;
+    #[cfg(target_arch = "wasm32")]
+    if let Some(language) = selected.first() {
+        if let Some(root) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.document_element())
+        {
+            let _ = root.set_attribute("lang", &language.to_string());
+        }
+    }
+    Ok(())
 }
 
 pub fn loader() -> &'static FluentLanguageLoader {
