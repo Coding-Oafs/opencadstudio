@@ -1791,7 +1791,7 @@ impl Scene {
         }
     }
 
-    pub(super) fn hatch_model_from_dxf(
+    pub(crate) fn hatch_model_from_dxf(
         dxf: &DxfHatch,
         color: [f32; 4],
     ) -> Option<HatchModel> {
@@ -1814,9 +1814,9 @@ impl Scene {
 
         for path in &dxf.paths {
             // Skip TEXTBOX boundary paths (flag bit 3). These are text
-            // bounding-boxes AutoCAD derives for island detection; they are
+            // derived bounding boxes used for island detection; they are
             // never drawn or filled. Treating one as a fill boundary paints its
-            // rectangle solid — a phantom bar AutoCAD never shows.
+            // rectangle solid and creates a phantom bar.
             if path.flags.bits() & 8 != 0 {
                 continue;
             }

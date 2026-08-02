@@ -1,20 +1,21 @@
-//! Text Style Font Browser window — fills the entire OS window.
+//! Text style manager.
 
-use crate::app::Message;
-use crate::app::StyleKind;
-use iced::widget::{
-    button, canvas, checkbox, column, container, row, scrollable, text, text_input, Space,
-};
-use iced::{mouse, Background, Border, Element, Length, Point, Rectangle, Theme};
+use crate::app::{Message, StyleKind};
 use crate::t;
+use iced::widget::{button, canvas, checkbox, column, container, row, scrollable, text, text_input};
+use iced::{mouse, Background, Border, Element, Length, Point, Rectangle, Theme};
 use std::borrow::Cow;
 
-/// View-model for the Text Style editor window.
 pub struct TextStyleView<'a> {
     pub styles: Vec<String>,
     pub selected: &'a str,
-    /// Name of the current text style (marked with ✓ in the list).
     pub current: &'a str,
+    pub tab: u8,
+    pub compare_name: String,
+    pub compare_opts: Vec<String>,
+    pub comparison_sections: Vec<String>,
+    pub read_only: bool,
+    pub in_use: bool,
     pub font_buf: &'a str,
     pub width_buf: &'a str,
     pub oblique_buf: &'a str,
@@ -23,56 +24,17 @@ pub struct TextStyleView<'a> {
     pub ttf_buf: &'a str,
     pub backward: bool,
     pub upside_down: bool,
+    pub vertical: bool,
     pub annotative: bool,
-    /// Name of the style being renamed inline (double-clicked), if any.
     pub rename_active: Option<&'a str>,
-    /// Edit buffer for the inline rename text input.
     pub rename_buf: &'a str,
 }
 
 const BUILTIN_FONTS: &[&str] = &[
-    "Standard", "ISO", "Simplex", "RomanS", "RomanD", "RomanC", "RomanT", "ItalicC", "ItalicT",
-    "ScriptS", "ScriptC", "GothGBT", "GothGRT", "GothITT", "GreekC", "Symbol",
-    "ISO3098", "Unicode",
+    "Standard", "ISO", "Simplex", "RomanS", "RomanD", "RomanC", "RomanT", "ItalicC",
+    "ItalicT", "ScriptS", "ScriptC", "GothGBT", "GothGRT", "GothITT", "GreekC",
+    "Symbol", "ISO3098", "Unicode",
 ];
-
-fn list_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, st| {
-        let palette = theme.palette();
-        let pair = match (active, st) {
-            (true, _) => Some(palette.primary.strong),
-            (false, button::Status::Hovered | button::Status::Pressed) => {
-                Some(palette.background.strong)
-            }
-            _ => None,
-        };
-        button::Style {
-        background: pair.map(|p| Background::Color(p.color)),
-        text_color: pair.map(|p| p.text).unwrap_or(palette.background.base.text),
-        ..Default::default()
-        }
-    }
-}
-
-fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let palette = theme.palette();
-    let border = match status {
-        text_input::Status::Focused { .. } => palette.primary.base.color,
-        _ => palette.background.neutral.color,
-    };
-    text_input::Style {
-        background: Background::Color(palette.background.base.color),
-        border: Border {
-            color: border,
-            width: 1.0,
-            radius: 3.0.into(),
-        },
-        icon: palette.background.base.text,
-        placeholder: palette.background.base.text.scale_alpha(0.48),
-        value: palette.background.base.text,
-        selection: palette.primary.base.color.scale_alpha(0.5),
-    }
-}
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
@@ -86,33 +48,55 @@ fn primary_style(theme: &Theme) -> iced::widget::text::Style {
     }
 }
 
-fn vsep<'a>(height: Length) -> Element<'a, Message> {
-    container(Space::new().width(1).height(height))
-        .width(1)
-        .height(height)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.neutral.color
-            )),
-            ..Default::default()
-        })
-        .into()
+fn field_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let palette = theme.palette();
+    text_input::Style {
+        background: Background::Color(palette.background.base.color),
+        border: Border {
+            color: if matches!(status, text_input::Status::Focused { .. }) {
+                palette.primary.base.color
+            } else {
+                palette.background.neutral.color
+            },
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        icon: palette.background.base.text,
+        placeholder: palette.background.base.text.scale_alpha(0.48),
+        value: palette.background.base.text,
+        selection: palette.primary.base.color.scale_alpha(0.5),
+    }
 }
 
-/// Live sample-text preview. Tessellates a fixed sample string through the same
-/// stroke path the text entities use (`lff::tessellate_text_ex`), so the chosen
-/// font, width factor, oblique angle and backward/upside-down flags all show up,
-/// then scales the result to fit the preview box (Y flipped: glyph space is
-/// Y-up, screen is Y-down). Height is not bound — it only scales uniformly and
-/// the fit cancels it.
+fn list_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme: &Theme, status| {
+        let palette = theme.palette();
+        let pair = match (active, status) {
+            (true, _) => Some(palette.primary.strong),
+            (false, button::Status::Hovered | button::Status::Pressed) => {
+                Some(palette.background.strong)
+            }
+            _ => None,
+        };
+        button::Style {
+            background: pair.map(|value| Background::Color(value.color)),
+            text_color: pair
+                .map(|value| value.text)
+                .unwrap_or(palette.background.base.text),
+            ..Default::default()
+        }
+    }
+}
+
 struct TextPreviewCanvas {
     font: String,
-    /// Negative mirrors left-right (backward).
+    big_font: String,
     width_factor: f32,
-    /// Radians.
     oblique: f32,
-    /// 0 or π (upside-down rotates 180° about the origin).
-    rotation: f32,
+    height: f32,
+    upside_down: bool,
+    vertical: bool,
+    annotative: bool,
 }
 
 impl canvas::Program<Message> for TextPreviewCanvas {
@@ -127,314 +111,311 @@ impl canvas::Program<Message> for TextPreviewCanvas {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let (strokes, _) = crate::scene::text::lff::tessellate_text_ex(
-            [0.0, 0.0],
-            9.0,
-            self.rotation,
-            self.width_factor,
-            self.oblique,
-            &self.font,
-            "AaBbCc 0123",
-        );
+        let ink = theme.palette().background.base.text;
+        let glyph_height = if self.height <= 0.0 {
+            18.0
+        } else {
+            (self.height * 7.0).clamp(6.0, 52.0)
+        };
+        let rotation = if self.upside_down {
+            std::f32::consts::PI
+        } else {
+            0.0
+        };
+        let strokes = if self.vertical {
+            let mut result = Vec::new();
+            for (index, character) in "Ab3".chars().enumerate() {
+                let (mut glyph, _) = crate::scene::text::lff::tessellate_text_ex(
+                    [0.0, -(index as f32) * glyph_height * 1.25],
+                    glyph_height,
+                    rotation,
+                    self.width_factor,
+                    self.oblique,
+                    &self.font,
+                    &character.to_string(),
+                );
+                result.append(&mut glyph);
+            }
+            result
+        } else {
+            crate::scene::text::lff::tessellate_text_ex(
+                [0.0, 0.0],
+                glyph_height,
+                rotation,
+                self.width_factor,
+                self.oblique,
+                &self.font,
+                "AaBbCc 0123",
+            )
+            .0
+        };
         let mut min = [f32::MAX; 2];
         let mut max = [f32::MIN; 2];
-        for s in &strokes {
-            for &[x, y] in s {
+        for stroke in &strokes {
+            for &[x, y] in stroke {
                 min[0] = min[0].min(x);
                 min[1] = min[1].min(y);
                 max[0] = max[0].max(x);
                 max[1] = max[1].max(y);
             }
         }
-        if min[0] > max[0] {
-            return vec![frame.into_geometry()];
-        }
-        let pad = 10.0;
-        let span = [(max[0] - min[0]).max(1e-3), (max[1] - min[1]).max(1e-3)];
-        let scale = ((bounds.width - 2.0 * pad) / span[0])
-            .min((bounds.height - 2.0 * pad) / span[1])
-            .max(0.0);
-        let mid = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
-        let center = [bounds.width * 0.5, bounds.height * 0.5];
-        let map = |x: f32, y: f32| {
-            Point::new(
-                center[0] + (x - mid[0]) * scale,
-                center[1] - (y - mid[1]) * scale,
-            )
-        };
-        let stroke = canvas::Stroke {
-            width: 1.4,
-            style: canvas::Style::Solid(theme.palette().background.base.text),
-            ..Default::default()
-        };
-        for s in &strokes {
-            if s.len() < 2 {
-                continue;
-            }
-            let path = canvas::Path::new(|p| {
-                p.move_to(map(s[0][0], s[0][1]));
-                for &[x, y] in &s[1..] {
-                    p.line_to(map(x, y));
+        if min[0] <= max[0] {
+            let span = [(max[0] - min[0]).max(1.0), (max[1] - min[1]).max(1.0)];
+            let available = [bounds.width - 24.0, bounds.height - 34.0];
+            let scale = (available[0] / span[0])
+                .min(available[1] / span[1])
+                .min(1.0)
+                .max(0.0);
+            let middle = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
+            let center = [bounds.width * 0.5, (bounds.height - 18.0) * 0.5];
+            let map = |x: f32, y: f32| {
+                Point::new(
+                    center[0] + (x - middle[0]) * scale,
+                    center[1] - (y - middle[1]) * scale,
+                )
+            };
+            for stroke in &strokes {
+                if stroke.len() < 2 {
+                    continue;
                 }
-            });
-            frame.stroke(&path, stroke.clone());
+                let path = canvas::Path::new(|builder| {
+                    builder.move_to(map(stroke[0][0], stroke[0][1]));
+                    for &[x, y] in &stroke[1..] {
+                        builder.line_to(map(x, y));
+                    }
+                });
+                frame.stroke(
+                    &path,
+                    canvas::Stroke::default().with_color(ink).with_width(1.35),
+                );
+            }
         }
+        let font_label = if self.big_font.trim().is_empty() {
+            self.font.clone()
+        } else {
+            format!("{} + {}", self.font, self.big_font)
+        };
+        let mode = if self.annotative {
+            t!("Paper height")
+        } else {
+            t!("Drawing height")
+        };
+        frame.fill_text(canvas::Text {
+            content: format!("{}  ·  {} {:.3}", font_label, mode, self.height),
+            position: Point::new(10.0, bounds.height - 9.0),
+            color: ink.scale_alpha(0.65),
+            size: iced::Pixels(10.0),
+            align_y: iced::alignment::Vertical::Center,
+            ..Default::default()
+        });
         vec![frame.into_geometry()]
     }
+}
+
+fn input_row<'a>(
+    label: Cow<'static, str>,
+    placeholder: Cow<'static, str>,
+    value: &'a str,
+    field: &'static str,
+    read_only: bool,
+) -> Element<'a, Message> {
+    let control: Element<'a, Message> = if read_only {
+        container(text(value).size(11)).padding([5, 7]).width(180).into()
+    } else {
+        text_input(placeholder.as_ref(), value)
+            .on_input(move |value| Message::TextStyleEdit { field, value })
+            .style(field_style)
+            .size(11)
+            .width(180)
+            .into()
+    };
+    row![text(label).size(11).style(muted_style).width(150), control]
+        .spacing(8)
+        .align_y(iced::Center)
+        .into()
+}
+
+fn toggle<'a>(
+    label: Cow<'static, str>,
+    value: bool,
+    field: &'static str,
+    read_only: bool,
+) -> Element<'a, Message> {
+    let checkbox = checkbox(value).label(label).size(14).text_size(11);
+    if read_only {
+        checkbox.into()
+    } else {
+        checkbox
+            .on_toggle(move |_| Message::TextStyleToggle(field))
+            .into()
+    }
+}
+
+fn font_list<'a>(
+    title: Cow<'static, str>,
+    values: Vec<String>,
+    selected: &'a str,
+    system: bool,
+    read_only: bool,
+) -> Element<'a, Message> {
+    let items: Vec<Element<'a, Message>> = values
+        .into_iter()
+        .map(|font| {
+            let active = selected.eq_ignore_ascii_case(&font);
+            let button = button(text(font.clone()).size(10))
+                .style(list_item(active))
+                .padding([3, 8])
+                .width(Length::Fill);
+            if read_only {
+                button.into()
+            } else if system {
+                button
+                    .on_press(Message::TextStyleEdit {
+                        field: "ttf",
+                        value: font,
+                    })
+                    .into()
+            } else {
+                button.on_press(Message::TextStyleFontPick(font)).into()
+            }
+        })
+        .collect();
+    container(column![text(title).size(10).style(muted_style), scrollable(column(items).spacing(1)).height(250)].spacing(5))
+        .width(Length::FillPortion(1))
+        .padding(4)
+        .into()
 }
 
 pub fn view_window<'a>(
     v: TextStyleView<'a>,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
-    let TextStyleView {
-        styles,
-        selected,
-        current,
-        font_buf,
-        width_buf,
-        oblique_buf,
-        height_buf,
-        bigfont_buf,
-        ttf_buf,
-        backward,
-        upside_down,
-        annotative,
-        rename_active,
-        rename_buf,
-    } = v;
-    // ── Middle: Font browser ──────────────────────────────────────────────
-    let font_items: Vec<Element<'_, Message>> = BUILTIN_FONTS
-        .iter()
-        .map(|&f| {
-            let is_sel = font_buf == f;
-            button(text(f).size(10))
-                .on_press(Message::TextStyleFontPick(f.to_string()))
-                .style(list_item(is_sel))
-                .padding([3, 8])
-                .width(sizing.width)
-                .into()
-        })
-        .collect();
-
-    let font_panel = container(
-        column![
-            text(t!("Font File")).size(10).style(muted_style),
-            container(scrollable(column(font_items).spacing(1)).height(sizing.height))
-                .style(|theme: &Theme| {
-                    let palette = theme.palette();
-                    container::Style {
-                    background: Some(Background::Color(palette.background.weak.color)),
-                    border: Border {
-                        color: palette.background.neutral.color,
-                        width: 1.0,
-                        radius: 3.0.into()
-                    },
-                    ..Default::default()
-                    }
-                })
-                .width(sizing.width)
-                .height(sizing.height)
-                .padding(2),
-            text_input(t!("font file…").as_ref(), font_buf)
-                .on_input(|v| Message::TextStyleEdit {
-                    field: "font",
-                    value: v
-                })
-                .style(field_style)
-                .size(11)
-                .width(sizing.width),
-        ]
-        .spacing(6)
-        .height(sizing.height),
-    )
-    .width(190)
-    .height(sizing.height)
-    .padding([12, 8]);
-
-    // Labeled numeric/text field row → TextStyleEdit { field, value }.
-    fn frow<'a>(
-        label: impl Into<Cow<'static, str>>,
-        ph: impl Into<Cow<'static, str>>,
-        buf: &'a str,
-        field: &'static str,
-    ) -> Element<'a, Message> {
-        row![
-            text(label.into()).size(11).style(muted_style).width(120),
-            text_input(ph.into().as_ref(), buf)
-                .on_input(move |v| Message::TextStyleEdit { field, value: v })
-                .style(field_style)
-                .size(11)
-                .width(140),
-        ]
-        .spacing(6)
-        .align_y(iced::Center)
-        .into()
-    }
-
-    // Live preview reflecting the in-progress edits. Effective font follows the
-    // entity rule: TrueType name wins when set, else the stroke font file.
-    let eff_font = if !ttf_buf.trim().is_empty() {
-        ttf_buf
+    let effective_font = if v.ttf_buf.trim().is_empty() {
+        v.font_buf
     } else {
-        font_buf
+        v.ttf_buf
     };
-    let prev_base_wf = width_buf
+    let width = v
+        .width_buf
         .trim()
         .parse::<f32>()
         .unwrap_or(1.0)
         .abs()
         .clamp(0.01, 100.0);
     let preview = canvas(TextPreviewCanvas {
-        font: eff_font.to_string(),
-        width_factor: if backward { -prev_base_wf } else { prev_base_wf },
-        oblique: oblique_buf.trim().parse::<f32>().unwrap_or(0.0).to_radians(),
-        rotation: if upside_down { std::f32::consts::PI } else { 0.0 },
+        font: effective_font.to_string(),
+        big_font: v.bigfont_buf.to_string(),
+        width_factor: if v.backward { -width } else { width },
+        oblique: v.oblique_buf.trim().parse::<f32>().unwrap_or(0.0).to_radians(),
+        height: v.height_buf.trim().parse::<f32>().unwrap_or(0.0).max(0.0),
+        upside_down: v.upside_down,
+        vertical: v.vertical,
+        annotative: v.annotative,
     })
-    .width(sizing.width)
-    .height(Length::Fixed(56.0));
+    .width(Length::Fill)
+    .height(112);
 
-    // ── Right: Properties ─────────────────────────────────────────────────
-    let props_panel = container(
-        column![
-            text(t!("Properties")).size(11).style(primary_style),
-            frow(t!("Big Font:"), t!("big-font file…"), bigfont_buf, "bigfont"),
-            frow(t!("TrueType Font:"), t!("e.g. Arial"), ttf_buf, "ttf"),
-            frow(
-                if annotative {
-                    t!("Paper Text Height:")
-                } else {
-                    t!("Fixed Height:")
-                },
-                t!("0 = variable"),
-                height_buf,
-                "height",
-            ),
-            frow(t!("Width Factor:"), "1.0", width_buf, "width"),
-            frow(t!("Oblique (°):"), "0.0", oblique_buf, "oblique"),
-            row![
-                checkbox(backward)
-                    .label(t!("Backward"))
-                    .on_toggle(|_| Message::TextStyleToggle("backward"))
-                    .size(15)
-                    .text_size(11),
-                checkbox(upside_down)
-                    .label(t!("Upside down"))
-                    .on_toggle(|_| Message::TextStyleToggle("upside_down"))
-                    .size(15)
-                    .text_size(11),
+    let content: Element<'a, Message> = match v.tab {
+        0 => {
+            let built_in = BUILTIN_FONTS.iter().map(|value| (*value).to_string()).collect();
+            let system = crate::scene::text::sysfont::families().to_vec();
+            column![
+                row![
+                    font_list(t!("Stroke fonts"), built_in, v.font_buf, false, v.read_only),
+                    font_list(t!("System fonts"), system, v.ttf_buf, true, v.read_only),
+                ]
+                .spacing(10),
+                input_row(t!("Font file"), t!("font file…"), v.font_buf, "font", v.read_only),
+                input_row(t!("Big font"), t!("big-font file…"), v.bigfont_buf, "bigfont", v.read_only),
+                input_row(t!("System font"), t!("font family…"), v.ttf_buf, "ttf", v.read_only),
             ]
-            .spacing(16),
-            checkbox(annotative)
-                .label(t!("Annotative"))
-                .on_toggle(|_| Message::TextStyleToggle("annotative"))
-                .size(15)
-                .text_size(11),
-            Space::new().height(8),
-            text(t!("Preview")).size(10).style(muted_style),
-            container(preview)
-                .style(|theme: &Theme| {
-                    let palette = theme.palette();
-                    container::Style {
-                    background: Some(Background::Color(palette.background.base.color)),
-                    border: Border {
-                        color: palette.background.neutral.color,
-                        width: 1.0,
-                        radius: 4.0.into()
-                    },
-                    ..Default::default()
-                    }
-                })
-                .padding(8)
-                .width(sizing.width),
+            .spacing(8)
+            .into()
+        }
+        _ => column![
+            text(t!("Size")).size(11).style(primary_style),
+            input_row(
+                if v.annotative { t!("Paper text height") } else { t!("Fixed height") },
+                t!("0 = variable"),
+                v.height_buf,
+                "height",
+                v.read_only,
+            ),
+            text(t!("Effects")).size(11).style(primary_style),
+            input_row(t!("Width factor"), "1.0".into(), v.width_buf, "width", v.read_only),
+            input_row(t!("Oblique angle"), "0.0".into(), v.oblique_buf, "oblique", v.read_only),
+            row![
+                toggle(t!("Backward"), v.backward, "backward", v.read_only),
+                toggle(t!("Upside down"), v.upside_down, "upside_down", v.read_only),
+                toggle(
+                    t!("Vertical"),
+                    v.vertical,
+                    "vertical",
+                    v.read_only || !v.ttf_buf.trim().is_empty(),
+                ),
+            ]
+            .spacing(18),
+            toggle(t!("Annotative"), v.annotative, "annotative", v.read_only),
         ]
-        .spacing(10)
-        .height(sizing.height),
-    )
-    .width(sizing.width)
-    .height(sizing.height)
-    .padding(iced::Padding {
-        top: 12.0,
-        right: 12.0,
-        bottom: 12.0,
-        left: 8.0,
-    });
-
-    // ── System TrueType fonts (read from the user's machine via fontdb) ──
-    let ttf_items: Vec<Element<'_, Message>> = crate::scene::text::sysfont::families()
-        .iter()
-        .map(|fam| {
-            let is_sel = ttf_buf.eq_ignore_ascii_case(fam);
-            button(text(fam).size(10))
-                .on_press(Message::TextStyleEdit {
-                    field: "ttf",
-                    value: fam.clone(),
-                })
-                .style(list_item(is_sel))
-                .padding([3, 8])
-                .width(sizing.width)
-                .into()
-        })
-        .collect();
-
-    let ttf_panel = container(
-        column![
-            text(t!("TrueType (system)")).size(10).style(muted_style),
-            container(scrollable(column(ttf_items).spacing(1)).height(sizing.height))
-                .style(|theme: &Theme| {
-                    let palette = theme.palette();
-                    container::Style {
-                    background: Some(Background::Color(palette.background.weak.color)),
-                    border: Border {
-                        color: palette.background.neutral.color,
-                        width: 1.0,
-                        radius: 3.0.into()
-                    },
-                    ..Default::default()
-                    }
-                })
-                .width(sizing.width)
-                .height(sizing.height)
-                .padding(2),
-            text_input(t!("TrueType font…").as_ref(), ttf_buf)
-                .on_input(|v| Message::TextStyleEdit {
-                    field: "ttf",
-                    value: v
-                })
-                .style(field_style)
-                .size(11)
-                .width(sizing.width),
-        ]
-        .spacing(6)
-        .height(sizing.height),
-    )
-    .width(190)
-    .height(sizing.height)
-    .padding([12, 8]);
-
-    let editor = row![
-        font_panel,
-        vsep(sizing.height),
-        ttf_panel,
-        vsep(sizing.height),
-        props_panel
-    ]
-    .height(sizing.height);
-
+        .spacing(9)
+        .into(),
+    };
+    let status = if v.read_only {
+        t!("Referenced style · Read only")
+    } else if v.selected.eq_ignore_ascii_case(v.current) {
+        t!("Current style")
+    } else if v.in_use {
+        t!("Used in drawing")
+    } else {
+        t!("Available style")
+    };
+    let summary = if v.comparison_sections.is_empty() {
+        t!("No differences").into_owned()
+    } else {
+        format!("{}: {}", t!("Different"), v.comparison_sections.join(", "))
+    };
+    let editor = crate::ui::style::style_manager::editor_shell(
+        crate::ui::style::style_manager::EditorShell {
+            sizing,
+            selected: v.selected.to_string(),
+            status,
+            preview: preview.into(),
+            comparison: Some(crate::ui::style::style_manager::EditorComparison {
+                selected: v.compare_name,
+                options: v.compare_opts,
+                summary,
+                on_select: Message::TextStyleDialogCompare,
+            }),
+            tabs: vec![
+                crate::ui::style::style_manager::EditorTab {
+                    label: t!("Fonts"),
+                    active: v.tab == 0,
+                    on_press: Message::TextStyleDialogTab(0),
+                },
+                crate::ui::style::style_manager::EditorTab {
+                    label: t!("Size and Effects"),
+                    active: v.tab == 1,
+                    on_press: Message::TextStyleDialogTab(1),
+                },
+            ],
+            content,
+        },
+    );
     crate::ui::style::style_manager::view(crate::ui::style::style_manager::Scaffold {
         sizing,
         kind: StyleKind::Text,
-        styles: &styles,
-        selected,
-        current: Some(current),
-        rename_active,
-        rename_buf,
+        styles: &v.styles,
+        selected: v.selected,
+        current: Some(v.current),
+        rename_active: v.rename_active,
+        rename_buf: v.rename_buf,
         on_new: Message::TextStyleDialogNew,
         on_copy: Message::TextStyleDialogCopy,
         on_delete: Message::TextStyleDialogDelete,
         on_select: Message::TextStyleDialogSelect,
         on_set_current: Message::TextStyleDialogSetCurrent,
         on_apply: Message::TextStyleApply,
-        editor: editor.into(),
+        read_only: v.read_only,
+        editor,
     })
 }

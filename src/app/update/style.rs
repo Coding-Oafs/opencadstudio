@@ -22,6 +22,91 @@ use iced::{mouse, Point, Task};
 
 
 impl OpenCADStudio {
+    pub(in crate::app) fn mlstyle_mut(
+        &mut self,
+        tab: usize,
+    ) -> Option<&mut acadrust::objects::MLineStyle> {
+        use acadrust::objects::ObjectType;
+        let name = self.mlstyle_selected.clone();
+        self.tabs[tab]
+            .scene
+            .document
+            .objects
+            .values_mut()
+            .find_map(|object| match object {
+                ObjectType::MLineStyle(style) if style.name == name => Some(style),
+                _ => None,
+            })
+    }
+
+    pub(in crate::app) fn load_mlstyle_bufs(&mut self, tab: usize) {
+        use acadrust::objects::ObjectType;
+        let name = self.mlstyle_selected.clone();
+        let Some((description, start_angle, end_angle, fill_color, elements)) = self.tabs[tab]
+            .scene
+            .document
+            .objects
+            .values()
+            .find_map(|object| match object {
+                ObjectType::MLineStyle(style) if style.name == name => Some((
+                    style.description.clone(),
+                    style.start_angle.to_degrees(),
+                    style.end_angle.to_degrees(),
+                    style.fill_color.index().unwrap_or(256),
+                    style
+                        .elements
+                        .iter()
+                        .map(|element| {
+                            [
+                                format!("{}", element.offset),
+                                element.color.index().unwrap_or(256).to_string(),
+                            element.linetype.clone(),
+                            ]
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        self.mln_description = description;
+        self.mln_start_angle = format!("{start_angle:.4}");
+        self.mln_end_angle = format!("{end_angle:.4}");
+        self.mln_fill_color = fill_color.to_string();
+        self.mln_elements = elements;
+    }
+
+    pub(in crate::app) fn stage_mlstyle_bufs(&mut self) {
+        let tab = self.active_tab;
+        let description = self.mln_description.clone();
+        let start_angle = self.mln_start_angle.trim().parse::<f64>().ok();
+        let end_angle = self.mln_end_angle.trim().parse::<f64>().ok();
+        let fill_color = self.mln_fill_color.trim().parse::<i16>().ok();
+        let elements = self.mln_elements.clone();
+        if let Some(style) = self.mlstyle_mut(tab) {
+            style.description = description;
+            if let Some(value) = start_angle {
+                style.start_angle = value.to_radians();
+            }
+            if let Some(value) = end_angle {
+                style.end_angle = value.to_radians();
+            }
+            if let Some(value) = fill_color {
+                style.fill_color = acadrust::types::Color::from_index(value);
+            }
+            for (element, values) in style.elements.iter_mut().zip(elements) {
+                if let Ok(value) = values[0].trim().parse::<f64>() {
+                    element.offset = value;
+                }
+                if let Ok(value) = values[1].trim().parse::<i16>() {
+                    element.color = acadrust::types::Color::from_index(value);
+                }
+                element.linetype = values[2].clone();
+            }
+        }
+    }
+
     pub(in crate::app) fn tablestyle_mut(&mut self, tab: usize) -> Option<&mut acadrust::objects::TableStyle> {
         use acadrust::objects::ObjectType;
         let name = self.tablestyle_selected.clone();
@@ -163,8 +248,8 @@ impl OpenCADStudio {
         self.mls_text_height = format!("{:.4}", s.text_height);
         self.mls_scale_factor = format!("{:.4}", s.scale_factor);
         self.mls_break_gap = format!("{:.4}", s.break_gap_size);
-        self.mls_first_seg_angle = format!("{:.4}", s.first_segment_angle);
-        self.mls_second_seg_angle = format!("{:.4}", s.second_segment_angle);
+        self.mls_first_seg_angle = format!("{:.4}", s.first_segment_angle.to_degrees());
+        self.mls_second_seg_angle = format!("{:.4}", s.second_segment_angle.to_degrees());
         self.mls_max_points = s.max_leader_points.to_string();
         self.mls_default_text = s.default_text.clone();
         self.mls_line_color = s
@@ -184,7 +269,7 @@ impl OpenCADStudio {
             .index()
             .map(|c| c.to_string())
             .unwrap_or_default();
-        self.mls_block_rotation = format!("{:.4}", s.block_content_rotation);
+        self.mls_block_rotation = format!("{:.4}", s.block_content_rotation.to_degrees());
         self.mls_block_scale_x = format!("{:.4}", s.block_content_scale_x);
         self.mls_block_scale_y = format!("{:.4}", s.block_content_scale_y);
         self.mls_block_scale_z = format!("{:.4}", s.block_content_scale_z);
@@ -273,6 +358,20 @@ impl OpenCADStudio {
 
     pub(in crate::app) fn apply_dimstyle_bufs(&mut self, tab: usize) {
         let doc = &mut self.tabs[tab].scene.document;
+        let read_only = doc
+            .dim_styles
+            .get(&self.dimstyle_selected)
+            .is_some_and(|style| {
+                style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
+            });
+        if read_only {
+            return;
+        }
+        let text_style_handle = doc
+            .text_styles
+            .get(&self.ds_dimtxsty)
+            .map(|style| style.handle)
+            .unwrap_or(acadrust::types::Handle::NULL);
         let Some(ds) = doc.dim_styles.get_mut(&self.dimstyle_selected) else {
             return;
         };
@@ -323,6 +422,7 @@ impl OpenCADStudio {
         ds.dimlim = self.ds_dimlim;
         ds.dimpost = self.ds_dimpost.clone();
         ds.dimtxsty = self.ds_dimtxsty.clone();
+        ds.dimtxsty_handle = text_style_handle;
         ds.annotative = self.ds_annotative;
         set_i16!(dimclrd, self.ds_dimclrd);
         set_i16!(dimlwd, self.ds_dimlwd);
@@ -392,7 +492,15 @@ impl OpenCADStudio {
             Dimlunit => self.ds_dimlunit = val,
             Dimdec => self.ds_dimdec = val,
             Dimpost => self.ds_dimpost = val,
-            Dimtp => self.ds_dimtp = val,
+            Dimtp => {
+                let symmetrical = self.ds_dimtol
+                    && !self.ds_dimlim
+                    && self.ds_dimtp.trim() == self.ds_dimtm.trim();
+                self.ds_dimtp = val.clone();
+                if symmetrical {
+                    self.ds_dimtm = val;
+                }
+            }
             Dimtm => self.ds_dimtm = val,
             Dimtdec => self.ds_dimtdec = val,
             Dimtfac => self.ds_dimtfac = val,
@@ -518,6 +626,9 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                 let bigfont = self.textstyle_bigfont.clone();
                 let ttf = self.textstyle_ttf.clone();
                 if let Some(s) = self.tabs[i].scene.document.text_styles.get_mut(&name) {
+                    if s.xref_dependent {
+                        return;
+                    }
                     s.font_file = font;
                     s.big_font_file = bigfont;
                     s.true_type_font = ttf;
@@ -629,6 +740,7 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                         .unwrap_or_else(|| "Standard".to_string())
                 };
                 self.active_modal = Some(crate::app::ModalKind::MlStyle);
+                self.load_mlstyle_bufs(i);
                 self.style_stage_begin();
                 Task::none()
     }
@@ -818,7 +930,10 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
     pub(super) fn on_mleader_style_set_handle(&mut self, field: &'static str, value: String) -> Task<Message> {
                 let i = self.active_tab;
                 let doc = &self.tabs[i].scene.document;
-                let handle: Option<acadrust::types::Handle> = if value == "None" {
+                let handle: Option<acadrust::types::Handle> = if value == "None"
+                    || value == "ByBlock"
+                    || value == "Closed filled"
+                {
                     None
                 } else {
                     match field {
@@ -897,10 +1012,10 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                         s.break_gap_size = v;
                     }
                     if let Some(v) = fsa {
-                        s.first_segment_angle = v;
+                        s.first_segment_angle = v.to_radians();
                     }
                     if let Some(v) = ssa {
-                        s.second_segment_angle = v;
+                        s.second_segment_angle = v.to_radians();
                     }
                     if let Some(v) = mp {
                         s.max_leader_points = v;
@@ -920,7 +1035,7 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                         s.block_content_color = acadrust::types::Color::from_index(v);
                     }
                     if let Some(v) = brot {
-                        s.block_content_rotation = v;
+                        s.block_content_rotation = v.to_radians();
                     }
                     if let Some(v) = bsx {
                         s.block_content_scale_x = v;
@@ -962,6 +1077,14 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                         .unwrap_or_else(|| "Standard".to_string())
                 };
                 self.dimstyle_selected = selected.clone();
+                self.dimstyle_compare = self.tabs[i]
+                    .scene
+                    .document
+                    .dim_styles
+                    .iter()
+                    .map(|style| style.name.clone())
+                    .find(|name| !name.eq_ignore_ascii_case(&selected))
+                    .unwrap_or_default();
                 self.load_dimstyle_bufs(i);
                 self.active_modal = Some(crate::app::ModalKind::DimStyle);
                 self.style_stage_begin();
@@ -1018,6 +1141,11 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     "dimltex_handle" | "dimltex1_handle" | "dimltex2_handle"
                 );
                 let doc = &self.tabs[i].scene.document;
+                if doc.dim_styles.get(&name).is_some_and(|style| {
+                    style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
+                }) {
+                    return Task::none();
+                }
                 let handle = if value == "Default" || value == "ByBlock" {
                     acadrust::types::Handle::NULL
                 } else if is_lt {
@@ -1037,7 +1165,10 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                 if let Some(ds) = self.tabs[i].scene.document.dim_styles.get_mut(&name) {
                     match field {
                         "dimblk" => ds.dimblk = handle,
-                        "dimblk1" => ds.dimblk1 = handle,
+                        "dimblk1" => {
+                            ds.dimblk1 = handle;
+                            ds.dimblk2 = handle;
+                        }
                         "dimblk2" => ds.dimblk2 = handle,
                         "dimldrblk" => ds.dimldrblk = handle,
                         "dimltex_handle" => ds.dimltex_handle = handle,

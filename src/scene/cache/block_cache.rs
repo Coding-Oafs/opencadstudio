@@ -28,7 +28,7 @@ const MAX_NESTING_DEPTH: usize = 32;
 /// Skip wires whose world-AABB projects to fewer than this many pixels in
 /// the active view. Picks up tiny detail at zoom-out so the tessellator
 /// doesn't waste time on geometry that contributes a few sub-pixel marks
-/// to the final image. 2 px is the AutoCAD-default "small element" floor
+/// to the final image. Two pixels is a practical small-element floor:
 /// — visibly the same image, dramatically fewer wires.
 const MIN_PIXEL_SIZE: f32 = 2.0;
 
@@ -426,66 +426,16 @@ fn build_defn(
                     nested_ins, doc, bg_color, depth_map,
                 )));
             }
-            // A dimension nested in a block bakes its geometry (extension /
-            // dim lines, arrows, text) into a per-instance `*D` block, exactly
-            // like a top-level dimension. The top-level path expands that block
-            // in `tessellate_entity`; the block-expand path calls the plain
-            // `tessellate::tessellate`, which does NOT, so nested dimensions
-            // drew nothing. Expand the `*D` block's entities here as block-local
-            // subs so they transform with the parent insert. (Empty block_name
-            // — a non-baked dimension — falls through to the default arm.)
-            EntityType::Dimension(dim)
-                if !dim.base().block_name.trim().is_empty()
-                    && !crate::entities::dimension::uses_custom_arrow_blocks(doc, dim) =>
-            {
-                let dblk = doc
-                    .block_records
-                    .iter()
-                    .find(|br| br.name.eq_ignore_ascii_case(&dim.base().block_name));
-                if let Some(dblk) = dblk {
-                    // The `*D` block content is baked in the coordinate space it
-                    // occupied when the dimension was created — for a dimension
-                    // inside a block that is often the ORIGINAL WCS, not the
-                    // block-local space. The dimension's insertion_point (DXF
-                    // 12) is the offset that maps the baked content into the
-                    // dimension's own (block-local) space; it is zero for
-                    // dimensions baked in place, so this is a no-op there.
-                    let ins = dim.base().insertion_point;
-                    for &deh in &dblk.entity_handles {
-                        let Some(dsub) = doc.get_entity(deh) else {
-                            continue;
-                        };
-                        // Definition points are baked as POINTs on Defpoints —
-                        // grip markers, never drawn (matches the top-level path).
-                        if matches!(dsub, EntityType::Point(_)) {
-                            continue;
-                        }
-                        if dsub.common().invisible || layer_hidden(doc, &dsub.common().layer) {
-                            continue;
-                        }
-                        let mut placed = dsub.clone();
-                        placed.as_entity_mut().translate(ins);
-                        // An arrowhead is baked as a nested INSERT of an arrow
-                        // block — route it through the nested-ref machinery so
-                        // the arrow block expands (tessellate_sub_local doesn't
-                        // expand inserts).
-                        if let EntityType::Insert(arrow) = &placed {
-                            subs.push(LocalSub::Nested(build_nested_ref(
-                                arrow, doc, bg_color, depth_map,
-                            )));
-                        } else {
-                            for lw in tessellate_sub_local(
-                                doc,
-                                &placed,
-                                anno_scale,
-                                annotation_scale_handle,
-                                bg_color,
-                                depth_map,
-                            ) {
-                                subs.push(LocalSub::Wire(lw));
-                            }
-                        }
-                    }
+            EntityType::Dimension(_) => {
+                for wire in tessellate_sub_local(
+                    doc,
+                    entity,
+                    anno_scale,
+                    annotation_scale_handle,
+                    bg_color,
+                    depth_map,
+                ) {
+                    subs.push(LocalSub::Wire(wire));
                 }
             }
             // A table nested in a block bakes its geometry (gridlines, cell
@@ -706,21 +656,38 @@ fn tessellate_sub_local(
     // Pass `local_offset` as the f64 world-offset so tessellate subtracts it
     // before casting to f32 — same precision-preservation trick used for
     // top-level entities, applied per-defn.
-    let wires_out = tessellate::tessellate(
-        doc,
-        h,
-        sub,
-        false,
-        sub_color,
-        pat_len,
-        pat,
-        lw_px,
-        anno_scale,
-        annotation_scale_handle,
-        None,
-        bg_color,
-        false,
-    );
+    let wires_out = if let EntityType::Dimension(dimension) = sub {
+        use crate::entities::dimension::DimensionTess;
+        dimension.tessellate(
+            doc,
+            h,
+            false,
+            sub_color,
+            lw_px,
+            anno_scale,
+            &HashSet::default(),
+            None,
+            bg_color,
+            None,
+            None,
+        )
+    } else {
+        tessellate::tessellate(
+            doc,
+            h,
+            sub,
+            false,
+            sub_color,
+            pat_len,
+            pat,
+            lw_px,
+            anno_scale,
+            annotation_scale_handle,
+            None,
+            bg_color,
+            false,
+        )
+    };
     if wires_out.is_empty() {
         return vec![];
     }

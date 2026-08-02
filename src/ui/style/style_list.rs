@@ -29,6 +29,7 @@ pub fn item<'a>(
     on_select: Message,
     rename_active: Option<&str>,
     rename_buf: &'a str,
+    can_rename: bool,
 ) -> Element<'a, Message> {
     if rename_active == Some(name) {
         text_input("", rename_buf)
@@ -56,9 +57,12 @@ pub fn item<'a>(
                 ..Default::default()
                 }
             });
-        mouse_area(cell)
-            .on_press(on_select)
-            .on_double_click(Message::StyleRenameStart(kind, name.to_string()))
-            .into()
+        let area = mouse_area(cell).on_press(on_select);
+        if can_rename {
+            area.on_double_click(Message::StyleRenameStart(kind, name.to_string()))
+                .into()
+        } else {
+            area.into()
+        }
     }
 }

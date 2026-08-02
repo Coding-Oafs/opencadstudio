@@ -1389,27 +1389,6 @@ fn apply_dimension_breaks(
     *lines = output;
 }
 
-pub(crate) fn uses_custom_arrow_blocks(document: &CadDocument, dim: &Dimension) -> bool {
-    let style_name = &dim.base().style_name;
-    let Some(style) = document.dim_styles.iter().find(|style| {
-        style.name.eq_ignore_ascii_case(style_name)
-            || (style_name.trim().is_empty() && style.name.eq_ignore_ascii_case("Standard"))
-    }) else {
-        return false;
-    };
-    if style.dimtsz > 1e-9 {
-        return false;
-    }
-    let is_custom = |handle| {
-        crate::scene::convert::tessellate::arrow_block_is_custom(document, handle)
-    };
-    if style.dimsah {
-        is_custom(style.dimblk1) || is_custom(style.dimblk2)
-    } else {
-        is_custom(style.dimblk)
-    }
-}
-
 pub trait DimensionTess {
     fn tessellate(
         &self,
@@ -1481,10 +1460,126 @@ fn tessellate_dimension_inner(
     // recursive call goes through the LOD ladder, not the truck path.)
 
     let style_name = &dim.base().style_name;
-    let style = document.dim_styles.iter().find(|s| {
+    let source_style = document.dim_styles.iter().find(|s| {
         s.name.eq_ignore_ascii_case(style_name)
             || (style_name.trim().is_empty() && s.name.eq_ignore_ascii_case("Standard"))
     });
+    let mut effective_style = source_style.cloned();
+    if let Some(style) = &mut effective_style {
+        use crate::entities::dim_override as ov;
+        let data = &dim.base().common.extended_data;
+        macro_rules! real {
+            ($field:ident, $code:ident) => {
+                if let Some(value) = ov::real(data, ov::$code) {
+                    style.$field = value;
+                }
+            };
+        }
+        macro_rules! int {
+            ($field:ident, $code:ident) => {
+                if let Some(value) = ov::int(data, ov::$code) {
+                    style.$field = value;
+                }
+            };
+        }
+        macro_rules! flag {
+            ($field:ident, $code:ident) => {
+                if let Some(value) = ov::int(data, ov::$code) {
+                    style.$field = value != 0;
+                }
+            };
+        }
+        macro_rules! handle {
+            ($field:ident, $code:ident) => {
+                if let Some(value) = ov::handle(data, ov::$code) {
+                    style.$field = value;
+                }
+            };
+        }
+        real!(dimscale, DIMSCALE);
+        real!(dimasz, DIMASZ);
+        real!(dimexo, DIMEXO);
+        real!(dimdli, DIMDLI);
+        real!(dimexe, DIMEXE);
+        real!(dimrnd, DIMRND);
+        real!(dimdle, DIMDLE);
+        real!(dimtp, DIMTP);
+        real!(dimtm, DIMTM);
+        real!(dimfxl, DIMFXL);
+        real!(dimjogang, DIMJOGANG);
+        real!(dimtxt, DIMTXT);
+        real!(dimcen, DIMCEN);
+        real!(dimtsz, DIMTSZ);
+        real!(dimaltf, DIMALTF);
+        real!(dimlfac, DIMLFAC);
+        real!(dimtvp, DIMTVP);
+        real!(dimtfac, DIMTFAC);
+        real!(dimgap, DIMGAP);
+        real!(dimaltrnd, DIMALTRND);
+        flag!(dimtol, DIMTOL);
+        flag!(dimlim, DIMLIM);
+        flag!(dimtih, DIMTIH);
+        flag!(dimtoh, DIMTOH);
+        flag!(dimse1, DIMSE1);
+        flag!(dimse2, DIMSE2);
+        flag!(dimalt, DIMALT);
+        flag!(dimtofl, DIMTOFL);
+        flag!(dimsah, DIMSAH);
+        flag!(dimtix, DIMTIX);
+        flag!(dimsoxd, DIMSOXD);
+        flag!(dimsd1, DIMSD1);
+        flag!(dimsd2, DIMSD2);
+        flag!(dimupt, DIMUPT);
+        flag!(dimfxlon, DIMFXLON);
+        flag!(dimtxtdirection, DIMTXTDIRECTION);
+        int!(dimzin, DIMZIN);
+        int!(dimazin, DIMAZIN);
+        int!(dimarcsym, DIMARCSYM);
+        int!(dimclrd, DIMCLRD);
+        int!(dimclre, DIMCLRE);
+        int!(dimclrt, DIMCLRT);
+        int!(dimadec, DIMADEC);
+        int!(dimaltd, DIMALTD);
+        int!(dimdec, DIMDEC);
+        int!(dimtdec, DIMTDEC);
+        int!(dimaltu, DIMALTU);
+        int!(dimalttd, DIMALTTD);
+        int!(dimaunit, DIMAUNIT);
+        int!(dimfrac, DIMFRAC);
+        int!(dimlunit, DIMLUNIT);
+        int!(dimdsep, DIMDSEP);
+        int!(dimtmove, DIMTMOVE);
+        int!(dimjust, DIMJUST);
+        int!(dimtolj, DIMTOLJ);
+        int!(dimtzin, DIMTZIN);
+        int!(dimaltz, DIMALTZ);
+        int!(dimalttz, DIMALTTZ);
+        int!(dimatfit, DIMATFIT);
+        int!(dimtfill, DIMTFILL);
+        int!(dimtfillclr, DIMTFILLCLR);
+        int!(dimlwd, DIMLWD);
+        int!(dimlwe, DIMLWE);
+        handle!(dimldrblk, DIMLDRBLK);
+        handle!(dimblk, DIMBLK);
+        handle!(dimblk1, DIMBLK1);
+        handle!(dimblk2, DIMBLK2);
+        handle!(dimltex_handle, DIMLTYPE);
+        handle!(dimltex1_handle, DIMLTEX1);
+        handle!(dimltex2_handle, DIMLTEX2);
+        if let Some(value) = ov::string(data, ov::DIMPOST) {
+            style.dimpost = value;
+        }
+        if let Some(value) = ov::string(data, ov::DIMAPOST) {
+            style.dimapost = value;
+        }
+        if let Some(value) = ov::handle(data, ov::DIMTXSTY) {
+            style.dimtxsty_handle = value;
+            if let Some(record) = document.text_styles.iter().find(|record| record.handle == value) {
+                style.dimtxsty = record.name.clone();
+            }
+        }
+    }
+    let style = effective_style.as_ref();
 
     // DIMSCALE rule:
     //   dimstyle.dimscale > 0  →  final multiplier; ignore anno_scale.
@@ -1655,7 +1750,7 @@ fn tessellate_dimension_inner(
     // preserved on save:
     //   - base.insertion_point: legacy anchor reference; render uses
     //     text_middle_point + dim-line geometry instead.
-    //   - base.block_name: AutoCAD-style "*D..." anonymous block name for
+    //   - base.block_name: generated anonymous block name for
     //     the dim graphics — we re-tessellate so don't need it.
     //   - base.version: DXF format marker (metadata only).
     let _ = (
@@ -2391,7 +2486,7 @@ fn append_linear_dimension(
 
     // DIMDLE: dim line overshoots the ext line by `dimdle` at each end,
     // but only when ticks are in use (DIMTSZ > 0). With arrowheads this
-    // is ignored, matching AutoCAD.
+    // is ignored.
     let dle = if params.ticks { params.dimdle } else { 0.0 };
     let dir_d1_to_d2 = normalized_or(d2 - d1, axis);
     let d1_out = d1 - dir_d1_to_d2 * dle;
@@ -2404,30 +2499,50 @@ fn append_linear_dimension(
     let gap = (d2 - d1).length();
     let arrows_outside = !params.ticks && params.arrow_len > 1e-6 && gap < 2.0 * params.arrow_len;
 
-    // DIMSD1/DIMSD2: when *both* set, omit the dim line entirely. AutoCAD
-    // splits at text otherwise — without that pivot info, leave as-is.
-    if !(suppress.dim1 && suppress.dim2) {
-        // Break the dim line where the text sits on it, so a DIMTFILL
-        // background reads over the line (2-D fills draw under all wires, so the
-        // line is gapped rather than z-masked).
-        let mut drew = false;
-        if let Some((tc, half_w, half_h)) = params.text_break {
-            let dir = normalized_or(d2_out - d1_out, axis);
-            let len = (d2_out - d1_out).length();
-            let along = (tc - d1_out).dot(dir);
-            let perp_dist = (tc - (d1_out + dir * along)).length();
-            if perp_dist < half_h && along - half_w > 0.0 && along + half_w < len {
-                add_segment(&mut g.dim_lines, d1_out, d1_out + dir * (along - half_w));
-                add_segment(&mut g.dim_lines, d1_out + dir * (along + half_w), d2_out);
-                drew = true;
+    // The two suppression flags address the portions at the first and second
+    // measured points independently. The text gap is also the natural split;
+    // when there is no gap, split at the projected text position or midpoint.
+    let line_dir = normalized_or(d2_out - d1_out, axis);
+    let line_len = (d2_out - d1_out).length();
+    let mut split = line_len * 0.5;
+    let mut left_end = split;
+    let mut right_start = split;
+    if let Some((text_center, half_width, half_height)) = params.text_break {
+        let along = (text_center - d1_out).dot(line_dir);
+        if along > 0.0 && along < line_len {
+            split = along;
+            left_end = split;
+            right_start = split;
+            let perpendicular = (text_center - (d1_out + line_dir * along)).length();
+            if perpendicular < half_height
+                && along - half_width > 0.0
+                && along + half_width < line_len
+            {
+                left_end = along - half_width;
+                right_start = along + half_width;
             }
         }
-        if !drew {
-            add_segment(&mut g.dim_lines, d1_out, d2_out);
-        }
-        if arrows_outside && !params.dimsoxd {
-            let stub = params.arrow_len * 2.0;
+    }
+    if !suppress.dim1 && left_end > 1e-6 {
+        add_segment(
+            &mut g.dim_lines,
+            d1_out,
+            d1_out + line_dir * left_end,
+        );
+    }
+    if !suppress.dim2 && line_len - right_start > 1e-6 {
+        add_segment(
+            &mut g.dim_lines,
+            d1_out + line_dir * right_start,
+            d2_out,
+        );
+    }
+    if arrows_outside && !params.dimsoxd {
+        let stub = params.arrow_len * 2.0;
+        if !suppress.dim1 {
             add_segment(&mut g.dim_lines, d1 - dir_d1_to_d2 * stub, d1);
+        }
+        if !suppress.dim2 {
             add_segment(&mut g.dim_lines, d2, d2 + dir_d1_to_d2 * stub);
         }
     }
@@ -2838,8 +2953,8 @@ fn dimension_text_parts(
     let base = dim.base();
     let is_angular = matches!(dim, Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_));
 
-    // Auto-generated body (the value AutoCAD would emit if the user did not
-    // override it). Built first so user_text "<>" substitution can re-use it.
+    // Auto-generated body used when the user did not override it. Built first
+    // so user_text "<>" substitution can re-use it.
     let primary_raw = if is_angular {
         format_angular_value(dim.measurement(), style)
     } else {
@@ -3168,7 +3283,7 @@ fn format_fractional(value: f64, dimfrac: i16) -> String {
 }
 
 /// Power-of-two denominator for architectural / fractional output. DIMFRAC is
-/// the exponent-ish knob AutoCAD pairs with DIMLUNIT; clamp it to a readable
+/// the exponent-like fraction-format knob; clamp it to a readable
 /// range (16ths … 1024ths).
 fn arch_denom(dimfrac: i16) -> u64 {
     let exp = (dimfrac.clamp(0, 8) as u32).max(2) + 2; // 4..=10 → 16..=1024

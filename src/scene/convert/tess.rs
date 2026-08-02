@@ -543,8 +543,8 @@ pub(crate) fn tessellate_entity(
     // An entity from an application we have no reader for (e.g. an Autodesk
     // Raster Design embedded raster image) arrives as `Unknown`. Its own data is
     // a private format we cannot decode — but it usually ships a proxy-graphics
-    // blob, the vector preview its author cached for exactly this case. AutoCAD
-    // draws that when the object enabler is missing; draw it too, so the entity
+    // blob, the vector preview its author cached for exactly this case. Draw it
+    // when the object enabler is missing, so the entity
     // occupies its real place instead of silently disappearing.
     let proxy_blob: Option<std::borrow::Cow<'_, [u8]>> = match e {
         EntityType::Unknown(_) => e
@@ -665,7 +665,7 @@ pub(crate) fn tessellate_entity(
     //
     // The DWG reader decodes the two cut-line endpoints, the signed end ticks
     // and the identifier. Synthesize the end ticks + arrowheads + label glyphs
-    // so the mark is visible on the layout, the way AutoCAD draws it. The raw
+    // so the mark is visible on the layout. The raw
     // record is still preserved for lossless write-back.
     if let EntityType::SectionSymbol(s) = e {
         return section_symbol_wires(
@@ -736,118 +736,6 @@ pub(crate) fn tessellate_entity(
         }];
     }
 
-    // ── Dimension baked-block fast path ─────────────────────────────────────
-    //
-    // A saved dimension may carry final geometry (extension lines, dim line,
-    // arrows and text) in a per-instance block — usually
-    // `*D<n>`, but custom names like `DIMBLOCK###-4NP` also occur. When the
-    // block exists we render its contents through `tessellate_entity` so
-    // sub-Text/MText get the standard baseline/greek/full LOD ladder, and
-    // DIMTXT × DIMSCALE isn't re-applied on already-baked geometry.
-    if let EntityType::Dimension(dim) = e {
-        let block_name = &dim.base().block_name;
-        if !block_name.trim().is_empty()
-            && !crate::entities::dimension::uses_custom_arrow_blocks(document, dim)
-        {
-            if let Some(br) = document
-                .block_records
-                .iter()
-                .find(|br| br.name.eq_ignore_ascii_case(block_name))
-            {
-                if !br.entity_handles.is_empty() {
-                    let mut wires: Vec<WireModel> = Vec::with_capacity(br.entity_handles.len());
-                    // The Dimension's own layer style — layer-0 inheritance
-                    // target for baked sub-entities on layer "0" (#221).
-                    let dim_l0_color = view::render::adapt_to_bg(
-                        view::render::layer_render_style(document, &e.common().layer).color,
-                        bg_color,
-                    );
-                    let dim_l0_aci = document
-                        .layers
-                        .get(&e.common().layer)
-                        .map(|l| match &l.color {
-                            acadrust::types::Color::Index(i) => *i,
-                            _ => 0,
-                        })
-                        .unwrap_or(0);
-                    for &eh in &br.entity_handles {
-                        let Some(sub) = document.get_entity(eh) else {
-                            continue;
-                        };
-                        // A dimension's definition points are baked into the
-                        // block as POINTs on the Defpoints layer. They are grip
-                        // markers rather than PDMODE display geometry, so
-                        // geometry — so rendering them adds a stray tick at each
-                        // measured point that makes the extension lines look like
-                        // they run past the geometry. Skip them.
-                        if matches!(sub, EntityType::Point(_)) {
-                            continue;
-                        }
-                        // Sub-entities inside *D### / DIMBLOCK## blocks
-                        // typically use ByBlock color/linetype/lineweight —
-                        // they should inherit from the Dimension entity.
-                        let has_book_color =
-                            view::render::has_resolved_book_color(document, sub);
-                        let sub_color_is_byblock = !has_book_color
-                            && sub.common().color == acadrust::types::Color::ByBlock;
-                        let sub_is_l0_bylayer =
-                            !has_book_color
-                            && view::render::is_effective_layer_zero(&sub.common().layer)
-                            && sub.common().color == acadrust::types::Color::ByLayer;
-                        let sub_wires = tessellate_entity(
-                            document,
-                            selected,
-                            active_viewport,
-                            bg_color,
-                            // Block contents are baked at the final WCS size —
-                            // don't let downstream paths re-apply anno_scale.
-                            1.0,
-                            None,
-                            sub,
-                            block_cache,
-                            view_aabb,
-                            world_per_pixel,
-                            paper_space,
-                        );
-                        for mut w in sub_wires {
-                            w.name = h.value().to_string();
-                            // Override ByBlock colour with the dim's resolved
-                            // colour so text matches `DIMCLRT`-style behaviour
-                            // (or layer colour) instead of the raw ByBlock
-                            // fallback that render_style_for produces. A layer-0
-                            // sub inherits the dim's layer colour instead.
-                            if sub_color_is_byblock {
-                                w.color = if sel {
-                                    WireModel::SELECTED
-                                } else {
-                                    entity_color
-                                };
-                                w.aci = aci;
-                            } else if sub_is_l0_bylayer && !sel {
-                                w.color = dim_l0_color;
-                                w.aci = dim_l0_aci;
-                            }
-                            wires.push(w);
-                        }
-                    }
-                    if !wires.is_empty() {
-                        let aabb = entity_aabb(e);
-                        for w in &mut wires {
-                            // Empty SDF-text cells keep their tight glyph-box
-                            // AABB; only stroke/fill wires take the whole-block
-                            // box as a broad-phase pick hint.
-                            if !w.points.is_empty() || !w.fill_tris.is_empty() {
-                                set_wire_aabb(w, aabb);
-                            }
-                        }
-                        return wires;
-                    }
-                }
-            }
-        }
-        // Fall through to the synthesis path below when no block is attached.
-    }
-
     if let EntityType::Dimension(dim) = e {
         let aabb = entity_aabb(e);
         use crate::entities::dimension::DimensionTess;
@@ -904,7 +792,7 @@ pub(crate) fn tessellate_entity(
 
     // ── Table baked-block fast path ─────────────────────────────────────────
     //
-    // AutoCAD bakes a Table's final rendered geometry (cell text, gridlines,
+    // A table may store final rendered geometry (cell text, gridlines,
     // fill) into a per-instance block (usually `*T###`) referenced through
     // `table.block_record_handle`. The block's text uses the *displayed*
     // height; synthesising cells from `self.rows + TableStyle` instead would

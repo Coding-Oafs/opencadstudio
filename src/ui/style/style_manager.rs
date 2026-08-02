@@ -10,7 +10,7 @@
 use crate::app::{Message, StyleKind};
 use iced::widget::button::{Status, Style};
 use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{Background, Border, Element, Theme};
+use iced::{Background, Border, Element, Length, Theme};
 use crate::t;
 use std::borrow::Cow;
 
@@ -45,6 +45,9 @@ pub struct Scaffold<'a, 'b> {
     pub on_set_current: Message,
     /// "Apply" action (right side, primary). Every manager has one.
     pub on_apply: Message,
+    /// Referenced styles may be copied but not changed, renamed, deleted, or
+    /// made current.
+    pub read_only: bool,
     pub editor: Element<'a, Message>,
 }
 
@@ -55,10 +58,10 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
     let bar = row![
         tb_button(t!("New"), s.on_new, false),
         tb_button(t!("Copy"), s.on_copy, false),
-        tb_button(t!("Delete"), s.on_delete, false),
+        tb_button_enabled(t!("Delete"), s.on_delete, false, !s.read_only),
         Space::new().width(width),
-        tb_button(t!("Set Current"), s.on_set_current, false),
-        tb_button(t!("Apply"), s.on_apply, true),
+        tb_button_enabled(t!("Set Current"), s.on_set_current, false, !s.read_only),
+        tb_button_enabled(t!("Apply"), s.on_apply, true, !s.read_only),
     ]
     .spacing(4)
     .align_y(iced::Center);
@@ -87,6 +90,7 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
                 (s.on_select)(name.clone()),
                 s.rename_active,
                 s.rename_buf,
+                !(s.read_only && is_sel),
             )
         })
         .collect();
@@ -137,6 +141,102 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
         .into()
 }
 
+pub struct EditorTab {
+    pub label: Cow<'static, str>,
+    pub active: bool,
+    pub on_press: Message,
+}
+
+pub struct EditorComparison {
+    pub selected: String,
+    pub options: Vec<String>,
+    pub summary: String,
+    pub on_select: fn(String) -> Message,
+}
+
+/// Shared right-hand editor composition used by every named style manager.
+/// The preview stays visible while the active property page scrolls.
+pub struct EditorShell<'a> {
+    pub sizing: crate::ui::modal::ModalSizing,
+    pub selected: String,
+    pub status: Cow<'static, str>,
+    pub preview: Element<'a, Message>,
+    pub comparison: Option<EditorComparison>,
+    pub tabs: Vec<EditorTab>,
+    pub content: Element<'a, Message>,
+}
+
+pub fn editor_shell<'a>(shell: EditorShell<'a>) -> Element<'a, Message> {
+    let tabs: Vec<Element<'a, Message>> = shell
+        .tabs
+        .into_iter()
+        .map(|tab| {
+            button(text(tab.label).size(11))
+                .on_press(tab.on_press)
+                .style(tab_button_style(tab.active))
+                .padding([4, 10])
+                .into()
+        })
+        .collect();
+    let comparison: Element<'a, Message> = match shell.comparison {
+        Some(comparison) if !comparison.options.is_empty() => row![
+            text(t!("Compare with")).size(10).style(muted_text_style),
+            iced::widget::pick_list(
+                Some(comparison.selected),
+                comparison.options,
+                |value| value.to_string(),
+            )
+            .on_select(comparison.on_select)
+            .text_size(11)
+            .width(150),
+            text(comparison.summary).size(10).style(muted_text_style),
+        ]
+        .spacing(8)
+        .align_y(iced::Center)
+        .into(),
+        _ => Space::new().height(0).into(),
+    };
+    let preview = container(shell.preview)
+        .width(Length::Fill)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.weak.color)),
+            border: Border {
+                color: theme.palette().background.neutral.color,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        });
+    container(
+        column![
+            row![
+                text(shell.selected).size(13).style(primary_text_style),
+                Space::new().width(Length::Fill),
+                text(shell.status).size(10).style(muted_text_style),
+            ]
+            .align_y(iced::Center),
+            preview,
+            comparison,
+            row(tabs).spacing(2),
+            hdivider(Length::Fill),
+            scrollable(container(shell.content).padding([12, 12]).width(Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ]
+        .spacing(6)
+        .height(shell.sizing.height),
+    )
+    .height(shell.sizing.height)
+    .width(Length::Fill)
+    .padding(iced::Padding {
+        top: 12.0,
+        right: 0.0,
+        bottom: 12.0,
+        left: 0.0,
+    })
+    .into()
+}
+
 // ── Shared chrome ──────────────────────────────────────────────────────────
 
 pub(crate) fn tb_button(
@@ -152,10 +252,55 @@ pub(crate) fn tb_button(
         .into()
 }
 
+pub(crate) fn tb_button_enabled(
+    label: impl Into<Cow<'static, str>>,
+    msg: Message,
+    accent: bool,
+    enabled: bool,
+) -> Element<'static, Message> {
+    let pad = if accent { [4, 14] } else { [4, 10] };
+    let button = button(text(label.into()).size(11))
+        .style(btn_s(accent))
+        .padding(pad);
+    if enabled {
+        button.on_press(msg).into()
+    } else {
+        button.into()
+    }
+}
+
+fn tab_button_style(active: bool) -> impl Fn(&Theme, Status) -> Style {
+    move |theme: &Theme, status| {
+        let palette = theme.palette();
+        let pair = match (active, status) {
+            (true, _) => palette.primary.strong,
+            (false, Status::Hovered | Status::Pressed) => palette.background.strong,
+            _ => palette.background.weak,
+        };
+        Style {
+            background: Some(Background::Color(pair.color)),
+            text_color: pair.text,
+            border: Border {
+                color: palette.background.neutral.color,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+fn primary_text_style(theme: &Theme) -> iced::widget::text::Style {
+    iced::widget::text::Style {
+        color: Some(theme.palette().primary.base.color),
+    }
+}
+
 fn btn_s(accent: bool) -> impl Fn(&Theme, Status) -> Style {
     move |theme: &Theme, st| {
         let palette = theme.palette();
         let pair = match (accent, st) {
+            (_, Status::Disabled) => palette.background.weak,
             (true, Status::Hovered | Status::Pressed) => palette.primary.strong,
             (false, Status::Hovered | Status::Pressed) => palette.background.strong,
             (true, _) => palette.primary.base,
@@ -163,7 +308,11 @@ fn btn_s(accent: bool) -> impl Fn(&Theme, Status) -> Style {
         };
         Style {
         background: Some(Background::Color(pair.color)),
-        text_color: pair.text,
+        text_color: if st == Status::Disabled {
+            pair.text.scale_alpha(0.45)
+        } else {
+            pair.text
+        },
         border: Border {
             color: palette.background.neutral.color,
             width: 1.0,

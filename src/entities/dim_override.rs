@@ -13,12 +13,79 @@ use acadrust::{CadDocument, Handle};
 
 // DXF group codes of the dimension variables surfaced on the leader panel.
 pub const DIMSCALE: i16 = 40; // overall scale       (real)
+pub const DIMPOST: i16 = 3;
+pub const DIMAPOST: i16 = 4;
 pub const DIMASZ: i16 = 41; // arrow size          (real)
 pub const DIMTAD: i16 = 77; // text vertical pos   (int16)
 pub const DIMCLRD: i16 = 176; // dim line colour     (int16 = ACI index)
 pub const DIMGAP: i16 = 147; // text offset / gap   (real)
 pub const DIMLWD: i16 = 371; // dim line lineweight (int16)
 pub const DIMLDRBLK: i16 = 341; // leader arrow block  (handle)
+pub const DIMEXO: i16 = 42;
+pub const DIMDLI: i16 = 43;
+pub const DIMEXE: i16 = 44;
+pub const DIMRND: i16 = 45;
+pub const DIMDLE: i16 = 46;
+pub const DIMTP: i16 = 47;
+pub const DIMTM: i16 = 48;
+pub const DIMFXL: i16 = 49;
+pub const DIMJOGANG: i16 = 50;
+pub const DIMTOL: i16 = 71;
+pub const DIMLIM: i16 = 72;
+pub const DIMTIH: i16 = 73;
+pub const DIMTOH: i16 = 74;
+pub const DIMSE1: i16 = 75;
+pub const DIMSE2: i16 = 76;
+pub const DIMZIN: i16 = 78;
+pub const DIMAZIN: i16 = 79;
+pub const DIMARCSYM: i16 = 90;
+pub const DIMTXT: i16 = 140;
+pub const DIMCEN: i16 = 141;
+pub const DIMTSZ: i16 = 142;
+pub const DIMALTF: i16 = 143;
+pub const DIMLFAC: i16 = 144;
+pub const DIMTVP: i16 = 145;
+pub const DIMTFAC: i16 = 146;
+pub const DIMALTRND: i16 = 148;
+pub const DIMALT: i16 = 170;
+pub const DIMALTD: i16 = 171;
+pub const DIMTOFL: i16 = 172;
+pub const DIMSAH: i16 = 173;
+pub const DIMTIX: i16 = 174;
+pub const DIMSOXD: i16 = 175;
+pub const DIMCLRE: i16 = 177;
+pub const DIMCLRT: i16 = 178;
+pub const DIMADEC: i16 = 179;
+pub const DIMDEC: i16 = 271;
+pub const DIMTDEC: i16 = 272;
+pub const DIMALTU: i16 = 273;
+pub const DIMALTTD: i16 = 274;
+pub const DIMAUNIT: i16 = 275;
+pub const DIMFRAC: i16 = 276;
+pub const DIMLUNIT: i16 = 277;
+pub const DIMDSEP: i16 = 278;
+pub const DIMTMOVE: i16 = 279;
+pub const DIMJUST: i16 = 280;
+pub const DIMSD1: i16 = 281;
+pub const DIMSD2: i16 = 282;
+pub const DIMTOLJ: i16 = 283;
+pub const DIMTZIN: i16 = 284;
+pub const DIMALTZ: i16 = 285;
+pub const DIMALTTZ: i16 = 286;
+pub const DIMUPT: i16 = 288;
+pub const DIMATFIT: i16 = 289;
+pub const DIMFXLON: i16 = 290;
+pub const DIMTFILL: i16 = 69;
+pub const DIMTFILLCLR: i16 = 70;
+pub const DIMTXTDIRECTION: i16 = 295;
+pub const DIMTXSTY: i16 = 340;
+pub const DIMBLK: i16 = 342;
+pub const DIMBLK1: i16 = 343;
+pub const DIMBLK2: i16 = 344;
+pub const DIMLTYPE: i16 = 345;
+pub const DIMLTEX1: i16 = 346;
+pub const DIMLTEX2: i16 = 347;
+pub const DIMLWE: i16 = 372;
 
 /// Every (code, value) override present in the `ACAD`/`DSTYLE` record.
 pub fn pairs(xd: &ExtendedData) -> Vec<(i16, XDataValue)> {
@@ -86,6 +153,16 @@ pub fn handle(xd: &ExtendedData, code: i16) -> Option<Handle> {
         .find(|(c, _)| *c == code)
         .and_then(|(_, v)| match v {
             XDataValue::Handle(h) => Some(h),
+            _ => None,
+        })
+}
+
+pub fn string(xd: &ExtendedData, code: i16) -> Option<String> {
+    pairs(xd)
+        .into_iter()
+        .find(|(c, _)| *c == code)
+        .and_then(|(_, value)| match value {
+            XDataValue::String(text) => Some(text),
             _ => None,
         })
 }

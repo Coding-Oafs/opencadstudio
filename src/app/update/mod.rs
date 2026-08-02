@@ -5408,11 +5408,25 @@ impl OpenCADStudio {
                 self.load_textstyle_bufs(i);
                 Task::none()
             }
+            Message::TextStyleDialogTab(tab) => {
+                self.textstyle_tab = tab;
+                Task::none()
+            }
+            Message::TextStyleDialogCompare(name) => {
+                self.textstyle_compare = name;
+                Task::none()
+            }
             Message::TextStyleDialogSetCurrent => {
                 // Staged: persists on Apply.
                 let i = self.active_tab;
                 let name = self.textstyle_selected.clone();
-                if self.tabs[i].scene.document.text_styles.get(&name).is_some() {
+                if self.tabs[i]
+                    .scene
+                    .document
+                    .text_styles
+                    .get(&name)
+                    .is_some_and(|style| !style.xref_dependent)
+                {
                     self.tabs[i].scene.document.header.current_text_style_name = name.clone();
                     self.sync_ribbon_styles();
                     self.command_line
@@ -5468,9 +5482,13 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 let name = self.textstyle_selected.clone();
                 if let Some(s) = self.tabs[i].scene.document.text_styles.get_mut(&name) {
+                    if s.xref_dependent {
+                        return Task::none();
+                    }
                     match field {
                         "backward" => s.flags.backward = !s.flags.backward,
                         "upside_down" => s.flags.upside_down = !s.flags.upside_down,
+                        "vertical" => s.is_vertical = !s.is_vertical,
                         "annotative" => s.annotative = !s.annotative,
                         _ => {}
                     }
@@ -5481,8 +5499,17 @@ impl OpenCADStudio {
             Message::TextStyleFontPick(font_file) => {
                 // Staged: update the buffer + live style; persist on Apply.
                 let i = self.active_tab;
-                self.textstyle_font = font_file.clone();
                 let name = self.textstyle_selected.clone();
+                if self.tabs[i]
+                    .scene
+                    .document
+                    .text_styles
+                    .get(&name)
+                    .is_some_and(|style| style.xref_dependent)
+                {
+                    return Task::none();
+                }
+                self.textstyle_font = font_file.clone();
                 if let Some(s) = self.tabs[i].scene.document.text_styles.get_mut(&name) {
                     s.font_file = font_file;
                 }
@@ -5516,10 +5543,21 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::TableStyleDialogSelect(name) => {
+                for row in 0..3 {
+                    let _ = self.on_table_style_cell_apply(row);
+                }
                 self.stage_tablestyle_bufs();
                 self.tablestyle_selected = name;
                 let i = self.active_tab;
                 self.load_tablestyle_bufs(i);
+                Task::none()
+            }
+            Message::TableStyleDialogTab(tab) => {
+                self.tablestyle_tab = tab;
+                Task::none()
+            }
+            Message::TableStyleDialogCompare(name) => {
+                self.tablestyle_compare = name;
                 Task::none()
             }
 
@@ -5534,6 +5572,9 @@ impl OpenCADStudio {
             }
 
             Message::TableStyleApply => {
+                for row in 0..3 {
+                    let _ = self.on_table_style_cell_apply(row);
+                }
                 self.stage_tablestyle_bufs();
                 self.style_stage_commit();
                 Task::none()
@@ -5728,7 +5769,18 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::MlStyleDialogSelect(name) => {
+                self.stage_mlstyle_bufs();
                 self.mlstyle_selected = name;
+                let i = self.active_tab;
+                self.load_mlstyle_bufs(i);
+                Task::none()
+            }
+            Message::MlStyleDialogTab(tab) => {
+                self.mlstyle_tab = tab;
+                Task::none()
+            }
+            Message::MlStyleDialogCompare(name) => {
+                self.mlstyle_compare = name;
                 Task::none()
             }
             Message::MlStyleDialogSetCurrent => {
@@ -5749,13 +5801,8 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
-            // Placeholder so the Multiline manager has the same Set Current +
-            // Apply pair as every other style manager. The editor is currently
-            // read-only, so there is nothing to apply yet — wire this up when
-            // editable MLineStyle properties land.
             Message::MlStyleApply => {
-                // Multiline styles have no editable properties yet; Apply still
-                // commits any staged structural / current-style changes.
+                self.stage_mlstyle_bufs();
                 self.style_stage_commit();
                 Task::none()
             }
@@ -5771,6 +5818,66 @@ impl OpenCADStudio {
                 self.style_delete(crate::app::StyleKind::MLine);
                 Task::none()
             }
+            Message::MlStyleEdit { field, value } => {
+                match field {
+                    "description" => self.mln_description = value,
+                    "start_angle" => self.mln_start_angle = value,
+                    "end_angle" => self.mln_end_angle = value,
+                    "fill_color" => self.mln_fill_color = value,
+                    _ => {}
+                }
+                self.stage_mlstyle_bufs();
+                Task::none()
+            }
+            Message::MlStyleToggle(field) => {
+                let i = self.active_tab;
+                if let Some(style) = self.mlstyle_mut(i) {
+                    match field {
+                        "fill" => style.flags.fill_on = !style.flags.fill_on,
+                        "joints" => style.flags.display_joints = !style.flags.display_joints,
+                        "start_square" => style.flags.start_square_cap = !style.flags.start_square_cap,
+                        "start_inner" => style.flags.start_inner_arcs_cap = !style.flags.start_inner_arcs_cap,
+                        "start_round" => style.flags.start_round_cap = !style.flags.start_round_cap,
+                        "end_square" => style.flags.end_square_cap = !style.flags.end_square_cap,
+                        "end_inner" => style.flags.end_inner_arcs_cap = !style.flags.end_inner_arcs_cap,
+                        "end_round" => style.flags.end_round_cap = !style.flags.end_round_cap,
+                        _ => {}
+                    }
+                }
+                Task::none()
+            }
+            Message::MlStyleElementEdit { index, field, value } => {
+                if let Some(element) = self.mln_elements.get_mut(index) {
+                    match field {
+                        "offset" => element[0] = value,
+                        "color" => element[1] = value,
+                        "linetype" => element[2] = value,
+                        _ => {}
+                    }
+                }
+                self.stage_mlstyle_bufs();
+                Task::none()
+            }
+            Message::MlStyleElementAdd => {
+                let i = self.active_tab;
+                if let Some(style) = self.mlstyle_mut(i) {
+                    style
+                        .elements
+                        .push(acadrust::objects::MLineStyleElement::default());
+                }
+                self.load_mlstyle_bufs(i);
+                Task::none()
+            }
+            Message::MlStyleElementDelete(index) => {
+                let i = self.active_tab;
+                if let Some(style) = self.mlstyle_mut(i) {
+                    if style.elements.len() > 1 && index < style.elements.len() {
+                        style.elements.remove(index);
+                    }
+                }
+                self.load_mlstyle_bufs(i);
+                Task::none()
+            }
 
             // ── MLeaderStyle Dialog ───────────────────────────────────────────
             Message::MLeaderStyleDialogOpen => self.on_mleader_style_dialog_open(),
@@ -5783,6 +5890,14 @@ impl OpenCADStudio {
                 self.mleaderstyle_selected = name;
                 let i = self.active_tab;
                 self.load_mleaderstyle_bufs(i);
+                Task::none()
+            }
+            Message::MLeaderStyleDialogTab(tab) => {
+                self.mleaderstyle_tab = tab;
+                Task::none()
+            }
+            Message::MLeaderStyleDialogCompare(name) => {
+                self.mleaderstyle_compare = name;
                 Task::none()
             }
             Message::MLeaderStyleDialogSetCurrent => self.on_mleader_style_dialog_set_current(),
@@ -5864,6 +5979,10 @@ impl OpenCADStudio {
                 self.dimstyle_tab = tab;
                 Task::none()
             }
+            Message::DimStyleDialogCompare(name) => {
+                self.dimstyle_compare = name;
+                Task::none()
+            }
             Message::DimStyleDialogNew => {
                 self.style_new(crate::app::StyleKind::Dim);
                 Task::none()
@@ -5875,6 +5994,19 @@ impl OpenCADStudio {
             Message::DimStyleDialogSetCurrent => {
                 // Staged: persists on Apply.
                 let i = self.active_tab;
+                let read_only = self.tabs[i]
+                    .scene
+                    .document
+                    .dim_styles
+                    .get(&self.dimstyle_selected)
+                    .is_some_and(|style| {
+                        style.xref_reference
+                            || style.xref_dependent
+                            || !style.xref_handle.is_null()
+                    });
+                if read_only {
+                    return Task::none();
+                }
                 self.tabs[i].scene.document.header.current_dimstyle_name =
                     self.dimstyle_selected.clone();
                 self.sync_ribbon_styles();
@@ -5894,7 +6026,75 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::DsToggle(field) => {
+                let separate_arrows = field == crate::app::DsField::Dimsah;
                 self.apply_ds_toggle(field);
+                if separate_arrows && self.ds_dimsah {
+                    let i = self.active_tab;
+                    if let Some(style) = self.tabs[i]
+                        .scene
+                        .document
+                        .dim_styles
+                        .get_mut(&self.dimstyle_selected)
+                    {
+                        if style.dimblk1.is_null() {
+                            style.dimblk1 = style.dimblk;
+                        }
+                        if style.dimblk2.is_null() {
+                            style.dimblk2 = style.dimblk1;
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::DsToleranceMode(mode) => {
+                self.ds_dimlim = mode == "limits";
+                self.ds_dimtol = matches!(mode.as_str(), "symmetrical" | "deviation");
+                if mode == "symmetrical" {
+                    self.ds_dimtm = self.ds_dimtp.clone();
+                }
+                let gap = self.ds_dimgap.trim().parse::<f64>().unwrap_or(0.625).abs();
+                self.ds_dimgap = if mode == "basic" {
+                    format!("-{}", gap.max(f64::EPSILON))
+                } else {
+                    format!("{}", gap)
+                };
+                Task::none()
+            }
+            Message::DsZeroBase(field, base) => {
+                let current = match &field {
+                    crate::app::DsField::Dimzin => &self.ds_dimzin,
+                    crate::app::DsField::Dimaltz => &self.ds_dimaltz,
+                    crate::app::DsField::Dimalttz => &self.ds_dimalttz,
+                    crate::app::DsField::Dimtzin => &self.ds_dimtzin,
+                    _ => return Task::none(),
+                }
+                .trim()
+                .parse::<i16>()
+                .unwrap_or(0);
+                self.apply_ds_edit(field, ((current & !3) | (base & 3)).to_string());
+                Task::none()
+            }
+            Message::DsZeroFlag(field, bit) => {
+                let current = match &field {
+                    crate::app::DsField::Dimzin => &self.ds_dimzin,
+                    crate::app::DsField::Dimaltz => &self.ds_dimaltz,
+                    crate::app::DsField::Dimalttz => &self.ds_dimalttz,
+                    crate::app::DsField::Dimtzin => &self.ds_dimtzin,
+                    _ => return Task::none(),
+                }
+                .trim()
+                .parse::<i16>()
+                .unwrap_or(0);
+                self.apply_ds_edit(field, (current ^ bit).to_string());
+                Task::none()
+            }
+            Message::DsCenterMarkMode(mode) => {
+                let size = self.ds_dimcen.trim().parse::<f64>().unwrap_or(0.09).abs();
+                self.ds_dimcen = match mode.as_str() {
+                    "mark" => size.max(f64::EPSILON).to_string(),
+                    "lines" => format!("-{}", size.max(f64::EPSILON)),
+                    _ => "0".to_string(),
+                };
                 Task::none()
             }
             Message::DsColorMore(field) => {

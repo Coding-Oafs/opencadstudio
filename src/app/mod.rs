@@ -670,9 +670,18 @@ pub(super) struct OpenCADStudio {
 
     // ── MLineStyle Dialog ─────────────────────────────────────────────────
     mlstyle_selected: String,
+    mlstyle_tab: u8,
+    mlstyle_compare: String,
+    mln_description: String,
+    mln_start_angle: String,
+    mln_end_angle: String,
+    mln_fill_color: String,
+    mln_elements: Vec<[String; 3]>,
 
     // ── MLeaderStyle Dialog ───────────────────────────────────────────────
     mleaderstyle_selected: String,
+    mleaderstyle_tab: u8,
+    mleaderstyle_compare: String,
     /// Colour field whose expanded palette is open (line/text/block).
     mls_color_open: Option<&'static str>,
     mls_landing_distance: String,
@@ -697,6 +706,8 @@ pub(super) struct OpenCADStudio {
 
     // ── TableStyle Dialog ─────────────────────────────────────────────────
     tablestyle_selected: String,
+    tablestyle_tab: u8,
+    tablestyle_compare: String,
     /// Edit buffers for the table style's general margins.
     ts_hmargin: String,
     ts_vmargin: String,
@@ -732,6 +743,8 @@ pub(super) struct OpenCADStudio {
 
     // ── TextStyle Font Browser ────────────────────────────────────────────
     textstyle_selected: String,
+    textstyle_tab: u8,
+    textstyle_compare: String,
     /// Edit buffer for font file name.
     textstyle_font: String,
     /// Edit buffer for width factor.
@@ -868,8 +881,10 @@ pub(super) struct OpenCADStudio {
     dimstyle_selected: String,
     /// Which colour field currently has its expanded palette open (if any).
     ds_color_open: Option<DsField>,
-    /// Active tab: 0=Lines, 1=Arrows, 2=Text, 3=Scale/Units, 4=Tolerances.
+    /// Active property group in the dimension style manager.
     dimstyle_tab: u8,
+    /// Style used by the manager's comparison summary.
+    dimstyle_compare: String,
     // Edit buffers (strings while typing):
     ds_dimdle: String,
     ds_dimdli: String,
@@ -2438,6 +2453,8 @@ pub enum Message {
     #[allow(dead_code)]
     TextStyleDialogClose,
     TextStyleDialogSelect(String),
+    TextStyleDialogTab(u8),
+    TextStyleDialogCompare(String),
     TextStyleDialogSetCurrent,
     TextStyleDialogNew,
     TextStyleDialogCopy,
@@ -2465,6 +2482,8 @@ pub enum Message {
     #[allow(dead_code)]
     TableStyleDialogClose,
     TableStyleDialogSelect(String),
+    TableStyleDialogTab(u8),
+    TableStyleDialogCompare(String),
     TableStyleDialogNew,
     TableStyleDialogCopy,
     TableStyleDialogDelete,
@@ -2523,16 +2542,32 @@ pub enum Message {
     #[allow(dead_code)]
     MlStyleDialogClose,
     MlStyleDialogSelect(String),
+    MlStyleDialogTab(u8),
+    MlStyleDialogCompare(String),
     MlStyleDialogSetCurrent,
     MlStyleApply,
     MlStyleDialogNew,
     MlStyleDialogCopy,
     MlStyleDialogDelete,
+    MlStyleEdit {
+        field: &'static str,
+        value: String,
+    },
+    MlStyleToggle(&'static str),
+    MlStyleElementEdit {
+        index: usize,
+        field: &'static str,
+        value: String,
+    },
+    MlStyleElementAdd,
+    MlStyleElementDelete(usize),
     // ── MLeaderStyle Dialog ───────────────────────────────────────────────
     MLeaderStyleDialogOpen,
     #[allow(dead_code)]
     MLeaderStyleDialogClose,
     MLeaderStyleDialogSelect(String),
+    MLeaderStyleDialogTab(u8),
+    MLeaderStyleDialogCompare(String),
     MLeaderStyleDialogSetCurrent,
     MLeaderStyleDialogNew,
     MLeaderStyleDialogCopy,
@@ -2565,6 +2600,8 @@ pub enum Message {
     DimStyleDialogSelect(String),
     /// Switch the active tab.
     DimStyleDialogTab(u8),
+    /// Change the style used by the comparison summary.
+    DimStyleDialogCompare(String),
     /// Create a new empty style (prompts via command line).
     DimStyleDialogNew,
     DimStyleDialogCopy,
@@ -2575,6 +2612,14 @@ pub enum Message {
     // Field edit messages:
     DsEdit(DsField, String),
     DsToggle(DsField),
+    /// Select the mutually-exclusive tolerance presentation.
+    DsToleranceMode(String),
+    /// Change the feet/inches mode in a zero-suppression bit field.
+    DsZeroBase(DsField, i16),
+    /// Toggle leading/trailing suppression in a zero-suppression bit field.
+    DsZeroFlag(DsField, i16),
+    /// Select no center mark, a mark, or centerlines.
+    DsCenterMarkMode(String),
     /// Toggle the expanded colour palette for a DimStyle colour field.
     DsColorMore(DsField),
     /// Open the `iced_aw` colour picker for a field and its current colour.
@@ -2887,6 +2932,8 @@ impl OpenCADStudio {
             style_rename_buf: String::new(),
             style_stage: None,
             textstyle_selected: "Standard".to_string(),
+            textstyle_tab: 0,
+            textstyle_compare: String::new(),
             textstyle_font: String::new(),
             textstyle_width: "1.0".to_string(),
             textstyle_oblique: "0.0".to_string(),
@@ -2895,6 +2942,8 @@ impl OpenCADStudio {
             textstyle_ttf: String::new(),
             // TableStyle dialog
             tablestyle_selected: "Standard".to_string(),
+            tablestyle_tab: 0,
+            tablestyle_compare: String::new(),
             ts_hmargin: "1.5".to_string(),
             ts_vmargin: "1.5".to_string(),
             ts_description: String::new(),
@@ -2911,8 +2960,17 @@ impl OpenCADStudio {
             ts_border_spacing: Default::default(),
             // MLineStyle dialog
             mlstyle_selected: "Standard".to_string(),
+            mlstyle_tab: 0,
+            mlstyle_compare: String::new(),
+            mln_description: String::new(),
+            mln_start_angle: "90".to_string(),
+            mln_end_angle: "90".to_string(),
+            mln_fill_color: "256".to_string(),
+            mln_elements: Vec::new(),
             // MLeaderStyle dialog
             mleaderstyle_selected: "Standard".to_string(),
+            mleaderstyle_tab: 0,
+            mleaderstyle_compare: String::new(),
             mls_color_open: None,
             mls_landing_distance: String::new(),
             mls_landing_gap: String::new(),
@@ -2937,6 +2995,7 @@ impl OpenCADStudio {
             dimstyle_selected: "Standard".to_string(),
             ds_color_open: None,
             dimstyle_tab: 0,
+            dimstyle_compare: String::new(),
             ds_dimdle: "0".to_string(),
             ds_dimdli: "3.75".to_string(),
             ds_dimgap: "0.625".to_string(),
