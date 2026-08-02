@@ -156,11 +156,8 @@ pub fn tessellate(
     // oversized text). Annotative-ness is resolved centrally from the entity's
     // per-object context, legacy XDATA, or annotative style (see
     // `scene::annotative::is_annotative`) so the bake and the panel agree.
-    let anno_scale = if crate::scene::annotative::is_annotative(document, entity) {
-        anno_scale
-    } else {
-        1.0
-    };
+    let anno_scale =
+        crate::scene::annotative::effective_annotation_scale(document, entity, anno_scale);
 
     // A HATCH is drawn as a fill by the hatch pipeline and highlighted via a
     // fill tint when selected (issue #71), so it carries no boundary outline in

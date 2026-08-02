@@ -377,6 +377,80 @@ pub fn active_object_context(
     default.or(first)
 }
 
+/// Resolve the display multiplier for an entity at the current annotation
+/// scale. A per-object context stores geometry relative to its native/default
+/// representation, so its current multiplier is the active scale's drawing
+/// factor divided by the default scale's drawing factor. Falling back preserves
+/// the legacy whole-drawing multiplier for annotative objects without a usable
+/// default context (including style-only DIMENSION and MULTILEADER entities).
+pub fn effective_annotation_scale(
+    doc: &CadDocument,
+    entity: &EntityType,
+    fallback: f32,
+) -> f32 {
+    if !is_annotative(doc, entity) {
+        return 1.0;
+    }
+
+    // Unlike MTEXT / DIMENSION contexts, an MLEADER context carries its
+    // already-scaled text height and overall scale factor. Keep the text
+    // height as stored; make `ml.scale_factor * anno_scale` resolve to the
+    // active context's scale factor for arrows, doglegs, and fallback text.
+    if let EntityType::MultiLeader(mleader) = entity {
+        let Some(active) = active_object_context(doc, entity.common().handle) else {
+            return fallback;
+        };
+        let ObjectContextKind::MLeader(context) = &active.kind else {
+            return fallback;
+        };
+        let base = mleader.scale_factor;
+        if base.abs() <= 1.0e-12 {
+            return fallback;
+        }
+        let relative = context.scale_factor / base;
+        return if relative.is_finite() && relative > 0.0 {
+            relative as f32
+        } else {
+            fallback
+        };
+    }
+
+    let Some(coll_h) = annotation_scales_dict(doc, entity.common().handle) else {
+        return fallback;
+    };
+    let Some(coll) = as_dict(doc, coll_h) else {
+        return fallback;
+    };
+
+    let active = active_object_context(doc, entity.common().handle);
+    let native = coll.entries.iter().find_map(|(_, leaf_h)| {
+        match doc.objects.get(leaf_h) {
+            Some(ObjectType::ObjectContextData(leaf)) if leaf.is_default => Some(leaf),
+            _ => None,
+        }
+    });
+    let (Some(active), Some(native)) = (active, native) else {
+        return fallback;
+    };
+    let (Some(ObjectType::Scale(active_scale)), Some(ObjectType::Scale(native_scale))) = (
+        doc.objects.get(&active.scale),
+        doc.objects.get(&native.scale),
+    ) else {
+        return fallback;
+    };
+
+    let native_factor = native_scale.inverse_factor();
+    if native_factor.abs() <= 1.0e-12 {
+        return fallback;
+    }
+    let relative = active_scale.inverse_factor() / native_factor;
+    if relative.is_finite() && relative > 0.0 {
+        relative as f32
+    } else {
+        fallback
+    }
+}
+
 fn text_horizontal(value: i16) -> acadrust::entities::TextHorizontalAlignment {
     use acadrust::entities::TextHorizontalAlignment;
     match value {
@@ -1030,6 +1104,17 @@ fn has_context_manager(doc: &CadDocument, common: &EntityCommon) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a MULTILEADER participates in annotation scaling through its
+/// per-object context, entity flag, or assigned annotative style.
+pub fn mleader_is_annotative(
+    doc: &CadDocument,
+    mleader: &acadrust::entities::MultiLeader,
+) -> bool {
+    has_context_manager(doc, &mleader.common)
+        || mleader.enable_annotation_scale
+        || mleader_style_annotative(doc, mleader.style_handle)
+}
+
 /// Whether an entity participates in annotation scaling.
 pub fn is_annotative(doc: &CadDocument, entity: &EntityType) -> bool {
     // Per-object annotation context (works regardless of style).
@@ -1049,9 +1134,7 @@ pub fn is_annotative(doc: &CadDocument, entity: &EntityType) -> bool {
         EntityType::MText(t) => t.is_annotative,
         EntityType::Dimension(d) => dim_style_annotative(doc, &d.base().style_name),
         EntityType::Leader(l) => dim_style_annotative(doc, &l.dimension_style),
-        EntityType::MultiLeader(ml) => {
-            ml.enable_annotation_scale || mleader_style_annotative(doc, ml.style_handle)
-        }
+        EntityType::MultiLeader(ml) => mleader_is_annotative(doc, ml),
         EntityType::Table(t) => table_style_annotative(doc, t.table_style_handle),
         _ => false,
     }

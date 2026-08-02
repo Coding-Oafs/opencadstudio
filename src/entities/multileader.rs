@@ -1320,7 +1320,7 @@ impl MultiLeaderTess for MultiLeader {
         // ml.scale_factor is always applied; anno_scale is only applied when the
         // multileader is marked annotative.
         let effective_scale = (ml.scale_factor as f32)
-            * if ml.enable_annotation_scale {
+            * if crate::scene::annotative::mleader_is_annotative(document, ml) {
                 anno_scale
             } else {
                 1.0

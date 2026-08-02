@@ -361,6 +361,20 @@ pub(crate) fn tessellate_entity(
     let e = contextual.as_ref();
     let h = e.common().handle;
     let sel = selected.contains(&h);
+    // Per-object annotation contexts store each representation relative to the
+    // native/default scale. Resolve that ratio once before TEXT/MTEXT,
+    // DIMENSION, and MULTILEADER reach their independent tessellation paths.
+    let anno_scale = if matches!(
+        e,
+        EntityType::Text(_)
+            | EntityType::MText(_)
+            | EntityType::Dimension(_)
+            | EntityType::MultiLeader(_)
+    ) {
+        crate::scene::annotative::effective_annotation_scale(document, e, anno_scale)
+    } else {
+        anno_scale
+    };
 
     // Frustum + LOD cull for non-Insert, non-Viewport entities. Insert is
     // handled separately (its WCS bbox depends on the block defn AABB ×
