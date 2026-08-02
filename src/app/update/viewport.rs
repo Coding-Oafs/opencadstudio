@@ -942,8 +942,10 @@ impl OpenCADStudio {
                 bounds,
                 self.snapper.osnap_radius_px,
             );
-            // Grip drag has no single rubber-band origin for a perp foot.
-            self.snapper.from_point = None;
+            // The engaged grip is the rubber-band origin. Perpendicular
+            // snapping must drop its foot from this point, including when a
+            // hot-grip set is moved by the same drag vector.
+            self.snapper.from_point = Some(grip.origin_world.as_vec3());
             let (go, gr) = self.tabs[i].ucs_grid_basis();
             // `raw` is already model space (viewport camera or paper→model),
             // and the wires are model space, so the snap result is model.
@@ -976,7 +978,7 @@ impl OpenCADStudio {
             }
             if let Some(dir) = self.axis_lock_dir {
                 snapped = axis_lock_apply(snapped, grip.origin_world, dir);
-            } else if snap_hit.is_none() {
+            } else if !snap_hit.is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid) {
                 let base = grip.origin_world;
                 let ucs_xf = self.tabs[i].ucs_xform();
                 if self.ortho_mode {
