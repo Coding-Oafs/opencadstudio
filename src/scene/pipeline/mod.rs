@@ -272,6 +272,7 @@ pub struct Pipeline {
     pub cached_wipeout_source: Option<std::sync::Arc<Vec<HatchModel>>>,
     pub cached_image_source: Option<std::sync::Arc<Vec<ImageModel>>>,
     pub cached_text_source: Option<std::sync::Arc<Vec<text_gpu::TextVertex>>>,
+    pub cached_annotation_highlight_source: Option<std::sync::Arc<Vec<WireModel>>>,
     pub cached_mesh_source: Option<std::sync::Arc<Vec<MeshLodSet>>>,
     pub cached_face3d_source: Option<std::sync::Arc<Vec<WireModel>>>,
     pub cached_face3d_depth_source:
@@ -1694,6 +1695,7 @@ impl Pipeline {
             cached_wipeout_source: None,
             cached_image_source: None,
             cached_text_source: None,
+            cached_annotation_highlight_source: None,
             cached_mesh_source: None,
             cached_face3d_source: None,
             cached_face3d_depth_source: None,
@@ -1785,11 +1787,12 @@ impl Pipeline {
         wires: &[WireModel],
         selected: &rustc_hash::FxHashSet<acadrust::Handle>,
         hover: Option<acadrust::Handle>,
+        annotation_context_wires: &[WireModel],
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         let hover = hover.filter(|h| !selected.contains(h));
-        if selected.is_empty() && hover.is_none() {
+        if selected.is_empty() && hover.is_none() && annotation_context_wires.is_empty() {
             self.gpu_selected_wires = vec![];
             return;
         }
@@ -1817,6 +1820,13 @@ impl Pipeline {
                         hover_wires.push(w);
                     }
                 }
+            }
+        }
+        for wire in annotation_context_wires {
+            if wire.selected {
+                selected_wires.push(wire);
+            } else {
+                hover_wires.push(wire);
             }
         }
         let mut gpu = WireGpu::from_highlight_refs(
@@ -1857,10 +1867,11 @@ impl Pipeline {
         wires: &[WireModel],
         selected: &rustc_hash::FxHashSet<acadrust::Handle>,
         hover: Option<acadrust::Handle>,
+        annotation_context_wires: &[WireModel],
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
         let hover = hover.filter(|h| !selected.contains(h));
-        if selected.is_empty() && hover.is_none() {
+        if selected.is_empty() && hover.is_none() && annotation_context_wires.is_empty() {
             self.text_highlight_vbuf = None;
             self.text_highlight_vcount = 0;
             return;
@@ -1886,6 +1897,19 @@ impl Pipeline {
         }
         if let Some(h) = hover {
             push(h.value(), WireModel::HOVER, wires, &mut out);
+        }
+        for wire in annotation_context_wires {
+            let tint = if wire.selected {
+                WireModel::SELECTED
+            } else {
+                WireModel::HOVER
+            };
+            for vertex in &wire.text_verts {
+                out.push(text_gpu::TextVertex {
+                    color: [tint[0], tint[1], tint[2], vertex.color[3]],
+                    ..*vertex
+                });
+            }
         }
         self.text_highlight_vcount = out.len() as u32;
         self.text_highlight_vbuf = text_gpu::upload_vertices(device, &out);
