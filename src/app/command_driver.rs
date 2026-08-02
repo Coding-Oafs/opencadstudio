@@ -79,6 +79,7 @@ impl OpenCADStudio {
         self.otrack_active = None;
         self.axis_lock_dir = None;
         self.dyn_user_reshaped = false;
+        self.dyn_coord_absolute = false;
         self.grip_hover = None;
         self.grip_popup = None;
         self.grip_pending = None;
@@ -252,6 +253,7 @@ impl OpenCADStudio {
             };
             self.last_point = Some(*point);
             self.dyn_user_reshaped = false;
+            self.dyn_coord_absolute = false;
             self.sync_dyn_fields();
             self.reset_tracking_after_point();
             self.push_ucs_to_cmd(i);

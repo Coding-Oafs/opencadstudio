@@ -267,6 +267,7 @@ impl OpenCADStudio {
         // (The delta is offset-invariant, so only the rotation matters.)
         let xf = self.tabs[i].ucs_xform();
         let d_ucs = xf.vec_to_ucs(w - base);
+        let w_ucs = xf.to_ucs(w);
         let dx = d_ucs.x;
         let dy = d_ucs.y;
         let dz = d_ucs.z;
@@ -319,20 +320,29 @@ impl OpenCADStudio {
         // (see #26 / #35). The live cartesian fallback is the cursor
         // position relative to base; typed values are relative deltas.
         let has_base = self.last_point.is_some();
+        let relative = has_base && !self.dyn_coord_absolute;
         // Relative result: base + the typed UCS-frame offset mapped to world.
         let rel = |off_ucs: glam::DVec3| base + xf.vec_to_wcs(off_ucs);
         match comps.as_slice() {
-            [DynComponent::X, DynComponent::Y] if has_base => {
+            [DynComponent::X, DynComponent::Y] if relative => {
                 Some(rel(glam::DVec3::new(val(0, dx), val(1, dy), 0.0)))
             }
             [DynComponent::X, DynComponent::Y] => {
-                Some(glam::DVec3::new(val(0, w.x), val(1, w.y), base.z))
+                Some(xf.to_wcs(glam::DVec3::new(
+                    val(0, w_ucs.x),
+                    val(1, w_ucs.y),
+                    0.0,
+                )))
             }
-            [DynComponent::X, DynComponent::Y, DynComponent::Z] if has_base => {
+            [DynComponent::X, DynComponent::Y, DynComponent::Z] if relative => {
                 Some(rel(glam::DVec3::new(val(0, dx), val(1, dy), val(2, dz))))
             }
             [DynComponent::X, DynComponent::Y, DynComponent::Z] => {
-                Some(glam::DVec3::new(val(0, w.x), val(1, w.y), val(2, base.z)))
+                Some(xf.to_wcs(glam::DVec3::new(
+                    val(0, w_ucs.x),
+                    val(1, w_ucs.y),
+                    val(2, w_ucs.z),
+                )))
             }
             [DynComponent::Distance, DynComponent::Angle] => {
                 let d = val(0, live_d);
@@ -409,6 +419,54 @@ impl OpenCADStudio {
             // Z, Angle, or any singleton: nothing further to advance to.
             _ => {}
         }
+    }
+
+    /// Whether the current dynamic field set represents a point coordinate
+    /// that can be switched with `@` / `#`.
+    pub(in crate::app) fn dyn_has_coordinate_fields(&self, i: usize) -> bool {
+        use crate::app::document::DynComponent;
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|field| field.component)
+            .collect();
+        comps.iter().any(|component| {
+            matches!(
+                component,
+                DynComponent::X | DynComponent::Y | DynComponent::Z
+            )
+        }) || matches!(
+            comps.as_slice(),
+            [DynComponent::Distance, DynComponent::Angle]
+        )
+    }
+
+    /// Switch the current dynamic point entry between relative (`@`) and
+    /// absolute (`#`) UCS coordinates. Polar fields become cartesian because
+    /// the selected mode applies to coordinate components, not distance/angle.
+    pub(in crate::app) fn dyn_set_coordinate_mode(&mut self, absolute: bool) {
+        use crate::app::document::{DynComponent, DynFieldEntry};
+        let i = self.active_tab;
+        self.dyn_coord_absolute = absolute;
+
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|field| field.component)
+            .collect();
+        if matches!(
+            comps.as_slice(),
+            [DynComponent::Distance, DynComponent::Angle]
+        ) {
+            let first_buffer = self.tabs[i].dyn_fields[0].buffer.clone();
+            let mut x = DynFieldEntry::new(DynComponent::X);
+            x.buffer = first_buffer;
+            self.tabs[i].dyn_fields = vec![x, DynFieldEntry::new(DynComponent::Y)];
+            self.tabs[i].dyn_active = usize::from(self.tabs[i].dyn_fields[0].locked());
+        }
+
+        self.dyn_user_reshaped = true;
+        self.sync_dyn_fields();
     }
 
     /// If dynamic input has at least one locked (typed) field, resolve the
@@ -493,6 +551,7 @@ impl OpenCADStudio {
                         }
                         self.tabs[i].dyn_active = 0;
                         self.dyn_user_reshaped = false;
+                        self.dyn_coord_absolute = false;
                         self.sync_dyn_fields();
                         self.reset_tracking_after_point();
                         self.push_ucs_to_cmd(i);
@@ -555,6 +614,7 @@ impl OpenCADStudio {
         }
         self.last_point = Some(pt);
         self.dyn_user_reshaped = false;
+        self.dyn_coord_absolute = false;
         self.sync_dyn_fields();
         self.reset_tracking_after_point();
         self.push_ucs_to_cmd(i);

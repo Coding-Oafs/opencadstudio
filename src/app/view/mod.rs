@@ -708,6 +708,7 @@ impl OpenCADStudio {
                                 base,
                                 &tab.ucs_xform(),
                                 self.dyn_user_reshaped,
+                                self.dyn_coord_absolute,
                             ),
                         };
                         crate::ui::overlay::DynBox {

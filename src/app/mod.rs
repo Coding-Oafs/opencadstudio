@@ -416,6 +416,11 @@ pub(super) struct OpenCADStudio {
     /// reverting to the command-default when `has_base` flips. Cleared
     /// on point commit / command start. See #35.
     dyn_user_reshaped: bool,
+    /// Dynamic cartesian entry mode for the current point. `false` is the
+    /// usual relative-to-last-point mode; typing `#` selects absolute UCS
+    /// coordinates and typing `@` selects relative coordinates again.
+    /// Cleared after a point is committed or a new command starts.
+    dyn_coord_absolute: bool,
     /// Grip the cursor is currently dwelling on. Set when the cursor
     /// stops within `GRIP_THRESHOLD_PX` of a grip; cleared when it
     /// drifts away. The instant lets `ViewportMove` detect when the
@@ -2730,6 +2735,7 @@ impl OpenCADStudio {
             ucs_grip_drag: None,
             pane_move_from: None,
             dyn_user_reshaped: false,
+            dyn_coord_absolute: false,
             grip_hover: None,
             grip_popup: None,
             grip_pending: None,

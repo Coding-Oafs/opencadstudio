@@ -185,11 +185,13 @@ pub(super) fn dyn_component_value(
     base: Option<glam::DVec3>,
     xf: &super::super::helpers::UcsXform,
     comma_cartesian: bool,
+    absolute: bool,
 ) -> String {
     if let Some(b) = &f.buffer {
         return b.clone();
     }
     let b = base.unwrap_or(glam::DVec3::ZERO);
+    let p = xf.to_ucs(w);
     // Relative deltas and the polar angle read in the active UCS plane. The
     // delta is offset-invariant, so only the axis rotation matters (identity
     // xf reproduces the world-frame deltas).
@@ -200,21 +202,22 @@ pub(super) fn dyn_component_value(
     // fields show relative deltas — matching the typed-value convention
     // in `dyn_resolve_point` so the live preview and the committed
     // coordinate use the same frame. See #35.
-    let has_base = base.is_some();
+    let relative = base.is_some() && !absolute;
     // Width / Height read as unsigned magnitudes (the sign is taken from the
     // cursor side on commit), matching the rectangle's two-edge entry. But once
     // the user separates the values with `,` the entry is a cartesian
     // coordinate pair, so the fields read as signed X/Y deltas to match the
     // committed point (#269).
     let wh = matches!(f.role, crate::command::DynRole::Width | crate::command::DynRole::Height)
+        && relative
         && !comma_cartesian;
     match f.component {
-        DynComponent::X if has_base => format!("{:.4}", if wh { dx.abs() } else { dx }),
-        DynComponent::Y if has_base => format!("{:.4}", if wh { dy.abs() } else { dy }),
-        DynComponent::Z if has_base => "0.0000".to_string(),
-        DynComponent::X => format!("{:.4}", w.x),
-        DynComponent::Y => format!("{:.4}", w.y),
-        DynComponent::Z => format!("{:.4}", b.z),
+        DynComponent::X if relative => format!("{:.4}", if wh { dx.abs() } else { dx }),
+        DynComponent::Y if relative => format!("{:.4}", if wh { dy.abs() } else { dy }),
+        DynComponent::Z if relative => "0.0000".to_string(),
+        DynComponent::X => format!("{:.4}", p.x),
+        DynComponent::Y => format!("{:.4}", p.y),
+        DynComponent::Z => format!("{:.4}", p.z),
         // Scaled by the role so a diameter box reads twice the radius.
         DynComponent::Distance => {
             format!("{:.4}", (dx * dx + dy * dy).sqrt() * f.role.value_scale() as f64)

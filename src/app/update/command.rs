@@ -157,6 +157,20 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         self.refresh_active_cmd_preview(i);
                         return self.focus_cmd_input();
                     }
+                    // In dynamic point entry, `@` and `#` are coordinate-mode
+                    // switches rather than command-line text. Consuming them
+                    // here keeps the prefix out of the command buffer while
+                    // the following digits continue into the dynamic fields.
+                    if matches!(s.as_str(), "@" | "#")
+                        && self.command_line.input.is_empty()
+                        && self.dyn_input
+                        && self.dyn_has_coordinate_fields(i)
+                    {
+                        self.dyn_set_coordinate_mode(s == "#");
+                        self.command_line.autocomplete_cursor = None;
+                        self.refresh_active_cmd_preview(i);
+                        return self.focus_cmd_input();
+                    }
                     // While dynamic input is showing fields, numeric and
                     // expression glyphs edit the focused field instead of
                     // the command line. Letters still go to the command line
@@ -370,6 +384,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             }
                             self.last_point = Some(pt);
                             self.dyn_user_reshaped = false;
+                            self.dyn_coord_absolute = false;
                             self.sync_dyn_fields();
                             self.reset_tracking_after_point();
                             self.push_ucs_to_cmd(i);
@@ -415,6 +430,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         }
                         self.last_point = Some(wcs_pt);
                         self.dyn_user_reshaped = false;
+                        self.dyn_coord_absolute = false;
                         self.sync_dyn_fields();
                         self.reset_tracking_after_point();
                         self.push_ucs_to_cmd(i);
