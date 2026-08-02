@@ -288,6 +288,7 @@ impl OpenCADStudio {
             pick_drag_rect: self.pick_drag_rect,
             bg_color: self.default_bg_color.map(f4_to_u3),
             paper_bg_color: self.default_paper_bg_color.map(f4_to_u3),
+            language: self.language,
         }
     }
 
@@ -317,6 +318,9 @@ impl OpenCADStudio {
         self.pick_drag_rect = s.pick_drag_rect;
         self.default_bg_color = s.bg_color.map(u3_to_f4);
         self.default_paper_bg_color = s.paper_bg_color.map(u3_to_f4);
+        if crate::i18n::set_language(s.language).is_ok() {
+            self.language = s.language;
+        }
         // Push the restored background onto every drawing tab that exists now
         // (the start tab and any initial drawing). Tabs created later pick it
         // up via `apply_bg_default` at their construction site.

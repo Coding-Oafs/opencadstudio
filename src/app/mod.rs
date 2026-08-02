@@ -855,6 +855,8 @@ pub(super) struct OpenCADStudio {
     save_dialog_for_unsaved: bool,
     /// User preference for the first save of a new/unsaved drawing.
     default_save_format: String,
+    /// Persisted interface language selection.
+    language: crate::i18n::Language,
 
     // ── DimStyle Dialog ───────────────────────────────────────────────────
     /// Name of the style currently shown in the dialog.
@@ -1602,6 +1604,8 @@ pub enum Message {
     OptionsThemeChanged(String),
     /// Edit one of Custom theme's six base colours as #RRGGBB.
     OptionsThemeColorChanged(usize, String),
+    /// Switch the interface language and redraw localized views.
+    LanguageChanged(crate::i18n::Language),
     ClearScene,
     SetWireframe(bool),
     /// Set the active tab's render mode (one of acadrust's seven visual
@@ -2648,6 +2652,10 @@ impl OpenCADStudio {
     }
 
     fn new() -> Self {
+        let config = config::AppConfig::load();
+        if let Err(error) = crate::i18n::set_language(config.settings.language) {
+            eprintln!("Unable to apply saved UI language: {error}");
+        }
         // Boot with only the Welcome/Start tab. The user creates drawings
         // explicitly (File → New); we never auto-spawn Drawing1.
         let start_tab = DocumentTab::new_start();
@@ -2827,6 +2835,7 @@ impl OpenCADStudio {
             save_dialog_filename: "drawing.dwg".to_string(),
             save_dialog_for_unsaved: false,
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
+            language: crate::i18n::Language::default(),
             // Plot style
             active_plot_style: crate::io::plot_style::PlotStyleTable::load_named(
                 crate::io::plot_style::DEFAULT_PLOT_STYLE,
@@ -2997,7 +3006,7 @@ impl OpenCADStudio {
         // so preferences, recents, status-bar layout, ribbon density and print
         // options survive across sessions (issue #68). `last_saved_config` is
         // seeded below so the first change — not the boot — triggers a write.
-        app.apply_config(config::AppConfig::load());
+        app.apply_config(config);
         // Load command aliases from ocad.pgp (writes the shipped default file
         // on first launch). The hide-set keeps aliases out of autocomplete while
         // their target command still shows.

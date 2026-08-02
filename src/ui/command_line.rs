@@ -111,8 +111,8 @@ pub enum EntryKind {
 impl CommandLine {
     pub fn new() -> Self {
         let mut cl = Self::default();
-        cl.push_info("Open CAD Studio ready.");
-        cl.push_info("Type a command or use the ribbon. Open OBJ: INSERT tab.");
+        cl.push_info(&crate::tr!("command-line-ready"));
+        cl.push_info(&crate::tr!("command-line-hint"));
         cl
     }
 
@@ -430,7 +430,7 @@ impl CommandLine {
                 }
             });
         let prompt = container(
-            text("Command:").size(11).style(|theme: &Theme| iced::widget::text::Style {
+            text(crate::tr!("command-line-label")).size(11).style(|theme: &Theme| iced::widget::text::Style {
                 color: Some(theme.palette().success.base.color),
             }),
         )
@@ -467,10 +467,7 @@ impl CommandLine {
                 ..Default::default()
             }
         });
-        let literal_tip = container(
-            text("Literal spaces: Space stays in the line instead of running the command (same as typing a leading '>'). Stays on until toggled off.")
-                .size(11),
-        )
+        let literal_tip = container(text(crate::tr!("command-line-literal-spaces")).size(11))
         .padding([3, 6])
         .style(container::bordered_box);
         let literal_btn = tooltip(literal_btn, literal_tip, tooltip::Position::Top).gap(4);

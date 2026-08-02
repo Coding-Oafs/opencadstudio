@@ -4323,6 +4323,22 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::LanguageChanged(language) => {
+                if self.language == language {
+                    return Task::none();
+                }
+                match crate::i18n::set_language(language) {
+                    Ok(()) => {
+                        self.language = language;
+                        self.persist_settings_if_changed();
+                    }
+                    Err(error) => self
+                        .command_line
+                        .push_error(&format!("Unable to change UI language: {error}")),
+                }
+                Task::none()
+            }
+
             Message::AboutOpen => {
                 self.active_modal = Some(super::ModalKind::About);
                 Task::none()

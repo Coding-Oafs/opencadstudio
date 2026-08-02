@@ -53,13 +53,14 @@ impl CadCommand for MoveCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Base => format!(
-                "MOVE  Specify base point  [{} objects]:",
-                self.handles.len()
+            Step::Base => crate::tr!(
+                "command-move-base",
+                count = (self.handles.len() as i64),
             ),
-            Step::Target(base) => format!(
-                "MOVE  Specify destination  [base {:.3},{:.3}]:",
-                base.x, base.y
+            Step::Target(base) => crate::tr!(
+                "command-move-target",
+                x = format!("{:.3}", base.x),
+                y = format!("{:.3}", base.y),
             ),
         }
     }

@@ -253,7 +253,7 @@ pub fn backdrop<'a>(
 /// title bar; pass `Vector::ZERO` to keep it centred.
 pub fn modal<'a>(
     base: impl Into<Element<'a, Message>>,
-    title: &'a str,
+    title: impl iced::widget::text::IntoFragment<'a>,
     content: impl Into<Element<'a, Message>>,
     on_close: Message,
     offset: Vector,

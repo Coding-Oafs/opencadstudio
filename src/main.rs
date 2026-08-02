@@ -10,6 +10,7 @@ mod config;
 mod cli;
 mod command;
 mod entities;
+mod i18n;
 mod io;
 #[cfg(not(target_arch = "wasm32"))]
 mod network;

@@ -6,6 +6,7 @@ pub mod config;
 pub mod cli;
 pub mod command;
 pub mod entities;
+pub mod i18n;
 pub mod io;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod network;

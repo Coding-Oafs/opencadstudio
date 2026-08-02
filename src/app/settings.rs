@@ -151,6 +151,9 @@ pub struct UserSettings {
     /// (#188).
     pub bg_color: Option<[u8; 3]>,
     pub paper_bg_color: Option<[u8; 3]>,
+    /// Interface language preference. `System` negotiates against the
+    /// platform locale on every launch.
+    pub language: crate::i18n::Language,
 }
 
 impl Default for UserSettings {
@@ -177,6 +180,7 @@ impl Default for UserSettings {
             pick_drag_rect: false,
             bg_color: None,
             paper_bg_color: None,
+            language: crate::i18n::Language::default(),
         }
     }
 }

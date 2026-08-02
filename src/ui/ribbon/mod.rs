@@ -422,7 +422,7 @@ impl Ribbon {
                 let is_active = i == self.active;
                 let is_contextual = module.id() == "layout";
                 let btn = container(
-                    button(text(module.title()).size(12))
+                    button(text(crate::i18n::ribbon_module_title(module.id(), module.title())).size(12))
                         .on_press(Message::RibbonSelectTab(i))
                         .style(move |theme: &Theme, status| {
                             let palette = theme.palette();

@@ -61,23 +61,27 @@ impl CadCommand for CopyCommand {
 
     fn prompt(&self) -> String {
         if self.awaiting_count {
-            return "COPY  Enter number of items to array:".to_string();
+            return crate::tr!("command-copy-array-count");
         }
         match &self.step {
-            Step::Base => format!(
-                "COPY  Specify base point  [{} objects]:",
-                self.handles.len()
+            Step::Base => crate::tr!(
+                "command-copy-base",
+                count = (self.handles.len() as i64),
             ),
             Step::Placing(base) => {
                 if let Some(n) = self.array_count {
-                    format!(
-                        "COPY  Specify second point for {n}-item array  [base {:.3},{:.3}]:",
-                        base.x, base.y
+                    crate::tr!(
+                        "command-copy-array-target",
+                        count = (n as i64),
+                        x = format!("{:.3}", base.x),
+                        y = format!("{:.3}", base.y),
                     )
                 } else {
-                    format!(
-                        "COPY  Specify destination  [{} copies so far | Array | Enter=done | base {:.3},{:.3}]:",
-                        self.count, base.x, base.y
+                    crate::tr!(
+                        "command-copy-target",
+                        count = (self.count as i64),
+                        x = format!("{:.3}", base.x),
+                        y = format!("{:.3}", base.y),
                     )
                 }
             }
