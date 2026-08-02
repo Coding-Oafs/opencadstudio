@@ -116,7 +116,7 @@ impl OpenCADStudio {
         // rather than keeping a second, blunter copy (#388, #389).
         if self.tabs[i].is_start && !start_allowed(cmd) {
             self.command_line
-                .push_info("No drawing open. Use NEW or OPEN to start a drawing.");
+                .push_info(crate::t!("No drawing open. Use NEW or OPEN to start a drawing.").as_ref());
             return Task::none();
         }
 
@@ -164,7 +164,7 @@ impl OpenCADStudio {
             }
         }
         self.command_line
-            .push_error(&format!("Unknown command: {cmd}"));
+            .push_error(crate::tf!("Unknown command: {cmd}").as_ref());
         self.finish_dispatch(cmd)
     }
 

@@ -4,6 +4,7 @@
 // receives the dispatched `COPYBASE_AT <x> <y> <z>` token.
 
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -21,7 +22,7 @@ impl CadCommand for CopyBaseCommand {
     }
 
     fn prompt(&self) -> String {
-        "COPYBASE  Specify base point:".to_string()
+        t!("COPYBASE  Specify base point:").into_owned()
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {

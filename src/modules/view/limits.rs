@@ -1,4 +1,5 @@
 use glam::{DVec2, DVec3};
+use crate::t;
 
 use crate::command::{CadCommand, CmdOption, CmdResult};
 
@@ -36,20 +37,23 @@ impl CadCommand for LimitsCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            LimitsStep::FirstCorner => format!(
-                "LIMITS  Specify first corner or [On / Off] <{:.4},{:.4}>:",
-                self.current_min.x, self.current_min.y
-            ),
-            LimitsStep::OppositeCorner(_) => format!(
-                "LIMITS  Specify opposite corner <{:.4},{:.4}>:",
-                self.current_max.x, self.current_max.y
-            ),
+            LimitsStep::FirstCorner => {
+                let v = format!("{:.4},{:.4}", self.current_min.x, self.current_min.y);
+                t!("LIMITS  Specify first corner or [On / Off] <%{v}>:", v = v).into_owned()
+            }
+            LimitsStep::OppositeCorner(_) => {
+                let v = format!("{:.4},{:.4}", self.current_max.x, self.current_max.y);
+                t!("LIMITS  Specify opposite corner <%{v}>:", v = v).into_owned()
+            }
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         match self.step {
-            LimitsStep::FirstCorner => vec![CmdOption::new("On", "ON"), CmdOption::new("Off", "OFF")],
+            LimitsStep::FirstCorner => vec![
+                CmdOption::new(t!("On").as_ref(), "ON"),
+                CmdOption::new(t!("Off").as_ref(), "OFF"),
+            ],
             LimitsStep::OppositeCorner(_) => Vec::new(),
         }
     }

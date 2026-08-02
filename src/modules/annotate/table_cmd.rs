@@ -15,6 +15,7 @@ use glam::DVec3;
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/table.svg"));
 
@@ -57,13 +58,23 @@ impl CadCommand for TableCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Columns => format!("TABLE  Enter number of columns [{DEFAULT_COLS}]:"),
-            Step::Rows { cols } => format!(
-                "TABLE  Enter number of rows (incl. header) [{DEFAULT_ROWS}]  ({cols} cols):"
-            ),
-            Step::Insertion { cols, rows } => {
-                format!("TABLE  Specify insertion point  [{cols}×{rows}]:")
-            }
+            Step::Columns => t!(
+                "TABLE  Enter number of columns [%{cols}]:",
+                cols = DEFAULT_COLS
+            )
+            .into_owned(),
+            Step::Rows { cols } => t!(
+                "TABLE  Enter number of rows (incl. header) [%{rows}]  (%{cols} cols):",
+                rows = DEFAULT_ROWS,
+                cols = cols
+            )
+            .into_owned(),
+            Step::Insertion { cols, rows } => t!(
+                "TABLE  Specify insertion point  [%{cols}×%{rows}]:",
+                cols = cols,
+                rows = rows
+            )
+            .into_owned(),
         }
     }
 

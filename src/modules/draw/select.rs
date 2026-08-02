@@ -10,6 +10,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdOption, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -52,13 +53,14 @@ impl CadCommand for SelectObjectsCommand {
 
     fn prompt(&self) -> String {
         if self.commit_on_enter && !self.handles.is_empty() {
-            format!(
-                "{}  Select objects ({} selected, Enter to apply):",
-                self.pending_cmd,
-                self.handles.len()
+            t!(
+                "%{cmd}  Select objects (%{count} selected, Enter to apply):",
+                cmd = self.pending_cmd,
+                count = self.handles.len()
             )
+            .into_owned()
         } else {
-            format!("{}  Select objects:", self.pending_cmd)
+            t!("%{cmd}  Select objects:", cmd = self.pending_cmd).into_owned()
         }
     }
 
@@ -74,7 +76,10 @@ impl CadCommand for SelectObjectsCommand {
     // also work typed — these buttons just surface them.
     fn options(&self) -> Vec<CmdOption> {
         if self.commit_on_enter {
-            vec![CmdOption::new("Previous", "P"), CmdOption::new("Last", "L")]
+            vec![
+                CmdOption::new(t!("Previous").as_ref(), "P"),
+                CmdOption::new(t!("Last").as_ref(), "L"),
+            ]
         } else {
             Vec::new()
         }

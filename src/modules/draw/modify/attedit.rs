@@ -8,6 +8,7 @@
 // directly and never starts this command (see `app::commands::inquiry`).
 
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -29,7 +30,7 @@ impl CadCommand for AtteditCommand {
     }
 
     fn prompt(&self) -> String {
-        "ATTEDIT  Select block with attributes:".to_string()
+        t!("ATTEDIT  Select block with attributes:").into_owned()
     }
 
     fn needs_entity_pick(&self) -> bool {

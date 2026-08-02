@@ -9,6 +9,7 @@ use acadrust::entities::MLine;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -48,14 +49,19 @@ impl CadCommand for MlineCommand {
 
     fn prompt(&self) -> String {
         if self.waiting_scale {
-            "MLINE  Enter scale factor:".into()
+            t!("MLINE  Enter scale factor:").into_owned()
         } else if self.points.is_empty() {
-            format!("MLINE  Specify start point (scale={:.2}):", self.scale)
-        } else {
-            format!(
-                "MLINE  Specify next point ({} pts, Enter to finish, C to close, S to set scale):",
-                self.points.len()
+            t!(
+                "MLINE  Specify start point (scale=%{scale}):",
+                scale = format!("{:.2}", self.scale)
             )
+            .into_owned()
+        } else {
+            t!(
+                "MLINE  Specify next point (%{count} pts, Enter to finish, C to close, S to set scale):",
+                count = self.points.len()
+            )
+            .into_owned()
         }
     }
 

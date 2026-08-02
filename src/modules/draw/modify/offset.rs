@@ -28,6 +28,7 @@ use cavalier_contours::polyline::{
     Polyline as CavPolyline,
 };
 use glam::{DVec3, Vec3};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::draw::defaults;
@@ -862,12 +863,12 @@ impl CadCommand for OffsetCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Distance => format!(
-                "OFFSET  Specify offset distance or [Through] <{:.4}>:",
-                defaults::get_offset_dist()
-            ),
+            Step::Distance => {
+                let d = format!("{:.4}", defaults::get_offset_dist());
+                t!("OFFSET  Specify offset distance or [Through] <%{d}>:", d = d).into_owned()
+            }
             Step::SelectObject { .. } => {
-                "OFFSET  Select object to offset (Enter to finish):".into()
+                t!("OFFSET  Select object to offset (Enter to finish):").into_owned()
             }
             Step::PickSide {
                 targets,
@@ -875,22 +876,36 @@ impl CadCommand for OffsetCommand {
                 multiple,
                 ..
             } => {
-                let n = if targets.len() > 1 {
-                    format!(" ({} objects)", targets.len())
+                let n: std::borrow::Cow<'_, str> = if targets.len() > 1 {
+                    t!(" (%{count} objects)", count = targets.len())
                 } else {
-                    String::new()
+                    std::borrow::Cow::Borrowed("")
                 };
                 match (locked, multiple) {
                     (Some(d), false) => {
-                        format!("OFFSET{n}  Click side or [Multiple]  [distance {d:.4}]:")
+                        let d = format!("{:.4}", d);
+                        t!(
+                            "OFFSET%{n}  Click side or [Multiple]  [distance %{d}]:",
+                            n = n,
+                            d = d
+                        )
+                        .into_owned()
                     }
                     (Some(d), true) => {
-                        format!("OFFSET{n} Multiple  Click next side [distance {d:.4}]:")
+                        let d = format!("{:.4}", d);
+                        t!(
+                            "OFFSET%{n} Multiple  Click next side [distance %{d}]:",
+                            n = n,
+                            d = d
+                        )
+                        .into_owned()
                     }
                     (None, false) => {
-                        format!("OFFSET{n}  Click through point or [Multiple]:")
+                        t!("OFFSET%{n}  Click through point or [Multiple]:", n = n).into_owned()
                     }
-                    (None, true) => format!("OFFSET{n} Multiple  Click next through point:"),
+                    (None, true) => {
+                        t!("OFFSET%{n} Multiple  Click next through point:", n = n).into_owned()
+                    }
                 }
             }
         }
@@ -899,7 +914,7 @@ impl CadCommand for OffsetCommand {
     fn options(&self) -> Vec<crate::command::CmdOption> {
         match &self.step {
             Step::Distance => vec![
-                crate::command::CmdOption::new("Through", "T"),
+                crate::command::CmdOption::new(t!("Through").as_ref(), "T"),
                 crate::command::CmdOption::enter(&format!(
                     "{:.4}",
                     defaults::get_offset_dist()
@@ -907,7 +922,7 @@ impl CadCommand for OffsetCommand {
             ],
             Step::PickSide {
                 multiple: false, ..
-            } => vec![crate::command::CmdOption::new("Multiple", "M")],
+            } => vec![crate::command::CmdOption::new(t!("Multiple").as_ref(), "M")],
             _ => Vec::new(),
         }
     }

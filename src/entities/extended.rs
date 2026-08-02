@@ -3,6 +3,7 @@ use acadrust::entities::{
     PointCloudData, PointCloudExData, RemoteTextData, SectionObjectData,
 };
 use acadrust::types::{Handle, Transform, Vector3};
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
@@ -29,7 +30,7 @@ fn handle_text(handle: Handle) -> String {
     }
 }
 
-fn text_prop(label: &'static str, field: &'static str, value: &str) -> Property {
+fn text_prop(label: &str, field: &'static str, value: &str) -> Property {
     Property {
         label: label.into(),
         field,
@@ -37,7 +38,7 @@ fn text_prop(label: &'static str, field: &'static str, value: &str) -> Property 
     }
 }
 
-fn bool_prop(label: &'static str, field: &'static str, value: bool) -> Property {
+fn bool_prop(label: &str, field: &'static str, value: bool) -> Property {
     Property {
         label: label.into(),
         field,
@@ -481,40 +482,36 @@ fn section_properties(data: &SectionObjectData) -> Vec<PropSection> {
         .join("\n");
     vec![
         PropSection {
-            title: "Section Object".into(),
+            title: t!("Section Object").into_owned(),
             props: vec![
-                text_prop("Name", "ext_section_name", &data.name),
-                ro_prop("State", "ext_section_state", data.state.to_string()),
-                ro_prop("Flags", "ext_section_flags", data.flags.to_string()),
-                ro_prop(
-                    "Vertical Direction",
+                text_prop(t!("Name").as_ref(), "ext_section_name", &data.name),
+                ro_prop(t!("State").as_ref(), "ext_section_state", data.state.to_string()),
+                ro_prop(t!("Flags").as_ref(), "ext_section_flags", data.flags.to_string()),
+                ro_prop(t!("Vertical Direction").as_ref(),
                     "ext_section_vertical",
                     vector_text(data.vertical_direction),
                 ),
-                edit_prop("Top Height", "ext_section_top", data.top_height),
-                edit_prop("Bottom Height", "ext_section_bottom", data.bottom_height),
-                ro_prop(
-                    "Indicator Alpha",
+                edit_prop(t!("Top Height").as_ref(), "ext_section_top", data.top_height),
+                edit_prop(t!("Bottom Height").as_ref(), "ext_section_bottom", data.bottom_height),
+                ro_prop(t!("Indicator Alpha").as_ref(),
                     "ext_section_alpha",
                     data.indicator_alpha.to_string(),
                 ),
-                ro_prop(
-                    "Indicator Color",
+                ro_prop(t!("Indicator Color").as_ref(),
                     "ext_section_color",
                     format!("{:?}", data.indicator_color),
                 ),
-                ro_prop(
-                    "Settings",
+                ro_prop(t!("Settings").as_ref(),
                     "ext_section_settings",
                     handle_text(data.settings_handle),
                 ),
             ],
         },
         PropSection {
-            title: "Section Vertices".into(),
+            title: t!("Section Vertices").into_owned(),
             props: vec![
-                ro_prop("Cutting Line", "ext_section_vertices", vertices),
-                ro_prop("Back Line", "ext_section_back_vertices", back_vertices),
+                ro_prop(t!("Cutting Line").as_ref(), "ext_section_vertices", vertices),
+                ro_prop(t!("Back Line").as_ref(), "ext_section_back_vertices", back_vertices),
             ],
         },
     ]
@@ -522,114 +519,102 @@ fn section_properties(data: &SectionObjectData) -> Vec<PropSection> {
 
 fn arc_text_properties(data: &ArcAlignedTextData) -> Vec<PropSection> {
     vec![PropSection {
-        title: "Arc-Aligned Text".into(),
+        title: t!("Arc-Aligned Text").into_owned(),
         props: vec![
-            text_prop("Text", "ext_arc_text", &data.text),
-            text_prop("Font", "ext_arc_font", &data.font_name),
-            text_prop("Big Font", "ext_arc_big_font", &data.big_font_name),
-            text_prop("Style", "ext_arc_style", &data.style_name),
-            ro_prop("Center", "ext_arc_center", vector_text(data.center)),
-            edit_prop("Radius", "ext_arc_radius", data.radius),
-            edit_prop("X Scale", "ext_arc_xscale", data.x_scale),
-            edit_prop("Text Size", "ext_arc_size", data.text_size),
-            edit_prop(
-                "Character Spacing",
+            text_prop(t!("Text").as_ref(), "ext_arc_text", &data.text),
+            text_prop(t!("Font").as_ref(), "ext_arc_font", &data.font_name),
+            text_prop(t!("Big Font").as_ref(), "ext_arc_big_font", &data.big_font_name),
+            text_prop(t!("Style").as_ref(), "ext_arc_style", &data.style_name),
+            ro_prop(t!("Center").as_ref(), "ext_arc_center", vector_text(data.center)),
+            edit_prop(t!("Radius").as_ref(), "ext_arc_radius", data.radius),
+            edit_prop(t!("X Scale").as_ref(), "ext_arc_xscale", data.x_scale),
+            edit_prop(t!("Text Size").as_ref(), "ext_arc_size", data.text_size),
+            edit_prop(t!("Character Spacing").as_ref(),
                 "ext_arc_spacing",
                 data.character_spacing,
             ),
-            edit_prop(
-                "Offset From Arc",
+            edit_prop(t!("Offset From Arc").as_ref(),
                 "ext_arc_offset",
                 data.offset_from_arc,
             ),
-            edit_prop("Right Offset", "ext_arc_right", data.right_offset),
-            edit_prop("Left Offset", "ext_arc_left", data.left_offset),
-            edit_angle_prop(
-                "Start Angle",
+            edit_prop(t!("Right Offset").as_ref(), "ext_arc_right", data.right_offset),
+            edit_prop(t!("Left Offset").as_ref(), "ext_arc_left", data.left_offset),
+            edit_angle_prop(t!("Start Angle").as_ref(),
                 "ext_arc_start",
                 data.start_angle.to_degrees(),
             ),
-            edit_angle_prop("End Angle", "ext_arc_end", data.end_angle.to_degrees()),
-            bool_prop("Reverse", "ext_arc_reverse", data.reverse),
-            ro_prop(
-                "Text Direction",
+            edit_angle_prop(t!("End Angle").as_ref(), "ext_arc_end", data.end_angle.to_degrees()),
+            bool_prop(t!("Reverse").as_ref(), "ext_arc_reverse", data.reverse),
+            ro_prop(t!("Text Direction").as_ref(),
                 "ext_arc_direction",
                 data.text_direction.to_string(),
             ),
-            ro_prop("Alignment", "ext_arc_alignment", data.alignment.to_string()),
-            ro_prop(
-                "Text Position",
+            ro_prop(t!("Alignment").as_ref(), "ext_arc_alignment", data.alignment.to_string()),
+            ro_prop(t!("Text Position").as_ref(),
                 "ext_arc_position",
                 data.text_position.to_string(),
             ),
-            bool_prop("Bold", "ext_arc_bold", data.bold),
-            bool_prop("Italic", "ext_arc_italic", data.italic),
-            bool_prop("Underlined", "ext_arc_underlined", data.underlined),
-            ro_prop(
-                "Character Set",
+            bool_prop(t!("Bold").as_ref(), "ext_arc_bold", data.bold),
+            bool_prop(t!("Italic").as_ref(), "ext_arc_italic", data.italic),
+            bool_prop(t!("Underlined").as_ref(), "ext_arc_underlined", data.underlined),
+            ro_prop(t!("Character Set").as_ref(),
                 "ext_arc_charset",
                 data.character_set.to_string(),
             ),
-            ro_prop(
-                "Pitch And Family",
+            ro_prop(t!("Pitch And Family").as_ref(),
                 "ext_arc_pitch",
                 data.pitch_and_family.to_string(),
             ),
-            bool_prop("SHX", "ext_arc_shx", data.is_shx),
-            ro_prop("Text Color", "ext_arc_color", data.text_color.to_string()),
-            ro_prop("Normal", "ext_arc_normal", vector_text(data.normal)),
-            bool_prop("Wizard Flag", "ext_arc_wizard", data.wizard_flag),
-            ro_prop("Arc", "ext_arc_handle", handle_text(data.arc_handle)),
+            bool_prop(t!("SHX").as_ref(), "ext_arc_shx", data.is_shx),
+            ro_prop(t!("Text Color").as_ref(), "ext_arc_color", data.text_color.to_string()),
+            ro_prop(t!("Normal").as_ref(), "ext_arc_normal", vector_text(data.normal)),
+            bool_prop(t!("Wizard Flag").as_ref(), "ext_arc_wizard", data.wizard_flag),
+            ro_prop(t!("Arc").as_ref(), "ext_arc_handle", handle_text(data.arc_handle)),
         ],
     }]
 }
 
 fn remote_text_properties(data: &RemoteTextData) -> Vec<PropSection> {
     vec![PropSection {
-        title: "Remote Text".into(),
+        title: t!("Remote Text").into_owned(),
         props: vec![
-            text_prop("Text", "ext_rtext_text", &data.text),
-            ro_prop("Position", "ext_rtext_position", vector_text(data.position)),
-            ro_prop("Normal", "ext_rtext_normal", vector_text(data.normal)),
-            edit_angle_prop(
-                "Rotation",
+            text_prop(t!("Text").as_ref(), "ext_rtext_text", &data.text),
+            ro_prop(t!("Position").as_ref(), "ext_rtext_position", vector_text(data.position)),
+            ro_prop(t!("Normal").as_ref(), "ext_rtext_normal", vector_text(data.normal)),
+            edit_angle_prop(t!("Rotation").as_ref(),
                 "ext_rtext_rotation",
                 data.rotation.to_degrees(),
             ),
-            edit_prop("Height", "ext_rtext_height", data.height),
-            text_prop("Style Name", "ext_rtext_style", &data.style_name),
-            ro_prop(
-                "Style Handle",
+            edit_prop(t!("Height").as_ref(), "ext_rtext_height", data.height),
+            text_prop(t!("Style Name").as_ref(), "ext_rtext_style", &data.style_name),
+            ro_prop(t!("Style Handle").as_ref(),
                 "ext_rtext_style_handle",
                 handle_text(data.style_handle),
             ),
-            ro_prop("Flags", "ext_rtext_flags", data.flags.to_string()),
+            ro_prop(t!("Flags").as_ref(), "ext_rtext_flags", data.flags.to_string()),
         ],
     }]
 }
 
 fn geo_marker_properties(data: &GeoPositionMarkerData) -> Vec<PropSection> {
     vec![PropSection {
-        title: "Geographic Position Marker".into(),
+        title: t!("Geographic Position Marker").into_owned(),
         props: vec![
-            ro_prop(
-                "Class Version",
+            ro_prop(t!("Class Version").as_ref(),
                 "ext_geo_version",
                 data.class_version.to_string(),
             ),
-            ro_prop("Position", "ext_geo_position", vector_text(data.position)),
-            edit_prop("Radius", "ext_geo_radius", data.radius),
-            text_prop("Notes", "ext_geo_notes", &data.notes),
-            edit_prop("Landing Gap", "ext_geo_gap", data.landing_gap),
-            bool_prop("Text Visible", "ext_geo_visible", data.mtext_visible),
-            ro_prop(
-                "Text Alignment",
+            ro_prop(t!("Position").as_ref(), "ext_geo_position", vector_text(data.position)),
+            edit_prop(t!("Radius").as_ref(), "ext_geo_radius", data.radius),
+            text_prop(t!("Notes").as_ref(), "ext_geo_notes", &data.notes),
+            edit_prop(t!("Landing Gap").as_ref(), "ext_geo_gap", data.landing_gap),
+            bool_prop(t!("Text Visible").as_ref(), "ext_geo_visible", data.mtext_visible),
+            ro_prop(t!("Text Alignment").as_ref(),
                 "ext_geo_alignment",
                 data.text_alignment.to_string(),
             ),
-            bool_prop("Frame Text", "ext_geo_frame", data.enable_frame_text),
-            ro_prop(
-                "Embedded MText",
+            bool_prop(t!("Frame Text").as_ref(), "ext_geo_frame", data.enable_frame_text),
+            ro_prop(t!("Embedded MText").as_ref(),
                 "ext_geo_mtext",
                 data.embedded_mtext
                     .as_ref()
@@ -660,91 +645,77 @@ fn point_cloud_properties(data: &PointCloudData) -> Vec<PropSection> {
         .join("\n");
     vec![
         PropSection {
-            title: "Point Cloud".into(),
+            title: t!("Point Cloud").into_owned(),
             props: vec![
-                ro_prop(
-                    "Class Version",
+                ro_prop(t!("Class Version").as_ref(),
                     "ext_pc_version",
                     data.class_version.to_string(),
                 ),
-                ro_prop("Origin", "ext_pc_origin", vector_text(data.origin)),
-                text_prop("Saved File", "ext_pc_file", &data.saved_filename),
-                ro_prop(
-                    "Source Files",
+                ro_prop(t!("Origin").as_ref(), "ext_pc_origin", vector_text(data.origin)),
+                text_prop(t!("Saved File").as_ref(), "ext_pc_file", &data.saved_filename),
+                ro_prop(t!("Source Files").as_ref(),
                     "ext_pc_sources",
                     data.source_files.join("\n"),
                 ),
-                ro_prop("Extents Min", "ext_pc_min", vector_text(data.extents_min)),
-                ro_prop("Extents Max", "ext_pc_max", vector_text(data.extents_max)),
-                ro_prop(
-                    "Point Count",
+                ro_prop(t!("Extents Min").as_ref(), "ext_pc_min", vector_text(data.extents_min)),
+                ro_prop(t!("Extents Max").as_ref(), "ext_pc_max", vector_text(data.extents_max)),
+                ro_prop(t!("Point Count").as_ref(),
                     "ext_pc_count",
                     data.point_count.to_string(),
                 ),
-                text_prop("UCS Name", "ext_pc_ucs", &data.ucs_name),
-                ro_prop(
-                    "UCS Origin",
+                text_prop(t!("UCS Name").as_ref(), "ext_pc_ucs", &data.ucs_name),
+                ro_prop(t!("UCS Origin").as_ref(),
                     "ext_pc_ucs_origin",
                     vector_text(data.ucs_origin),
                 ),
-                ro_prop(
-                    "UCS X",
+                ro_prop(t!("UCS X").as_ref(),
                     "ext_pc_ucs_x",
                     vector_text(data.ucs_x_direction),
                 ),
-                ro_prop(
-                    "UCS Y",
+                ro_prop(t!("UCS Y").as_ref(),
                     "ext_pc_ucs_y",
                     vector_text(data.ucs_y_direction),
                 ),
-                ro_prop(
-                    "UCS Z",
+                ro_prop(t!("UCS Z").as_ref(),
                     "ext_pc_ucs_z",
                     vector_text(data.ucs_z_direction),
                 ),
-                ro_prop(
-                    "Definition",
+                ro_prop(t!("Definition").as_ref(),
                     "ext_pc_definition",
                     handle_text(data.definition_handle),
                 ),
-                ro_prop(
-                    "Reactor",
+                ro_prop(t!("Reactor").as_ref(),
                     "ext_pc_reactor",
                     handle_text(data.reactor_handle),
                 ),
             ],
         },
         PropSection {
-            title: "Point Cloud Display".into(),
+            title: t!("Point Cloud Display").into_owned(),
             props: vec![
-                bool_prop("Show Intensity", "ext_pc_show_intensity", data.show_intensity),
-                ro_prop(
-                    "Intensity Scheme",
+                bool_prop(t!("Show Intensity").as_ref(), "ext_pc_show_intensity", data.show_intensity),
+                ro_prop(t!("Intensity Scheme").as_ref(),
                     "ext_pc_intensity_scheme",
                     data.intensity_scheme.to_string(),
                 ),
-                edit_prop(
-                    "Minimum Intensity",
+                edit_prop(t!("Minimum Intensity").as_ref(),
                     "ext_pc_intensity_min",
                     data.minimum_intensity,
                 ),
-                edit_prop(
-                    "Maximum Intensity",
+                edit_prop(t!("Maximum Intensity").as_ref(),
                     "ext_pc_intensity_max",
                     data.maximum_intensity,
                 ),
-                edit_prop(
-                    "Low Threshold",
+                edit_prop(t!("Low Threshold").as_ref(),
                     "ext_pc_low_threshold",
                     data.low_intensity_threshold,
                 ),
-                edit_prop(
-                    "High Threshold",
+                edit_prop(t!("High Threshold").as_ref(),
                     "ext_pc_high_threshold",
                     data.high_intensity_threshold,
                 ),
-                bool_prop("Show Clipping", "ext_pc_show_clipping", data.show_clipping),
-                ro_prop("Clippings", "ext_pc_clippings", clips),
+                bool_prop(t!("Show Clipping").as_ref(), "ext_pc_show_clipping", data.show_clipping),
+                ro_prop(t!("Clippings").as_ref(), "ext_pc_clippings", clips),
             ],
         },
     ]
@@ -770,92 +741,77 @@ fn point_cloud_ex_properties(data: &PointCloudExData) -> Vec<PropSection> {
         .join("\n");
     vec![
         PropSection {
-            title: "Point Cloud Ex".into(),
+            title: t!("Point Cloud Ex").into_owned(),
             props: vec![
-                ro_prop(
-                    "Class Version",
+                ro_prop(t!("Class Version").as_ref(),
                     "ext_pcx_version",
                     data.class_version.to_string(),
                 ),
-                text_prop("Name", "ext_pcx_name", &data.name),
-                ro_prop("Extents Min", "ext_pcx_min", vector_text(data.extents_min)),
-                ro_prop("Extents Max", "ext_pcx_max", vector_text(data.extents_max)),
-                ro_prop(
-                    "UCS Origin",
+                text_prop(t!("Name").as_ref(), "ext_pcx_name", &data.name),
+                ro_prop(t!("Extents Min").as_ref(), "ext_pcx_min", vector_text(data.extents_min)),
+                ro_prop(t!("Extents Max").as_ref(), "ext_pcx_max", vector_text(data.extents_max)),
+                ro_prop(t!("UCS Origin").as_ref(),
                     "ext_pcx_ucs_origin",
                     vector_text(data.ucs_origin),
                 ),
-                ro_prop(
-                    "UCS X",
+                ro_prop(t!("UCS X").as_ref(),
                     "ext_pcx_ucs_x",
                     vector_text(data.ucs_x_direction),
                 ),
-                ro_prop(
-                    "UCS Y",
+                ro_prop(t!("UCS Y").as_ref(),
                     "ext_pcx_ucs_y",
                     vector_text(data.ucs_y_direction),
                 ),
-                ro_prop(
-                    "UCS Z",
+                ro_prop(t!("UCS Z").as_ref(),
                     "ext_pcx_ucs_z",
                     vector_text(data.ucs_z_direction),
                 ),
-                bool_prop("Locked", "ext_pcx_locked", data.locked),
-                ro_prop(
-                    "Definition",
+                bool_prop(t!("Locked").as_ref(), "ext_pcx_locked", data.locked),
+                ro_prop(t!("Definition").as_ref(),
                     "ext_pcx_definition",
                     handle_text(data.definition_handle),
                 ),
-                ro_prop(
-                    "Reactor",
+                ro_prop(t!("Reactor").as_ref(),
                     "ext_pcx_reactor",
                     handle_text(data.reactor_handle),
                 ),
             ],
         },
         PropSection {
-            title: "Point Cloud Ex Display".into(),
+            title: t!("Point Cloud Ex Display").into_owned(),
             props: vec![
-                bool_prop(
-                    "Show Intensity",
+                bool_prop(t!("Show Intensity").as_ref(),
                     "ext_pcx_show_intensity",
                     data.show_intensity,
                 ),
-                bool_prop("Show Cropping", "ext_pcx_show_cropping", data.show_cropping),
-                ro_prop(
-                    "Unknown Flags",
+                bool_prop(t!("Show Cropping").as_ref(), "ext_pcx_show_cropping", data.show_cropping),
+                ro_prop(t!("Unknown Flags").as_ref(),
                     "ext_pcx_unknown",
                     format!("{}, {}", data.unknown_bl0, data.unknown_bl1),
                 ),
-                ro_prop(
-                    "Stylization Type",
+                ro_prop(t!("Stylization Type").as_ref(),
                     "ext_pcx_stylization",
                     data.stylization_type.to_string(),
                 ),
-                text_prop(
-                    "Intensity Color Scheme",
+                text_prop(t!("Intensity Color Scheme").as_ref(),
                     "ext_pcx_intensity_scheme",
                     &data.intensity_color_scheme,
                 ),
-                text_prop(
-                    "Current Color Scheme",
+                text_prop(t!("Current Color Scheme").as_ref(),
                     "ext_pcx_current_scheme",
                     &data.current_color_scheme,
                 ),
-                text_prop(
-                    "Classification Scheme",
+                text_prop(t!("Classification Scheme").as_ref(),
                     "ext_pcx_class_scheme",
                     &data.classification_color_scheme,
                 ),
-                edit_prop("Elevation Min", "ext_pcx_elevation_min", data.elevation_min),
-                edit_prop("Elevation Max", "ext_pcx_elevation_max", data.elevation_max),
-                ro_prop(
-                    "Intensity Range",
+                edit_prop(t!("Elevation Min").as_ref(), "ext_pcx_elevation_min", data.elevation_min),
+                edit_prop(t!("Elevation Max").as_ref(), "ext_pcx_elevation_max", data.elevation_max),
+                ro_prop(t!("Intensity Range").as_ref(),
                     "ext_pcx_intensity_range",
                     format!("{}..{}", data.intensity_min, data.intensity_max),
                 ),
-                ro_prop(
-                    "Out Of Range Behavior",
+                ro_prop(t!("Out Of Range Behavior").as_ref(),
                     "ext_pcx_out_of_range",
                     format!(
                         "intensity {}; elevation {}",
@@ -863,22 +819,19 @@ fn point_cloud_ex_properties(data: &PointCloudExData) -> Vec<PropSection> {
                         data.elevation_out_of_range_behavior
                     ),
                 ),
-                bool_prop(
-                    "Fixed Elevation Range",
+                bool_prop(t!("Fixed Elevation Range").as_ref(),
                     "ext_pcx_fixed_range",
                     data.elevation_apply_to_fixed_range,
                 ),
-                bool_prop(
-                    "Intensity Gradient",
+                bool_prop(t!("Intensity Gradient").as_ref(),
                     "ext_pcx_intensity_gradient",
                     data.intensity_as_gradient,
                 ),
-                bool_prop(
-                    "Elevation Gradient",
+                bool_prop(t!("Elevation Gradient").as_ref(),
                     "ext_pcx_elevation_gradient",
                     data.elevation_as_gradient,
                 ),
-                ro_prop("Croppings", "ext_pcx_croppings", crops),
+                ro_prop(t!("Croppings").as_ref(), "ext_pcx_croppings", crops),
             ],
         },
     ]
@@ -918,25 +871,23 @@ fn reference_properties(
 fn properties(entity: &ExtendedEntity) -> Vec<PropSection> {
     match &entity.data {
         ExtendedEntityData::Camera { view_handle } => vec![PropSection {
-            title: "Camera".into(),
-            props: vec![ro_prop("View", "ext_camera_view", handle_text(*view_handle))],
+            title: t!("Camera").into_owned(),
+            props: vec![ro_prop(t!("View").as_ref(), "ext_camera_view", handle_text(*view_handle))],
         }],
         ExtendedEntityData::SectionObject(data) => section_properties(data),
         ExtendedEntityData::ArcAlignedText(data) => arc_text_properties(data),
         ExtendedEntityData::RemoteText(data) => remote_text_properties(data),
         ExtendedEntityData::GeoPositionMarker(data) => geo_marker_properties(data),
         ExtendedEntityData::CoordinationModel(data) => vec![PropSection {
-            title: "Coordination Model".into(),
+            title: t!("Coordination Model").into_owned(),
             props: vec![
-                ro_prop("Flags", "ext_coord_flags", data.flags.to_string()),
-                ro_prop(
-                    "Definition",
+                ro_prop(t!("Flags").as_ref(), "ext_coord_flags", data.flags.to_string()),
+                ro_prop(t!("Definition").as_ref(),
                     "ext_coord_definition",
                     handle_text(data.definition_handle),
                 ),
-                edit_prop("Unit Factor", "ext_coord_unit", data.unit_factor),
-                ro_prop(
-                    "Transform",
+                edit_prop(t!("Unit Factor").as_ref(), "ext_coord_unit", data.unit_factor),
+                ro_prop(t!("Transform").as_ref(),
                     "ext_coord_transform",
                     data.transform
                         .chunks_exact(4)
@@ -954,68 +905,60 @@ fn properties(entity: &ExtendedEntity) -> Vec<PropSection> {
         ExtendedEntityData::PointCloud(data) => point_cloud_properties(data),
         ExtendedEntityData::PointCloudEx(data) => point_cloud_ex_properties(data),
         ExtendedEntityData::Proxy(data) => vec![PropSection {
-            title: "Proxy Entity".into(),
+            title: t!("Proxy Entity").into_owned(),
             props: vec![
-                ro_prop("Proxy ID", "ext_proxy_id", data.proxy_id.to_string()),
-                ro_prop("Class ID", "ext_proxy_class", data.class_id.to_string()),
-                ro_prop("DXF Subclass", "ext_proxy_subclass", data.dxf_subclass.clone()),
-                ro_prop("Version", "ext_proxy_version", data.version.to_string()),
-                ro_prop(
-                    "DWG Version",
+                ro_prop(t!("Proxy ID").as_ref(), "ext_proxy_id", data.proxy_id.to_string()),
+                ro_prop(t!("Class ID").as_ref(), "ext_proxy_class", data.class_id.to_string()),
+                ro_prop(t!("DXF Subclass").as_ref(), "ext_proxy_subclass", data.dxf_subclass.clone()),
+                ro_prop(t!("Version").as_ref(), "ext_proxy_version", data.version.to_string()),
+                ro_prop(t!("DWG Version").as_ref(),
                     "ext_proxy_dwg_version",
                     format!("{}.{}", data.dwg_version, data.maintenance_version),
                 ),
-                ro_prop("From DXF", "ext_proxy_from_dxf", data.from_dxf.to_string()),
-                ro_prop(
-                    "Graphics",
+                ro_prop(t!("From DXF").as_ref(), "ext_proxy_from_dxf", data.from_dxf.to_string()),
+                ro_prop(t!("Graphics").as_ref(),
                     "ext_proxy_graphics",
                     format!("{} bits", data.graphics.bit_count),
                 ),
-                ro_prop(
-                    "Payload",
+                ro_prop(t!("Payload").as_ref(),
                     "ext_proxy_payload",
                     format!("{} bits", data.payload.bit_count),
                 ),
-                ro_prop(
-                    "Text Payload",
+                ro_prop(t!("Text Payload").as_ref(),
                     "ext_proxy_text_payload",
                     format!("{} bits", data.text_payload.bit_count),
                 ),
-                ro_prop(
-                    "Object References",
+                ro_prop(t!("Object References").as_ref(),
                     "ext_proxy_references",
                     reference_properties(&data.object_ids),
                 ),
             ],
         }],
         ExtendedEntityData::OleFrame(data) => vec![PropSection {
-            title: "OLE Frame".into(),
+            title: t!("OLE Frame").into_owned(),
             props: vec![
-                ro_prop("Flag", "ext_ole_flag", data.flag.to_string()),
-                ro_prop("Mode", "ext_ole_mode", data.mode.to_string()),
-                ro_prop(
-                    "Storage Size",
+                ro_prop(t!("Flag").as_ref(), "ext_ole_flag", data.flag.to_string()),
+                ro_prop(t!("Mode").as_ref(), "ext_ole_mode", data.mode.to_string()),
+                ro_prop(t!("Storage Size").as_ref(),
                     "ext_ole_size",
                     format!("{} bytes", data.storage.encoded_len()),
                 ),
             ],
         }],
         ExtendedEntityData::LayoutPrintConfig(data) => vec![PropSection {
-            title: "Layout Print Configuration".into(),
+            title: t!("Layout Print Configuration").into_owned(),
             props: vec![
-                ro_prop(
-                    "Class Version",
+                ro_prop(t!("Class Version").as_ref(),
                     "ext_print_version",
                     data.class_version.to_string(),
                 ),
-                ro_prop("Flag", "ext_print_flag", data.flag.to_string()),
+                ro_prop(t!("Flag").as_ref(), "ext_print_flag", data.flag.to_string()),
             ],
         }],
         ExtendedEntityData::Format(data) => vec![PropSection {
-            title: "Format".into(),
+            title: t!("Format").into_owned(),
             props: vec![
-                ro_prop(
-                    "DWG Payload",
+                ro_prop(t!("DWG Payload").as_ref(),
                     "ext_format_dwg",
                     format!(
                         "{} bytes / {} handle bits",
@@ -1023,54 +966,47 @@ fn properties(entity: &ExtendedEntity) -> Vec<PropSection> {
                         data.raw_dwg_handle_bits
                     ),
                 ),
-                ro_prop(
-                    "DWG Version",
+                ro_prop(t!("DWG Version").as_ref(),
                     "ext_format_version",
                     format!("{:?}", data.raw_dwg_version),
                 ),
-                ro_prop(
-                    "DXF Codes",
+                ro_prop(t!("DXF Codes").as_ref(),
                     "ext_format_dxf",
                     data.raw_dxf_codes.as_ref().map_or(0, Vec::len).to_string(),
                 ),
             ],
         }],
         ExtendedEntityData::Legacy(data) => vec![PropSection {
-            title: "Legacy Entity".into(),
-            props: vec![ro_prop("Data", "ext_legacy_data", format!("{data:#?}"))],
+            title: t!("Legacy Entity").into_owned(),
+            props: vec![ro_prop(t!("Data").as_ref(), "ext_legacy_data", format!("{data:#?}"))],
         }],
         ExtendedEntityData::DynamicBlock(data) => vec![PropSection {
-            title: "Dynamic Block Entity".into(),
+            title: t!("Dynamic Block Entity").into_owned(),
             props: vec![
-                ro_prop(
-                    "Class",
+                ro_prop(t!("Class").as_ref(),
                     "ext_dynamic_class",
                     data.entity_dxf_name().unwrap_or("Helper"),
                 ),
-                ro_prop("Decoded Data", "ext_dynamic_data", format!("{data:#?}")),
+                ro_prop(t!("Decoded Data").as_ref(), "ext_dynamic_data", format!("{data:#?}")),
             ],
         }],
         ExtendedEntityData::RegisteredClass(data) => vec![PropSection {
-            title: "Registered Class Entity".into(),
+            title: t!("Registered Class Entity").into_owned(),
             props: vec![
-                ro_prop("DXF Name", "ext_registered_dxf", data.dxf_name.clone()),
-                ro_prop(
-                    "C++ Class",
+                ro_prop(t!("DXF Name").as_ref(), "ext_registered_dxf", data.dxf_name.clone()),
+                ro_prop(t!("C++ Class").as_ref(),
                     "ext_registered_cpp",
                     data.cpp_class_name.clone(),
                 ),
-                ro_prop(
-                    "Properties",
+                ro_prop(t!("Properties").as_ref(),
                     "ext_registered_properties",
                     semantic_properties(&data.properties),
                 ),
-                ro_prop(
-                    "Payload",
+                ro_prop(t!("Payload").as_ref(),
                     "ext_registered_payload",
                     format!("{} bits", data.payload.bit_count),
                 ),
-                ro_prop(
-                    "Object References",
+                ro_prop(t!("Object References").as_ref(),
                     "ext_registered_references",
                     reference_properties(&data.object_ids),
                 ),

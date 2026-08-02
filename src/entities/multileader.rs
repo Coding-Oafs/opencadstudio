@@ -6,6 +6,7 @@ use acadrust::entities::{
 use crate::entities::text_support::{
     layout_mtext, resolve_text_style, MTextRenderOpts, MTextVAnchor, ResolvedTextStyle,
 };
+use crate::t;
 
 /// Map MLEADER's vertical attachment enum onto the shared `MTextVAnchor`
 /// used by `layout_mtext`. Replaces the old `v_offset_for_attachment`
@@ -650,19 +651,19 @@ fn properties(ml: &MultiLeader) -> Vec<PropSection> {
 
     // ── Misc ─────────────────────────────────────────────────────────────
     let misc = PropSection {
-        title: "Misc".into(),
+        title: t!("Misc").into_owned(),
         props: vec![
             // Overall scale is grayed when annotative (annotation scale drives sizing).
             num_row(
-                "Overall scale",
+                t!("Overall scale").as_ref(),
                 "scale_factor",
                 ml.scale_factor,
                 !ml.enable_annotation_scale,
             ),
             // Style name is resolved from style_handle by the panel builder (needs doc).
-            ro("Multileader style", "mleader_style", "Standard"),
+            ro(t!("Multileader style").as_ref(), "mleader_style", "Standard"),
             bool_toggle(
-                "Annotative",
+                t!("Annotative").as_ref(),
                 "enable_annotation_scale",
                 ml.enable_annotation_scale,
             ),
@@ -673,127 +674,127 @@ fn properties(ml: &MultiLeader) -> Vec<PropSection> {
     // Landing rows are folded in here: the standalone "Leader Structure" group
     // is a style-dialog tab, not a palette group.
     let leaders = PropSection {
-        title: "Leaders".into(),
+        title: t!("Leaders").into_owned(),
         props: vec![
             choice(
-                "Leader type",
+                t!("Leader type").as_ref(),
                 "path_type",
                 leader_type_str(&ml.path_type),
                 &["Straight", "Spline", "None"],
             ),
             Property {
-                label: "Leader color".into(),
+                label: t!("Leader color").into_owned(),
                 field: "line_color",
                 value: PropValue::ColorChoice(ml.line_color),
             },
             // Linetype name resolved from line_type_handle by the panel builder.
-            ro("Leader linetype", "line_type_handle", "ByBlock"),
+            ro(t!("Leader linetype").as_ref(), "line_type_handle", "ByBlock"),
             Property {
-                label: "Leader lineweight".into(),
+                label: t!("Leader lineweight").into_owned(),
                 field: "line_weight",
                 value: PropValue::LwChoice(ml.line_weight),
             },
             // Arrowhead block name resolved by the panel builder (default "Closed filled").
-            ro("Arrowhead", "arrowhead_handle", "Closed filled"),
-            edit("Arrowhead size", "arrowhead_size", ml.arrowhead_size),
-            bool_toggle("Horizontal Landing", "enable_dogleg", ml.enable_dogleg),
+            ro(t!("Arrowhead").as_ref(), "arrowhead_handle", "Closed filled"),
+            edit(t!("Arrowhead size").as_ref(), "arrowhead_size", ml.arrowhead_size),
+            bool_toggle(t!("Horizontal Landing").as_ref(), "enable_dogleg", ml.enable_dogleg),
             num_row(
-                "Landing distance",
+                t!("Landing distance").as_ref(),
                 "landing_distance",
                 ml.dogleg_length,
                 ml.enable_dogleg,
             ),
-            bool_toggle("Leader extension", "enable_landing", ml.enable_landing),
+            bool_toggle(t!("Leader extension").as_ref(), "enable_landing", ml.enable_landing),
         ],
     };
 
     // ── Text (shown only for MText content) ──────────────────────────────
     let text = PropSection {
-        title: "Text".into(),
+        title: t!("Text").into_owned(),
         props: vec![
             Property {
-                label: "Contents".into(),
+                label: t!("Contents").into_owned(),
                 field: "text_string",
                 value: PropValue::EditText(ctx.text_string.clone()),
             },
             // Text-style name resolved from text_style_handle by the panel builder.
-            ro("Text style", "text_style_handle", "Standard"),
+            ro(t!("Text style").as_ref(), "text_style_handle", "Standard"),
             choice(
-                "Justify",
+                t!("Justify").as_ref(),
                 "text_alignment",
                 text_align_str(&ml.text_alignment),
                 &["Left", "Center", "Right"],
             ),
             choice(
-                "Direction",
+                t!("Direction").as_ref(),
                 "text_flow_direction",
                 flow_dir_str(&ctx.text_flow_direction),
                 &["By style", "Left to right", "Top to bottom"],
             ),
-            edit("Width", "text_width", ctx.text_width),
-            edit("Height", "text_height", ml.text_height),
-            edit_angle("Rotation", "text_rotation", ctx.text_rotation.to_degrees()),
-            edit("Line space factor", "line_spacing", ctx.line_spacing_factor),
+            edit(t!("Width").as_ref(), "text_width", ctx.text_width),
+            edit(t!("Height").as_ref(), "text_height", ml.text_height),
+            edit_angle(t!("Rotation").as_ref(), "text_rotation", ctx.text_rotation.to_degrees()),
+            edit(t!("Line space factor").as_ref(), "line_spacing", ctx.line_spacing_factor),
             edit(
-                "Line space distance",
+                t!("Line space distance").as_ref(),
                 "line_space_distance",
                 ml.text_height * 1.666_666_666_666_667 * ctx.line_spacing_factor,
             ),
             choice(
-                "Line space style",
+                t!("Line space style").as_ref(),
                 "line_space_style",
                 line_style_str(&ctx.line_spacing_style),
                 &["At least", "Exactly"],
             ),
             bool_toggle(
-                "Background mask",
+                t!("Background mask").as_ref(),
                 "background_fill_enabled",
                 ctx.background_fill_enabled,
             ),
             choice(
-                "Attachment type",
+                t!("Attachment type").as_ref(),
                 "text_attachment_direction",
                 attach_dir_str(&ml.text_attachment_direction),
                 &["Horizontal", "Vertical"],
             ),
             choice(
-                "Left Attachment",
+                t!("Left Attachment").as_ref(),
                 "text_left_attachment",
                 attachment_str(&ml.text_left_attachment),
                 &ATTACH_LABELS,
             ),
             choice(
-                "Right Attachment",
+                t!("Right Attachment").as_ref(),
                 "text_right_attachment",
                 attachment_str(&ml.text_right_attachment),
                 &ATTACH_LABELS,
             ),
-            edit("Landing gap", "landing_gap", ctx.landing_gap),
-            bool_toggle("Text frame", "text_frame", ml.text_frame),
+            edit(t!("Landing gap").as_ref(), "landing_gap", ctx.landing_gap),
+            bool_toggle(t!("Text frame").as_ref(), "text_frame", ml.text_frame),
         ],
     };
 
     // ── Block ────────────────────────────────────────────────────────────
     let block = PropSection {
-        title: "Block".into(),
+        title: t!("Block").into_owned(),
         props: vec![
             ro(
-                "Source block",
+                t!("Source block").as_ref(),
                 "block_content_handle",
                 hexh(ml.block_content_handle),
             ),
             ro(
-                "Block connection",
+                t!("Block connection").as_ref(),
                 "block_connection_type",
                 format!("{:?}", ml.block_connection_type),
             ),
             ro(
-                "Block color",
+                t!("Block color").as_ref(),
                 "block_content_color",
                 format!("{:?}", ml.block_content_color),
             ),
             ro(
-                "Block scale",
+                t!("Block scale").as_ref(),
                 "block_scale",
                 format!(
                     "{:.3} × {:.3} × {:.3}",
@@ -801,7 +802,7 @@ fn properties(ml: &MultiLeader) -> Vec<PropSection> {
                 ),
             ),
             edit(
-                "Block rotation",
+                t!("Block rotation").as_ref(),
                 "block_rotation",
                 ml.block_rotation.to_degrees(),
             ),

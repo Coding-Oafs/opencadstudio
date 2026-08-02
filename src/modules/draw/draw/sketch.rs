@@ -15,6 +15,7 @@
 use acadrust::entities::{LwPolyline, LwVertex};
 use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -88,9 +89,9 @@ impl CadCommand for SketchCommand {
 
     fn prompt(&self) -> String {
         if self.pen_down {
-            "SKETCH  Pen down — move to sketch, click to lift, Enter to record:".to_string()
+            t!("SKETCH  Pen down — move to sketch, click to lift, Enter to record:").into_owned()
         } else {
-            "SKETCH  Pen up — click to lower the pen, Enter to record:".to_string()
+            t!("SKETCH  Pen up — click to lower the pen, Enter to record:").into_owned()
         }
     }
 

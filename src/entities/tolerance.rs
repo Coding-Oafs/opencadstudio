@@ -8,6 +8,7 @@ use crate::scene::model::object::{GripApply, GripDef, PropSection};
 use crate::scene::model::wire_model::SnapHint;
 use crate::scene::text::lff;
 use crate::scene::view::transform;
+use crate::t;
 
 // ── GDT text parser ───────────────────────────────────────────────────────────
 
@@ -541,25 +542,25 @@ impl PropertyEditable for Tolerance {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
         vec![
             PropSection {
-                title: "Text".into(),
+                title: t!("Text").into_owned(),
                 props: vec![
-                    ro("Text style", "tol_text_style", String::new()),
-                    edit("Text height", "tol_text_height", self.text_height),
+                    ro(t!("Text style").as_ref(), "tol_text_style", String::new()),
+                    edit(t!("Text height").as_ref(), "tol_text_height", self.text_height),
                 ],
             },
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    edit("Position X", "tol_ix", self.insertion_point.x),
-                    edit("Position Y", "tol_iy", self.insertion_point.y),
-                    edit("Position Z", "tol_iz", self.insertion_point.z),
+                    edit(t!("Position X").as_ref(), "tol_ix", self.insertion_point.x),
+                    edit(t!("Position Y").as_ref(), "tol_iy", self.insertion_point.y),
+                    edit(t!("Position Z").as_ref(), "tol_iz", self.insertion_point.z),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
                     ro(
-                        "Dimension style",
+                        t!("Dimension style").as_ref(),
                         "tol_dim_style",
                         if self.dimension_style_name.is_empty() {
                             "(default)".to_string()
@@ -567,9 +568,9 @@ impl PropertyEditable for Tolerance {
                             self.dimension_style_name.clone()
                         },
                     ),
-                    edit("Direction X", "tol_dir_x", self.direction.x),
-                    edit("Direction Y", "tol_dir_y", self.direction.y),
-                    edit("Direction Z", "tol_dir_z", self.direction.z),
+                    edit(t!("Direction X").as_ref(), "tol_dir_x", self.direction.x),
+                    edit(t!("Direction Y").as_ref(), "tol_dir_y", self.direction.y),
+                    edit(t!("Direction Z").as_ref(), "tol_dir_z", self.direction.z),
                 ],
             },
         ]

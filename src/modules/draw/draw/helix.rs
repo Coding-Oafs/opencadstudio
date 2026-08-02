@@ -15,6 +15,7 @@
 use acadrust::entities::Polyline3D;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, DynField};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -115,11 +116,11 @@ impl CadCommand for HelixCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            Step::Center => "HELIX  Specify centre point of base:".to_string(),
-            Step::BaseRadius => "HELIX  Specify base radius:".to_string(),
-            Step::TopRadius => "HELIX  Specify top radius <same as base>:".to_string(),
-            Step::Height => "HELIX  Specify helix height:".to_string(),
-            Step::Turns => "HELIX  Enter number of turns <3>:".to_string(),
+            Step::Center => t!("HELIX  Specify centre point of base:").into_owned(),
+            Step::BaseRadius => t!("HELIX  Specify base radius:").into_owned(),
+            Step::TopRadius => t!("HELIX  Specify top radius <same as base>:").into_owned(),
+            Step::Height => t!("HELIX  Specify helix height:").into_owned(),
+            Step::Turns => t!("HELIX  Enter number of turns <3>:").into_owned(),
         }
     }
 

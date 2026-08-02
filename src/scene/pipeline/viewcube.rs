@@ -14,6 +14,7 @@ use glam::camera::rh::proj::directx::orthographic;
 use glam::{Mat4, Vec3, Vec4};
 use iced::wgpu;
 use iced::{Rectangle, Size};
+use crate::t;
 
 // ── ViewCube layout ───────────────────────────────────────────────────────
 pub const VIEWCUBE_PX: u32 = 84; // 30% smaller cube (was 120)
@@ -53,7 +54,21 @@ pub enum NudgeDir {
     Right,
 }
 
-const FACE_LABELS: [&str; 6] = ["TOP", "BOTTOM", "FRONT", "BACK", "RIGHT", "LEFT"];
+/// Face labels in the current UI language, sourced from `locales/*.yml`
+/// (`ViewCube Top` …). The cube text is drawn from a fixed bitmap atlas,
+/// so the translated values must stay inside the atlas glyph set — the same
+/// vocabulary the `glyph_index`/`latin_rows`/`han_rows` tables below agree on.
+fn face_labels() -> [std::borrow::Cow<'static, str>; 6] {
+    [
+        t!("ViewCube Top"),
+        t!("ViewCube Bottom"),
+        t!("ViewCube Front"),
+        t!("ViewCube Back"),
+        t!("ViewCube Right"),
+        t!("ViewCube Left"),
+    ]
+}
+
 const FACE_CENTERS: [[f32; 3]; 6] = [
     [0.0, 0.0, 1.0],
     [0.0, 0.0, -1.0],
@@ -226,13 +241,27 @@ impl CubeUniforms {
 }
 
 // ── Bitmap text ───────────────────────────────────────────────────────────
+//
+// Atlas grid: 8 × 3 cells of 16×18 px (128×54 texture). Each cell holds one
+// glyph, centered. Latin label glyphs are the original 5×7 bitmaps; the six
+// Simplified-Chinese face labels are 14×16 bitmaps traced from the system's
+// Noto Sans CJK font (see the `han_rows` table below), which keeps the shapes
+// correct instead of hand-drawn approximations.
 
-const GLYPH_W: usize = 5;
-const GLYPH_H: usize = 7;
-const CELL_W: usize = 6;
-const CELL_H: usize = 8;
+const CELL_W: usize = 16;
+const CELL_H: usize = 18;
 const ATLAS_COLS: usize = 8;
 const ATLAS_ROWS: usize = 3;
+// Latin label glyphs: 5×7 bitmaps centered in their cell.
+const LATIN_W: usize = 5;
+const LATIN_H: usize = 7;
+const LATIN_OX: usize = (CELL_W - LATIN_W) / 2;
+const LATIN_OY: usize = (CELL_H - LATIN_H) / 2;
+// Han label glyphs: 14×16 font bitmaps centered in their cell.
+const HAN_W: usize = 14;
+const HAN_H: usize = 16;
+const HAN_OX: usize = (CELL_W - HAN_W) / 2;
+const HAN_OY: usize = (CELL_H - HAN_H) / 2;
 const MAX_LABEL_CHARS: usize = 6;
 const LABEL_COUNT: usize = 6;
 // Face labels + the four compass cardinals (one glyph each).
@@ -287,67 +316,122 @@ fn glyph_index(c: char) -> Option<usize> {
         'T' => Some(15),
         'S' => Some(16),
         'W' => Some(17),
+        // Simplified-Chinese face labels (atlas cells 18..24).
+        '上' => Some(18),
+        '下' => Some(19),
+        '前' => Some(20),
+        '后' => Some(21),
+        '右' => Some(22),
+        '左' => Some(23),
         _ => None,
     }
 }
 
-fn glyph_rows(c: char) -> [u8; GLYPH_H] {
+/// 5×7 Latin glyph rows (existing shapes, unchanged) for the English labels
+/// and compass cardinals. `None` for any other character.
+fn latin_rows(c: char) -> Option<[u8; 7]> {
     match c {
-        'A' => [
+        'A' => Some([
             0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ],
-        'B' => [
+        ]),
+        'B' => Some([
             0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
-        ],
-        'C' => [
+        ]),
+        'C' => Some([
             0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
-        ],
-        'E' => [
+        ]),
+        'E' => Some([
             0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
-        ],
-        'F' => [
+        ]),
+        'F' => Some([
             0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
-        ],
-        'G' => [
+        ]),
+        'G' => Some([
             0b01111, 0b10000, 0b10000, 0b10011, 0b10001, 0b10001, 0b01111,
-        ],
-        'H' => [
+        ]),
+        'H' => Some([
             0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ],
-        'I' => [
+        ]),
+        'I' => Some([
             0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
-        ],
-        'K' => [
+        ]),
+        'K' => Some([
             0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
-        ],
-        'L' => [
+        ]),
+        'L' => Some([
             0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
-        ],
-        'M' => [
+        ]),
+        'M' => Some([
             0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
-        ],
-        'N' => [
+        ]),
+        'N' => Some([
             0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
-        ],
-        'O' => [
+        ]),
+        'O' => Some([
             0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ],
-        'P' => [
+        ]),
+        'P' => Some([
             0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
-        ],
-        'R' => [
+        ]),
+        'R' => Some([
             0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
-        ],
-        'T' => [
+        ]),
+        'T' => Some([
             0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
-        ],
-        'S' => [
+        ]),
+        'S' => Some([
             0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
-        ],
-        'W' => [
+        ]),
+        'W' => Some([
             0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
-        ],
-        _ => [0; GLYPH_H],
+        ]),
+        _ => None,
+    }
+}
+
+/// 14×16 Han glyph rows for the Simplified-Chinese face labels (上/下/前/后/右/左),
+/// traced from Noto Sans CJK Bold (system font) so the stroke shapes are the
+/// real printed forms rather than hand-drawn approximations. Each row is a
+/// 14-bit mask, bit 13 = leftmost pixel. `None` for any other character.
+fn han_rows(c: char) -> Option<[u16; HAN_H]> {
+    match c {
+        '上' => Some([
+            0b00000000000000, 0b00000000000000, 0b00000110000000, 0b00000110000000,
+            0b00000110000000, 0b00000110000000, 0b00000111111100, 0b00000111111100,
+            0b00000110000000, 0b00000110000000, 0b00000110000000, 0b00000110000000,
+            0b11111111111110, 0b11111111111110, 0b00000000000000, 0b00000000000000,
+        ]),
+        '下' => Some([
+            0b00000000000000, 0b11111111111110, 0b11111111111110, 0b00000110000000,
+            0b00000110000000, 0b00000111100000, 0b00000111110000, 0b00000110111100,
+            0b00000110001100, 0b00000110000000, 0b00000110000000, 0b00000110000000,
+            0b00000110000000, 0b00000110000000, 0b00000000000000, 0b00000000000000,
+        ]),
+        '前' => Some([
+            0b00000000000000, 0b00010000010000, 0b00011000011000, 0b11111111111110,
+            0b11111111111110, 0b00000000000100, 0b01111100101100, 0b01100100101100,
+            0b01111100101100, 0b01100100101100, 0b01111100101100, 0b01100110001100,
+            0b01100110011100, 0b01101100011100, 0b00000000000000, 0b00000000000000,
+        ]),
+        '后' => Some([
+            0b00000000000000, 0b00000000111000, 0b00111111111100, 0b01111000000000,
+            0b00100000000000, 0b00111111111110, 0b01111111111100, 0b01100000000000,
+            0b01101111111100, 0b01101111111100, 0b01101100001100, 0b01101100001100,
+            0b11001111111100, 0b11001100001100, 0b00000000000000, 0b00000000000000,
+        ]),
+        '右' => Some([
+            0b00000000000000, 0b00000100000000, 0b00000110000000, 0b00001110000000,
+            0b11111111111110, 0b00011100000000, 0b00011000000000, 0b00011000000000,
+            0b00111111111100, 0b01111000001100, 0b11111000001100, 0b01011000001100,
+            0b00011111111100, 0b00011111111100, 0b00011000001100, 0b00000000000000,
+        ]),
+        '左' => Some([
+            0b00000000000000, 0b00001100000000, 0b00001100000000, 0b01111111111100,
+            0b11111111111110, 0b00011000000000, 0b00011000000000, 0b00011111111100,
+            0b00111111111100, 0b00110001100000, 0b01100001100000, 0b01100001100000,
+            0b11011111111110, 0b00011111111110, 0b00000000000000, 0b00000000000000,
+        ]),
+        _ => None,
     }
 }
 
@@ -357,20 +441,32 @@ fn build_atlas() -> (Vec<u8>, u32, u32) {
     let mut data = vec![0u8; (w * h) as usize];
     let glyphs = [
         'A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'T', 'S', 'W',
+        '上', '下', '前', '后', '右', '左',
     ];
     for (i, &ch) in glyphs.iter().enumerate() {
         let col = i % ATLAS_COLS;
         let row = i / ATLAS_COLS;
         let x0 = col * CELL_W;
         let y0 = row * CELL_H;
-        let rows = glyph_rows(ch);
-        for y in 0..GLYPH_H {
-            let bits = rows[y];
-            for x in 0..GLYPH_W {
-                if (bits >> (GLYPH_W - 1 - x)) & 1 == 0 {
-                    continue;
+        if let Some(rows) = latin_rows(ch) {
+            for y in 0..LATIN_H {
+                let bits = rows[y];
+                for x in 0..LATIN_W {
+                    if (bits >> (LATIN_W - 1 - x)) & 1 == 0 {
+                        continue;
+                    }
+                    data[(y0 + y + LATIN_OY) as usize * w as usize + (x0 + x + LATIN_OX)] = 255;
                 }
-                data[(y0 + y) as usize * w as usize + (x0 + x)] = 255;
+            }
+        } else if let Some(rows) = han_rows(ch) {
+            for y in 0..HAN_H {
+                let bits = rows[y];
+                for x in 0..HAN_W {
+                    if (bits >> (HAN_W - 1 - x)) & 1 == 0 {
+                        continue;
+                    }
+                    data[(y0 + y + HAN_OY) as usize * w as usize + (x0 + x + HAN_OX)] = 255;
+                }
             }
         }
     }
@@ -380,13 +476,18 @@ fn build_atlas() -> (Vec<u8>, u32, u32) {
 fn glyph_uv(index: usize, atlas_w: f32, atlas_h: f32) -> (f32, f32, f32, f32) {
     let col = index % ATLAS_COLS;
     let row = index / ATLAS_COLS;
-    let x0 = (col * CELL_W) as f32;
-    let y0 = (row * CELL_H) as f32;
+    let (ox, oy, gw, gh) = if index < 18 {
+        (LATIN_OX, LATIN_OY, LATIN_W, LATIN_H)
+    } else {
+        (HAN_OX, HAN_OY, HAN_W, HAN_H)
+    };
+    let x0 = (col * CELL_W + ox) as f32;
+    let y0 = (row * CELL_H + oy) as f32;
     (
         x0 / atlas_w,
         y0 / atlas_h,
-        (x0 + GLYPH_W as f32) / atlas_w,
-        (y0 + GLYPH_H as f32) / atlas_h,
+        (x0 + gw as f32) / atlas_w,
+        (y0 + gh as f32) / atlas_h,
     )
 }
 
@@ -590,33 +691,20 @@ impl ViewCubeText {
             ))
             * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
 
-        // Glyph size in cube-local units. Letters are laid out on the face
-        // plane itself (not screen-aligned), so they skew with perspective and
-        // look painted onto the surface as the cube rotates.
+        // Glyph size in cube-local units. Letters are screen-aligned per face
+        // (see the axis projection below), so they read upright on every face
+        // as the cube rotates instead of turning with the face's local axes.
         const GW: f32 = 0.17; // glyph width
         const GH: f32 = 0.24; // glyph height
         const ADV: f32 = 0.22; // pen advance
-        // In-plane (right, up) axes per face, ordered as FACE_CENTERS. Chosen
-        // so u × v = outward normal → letters never read mirrored.
-        const FACE_U: [[f32; 3]; 6] = [
-            [1.0, 0.0, 0.0],  // TOP
-            [-1.0, 0.0, 0.0], // BOTTOM
-            [1.0, 0.0, 0.0],  // FRONT
-            [-1.0, 0.0, 0.0], // BACK
-            [0.0, 1.0, 0.0],  // RIGHT
-            [0.0, -1.0, 0.0], // LEFT
-        ];
-        const FACE_V: [[f32; 3]; 6] = [
-            [0.0, 1.0, 0.0], // TOP
-            [0.0, 1.0, 0.0], // BOTTOM
-            [0.0, 0.0, 1.0], // FRONT
-            [0.0, 0.0, 1.0], // BACK
-            [0.0, 0.0, 1.0], // RIGHT
-            [0.0, 0.0, 1.0], // LEFT
-        ];
+        // Local directions that map onto the screen's up / right once rotated
+        // by `cam_rotation`. Used to project label axes onto each face plane.
+        let inv_rot = cam_rotation.inverse();
+        let screen_up_local = inv_rot.transform_vector3(Vec3::Y);
+        let screen_right_local = inv_rot.transform_vector3(Vec3::X);
         let mut verts: Vec<TextVertex> = Vec::with_capacity(MAX_VERTS);
         let view_dir = Vec3::Z;
-
+        let labels = face_labels();
         // Local cube point → screen pixel.
         let project = |local: Vec3| -> Option<[f32; 2]> {
             let world = cam_rotation.transform_point3(local);
@@ -644,25 +732,54 @@ impl ViewCubeText {
                 text_color[2],
                 text_color[3] * alpha,
             ];
-            let u = Vec3::from(FACE_U[fi]);
-            let v = Vec3::from(FACE_V[fi]);
+            // Screen-aligned label axes: project the screen's up direction onto
+            // the face plane so the text reads upright (never rotated with the
+            // face) on every visible face. `u` is then completed in-plane and
+            // flipped toward screen-right so letters read left→right.
+            let n = face_n;
+            let mut v = screen_up_local - n * screen_up_local.dot(n);
+            if v.length_squared() < 1e-6 {
+                // Face normal is (anti-)parallel to screen-up, so the projected
+                // up vanishes; project screen-right instead and rebuild the frame.
+                let mut u = screen_right_local - n * screen_right_local.dot(n);
+                if u.length_squared() < 1e-6 {
+                    u = Vec3::Z - n * Vec3::Z.dot(n);
+                }
+                u = u.normalize();
+                v = n.cross(u);
+            } else {
+                v = v.normalize();
+            }
+            let mut u = n.cross(v);
+            if u.dot(screen_right_local) < 0.0 {
+                u = -u;
+            }
             let center = face_n; // unit normal = face surface centre (distance E)
 
-            let label = FACE_LABELS[fi];
-            let total_w = label.len() as f32 * ADV;
+            let label = &labels[fi];
+            // Han labels are single characters; render them ~2.6× larger so the
+            // 14×16 font bitmap stays ~1:1 and crisp. Multi-letter Latin labels
+            // keep the compact size so "BOTTOM" still fits the face.
+            let is_han = label.chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c));
+            let (gw, gh, adv) = if is_han {
+                (0.45, 0.52, 0.45)
+            } else {
+                (GW, GH, ADV)
+            };
+            let total_w = label.chars().count() as f32 * adv;
             let mut pen = -total_w * 0.5;
             for ch in label.chars() {
                 let Some(gi) = glyph_index(ch) else {
-                    pen += ADV;
+                    pen += adv;
                     continue;
                 };
                 let (u0, v0, u1, v1) = glyph_uv(gi, self.atlas_w, self.atlas_h);
                 // Glyph quad corners on the face plane, then projected.
                 let corner = |lx: f32, ly: f32| center + u * lx + v * ly;
-                let tl = project(corner(pen, GH * 0.5));
-                let tr = project(corner(pen + GW, GH * 0.5));
-                let br = project(corner(pen + GW, -GH * 0.5));
-                let bl = project(corner(pen, -GH * 0.5));
+                let tl = project(corner(pen, gh * 0.5));
+                let tr = project(corner(pen + gw, gh * 0.5));
+                let br = project(corner(pen + gw, -gh * 0.5));
+                let bl = project(corner(pen, -gh * 0.5));
                 if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
                     let mk = |pos: [f32; 2], uv: [f32; 2]| TextVertex { pos, uv, color };
                     verts.push(mk(tl, [u0, v0]));
@@ -672,7 +789,7 @@ impl ViewCubeText {
                     verts.push(mk(br, [u1, v1]));
                     verts.push(mk(bl, [u0, v1]));
                 }
-                pen += ADV;
+                pen += adv;
                 if verts.len() >= self.vertex_capacity as usize {
                     break;
                 }

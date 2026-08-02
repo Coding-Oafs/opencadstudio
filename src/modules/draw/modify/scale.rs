@@ -14,6 +14,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, DynField, EntityTransform};
 use crate::modules::draw::defaults;
@@ -80,22 +81,29 @@ impl CadCommand for ScaleCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Base => format!(
-                "SCALE  Specify base point  [{} objects]:",
-                self.handles.len()
-            ),
-            Step::Factor { .. } => format!(
-                "SCALE  Specify scale factor  <{:.4}>:",
-                self.default_factor
-            ),
-            Step::RefFirst { .. } => {
-                "SCALE  Specify first reference point or type reference length:".into()
+            Step::Base => t!(
+                "SCALE  Specify base point  [%{count} objects]:",
+                count = self.handles.len()
+            )
+            .into_owned(),
+            Step::Factor { .. } => {
+                let f = format!("{:.4}", self.default_factor);
+                t!("SCALE  Specify scale factor  <%{f}>:", f = f).into_owned()
             }
-            Step::RefSecond { .. } => "SCALE  Specify second reference point:".into(),
-            Step::RefNew { ref_dist, .. } => format!(
-                "SCALE  Specify new length from base or type a length  [ref={:.3}]:",
-                ref_dist
-            ),
+            Step::RefFirst { .. } => {
+                t!("SCALE  Specify first reference point or type reference length:").into_owned()
+            }
+            Step::RefSecond { .. } => {
+                t!("SCALE  Specify second reference point:").into_owned()
+            }
+            Step::RefNew { ref_dist, .. } => {
+                let d = format!("{:.3}", ref_dist);
+                t!(
+                    "SCALE  Specify new length from base or type a length  [ref=%{d}]:",
+                    d = d
+                )
+                .into_owned()
+            }
         }
     }
 
@@ -103,7 +111,7 @@ impl CadCommand for ScaleCommand {
         use crate::command::CmdOption;
         match &self.step {
             // The reference-scaling keyword is only offered at the factor step.
-            Step::Factor { .. } => vec![CmdOption::new("Reference", "R")],
+            Step::Factor { .. } => vec![CmdOption::new(t!("Reference").as_ref(), "R")],
             _ => vec![],
         }
     }

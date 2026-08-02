@@ -131,9 +131,9 @@ impl OpenCADStudio {
             "Replaced 1 occurrence in {}; {remaining} matching object(s) remain.",
             match_label(target)
         );
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "FIND/REPLACE: replaced 1 occurrence of \"{search}\"."
-        ));
+        ).as_ref());
         self.refresh_properties();
     }
 
@@ -188,9 +188,9 @@ impl OpenCADStudio {
             "Replaced {replaced} occurrence(s) in {} object(s).",
             changed.len()
         );
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "FIND/REPLACE: replaced {replaced} occurrence(s) of \"{search}\"."
-        ));
+        ).as_ref());
         self.refresh_properties();
     }
 

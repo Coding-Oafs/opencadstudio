@@ -5,6 +5,7 @@
 
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Point as CadPoint};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -34,12 +35,12 @@ impl CadCommand for PointCommand {
         "POINT"
     }
     fn prompt(&self) -> String {
-        "POINT  Specify point:".into()
+        crate::t!("POINT  Specify point:").into_owned()
     }
 
     fn options(&self) -> Vec<crate::command::CmdOption> {
         use crate::command::CmdOption;
-        vec![CmdOption::enter("Done")]
+        vec![CmdOption::enter(t!("Done").as_ref())]
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {

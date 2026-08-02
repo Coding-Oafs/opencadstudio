@@ -14,6 +14,7 @@ use glam::{DVec3, Vec3};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_continue.svg"));
 
@@ -104,9 +105,9 @@ impl CadCommand for DimContinueCommand {
 
     fn prompt(&self) -> String {
         if !self.ready {
-            "DIMCONTINUE  No base dimension found. Place a dimension first.".into()
+            t!("DIMCONTINUE  No base dimension found. Place a dimension first.").into_owned()
         } else {
-            "DIMCONTINUE  Specify a second extension line origin (Enter to exit):".into()
+            t!("DIMCONTINUE  Specify a second extension line origin (Enter to exit):").into_owned()
         }
     }
 

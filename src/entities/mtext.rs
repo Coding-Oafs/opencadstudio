@@ -11,6 +11,7 @@ use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckC
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
+use crate::t;
 
 /// The entity's `column_data` as the layout's column description.
 ///
@@ -254,15 +255,15 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
     let height_editable = col_type == 1 || (col_type == 2 && !t.column_data.auto_height);
     vec![
         PropSection {
-            title: "Text".into(),
+            title: t!("Text").into_owned(),
             props: vec![
                 Property {
-                    label: "Contents".into(),
+                    label: t!("Contents").into_owned(),
                     field: "content",
                     value: PropValue::EditText(t.value.clone()),
                 },
                 Property {
-                    label: "Style".into(),
+                    label: t!("Style").into_owned(),
                     field: "style",
                     value: PropValue::Choice {
                         selected: if t.style.trim().is_empty() {
@@ -274,12 +275,12 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                     },
                 },
                 ro(
-                    "Annotative",
+                    t!("Annotative").as_ref(),
                     "annotative",
                     if t.is_annotative { "Yes" } else { "No" },
                 ),
                 Property {
-                    label: "Justify".into(),
+                    label: t!("Justify").into_owned(),
                     field: "justify",
                     value: PropValue::Choice {
                         selected: attachment_str(&t.attachment_point).to_string(),
@@ -300,7 +301,7 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                     },
                 },
                 Property {
-                    label: "Direction".into(),
+                    label: t!("Direction").into_owned(),
                     field: "direction",
                     value: PropValue::Choice {
                         selected: drawing_dir_str(&t.drawing_direction).to_string(),
@@ -310,12 +311,12 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                             .collect(),
                     },
                 },
-                edit("Text height", "height", t.height),
-                edit_angle("Rotation", "rotation", t.rotation.to_degrees()),
-                edit("Line space factor", "line_spacing", t.line_spacing_factor),
-                edit("Line space distance", "line_space_distance", line_space_distance),
+                edit(t!("Text height").as_ref(), "height", t.height),
+                edit_angle(t!("Rotation").as_ref(), "rotation", t.rotation.to_degrees()),
+                edit(t!("Line space factor").as_ref(), "line_spacing", t.line_spacing_factor),
+                edit(t!("Line space distance").as_ref(), "line_space_distance", line_space_distance),
                 Property {
-                    label: "Line space style".into(),
+                    label: t!("Line space style").into_owned(),
                     field: "line_space_style",
                     value: PropValue::Choice {
                         selected: match t.line_spacing_style {
@@ -330,7 +331,7 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                     },
                 },
                 Property {
-                    label: "Background mask".into(),
+                    label: t!("Background mask").into_owned(),
                     field: "background_mask",
                     value: PropValue::Choice {
                         selected: if t.background_fill_flags & 0x01 != 0 {
@@ -346,15 +347,15 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                             .collect(),
                     },
                 },
-                num_row("Defined width", "rect_w", t.rectangle_width, width_editable),
+                num_row(t!("Defined width").as_ref(), "rect_w", t.rectangle_width, width_editable),
                 num_row(
-                    "Defined height",
+                    t!("Defined height").as_ref(),
                     "rect_h",
                     t.rectangle_height.unwrap_or(0.0),
                     height_editable,
                 ),
                 Property {
-                    label: "Columns".into(),
+                    label: t!("Columns").into_owned(),
                     field: "columns",
                     value: PropValue::Choice {
                         selected: columns_str(&t.column_data).to_string(),
@@ -366,20 +367,20 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                 },
                 // Count / width / gutter are live only when columns are on.
                 num_row(
-                    "Column count",
+                    t!("Column count").as_ref(),
                     "col_count",
                     t.column_data.column_count as f64,
                     col_type != 0,
                 ),
-                num_row("Column width", "col_width", t.column_data.width, col_type != 0),
+                num_row(t!("Column width").as_ref(), "col_width", t.column_data.width, col_type != 0),
                 num_row(
-                    "Column gutter",
+                    t!("Column gutter").as_ref(),
                     "col_gutter",
                     t.column_data.gutter,
                     col_type != 0,
                 ),
                 Property {
-                    label: "Text frame".into(),
+                    label: t!("Text frame").into_owned(),
                     field: "text_frame",
                     value: PropValue::BoolToggle {
                         field: "text_frame",
@@ -389,11 +390,11 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
             ],
         },
         PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                edit("Position X", "ins_x", t.insertion_point.x),
-                edit("Position Y", "ins_y", t.insertion_point.y),
-                edit("Position Z", "ins_z", t.insertion_point.z),
+                edit(t!("Position X").as_ref(), "ins_x", t.insertion_point.x),
+                edit(t!("Position Y").as_ref(), "ins_y", t.insertion_point.y),
+                edit(t!("Position Z").as_ref(), "ins_z", t.insertion_point.z),
             ],
         },
     ]

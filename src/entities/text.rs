@@ -12,6 +12,7 @@ use crate::scene::convert::acad_to_truck::{GlyphRun, TextStroke, TruckEntity, Tr
 use crate::scene::text::lff;
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
+use crate::t;
 
 /// Combined single-line-text justification (horizontal × vertical) shown as one
 /// dropdown value. Horizontal-only modes (Aligned/Middle/Fit) ignore the
@@ -273,15 +274,15 @@ fn properties(t: &Text, text_style_names: &[String]) -> Vec<PropSection> {
     };
     vec![
         PropSection {
-            title: "Text".into(),
+            title: t!("Text").into_owned(),
             props: vec![
                 Property {
-                    label: "Contents".into(),
+                    label: t!("Contents").into_owned(),
                     field: "content",
                     value: PropValue::EditText(t.value.clone()),
                 },
                 Property {
-                    label: "Style".into(),
+                    label: t!("Style").into_owned(),
                     field: "style",
                     value: PropValue::Choice {
                         selected: if t.style.trim().is_empty() {
@@ -292,9 +293,9 @@ fn properties(t: &Text, text_style_names: &[String]) -> Vec<PropSection> {
                         options: text_style_names.to_vec(),
                     },
                 },
-                ro("Annotative", "annotative", "No"),
+                ro(t!("Annotative").as_ref(), "annotative", "No"),
                 Property {
-                    label: "Justify".into(),
+                    label: t!("Justify").into_owned(),
                     field: "justify",
                     value: PropValue::Choice {
                         selected: text_justify_str(
@@ -324,28 +325,28 @@ fn properties(t: &Text, text_style_names: &[String]) -> Vec<PropSection> {
                         .collect(),
                     },
                 },
-                edit("Height", "height", t.height),
-                edit_angle("Rotation", "rotation", t.rotation.to_degrees()),
-                edit("Width factor", "width_factor", t.width_factor),
-                edit_angle("Obliquing", "oblique_angle", t.oblique_angle.to_degrees()),
-                num_row("Text alignment X", "align_x", ax, align_editable),
-                num_row("Text alignment Y", "align_y", ay, align_editable),
-                num_row("Text alignment Z", "align_z", az, align_editable),
+                edit(t!("Height").as_ref(), "height", t.height),
+                edit_angle(t!("Rotation").as_ref(), "rotation", t.rotation.to_degrees()),
+                edit(t!("Width factor").as_ref(), "width_factor", t.width_factor),
+                edit_angle(t!("Obliquing").as_ref(), "oblique_angle", t.oblique_angle.to_degrees()),
+                num_row(t!("Text alignment X").as_ref(), "align_x", ax, align_editable),
+                num_row(t!("Text alignment Y").as_ref(), "align_y", ay, align_editable),
+                num_row(t!("Text alignment Z").as_ref(), "align_z", az, align_editable),
             ],
         },
         PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                num_row("Position X", "ins_x", t.insertion_point.x, pos_editable),
-                num_row("Position Y", "ins_y", t.insertion_point.y, pos_editable),
-                num_row("Position Z", "ins_z", t.insertion_point.z, pos_editable),
+                num_row(t!("Position X").as_ref(), "ins_x", t.insertion_point.x, pos_editable),
+                num_row(t!("Position Y").as_ref(), "ins_y", t.insertion_point.y, pos_editable),
+                num_row(t!("Position Z").as_ref(), "ins_z", t.insertion_point.z, pos_editable),
             ],
         },
         PropSection {
-            title: "Misc".into(),
+            title: t!("Misc").into_owned(),
             props: vec![
                 Property {
-                    label: "Upside down".into(),
+                    label: t!("Upside down").into_owned(),
                     field: "upside_down",
                     value: PropValue::BoolToggle {
                         field: "upside_down",
@@ -353,7 +354,7 @@ fn properties(t: &Text, text_style_names: &[String]) -> Vec<PropSection> {
                     },
                 },
                 Property {
-                    label: "Backward".into(),
+                    label: t!("Backward").into_owned(),
                     field: "backward",
                     value: PropValue::BoolToggle {
                         field: "backward",

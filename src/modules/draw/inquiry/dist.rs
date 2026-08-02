@@ -1,6 +1,7 @@
 // DIST command — measure distance and angle between two picked points.
 
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -25,9 +26,9 @@ impl CadCommand for DistCommand {
 
     fn prompt(&self) -> String {
         if self.first.is_none() {
-            "DIST  Specify first point:".into()
+            t!("DIST  Specify first point:").into_owned()
         } else {
-            "DIST  Specify second point:".into()
+            t!("DIST  Specify second point:").into_owned()
         }
     }
 
@@ -45,9 +46,22 @@ impl CadCommand for DistCommand {
             let dist_xy = dx.hypot(dy);
             let angle_z = dz.atan2(dist_xy).to_degrees();
 
-            let msg = format!(
-                "Distance = {dist:.4},  Angle in XY Plane = {angle_xy:.4}°,  Angle from XY Plane = {angle_z:.4}°\n  Delta X = {dx:.4},  Delta Y = {dy:.4},  Delta Z = {dz:.4}",
-            );
+            let dist_s = format!("{dist:.4}");
+            let angle_xy_s = format!("{angle_xy:.4}");
+            let angle_z_s = format!("{angle_z:.4}");
+            let dx_s = format!("{dx:.4}");
+            let dy_s = format!("{dy:.4}");
+            let dz_s = format!("{dz:.4}");
+            let msg = t!(
+                "Distance = %{dist},  Angle in XY Plane = %{angle_xy}°,  Angle from XY Plane = %{angle_z}°\n  Delta X = %{dx},  Delta Y = %{dy},  Delta Z = %{dz}",
+                dist = dist_s,
+                angle_xy = angle_xy_s,
+                angle_z = angle_z_s,
+                dx = dx_s,
+                dy = dy_s,
+                dz = dz_s,
+            )
+            .into_owned();
             CmdResult::Measurement(msg)
         } else {
             self.first = Some(pt);

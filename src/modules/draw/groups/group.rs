@@ -15,6 +15,7 @@ pub fn tool() -> ToolDef {
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -37,7 +38,8 @@ impl CadCommand for GroupCommand {
     }
 
     fn prompt(&self) -> String {
-        format!("GROUP  Enter group name [{}]:", self.auto_name)
+        let name = self.auto_name.clone();
+        t!("GROUP  Enter group name [%{name}]:", name = name).into_owned()
     }
 
     fn wants_text_input(&self) -> bool {

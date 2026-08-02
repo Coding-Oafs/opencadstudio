@@ -14,6 +14,7 @@ use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_break.svg"));
 
@@ -50,9 +51,9 @@ impl CadCommand for DimBreakCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::PickDim => "DIMBREAK  Select dimension to break:".into(),
+            Step::PickDim => t!("DIMBREAK  Select dimension to break:").into_owned(),
             Step::PickCrossing { .. } => {
-                "DIMBREAK  Select object to break at, or Enter for Auto:".into()
+                t!("DIMBREAK  Select object to break at, or Enter for Auto:").into_owned()
             }
         }
     }

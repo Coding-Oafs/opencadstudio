@@ -224,10 +224,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     let raw = crate::app::expr_eval::eval_to_string(self.command_line.input.trim());
                     self.command_line.input.clear();
                     let Ok(v) = raw.parse::<f64>() else {
-                        self.command_line.push_error(&format!(
+                        self.command_line.push_error(crate::tf!(
                             "{}: expected a number, got \"{raw}\"",
                             pending.label
-                        ));
+                        ).as_ref());
                         return Task::none();
                     };
                     let i = self.active_tab;
@@ -443,9 +443,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         return self.apply_cmd_result(result);
                     }
 
-                    self.command_line.push_error(&format!(
+                    self.command_line.push_error(crate::tf!(
                         "Expected coordinates (x,y) or a number, got: \"{text}\""
-                    ));
+                    ).as_ref());
                     return self.focus_cmd_input();
                 }
                 if let Some(cmd) = self.command_line.submit() {
@@ -519,7 +519,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 // Esc cancels a pending system-variable value prompt.
                 if self.pending_setvar.take().is_some() {
-                    self.command_line.push_info("*Cancel*");
+                    self.command_line.push_info(crate::t!("*Cancel*").as_ref());
                     return Task::none();
                 }
                 // UCS icon: Esc ends any grip drag and clears the selection
@@ -548,7 +548,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         sel.middle_down = false;
                         sel.middle_last_pos = None;
                     }
-                    self.command_line.push_output("PAN ended.");
+                    self.command_line.push_output(crate::t!("PAN ended.").as_ref());
                     return Task::none();
                 }
                 // Grip popup intercepts Escape — dismisses the menu
@@ -738,7 +738,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 names.retain(|n| n != "0" && *n != current);
                 if names.len() < before {
                     self.command_line
-                        .push_info("Layer \"0\" and the current layer can't be deleted — skipped.");
+                        .push_info(crate::t!("Layer \"0\" and the current layer can't be deleted — skipped.").as_ref());
                 }
                 if names.is_empty() {
                     return Task::none();
@@ -971,7 +971,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         action: item.action,
                         label,
                     });
-                    self.command_line.push_info(&format!("{label}:"));
+                    self.command_line.push_info(crate::tf!("{label}:").as_ref());
                     return self.focus_cmd_input();
                 }
                 // Break at vertex replaces the entity with the split pieces —
@@ -993,11 +993,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             self.tabs[i].dirty = true;
                             self.refresh_selected_grips();
                             self.refresh_properties();
-                            self.command_line.push_output("Polyline broken at vertex.");
+                            self.command_line.push_output(crate::t!("Polyline broken at vertex.").as_ref());
                         }
                         None => self
                             .command_line
-                            .push_error("Cannot break at this vertex."),
+                            .push_error(crate::t!("Cannot break at this vertex.").as_ref()),
                     }
                     return Task::none();
                 }
@@ -1042,7 +1042,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             self.tabs[i].dirty = dirty_before;
                             self.refresh_selected_grips();
                             self.refresh_properties();
-                            self.command_line.push_error("Cannot add a vertex here.");
+                            self.command_line.push_error(crate::t!("Cannot add a vertex here.").as_ref());
                             return Task::none();
                         }
                         self.tabs[i]
@@ -1069,7 +1069,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 grip_world,
                             ));
                             self.command_line
-                                .push_info("Specify new vertex location:");
+                                .push_info(crate::t!("Specify new vertex location:").as_ref());
                         } else {
                             if let Some(entity) =
                                 self.tabs[i].scene.document.get_entity_mut(popup.handle)
@@ -1083,7 +1083,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             self.refresh_selected_grips();
                             self.refresh_properties();
                             self.command_line
-                                .push_error("Cannot place the new vertex.");
+                                .push_error(crate::t!("Cannot place the new vertex.").as_ref());
                         }
                         return Task::none();
                     }
@@ -2084,9 +2084,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
         // The block's layer may have been locked while the editor was open —
         // refuse to write attributes to a locked-layer block.
         if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
-            self.command_line.push_info(&format!(
+            self.command_line.push_info(crate::tf!(
                 "Object is on locked layer \"{layer}\" — unlock the layer to edit its attributes."
-            ));
+            ).as_ref());
             return Task::none();
         }
         // Snapshot the working copy so the document can be mutated while the

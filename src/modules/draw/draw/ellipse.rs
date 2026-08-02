@@ -7,6 +7,7 @@
 
 use acadrust::types::Vector3;
 use acadrust::{Ellipse, EntityType};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::IconKind;
@@ -126,12 +127,13 @@ impl CadCommand for EllipseCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            CtrStep::Center => "ELLIPSE  Specify center:".into(),
-            CtrStep::MajorAxis { .. } => "ELLIPSE  Specify major axis endpoint:".into(),
-            CtrStep::MinorRatio { major, .. } => format!(
+            CtrStep::Center => t!("ELLIPSE  Specify center:").into_owned(),
+            CtrStep::MajorAxis { .. } => t!("ELLIPSE  Specify major axis endpoint:").into_owned(),
+            CtrStep::MinorRatio { major, .. } => crate::tf!(
                 "ELLIPSE  Specify minor axis point or type half-length  [major r={:.3}]:",
                 major.length()
-            ),
+            )
+            .into_owned(),
         }
     }
 
@@ -265,12 +267,17 @@ impl CadCommand for EllipseAxisCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            AxisStep::Pt1 => "ELLIPSE (Axis)  Specify first endpoint of major axis:".into(),
-            AxisStep::Pt2 { .. } => "ELLIPSE (Axis)  Specify second endpoint of major axis:".into(),
-            AxisStep::MinorRatio { major, .. } => format!(
+            AxisStep::Pt1 => {
+                t!("ELLIPSE (Axis)  Specify first endpoint of major axis:").into_owned()
+            }
+            AxisStep::Pt2 { .. } => {
+                t!("ELLIPSE (Axis)  Specify second endpoint of major axis:").into_owned()
+            }
+            AxisStep::MinorRatio { major, .. } => crate::tf!(
                 "ELLIPSE (Axis)  Specify minor axis point or type half-length  [major r={:.3}]:",
                 major.length()
-            ),
+            )
+            .into_owned(),
         }
     }
 
@@ -397,19 +404,27 @@ impl CadCommand for EllipseArcCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            ArcStep::Center => "ELLIPSE ARC  Specify center:".into(),
-            ArcStep::MajorAxis { .. } => "ELLIPSE ARC  Specify major axis endpoint:".into(),
-            ArcStep::MinorRatio { major, .. } => format!(
-                "ELLIPSE ARC  Specify minor axis point or type half-length  [major r={:.3}]:",
-                major.length()
-            ),
-            ArcStep::StartAngle { .. } => {
-                "ELLIPSE ARC  Specify start angle point or type degrees:".into()
+            ArcStep::Center => t!("ELLIPSE ARC  Specify center:").into_owned(),
+            ArcStep::MajorAxis { .. } => t!("ELLIPSE ARC  Specify major axis endpoint:").into_owned(),
+            ArcStep::MinorRatio { major, .. } => {
+                let r = format!("{:.3}", major.length());
+                t!(
+                    "ELLIPSE ARC  Specify minor axis point or type half-length  [major r=%{r}]:",
+                    r = r
+                )
+                .into_owned()
             }
-            ArcStep::EndAngle { t_start, .. } => format!(
-                "ELLIPSE ARC  Specify end angle point or type degrees  [start={:.1}°]:",
-                t_start.to_degrees()
-            ),
+            ArcStep::StartAngle { .. } => {
+                t!("ELLIPSE ARC  Specify start angle point or type degrees:").into_owned()
+            }
+            ArcStep::EndAngle { t_start, .. } => {
+                let sa = format!("{:.1}°", t_start.to_degrees());
+                t!(
+                    "ELLIPSE ARC  Specify end angle point or type degrees  [start=%{sa}]:",
+                    sa = sa
+                )
+                .into_owned()
+            }
         }
     }
 

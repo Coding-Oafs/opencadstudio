@@ -1,6 +1,7 @@
 // ID command — report coordinates of a picked point.
 
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -18,7 +19,7 @@ impl CadCommand for IdCommand {
     }
 
     fn prompt(&self) -> String {
-        "ID  Specify point:".into()
+        t!("ID  Specify point:").into_owned()
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
@@ -26,7 +27,16 @@ impl CadCommand for IdCommand {
         let x = pt.x;
         let y = pt.y;
         let z = pt.z;
-        let msg = format!("X = {x:.4},  Y = {y:.4},  Z = {z:.4}");
+        let x_s = format!("{x:.4}");
+        let y_s = format!("{y:.4}");
+        let z_s = format!("{z:.4}");
+        let msg = t!(
+            "X = %{x},  Y = %{y},  Z = %{z}",
+            x = x_s,
+            y = y_s,
+            z = z_s
+        )
+        .into_owned();
         CmdResult::Measurement(msg)
     }
 

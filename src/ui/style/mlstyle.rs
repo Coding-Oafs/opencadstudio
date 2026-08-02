@@ -3,6 +3,8 @@
 use crate::app::Message;
 use iced::widget::{column, container, row, scrollable, text};
 use iced::{Element, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
@@ -20,7 +22,7 @@ pub fn view_window<'a>(
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     // ── Right: Details panel ──────────────────────────────────────────────
-    let info_row = |label: &'static str, val: String| -> Element<'_, Message> {
+    let info_row = |label: Cow<'static, str>, val: String| -> Element<'_, Message> {
         row![
             text(label).size(11).style(muted_style).width(120),
             text(val).size(11),
@@ -61,9 +63,9 @@ pub fn view_window<'a>(
             .collect();
 
         let mut col_items: Vec<Element<'_, Message>> = vec![
-            info_row("Name:", s.name.clone()),
-            info_row("Elements:", s.elements.len().to_string()),
-            text("  Off   Color        Ltype")
+            info_row(t!("Name:"), s.name.clone()),
+            info_row(t!("Elements:"), s.elements.len().to_string()),
+            text(t!("  Off   Color        Ltype"))
                 .size(10)
                 .style(muted_style)
                 .into(),
@@ -73,7 +75,7 @@ pub fn view_window<'a>(
             .height(sizing.height)
             .into()
     } else {
-        container(text("Select a style to view details.").size(11).style(muted_style))
+        container(text(t!("Select a style to view details.")).size(11).style(muted_style))
             .padding([12, 12])
             .into()
     };

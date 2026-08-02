@@ -15,6 +15,7 @@ use acadrust::entities::LwVertex;
 use acadrust::types::Vector2;
 use acadrust::{EntityType, Handle};
 use glam::{DVec2, DVec3};
+use crate::t;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::command::{CadCommand, CmdResult};
@@ -84,16 +85,20 @@ impl CadCommand for PeditCommand {
 
     fn prompt(&self) -> String {
         match &self.mode {
-            Mode::PickTarget => "PEDIT  Select polyline (or a line/arc to convert):".into(),
-            Mode::ConvertPrompt(_) => {
-                "PEDIT  Object is not a polyline. Turn it into one?  [Yes/No] <Y>:".into()
+            Mode::PickTarget => {
+                t!("PEDIT  Select polyline (or a line/arc to convert):").into_owned()
             }
-            Mode::AwaitWidth => "PEDIT  Specify new width:".into(),
-            Mode::JoinGather(list) => format!(
-                "PEDIT Join  Select objects to join ({} picked), Enter to merge:",
-                list.len().saturating_sub(1)
-            ),
-            Mode::Options => "PEDIT  Enter option:".into(),
+            Mode::ConvertPrompt(_) => t!(
+                "PEDIT  Object is not a polyline. Turn it into one?  [Yes/No] <Y>:"
+            )
+            .into_owned(),
+            Mode::AwaitWidth => t!("PEDIT  Specify new width:").into_owned(),
+            Mode::JoinGather(list) => t!(
+                "PEDIT Join  Select objects to join (%{count} picked), Enter to merge:",
+                count = list.len().saturating_sub(1)
+            )
+            .into_owned(),
+            Mode::Options => t!("PEDIT  Enter option:").into_owned(),
         }
     }
 
@@ -101,19 +106,19 @@ impl CadCommand for PeditCommand {
         use crate::command::CmdOption;
         match &self.mode {
             Mode::Options => vec![
-                CmdOption::new("Close", "C"),
-                CmdOption::new("Open", "O"),
-                CmdOption::new("Join", "J"),
-                CmdOption::new("Width", "W"),
-                CmdOption::new("Fit", "F"),
-                CmdOption::new("Spline", "S"),
-                CmdOption::new("Decurve", "D"),
-                CmdOption::new("eXit", "X"),
+                CmdOption::new(t!("Close").as_ref(), "C"),
+                CmdOption::new(t!("Open").as_ref(), "O"),
+                CmdOption::new(t!("Join").as_ref(), "J"),
+                CmdOption::new(t!("Width").as_ref(), "W"),
+                CmdOption::new(t!("Fit").as_ref(), "F"),
+                CmdOption::new(t!("Spline").as_ref(), "S"),
+                CmdOption::new(t!("Decurve").as_ref(), "D"),
+                CmdOption::new(t!("eXit").as_ref(), "X"),
             ],
             Mode::ConvertPrompt(_) => {
-                vec![CmdOption::new("Yes", "Y"), CmdOption::new("No", "N")]
+                vec![CmdOption::new(t!("Yes").as_ref(), "Y"), CmdOption::new(t!("No").as_ref(), "N")]
             }
-            Mode::JoinGather(_) => vec![CmdOption::enter("Join")],
+            Mode::JoinGather(_) => vec![CmdOption::enter(t!("Join").as_ref())],
             _ => vec![],
         }
     }

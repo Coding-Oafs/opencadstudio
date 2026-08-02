@@ -10,6 +10,7 @@
 
 use crate::command::{CadCommand, CmdResult};
 use glam::DVec3;
+use crate::t;
 
 #[derive(Default)]
 pub struct UcsCommand {
@@ -48,14 +49,16 @@ impl CadCommand for UcsCommand {
 
     fn prompt(&self) -> String {
         match self.option.as_deref() {
-            None => "UCS  option [World/Z/X/Y/Origin/Save/Delete] or name:".into(),
-            Some("Z") => "UCS  rotation angle about Z (degrees):".into(),
-            Some("X") => "UCS  rotation angle about X (degrees):".into(),
-            Some("Y") => "UCS  rotation angle about Y (degrees):".into(),
-            Some("ORIGIN") | Some("O") => "UCS  new origin point:".into(),
-            Some("SAVE") | Some("S") => "UCS  name to save current UCS as:".into(),
-            Some("DELETE") | Some("DEL") | Some("D") => "UCS  name of UCS to delete:".into(),
-            Some(_) => "UCS  value:".into(),
+            None => t!("UCS  option [World/Z/X/Y/Origin/Save/Delete] or name:").into_owned(),
+            Some("Z") => t!("UCS  rotation angle about Z (degrees):").into_owned(),
+            Some("X") => t!("UCS  rotation angle about X (degrees):").into_owned(),
+            Some("Y") => t!("UCS  rotation angle about Y (degrees):").into_owned(),
+            Some("ORIGIN") | Some("O") => t!("UCS  new origin point:").into_owned(),
+            Some("SAVE") | Some("S") => t!("UCS  name to save current UCS as:").into_owned(),
+            Some("DELETE") | Some("DEL") | Some("D") => {
+                t!("UCS  name of UCS to delete:").into_owned()
+            }
+            Some(_) => t!("UCS  value:").into_owned(),
         }
     }
 

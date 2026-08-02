@@ -6,6 +6,8 @@
 use iced::time::Instant;
 use iced::widget::{button, column, container, row, stack, text, Space};
 use iced::{Background, Border, Element, Fill, Length, Theme};
+use crate::t;
+use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
 use crate::app::{
@@ -17,14 +19,14 @@ const CARD_WIDTH: f32 = 420.0;
 const BAR_TRACK_WIDTH: f32 = 380.0;
 const BAR_TRACK_HEIGHT: f32 = 6.0;
 
-fn phase_label(phase: u8) -> &'static str {
+fn phase_label(phase: u8) -> Cow<'static, str> {
     match phase {
-        OPEN_PHASE_READING => "Reading file…",
-        OPEN_PHASE_PARSING => "Parsing entities…",
-        OPEN_PHASE_XREF => "Loading references…",
-        OPEN_PHASE_CACHING => "Building scene caches…",
-        OPEN_PHASE_FINALIZING => "Finalizing…",
-        _ => "Working…",
+        OPEN_PHASE_READING => t!("Reading file…"),
+        OPEN_PHASE_PARSING => t!("Parsing entities…"),
+        OPEN_PHASE_XREF => t!("Loading references…"),
+        OPEN_PHASE_CACHING => t!("Building scene caches…"),
+        OPEN_PHASE_FINALIZING => t!("Finalizing…"),
+        _ => t!("Working…"),
     }
 }
 
@@ -101,7 +103,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
     .into();
 
     // ── Card body ────────────────────────────────────────────────────────
-    let title = text("Opening file").size(15);
+    let title = text(t!("Opening file")).size(15);
 
     let name_line = text(format!(
         "{}  ({})",
@@ -123,7 +125,7 @@ pub fn view<'a>(progress: &'a OpenProgress, _now: Instant) -> Element<'a, Messag
             color: Some(theme.palette().primary.base.color),
         });
 
-    let cancel_btn: Element<'_, Message> = button(text("Cancel").size(12))
+    let cancel_btn: Element<'_, Message> = button(text(t!("Cancel")).size(12))
         .on_press(Message::OpenCancel)
         .style(button::danger)
         .padding([4, 14])

@@ -14,6 +14,7 @@ use iced::widget::{
 use iced::window;
 use iced::{keyboard, Background, Border, Color, Element, Fill, Subscription, Task, Theme};
 use iced_aw::ContextMenu;
+use crate::t;
 
 mod controls;
 mod modal;
@@ -1210,7 +1211,7 @@ impl OpenCADStudio {
             let copy_btn = button(
                 row![
                     crate::ui::icons::themed_primary(crate::ui::icons::COPY, 11.0),
-                    text("Copy").size(11),
+                    text(t!("Copy")).size(11),
                 ]
                 .spacing(4)
                 .align_y(iced::Center),
@@ -1221,7 +1222,7 @@ impl OpenCADStudio {
             let clear_btn = button(
                 row![
                     crate::ui::icons::themed_danger(crate::ui::icons::TRASH, 11.0),
-                    text("Clear").size(11),
+                    text(t!("Clear")).size(11),
                 ]
                 .spacing(4)
                 .align_y(iced::Center),
@@ -1230,7 +1231,7 @@ impl OpenCADStudio {
             .style(perf_button_style)
             .padding([2, 6]);
             let header = row![
-                text("PERF").size(12).style(|theme: &Theme| iced::widget::text::Style {
+                text(t!("PERF")).size(12).style(|theme: &Theme| iced::widget::text::Style {
                     color: Some(theme.palette().success.base.color),
                 }),
                 Space::new().width(iced::Length::Fill),

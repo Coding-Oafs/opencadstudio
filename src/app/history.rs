@@ -1020,7 +1020,7 @@ impl OpenCADStudio {
         let available = self.tabs[i].history.undo_stack.len();
         let steps = steps.min(available);
         if steps == 0 {
-            self.command_line.push_info("Nothing to undo.");
+            self.command_line.push_info(crate::t!("Nothing to undo.").as_ref());
             return;
         }
 
@@ -1069,7 +1069,7 @@ impl OpenCADStudio {
         }
         self.finish_history_apply(i, had_full, layer_panel_changed, &changes);
         self.command_line
-            .push_output(&format!("Undo: {last_label}"));
+            .push_output(crate::tf!("Undo: {last_label}").as_ref());
     }
 
     pub(super) fn redo_steps(&mut self, steps: usize) {
@@ -1078,7 +1078,7 @@ impl OpenCADStudio {
         let available = self.tabs[i].history.redo_stack.len();
         let steps = steps.min(available);
         if steps == 0 {
-            self.command_line.push_info("Nothing to redo.");
+            self.command_line.push_info(crate::t!("Nothing to redo.").as_ref());
             return;
         }
 
@@ -1124,7 +1124,7 @@ impl OpenCADStudio {
         }
         self.finish_history_apply(i, had_full, layer_panel_changed, &changes);
         self.command_line
-            .push_output(&format!("Redo: {last_label}"));
+            .push_output(crate::tf!("Redo: {last_label}").as_ref());
     }
 }
 

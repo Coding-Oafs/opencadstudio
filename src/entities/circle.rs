@@ -1,4 +1,5 @@
 use acadrust::entities::Circle;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
@@ -134,18 +135,18 @@ fn properties(circle: &Circle) -> Vec<PropSection> {
     use std::f64::consts::PI;
     let r = circle.radius;
     vec![PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![
-            edit("Center X", "center_x", circle.center.x),
-            edit("Center Y", "center_y", circle.center.y),
-            edit("Center Z", "center_z", circle.center.z),
-            edit("Radius", "radius", r),
-            edit("Diameter", "diameter", r * 2.0),
-            edit("Circumference", "circumference", 2.0 * PI * r),
-            edit("Area", "area", PI * r * r),
-            ro("Normal X", "normal_x", format!("{:.4}", circle.normal.x)),
-            ro("Normal Y", "normal_y", format!("{:.4}", circle.normal.y)),
-            ro("Normal Z", "normal_z", format!("{:.4}", circle.normal.z)),
+            edit(t!("Center X").as_ref(), "center_x", circle.center.x),
+            edit(t!("Center Y").as_ref(), "center_y", circle.center.y),
+            edit(t!("Center Z").as_ref(), "center_z", circle.center.z),
+            edit(t!("Radius").as_ref(), "radius", r),
+            edit(t!("Diameter").as_ref(), "diameter", r * 2.0),
+            edit(t!("Circumference").as_ref(), "circumference", 2.0 * PI * r),
+            edit(t!("Area").as_ref(), "area", PI * r * r),
+            ro(t!("Normal X").as_ref(), "normal_x", format!("{:.4}", circle.normal.x)),
+            ro(t!("Normal Y").as_ref(), "normal_y", format!("{:.4}", circle.normal.y)),
+            ro(t!("Normal Z").as_ref(), "normal_z", format!("{:.4}", circle.normal.z)),
         ],
     }]
 }

@@ -10,6 +10,7 @@ use acadrust::entities::RasterImage;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -66,12 +67,13 @@ impl CadCommand for ImageCommand {
 
     fn prompt(&self) -> String {
         if self.origin.is_none() {
-            format!(
-                "IMAGE  Specify insertion point ({}):  ",
-                short_name(&self.file_path)
+            t!(
+                "IMAGE  Specify insertion point (%{name}):  ",
+                name = short_name(&self.file_path)
             )
+            .into_owned()
         } else {
-            "IMAGE  Specify width (drag right):".into()
+            t!("IMAGE  Specify width (drag right):").into_owned()
         }
     }
 

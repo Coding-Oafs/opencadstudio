@@ -7,6 +7,7 @@ use acadrust::entities::Point as PointEnt;
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -33,9 +34,9 @@ impl CadCommand for DivideCommand {
 
     fn prompt(&self) -> String {
         if self.target.is_none() {
-            "DIVIDE  Select object to divide:".into()
+            t!("DIVIDE  Select object to divide:").into_owned()
         } else {
-            "DIVIDE  Enter number of segments:".into()
+            t!("DIVIDE  Enter number of segments:").into_owned()
         }
     }
 
@@ -102,9 +103,9 @@ impl CadCommand for MeasureCommand {
 
     fn prompt(&self) -> String {
         if self.target.is_none() {
-            "MEASURE  Select object to measure:".into()
+            t!("MEASURE  Select object to measure:").into_owned()
         } else {
-            "MEASURE  Specify segment length:".into()
+            t!("MEASURE  Specify segment length:").into_owned()
         }
     }
 

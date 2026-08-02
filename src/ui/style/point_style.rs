@@ -8,6 +8,8 @@
 use crate::app::Message;
 use iced::widget::{button, canvas, column, container, radio, row, text, text_input, Space};
 use iced::{mouse, Background, Border, Element, Length, Point, Rectangle, Size, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 const CELL_PX: f32 = 44.0;
 
@@ -151,7 +153,7 @@ pub fn view_window<'a>(
     }
 
     let size_row = row![
-        text("Point Size:").size(13),
+        text(t!("Point Size:")).size(13),
         Space::new().width(10),
         text_input("0", size_buf)
             .on_input(Message::PointStyleSizeInput)
@@ -160,13 +162,13 @@ pub fn view_window<'a>(
             .size(13)
             .width(110),
         Space::new().width(6),
-        text(if relative { "%" } else { "units" }).size(12).style(muted_style),
+        text(if relative { Cow::Borrowed("%") } else { t!("units") }).size(12).style(muted_style),
     ]
     .align_y(iced::Center);
 
     let radios = column![
         radio(
-            "Set Size Relative to Screen",
+            t!("Set Size Relative to Screen"),
             true,
             Some(relative),
             Message::PointStyleSizeRelative,
@@ -174,7 +176,7 @@ pub fn view_window<'a>(
         .size(15)
         .text_size(13),
         radio(
-            "Set Size in Absolute Units",
+            t!("Set Size in Absolute Units"),
             false,
             Some(relative),
             Message::PointStyleSizeRelative,
@@ -184,14 +186,14 @@ pub fn view_window<'a>(
     ]
     .spacing(6);
 
-    let ok = button(text("OK").size(13))
+    let ok = button(text(t!("OK")).size(13))
         .padding([5, 22])
         .on_press(Message::PointStyleOk)
         .style(button::primary);
 
     container(
         column![
-            text("Point Style").size(18),
+            text(t!("Point Style")).size(18),
             Space::new().height(6),
             grid,
             Space::new().height(12),

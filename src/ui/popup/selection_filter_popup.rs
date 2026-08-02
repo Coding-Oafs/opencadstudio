@@ -6,6 +6,7 @@ use rustc_hash::FxHashSet as HashSet;
 
 use iced::widget::{button, container, row, text};
 use iced::{Background, Element, Fill, Theme};
+use crate::t;
 
 use crate::app::Message;
 use crate::ui::statusbar::status_menu::Entry;
@@ -66,7 +67,7 @@ pub fn menu_entries(
 fn type_row(name: String, included: bool) -> Element<'static, Message> {
     let check = crate::ui::icons::themed_check_cell(included);
 
-    let lbl = text(name.clone()).size(11);
+    let lbl = text(t!(name.as_str())).size(11);
 
     let content = row![check, lbl].spacing(6).align_y(iced::Center);
 
@@ -80,7 +81,7 @@ fn type_row(name: String, included: bool) -> Element<'static, Message> {
 
 fn empty_row() -> Element<'static, Message> {
     container(
-        text("No objects").size(11).style(|theme: &Theme| text::Style {
+        text(t!("No objects")).size(11).style(|theme: &Theme| text::Style {
             color: Some(
                 theme
                     .palette()
@@ -96,7 +97,7 @@ fn empty_row() -> Element<'static, Message> {
 }
 
 fn header_btn(label: &str, msg: Message, enabled: bool) -> Element<'_, Message> {
-    let b = button(text(label).size(10));
+    let b = button(text(t!(label)).size(10));
     let b = if enabled { b.on_press(msg) } else { b };
     b.style(button::secondary)
     .padding([3, 8])

@@ -5,6 +5,18 @@ use iced::widget::{
     button, checkbox, column, container, row, scrollable, text, text_input,
 };
 use iced::{Background, Border, Element, Theme};
+use crate::t;
+use std::borrow::Cow;
+use std::fmt;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EnumChoice(String);
+
+impl fmt::Display for EnumChoice {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(crate::i18n::translate(&self.0).as_ref())
+    }
+}
 
 fn btn_s(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
@@ -83,12 +95,12 @@ pub struct MLeaderStyleView<'a> {
     pub color_open: Option<&'static str>,
 }
 
-fn section<'a>(label: &'static str) -> Element<'a, Message> {
+fn section<'a>(label: Cow<'static, str>) -> Element<'a, Message> {
     text(label).size(11).style(primary_style).into()
 }
 
 fn num_row<'a>(
-    label: &'static str,
+    label: Cow<'static, str>,
     placeholder: &'static str,
     value: &'a str,
     field: &'static str,
@@ -105,7 +117,10 @@ fn num_row<'a>(
     .into()
 }
 
-fn readonly_num_row<'a>(label: &'static str, value: &'a str) -> Element<'a, Message> {
+fn readonly_num_row<'a>(
+    label: Cow<'static, str>,
+    value: Cow<'static, str>,
+) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(150),
         text(value).size(11).style(muted_style),
@@ -118,7 +133,7 @@ fn readonly_num_row<'a>(label: &'static str, value: &'a str) -> Element<'a, Mess
 /// Shared colour selector row. Reuses MLeaderStyleEdit by sending the chosen
 /// colour as an ACI string; `open` shows the expanded palette.
 fn color_row<'a>(
-    label: &'static str,
+    label: Cow<'static, str>,
     value: &'a str,
     field: &'static str,
     open: bool,
@@ -148,15 +163,15 @@ fn color_row<'a>(
 }
 
 fn enum_row<'a>(
-    label: &'static str,
-    options: Vec<String>,
+    label: Cow<'static, str>,
+    options: Vec<EnumChoice>,
     selected: String,
     field: &'static str,
 ) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(150),
-        iced::widget::pick_list(Some(selected), options, |value| value.to_string())
-        .on_select(move |value| Message::MLeaderStyleSetEnum { field, value })
+        iced::widget::pick_list(Some(EnumChoice(selected)), options, |value| value.to_string())
+        .on_select(move |choice| Message::MLeaderStyleSetEnum { field, value: choice.0 })
         .text_size(11)
         .width(190),
     ]
@@ -168,7 +183,7 @@ fn enum_row<'a>(
 fn lineweight_row<'a>(selected: acadrust::types::LineWeight) -> Element<'a, Message> {
     let selected = crate::ui::properties::LwItem(selected);
     row![
-        text("Line weight:").size(11).style(muted_style).width(150),
+        text(t!("Line weight:")).size(11).style(muted_style).width(150),
         iced::widget::pick_list(
             Some(selected),
             crate::ui::properties::lw_options(),
@@ -198,14 +213,14 @@ const ATTACH_OPTS: [&str; 11] = [
     "CenterOfTextOverline",
 ];
 
-fn opts(list: &[&str]) -> Vec<String> {
-    list.iter().map(|s| s.to_string()).collect()
+fn opts(list: &[&str]) -> Vec<EnumChoice> {
+    list.iter().map(|value| EnumChoice((*value).to_string())).collect()
 }
 
 /// Dropdown for an Option<Handle> field (linetype / arrowhead / text style /
 /// block content). Options are record names; "None" clears the handle.
 fn handle_row<'a>(
-    label: &'static str,
+    label: Cow<'static, str>,
     options: Vec<String>,
     selected: String,
     field: &'static str,
@@ -222,7 +237,7 @@ fn handle_row<'a>(
     .into()
 }
 
-fn chk<'a>(label: &'static str, val: bool, field: &'static str) -> Element<'a, Message> {
+fn chk<'a>(label: Cow<'static, str>, val: bool, field: &'static str) -> Element<'a, Message> {
     checkbox(val)
         .label(label)
         .on_toggle(move |_| Message::MLeaderStyleToggle(field))
@@ -240,174 +255,174 @@ pub fn view_window<'a>(
         scrollable(
             column![
                 row![
-                    text("Name:").size(11).style(muted_style).width(150),
+                    text(t!("Name:")).size(11).style(muted_style).width(150),
                     text(s.name.clone()).size(11),
                 ]
                 .spacing(8),
-                num_row("Description:", "", v.description, "description"),
+                num_row(t!("Description:"), "", v.description, "description"),
                 // Leader Format
-                section("Leader Format"),
+                section(t!("Leader Format")),
                 enum_row(
-                    "Path type:",
+                    t!("Path type:"),
                     opts(&["Invisible", "StraightLineSegments", "Spline"]),
                     format!("{:?}", s.path_type),
                     "path_type"
                 ),
-                color_row("Line color (ACI):", v.line_color, "line_color", v.color_open == Some("line_color")),
+                color_row(t!("Line color (ACI):"), v.line_color, "line_color", v.color_open == Some("line_color")),
                 lineweight_row(s.line_weight),
                 handle_row(
-                    "Line type:",
+                    t!("Line type:"),
                     v.lt_opts.clone(),
                     v.line_type_name.clone(),
                     "line_type_handle"
                 ),
                 handle_row(
-                    "Arrowhead block:",
+                    t!("Arrowhead block:"),
                     v.block_opts.clone(),
                     v.arrowhead_name.clone(),
                     "arrowhead_handle"
                 ),
                 num_row(
-                    "Arrowhead size:",
+                    t!("Arrowhead size:"),
                     "0.18",
                     v.arrowhead_size,
                     "arrowhead_size"
                 ),
-                num_row("Break gap size:", "0.125", v.break_gap, "break_gap"),
+                num_row(t!("Break gap size:"), "0.125", v.break_gap, "break_gap"),
                 // Leader Structure
-                section("Leader Structure"),
-                chk("Enable landing", s.enable_landing, "enable_landing"),
-                chk("Enable dogleg", s.enable_dogleg, "enable_dogleg"),
+                section(t!("Leader Structure")),
+                chk(t!("Enable landing"), s.enable_landing, "enable_landing"),
+                chk(t!("Enable dogleg"), s.enable_dogleg, "enable_dogleg"),
                 num_row(
-                    "Landing distance:",
+                    t!("Landing distance:"),
                     "8.0",
                     v.landing_distance,
                     "landing_distance"
                 ),
-                num_row("Landing gap:", "0.09", v.landing_gap, "landing_gap"),
-                num_row("Max leader points:", "2", v.max_points, "max_points"),
+                num_row(t!("Landing gap:"), "0.09", v.landing_gap, "landing_gap"),
+                num_row(t!("Max leader points:"), "2", v.max_points, "max_points"),
                 num_row(
-                    "First seg. angle:",
+                    t!("First seg. angle:"),
                     "0",
                     v.first_seg_angle,
                     "first_seg_angle"
                 ),
                 num_row(
-                    "Second seg. angle:",
+                    t!("Second seg. angle:"),
                     "0",
                     v.second_seg_angle,
                     "second_seg_angle"
                 ),
                 if s.is_annotative {
-                    readonly_num_row("Scale factor:", "By annotation scale")
+                    readonly_num_row(t!("Scale factor:"), t!("By annotation scale"))
                 } else {
-                    num_row("Scale factor:", "1.0", v.scale_factor, "scale_factor")
+                    num_row(t!("Scale factor:"), "1.0", v.scale_factor, "scale_factor")
                 },
-                num_row("Align space:", "4.0", v.align_space, "align_space"),
+                num_row(t!("Align space:"), "4.0", v.align_space, "align_space"),
                 enum_row(
-                    "Leader draw order:",
+                    t!("Leader draw order:"),
                     opts(&["LeaderHeadFirst", "LeaderTailFirst"]),
                     format!("{:?}", s.leader_draw_order),
                     "leader_draw_order"
                 ),
                 enum_row(
-                    "Multileader draw order:",
+                    t!("Multileader draw order:"),
                     opts(&["ContentFirst", "LeaderFirst"]),
                     format!("{:?}", s.multileader_draw_order),
                     "multileader_draw_order"
                 ),
-                chk("Annotative", s.is_annotative, "annotative"),
+                chk(t!("Annotative"), s.is_annotative, "annotative"),
                 // Content
-                section("Content"),
+                section(t!("Content")),
                 enum_row(
-                    "Content type:",
+                    t!("Content type:"),
                     opts(&["None", "Block", "MText", "Tolerance"]),
                     format!("{:?}", s.content_type),
                     "content_type"
                 ),
-                num_row("Default text:", "", v.default_text, "default_text"),
+                num_row(t!("Default text:"), "", v.default_text, "default_text"),
                 handle_row(
-                    "Text style:",
+                    t!("Text style:"),
                     v.textstyle_opts.clone(),
                     v.text_style_name.clone(),
                     "text_style_handle"
                 ),
-                num_row("Text height:", "0.18", v.text_height, "text_height"),
-                color_row("Text color (ACI):", v.text_color, "text_color", v.color_open == Some("text_color")),
+                num_row(t!("Text height:"), "0.18", v.text_height, "text_height"),
+                color_row(t!("Text color (ACI):"), v.text_color, "text_color", v.color_open == Some("text_color")),
                 enum_row(
-                    "Text angle:",
+                    t!("Text angle:"),
                     opts(&["ParallelToLastLeaderLine", "Horizontal", "Optimized"]),
                     format!("{:?}", s.text_angle_type),
                     "text_angle_type"
                 ),
                 enum_row(
-                    "Text alignment:",
+                    t!("Text alignment:"),
                     opts(&["Left", "Center", "Right"]),
                     format!("{:?}", s.text_alignment),
                     "text_alignment"
                 ),
                 enum_row(
-                    "Left attachment:",
+                    t!("Left attachment:"),
                     opts(&ATTACH_OPTS),
                     format!("{:?}", s.text_left_attachment),
                     "text_left_attachment"
                 ),
                 enum_row(
-                    "Right attachment:",
+                    t!("Right attachment:"),
                     opts(&ATTACH_OPTS),
                     format!("{:?}", s.text_right_attachment),
                     "text_right_attachment"
                 ),
                 enum_row(
-                    "Top attachment:",
+                    t!("Top attachment:"),
                     opts(&ATTACH_OPTS),
                     format!("{:?}", s.text_top_attachment),
                     "text_top_attachment"
                 ),
                 enum_row(
-                    "Bottom attachment:",
+                    t!("Bottom attachment:"),
                     opts(&ATTACH_OPTS),
                     format!("{:?}", s.text_bottom_attachment),
                     "text_bottom_attachment"
                 ),
                 enum_row(
-                    "Attachment direction:",
+                    t!("Attachment direction:"),
                     opts(&["Horizontal", "Vertical"]),
                     format!("{:?}", s.text_attachment_direction),
                     "text_attachment_direction"
                 ),
-                chk("Text frame", s.text_frame, "text_frame"),
-                chk("Text always left", s.text_always_left, "text_always_left"),
+                chk(t!("Text frame"), s.text_frame, "text_frame"),
+                chk(t!("Text always left"), s.text_always_left, "text_always_left"),
                 // Block Content
-                section("Block Content"),
+                section(t!("Block Content")),
                 handle_row(
-                    "Block:",
+                    t!("Block:"),
                     v.block_opts.clone(),
                     v.block_content_name.clone(),
                     "block_content_handle"
                 ),
-                color_row("Block color (ACI):", v.block_color, "block_color", v.color_open == Some("block_color")),
+                color_row(t!("Block color (ACI):"), v.block_color, "block_color", v.color_open == Some("block_color")),
                 enum_row(
-                    "Block connection:",
+                    t!("Block connection:"),
                     opts(&["BlockExtents", "BasePoint"]),
                     format!("{:?}", s.block_content_connection),
                     "block_content_connection"
                 ),
-                num_row("Block rotation:", "0", v.block_rotation, "block_rotation"),
-                num_row("Block scale X:", "1.0", v.block_scale_x, "block_scale_x"),
-                num_row("Block scale Y:", "1.0", v.block_scale_y, "block_scale_y"),
-                num_row("Block scale Z:", "1.0", v.block_scale_z, "block_scale_z"),
+                num_row(t!("Block rotation:"), "0", v.block_rotation, "block_rotation"),
+                num_row(t!("Block scale X:"), "1.0", v.block_scale_x, "block_scale_x"),
+                num_row(t!("Block scale Y:"), "1.0", v.block_scale_y, "block_scale_y"),
+                num_row(t!("Block scale Z:"), "1.0", v.block_scale_z, "block_scale_z"),
                 chk(
-                    "Enable block scale",
+                    t!("Enable block scale"),
                     s.enable_block_scale,
                     "enable_block_scale"
                 ),
                 chk(
-                    "Enable block rotation",
+                    t!("Enable block rotation"),
                     s.enable_block_rotation,
                     "enable_block_rotation"
                 ),
-                button(text("Apply").size(11))
+                button(text(t!("Apply")).size(11))
                     .on_press(Message::MLeaderStyleApply)
                     .style(btn_s(true))
                     .padding([4, 14]),
@@ -419,7 +434,7 @@ pub fn view_window<'a>(
         .height(sizing.height)
         .into()
     } else {
-        container(text("Select a style to view details.").size(11).style(muted_style))
+        container(text(t!("Select a style to view details.")).size(11).style(muted_style))
             .padding([12, 12])
             .into()
     };

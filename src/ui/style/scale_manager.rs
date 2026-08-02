@@ -13,6 +13,8 @@ use iced::widget::{
     column, container, mouse_area, row, scrollable, text, text_input, Space,
 };
 use iced::{Background, Border, Element, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 /// Inline-rename text-input id, so the rename-start handler can focus it.
 pub fn rename_input_id() -> iced::widget::Id {
@@ -54,12 +56,12 @@ pub fn view_window<'a, 'b>(
     // ── Toolbar: New / Delete | Set Current / Apply ───────────────────────
     let toolbar = container(
         row![
-            tb_button("New", Message::ScaleManagerNew, false),
-            tb_button("Copy", Message::ScaleManagerCopy, false),
-            tb_button("Delete", Message::ScaleManagerDelete, false),
+            tb_button(t!("New"), Message::ScaleManagerNew, false),
+            tb_button(t!("Copy"), Message::ScaleManagerCopy, false),
+            tb_button(t!("Delete"), Message::ScaleManagerDelete, false),
             Space::new().width(sizing.width),
-            tb_button("Set Current", Message::ScaleManagerSetCurrent, false),
-            tb_button("Apply", Message::ScaleManagerApply, true),
+            tb_button(t!("Set Current"), Message::ScaleManagerSetCurrent, false),
+            tb_button(t!("Apply"), Message::ScaleManagerApply, true),
         ]
         .spacing(4)
         .align_y(iced::Center),
@@ -119,7 +121,7 @@ pub fn view_window<'a, 'b>(
 
     let list_panel = container(
         column![
-            text("Scales").size(10).style(muted_text_style),
+            text(t!("Scales")).size(10).style(muted_text_style),
             container(scrollable(column(rows).spacing(1)).height(sizing.height))
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
@@ -151,10 +153,10 @@ pub fn view_window<'a, 'b>(
 
     // ── Right: editor (name + paper:drawing) ──────────────────────────────
     let field =
-        |label: &'static str, ph: &'static str, value: &str, on: fn(String) -> Message| {
+        |label: Cow<'static, str>, ph: Cow<'static, str>, value: &str, on: fn(String) -> Message| {
             row![
                 text(label).size(11).style(muted_text_style).width(96),
-                text_input(ph, value)
+                text_input(ph.as_ref(), value)
                     .on_input(on)
                     .style(field_style)
                     .size(12)
@@ -167,11 +169,11 @@ pub fn view_window<'a, 'b>(
 
     let editor = container(
         column![
-            text("Scale").size(10).style(muted_text_style),
-            field("Paper units", "1", paper_buf, Message::ScaleManagerPaperBuf),
-            field("Drawing units", "50", drawing_buf, Message::ScaleManagerDrawingBuf),
+            text(Cow::Borrowed("Scale")).size(10).style(muted_text_style),
+            field(t!("Paper units"), Cow::Borrowed("1"), paper_buf, Message::ScaleManagerPaperBuf),
+            field(t!("Drawing units"), Cow::Borrowed("50"), drawing_buf, Message::ScaleManagerDrawingBuf),
             Space::new().height(6),
-            text("Double-click a scale to rename it; edit its paper : drawing ratio here. New / Copy add a scale. Changes are kept only if you click Apply before closing.")
+            text(t!("Double-click a scale to rename it; edit its paper : drawing ratio here. New / Copy add a scale. Changes are kept only if you click Apply before closing."))
                 .size(10)
                 .style(muted_text_style),
         ]

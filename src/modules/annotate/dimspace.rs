@@ -10,6 +10,7 @@ use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_space.svg"));
 
@@ -47,12 +48,13 @@ impl CadCommand for DimSpaceCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::PickBase => "DIMSPACE  Select base dimension:".into(),
-            Step::PickOthers { others, .. } => format!(
-                "DIMSPACE  Select dimension to space ({} selected, Enter when done):",
-                others.len()
-            ),
-            Step::EnterSpacing { .. } => "DIMSPACE  Enter value (0 = auto):".into(),
+            Step::PickBase => t!("DIMSPACE  Select base dimension:").into_owned(),
+            Step::PickOthers { others, .. } => t!(
+                "DIMSPACE  Select dimension to space (%{count} selected, Enter when done):",
+                count = others.len()
+            )
+            .into_owned(),
+            Step::EnterSpacing { .. } => t!("DIMSPACE  Enter value (0 = auto):").into_owned(),
         }
     }
 

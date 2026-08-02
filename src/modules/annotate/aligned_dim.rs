@@ -8,6 +8,7 @@ use glam::DVec3;
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_aligned.svg"));
 
@@ -57,18 +58,18 @@ impl CadCommand for AlignedDimensionCommand {
 
     fn prompt(&self) -> String {
         if self.awaiting_text {
-            return "DIMALIGNED  Enter dimension text (blank = measured value):".into();
+            return t!("DIMALIGNED  Enter dimension text (blank = measured value):").into_owned();
         }
         if self.awaiting_angle {
-            return "DIMALIGNED  Specify text angle (degrees):".into();
+            return t!("DIMALIGNED  Specify text angle (degrees):").into_owned();
         }
         match self.step {
-            Step::First => "DIMALIGNED  Specify first extension line origin:".into(),
+            Step::First => t!("DIMALIGNED  Specify first extension line origin:").into_owned(),
             Step::Second(_) => {
-                "DIMALIGNED  Specify second extension line origin  [Text/Angle]:".into()
+                t!("DIMALIGNED  Specify second extension line origin  [Text/Angle]:").into_owned()
             }
             Step::DimLine { .. } => {
-                "DIMALIGNED  Specify dimension line location  [Text/Angle]:".into()
+                t!("DIMALIGNED  Specify dimension line location  [Text/Angle]:").into_owned()
             }
         }
     }

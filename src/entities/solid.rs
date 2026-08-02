@@ -8,6 +8,7 @@
 // Grips:     4 corner grip points.
 
 use acadrust::entities::Solid;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, ro_prop as ro, square_grip};
@@ -153,21 +154,21 @@ impl PropertyEditable for Solid {
         // field on the entity); reported from the first corner's Z.
         let elevation = self.first_corner.z;
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                edit("Point 1 X", "sl_p1x", self.first_corner.x),
-                edit("Point 1 Y", "sl_p1y", self.first_corner.y),
-                edit("Point 1 Z", "sl_p1z", self.first_corner.z),
-                edit("Point 2 X", "sl_p2x", self.second_corner.x),
-                edit("Point 2 Y", "sl_p2y", self.second_corner.y),
-                edit("Point 2 Z", "sl_p2z", self.second_corner.z),
-                edit("Point 3 X", "sl_p3x", self.third_corner.x),
-                edit("Point 3 Y", "sl_p3y", self.third_corner.y),
-                edit("Point 3 Z", "sl_p3z", self.third_corner.z),
-                edit("Point 4 X", "sl_p4x", self.fourth_corner.x),
-                edit("Point 4 Y", "sl_p4y", self.fourth_corner.y),
-                edit("Point 4 Z", "sl_p4z", self.fourth_corner.z),
-                ro("Elevation", "sl_elev", format!("{:.4}", elevation)),
+                edit(t!("Point 1 X").as_ref(), "sl_p1x", self.first_corner.x),
+                edit(t!("Point 1 Y").as_ref(), "sl_p1y", self.first_corner.y),
+                edit(t!("Point 1 Z").as_ref(), "sl_p1z", self.first_corner.z),
+                edit(t!("Point 2 X").as_ref(), "sl_p2x", self.second_corner.x),
+                edit(t!("Point 2 Y").as_ref(), "sl_p2y", self.second_corner.y),
+                edit(t!("Point 2 Z").as_ref(), "sl_p2z", self.second_corner.z),
+                edit(t!("Point 3 X").as_ref(), "sl_p3x", self.third_corner.x),
+                edit(t!("Point 3 Y").as_ref(), "sl_p3y", self.third_corner.y),
+                edit(t!("Point 3 Z").as_ref(), "sl_p3z", self.third_corner.z),
+                edit(t!("Point 4 X").as_ref(), "sl_p4x", self.fourth_corner.x),
+                edit(t!("Point 4 Y").as_ref(), "sl_p4y", self.fourth_corner.y),
+                edit(t!("Point 4 Z").as_ref(), "sl_p4z", self.fourth_corner.z),
+                ro(t!("Elevation").as_ref(), "sl_elev", format!("{:.4}", elevation)),
             ],
         }]
     }

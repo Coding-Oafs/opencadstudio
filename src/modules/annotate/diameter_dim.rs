@@ -8,6 +8,7 @@ use glam::{DVec3, Vec3};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_diameter.svg"));
 
@@ -57,16 +58,16 @@ impl CadCommand for DiameterDimensionCommand {
 
     fn prompt(&self) -> String {
         if self.awaiting_text {
-            return "DIMDIAMETER  Enter dimension text (blank = measured value):".into();
+            return t!("DIMDIAMETER  Enter dimension text (blank = measured value):").into_owned();
         }
         if self.awaiting_angle {
-            return "DIMDIAMETER  Specify text angle (degrees):".into();
+            return t!("DIMDIAMETER  Specify text angle (degrees):").into_owned();
         }
         match self.step {
-            Step::CenterPoint => "DIMDIAMETER  Specify center point:".into(),
-            Step::ArcPoint(_) => "DIMDIAMETER  Specify point on circle:".into(),
+            Step::CenterPoint => t!("DIMDIAMETER  Specify center point:").into_owned(),
+            Step::ArcPoint(_) => t!("DIMDIAMETER  Specify point on circle:").into_owned(),
             Step::TextPoint { .. } => {
-                "DIMDIAMETER  Specify dimension line location  [Text/Angle]:".into()
+                t!("DIMDIAMETER  Specify dimension line location  [Text/Angle]:").into_owned()
             }
         }
     }

@@ -1,4 +1,5 @@
 use acadrust::{EntityType, Handle};
+use crate::t;
 
 use crate::scene::model::object::{PropSection, PropValue, Property};
 
@@ -33,35 +34,35 @@ pub fn general_section(entity: &EntityType) -> PropSection {
         .unwrap_or_default();
 
     let mut section = PropSection {
-        title: "General".into(),
+        title: t!("General").into_owned(),
         props: vec![
             Property {
-                label: "Handle".into(),
+                label: t!("Handle").into_owned(),
                 field: "handle",
                 value: PropValue::ReadOnly(common.handle.value().to_string()),
             },
             Property {
-                label: "Color".into(),
+                label: t!("Color").into_owned(),
                 field: "color",
                 value: PropValue::ColorChoice(common.color),
             },
             Property {
-                label: "Layer".into(),
+                label: t!("Layer").into_owned(),
                 field: "layer",
                 value: PropValue::LayerChoice(common.layer.clone()),
             },
             Property {
-                label: "Linetype".into(),
+                label: t!("Linetype").into_owned(),
                 field: "linetype",
                 value: PropValue::LinetypeChoice(linetype_display),
             },
             Property {
-                label: "Linetype scale".into(),
+                label: t!("Linetype scale").into_owned(),
                 field: "linetype_scale",
                 value: PropValue::EditText(format!("{:.4}", common.linetype_scale)),
             },
             Property {
-                label: "Plot style".into(),
+                label: t!("Plot style").into_owned(),
                 field: "plot_style",
                 value: PropValue::ReadOnly(
                     match common.plotstyle_flags {
@@ -73,17 +74,17 @@ pub fn general_section(entity: &EntityType) -> PropSection {
                 ),
             },
             Property {
-                label: "Lineweight".into(),
+                label: t!("Lineweight").into_owned(),
                 field: "lineweight",
                 value: PropValue::LwChoice(common.line_weight),
             },
             Property {
-                label: "Transparency".into(),
+                label: t!("Transparency").into_owned(),
                 field: "transparency",
                 value: PropValue::EditText(transp_display),
             },
             Property {
-                label: "Hyperlink".into(),
+                label: t!("Hyperlink").into_owned(),
                 field: "hyperlink",
                 value: PropValue::EditText(hyperlink),
             },
@@ -96,7 +97,7 @@ pub fn general_section(entity: &EntityType) -> PropSection {
     if let Some(t) = crate::scene::view::dispatch::entity_thickness(entity) {
         section
             .props
-            .push(crate::entities::common::edit_prop("Thickness", "thickness", t));
+            .push(crate::entities::common::edit_prop(t!("Thickness").as_ref(), "thickness", t));
     }
 
     section
@@ -125,7 +126,7 @@ pub fn visualization_section(entity: &EntityType) -> Option<PropSection> {
         _ => "Custom",
     };
     let mut props = vec![Property {
-        label: "Material".into(),
+        label: t!("Material").into_owned(),
         field: "material",
         value: PropValue::ReadOnly(material.into()),
     }];
@@ -136,39 +137,41 @@ pub fn visualization_section(entity: &EntityType) -> Option<PropSection> {
     };
     props.extend([
         Property {
-            label: "Visual style".into(),
+            label: t!("Visual style").into_owned(),
             field: "visual_style",
             value: PropValue::ReadOnly(handle_text(common.full_visual_style_handle)),
         },
         Property {
-            label: "Face style".into(),
+            label: t!("Face style").into_owned(),
             field: "face_visual_style",
             value: PropValue::ReadOnly(handle_text(common.face_visual_style_handle)),
         },
         Property {
-            label: "Edge style".into(),
+            label: t!("Edge style").into_owned(),
             field: "edge_visual_style",
             value: PropValue::ReadOnly(handle_text(common.edge_visual_style_handle)),
         },
         Property {
-            label: "Shadow flags".into(),
+            label: t!("Shadow flags").into_owned(),
             field: "shadow_flags",
             value: PropValue::ReadOnly(common.shadow_flags.to_string()),
         },
     ]);
     Some(PropSection {
-        title: "3D Visualization".into(),
+        title: t!("3D Visualization").into_owned(),
         props,
     })
 }
 
 pub fn fallback_properties(_handle: Handle, entity: &EntityType) -> PropSection {
     PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![Property {
-            label: "Type".into(),
+            label: t!("Type").into_owned(),
             field: "type",
-            value: PropValue::ReadOnly(crate::entities::names::ui_name_or_class(entity).into()),
+            value: PropValue::ReadOnly(
+                crate::t!(crate::entities::names::ui_name_or_class(entity)).into_owned(),
+            ),
         }],
     }
 }

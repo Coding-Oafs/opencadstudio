@@ -8,6 +8,7 @@
 
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Line};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, TangentObject};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -64,9 +65,9 @@ impl CadCommand for LineCommand {
 
     fn prompt(&self) -> String {
         match self.points.len() {
-            0 => "LINE  Specify first point:".to_string(),
-            1 => "LINE  Specify next point  [Undo]:".to_string(),
-            _ => "LINE  Specify next point  [Close/Undo]:".to_string(),
+            0 => t!("LINE  Specify first point:").into_owned(),
+            1 => t!("LINE  Specify next point  [Undo]:").into_owned(),
+            _ => t!("LINE  Specify next point  [Close/Undo]:").into_owned(),
         }
     }
 

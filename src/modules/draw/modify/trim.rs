@@ -26,6 +26,7 @@ use crate::modules::draw::modify::spline_ops::{
 };
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 use super::entity_index::ModifyEntityIndex;
 
@@ -3092,22 +3093,33 @@ impl CadCommand for TrimCommand {
     }
 
     fn prompt(&self) -> String {
-        let edge = if self.implied_edges { " [Edge: Extend]" } else { "" };
+        let edge = if self.implied_edges {
+            t!(" [Edge: Extend]")
+        } else {
+            std::borrow::Cow::Borrowed("")
+        };
         match &self.mode {
             TrimMode::Pick => {
-                format!("TRIM{edge}  Click segment to remove (Shift+click extends):")
+                crate::tf!("TRIM{edge}  Click segment to remove (Shift+click extends):")
+                    .into_owned()
             }
-            TrimMode::SelectEdges => format!(
+            TrimMode::SelectEdges => crate::tf!(
                 "TRIM  Select cutting edges [{} picked, Enter = done]:",
                 self.edge_set.len()
-            ),
-            TrimMode::Fence(pts) => format!(
+            )
+            .into_owned(),
+            TrimMode::Fence(pts) => crate::tf!(
                 "TRIM{edge}  Fence: pick points [{} placed, Enter = trim crossed]:",
                 pts.len()
-            ),
-            TrimMode::CrossFirst => format!("TRIM{edge}  Crossing: first corner:"),
-            TrimMode::CrossSecond(_) => format!("TRIM{edge}  Crossing: opposite corner:"),
-            TrimMode::Erase => "TRIM  Erase: click objects to delete [Enter = done]:".into(),
+            )
+            .into_owned(),
+            TrimMode::CrossFirst => crate::tf!("TRIM{edge}  Crossing: first corner:").into_owned(),
+            TrimMode::CrossSecond(_) => {
+                crate::tf!("TRIM{edge}  Crossing: opposite corner:").into_owned()
+            }
+            TrimMode::Erase => {
+                t!("TRIM  Erase: click objects to delete [Enter = done]:").into_owned()
+            }
         }
     }
 
@@ -3778,22 +3790,33 @@ impl CadCommand for ExtendCommand {
     }
 
     fn prompt(&self) -> String {
-        let edge = if self.implied_edges { " [Edge: Extend]" } else { "" };
+        let edge = if self.implied_edges {
+            t!(" [Edge: Extend]")
+        } else {
+            std::borrow::Cow::Borrowed("")
+        };
         match &self.mode {
-            TrimMode::Pick => format!(
+            TrimMode::Pick => crate::tf!(
                 "EXTEND{edge}  Click near end of object to extend (Shift+click trims):"
-            ),
-            TrimMode::SelectEdges => format!(
+            )
+            .into_owned(),
+            TrimMode::SelectEdges => crate::tf!(
                 "EXTEND  Select boundary edges [{} picked, Enter = done]:",
                 self.edge_set.len()
-            ),
-            TrimMode::Fence(pts) => format!(
+            )
+            .into_owned(),
+            TrimMode::Fence(pts) => crate::tf!(
                 "EXTEND{edge}  Fence: pick points [{} placed, Enter = extend crossed]:",
                 pts.len()
-            ),
-            TrimMode::CrossFirst => format!("EXTEND{edge}  Crossing: first corner:"),
-            TrimMode::CrossSecond(_) => format!("EXTEND{edge}  Crossing: opposite corner:"),
-            TrimMode::Erase => "EXTEND  [Enter = done]:".into(),
+            )
+            .into_owned(),
+            TrimMode::CrossFirst => {
+                crate::tf!("EXTEND{edge}  Crossing: first corner:").into_owned()
+            }
+            TrimMode::CrossSecond(_) => {
+                crate::tf!("EXTEND{edge}  Crossing: opposite corner:").into_owned()
+            }
+            TrimMode::Erase => t!("EXTEND  [Enter = done]:").into_owned(),
         }
     }
 
@@ -4671,9 +4694,9 @@ impl CadCommand for ExtrimCommand {
 
     fn prompt(&self) -> String {
         if self.boundary.is_none() {
-            "EXTRIM  Select cutting boundary:".into()
+            crate::t!("EXTRIM  Select cutting boundary:").into_owned()
         } else {
-            "EXTRIM  Click the side to trim away:".into()
+            crate::t!("EXTRIM  Click the side to trim away:").into_owned()
         }
     }
 

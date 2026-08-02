@@ -7,6 +7,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, DynField};
 use crate::scene::model::wire_model::WireModel;
@@ -117,8 +118,8 @@ impl CadCommand for TorientCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::AngleOrFirstPoint => "TORIENT  New absolute rotation <Most Readable>:".into(),
-            Step::SecondPoint { .. } => "TORIENT  Specify second point:".into(),
+            Step::AngleOrFirstPoint => t!("TORIENT  New absolute rotation <Most Readable>:").into_owned(),
+            Step::SecondPoint { .. } => t!("TORIENT  Specify second point:").into_owned(),
         }
     }
 

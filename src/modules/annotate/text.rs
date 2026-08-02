@@ -2,6 +2,7 @@ use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/text.svg"));
 
@@ -37,7 +38,7 @@ impl CadCommand for TextCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::InsertPoint => "TEXT  Specify insertion point:".into(),
+            Step::InsertPoint => t!("TEXT  Specify insertion point:").into_owned(),
         }
     }
 

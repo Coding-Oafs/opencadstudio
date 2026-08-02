@@ -38,7 +38,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 2 {
             self.command_line
-                .push_error("Boolean: select exactly two solids created this session.");
+                .push_error(crate::t!("Boolean: select exactly two solids created this session.").as_ref());
             return Task::none();
         }
         let a = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -50,7 +50,7 @@ impl super::OpenCADStudio {
         };
         let Some(result) = solid_model::boolean(kind, &a, &b) else {
             self.command_line
-                .push_error("Boolean failed — the solids may not overlap.");
+                .push_error(crate::t!("Boolean failed — the solids may not overlap.").as_ref());
             return Task::none();
         };
 
@@ -87,7 +87,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 1 {
             self.command_line
-                .push_error("SLICE: select exactly one solid created this session.");
+                .push_error(crate::t!("SLICE: select exactly one solid created this session.").as_ref());
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -105,7 +105,7 @@ impl super::OpenCADStudio {
         }
         if min[0] > max[0] {
             self.command_line
-                .push_error("SLICE: could not determine the solid's extent.");
+                .push_error(crate::t!("SLICE: could not determine the solid's extent.").as_ref());
             return Task::none();
         }
         // Generous margin so the box fully spans the solid in the free axes.
@@ -123,7 +123,7 @@ impl super::OpenCADStudio {
         }
         if hi[axis] <= lo[axis] {
             self.command_line
-                .push_error("SLICE: the plane does not cross the solid on the kept side.");
+                .push_error(crate::t!("SLICE: the plane does not cross the solid on the kept side.").as_ref());
             return Task::none();
         }
         let center = [
@@ -134,7 +134,7 @@ impl super::OpenCADStudio {
         let halfspace = solid_model::box_solid(center, hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
         let Some(result) = solid_model::boolean(Bool::Intersect, &solid, &halfspace) else {
             self.command_line
-                .push_error("SLICE failed — the plane may not cross the solid.");
+                .push_error(crate::t!("SLICE failed — the plane may not cross the solid.").as_ref());
             return Task::none();
         };
         self.push_undo_snapshot(i, "SLICE");
@@ -149,10 +149,10 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         let ax = ["X", "Y", "Z"][axis];
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "SLICE: cut at {ax}={value}, kept the {} half.",
             if keep_low { "lower" } else { "upper" }
-        ));
+        ).as_ref());
         Task::none()
     }
 
@@ -169,7 +169,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 2 {
             self.command_line
-                .push_error("INTERFERE: select exactly two solids created this session.");
+                .push_error(crate::t!("INTERFERE: select exactly two solids created this session.").as_ref());
             return Task::none();
         }
         let a = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -184,11 +184,11 @@ impl super::OpenCADStudio {
                 self.tabs[i].dirty = true;
                 self.refresh_properties();
                 self.command_line
-                    .push_output("INTERFERE: created an interference solid from the overlap.");
+                    .push_output(crate::t!("INTERFERE: created an interference solid from the overlap.").as_ref());
             }
             None => self
                 .command_line
-                .push_output("INTERFERE: the selected solids do not overlap."),
+                .push_output(crate::t!("INTERFERE: the selected solids do not overlap.").as_ref()),
         }
         Task::none()
     }
@@ -208,7 +208,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 1 {
             self.command_line
-                .push_error("3DROTATE: select exactly one solid created this session.");
+                .push_error(crate::t!("3DROTATE: select exactly one solid created this session.").as_ref());
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -225,7 +225,7 @@ impl super::OpenCADStudio {
         }
         if min[0] > max[0] {
             self.command_line
-                .push_error("3DROTATE: could not determine the solid's extent.");
+                .push_error(crate::t!("3DROTATE: could not determine the solid's extent.").as_ref());
             return Task::none();
         }
         let origin = Point3::new(
@@ -250,10 +250,10 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "3DROTATE: rotated {angle_deg}° about the {} axis.",
             ["X", "Y", "Z"][axis]
-        ));
+        ).as_ref());
         Task::none()
     }
 
@@ -280,7 +280,7 @@ impl super::OpenCADStudio {
             });
         let Some((handle, pts, closed)) = found else {
             self.command_line
-                .push_error("POLYSOLID: select a polyline first.");
+                .push_error(crate::t!("POLYSOLID: select a polyline first.").as_ref());
             return Task::none();
         };
         let mut segs: Vec<([f64; 2], [f64; 2])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
@@ -308,7 +308,7 @@ impl super::OpenCADStudio {
         }
         let Some(result) = acc else {
             self.command_line
-                .push_error("POLYSOLID: the polyline has no usable segments.");
+                .push_error(crate::t!("POLYSOLID: the polyline has no usable segments.").as_ref());
             return Task::none();
         };
         self.push_undo_snapshot(i, "POLYSOLID");
@@ -322,9 +322,9 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "POLYSOLID: built a wall solid from {used} segment(s) (width {width}, height {height})."
-        ));
+        ).as_ref());
         Task::none()
     }
 
@@ -344,7 +344,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 1 {
             self.command_line
-                .push_error("3DMIRROR: select exactly one solid created this session.");
+                .push_error(crate::t!("3DMIRROR: select exactly one solid created this session.").as_ref());
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -361,7 +361,7 @@ impl super::OpenCADStudio {
         }
         if min[0] > max[0] {
             self.command_line
-                .push_error("3DMIRROR: could not determine the solid's extent.");
+                .push_error(crate::t!("3DMIRROR: could not determine the solid's extent.").as_ref());
             return Task::none();
         }
         let c = TVec3::new(
@@ -390,10 +390,10 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "3DMIRROR: added a mirror across the {} plane.",
             ["X", "Y", "Z"][axis]
-        ));
+        ).as_ref());
         Task::none()
     }
 
@@ -417,7 +417,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 1 {
             self.command_line
-                .push_error("3DALIGN: select exactly one solid created this session.");
+                .push_error(crate::t!("3DALIGN: select exactly one solid created this session.").as_ref());
             return Task::none();
         }
         // Build a right-handed frame (origin + orthonormal axes) from 3 points.
@@ -440,7 +440,7 @@ impl super::OpenCADStudio {
         };
         let (Some(s), Some(d)) = (frame(src), frame(dst)) else {
             self.command_line
-                .push_error("3DALIGN: each point triple must be non-coincident and non-collinear.");
+                .push_error(crate::t!("3DALIGN: each point triple must be non-coincident and non-collinear.").as_ref());
             return Task::none();
         };
         let a = (d * s.inverse()).to_cols_array(); // column-major [f64; 16]
@@ -462,7 +462,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line
-            .push_output("3DALIGN: aligned the solid to the destination points.");
+            .push_output(crate::t!("3DALIGN: aligned the solid to the destination points.").as_ref());
         Task::none()
     }
 
@@ -487,7 +487,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.len() != 1 {
             self.command_line
-                .push_error("SECTION: select exactly one solid created this session.");
+                .push_error(crate::t!("SECTION: select exactly one solid created this session.").as_ref());
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -504,7 +504,7 @@ impl super::OpenCADStudio {
         }
         if min[0] > max[0] {
             self.command_line
-                .push_error("SECTION: could not determine the solid's extent.");
+                .push_error(crate::t!("SECTION: could not determine the solid's extent.").as_ref());
             return Task::none();
         }
         // Margin so the cutting plane fully spans the solid in the free axes.
@@ -546,7 +546,7 @@ impl super::OpenCADStudio {
         .collect();
         let Ok(face) = builder::try_attach_plane(&[wire]) else {
             self.command_line
-                .push_error("SECTION: could not build the cutting plane.");
+                .push_error(crate::t!("SECTION: could not build the cutting plane.").as_ref());
             return Task::none();
         };
         let shell: Shell = std::iter::once(face).collect();
@@ -556,7 +556,7 @@ impl super::OpenCADStudio {
         let segs = solid_mesh.extract_interference(&plane_mesh);
         if segs.is_empty() {
             self.command_line
-                .push_output("SECTION: the plane does not cross the solid.");
+                .push_output(crate::t!("SECTION: the plane does not cross the solid.").as_ref());
             return Task::none();
         }
         self.push_undo_snapshot(i, "SECTION");
@@ -569,11 +569,11 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "SECTION: created {} section line(s) at {}={value}.",
             segs.len(),
             ["X", "Y", "Z"][axis]
-        ));
+        ).as_ref());
         Task::none()
     }
 
@@ -581,7 +581,7 @@ impl super::OpenCADStudio {
     #[cfg(not(feature = "solid3d"))]
     pub(super) fn solid_section(&mut self, _axis: usize, _value: f64) -> Task<Message> {
         self.command_line
-            .push_error("SECTION: solid modelling is unavailable in this build.");
+            .push_error(crate::t!("SECTION: solid modelling is unavailable in this build.").as_ref());
         Task::none()
     }
 
@@ -604,7 +604,7 @@ impl super::OpenCADStudio {
         let n = sides.max(3);
         if radius <= 0.0 || height <= 0.0 {
             self.command_line
-                .push_error("PYRAMID: radius and height must be positive.");
+                .push_error(crate::t!("PYRAMID: radius and height must be positive.").as_ref());
             return Task::none();
         }
         let corners: Vec<Point3> = (0..n)
@@ -642,7 +642,7 @@ impl super::OpenCADStudio {
         }
         if faces.len() < n + 1 {
             self.command_line
-                .push_error("PYRAMID: could not build all faces.");
+                .push_error(crate::t!("PYRAMID: could not build all faces.").as_ref());
             return Task::none();
         }
         let shell = Shell::from(faces);
@@ -655,12 +655,12 @@ impl super::OpenCADStudio {
         } = truck_tess::tessellate_shell(&shell)
         else {
             self.command_line
-                .push_error("PYRAMID: tessellation failed.");
+                .push_error(crate::t!("PYRAMID: tessellation failed.").as_ref());
             return Task::none();
         };
         if verts.is_empty() {
             self.command_line
-                .push_error("PYRAMID: tessellation produced no geometry.");
+                .push_error(crate::t!("PYRAMID: tessellation produced no geometry.").as_ref());
             return Task::none();
         }
         self.push_undo_snapshot(i, "PYRAMID");
@@ -682,9 +682,9 @@ impl super::OpenCADStudio {
             .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(&format!(
+        self.command_line.push_output(crate::tf!(
             "PYRAMID: created a {n}-sided pyramid (radius {radius}, height {height})."
-        ));
+        ).as_ref());
         Task::none()
     }
 
@@ -713,12 +713,12 @@ impl super::OpenCADStudio {
             });
         let Some((handle, fit)) = found else {
             self.command_line
-                .push_error("SPLINEFIT: select a polyline to fit a spline through.");
+                .push_error(crate::t!("SPLINEFIT: select a polyline to fit a spline through.").as_ref());
             return Task::none();
         };
         if fit.len() < 3 {
             self.command_line
-                .push_error("SPLINEFIT: need at least 3 points.");
+                .push_error(crate::t!("SPLINEFIT: need at least 3 points.").as_ref());
             return Task::none();
         }
         let n = fit.len();
@@ -756,7 +756,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line
-            .push_output(&format!("SPLINEFIT: fit a spline through {n} points."));
+            .push_output(crate::tf!("SPLINEFIT: fit a spline through {n} points.").as_ref());
         Task::none()
     }
 
@@ -776,7 +776,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.is_empty() {
             self.command_line
-                .push_error("FLATSHOT: select a solid created this session.");
+                .push_error(crate::t!("FLATSHOT: select a solid created this session.").as_ref());
             return Task::none();
         }
         self.push_undo_snapshot(i, "FLATSHOT");
@@ -797,7 +797,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line
-            .push_output(&format!("FLATSHOT: created {n} projected edge(s) at Z=0."));
+            .push_output(crate::tf!("FLATSHOT: created {n} projected edge(s) at Z=0.").as_ref());
         Task::none()
     }
 
@@ -816,7 +816,7 @@ impl super::OpenCADStudio {
             .collect();
         if handles.is_empty() {
             self.command_line
-                .push_error("CONVTOSURFACE: select a solid created this session.");
+                .push_error(crate::t!("CONVTOSURFACE: select a solid created this session.").as_ref());
             return Task::none();
         }
         let mut surfaces: Vec<Surface> = Vec::new();
@@ -848,7 +848,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line
-            .push_output(&format!("CONVTOSURFACE: converted {n} solid(s) to surface(s)."));
+            .push_output(crate::tf!("CONVTOSURFACE: converted {n} solid(s) to surface(s).").as_ref());
         Task::none()
     }
 }

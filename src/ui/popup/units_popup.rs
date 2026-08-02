@@ -5,6 +5,7 @@ use iced::{Element, Fill};
 
 use crate::app::Message;
 use crate::ui::statusbar::status_menu::Entry;
+use crate::t;
 
 /// Units offered in the picker: (INSUNITS code, menu label).
 const UNITS: &[(i16, &str)] = &[
@@ -51,7 +52,7 @@ pub fn menu_entries(current: i16) -> Vec<Entry<'static>> {
 fn unit_row(label: &'static str, active: bool, msg: Message) -> Element<'static, Message> {
     let check = crate::ui::icons::themed_check_cell(active);
 
-    let lbl = text(label).size(11);
+    let lbl = text(t!(label)).size(11);
 
     let content = row![check, lbl].spacing(6).align_y(iced::Center);
 

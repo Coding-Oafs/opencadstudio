@@ -10,6 +10,7 @@ use crate::app::Message;
 use crate::ui::style::style_manager::{hdivider, muted_text_style, tb_button};
 use iced::widget::{column, container, mouse_area, row, scrollable, text, Space};
 use iced::{Background, Border, Element, Theme};
+use crate::t;
 
 /// `scales` is `(name, "paper:drawing" ratio, is_member)`. Every label is cloned
 /// into the widget tree, so the returned element borrows nothing from the args.
@@ -20,9 +21,9 @@ pub fn view_window(
 ) -> Element<'static, Message> {
     let toolbar = container(
         row![
-            text(format!("Object: {object_label}")).size(11),
+            text(t!("Object: %{object_label}", object_label = object_label)).size(11),
             Space::new().width(sizing.width),
-            tb_button("Close", Message::CloseModal, true),
+            tb_button(t!("Close"), Message::CloseModal, true),
         ]
         .spacing(4)
         .align_y(iced::Center),
@@ -75,7 +76,7 @@ pub fn view_window(
 
     let body = container(
         column![
-            text("Click a scale to add or remove the object's representation for it.")
+            text(t!("Click a scale to add or remove the object's representation for it."))
                 .size(10)
                 .style(muted_text_style),
             list,

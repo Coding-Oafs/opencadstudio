@@ -11,6 +11,7 @@ use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, Property, PropValue};
 use crate::scene::view::transform;
 use crate::scene::model::wire_model::SnapHint;
+use crate::t;
 
 fn v3(v: &acadrust::types::Vector3) -> Vec3 {
     Vec3::new(v.x as f32, v.y as f32, v.z as f32)
@@ -1773,7 +1774,7 @@ impl PropertyEditable for Table {
                 _ => "(none)".to_string(),
             }
         };
-        let toggle = |label: &'static str, field: &'static str, b: bool| -> Property {
+        let toggle = |label: &str, field: &'static str, b: bool| -> Property {
             Property {
                 label: label.into(),
                 field,
@@ -1806,93 +1807,93 @@ impl PropertyEditable for Table {
 
         vec![
             PropSection {
-                title: "Table".into(),
+                title: t!("Table").into_owned(),
                 props: vec![
                     ro(
-                        "Table style",
+                        t!("Table style").as_ref(),
                         "tbl_style_handle",
                         fmt_h(&self.table_style_handle),
                     ),
-                    ro("Rows", "tbl_rows", self.rows.len().to_string()),
-                    ro("Columns", "tbl_cols", self.columns.len().to_string()),
-                    ro("Contents", "tbl_contents", content_count.to_string()),
+                    ro(t!("Rows").as_ref(), "tbl_rows", self.rows.len().to_string()),
+                    ro(t!("Columns").as_ref(), "tbl_cols", self.columns.len().to_string()),
+                    ro(t!("Contents").as_ref(), "tbl_contents", content_count.to_string()),
                     ro(
-                        "Block contents",
+                        t!("Block contents").as_ref(),
                         "tbl_block_contents",
                         block_content_count.to_string(),
                     ),
                     ro(
-                        "Field contents",
+                        t!("Field contents").as_ref(),
                         "tbl_field_contents",
                         field_content_count.to_string(),
                     ),
                     ro(
-                        "Merged ranges",
+                        t!("Merged ranges").as_ref(),
                         "tbl_merged_ranges",
                         self.merged_ranges.len().to_string(),
                     ),
                     ro(
-                        "Linked cells",
+                        t!("Linked cells").as_ref(),
                         "tbl_linked_cells",
                         linked_cell_count.to_string(),
                     ),
-                    ro("Direction", "tbl_direction", format!("{:.4}", direction_deg)),
+                    ro(t!("Direction").as_ref(), "tbl_direction", format!("{:.4}", direction_deg)),
                     ro(
-                        "Table width",
+                        t!("Table width").as_ref(),
                         "tbl_width",
                         format!("{:.4}", self.total_width()),
                     ),
                     ro(
-                        "Table height",
+                        t!("Table height").as_ref(),
                         "tbl_height",
                         format!("{:.4}", self.total_height()),
                     ),
                 ],
             },
             PropSection {
-                title: "Table Breaks".into(),
+                title: t!("Table Breaks").into_owned(),
                 props: vec![
                     toggle(
-                        "Enabled",
+                        t!("Enabled").as_ref(),
                         "tbl_break_enabled",
                         self.break_options.contains(BreakOptionFlags::ENABLE_BREAKS),
                     ),
                     ro(
-                        "Direction",
+                        t!("Direction").as_ref(),
                         "tbl_break_direction",
                         format!("{:?}", self.break_flow_direction),
                     ),
                     toggle(
-                        "Repeat top labels",
+                        t!("Repeat top labels").as_ref(),
                         "tbl_break_repeat_top",
                         self.break_options
                             .contains(BreakOptionFlags::REPEAT_TOP_LABELS),
                     ),
                     toggle(
-                        "Repeat bottom labels",
+                        t!("Repeat bottom labels").as_ref(),
                         "tbl_break_repeat_bottom",
                         self.break_options
                             .contains(BreakOptionFlags::REPEAT_BOTTOM_LABELS),
                     ),
                     toggle(
-                        "Manual positions",
+                        t!("Manual positions").as_ref(),
                         "tbl_break_manual_positions",
                         self.break_options
                             .contains(BreakOptionFlags::ALLOW_MANUAL_POSITIONS),
                     ),
                     toggle(
-                        "Manual heights",
+                        t!("Manual heights").as_ref(),
                         "tbl_break_manual_heights",
                         self.break_options
                             .contains(BreakOptionFlags::ALLOW_MANUAL_HEIGHTS),
                     ),
                     ro(
-                        "Segments",
+                        t!("Segments").as_ref(),
                         "tbl_break_segments",
                         self.break_ranges.len().max(self.break_data.len()).to_string(),
                     ),
-                    ro("Break heights", "tbl_break_height", break_heights),
-                    edit("Spacing", "tbl_break_spacing", self.break_spacing),
+                    ro(t!("Break heights").as_ref(), "tbl_break_height", break_heights),
+                    edit(t!("Spacing").as_ref(), "tbl_break_spacing", self.break_spacing),
                 ],
             },
         ]

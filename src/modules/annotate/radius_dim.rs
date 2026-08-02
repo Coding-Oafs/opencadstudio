@@ -6,6 +6,7 @@ use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::{DVec3, Vec3};
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_radius.svg"));
 
@@ -55,16 +56,16 @@ impl CadCommand for RadiusDimensionCommand {
 
     fn prompt(&self) -> String {
         if self.awaiting_text {
-            return "DIMRADIUS  Enter dimension text (blank = measured value):".into();
+            return t!("DIMRADIUS  Enter dimension text (blank = measured value):").into_owned();
         }
         if self.awaiting_angle {
-            return "DIMRADIUS  Specify text angle (degrees):".into();
+            return t!("DIMRADIUS  Specify text angle (degrees):").into_owned();
         }
         match self.step {
-            Step::CenterPoint => "DIMRADIUS  Specify center point:".into(),
-            Step::RadiusPoint(_) => "DIMRADIUS  Specify radius point:".into(),
+            Step::CenterPoint => t!("DIMRADIUS  Specify center point:").into_owned(),
+            Step::RadiusPoint(_) => t!("DIMRADIUS  Specify radius point:").into_owned(),
             Step::TextPoint { .. } => {
-                "DIMRADIUS  Specify dimension line location  [Text/Angle]:".into()
+                t!("DIMRADIUS  Specify dimension line location  [Text/Angle]:").into_owned()
             }
         }
     }

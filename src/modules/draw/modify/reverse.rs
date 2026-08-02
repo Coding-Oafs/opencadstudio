@@ -23,6 +23,7 @@
 use acadrust::entities::Spline;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -196,7 +197,7 @@ impl CadCommand for ReverseCommand {
     }
 
     fn prompt(&self) -> String {
-        "REVERSE  Select line, polyline or spline to reverse:".to_string()
+        t!("REVERSE  Select line, polyline or spline to reverse:").into_owned()
     }
 
     fn needs_entity_pick(&self) -> bool {

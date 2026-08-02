@@ -14,6 +14,8 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
 
+use crate::t;
+
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
@@ -47,7 +49,11 @@ impl CadCommand for XAttachCommand {
     }
 
     fn prompt(&self) -> String {
-        format!("XATTACH  Specify insertion point for \"{}\":", self.block_name)
+        t!(
+            "XATTACH  Specify insertion point for \"%{name}\":",
+            name = self.block_name
+        )
+        .into_owned()
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {

@@ -12,6 +12,7 @@
 use acadrust::types::{Vector2, Vector3};
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -37,10 +38,11 @@ impl CadCommand for JoinCommand {
     }
 
     fn prompt(&self) -> String {
-        format!(
-            "JOIN  Select objects to join ({} selected, Enter to apply):",
-            self.handles.len()
+        t!(
+            "JOIN  Select objects to join (%{count} selected, Enter to apply):",
+            count = self.handles.len()
         )
+        .into_owned()
     }
 
     fn is_selection_gathering(&self) -> bool {

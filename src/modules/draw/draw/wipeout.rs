@@ -4,6 +4,7 @@ use acadrust::entities::{Wipeout, WipeoutClipType};
 use acadrust::types::{Vector2, Vector3};
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdOption, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -80,20 +81,24 @@ impl CadCommand for WipeoutCommand {
     fn prompt(&self) -> String {
         match self.mode {
             WipeoutMode::Draw if self.points.is_empty() => {
-                "WIPEOUT  Specify first point or [Polyline]:".into()
+                t!("WIPEOUT  Specify first point or [Polyline]:").into_owned()
             }
-            WipeoutMode::Draw => format!(
-                "WIPEOUT  Specify next point or [Undo/Close] ({} points):",
-                self.points.len()
-            ),
+            WipeoutMode::Draw => {
+                let n = self.points.len();
+                t!(
+                    "WIPEOUT  Specify next point or [Undo/Close] (%{n} points):",
+                    n = n
+                )
+                .into_owned()
+            }
             WipeoutMode::Polyline => {
-                "WIPEOUT Polyline  Select a closed planar polyline:".into()
+                t!("WIPEOUT Polyline  Select a closed planar polyline:").into_owned()
             }
             WipeoutMode::Rectangular if self.first.is_none() => {
-                "WIPEOUT Rectangular  Specify first corner:".into()
+                t!("WIPEOUT Rectangular  Specify first corner:").into_owned()
             }
             WipeoutMode::Rectangular => {
-                "WIPEOUT Rectangular  Specify opposite corner:".into()
+                t!("WIPEOUT Rectangular  Specify opposite corner:").into_owned()
             }
         }
     }
@@ -101,11 +106,11 @@ impl CadCommand for WipeoutCommand {
     fn options(&self) -> Vec<CmdOption> {
         match self.mode {
             WipeoutMode::Draw if self.points.is_empty() => {
-                vec![CmdOption::new("Polyline", "P")]
+                vec![CmdOption::new(t!("Polyline").as_ref(), "P")]
             }
             WipeoutMode::Draw => vec![
-                CmdOption::new("Undo", "U"),
-                CmdOption::new("Close", "C"),
+                CmdOption::new(t!("Undo").as_ref(), "U"),
+                CmdOption::new(t!("Close").as_ref(), "C"),
             ],
             _ => Vec::new(),
         }

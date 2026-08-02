@@ -8,6 +8,7 @@
 
 use acadrust::{entities::Solid3D, EntityType};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -46,8 +47,9 @@ impl CadCommand for ExtrudeCommand {
     }
     fn prompt(&self) -> String {
         match self.step {
-            ExtrudeStep::Pick => "EXTRUDE  Select closed profile (Circle, LwPolyline…):".into(),
-            ExtrudeStep::Height => "EXTRUDE  Height:".into(),
+            ExtrudeStep::Pick => t!("EXTRUDE  Select closed profile (Circle, LwPolyline…):")
+                .into_owned(),
+            ExtrudeStep::Height => t!("EXTRUDE  Height:").into_owned(),
         }
     }
     fn needs_entity_pick(&self) -> bool {
@@ -126,10 +128,10 @@ impl CadCommand for RevolveCommand {
     }
     fn prompt(&self) -> String {
         match self.step {
-            RevolveStep::Pick => "REVOLVE  Select profile:".into(),
-            RevolveStep::AxisStart => "REVOLVE  Axis start point:".into(),
-            RevolveStep::AxisEnd => "REVOLVE  Axis end point:".into(),
-            RevolveStep::Angle => "REVOLVE  Angle of revolution <360>:".into(),
+            RevolveStep::Pick => t!("REVOLVE  Select profile:").into_owned(),
+            RevolveStep::AxisStart => t!("REVOLVE  Axis start point:").into_owned(),
+            RevolveStep::AxisEnd => t!("REVOLVE  Axis end point:").into_owned(),
+            RevolveStep::Angle => t!("REVOLVE  Angle of revolution <360>:").into_owned(),
         }
     }
     fn needs_entity_pick(&self) -> bool {
@@ -224,8 +226,10 @@ impl CadCommand for SweepCommand {
     }
     fn prompt(&self) -> String {
         match self.step {
-            SweepStep::PickProfile => "SWEEP  Select profile to sweep:".into(),
-            SweepStep::PickPath => "SWEEP  Select path (Line, Arc, LwPolyline):".into(),
+            SweepStep::PickProfile => t!("SWEEP  Select profile to sweep:").into_owned(),
+            SweepStep::PickPath => {
+                t!("SWEEP  Select path (Line, Arc, LwPolyline):").into_owned()
+            }
         }
     }
     fn needs_entity_pick(&self) -> bool {
@@ -278,12 +282,13 @@ impl CadCommand for LoftCommand {
     }
     fn prompt(&self) -> String {
         if self.profiles.is_empty() {
-            "LOFT  Select first cross-section:".into()
+            t!("LOFT  Select first cross-section:").into_owned()
         } else {
-            format!(
-                "LOFT  Select next cross-section ({} selected, Enter to finish):",
-                self.profiles.len()
+            t!(
+                "LOFT  Select next cross-section (%{count} selected, Enter to finish):",
+                count = self.profiles.len()
             )
+            .into_owned()
         }
     }
     fn needs_entity_pick(&self) -> bool {

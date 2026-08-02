@@ -10,6 +10,7 @@
 use acadrust::entities::Polyline3D;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -65,9 +66,9 @@ impl CadCommand for Poly3dCommand {
 
     fn prompt(&self) -> String {
         match self.points.len() {
-            0 => "3DPOLY  Specify start point of polyline:".to_string(),
-            1 => "3DPOLY  Specify next point  [Undo]:".to_string(),
-            _ => "3DPOLY  Specify next point  [Close/Undo]:".to_string(),
+            0 => t!("3DPOLY  Specify start point of polyline:").into_owned(),
+            1 => t!("3DPOLY  Specify next point  [Undo]:").into_owned(),
+            _ => t!("3DPOLY  Specify next point  [Close/Undo]:").into_owned(),
         }
     }
 

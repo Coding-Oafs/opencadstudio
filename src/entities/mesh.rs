@@ -1,5 +1,6 @@
 use acadrust::entities::{mesh::Mesh, polygon_mesh::PolygonMesh, Face3D, PolyfaceMesh};
 use glam::Vec3;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{parse_f64, ro_prop as ro, square_grip};
@@ -249,25 +250,25 @@ impl PropertyEditable for Face3D {
         let inv = self.invisible_edges;
         let edge = |hidden: bool| if hidden { "Invisible" } else { "Visible" };
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                ro("Current vertex", "f3_current", String::new()),
-                edit("Vertex 1 X", "f3_p1x", self.first_corner.x),
-                edit("Vertex 1 Y", "f3_p1y", self.first_corner.y),
-                edit("Vertex 1 Z", "f3_p1z", self.first_corner.z),
-                edit("Vertex 2 X", "f3_p2x", self.second_corner.x),
-                edit("Vertex 2 Y", "f3_p2y", self.second_corner.y),
-                edit("Vertex 2 Z", "f3_p2z", self.second_corner.z),
-                edit("Vertex 3 X", "f3_p3x", self.third_corner.x),
-                edit("Vertex 3 Y", "f3_p3y", self.third_corner.y),
-                edit("Vertex 3 Z", "f3_p3z", self.third_corner.z),
-                edit("Vertex 4 X", "f3_p4x", self.fourth_corner.x),
-                edit("Vertex 4 Y", "f3_p4y", self.fourth_corner.y),
-                edit("Vertex 4 Z", "f3_p4z", self.fourth_corner.z),
-                ro("Edge 1", "f3_edge1", edge(inv.is_first_invisible())),
-                ro("Edge 2", "f3_edge2", edge(inv.is_second_invisible())),
-                ro("Edge 3", "f3_edge3", edge(inv.is_third_invisible())),
-                ro("Edge 4", "f3_edge4", edge(inv.is_fourth_invisible())),
+                ro(t!("Current vertex").as_ref(), "f3_current", String::new()),
+                edit(t!("Vertex 1 X").as_ref(), "f3_p1x", self.first_corner.x),
+                edit(t!("Vertex 1 Y").as_ref(), "f3_p1y", self.first_corner.y),
+                edit(t!("Vertex 1 Z").as_ref(), "f3_p1z", self.first_corner.z),
+                edit(t!("Vertex 2 X").as_ref(), "f3_p2x", self.second_corner.x),
+                edit(t!("Vertex 2 Y").as_ref(), "f3_p2y", self.second_corner.y),
+                edit(t!("Vertex 2 Z").as_ref(), "f3_p2z", self.second_corner.z),
+                edit(t!("Vertex 3 X").as_ref(), "f3_p3x", self.third_corner.x),
+                edit(t!("Vertex 3 Y").as_ref(), "f3_p3y", self.third_corner.y),
+                edit(t!("Vertex 3 Z").as_ref(), "f3_p3z", self.third_corner.z),
+                edit(t!("Vertex 4 X").as_ref(), "f3_p4x", self.fourth_corner.x),
+                edit(t!("Vertex 4 Y").as_ref(), "f3_p4y", self.fourth_corner.y),
+                edit(t!("Vertex 4 Z").as_ref(), "f3_p4z", self.fourth_corner.z),
+                ro(t!("Edge 1").as_ref(), "f3_edge1", edge(inv.is_first_invisible())),
+                ro(t!("Edge 2").as_ref(), "f3_edge2", edge(inv.is_second_invisible())),
+                ro(t!("Edge 3").as_ref(), "f3_edge3", edge(inv.is_third_invisible())),
+                ro(t!("Edge 4").as_ref(), "f3_edge4", edge(inv.is_fourth_invisible())),
             ],
         }]
     }
@@ -380,37 +381,34 @@ impl PropertyEditable for PolygonMesh {
         let face_count = cells_m * cells_n;
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    ro("Vertex", "pm_vertex", String::new()),
-                    ro(
-                        "Vertex X",
+                    ro(t!("Vertex").as_ref(), "pm_vertex", String::new()),
+                    ro(t!("Vertex X").as_ref(),
                         "pm_vx",
                         first.map(|v| format!("{:.4}", v.location.x)).unwrap_or_default(),
                     ),
-                    ro(
-                        "Vertex Y",
+                    ro(t!("Vertex Y").as_ref(),
                         "pm_vy",
                         first.map(|v| format!("{:.4}", v.location.y)).unwrap_or_default(),
                     ),
-                    ro(
-                        "Vertex Z",
+                    ro(t!("Vertex Z").as_ref(),
                         "pm_vz",
                         first.map(|v| format!("{:.4}", v.location.z)).unwrap_or_default(),
                     ),
-                    ro("M vertex count", "pm_m", self.m_vertex_count.to_string()),
-                    ro("N vertex count", "pm_n", self.n_vertex_count.to_string()),
-                    ro("M closed", "pm_closed_m", yesno(self.is_closed_m())),
-                    ro("N closed", "pm_closed_n", yesno(self.is_closed_n())),
-                    ro("M density", "pm_smooth_m", self.m_smooth_density.to_string()),
-                    ro("N density", "pm_smooth_n", self.n_smooth_density.to_string()),
-                    ro("Vertex count", "pm_v", self.vertices.len().to_string()),
-                    ro("Face count", "pm_faces", face_count.to_string()),
+                    ro(t!("M vertex count").as_ref(), "pm_m", self.m_vertex_count.to_string()),
+                    ro(t!("N vertex count").as_ref(), "pm_n", self.n_vertex_count.to_string()),
+                    ro(t!("M closed").as_ref(), "pm_closed_m", yesno(self.is_closed_m())),
+                    ro(t!("N closed").as_ref(), "pm_closed_n", yesno(self.is_closed_n())),
+                    ro(t!("M density").as_ref(), "pm_smooth_m", self.m_smooth_density.to_string()),
+                    ro(t!("N density").as_ref(), "pm_smooth_n", self.n_smooth_density.to_string()),
+                    ro(t!("Vertex count").as_ref(), "pm_v", self.vertices.len().to_string()),
+                    ro(t!("Face count").as_ref(), "pm_faces", face_count.to_string()),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
-                props: vec![ro("Fit/smooth", "pm_smooth", smooth)],
+                title: t!("Misc").into_owned(),
+                props: vec![ro(t!("Fit/smooth").as_ref(), "pm_smooth", smooth)],
             },
         ]
     }
@@ -495,39 +493,36 @@ impl PropertyEditable for PolyfaceMesh {
         let first = self.vertices.first();
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    ro("Vertex", "pfm_vertex", String::new()),
-                    ro(
-                        "Vertex X",
+                    ro(t!("Vertex").as_ref(), "pfm_vertex", String::new()),
+                    ro(t!("Vertex X").as_ref(),
                         "pfm_vx",
                         first.map(|v| format!("{:.4}", v.location.x)).unwrap_or_default(),
                     ),
-                    ro(
-                        "Vertex Y",
+                    ro(t!("Vertex Y").as_ref(),
                         "pfm_vy",
                         first.map(|v| format!("{:.4}", v.location.y)).unwrap_or_default(),
                     ),
-                    ro(
-                        "Vertex Z",
+                    ro(t!("Vertex Z").as_ref(),
                         "pfm_vz",
                         first.map(|v| format!("{:.4}", v.location.z)).unwrap_or_default(),
                     ),
                     // Polyface meshes store an explicit vertex/face list rather
                     // than an M×N grid, so the grid-only rows are not applicable.
-                    ro("M vertex count", "pfm_m", String::new()),
-                    ro("N vertex count", "pfm_n", String::new()),
-                    ro("M closed", "pfm_closed_m", String::new()),
-                    ro("N closed", "pfm_closed_n", String::new()),
-                    ro("M density", "pfm_density_m", String::new()),
-                    ro("N density", "pfm_density_n", String::new()),
-                    ro("Vertex count", "pfm_v", self.vertices.len().to_string()),
-                    ro("Face count", "pfm_f", self.faces.len().to_string()),
+                    ro(t!("M vertex count").as_ref(), "pfm_m", String::new()),
+                    ro(t!("N vertex count").as_ref(), "pfm_n", String::new()),
+                    ro(t!("M closed").as_ref(), "pfm_closed_m", String::new()),
+                    ro(t!("N closed").as_ref(), "pfm_closed_n", String::new()),
+                    ro(t!("M density").as_ref(), "pfm_density_m", String::new()),
+                    ro(t!("N density").as_ref(), "pfm_density_n", String::new()),
+                    ro(t!("Vertex count").as_ref(), "pfm_v", self.vertices.len().to_string()),
+                    ro(t!("Face count").as_ref(), "pfm_f", self.faces.len().to_string()),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
-                props: vec![ro("Fit/smooth", "pfm_smooth", smooth)],
+                title: t!("Misc").into_owned(),
+                props: vec![ro(t!("Fit/smooth").as_ref(), "pfm_smooth", smooth)],
             },
         ]
     }
@@ -1149,26 +1144,25 @@ impl PropertyEditable for Mesh {
         let watertight =
             !self.faces.is_empty() && edge_use.values().all(|&c| c == 2);
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
                 Property {
-                    label: "Level of Smoothness".into(),
+                    label: t!("Level of Smoothness").into_owned(),
                     field: "msh_subdiv_edit",
                     value: PropValue::EditText(self.subdivision_level.to_string()),
                 },
                 Property {
-                    label: "Blend Creases".into(),
+                    label: t!("Blend Creases").into_owned(),
                     field: "msh_blend_crease",
                     value: PropValue::BoolToggle {
                         field: "msh_blend_crease",
                         value: self.blend_crease,
                     },
                 },
-                ro("Number of Faces", "msh_f", self.faces.len().to_string()),
-                ro("Number of Vertices", "msh_v", self.vertices.len().to_string()),
-                ro("Number of Edges", "msh_e", self.edges.len().to_string()),
-                ro(
-                    "Creased Edges",
+                ro(t!("Number of Faces").as_ref(), "msh_f", self.faces.len().to_string()),
+                ro(t!("Number of Vertices").as_ref(), "msh_v", self.vertices.len().to_string()),
+                ro(t!("Number of Edges").as_ref(), "msh_e", self.edges.len().to_string()),
+                ro(t!("Creased Edges").as_ref(),
                     "msh_creased",
                     self.edges
                         .iter()
@@ -1176,14 +1170,12 @@ impl PropertyEditable for Mesh {
                         .count()
                         .to_string(),
                 ),
-                ro(
-                    "Override Option",
+                ro(t!("Override Option").as_ref(),
                     "msh_override",
                     self.override_option.to_string(),
                 ),
-                ro("Number of Grips", "msh_grips", self.vertices.len().to_string()),
-                ro(
-                    "Watertight",
+                ro(t!("Number of Grips").as_ref(), "msh_grips", self.vertices.len().to_string()),
+                ro(t!("Watertight").as_ref(),
                     "msh_watertight",
                     if watertight { "Yes" } else { "No" },
                 ),

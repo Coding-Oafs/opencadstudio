@@ -12,6 +12,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -32,7 +33,7 @@ impl CadCommand for VplayerCommand {
     }
 
     fn prompt(&self) -> String {
-        "VPLAYER  F <layer> = Freeze  |  T <layer> = Thaw  |  Enter = Exit".to_string()
+        t!("VPLAYER  F <layer> = Freeze  |  T <layer> = Thaw  |  Enter = Exit").into_owned()
     }
 
     fn wants_text_input(&self) -> bool {

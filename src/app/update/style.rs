@@ -368,7 +368,7 @@ impl OpenCADStudio {
         ds.dimalt = self.ds_dimalt;
         ds.dimapost = self.ds_dimapost.clone();
         self.command_line
-            .push_output(&format!("DimStyle '{}' updated.", self.dimstyle_selected));
+            .push_output(crate::tf!("DimStyle '{}' updated.", self.dimstyle_selected).as_ref());
     }
 
     /// Update a single string buffer field.
@@ -687,7 +687,7 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     self.tabs[i].active_mleader_style = name.clone();
                     self.ribbon.active_mleader_style = name.clone();
                     self.command_line
-                        .push_output(&format!("Current multileader style: {}", name));
+                        .push_output(crate::tf!("Current multileader style: {}", name).as_ref());
                 }
                 Task::none()
     }

@@ -13,6 +13,7 @@ use acadrust::entities::LwVertex;
 use acadrust::types::Vector2;
 use acadrust::{EntityType, Handle, LwPolyline};
 use glam::{DVec2, DVec3, Vec2, Vec3};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -255,16 +256,18 @@ impl CadCommand for PlineCommand {
 
     fn prompt(&self) -> String {
         let mode_tag = match self.mode {
-            SegMode::Line => "Line",
-            SegMode::Arc => "Arc",
+            SegMode::Line => t!("Line"),
+            SegMode::Arc => t!("Arc"),
         };
         if self.vertices.is_empty() {
-            "PLINE  Specify start point:".into()
+            t!("PLINE  Specify start point:").into_owned()
         } else {
-            format!(
-                "PLINE [{mode_tag}]  Next pt  [{}pts]:",
-                self.vertices.len()
+            t!(
+                "PLINE [%{mode}]  Next pt  [%{count}pts]:",
+                mode = mode_tag,
+                count = self.vertices.len()
             )
+            .into_owned()
         }
     }
 
@@ -276,11 +279,11 @@ impl CadCommand for PlineCommand {
             Vec::new()
         } else {
             vec![
-                CmdOption::new("Arc", "A"),
-                CmdOption::new("Line", "L"),
-                CmdOption::new("Close", "C"),
-                CmdOption::new("Undo", "U"),
-                CmdOption::enter("Done"),
+                CmdOption::new(t!("Arc").as_ref(), "A"),
+                CmdOption::new(t!("Line").as_ref(), "L"),
+                CmdOption::new(t!("Close").as_ref(), "C"),
+                CmdOption::new(t!("Undo").as_ref(), "U"),
+                CmdOption::enter(t!("Done").as_ref()),
             ]
         }
     }

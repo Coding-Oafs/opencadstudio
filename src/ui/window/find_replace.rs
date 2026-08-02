@@ -1,6 +1,8 @@
 use crate::app::Message;
+use crate::t;
 use iced::widget::{button, column, row, text, text_input, Space};
 use iced::{Element, Fill, Length, Shrink};
+use std::borrow::Cow;
 
 pub const FIND_INPUT_ID: &str = "find-replace-search";
 
@@ -15,19 +17,19 @@ pub fn view_window<'a>(
     } else {
         Shrink
     };
-    let find_input = text_input("Text to find", search)
+    let find_input = text_input("", search)
         .id(iced::widget::Id::new(FIND_INPUT_ID))
         .on_input(Message::FindReplaceSearchChanged)
         .on_submit(Message::FindReplaceNext)
         .padding([6, 8])
         .size(13);
-    let replacement_input = text_input("Replacement text", replacement)
+    let replacement_input = text_input("", replacement)
         .on_input(Message::FindReplaceReplacementChanged)
         .padding([6, 8])
         .size(13);
 
     let enabled = !search.trim().is_empty();
-    let action = |label: &'static str, message: Message| {
+    let action = |label: Cow<'static, str>, message: Message| {
         let button = button(text(label).size(12)).padding([6, 12]);
         if enabled {
             button.on_press(message)
@@ -38,29 +40,29 @@ pub fn view_window<'a>(
 
     column![
         row![
-            text("Find:").size(12).width(90),
+            text(t!("Find:")).size(12).width(90),
             find_input.width(field_width),
         ]
         .spacing(8)
         .align_y(iced::Center),
         row![
-            text("Replace with:").size(12).width(90),
+            text(t!("Replace with:")).size(12).width(90),
             replacement_input.width(field_width),
         ]
         .spacing(8)
         .align_y(iced::Center),
-        text("Searches Text, MText, Attribute Definitions, and block attribute values.")
+        text(t!("Searches Text, MText, Attribute Definitions, and block attribute values."))
             .size(11),
         text(status).size(11),
         row![
             Space::new().width(field_width),
-            button(text("Close").size(12))
+            button(text(t!("Close")).size(12))
                 .on_press(Message::CloseModal)
                 .padding([6, 12])
                 .style(button::secondary),
-            action("Replace", Message::FindReplaceOne).style(button::secondary),
-            action("Replace All", Message::FindReplaceAll).style(button::danger),
-            action("Find Next", Message::FindReplaceNext).style(button::primary),
+            action(t!("Replace"), Message::FindReplaceOne).style(button::secondary),
+            action(t!("Replace All"), Message::FindReplaceAll).style(button::danger),
+            action(t!("Find Next"), Message::FindReplaceNext).style(button::primary),
         ]
         .spacing(8)
         .align_y(iced::Center),

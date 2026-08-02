@@ -1,5 +1,6 @@
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -40,15 +41,17 @@ impl CadCommand for CreateBlockCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Name => format!(
-                "BLOCK  Enter block name  [{} objects selected]:",
-                self.handles.len()
-            ),
-            Step::Base { name } => format!(
-                "BLOCK  Specify base point for \"{}\"  [{} objects]:",
-                name,
-                self.handles.len()
-            ),
+            Step::Name => t!(
+                "BLOCK  Enter block name  [%{count} objects selected]:",
+                count = self.handles.len()
+            )
+            .into_owned(),
+            Step::Base { name } => t!(
+                "BLOCK  Specify base point for \"%{name}\"  [%{count} objects]:",
+                name = name,
+                count = self.handles.len()
+            )
+            .into_owned(),
         }
     }
 

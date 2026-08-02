@@ -38,9 +38,9 @@ impl CadCommand for LayMatchCommand {
 
     fn prompt(&self) -> String {
         if self.dest_handles.is_empty() {
-            "LAYMATCH  Select objects to change layer:".into()
+            crate::t!("LAYMATCH  Select objects to change layer:").into_owned()
         } else {
-            "LAYMATCH  Select source object to match layer from:".into()
+            crate::t!("LAYMATCH  Select source object to match layer from:").into_owned()
         }
     }
 

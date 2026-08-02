@@ -26,6 +26,7 @@ use crate::snap::Snapper;
 use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
 use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
 use crate::ui::wrap_bar::WrapBar;
+use crate::t;
 
 const ST_ANNO_VISIBILITY: &[u8] = include_bytes!("../../../assets/icons/scale_list.svg");
 const ST_ANNO_AUTO_ADD: &[u8] = include_bytes!("../../../assets/icons/add_scale.svg");
@@ -142,7 +143,7 @@ impl StatusBar {
         let menu_btn = if is_start {
             tip(
                 menu_button.into(),
-                "Open or create a drawing to manage layouts.",
+                t!("Open or create a drawing to manage layouts."),
             )
         } else {
             status_menu::menu_bar(
@@ -150,7 +151,7 @@ impl StatusBar {
                     menu_button
                         .on_press(Message::StatusMenuTooltipHidden(true))
                         .into(),
-                    "Model and layout list",
+                    t!("Model and layout list"),
                     tooltip_hidden,
                 ),
                 statusbar_menu::layout_entries(&layout_names, &current_layout),
@@ -164,7 +165,7 @@ impl StatusBar {
         let add_btn = if is_start {
             tip(
                 add_button.into(),
-                "Open or create a drawing to add a layout.",
+                t!("Open or create a drawing to add a layout."),
             )
         } else {
             add_button.on_press(Message::LayoutCreate).into()
@@ -174,7 +175,7 @@ impl StatusBar {
         let osnap_active = snapper.is_active();
 
         let vp_label = if viewport_count > 0 {
-            format!("{} VP", viewport_count)
+            t!("%{n} VP", n = viewport_count).into_owned()
         } else {
             String::new()
         };
@@ -205,7 +206,7 @@ impl StatusBar {
             status_menu::menu_bar(
                 menu_tip(
                     popup_pill(&scale_label),
-                    "Annotation / Viewport Scale\nClick to change",
+                    t!("Annotation / Viewport Scale\nClick to change"),
                     tooltip_hidden,
                 ),
                 crate::ui::popup::scale_popup::menu_entries(
@@ -229,7 +230,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     action_pill(&coords_label, Message::CycleCoordsMode),
-                    "Cursor coordinates ($COORDS)\nClick to cycle: static / live / polar",
+                    t!("Cursor coordinates ($COORDS)\nClick to cycle: static / live / polar"),
                 )
                 .into(),
             );
@@ -238,7 +239,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_ORTHO, ortho_mode, Message::ToggleOrtho),
-                    "Orthogonal Mode\nF8",
+                    t!("Orthogonal Mode\nF8"),
                 )
                 .into(),
             );
@@ -247,7 +248,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_LWT, lineweight_display, Message::ToggleLineweightDisplay),
-                    "Show Lineweight\nLWDISPLAY",
+                    t!("Show Lineweight\nLWDISPLAY"),
                 )
                 .into(),
             );
@@ -270,7 +271,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_DYN, dyn_input, Message::ToggleDynInput),
-                    "Dynamic Input\nF12",
+                    t!("Dynamic Input\nF12"),
                 )
                 .into(),
             );
@@ -279,7 +280,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_OTRACK, otrack, Message::ToggleOTrack),
-                    "Object Snap Tracking\nF11",
+                    t!("Object Snap Tracking\nF11"),
                 )
                 .into(),
             );
@@ -299,7 +300,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     space_mode_btn(&current_layout, in_mspace),
-                    "PAPER: double-click viewport to enter MSPACE\nMODEL: click to switch to Model Space",
+                    t!("PAPER: double-click viewport to enter MSPACE\nMODEL: click to switch to Model Space"),
                 )
                 .into(),
             );
@@ -315,7 +316,7 @@ impl StatusBar {
                         annotation_all_visible,
                         Message::ToggleAnnotationVisibility,
                     ),
-                    "Show Annotation Objects",
+                    t!("Show Annotation Objects"),
                 )
                 .into(),
             );
@@ -328,7 +329,7 @@ impl StatusBar {
                         annotation_auto_add,
                         Message::ToggleAnnotationAutoAdd,
                     ),
-                    "Automatically Add Scales",
+                    t!("Automatically Add Scales"),
                 )
                 .into(),
             );
@@ -342,7 +343,7 @@ impl StatusBar {
                             synced,
                             Message::SyncViewportAnnotationScale,
                         ),
-                        "Viewport / Annotation Scale Sync",
+                        t!("Viewport / Annotation Scale Sync"),
                     )
                     .into(),
                 );
@@ -352,8 +353,8 @@ impl StatusBar {
             pills.push(
                 status_menu::menu_bar(
                     menu_tip(
-                        popup_pill(crate::ui::popup::units_popup::unit_short(insertion_units)),
-                        "Drawing Units (INSUNITS)\nClick to change",
+                        popup_pill(t!(crate::ui::popup::units_popup::unit_short(insertion_units))),
+                        t!("Drawing Units (INSUNITS)\nClick to change"),
                         tooltip_hidden,
                     ),
                     crate::ui::popup::units_popup::menu_entries(insertion_units),
@@ -370,7 +371,7 @@ impl StatusBar {
                         transparency_display,
                         Message::ToggleTransparencyDisplay,
                     ),
-                    "Show Transparency\nForce opaque when off",
+                    t!("Show Transparency\nForce opaque when off"),
                 )
                 .into(),
             );
@@ -384,7 +385,7 @@ impl StatusBar {
                             isolation_active,
                             Message::StatusMenuTooltipHidden(true),
                         ),
-                        "Isolate Objects\nClick for Isolate / Hide / End",
+                        t!("Isolate Objects\nClick for Isolate / Hide / End"),
                         tooltip_hidden,
                     ),
                     crate::ui::popup::isolate_popup::menu_entries(
@@ -400,7 +401,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_QUICKPROPS, quick_properties, Message::ToggleQuickProperties),
-                    "Quick Properties\nFloating panel on selection",
+                    t!("Quick Properties\nFloating panel on selection"),
                 )
                 .into(),
             );
@@ -414,7 +415,7 @@ impl StatusBar {
                             selection_filter_active,
                             Message::StatusMenuTooltipHidden(true),
                         ),
-                        "Selection Filtering\nLimit which object types can be picked",
+                        t!("Selection Filtering\nLimit which object types can be picked"),
                         tooltip_hidden,
                     ),
                     crate::ui::popup::selection_filter_popup::menu_entries(
@@ -430,7 +431,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_SELCYCLE, selection_cycling, Message::ToggleSelectionCycling),
-                    "Selection Cycling\nRepeat-click to step through overlapping objects",
+                    t!("Selection Cycling\nRepeat-click to step through overlapping objects"),
                 )
                 .into(),
             );
@@ -439,7 +440,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     status_pill(vp_label).into(),
-                    "Viewport count in active layout",
+                    t!("Viewport count in active layout"),
                 )
                 .into(),
             );
@@ -448,7 +449,7 @@ impl StatusBar {
             pills.push(
                 tip(
                     toggle_pill(crate::ui::icons::ST_CLEANSCREEN, clean_screen, Message::ToggleCleanScreen),
-                    "Clean Screen\nHide ribbon and panels",
+                    t!("Clean Screen\nHide ribbon and panels"),
                 )
                 .into(),
             );
@@ -458,7 +459,7 @@ impl StatusBar {
             status_menu::menu_bar(
                 menu_tip(
                     customize_btn(),
-                    "Customization\nShow or hide status-bar items",
+                    t!("Customization\nShow or hide status-bar items"),
                     tooltip_hidden,
                 ),
                 statusbar_menu::customization_entries(config),
@@ -589,7 +590,10 @@ fn customize_btn() -> Element<'static, Message> {
 
 // ── Tooltip helper ────────────────────────────────────────────────────────
 
-fn tip<'a>(content: Element<'a, Message>, label: &'static str) -> Element<'a, Message> {
+fn tip<'a>(
+    content: Element<'a, Message>,
+    label: std::borrow::Cow<'static, str>,
+) -> Element<'a, Message> {
     tip_node(content, text(label).size(11).into())
 }
 
@@ -597,7 +601,7 @@ fn tip<'a>(content: Element<'a, Message>, label: &'static str) -> Element<'a, Me
 /// opened menu resets suppression for the next hover without covering the menu.
 fn menu_tip<'a>(
     content: Element<'a, Message>,
-    label: &'static str,
+    label: std::borrow::Cow<'static, str>,
     hidden: bool,
 ) -> Element<'a, Message> {
     let content = if hidden {
@@ -707,8 +711,9 @@ fn polar_pill<'a>(
     entries: Vec<StatusMenuEntry<'a>>,
 ) -> Element<'a, Message> {
     let angle = crate::ui::popup::polar_popup::angle_label(increment_deg);
-    let tooltip_text = format!(
-        "Polar Tracking ({angle})\nF10 — left-click on/off\nRight-click cycles · ▾ picks angle",
+    let tooltip_text = t!(
+        "Polar Tracking (%{angle})\nF10 — left-click on/off\nRight-click cycles · ▾ picks angle",
+        angle = angle,
     );
 
     // Right-click quick-cycles through the same increments the picker lists.
@@ -762,7 +767,7 @@ fn polar_pill<'a>(
             )
             .on_press(Message::StatusMenuTooltipHidden(true))
             .into(),
-            "Polar angle\nClick to choose",
+            t!("Polar angle\nClick to choose"),
             tooltip_hidden,
         ),
         entries,
@@ -792,7 +797,7 @@ fn osnap_btn<'a>(
         mouse_area(snap_icon)
         .on_press(Message::ToggleSnapEnabled)
         .into(),
-        "Object Snap: toggle on/off\nF3",
+        t!("Object Snap: toggle on/off\nF3"),
     );
 
     let caret = status_menu::menu_bar(
@@ -807,7 +812,7 @@ fn osnap_btn<'a>(
             )
             .on_press(Message::StatusMenuTooltipHidden(true))
             .into(),
-            "Object Snap list\nClick to choose snap types",
+            t!("Object Snap list\nClick to choose snap types"),
             tooltip_hidden,
         ),
         entries,
@@ -820,7 +825,7 @@ fn osnap_btn<'a>(
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn layout_tab_context_menu(name: String) -> Element<'static, Message> {
-    let item = |label: &'static str, msg: Message| {
+    let item = |label: std::borrow::Cow<'static, str>, msg: Message| {
         button(text(label).size(12))
             .on_press(msg)
             .style(button::subtle)
@@ -830,8 +835,8 @@ fn layout_tab_context_menu(name: String) -> Element<'static, Message> {
 
     container(
         column![
-            item("Rename", Message::LayoutRenameStart(name.clone())),
-            item("Delete", Message::LayoutDelete(name)),
+            item(t!("Rename"), Message::LayoutRenameStart(name.clone())),
+            item(t!("Delete"), Message::LayoutDelete(name)),
         ]
         .spacing(0)
         .width(160),
@@ -888,7 +893,7 @@ fn space_tab<'a>(
             format!("{report_key_prefix}:{label}"),
             tip(
                 display.into(),
-                "Open or create a drawing to switch layouts.",
+                t!("Open or create a drawing to switch layouts."),
             ),
         )
         .into()
@@ -960,11 +965,11 @@ fn space_mode_btn(current_layout: &str, in_mspace: bool) -> Element<'static, Mes
     //   PAPER = currently in paper-space editing
     //   MODEL = currently in model-space editing (either the Model tab or MSPACE)
     let (label, active, on_press) = if is_model_tab {
-        ("MODEL", false, None::<Message>)
+        (t!("MODEL"), false, None::<Message>)
     } else if in_mspace {
-        ("MODEL", true, Some(Message::ExitViewport))
+        (t!("MODEL"), true, Some(Message::ExitViewport))
     } else {
-        ("PAPER", false, Some(Message::MspaceCommand))
+        (t!("PAPER"), false, Some(Message::MspaceCommand))
     };
 
     let clickable = on_press.is_some();
@@ -1002,12 +1007,12 @@ fn status_pill(label: impl Into<String>) -> Element<'static, Message> {
 // ── Scale popup button ────────────────────────────────────────────────────
 
 /// Shared visual root for labelled status-bar menus (units, scale, …).
-fn popup_pill(label: &str) -> Element<'static, Message> {
+fn popup_pill(label: impl Into<String>) -> Element<'static, Message> {
     action_pill(label, Message::StatusMenuTooltipHidden(true))
 }
 
-fn action_pill(label: &str, msg: Message) -> Element<'static, Message> {
-    let label = label.to_string();
+fn action_pill(label: impl Into<String>, msg: Message) -> Element<'static, Message> {
+    let label = label.into();
     button(text(label).size(12))
     .on_press(msg)
     .style(button::subtle)

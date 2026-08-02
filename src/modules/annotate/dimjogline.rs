@@ -10,6 +10,7 @@ use glam::DVec3;
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_jog.svg"));
 
@@ -46,8 +47,8 @@ impl CadCommand for DimJogLineCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::PickDim => "DIMJOGLINE  Select linear or aligned dimension:".into(),
-            Step::PickJogPos { .. } => "DIMJOGLINE  Specify jog location:".into(),
+            Step::PickDim => t!("DIMJOGLINE  Select linear or aligned dimension:").into_owned(),
+            Step::PickJogPos { .. } => t!("DIMJOGLINE  Specify jog location:").into_owned(),
         }
     }
 

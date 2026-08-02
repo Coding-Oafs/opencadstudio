@@ -10,6 +10,7 @@ use acadrust::entities::AttributeDefinition;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -52,12 +53,22 @@ impl CadCommand for AttdefCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Tag => "ATTDEF  Enter attribute tag (no spaces):".into(),
-            Step::Prompt { tag } => format!("ATTDEF  Enter prompt for '{tag}' (Enter=use tag):"),
-            Step::Default { tag, .. } => {
-                format!("ATTDEF  Enter default value for '{tag}' (Enter=blank):")
-            }
-            Step::Insertion { tag, .. } => format!("ATTDEF  Specify insertion point for '{tag}':"),
+            Step::Tag => t!("ATTDEF  Enter attribute tag (no spaces):").into_owned(),
+            Step::Prompt { tag } => t!(
+                "ATTDEF  Enter prompt for '%{tag}' (Enter=use tag):",
+                tag = tag
+            )
+            .into_owned(),
+            Step::Default { tag, .. } => t!(
+                "ATTDEF  Enter default value for '%{tag}' (Enter=blank):",
+                tag = tag
+            )
+            .into_owned(),
+            Step::Insertion { tag, .. } => t!(
+                "ATTDEF  Specify insertion point for '%{tag}':",
+                tag = tag
+            )
+            .into_owned(),
         }
     }
 

@@ -9,6 +9,7 @@ use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_edit.svg"));
 
@@ -45,9 +46,9 @@ impl CadCommand for DimEditCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::PickDim => "DIMEDIT  Select dimension:".into(),
+            Step::PickDim => t!("DIMEDIT  Select dimension:").into_owned(),
             Step::EnterText { .. } => {
-                "DIMEDIT  Enter text override (blank = reset to measured):".into()
+                t!("DIMEDIT  Enter text override (blank = reset to measured):").into_owned()
             }
         }
     }

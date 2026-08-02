@@ -1,4 +1,5 @@
 use acadrust::{entities::Line, Entity};
+use crate::t;
 use truck_modeling::{builder, Point3};
 
 use crate::command::EntityTransform;
@@ -81,19 +82,19 @@ fn properties(line: &Line) -> Vec<PropSection> {
     let dz = line.end.z - line.start.z;
     let angle = dy.atan2(dx).to_degrees().rem_euclid(360.0);
     vec![PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![
-            edit("Start X", "start_x", line.start.x),
-            edit("Start Y", "start_y", line.start.y),
-            edit("Start Z", "start_z", line.start.z),
-            edit("End X", "end_x", line.end.x),
-            edit("End Y", "end_y", line.end.y),
-            edit("End Z", "end_z", line.end.z),
-            ro("Delta X", "delta_x", format!("{dx:.4}")),
-            ro("Delta Y", "delta_y", format!("{dy:.4}")),
-            ro("Delta Z", "delta_z", format!("{dz:.4}")),
-            ro("Length", "length", format!("{:.4}", line.length())),
-            ro("Angle", "angle", format!("{angle:.2}")),
+            edit(t!("Start X").as_ref(), "start_x", line.start.x),
+            edit(t!("Start Y").as_ref(), "start_y", line.start.y),
+            edit(t!("Start Z").as_ref(), "start_z", line.start.z),
+            edit(t!("End X").as_ref(), "end_x", line.end.x),
+            edit(t!("End Y").as_ref(), "end_y", line.end.y),
+            edit(t!("End Z").as_ref(), "end_z", line.end.z),
+            ro(t!("Delta X").as_ref(), "delta_x", format!("{dx:.4}")),
+            ro(t!("Delta Y").as_ref(), "delta_y", format!("{dy:.4}")),
+            ro(t!("Delta Z").as_ref(), "delta_z", format!("{dz:.4}")),
+            ro(t!("Length").as_ref(), "length", format!("{:.4}", line.length())),
+            ro(t!("Angle").as_ref(), "angle", format!("{angle:.2}")),
         ],
     }]
 }

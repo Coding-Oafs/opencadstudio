@@ -14,6 +14,7 @@ use glam::DVec3;
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/qdim.svg"));
 
@@ -50,8 +51,10 @@ impl CadCommand for QdimCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Gathering => "QDIM  Select geometry to dimension (Enter when done):".into(),
-            Step::PlaceLine { .. } => "QDIM  Specify dimension line position:".into(),
+            Step::Gathering => {
+                t!("QDIM  Select geometry to dimension (Enter when done):").into_owned()
+            }
+            Step::PlaceLine { .. } => t!("QDIM  Specify dimension line position:").into_owned(),
         }
     }
 

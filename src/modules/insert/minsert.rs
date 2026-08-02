@@ -10,6 +10,7 @@ use acadrust::entities::Insert;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -120,22 +121,36 @@ impl CadCommand for MinsertCommand {
                 } else {
                     format!("  [{}]", self.available.join(", "))
                 };
-                format!("MINSERT  Enter block name:{hint}")
+                t!("MINSERT  Enter block name:%{hint}", hint = hint).into_owned()
             }
             Step::Point { name } => {
-                format!("MINSERT  Specify insertion point for \"{name}\":")
+                t!(
+                    "MINSERT  Specify insertion point for \"%{name}\":",
+                    name = name
+                )
+                .into_owned()
             }
             Step::Params { idx, .. } => match idx {
-                ParamIdx::Rows => format!("MINSERT  Enter number of rows <{}>:", self.rows),
-                ParamIdx::Columns => {
-                    format!("MINSERT  Enter number of columns <{}>:", self.columns)
-                }
-                ParamIdx::RowSpacing => {
-                    format!("MINSERT  Enter row spacing <{}>:", self.row_spacing)
-                }
-                ParamIdx::ColumnSpacing => {
-                    format!("MINSERT  Enter column spacing <{}>:", self.column_spacing)
-                }
+                ParamIdx::Rows => t!(
+                    "MINSERT  Enter number of rows <%{rows}>:",
+                    rows = self.rows
+                )
+                .into_owned(),
+                ParamIdx::Columns => t!(
+                    "MINSERT  Enter number of columns <%{cols}>:",
+                    cols = self.columns
+                )
+                .into_owned(),
+                ParamIdx::RowSpacing => t!(
+                    "MINSERT  Enter row spacing <%{val}>:",
+                    val = self.row_spacing
+                )
+                .into_owned(),
+                ParamIdx::ColumnSpacing => t!(
+                    "MINSERT  Enter column spacing <%{val}>:",
+                    val = self.column_spacing
+                )
+                .into_owned(),
             },
         }
     }

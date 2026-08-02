@@ -42,9 +42,9 @@ impl CadCommand for MatchPropCommand {
 
     fn prompt(&self) -> String {
         if !self.phase1_done() {
-            "MATCHPROP  Select source object:".into()
+            crate::t!("MATCHPROP  Select source object:").into_owned()
         } else {
-            "MATCHPROP  Select destination objects (Enter to finish):".into()
+            crate::t!("MATCHPROP  Select destination objects (Enter to finish):").into_owned()
         }
     }
 

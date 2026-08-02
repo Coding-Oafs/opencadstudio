@@ -4,6 +4,22 @@ use iced::widget::{
     button, column, container, row, scrollable, text, text_input, Space,
 };
 use iced::{Background, Border, Element, Theme};
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ThemeChoice(String);
+
+impl fmt::Display for ThemeChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self.0.as_str() {
+            "Light" => crate::t!("Light"),
+            "Dark" => crate::t!("Dark"),
+            "Custom" => crate::t!("Custom"),
+            _ => std::borrow::Cow::Borrowed(self.0.as_str()),
+        };
+        f.write_str(label.as_ref())
+    }
+}
 
 pub fn view_window<'a>(
     default_save_format: &'a str,
@@ -21,8 +37,9 @@ pub fn view_window<'a>(
         .iter()
         .map(ToString::to_string)
         .chain(std::iter::once("Custom".to_string()))
+        .map(ThemeChoice)
         .collect::<Vec<_>>();
-    let selected_theme = Some(ui_theme.name.clone());
+    let selected_theme = Some(ThemeChoice(ui_theme.name.clone()));
 
     let palette = ui_theme.palette.to_iced();
     let colors = [
@@ -110,7 +127,7 @@ pub fn view_window<'a>(
                 theme_options,
                 |value| value.to_string(),
             )
-            .on_select(Message::OptionsThemeChanged)
+            .on_select(|choice| Message::OptionsThemeChanged(choice.0))
             .width(sizing.width),
         ]
         .spacing(12)

@@ -1,4 +1,5 @@
 use acadrust::entities::{RasterImage, Wipeout};
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_prop as edit, ro_prop as ro, square_grip};
@@ -289,27 +290,27 @@ impl PropertyEditable for RasterImage {
         let transparency = format!("{:.0}%", self.common.transparency.as_percent() * 100.0);
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    edit("Position X", "ri_ox", self.insertion_point.x),
-                    edit("Position Y", "ri_oy", self.insertion_point.y),
-                    edit("Position Z", "ri_oz", self.insertion_point.z),
-                    ro("Rotation", "ri_rotation", format!("{:.4}", rotation_deg)),
-                    ro("Width", "ri_width", format!("{:.4}", self.width())),
-                    ro("Height", "ri_height", format!("{:.4}", self.height())),
-                    ro("Scale", "ri_scale", format!("{:.4}", scale)),
+                    edit(t!("Position X").as_ref(), "ri_ox", self.insertion_point.x),
+                    edit(t!("Position Y").as_ref(), "ri_oy", self.insertion_point.y),
+                    edit(t!("Position Z").as_ref(), "ri_oz", self.insertion_point.z),
+                    ro(t!("Rotation").as_ref(), "ri_rotation", format!("{:.4}", rotation_deg)),
+                    ro(t!("Width").as_ref(), "ri_width", format!("{:.4}", self.width())),
+                    ro(t!("Height").as_ref(), "ri_height", format!("{:.4}", self.height())),
+                    ro(t!("Scale").as_ref(), "ri_scale", format!("{:.4}", scale)),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
-                    ro("Name", "ri_name", self.file_name().to_string()),
-                    edit("Brightness", "ri_bright", self.brightness as f64),
-                    edit("Contrast", "ri_contrast", self.contrast as f64),
-                    edit("Fade", "ri_fade", self.fade as f64),
-                    ro("Transparency", "ri_transparency", transparency),
+                    ro(t!("Name").as_ref(), "ri_name", self.file_name().to_string()),
+                    edit(t!("Brightness").as_ref(), "ri_bright", self.brightness as f64),
+                    edit(t!("Contrast").as_ref(), "ri_contrast", self.contrast as f64),
+                    edit(t!("Fade").as_ref(), "ri_fade", self.fade as f64),
+                    ro(t!("Transparency").as_ref(), "ri_transparency", transparency),
                     Property {
-                        label: "Show image".into(),
+                        label: t!("Show image").into_owned(),
                         field: "ri_show_image",
                         value: PropValue::BoolToggle {
                             field: "ri_show_image",
@@ -317,7 +318,7 @@ impl PropertyEditable for RasterImage {
                         },
                     },
                     Property {
-                        label: "Show clipped".into(),
+                        label: t!("Show clipped").into_owned(),
                         field: "ri_show_clipped",
                         value: PropValue::BoolToggle {
                             field: "ri_show_clipped",
@@ -325,7 +326,7 @@ impl PropertyEditable for RasterImage {
                         },
                     },
                     Property {
-                        label: "Clip inverted".into(),
+                        label: t!("Clip inverted").into_owned(),
                         field: "ri_clip_inverted",
                         value: PropValue::BoolToggle {
                             field: "ri_clip_inverted",
@@ -596,18 +597,18 @@ impl PropertyEditable for Wipeout {
             .contains(acadrust::entities::WipeoutDisplayFlags::TRANSPARENCY_ON);
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    edit("Position X", "wo_ox", self.insertion_point.x),
-                    edit("Position Y", "wo_oy", self.insertion_point.y),
-                    edit("Position Z", "wo_oz", self.insertion_point.z),
+                    edit(t!("Position X").as_ref(), "wo_ox", self.insertion_point.x),
+                    edit(t!("Position Y").as_ref(), "wo_oy", self.insertion_point.y),
+                    edit(t!("Position Z").as_ref(), "wo_oz", self.insertion_point.z),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
                     Property {
-                        label: "Show image".into(),
+                        label: t!("Show image").into_owned(),
                         field: "wo_show_image",
                         value: PropValue::BoolToggle {
                             field: "wo_show_image",
@@ -615,7 +616,7 @@ impl PropertyEditable for Wipeout {
                         },
                     },
                     Property {
-                        label: "Show clipped".into(),
+                        label: t!("Show clipped").into_owned(),
                         field: "wo_show_clipped",
                         value: PropValue::BoolToggle {
                             field: "wo_show_clipped",
@@ -623,7 +624,7 @@ impl PropertyEditable for Wipeout {
                         },
                     },
                     Property {
-                        label: "Background transparency".into(),
+                        label: t!("Background transparency").into_owned(),
                         field: "wo_bg_transparency",
                         value: PropValue::BoolToggle {
                             field: "wo_bg_transparency",

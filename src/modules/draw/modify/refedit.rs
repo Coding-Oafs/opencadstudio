@@ -15,6 +15,7 @@
 
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -79,7 +80,7 @@ impl CadCommand for RefEditPickCommand {
         "REFEDIT"
     }
     fn prompt(&self) -> String {
-        "REFEDIT  Select block reference to edit:".into()
+        crate::t!("REFEDIT  Select block reference to edit:").into_owned()
     }
 
     fn needs_entity_pick(&self) -> bool {
@@ -119,7 +120,7 @@ impl CadCommand for RefCloseCommand {
         "REFCLOSE"
     }
     fn prompt(&self) -> String {
-        "REFCLOSE  [Save/Discard] <Save>:".into()
+        t!("REFCLOSE  [Save/Discard] <Save>:").into_owned()
     }
     fn wants_text_input(&self) -> bool {
         true

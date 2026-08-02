@@ -10,6 +10,7 @@
 use acadrust::entities::Solid;
 use acadrust::types::Vector3;
 use acadrust::EntityType;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -91,10 +92,10 @@ impl CadCommand for Solid2dCommand {
 
     fn prompt(&self) -> String {
         match self.points.len() {
-            0 => "SOLID  Specify first point:".to_string(),
-            1 => "SOLID  Specify second point:".to_string(),
-            2 => "SOLID  Specify third point:".to_string(),
-            _ => "SOLID  Specify fourth point:".to_string(),
+            0 => t!("SOLID  Specify first point:").into_owned(),
+            1 => t!("SOLID  Specify second point:").into_owned(),
+            2 => t!("SOLID  Specify third point:").into_owned(),
+            _ => t!("SOLID  Specify fourth point:").into_owned(),
         }
     }
 
@@ -102,7 +103,7 @@ impl CadCommand for Solid2dCommand {
         use crate::command::CmdOption;
         // After three corners Enter commits a triangle; offer a Done button.
         if self.points.len() == 3 {
-            vec![CmdOption::enter("Done")]
+            vec![CmdOption::enter(t!("Done").as_ref())]
         } else {
             Vec::new()
         }

@@ -14,6 +14,7 @@ use acadrust::entities::{
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::{DVec3, Vec3};
+use crate::t;
 use truck_modeling::base::{BoundedCurve, Cut};
 
 use crate::command::{CadCommand, CmdResult};
@@ -42,9 +43,9 @@ impl CadCommand for LengthenCommand {
 
     fn prompt(&self) -> String {
         match &self.state {
-            LenState::PickEntity => "LENGTHEN  Select object:".into(),
+            LenState::PickEntity => t!("LENGTHEN  Select object:").into_owned(),
             LenState::PickOption { .. } => {
-                "LENGTHEN  Enter option [DE <delta> / TO <total> / P <pct>]:".into()
+                t!("LENGTHEN  Enter option [DE <delta> / TO <total> / P <pct>]:").into_owned()
             }
         }
     }

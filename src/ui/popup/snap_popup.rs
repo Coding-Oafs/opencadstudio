@@ -6,6 +6,7 @@ use iced::{Background, Element, Fill, Length, Theme};
 use crate::app::Message;
 use crate::snap::{SnapType, Snapper, ALL_SNAP_MODES};
 use crate::ui::statusbar::status_menu::Entry;
+use crate::t;
 
 pub fn menu_entries<'a>(snapper: &'a Snapper) -> Vec<Entry<'a>> {
     let all_on = snapper.all_on();
@@ -54,7 +55,7 @@ fn snap_row<'a>(snap_type: SnapType, label: &'a str, active: bool) -> Element<'a
     .width(Length::Fixed(16.0))
     .align_x(iced::Center);
 
-    let label_el = text(label).size(11);
+    let label_el = text(t!(label)).size(11);
 
     let content = row![checkmark, icon_el, label_el]
         .spacing(4)
@@ -69,7 +70,7 @@ fn snap_row<'a>(snap_type: SnapType, label: &'a str, active: bool) -> Element<'a
 }
 
 fn header_btn(label: &str, msg: Message, enabled: bool) -> Element<'_, Message> {
-    let b = button(text(label).size(10));
+    let b = button(text(t!(label)).size(10));
     let b = if enabled { b.on_press(msg) } else { b };
     b.style(button::secondary)
     .padding([3, 8])

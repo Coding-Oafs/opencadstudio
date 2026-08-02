@@ -13,6 +13,7 @@
 use acadrust::entities::LwVertex;
 use acadrust::types::Vector2;
 use acadrust::{EntityType, LwPolyline};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::IconKind;
@@ -165,9 +166,9 @@ impl CadCommand for RectCommand {
     }
     fn prompt(&self) -> String {
         if self.a.is_none() {
-            "RECT  Specify first corner:".into()
+            crate::t!("RECT  Specify first corner:").into_owned()
         } else {
-            "RECT  Specify opposite corner:".into()
+            crate::t!("RECT  Specify opposite corner:").into_owned()
         }
     }
 
@@ -278,9 +279,9 @@ impl CadCommand for RectRotCommand {
     }
     fn prompt(&self) -> String {
         match self.step {
-            0 => "RECT ROT  Specify first corner:".into(),
-            1 => "RECT ROT  Specify adjacent corner (defines edge direction):".into(),
-            _ => "RECT ROT  Specify height (perpendicular pick):".into(),
+            0 => crate::t!("RECT ROT  Specify first corner:").into_owned(),
+            1 => crate::t!("RECT ROT  Specify adjacent corner (defines edge direction):").into_owned(),
+            _ => crate::t!("RECT ROT  Specify height (perpendicular pick):").into_owned(),
         }
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
@@ -386,9 +387,9 @@ impl CadCommand for RectCenCommand {
     }
     fn prompt(&self) -> String {
         if self.center.is_none() {
-            "RECT CEN  Specify center point:".into()
+            t!("RECT CEN  Specify center point:").into_owned()
         } else {
-            "RECT CEN  Specify corner point:".into()
+            t!("RECT CEN  Specify corner point:").into_owned()
         }
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
@@ -530,12 +531,13 @@ impl CadCommand for PolyCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            0 => format!("POLYGON  Enter number of sides <{}>:", self.sides),
-            1 => format!("POLYGON  Specify center [{} sides]:", self.sides),
-            _ => format!(
+            0 => crate::tf!("POLYGON  Enter number of sides <{}>:", self.sides).into_owned(),
+            1 => crate::tf!("POLYGON  Specify center [{} sides]:", self.sides).into_owned(),
+            _ => crate::tf!(
                 "POLYGON  Specify vertex on circle [{} sides inscribed]:",
                 self.sides
-            ),
+            )
+            .into_owned(),
         }
     }
 
@@ -644,12 +646,13 @@ impl CadCommand for PolyCCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            0 => format!("POLYGON C  Enter number of sides <{}>:", self.sides),
-            1 => format!("POLYGON C  Specify center [{} sides]:", self.sides),
-            _ => format!(
+            0 => crate::tf!("POLYGON C  Enter number of sides <{}>:", self.sides).into_owned(),
+            1 => crate::tf!("POLYGON C  Specify center [{} sides]:", self.sides).into_owned(),
+            _ => crate::tf!(
                 "POLYGON C  Specify edge-midpoint radius [{} sides circumscribed]:",
                 self.sides
-            ),
+            )
+            .into_owned(),
         }
     }
 
@@ -753,15 +756,26 @@ impl CadCommand for PolyECommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            0 => format!("POLYGON E  Enter number of sides <{}>:", self.sides),
-            1 => format!(
-                "POLYGON E  Specify first endpoint of edge [{} sides]:",
-                self.sides
-            ),
-            _ => format!(
-                "POLYGON E  Specify second endpoint of edge [{} sides]:",
-                self.sides
-            ),
+            0 => {
+                let n = self.sides;
+                t!("POLYGON E  Enter number of sides <%{n}>:", n = n).into_owned()
+            }
+            1 => {
+                let n = self.sides;
+                t!(
+                    "POLYGON E  Specify first endpoint of edge [%{n} sides]:",
+                    n = n
+                )
+                .into_owned()
+            }
+            _ => {
+                let n = self.sides;
+                t!(
+                    "POLYGON E  Specify second endpoint of edge [%{n} sides]:",
+                    n = n
+                )
+                .into_owned()
+            }
         }
     }
 

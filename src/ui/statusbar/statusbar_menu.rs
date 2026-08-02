@@ -6,13 +6,14 @@ use iced::{Background, Element, Fill, Theme};
 use crate::app::Message;
 use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
 use crate::ui::statusbar::status_menu::Entry;
+use crate::t;
 
 pub fn customization_entries(config: &StatusBarConfig) -> Vec<Entry<'static>> {
     StatusPill::ALL
         .iter()
         .map(|&pill| {
             Entry::stay(menu_row(
-                pill.label(),
+                t!(pill.label()),
                 config.is_visible(pill),
                 Message::ToggleStatusPill(pill),
             ))
@@ -48,7 +49,7 @@ fn layout_row<'a>(name: String, is_current: bool) -> Element<'a, Message> {
         .into()
 }
 
-fn menu_row(label: &'static str, checked: bool, msg: Message) -> Element<'static, Message> {
+fn menu_row(label: std::borrow::Cow<'static, str>, checked: bool, msg: Message) -> Element<'static, Message> {
     let check = crate::ui::icons::themed_check_cell(checked);
 
     let lbl = text(label).size(11);

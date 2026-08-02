@@ -11,7 +11,7 @@ impl OpenCADStudio {
             "SAVEALL" => {
                 if self.read_only {
                     self.command_line
-                        .push_error("Read-only session (--read-only): saving is disabled.");
+                        .push_error(crate::t!("Read-only session (--read-only): saving is disabled.").as_ref());
                     return Some(Task::none());
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -27,10 +27,10 @@ impl OpenCADStudio {
                                 .active_save_jobs
                                 .contains_key(&self.tabs[t].id)
                             {
-                                self.command_line.push_info(&format!(
+                                self.command_line.push_info(crate::tf!(
                                     "SAVEALL: {} already has a save running",
                                     path.display()
-                                ));
+                                ).as_ref());
                                 skipped += 1;
                                 continue;
                             }
@@ -42,28 +42,28 @@ impl OpenCADStudio {
                                 Ok(()) => {
                                     saved += 1;
                                 }
-                                Err(e) => self.command_line.push_error(&format!(
+                                Err(e) => self.command_line.push_error(crate::tf!(
                                     "SAVEALL: {} failed: {e}",
                                     path.display()
-                                )),
+                                ).as_ref()),
                             }
                         } else {
                             skipped += 1;
                         }
                     }
-                    self.command_line.push_output(&format!(
+                    self.command_line.push_output(crate::tf!(
                         "SAVEALL: saved {saved} drawing(s){}.",
                         if skipped > 0 {
                             format!("; {skipped} need SAVEAS (no file path yet)")
                         } else {
                             String::new()
                         }
-                    ));
+                    ).as_ref());
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
                     self.command_line
-                        .push_info("SAVEALL: save each tab individually in the web build.");
+                        .push_info(crate::t!("SAVEALL: save each tab individually in the web build.").as_ref());
                 }
                 return Some(Task::none());
             }
@@ -76,7 +76,7 @@ impl OpenCADStudio {
                     Ok(n) => return Some(Task::done(Message::UndoMany(n))),
                     Err(_) => {
                         self.command_line
-                            .push_error("Usage: UNDO [number of steps]");
+                            .push_error(crate::t!("Usage: UNDO [number of steps]").as_ref());
                         return Some(Task::none());
                     }
                 }
@@ -87,7 +87,7 @@ impl OpenCADStudio {
             // without undoing any work done since.
             "OOPS" => {
                 if self.oops_cache.is_empty() {
-                    self.command_line.push_info("OOPS: nothing to restore.");
+                    self.command_line.push_info(crate::t!("OOPS: nothing to restore.").as_ref());
                 } else {
                     let restored = std::mem::take(&mut self.oops_cache);
                     let pending = self.begin_undo(i, "OOPS", restored.len(), true);
@@ -99,7 +99,7 @@ impl OpenCADStudio {
                         self.commit_undo_delta(i, pending);
                     }
                     self.command_line
-                        .push_output(&format!("OOPS: restored {n} object(s)."));
+                        .push_output(crate::tf!("OOPS: restored {n} object(s).").as_ref());
                 }
             }
             "CLEAR" | "CLR" => return Some(Task::done(Message::ClearScene)),
@@ -161,7 +161,7 @@ impl OpenCADStudio {
                     }
                 };
                 self.command_line
-                    .push_output(&format!("Visual style: {label}."));
+                    .push_output(crate::tf!("Visual style: {label}.").as_ref());
                 return Some(Task::done(Message::SetWireframe(wireframe)));
             }
             // CLOSE — close the active drawing tab (with the unsaved-changes
@@ -216,18 +216,18 @@ impl OpenCADStudio {
                                     }
                                 }
                             }
-                            self.command_line.push_output(&format!(
+                            self.command_line.push_output(crate::tf!(
                                 "{cmd}: packaged {copied} file(s) into {}",
                                 folder.display()
-                            ));
+                            ).as_ref());
                         }
                         Err(e) => self
                             .command_line
-                            .push_error(&format!("{cmd}: cannot create folder ({e}).")),
+                            .push_error(crate::tf!("{cmd}: cannot create folder ({e}).").as_ref()),
                     }
                 } else {
                     self.command_line
-                        .push_error("ARCHIVE: save the drawing first (it has no file path yet).");
+                        .push_error(crate::t!("ARCHIVE: save the drawing first (it has no file path yet).").as_ref());
                 }
             }
 
@@ -302,7 +302,7 @@ impl OpenCADStudio {
                     self.tabs[i].scene.recolor_meshes();
                     self.tabs[i].scene.bump_geometry();
                     self.command_line
-                        .push_output("Background reset to default.");
+                        .push_output(crate::t!("Background reset to default.").as_ref());
                 } else if let Some(rgba) = parse_background_color(&args) {
                     if is_paper {
                         self.tabs[i].paper_bg_color = Some(rgba);
@@ -316,12 +316,12 @@ impl OpenCADStudio {
                     self.tabs[i].scene.recolor_meshes();
                     self.tabs[i].scene.bump_geometry();
                     let [r, g, b, _] = rgba;
-                    self.command_line.push_output(&format!(
+                    self.command_line.push_output(crate::tf!(
                         "Background: rgb({}, {}, {})",
                         (r * 255.0).round() as u8,
                         (g * 255.0).round() as u8,
                         (b * 255.0).round() as u8
-                    ));
+                    ).as_ref());
                     // Persisted centrally after this message via
                     // `persist_settings_if_changed()`.
                 } else {
@@ -361,20 +361,20 @@ impl OpenCADStudio {
                                 })
                                 .map(|l| Task::done(Message::Command(l.to_string())))
                                 .collect();
-                            self.command_line.push_output(&format!(
+                            self.command_line.push_output(crate::tf!(
                                 "SCRIPT: running {} command(s) from {p}.",
                                 cmds.len()
-                            ));
+                            ).as_ref());
                             return Some(Task::batch(cmds));
                         }
                         Err(e) => {
                             self.command_line
-                                .push_error(&format!("SCRIPT: cannot read {p}: {e}"));
+                                .push_error(crate::tf!("SCRIPT: cannot read {p}: {e}").as_ref());
                         }
                     },
                     _ => {
                         self.command_line
-                            .push_info("Usage: SCRIPT <path to .scr file>");
+                            .push_info(crate::t!("Usage: SCRIPT <path to .scr file>").as_ref());
                     }
                 }
             }

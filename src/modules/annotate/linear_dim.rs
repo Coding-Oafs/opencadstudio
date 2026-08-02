@@ -6,6 +6,7 @@ use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::{DVec3, Mat4, Vec3};
+use crate::t;
 
 /// World-space measurement axis for a linear dimension between `first` and
 /// `second`, chosen as the UCS X or Y axis (whichever the span is closer to).
@@ -75,18 +76,18 @@ impl CadCommand for LinearDimensionCommand {
 
     fn prompt(&self) -> String {
         if self.awaiting_text {
-            return "DIMLINEAR  Enter dimension text (blank = measured value):".into();
+            return t!("DIMLINEAR  Enter dimension text (blank = measured value):").into_owned();
         }
         if self.awaiting_angle {
-            return "DIMLINEAR  Specify text angle (degrees):".into();
+            return t!("DIMLINEAR  Specify text angle (degrees):").into_owned();
         }
         match self.step {
-            Step::FirstPoint => "DIMLINEAR  Specify first extension line origin:".into(),
+            Step::FirstPoint => t!("DIMLINEAR  Specify first extension line origin:").into_owned(),
             Step::SecondPoint(_) => {
-                "DIMLINEAR  Specify second extension line origin  [Text/Angle]:".into()
+                t!("DIMLINEAR  Specify second extension line origin  [Text/Angle]:").into_owned()
             }
             Step::DimensionLine { .. } => {
-                "DIMLINEAR  Specify dimension line location  [Text/Angle]:".into()
+                t!("DIMLINEAR  Specify dimension line location  [Text/Angle]:").into_owned()
             }
         }
     }

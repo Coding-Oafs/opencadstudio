@@ -12,6 +12,7 @@ use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/ddedit.svg"));
 
@@ -38,7 +39,7 @@ impl CadCommand for DdeditCommand {
     }
 
     fn prompt(&self) -> String {
-        "DDEDIT  Select text entity:".into()
+        t!("DDEDIT  Select text entity:").into_owned()
     }
 
     fn needs_entity_pick(&self) -> bool {

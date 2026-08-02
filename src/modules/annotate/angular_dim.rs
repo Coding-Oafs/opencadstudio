@@ -6,6 +6,7 @@ use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::{DVec3, Vec3};
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/dim_angular.svg"));
 
@@ -49,10 +50,14 @@ impl CadCommand for AngularDimensionCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            Step::Vertex => "DIMANGULAR  Specify angle vertex:".into(),
-            Step::FirstRay(_) => "DIMANGULAR  Specify first extension line point:".into(),
-            Step::SecondRay { .. } => "DIMANGULAR  Specify second extension line point:".into(),
-            Step::ArcPoint { .. } => "DIMANGULAR  Specify dimension arc location:".into(),
+            Step::Vertex => t!("DIMANGULAR  Specify angle vertex:").into_owned(),
+            Step::FirstRay(_) => {
+                t!("DIMANGULAR  Specify first extension line point:").into_owned()
+            }
+            Step::SecondRay { .. } => {
+                t!("DIMANGULAR  Specify second extension line point:").into_owned()
+            }
+            Step::ArcPoint { .. } => t!("DIMANGULAR  Specify dimension arc location:").into_owned(),
         }
     }
 

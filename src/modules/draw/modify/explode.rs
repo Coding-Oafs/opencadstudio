@@ -29,6 +29,7 @@ use acadrust::{CadDocument, EntityType, Handle};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use glam::DVec3;
+use crate::t;
 
 // ── Ribbon definition ──────────────────────────────────────────────────────
 
@@ -1302,7 +1303,7 @@ impl CadCommand for ExplodeCommand {
         "EXPLODE"
     }
     fn prompt(&self) -> String {
-        "EXPLODE  Select objects to explode:".into()
+        t!("EXPLODE  Select objects to explode:").into_owned()
     }
 
     fn on_point(&mut self, _pt: DVec3) -> CmdResult {

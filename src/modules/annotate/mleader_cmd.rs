@@ -13,6 +13,7 @@ use glam::{DVec3, Mat4, Vec3};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../assets/icons/mleader.svg"));
 
@@ -47,12 +48,13 @@ impl CadCommand for MLeaderCommand {
 
     fn prompt(&self) -> String {
         if self.verts.is_empty() {
-            "MLEADER  Specify arrowhead point:".into()
+            t!("MLEADER  Specify arrowhead point:").into_owned()
         } else {
-            format!(
-                "MLEADER  Specify next point [{} pts — Enter to place text]:",
-                self.verts.len()
+            t!(
+                "MLEADER  Specify next point [%{count} pts — Enter to place text]:",
+                count = self.verts.len()
             )
+            .into_owned()
         }
     }
 

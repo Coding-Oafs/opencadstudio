@@ -1,4 +1,5 @@
 use acadrust::entities::{Polyline, Polyline2D, Polyline3D};
+use crate::t;
 use truck_modeling::{builder, Edge, Point3, Wire};
 
 use crate::command::EntityTransform;
@@ -123,11 +124,11 @@ impl Grippable for Polyline {
 impl PropertyEditable for Polyline {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                ro("Vertices", "vertices", self.vertices.len().to_string()),
+                ro(t!("Vertices").as_ref(), "vertices", self.vertices.len().to_string()),
                 Property {
-                    label: "Closed".into(),
+                    label: t!("Closed").into_owned(),
                     field: "pl_closed",
                     value: PropValue::BoolToggle {
                         field: "pl_closed",
@@ -565,24 +566,24 @@ impl PropertyEditable for Polyline2D {
 
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    stepper("Current Vertex", "pl2_current_vertex", vertex_label),
-                    edit("Vertex X", "pl2_vertex_x", vertex_x),
-                    edit("Vertex Y", "pl2_vertex_y", vertex_y),
-                    edit("Start segment width", "pl2_seg_start_w", seg_start_w),
-                    edit("End segment width", "pl2_seg_end_w", seg_end_w),
-                    edit("Global width", "pl2_start_w", self.start_width),
-                    edit("Elevation", "pl2_elevation", self.elevation),
-                    ro("Area", "pl2_area", format!("{area:.4}")),
-                    ro("Length", "pl2_length", format!("{length:.4}")),
+                    stepper(t!("Current Vertex").as_ref(), "pl2_current_vertex", vertex_label),
+                    edit(t!("Vertex X").as_ref(), "pl2_vertex_x", vertex_x),
+                    edit(t!("Vertex Y").as_ref(), "pl2_vertex_y", vertex_y),
+                    edit(t!("Start segment width").as_ref(), "pl2_seg_start_w", seg_start_w),
+                    edit(t!("End segment width").as_ref(), "pl2_seg_end_w", seg_end_w),
+                    edit(t!("Global width").as_ref(), "pl2_start_w", self.start_width),
+                    edit(t!("Elevation").as_ref(), "pl2_elevation", self.elevation),
+                    ro(t!("Area").as_ref(), "pl2_area", format!("{area:.4}")),
+                    ro(t!("Length").as_ref(), "pl2_length", format!("{length:.4}")),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
                     Property {
-                        label: "Closed".into(),
+                        label: t!("Closed").into_owned(),
                         field: "pl2_closed",
                         value: PropValue::BoolToggle {
                             field: "pl2_closed",
@@ -590,7 +591,7 @@ impl PropertyEditable for Polyline2D {
                         },
                     },
                     Property {
-                        label: "Linetype generation".into(),
+                        label: t!("Linetype generation").into_owned(),
                         field: "pl2_ltype_gen",
                         value: PropValue::BoolToggle {
                             field: "pl2_ltype_gen",
@@ -838,26 +839,26 @@ impl PropertyEditable for Polyline3D {
 
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    ro("Vertex", "pl3_vertex", if n > 0 { "1" } else { "" }),
-                    edit("Vertex X", "pl3_vertex_x", vertex_x),
-                    edit("Vertex Y", "pl3_vertex_y", vertex_y),
-                    edit("Vertex Z", "pl3_vertex_z", vertex_z),
+                    ro(t!("Vertex").as_ref(), "pl3_vertex", if n > 0 { "1" } else { "" }),
+                    edit(t!("Vertex X").as_ref(), "pl3_vertex_x", vertex_x),
+                    edit(t!("Vertex Y").as_ref(), "pl3_vertex_y", vertex_y),
+                    edit(t!("Vertex Z").as_ref(), "pl3_vertex_z", vertex_z),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
                     Property {
-                        label: "Closed".into(),
+                        label: t!("Closed").into_owned(),
                         field: "pl3_closed",
                         value: PropValue::BoolToggle {
                             field: "pl3_closed",
                             value: self.is_closed(),
                         },
                     },
-                    ro("Fit/Smooth", "pl3_smooth", fit_smooth),
+                    ro(t!("Fit/Smooth").as_ref(), "pl3_smooth", fit_smooth),
                 ],
             },
         ]

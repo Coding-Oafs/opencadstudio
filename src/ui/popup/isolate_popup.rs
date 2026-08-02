@@ -5,6 +5,7 @@ use iced::{Element, Fill};
 
 use crate::app::Message;
 use crate::ui::statusbar::status_menu::Entry;
+use crate::t;
 
 /// - `has_selection`: enables Isolate / Hide (they act on the selection).
 /// - `isolation_active`: enables End Isolation (something is hidden).
@@ -41,7 +42,7 @@ fn action_entry(label: &'static str, enabled: bool, msg: Message) -> Entry<'stat
 }
 
 fn action_row(label: &'static str, enabled: bool, msg: Message) -> Element<'static, Message> {
-    let lbl = text(label).size(11);
+    let lbl = text(t!(label)).size(11);
     let content = row![lbl].align_y(iced::Center);
 
     let mut btn = button(content)

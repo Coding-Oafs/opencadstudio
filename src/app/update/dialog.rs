@@ -116,7 +116,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 if self.tabs[self.active_tab].is_start && !matches!(event, ModuleEvent::Command(_)) {
                     self.ribbon.close_dropdown();
                     self.command_line
-                        .push_info("No drawing open — use New or Open first.");
+                        .push_info(crate::t!("No drawing open — use New or Open first.").as_ref());
                     return Task::none();
                 }
                 // Dismiss any open dropdown / collapsed-panel flyout on tool use,
@@ -141,13 +141,13 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     }
                     ModuleEvent::OpenFileDialog => {
                         self.command_line
-                            .push_info("Open DWG/DXF: not yet implemented.");
+                            .push_info(crate::t!("Open DWG/DXF: not yet implemented.").as_ref());
                     }
                     ModuleEvent::ClearModels => {
                         let i = self.active_tab;
                         self.tabs[i].scene.clear();
                         self.tabs[i].properties = PropertiesPanel::empty();
-                        self.command_line.push_output("Scene cleared.");
+                        self.command_line.push_output(crate::t!("Scene cleared.").as_ref());
                     }
                     ModuleEvent::SetWireframe(w) => {
                         let i = self.active_tab;
@@ -265,7 +265,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
 
             if self.active_save_jobs.contains_key(&self.tabs[idx].id) {
                 self.command_line
-                    .push_info("Save already running for this drawing.");
+                    .push_info(crate::t!("Save already running for this drawing.").as_ref());
                 return Task::none();
             }
 

@@ -10,6 +10,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -53,13 +54,20 @@ impl CadCommand for HatcheditCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            HatcheditStep::PickHatch => "HATCHEDIT  Select hatch:".into(),
+            HatcheditStep::PickHatch => t!("HATCHEDIT  Select hatch:").into_owned(),
             HatcheditStep::EditOptions {
                 name, scale, angle, ..
-            } => format!(
-                "HATCHEDIT  Pattern:{name}  Scale:{scale:.4}  Angle:{angle:.1}  \
-                 [P <pat> / S <scale> / A <angle> | Enter to apply]:"
-            ),
+            } => {
+                let scale = format!("{scale:.4}");
+                let angle = format!("{angle:.1}");
+                t!(
+                    "HATCHEDIT  Pattern:%{name}  Scale:%{scale}  Angle:%{angle}  [P <pat> / S <scale> / A <angle> | Enter to apply]:",
+                    name = name,
+                    scale = scale,
+                    angle = angle
+                )
+                .into_owned()
+            }
         }
     }
 

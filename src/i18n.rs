@@ -7,8 +7,12 @@ use i18n_embed::DesktopLanguageRequester;
 #[cfg(target_arch = "wasm32")]
 use i18n_embed::WebLanguageRequester;
 use rust_embed::RustEmbed;
+use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+
+#[path = "locale_catalog.rs"]
+mod locale_catalog;
 
 #[derive(RustEmbed)]
 #[folder = "locales/"]
@@ -123,6 +127,107 @@ pub fn set_language(language: Language) -> Result<(), i18n_embed::I18nEmbedError
     load_language(loader(), language)
 }
 
+/// Translate an application-facing source label from the complete UI catalog.
+///
+/// Stable semantic ids remain preferable for new code. This compatibility
+/// layer lets existing UI surfaces move to Fluent without turning command
+/// tokens, property ids, file-format values, or plug-in supplied text into
+/// translatable data.
+pub fn translate(source: impl AsRef<str>) -> Cow<'static, str> {
+    let source = source.as_ref();
+    locale_catalog::message_id(source)
+        .map(|message_id| Cow::Owned(loader().get(message_id)))
+        .unwrap_or_else(|| Cow::Owned(source.to_string()))
+}
+
+/// Translate a catalog message and replace the named values used by legacy
+/// command prompts. Catalog generation protects these markers from machine
+/// translation and Fluent parsing.
+pub fn translate_args(
+    source: impl AsRef<str>,
+    args: &[(&str, String)],
+) -> Cow<'static, str> {
+    let source = source.as_ref();
+    let mut translated = locale_catalog::message_id(source)
+        .map(|message_id| loader().get(message_id))
+        .unwrap_or_else(|| source.to_string());
+    for (name, value) in args {
+        translated = translated.replace(&format!("__ocs_arg_{name}__"), value);
+        translated = translated.replace(&format!("%{{{name}}}"), value);
+    }
+    Cow::Owned(translated)
+}
+
+/// Translate a Rust formatting template after its values have been rendered.
+/// The catalog stores positional markers, while this function recovers each
+/// rendered value from the English template and places it in the localized
+/// sentence. File names, handles, counts, and command values therefore remain
+/// data instead of being sent through translation.
+pub fn translate_format(template: &str, rendered: String) -> Cow<'static, str> {
+    let Some(message_id) = locale_catalog::message_id(template) else {
+        return Cow::Owned(rendered);
+    };
+    let Some(values) = format_values(template, &rendered) else {
+        return Cow::Owned(rendered);
+    };
+    let mut translated = loader().get(message_id);
+    for (index, value) in values.iter().enumerate() {
+        translated = translated.replace(&format!("__ocs_fmt_{index}__"), value);
+    }
+    Cow::Owned(translated)
+}
+
+fn format_values(template: &str, rendered: &str) -> Option<Vec<String>> {
+    let mut literals = vec![String::new()];
+    let mut chars = template.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match (ch, chars.peek().copied()) {
+            ('{', Some('{')) => {
+                chars.next();
+                literals.last_mut()?.push('{');
+            }
+            ('}', Some('}')) => {
+                chars.next();
+                literals.last_mut()?.push('}');
+            }
+            ('{', _) => {
+                let mut closed = false;
+                for inner in chars.by_ref() {
+                    if inner == '}' {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+                literals.push(String::new());
+            }
+            ('}', _) => return None,
+            _ => literals.last_mut()?.push(ch),
+        }
+    }
+
+    let mut cursor = 0;
+    if !rendered.starts_with(&literals[0]) {
+        return None;
+    }
+    cursor += literals[0].len();
+    let mut values = Vec::with_capacity(literals.len().saturating_sub(1));
+    for index in 1..literals.len() {
+        let separator = &literals[index];
+        if index + 1 == literals.len() && separator.is_empty() {
+            values.push(rendered[cursor..].to_string());
+            cursor = rendered.len();
+        } else {
+            let offset = rendered[cursor..].find(separator)?;
+            values.push(rendered[cursor..cursor + offset].to_string());
+            cursor += offset + separator.len();
+        }
+    }
+    (cursor == rendered.len()).then_some(values)
+}
+
 /// Built-in ribbon modules have stable ids; plug-ins keep their supplied title
 /// until they provide their own localization bundle.
 pub fn ribbon_module_title(id: &str, fallback: &str) -> String {
@@ -150,4 +255,29 @@ macro_rules! tr {
             $($name = $value),+
         )
     };
+}
+
+/// Source-catalog compatibility macro used while the existing interface is
+/// migrated to semantic Fluent ids. Named arguments mirror the command prompt
+/// placeholders already present in the source catalog.
+#[macro_export]
+macro_rules! t {
+    ($source:expr $(,)?) => {
+        $crate::i18n::translate($source)
+    };
+    ($source:expr, $($name:ident = $value:expr),+ $(,)?) => {
+        $crate::i18n::translate_args(
+            $source,
+            &[$((stringify!($name), ($value).to_string())),+],
+        )
+    };
+}
+
+/// Localized counterpart of `format!` for application-facing messages.
+#[macro_export]
+macro_rules! tf {
+    ($template:literal $($args:tt)*) => {{
+        let rendered = format!($template $($args)*);
+        $crate::i18n::translate_format($template, rendered)
+    }};
 }

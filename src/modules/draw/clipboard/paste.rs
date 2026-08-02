@@ -17,6 +17,7 @@ pub const MENU_ITEMS: &[(&str, &str, IconKind)] = &[
 
 use acadrust::Handle;
 use glam::{DVec3, Vec3};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -103,7 +104,7 @@ impl CadCommand for PasteCommand {
     }
 
     fn prompt(&self) -> String {
-        "PASTECLIP  Pick insertion point:".into()
+        t!("PASTECLIP  Pick insertion point:").into_owned()
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {

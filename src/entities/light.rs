@@ -11,6 +11,7 @@
 
 use acadrust::entities::Light;
 use acadrust::EntityType;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
@@ -262,27 +263,27 @@ impl PropertyEditable for Light {
             _ => "Point",
         };
         let mut props = vec![
-            ro_prop("Name", "li_name", self.name.clone()),
-            ro_prop("Type", "li_type", kind),
-            edit("Position X", "li_px", self.position.x),
-            edit("Position Y", "li_py", self.position.y),
-            edit("Position Z", "li_pz", self.position.z),
+            ro_prop(t!("Name").as_ref(), "li_name", self.name.clone()),
+            ro_prop(t!("Type").as_ref(), "li_type", kind),
+            edit(t!("Position X").as_ref(), "li_px", self.position.x),
+            edit(t!("Position Y").as_ref(), "li_py", self.position.y),
+            edit(t!("Position Z").as_ref(), "li_pz", self.position.z),
         ];
         if self.light_type != 2 {
-            props.push(edit("Target X", "li_tx", self.target.x));
-            props.push(edit("Target Y", "li_ty", self.target.y));
-            props.push(edit("Target Z", "li_tz", self.target.z));
+            props.push(edit(t!("Target X").as_ref(), "li_tx", self.target.x));
+            props.push(edit(t!("Target Y").as_ref(), "li_ty", self.target.y));
+            props.push(edit(t!("Target Z").as_ref(), "li_tz", self.target.z));
         }
         let mut sections = vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props,
             },
             PropSection {
-                title: "Light".into(),
+                title: t!("Light").into_owned(),
                 props: vec![
                     Property {
-                        label: "On".into(),
+                        label: t!("On").into_owned(),
                         field: "li_status",
                         value: PropValue::BoolToggle {
                             field: "li_status",
@@ -290,17 +291,17 @@ impl PropertyEditable for Light {
                         },
                     },
                     Property {
-                        label: "Plot Glyph".into(),
+                        label: t!("Plot Glyph").into_owned(),
                         field: "li_plot_glyph",
                         value: PropValue::BoolToggle {
                             field: "li_plot_glyph",
                             value: self.plot_glyph,
                         },
                     },
-                    ro_prop("Color", "li_color", format!("{:?}", self.light_color)),
-                    edit("Intensity", "li_intensity", self.intensity),
+                    ro_prop(t!("Color").as_ref(), "li_color", format!("{:?}", self.light_color)),
+                    edit(t!("Intensity").as_ref(), "li_intensity", self.intensity),
                     Property {
-                        label: "Attenuation".into(),
+                        label: t!("Attenuation").into_owned(),
                         field: "li_attenuation",
                         value: PropValue::Choice {
                             selected: match self.attenuation_type {
@@ -317,42 +318,39 @@ impl PropertyEditable for Light {
                         },
                     },
                     Property {
-                        label: "Use Limits".into(),
+                        label: t!("Use Limits").into_owned(),
                         field: "li_use_limits",
                         value: PropValue::BoolToggle {
                             field: "li_use_limits",
                             value: self.use_attenuation_limits,
                         },
                     },
-                    edit("Start Limit", "li_start", self.attenuation_start_limit),
-                    edit("End Limit", "li_end", self.attenuation_end_limit),
-                    edit_angle_prop(
-                        "Hotspot Angle",
+                    edit(t!("Start Limit").as_ref(), "li_start", self.attenuation_start_limit),
+                    edit(t!("End Limit").as_ref(), "li_end", self.attenuation_end_limit),
+                    edit_angle_prop(t!("Hotspot Angle").as_ref(),
                         "li_hotspot",
                         self.hotspot_angle.to_degrees(),
                     ),
-                    edit_angle_prop(
-                        "Falloff Angle",
+                    edit_angle_prop(t!("Falloff Angle").as_ref(),
                         "li_falloff",
                         self.falloff_angle.to_degrees(),
                     ),
                 ],
             },
             PropSection {
-                title: "Shadows".into(),
+                title: t!("Shadows").into_owned(),
                 props: vec![
                     Property {
-                        label: "Cast Shadows".into(),
+                        label: t!("Cast Shadows").into_owned(),
                         field: "li_shadows",
                         value: PropValue::BoolToggle {
                             field: "li_shadows",
                             value: self.cast_shadows,
                         },
                     },
-                    ro_prop("Type", "li_shadow_type", self.shadow_type.to_string()),
-                    ro_prop("Map Size", "li_shadow_size", self.shadow_map_size.to_string()),
-                    ro_prop(
-                        "Softness",
+                    ro_prop(t!("Type").as_ref(), "li_shadow_type", self.shadow_type.to_string()),
+                    ro_prop(t!("Map Size").as_ref(), "li_shadow_size", self.shadow_map_size.to_string()),
+                    ro_prop(t!("Softness").as_ref(),
                         "li_shadow_softness",
                         self.shadow_map_softness.to_string(),
                     ),
@@ -361,36 +359,30 @@ impl PropertyEditable for Light {
         ];
         if let Some(photo) = &self.photometric_data {
             sections.push(PropSection {
-                title: "Photometric".into(),
+                title: t!("Photometric").into_owned(),
                 props: vec![
-                    ro_prop("Web File", "li_web_file", photo.web_file.clone()),
-                    ro_prop(
-                        "Physical Method",
+                    ro_prop(t!("Web File").as_ref(), "li_web_file", photo.web_file.clone()),
+                    ro_prop(t!("Physical Method").as_ref(),
                         "li_physical_method",
                         photo.physical_intensity_method.to_string(),
                     ),
-                    edit(
-                        "Physical Intensity",
+                    edit(t!("Physical Intensity").as_ref(),
                         "li_physical_intensity",
                         photo.physical_intensity,
                     ),
-                    edit(
-                        "Illuminance Distance",
+                    edit(t!("Illuminance Distance").as_ref(),
                         "li_illuminance_distance",
                         photo.illuminance_distance,
                     ),
-                    edit(
-                        "Color Temperature",
+                    edit(t!("Color Temperature").as_ref(),
                         "li_color_temperature",
                         photo.lamp_color_temperature,
                     ),
-                    ro_prop(
-                        "Lamp Preset",
+                    ro_prop(t!("Lamp Preset").as_ref(),
                         "li_lamp_preset",
                         photo.lamp_color_preset.to_string(),
                     ),
-                    ro_prop(
-                        "Shape",
+                    ro_prop(t!("Shape").as_ref(),
                         "li_shape",
                         format!(
                             "{} · {:.6} × {:.6} · radius {:.6}",
@@ -400,8 +392,7 @@ impl PropertyEditable for Light {
                             photo.extended_light_radius
                         ),
                     ),
-                    ro_prop(
-                        "Web",
+                    ro_prop(t!("Web").as_ref(),
                         "li_web",
                         format!(
                             "type {}; symmetry {}; flux {:.6}; angles {:?}; rotation {:.6},{:.6},{:.6}",

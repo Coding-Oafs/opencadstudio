@@ -15,6 +15,7 @@ pub fn tool() -> ToolDef {
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -33,7 +34,7 @@ impl CadCommand for UngroupCommand {
     }
 
     fn prompt(&self) -> String {
-        "UNGROUP  Select grouped objects:".into()
+        t!("UNGROUP  Select grouped objects:").into_owned()
     }
 
     fn is_selection_gathering(&self) -> bool {

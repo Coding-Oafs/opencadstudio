@@ -16,6 +16,7 @@
 
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -112,9 +113,20 @@ impl MeasureGeomCommand {
         let dy = delta.y; // drawing plane is world XY
         let dz = delta.z; // elevation
         let angle_xy = dy.atan2(dx).to_degrees();
-        format!(
-            "Distance = {dist:.4},  Angle in XY Plane = {angle_xy:.4}°\n  Delta X = {dx:.4},  Delta Y = {dy:.4},  Delta Z = {dz:.4}",
+        let dist_s = format!("{dist:.4}");
+        let angle_xy_s = format!("{angle_xy:.4}");
+        let dx_s = format!("{dx:.4}");
+        let dy_s = format!("{dy:.4}");
+        let dz_s = format!("{dz:.4}");
+        t!(
+            "Distance = %{dist},  Angle in XY Plane = %{angle_xy}°\n  Delta X = %{dx},  Delta Y = %{dy},  Delta Z = %{dz}",
+            dist = dist_s,
+            angle_xy = angle_xy_s,
+            dx = dx_s,
+            dy = dy_s,
+            dz = dz_s,
         )
+        .into_owned()
     }
 
     /// AREA readout: shoelace area (f64, relative to first vertex) + perimeter.
@@ -130,7 +142,14 @@ impl MeasureGeomCommand {
             perimeter += (points[(idx + 1) % n] - points[idx]).length();
         }
         let area = (area_sum * 0.5).abs();
-        format!("Area = {area:.4},  Perimeter = {perimeter:.4}")
+        let area_s = format!("{area:.4}");
+        let perimeter_s = format!("{perimeter:.4}");
+        t!(
+            "Area = %{area},  Perimeter = %{perimeter}",
+            area = area_s,
+            perimeter = perimeter_s
+        )
+        .into_owned()
     }
 
     /// ANGLE readout: angle at `vertex` between the rays to `a` and `b`.
@@ -140,11 +159,12 @@ impl MeasureGeomCommand {
         let la = va.length();
         let lb = vb.length();
         if la == 0.0 || lb == 0.0 {
-            return "Angle = 0.0000° (degenerate rays)".to_string();
+            return t!("Angle = 0.0000° (degenerate rays)").into_owned();
         }
         let cos = (va.dot(vb) / (la * lb)).clamp(-1.0, 1.0);
         let angle = cos.acos().to_degrees();
-        format!("Angle = {angle:.4}°")
+        let angle_s = format!("{angle:.4}");
+        t!("Angle = %{angle}°", angle = angle_s).into_owned()
     }
 }
 
@@ -156,31 +176,33 @@ impl CadCommand for MeasureGeomCommand {
     fn prompt(&self) -> String {
         match self.mode {
             Mode::Choose => {
-                "MEASUREGEOM  Enter an option [Distance/Radius/Angle/ARea]:".into()
+                t!("MEASUREGEOM  Enter an option [Distance/Radius/Angle/ARea]:").into_owned()
             }
             Mode::Distance => {
                 if self.points.is_empty() {
-                    "MEASUREGEOM  Specify first point:".into()
+                    t!("MEASUREGEOM  Specify first point:").into_owned()
                 } else {
-                    "MEASUREGEOM  Specify second point:".into()
+                    t!("MEASUREGEOM  Specify second point:").into_owned()
                 }
             }
             Mode::Area => {
                 if self.points.is_empty() {
-                    "MEASUREGEOM  Specify first corner point (Enter to cancel):".into()
+                    t!("MEASUREGEOM  Specify first corner point (Enter to cancel):").into_owned()
                 } else {
-                    format!(
-                        "MEASUREGEOM  Specify next point ({} picked, Enter to calculate):",
-                        self.points.len()
+                    let n = self.points.len();
+                    t!(
+                        "MEASUREGEOM  Specify next point (%{n} picked, Enter to calculate):",
+                        n = n
                     )
+                    .into_owned()
                 }
             }
             Mode::Angle => match self.points.len() {
-                0 => "MEASUREGEOM  Specify vertex point:".into(),
-                1 => "MEASUREGEOM  Specify first ray point:".into(),
-                _ => "MEASUREGEOM  Specify second ray point:".into(),
+                0 => t!("MEASUREGEOM  Specify vertex point:").into_owned(),
+                1 => t!("MEASUREGEOM  Specify first ray point:").into_owned(),
+                _ => t!("MEASUREGEOM  Specify second ray point:").into_owned(),
             },
-            Mode::Radius => "MEASUREGEOM  Select arc or circle:".into(),
+            Mode::Radius => t!("MEASUREGEOM  Select arc or circle:").into_owned(),
         }
     }
 
@@ -223,9 +245,16 @@ impl CadCommand for MeasureGeomCommand {
         match self.picked.as_ref().and_then(Self::radius_of) {
             Some(radius) => {
                 let diameter = radius * 2.0;
-                CmdResult::Measurement(format!(
-                    "Radius = {radius:.4},  Diameter = {diameter:.4}"
-                ))
+                let radius_s = format!("{radius:.4}");
+                let diameter_s = format!("{diameter:.4}");
+                CmdResult::Measurement(
+                    t!(
+                        "Radius = %{radius},  Diameter = %{diameter}",
+                        radius = radius_s,
+                        diameter = diameter_s
+                    )
+                    .into_owned(),
+                )
             }
             // Picked something that is not a circle or arc — keep prompting.
             None => CmdResult::NeedPoint,

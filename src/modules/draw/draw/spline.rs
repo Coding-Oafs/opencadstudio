@@ -5,6 +5,7 @@
 
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Spline};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -110,9 +111,10 @@ impl CadCommand for SplineCommand {
 
     fn prompt(&self) -> String {
         if self.pts.is_empty() {
-            "SPLINE  Specify first control point:".into()
+            t!("SPLINE  Specify first control point:").into_owned()
         } else {
-            format!("SPLINE  Specify next point  [{} pts]:", self.pts.len())
+            let n = self.pts.len();
+            t!("SPLINE  Specify next point  [%{n} pts]:", n = n).into_owned()
         }
     }
 
@@ -121,10 +123,10 @@ impl CadCommand for SplineCommand {
         if self.pts.is_empty() {
             return Vec::new();
         }
-        let mut opts = vec![CmdOption::new("Close", "C")];
+        let mut opts = vec![CmdOption::new(t!("Close").as_ref(), "C")];
         // Undo only makes sense once a control point exists.
-        opts.push(CmdOption::new("Undo", "U"));
-        opts.push(CmdOption::enter("Done"));
+        opts.push(CmdOption::new(t!("Undo").as_ref(), "U"));
+        opts.push(CmdOption::enter(t!("Done").as_ref()));
         opts
     }
 

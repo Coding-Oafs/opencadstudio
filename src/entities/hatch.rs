@@ -1,5 +1,6 @@
 use acadrust::entities::{BoundaryEdge, Hatch};
 use glam::Vec3;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, circle_grip, edit_angle_prop as edit_angle, edit_prop as edit, parse_f64, ro_prop as ro};
@@ -264,10 +265,10 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
         let centered = if g.shift.abs() < 1e-9 { "Yes" } else { "No" };
         let mut sections = vec![
             PropSection {
-                title: "Pattern".into(),
+                title: t!("Pattern").into_owned(),
                 props: vec![
                     Property {
-                        label: "Type".into(),
+                        label: t!("Type").into_owned(),
                         field: "fill_type",
                         value: PropValue::Choice {
                             selected: grad_type.to_string(),
@@ -279,7 +280,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
                             crate::scene::model::hatch_model::GradientKind::from_name(&g.name);
                         let _ = invert;
                         Property {
-                            label: "Gradient type".into(),
+                            label: t!("Gradient type").into_owned(),
                             field: "gradient_type",
                             value: PropValue::Choice {
                                 selected: kind.label().to_string(),
@@ -291,7 +292,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
                         }
                     },
                     Property {
-                        label: "Invert".into(),
+                        label: t!("Invert").into_owned(),
                         field: "gradient_invert",
                         value: PropValue::BoolToggle {
                             field: "gradient_invert",
@@ -302,39 +303,38 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
                         },
                     },
                     Property {
-                        label: "Color 1".into(),
+                        label: t!("Color 1").into_owned(),
                         field: "gradient_color_1",
                         value: PropValue::ColorChoice(grad_c1),
                     },
                     Property {
-                        label: "Color 2".into(),
+                        label: t!("Color 2").into_owned(),
                         field: "gradient_color_2",
                         value: PropValue::ColorChoice(grad_c2),
                     },
-                    edit_angle("Angle", "pattern_angle", g.angle.to_degrees()),
-                    ro("Centered", "gradient_centered", centered),
+                    edit_angle(t!("Angle").as_ref(), "pattern_angle", g.angle.to_degrees()),
+                    ro(t!("Centered").as_ref(), "gradient_centered", centered),
                 ],
             },
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    edit("Elevation", "elevation", h.elevation),
-                    ro("Area", "area", format!("{:.4}", area)),
-                    ro("Cumulative area", "cumulative_area", format!("{:.4}", area)),
+                    edit(t!("Elevation").as_ref(), "elevation", h.elevation),
+                    ro(t!("Area").as_ref(), "area", format!("{:.4}", area)),
+                    ro(t!("Cumulative area").as_ref(), "cumulative_area", format!("{:.4}", area)),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
-                    ro(
-                        "Associative",
+                    ro(t!("Associative").as_ref(),
                         "associative",
                         if h.is_associative { "Yes" } else { "No" },
                     ),
-                    ro("Annotative", "annotative", String::new()),
-                    ro("Island detection style", "style", style),
+                    ro(t!("Annotative").as_ref(), "annotative", String::new()),
+                    ro(t!("Island detection style").as_ref(), "style", style),
                     Property {
-                        label: "Background".into(),
+                        label: t!("Background").into_owned(),
                         field: "bg_enabled",
                         value: PropValue::BoolToggle {
                             field: "bg_enabled",
@@ -347,7 +347,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
         if bg_on {
             if let Some(sec) = sections.last_mut() {
                 sec.props.push(Property {
-                    label: "Background color".into(),
+                    label: t!("Background color").into_owned(),
                     field: "background_color",
                     value: PropValue::ColorChoice(bg_col),
                 });
@@ -360,7 +360,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
     // ── Hatch (pattern / solid) ────────────────────────────────────────────
     // "Type" = pattern definition source (Predefined / User Defined / Custom).
     let type_row = Property {
-        label: "Type".into(),
+        label: t!("Type").into_owned(),
         field: "pattern_type_label",
         value: PropValue::Choice {
             selected: pattern_type.to_string(),
@@ -368,12 +368,12 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
         },
     };
     let pattern_name_row = Property {
-        label: "Pattern name".into(),
+        label: t!("Pattern name").into_owned(),
         field: "pattern_name",
         value: PropValue::HatchPatternChoice(h.pattern.name.clone()),
     };
     let associative_row = Property {
-        label: "Associative".into(),
+        label: t!("Associative").into_owned(),
         field: "associative",
         value: PropValue::BoolToggle {
             field: "associative",
@@ -381,7 +381,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
         },
     };
     let double_row = Property {
-        label: "Double".into(),
+        label: t!("Double").into_owned(),
         field: "double",
         value: PropValue::BoolToggle {
             field: "double",
@@ -389,15 +389,14 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
         },
     };
     let island_row = Property {
-        label: "Island detection style".into(),
+        label: t!("Island detection style").into_owned(),
         field: "style",
         value: PropValue::Choice {
             selected: style.to_string(),
             options: vec!["Normal".into(), "Outer".into(), "Ignore".into()],
         },
     };
-    let spacing_row = edit(
-        "Spacing",
+    let spacing_row = edit(t!("Spacing").as_ref(),
         "spacing",
         h.pattern
             .lines
@@ -415,22 +414,22 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
 
     let mut sections = vec![
         PropSection {
-            title: "Pattern".into(),
+            title: t!("Pattern").into_owned(),
             props: vec![
                 type_row,
                 pattern_name_row,
-                ro("Annotative", "annotative", String::new()),
-                edit_angle("Angle", "pattern_angle", h.pattern_angle.to_degrees()),
-                edit("Scale", "pattern_scale", h.pattern_scale),
-                edit("Origin X", "origin_x", origin_x),
-                edit("Origin Y", "origin_y", origin_y),
+                ro(t!("Annotative").as_ref(), "annotative", String::new()),
+                edit_angle(t!("Angle").as_ref(), "pattern_angle", h.pattern_angle.to_degrees()),
+                edit(t!("Scale").as_ref(), "pattern_scale", h.pattern_scale),
+                edit(t!("Origin X").as_ref(), "origin_x", origin_x),
+                edit(t!("Origin Y").as_ref(), "origin_y", origin_y),
                 spacing_row,
-                ro("ISO pen width", "iso_pen_width", String::new()),
+                ro(t!("ISO pen width").as_ref(), "iso_pen_width", String::new()),
                 double_row,
                 associative_row,
                 island_row,
                 Property {
-                    label: "Background".into(),
+                    label: t!("Background").into_owned(),
                     field: "bg_enabled",
                     value: PropValue::BoolToggle {
                         field: "bg_enabled",
@@ -440,18 +439,18 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
             ],
         },
         PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                edit("Elevation", "elevation", h.elevation),
-                ro("Area", "area", format!("{:.4}", area)),
-                ro("Cumulative area", "cumulative_area", format!("{:.4}", area)),
+                edit(t!("Elevation").as_ref(), "elevation", h.elevation),
+                ro(t!("Area").as_ref(), "area", format!("{:.4}", area)),
+                ro(t!("Cumulative area").as_ref(), "cumulative_area", format!("{:.4}", area)),
             ],
         },
     ];
     if bg_on {
         if let Some(sec) = sections.first_mut() {
             sec.props.push(Property {
-                label: "Background color".into(),
+                label: t!("Background color").into_owned(),
                 field: "background_color",
                 value: PropValue::ColorChoice(bg_col),
             });

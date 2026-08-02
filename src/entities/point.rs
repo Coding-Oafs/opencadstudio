@@ -1,5 +1,6 @@
 use acadrust::entities::Point;
 use acadrust::EntityType;
+use crate::t;
 use truck_modeling::{builder, Point3};
 
 use crate::command::EntityTransform;
@@ -187,11 +188,11 @@ fn grips(pt: &Point) -> Vec<GripDef> {
 
 fn properties(pt: &Point) -> Vec<PropSection> {
     vec![PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![
-            edit("Position X", "loc_x", pt.location.x),
-            edit("Position Y", "loc_y", pt.location.y),
-            edit("Position Z", "loc_z", pt.location.z),
+            edit(t!("Position X").as_ref(), "loc_x", pt.location.x),
+            edit(t!("Position Y").as_ref(), "loc_y", pt.location.y),
+            edit(t!("Position Z").as_ref(), "loc_z", pt.location.z),
         ],
     }]
 }

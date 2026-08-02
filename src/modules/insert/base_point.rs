@@ -1,3 +1,5 @@
+use crate::t;
+
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use glam::DVec3;
@@ -30,7 +32,7 @@ impl CadCommand for BaseCommand {
     }
 
     fn prompt(&self) -> String {
-        "BASE  Specify base point:".to_string()
+        t!("BASE  Specify base point:").into_owned()
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {

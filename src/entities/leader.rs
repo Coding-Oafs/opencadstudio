@@ -10,6 +10,7 @@ use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::TangentGeom;
+use crate::t;
 
 // ── TruckConvertible (used for snap/grip key-vertices) ─────────────────────
 
@@ -219,27 +220,27 @@ fn properties(leader: &Leader) -> Vec<PropSection> {
 
     // Geometry sits right after General — a leader owns editable path vertices,
     // navigated one at a time by the Current Vertex spinner.
-    let mut geometry = vec![stepper("Current Vertex", "current_vertex", vertex_label)];
+    let mut geometry = vec![stepper(t!("Current Vertex").as_ref(), "current_vertex", vertex_label)];
     if let Some(v) = leader.vertices.get(vi) {
-        geometry.push(edit("Vertex X", "vertex_x", v.x));
-        geometry.push(edit("Vertex Y", "vertex_y", v.y));
-        geometry.push(edit("Vertex Z", "vertex_z", v.z));
+        geometry.push(edit(t!("Vertex X").as_ref(), "vertex_x", v.x));
+        geometry.push(edit(t!("Vertex Y").as_ref(), "vertex_y", v.y));
+        geometry.push(edit(t!("Vertex Z").as_ref(), "vertex_z", v.z));
     } else {
-        geometry.push(ro("Vertex X", "vertex_x", String::new()));
-        geometry.push(ro("Vertex Y", "vertex_y", String::new()));
-        geometry.push(ro("Vertex Z", "vertex_z", String::new()));
+        geometry.push(ro(t!("Vertex X").as_ref(), "vertex_x", String::new()));
+        geometry.push(ro(t!("Vertex Y").as_ref(), "vertex_y", String::new()));
+        geometry.push(ro(t!("Vertex Z").as_ref(), "vertex_z", String::new()));
     }
 
     // Misc: Dim style (upgraded to a dropdown by the panel builder), the
     // combined path/arrow Type, and annotative state (from the dim style).
     let misc = vec![
         Property {
-            label: "Dim style".into(),
+            label: t!("Dim style").into_owned(),
             field: "dimension_style",
             value: PropValue::EditText(leader.dimension_style.clone()),
         },
         choice_prop(
-            "Type",
+            t!("Type").as_ref(),
             "leader_type",
             leader_type_str(&leader.path_type, leader.arrow_enabled),
             &[
@@ -249,42 +250,42 @@ fn properties(leader: &Leader) -> Vec<PropSection> {
                 "Spline without arrow",
             ],
         ),
-        ro("Annotative", "annotative", "No"),
+        ro(t!("Annotative").as_ref(), "annotative", "No"),
     ];
 
     // Lines & Arrows / Text / Fit are dimension-style-derived; the panel builder
     // resolves leader.dimension_style and fills these values from the DimStyle.
     let lines_arrows = vec![
-        ro("Arrow", "arrow_block", "Closed filled"),
-        ro("Arrow size", "arrow_size", String::new()),
-        ro("Dim line lineweight", "dim_line_lw", "ByLayer"),
-        ro("Dim line color", "dim_line_color", "ByLayer"),
+        ro(t!("Arrow").as_ref(), "arrow_block", "Closed filled"),
+        ro(t!("Arrow size").as_ref(), "arrow_size", String::new()),
+        ro(t!("Dim line lineweight").as_ref(), "dim_line_lw", "ByLayer"),
+        ro(t!("Dim line color").as_ref(), "dim_line_color", "ByLayer"),
     ];
     let text = vec![
-        ro("Text offset", "text_offset", String::new()),
-        ro("Text pos vert", "text_pos_vert", String::new()),
+        ro(t!("Text offset").as_ref(), "text_offset", String::new()),
+        ro(t!("Text pos vert").as_ref(), "text_pos_vert", String::new()),
     ];
-    let fit = vec![ro("Dim scale overall", "dim_scale_overall", String::new())];
+    let fit = vec![ro(t!("Dim scale overall").as_ref(), "dim_scale_overall", String::new())];
 
     vec![
         PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: geometry,
         },
         PropSection {
-            title: "Misc".into(),
+            title: t!("Misc").into_owned(),
             props: misc,
         },
         PropSection {
-            title: "Lines & Arrows".into(),
+            title: t!("Lines & Arrows").into_owned(),
             props: lines_arrows,
         },
         PropSection {
-            title: "Text".into(),
+            title: t!("Text").into_owned(),
             props: text,
         },
         PropSection {
-            title: "Fit".into(),
+            title: t!("Fit").into_owned(),
             props: fit,
         },
     ]

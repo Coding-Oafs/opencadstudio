@@ -12,7 +12,9 @@ use iced::widget::{
     button, column, container, markdown, row, rule, scrollable, text, text_input, Space,
 };
 use iced::{Background, Border, Element, Fill, Length, Theme};
+use crate::t;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 
 /// Empty lane kept at the right edge of scroll content so the vertical
 /// scrollbar never covers card controls.
@@ -79,9 +81,9 @@ fn badge<'a>(label: String) -> Element<'a, Message> {
 fn toggle_button<'a>(id: &str, disabled: bool) -> Element<'a, Message> {
     // Label shows the action the click performs.
     let label = if disabled {
-        "Enable"
+        t!("Enable")
     } else {
-        "Disable"
+        t!("Disable")
     };
     let want_enabled = disabled; // clicking flips the state
     let id_owned = id.to_string();
@@ -101,8 +103,8 @@ enum StatusKind {
 }
 
 /// Coloured status pill for a discovered external package.
-fn status_badge<'a>(label: &str, kind: StatusKind) -> Element<'a, Message> {
-    container(text(label.to_string()).size(11))
+fn status_badge<'a>(label: Cow<'static, str>, kind: StatusKind) -> Element<'a, Message> {
+    container(text(label).size(11))
         .padding([2, 8])
         .style(move |theme: &Theme| {
             let palette = theme.palette();
@@ -219,17 +221,17 @@ fn external_card<'a>(
     let failed_old_api =
         load_error.is_some() && p.api_version != ocs_plugin_api::API_VERSION;
     let (status, kind) = if loaded && disabled {
-        ("Disabled", StatusKind::Muted)
+        (t!("Disabled"), StatusKind::Muted)
     } else if loaded {
-        ("Loaded", StatusKind::Success)
+        (t!("Loaded"), StatusKind::Success)
     } else if !p.api_compatible() || failed_old_api {
-        ("API incompatible", StatusKind::Danger)
+        (t!("API incompatible"), StatusKind::Danger)
     } else if load_error.is_some() {
-        ("Load failed", StatusKind::Danger)
+        (t!("Load failed"), StatusKind::Danger)
     } else if !p.lib_present {
-        ("No library", StatusKind::Warning)
+        (t!("No library"), StatusKind::Warning)
     } else {
-        ("Restart to load", StatusKind::Warning)
+        (t!("Restart to load"), StatusKind::Warning)
     };
     let header = row![
         text(p.name.clone()).size(15),
@@ -249,21 +251,23 @@ fn external_card<'a>(
     }
     if !p.command_prefixes.is_empty() {
         info_body = info_body.push(
-            text(format!("Commands: {}", p.command_prefixes.join(", ")))
-                .size(11)
-                .style(muted_style),
+            text(t!(
+                "Commands:  %{cmds}",
+                cmds = p.command_prefixes.join(", ")
+            ))
+            .size(11)
+            .style(muted_style),
         );
     }
     if let Some(error) = load_error {
         let detail = if failed_old_api {
-            format!(
-                "Plugin API {} is incompatible with this build's API {} ribbon ABI. \
-                 Update or rebuild the plugin.",
-                p.api_version,
-                ocs_plugin_api::API_VERSION,
+            t!(
+                "Plugin API  %{plugin}  is incompatible with this build's API  %{build}  ribbon ABI. Update or rebuild the plugin.",
+                plugin = p.api_version,
+                build = ocs_plugin_api::API_VERSION,
             )
         } else {
-            format!("Load failed: {error}")
+            t!("Load failed:  %{error}", error = error)
         };
         info_body = info_body.push(
             text(detail)
@@ -288,9 +292,8 @@ fn external_card<'a>(
 
     let mut actions = row![Space::new().width(Fill)].align_y(iced::Center);
     if let (Some(repo), Some(tag)) = (repository, update_tag) {
-        let label = format!("Update to {tag}");
         actions = actions.push(pill_button(
-            &label,
+            t!("Update to  %{tag}", tag = tag),
             Message::PluginUpdate(repo, tag),
             button::primary,
         ));
@@ -302,7 +305,7 @@ fn external_card<'a>(
         actions = actions.push(Space::new().width(6));
     }
     actions = actions.push(pill_button(
-        "Uninstall",
+        t!("Uninstall"),
         Message::PluginUninstall(p.id.clone()),
         button::danger,
     ));
@@ -314,11 +317,11 @@ fn external_card<'a>(
 }
 
 fn pill_button<'a>(
-    label: &str,
+    label: impl Into<Cow<'static, str>>,
     msg: Message,
     style: fn(&Theme, button::Status) -> button::Style,
 ) -> Element<'a, Message> {
-    button(text(label.to_string()).size(12))
+    button(text(label.into()).size(12))
         .padding([4, 12])
         .on_press(msg)
         .style(style)
@@ -357,7 +360,7 @@ fn install_controls<'a>(
             .map(|release| release.api_version)
     });
     let picker: Element<'_, Message> = if tags.is_empty() {
-        text("no releases").size(11).style(muted_style).into()
+        text(t!("no releases")).size(11).style(muted_style).into()
     } else {
         let r = repo_s.clone();
         iced::widget::pick_list(selected, tags, |value| value.to_string())
@@ -368,13 +371,13 @@ fn install_controls<'a>(
     let action = match selected_api {
         Some(api_version) if api_version == ocs_plugin_api::API_VERSION => {
             pill_button(
-                "Install",
+                t!("Install"),
                 Message::PluginInstall(repo_s.clone()),
                 button::success,
             )
         }
-        Some(_) => status_badge("Incompatible", StatusKind::Danger),
-        None => status_badge("Unavailable", StatusKind::Muted),
+        Some(_) => status_badge(t!("Incompatible"), StatusKind::Danger),
+        None => status_badge(t!("Unavailable"), StatusKind::Muted),
     };
     let mut controls = row![picker, Space::new().width(8), action]
         .align_y(iced::Center)
@@ -424,14 +427,14 @@ fn repository_display_name(repository: &str) -> String {
 
 fn add_repository_card<'a>(m: &MarketView) -> Element<'a, Message> {
     let form = row![
-        text_input("GitHub URL or owner/repository", m.input)
+        text_input(t!("GitHub URL or owner/repository").as_ref(), m.input)
             .on_input(Message::PluginRepoInput)
             .on_submit(Message::PluginRepoAdd)
             .size(13)
             .width(Fill),
         Space::new().width(8),
         pill_button(
-            "Add repository",
+            t!("Add repository"),
             Message::PluginRepoAdd,
             button::primary,
         ),
@@ -440,11 +443,10 @@ fn add_repository_card<'a>(m: &MarketView) -> Element<'a, Message> {
 
     market_card(
         column![
-            text("Add from GitHub").size(14),
-            text(
-                "Paste a public repository URL. Compatible releases and the README \
-                 are detected automatically.",
-            )
+            text(t!("Add from GitHub")).size(14),
+            text(t!(
+                "Paste a public repository URL. Compatible releases and the README are detected automatically."
+            ))
             .size(11)
             .style(muted_style),
             Space::new().height(3),
@@ -455,28 +457,31 @@ fn add_repository_card<'a>(m: &MarketView) -> Element<'a, Message> {
     )
 }
 
-fn registry_error_message(error: &str) -> (&'static str, &'static str) {
+fn registry_error_message(error: &str) -> (Cow<'static, str>, Cow<'static, str>) {
     let error = error.to_ascii_lowercase();
     if error.contains("certificate")
         || error.contains("unknownissuer")
         || error.contains("unknown issuer")
     {
         (
-            "Unable to verify the server certificate",
-            "Open CAD Studio could not trust the certificate presented for the plugin registry. \
-             Check your system certificate and proxy settings, then retry.",
+            t!("Unable to verify the server certificate"),
+            t!(
+                "Open CAD Studio could not trust the certificate presented for the plugin registry. Check your system certificate and proxy settings, then retry."
+            ),
         )
     } else if error.contains("timed out") || error.contains("timeout") {
         (
-            "Plugin registry request timed out",
-            "Check your internet or proxy connection, then retry. Manually added repositories \
-             remain available.",
+            t!("Plugin registry request timed out"),
+            t!(
+                "Check your internet or proxy connection, then retry. Manually added repositories remain available."
+            ),
         )
     } else {
         (
-            "Unable to load the plugin registry",
-            "Check your internet or proxy connection, then retry. Manually added repositories \
-             remain available.",
+            t!("Unable to load the plugin registry"),
+            t!(
+                "Check your internet or proxy connection, then retry. Manually added repositories remain available."
+            ),
         )
     }
 }
@@ -486,23 +491,23 @@ fn registry_notice<'a>(m: &MarketView) -> Option<Element<'a, Message>> {
         let (title, message) = registry_error_message(error);
         let actions = row![
             pill_button(
-                "Retry",
+                t!("Retry"),
                 Message::PluginRegistryRetry,
                 button::primary,
             ),
             Space::new().width(6),
             pill_button(
                 if m.registry_error_details_open {
-                    "Hide details"
+                    t!("Hide details")
                 } else {
-                    "Show details"
+                    t!("Show details")
                 },
                 Message::PluginRegistryErrorDetailsToggle,
                 button::secondary,
             ),
             Space::new().width(6),
             pill_button(
-                "Copy details",
+                t!("Copy details"),
                 Message::PluginRegistryCopyDiagnostics,
                 button::secondary,
             ),
@@ -545,8 +550,8 @@ fn registry_notice<'a>(m: &MarketView) -> Option<Element<'a, Message>> {
     (m.registry_loading && m.registry.is_empty()).then(|| {
         container(
             column![
-                text("Loading plugin catalog…").size(13),
-                text("Connecting securely using your system certificate settings.")
+                text(t!("Loading plugin catalog…")).size(13),
+                text(t!("Connecting securely using your system certificate settings."))
                     .size(11)
                     .style(muted_style),
             ]
@@ -563,7 +568,7 @@ fn marketplace_section<'a>(
     m: &MarketView,
     externals: &[ExternalPlugin],
 ) -> Element<'a, Message> {
-    let mut col = column![text("Available plugins").size(13).style(primary_style)].spacing(6);
+    let mut col = column![text(t!("Available plugins")).size(13).style(primary_style)].spacing(6);
     let mut visible = 0usize;
     if let Some(notice) = registry_notice(m) {
         col = col.push(notice);
@@ -617,7 +622,7 @@ fn marketplace_section<'a>(
         let info = button(
             column![
                 text(display_name).size(14),
-                text("Added from GitHub").size(11).style(muted_style),
+                text(t!("Added from GitHub")).size(11).style(muted_style),
             ]
             .spacing(4)
             .width(Fill),
@@ -642,9 +647,9 @@ fn marketplace_section<'a>(
         && !(m.registry_loading && m.registry.is_empty())
     {
         let message = if m.search.trim().is_empty() {
-            "No additional plugins are available."
+            t!("No additional plugins are available.")
         } else {
-            "No available plugins match your search."
+            t!("No available plugins match your search.")
         };
         col = col.push(text(message).size(12).style(muted_style));
     }
@@ -684,8 +689,8 @@ fn readme_panel<'a>(
     let Some(repo) = market.selected_repo else {
         return container(
             column![
-                text("Plugin details").size(16),
-                text("Select a plugin to read its GitHub README.")
+                text(t!("Plugin details")).size(16),
+                text(t!("Select a plugin to read its GitHub README."))
                     .size(12)
                     .style(muted_style),
             ]
@@ -712,7 +717,7 @@ fn readme_panel<'a>(
         .spacing(3)
         .width(width),
         pill_button(
-            "View on GitHub",
+            t!("View on GitHub"),
             Message::OpenUrl(format!("https://github.com/{repo}")),
             button::secondary,
         ),
@@ -722,8 +727,8 @@ fn readme_panel<'a>(
     let content: Element<'a, Message> = if market.readme_loading.contains(repo) {
         container(
             column![
-                text("Loading README…").size(13),
-                text("Fetching the default branch from GitHub.")
+                text(t!("Loading README…")).size(13),
+                text(t!("Fetching the default branch from GitHub."))
                     .size(11)
                     .style(muted_style),
             ]
@@ -748,11 +753,11 @@ fn readme_panel<'a>(
             }
             Some(Err(error)) => container(
                 column![
-                    text("README could not be loaded").size(14),
+                    text(t!("README could not be loaded")).size(14),
                     text(error.clone()).size(11).style(muted_style),
                     Space::new().height(4),
                     pill_button(
-                        "Retry",
+                        t!("Retry"),
                         Message::PluginReadmeSelect(repo.to_string()),
                         button::secondary,
                     ),
@@ -765,7 +770,7 @@ fn readme_panel<'a>(
             .height(height)
             .into(),
             None => container(
-                text("Select the plugin again to load its README.")
+                text(t!("Select the plugin again to load its README."))
                     .size(12)
                     .style(muted_style),
             )
@@ -811,15 +816,16 @@ pub fn view_window<'a>(
 ) -> Element<'a, Message> {
     let width = sizing.width;
     let height = sizing.height;
-    let title = text("Plugins").size(20);
-    let subtitle = text("Browse, install, and manage add-ons. Select one to view its README.")
-        .size(12)
-        .style(muted_style);
+    let title = text(t!("Plugins")).size(20);
+    let subtitle =
+        text(t!("Browse, install, and manage add-ons. Select one to view its README."))
+            .size(12)
+            .style(muted_style);
 
     let mut list = column![].spacing(10);
     // Installed external packages (from the plugins folder).
     if externals.is_empty() {
-        list = list.push(text("No plugins installed yet.").size(13).style(muted_style));
+        list = list.push(text(t!("No plugins installed yet.")).size(13).style(muted_style));
     } else {
         let mut visible_installed = 0usize;
         for p in externals {
@@ -828,7 +834,7 @@ pub fn view_window<'a>(
                 continue;
             }
             if visible_installed == 0 {
-                list = list.push(text("Installed").size(13).style(primary_style));
+                list = list.push(text(t!("Installed")).size(13).style(primary_style));
             }
             visible_installed += 1;
             let selected = repository.as_deref() == market.selected_repo;
@@ -857,7 +863,7 @@ pub fn view_window<'a>(
         }
         if visible_installed == 0 && !market.search.trim().is_empty() {
             list = list.push(
-                text("No installed plugins match your search.")
+                text(t!("No installed plugins match your search."))
                     .size(12)
                     .style(muted_style),
             );
@@ -875,7 +881,7 @@ pub fn view_window<'a>(
     let catalog = scrollable(container(list.width(Fill)).padding(gutter))
         .height(height)
         .width(Fill);
-    let search = text_input("Search plugins…", market.search)
+    let search = text_input(t!("Search plugins…").as_ref(), market.search)
         .on_input(Message::PluginSearchInput)
         .size(13)
         .padding([7, 10])
@@ -916,7 +922,7 @@ pub fn view_window<'a>(
 /// Browser replacement for the native Plugin Manager.
 #[cfg(target_arch = "wasm32")]
 pub fn view_web_notice<'a>() -> Element<'a, Message> {
-    let download = button(text("Download desktop app").size(13))
+    let download = button(text(t!("Download desktop app")).size(13))
         .on_press(Message::OpenUrl(DESKTOP_DOWNLOAD_URL.to_string()))
         .padding([9, 18])
         .style(|theme: &Theme, status| {
@@ -944,14 +950,13 @@ pub fn view_web_notice<'a>() -> Element<'a, Message> {
     let notice = container(
         column![
             icon,
-            text("Plugins are available in the desktop app")
+            text(t!("Plugins are available in the desktop app"))
                 .size(20)
                 .width(Length::Fit)
                 .align_x(iced::alignment::Horizontal::Center),
-            text(
-                "Open CAD Studio plugins are native packages and cannot run inside a browser. \
-                 Download the desktop app to browse, install, and use plugins.",
-            )
+            text(t!(
+                "Open CAD Studio plugins are native packages and cannot run inside a browser. Download the desktop app to browse, install, and use plugins."
+            ))
             .size(13)
             .width(Length::Fit)
             .align_x(iced::alignment::Horizontal::Center)
@@ -998,6 +1003,10 @@ mod tests {
 
     #[test]
     fn certificate_errors_get_user_friendly_copy() {
+        // The registry message is localised; pin English so the assertion
+        // does not depend on the ambient process locale.
+        crate::i18n::set_language(crate::i18n::Language::EnUs)
+            .expect("English locale must be available");
         let (title, message) =
             registry_error_message("io: invalid peer certificate: UnknownIssuer");
 

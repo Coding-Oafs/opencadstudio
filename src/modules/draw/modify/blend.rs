@@ -9,6 +9,7 @@ use acadrust::entities::{EntityCommon, Spline};
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 use truck_modeling::base::{BoundedCurve, ParametricCurve, Vector4};
 use truck_modeling::{BSplineCurve, KnotVec, NurbsCurve, Point3};
 
@@ -103,29 +104,41 @@ impl CadCommand for BlendCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            BlendStep::First => format!(
-                "BLEND  Select first open curve  [Continuity={}]:",
-                self.continuity.label()
-            ),
-            BlendStep::Continuity { .. } => format!(
-                "BLEND  Enter continuity [Tangent/Curvature] <{}>:",
-                self.continuity.label()
-            ),
-            BlendStep::Second { .. } => format!(
-                "BLEND  Select second open curve  [Continuity={}]:",
-                self.continuity.label()
-            ),
+            BlendStep::First => {
+                let c = self.continuity.label();
+                t!(
+                    "BLEND  Select first open curve  [Continuity=%{c}]:",
+                    c = c
+                )
+                .into_owned()
+            }
+            BlendStep::Continuity { .. } => {
+                let c = self.continuity.label();
+                t!(
+                    "BLEND  Enter continuity [Tangent/Curvature] <%{c}>:",
+                    c = c
+                )
+                .into_owned()
+            }
+            BlendStep::Second { .. } => {
+                let c = self.continuity.label();
+                t!(
+                    "BLEND  Select second open curve  [Continuity=%{c}]:",
+                    c = c
+                )
+                .into_owned()
+            }
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         match self.step {
             BlendStep::First | BlendStep::Second { .. } => {
-                vec![CmdOption::new("Continuity", "C")]
+                vec![CmdOption::new(t!("Continuity").as_ref(), "C")]
             }
             BlendStep::Continuity { .. } => vec![
-                CmdOption::new("Tangent", "T"),
-                CmdOption::new("Curvature", "C"),
+                CmdOption::new(t!("Tangent").as_ref(), "T"),
+                CmdOption::new(t!("Curvature").as_ref(), "C"),
             ],
         }
     }

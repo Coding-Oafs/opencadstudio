@@ -5,6 +5,7 @@
 //   *           → copies currently selected model-space entities
 
 use acadrust::{CadDocument, EntityType};
+use crate::t;
 
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 
@@ -26,11 +27,15 @@ pub fn extract_block_to_doc(src: &CadDocument, block_name: &str) -> Result<CadDo
     let br = src
         .block_records
         .get(block_name)
-        .ok_or_else(|| format!("Block \"{block_name}\" not found."))?;
+        .ok_or_else(|| t!("Block \"%{name}\" not found.", name = block_name).into_owned())?;
 
     let handles = br.entity_handles.clone();
     if handles.is_empty() {
-        return Err(format!("Block \"{block_name}\" has no entities."));
+        return Err(t!(
+            "Block \"%{name}\" has no entities.",
+            name = block_name
+        )
+        .into_owned());
     }
 
     let mut out = CadDocument::new();
@@ -59,9 +64,11 @@ pub fn extract_block_to_doc(src: &CadDocument, block_name: &str) -> Result<CadDo
     }
 
     if out.entities().count() == 0 {
-        return Err(format!(
-            "Block \"{block_name}\" produced no exportable entities."
-        ));
+        return Err(t!(
+            "Block \"%{name}\" produced no exportable entities.",
+            name = block_name
+        )
+        .into_owned());
     }
 
     Ok(out)
@@ -74,7 +81,7 @@ pub fn extract_entities_to_doc(
     handles: &[acadrust::Handle],
 ) -> Result<CadDocument, String> {
     if handles.is_empty() {
-        return Err("No entities selected for WBLOCK.".into());
+        return Err(t!("No entities selected for WBLOCK.").into_owned());
     }
 
     let mut out = CadDocument::new();
@@ -99,7 +106,7 @@ pub fn extract_entities_to_doc(
     }
 
     if out.entities().count() == 0 {
-        return Err("None of the selected entities could be exported.".into());
+        return Err(t!("None of the selected entities could be exported.").into_owned());
     }
 
     Ok(out)

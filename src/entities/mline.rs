@@ -1,4 +1,5 @@
 use acadrust::entities::MLine;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, ro_prop as ro, square_grip};
@@ -336,24 +337,24 @@ impl PropertyEditable for MLine {
         let cur_z = cur.map(|v| v.position.z).unwrap_or(0.0);
         vec![
             PropSection {
-                title: "Geometry".into(),
+                title: t!("Geometry").into_owned(),
                 props: vec![
-                    ro("Vertex", "ml_vertex", if self.vertices.is_empty() { String::new() } else { "1".to_string() }),
-                    edit("Vertex X", "ml_vertex_x", cur_x),
-                    edit("Vertex Y", "ml_vertex_y", cur_y),
-                    edit("Vertex Z", "ml_vertex_z", cur_z),
+                    ro(t!("Vertex").as_ref(), "ml_vertex", if self.vertices.is_empty() { String::new() } else { "1".to_string() }),
+                    edit(t!("Vertex X").as_ref(), "ml_vertex_x", cur_x),
+                    edit(t!("Vertex Y").as_ref(), "ml_vertex_y", cur_y),
+                    edit(t!("Vertex Z").as_ref(), "ml_vertex_z", cur_z),
                 ],
             },
             PropSection {
-                title: "Misc".into(),
+                title: t!("Misc").into_owned(),
                 props: vec![
                     Property {
-                        label: "Style".into(),
+                        label: t!("Style").into_owned(),
                         field: "ml_style",
                         value: PropValue::EditText(self.style_name.clone()),
                     },
                     Property {
-                        label: "Style justification".into(),
+                        label: t!("Style justification").into_owned(),
                         field: "ml_justification",
                         value: PropValue::Choice {
                             selected: just_str.to_string(),
@@ -363,7 +364,7 @@ impl PropertyEditable for MLine {
                                 .collect(),
                         },
                     },
-                    edit("Style scale", "ml_scale", self.scale_factor),
+                    edit(t!("Style scale").as_ref(), "ml_scale", self.scale_factor),
                 ],
             },
         ]

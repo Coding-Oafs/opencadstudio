@@ -10,6 +10,7 @@
 use acadrust::entities::Solid3D;
 use acadrust::{primitives, EntityType};
 use glam::DVec3;
+use crate::t;
 use truck_modeling::Solid;
 
 use crate::command::{CadCommand, CmdResult};
@@ -194,14 +195,14 @@ impl CadCommand for PrimitiveCommand {
     fn prompt(&self) -> String {
         let n = self.shape.name();
         if self.height_step {
-            return format!("{n}  Specify height <Enter for default>:");
+            return t!("%{n}  Specify height <Enter for default>:", n = n).into_owned();
         }
         match (self.shape.radial(), self.pts.len()) {
-            (false, 0) => format!("{n}  Specify first corner:"),
-            (false, _) => format!("{n}  Specify opposite corner:"),
-            (true, 0) => format!("{n}  Specify center point:"),
-            (true, 1) => format!("{n}  Specify radius:"),
-            (true, _) => format!("{n}  Specify tube radius:"),
+            (false, 0) => t!("%{n}  Specify first corner:", n = n).into_owned(),
+            (false, _) => t!("%{n}  Specify opposite corner:", n = n).into_owned(),
+            (true, 0) => t!("%{n}  Specify center point:", n = n).into_owned(),
+            (true, 1) => t!("%{n}  Specify radius:", n = n).into_owned(),
+            (true, _) => t!("%{n}  Specify tube radius:", n = n).into_owned(),
         }
     }
 

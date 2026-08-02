@@ -593,7 +593,7 @@ impl OpenCADStudio {
         self.load_style_bufs(kind);
         self.after_style_change(kind);
         self.command_line
-            .push_output(&format!("Style '{name}' created."));
+            .push_output(crate::tf!("Style '{name}' created.").as_ref());
     }
 
     pub(super) fn style_copy(&mut self, kind: StyleKind) {
@@ -608,19 +608,19 @@ impl OpenCADStudio {
         self.load_style_bufs(kind);
         self.after_style_change(kind);
         self.command_line
-            .push_output(&format!("Style '{name}' created."));
+            .push_output(crate::tf!("Style '{name}' created.").as_ref());
     }
 
     pub(super) fn style_delete(&mut self, kind: StyleKind) {
         let name = self.style_selected(kind);
         if name.eq_ignore_ascii_case("Standard") {
             self.command_line
-                .push_error("Cannot delete the Standard style.");
+                .push_error(crate::t!("Cannot delete the Standard style.").as_ref());
             return;
         }
         if self.style_in_use(kind, &name) {
             self.command_line
-                .push_error("Cannot delete a style that is current or in use.");
+                .push_error(crate::t!("Cannot delete a style that is current or in use.").as_ref());
             return;
         }
         if !self.remove_style_storage(kind, &name) {
@@ -635,7 +635,7 @@ impl OpenCADStudio {
         self.load_style_bufs(kind);
         self.after_style_change(kind);
         self.command_line
-            .push_output(&format!("Style '{name}' deleted."));
+            .push_output(crate::tf!("Style '{name}' deleted.").as_ref());
     }
 
     /// Begin inline rename of the double-clicked style.
@@ -659,12 +659,12 @@ impl OpenCADStudio {
         }
         if old.eq_ignore_ascii_case("Standard") {
             self.command_line
-                .push_error("Cannot rename the Standard style.");
+                .push_error(crate::t!("Cannot rename the Standard style.").as_ref());
             return;
         }
         if self.style_exists(kind, &new) {
             self.command_line
-                .push_error(&format!("Style '{new}' already exists."));
+                .push_error(crate::tf!("Style '{new}' already exists.").as_ref());
             return;
         }
         self.rename_style_storage(kind, &old, &new);
@@ -674,7 +674,7 @@ impl OpenCADStudio {
         self.load_style_bufs(kind);
         self.after_style_change(kind);
         self.command_line
-            .push_output(&format!("Renamed '{old}' → '{new}'."));
+            .push_output(crate::tf!("Renamed '{old}' → '{new}'.").as_ref());
     }
 
     pub(super) fn style_rename_cancel(&mut self) {

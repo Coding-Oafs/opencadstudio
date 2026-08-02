@@ -13,6 +13,8 @@ use iced::widget::{
 };
 use iced::Padding;
 use iced::{Background, Border, Color, Element, Fill, Length, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 // ── Per-viewport column descriptor ───────────────────────────────────────────
 
@@ -330,22 +332,22 @@ impl LayerPanel {
         // ── Toolbar ───────────────────────────────────────────────────────
         let toolbar = container(
             row![
-                toolbar_btn(crate::ui::icons::PLUS, "New", Message::LayerNew),
+                toolbar_btn(crate::ui::icons::PLUS, t!("New"), Message::LayerNew),
                 toolbar_btn_cond(
                     crate::ui::icons::TRASH,
-                    "Delete",
+                    t!("Delete"),
                     Message::LayerDelete,
                     has_sel && !sel_is_zero,
                 ),
                 toolbar_btn_cond(
                     crate::ui::icons::CHECK,
-                    "Set Current",
+                    t!("Set Current"),
                     Message::LayerSetCurrent,
                     has_sel,
                 ),
                 iced::widget::Space::new().width(sizing.width),
                 // Search box: filters rows by name as the user types (#343).
-                text_input("Search…", &self.filter)
+                text_input(t!("Search…").as_ref(), &self.filter)
                     .on_input(Message::LayerManagerFilterChanged)
                     .size(FONT_SZ)
                     .padding([3, 6])
@@ -368,8 +370,8 @@ impl LayerPanel {
         let sc = self.sort_col;
         let sa = self.sort_asc;
         let mut header_row = row![
-            text("Status").size(10).style(muted_style).width(50),
-            sortable_header("Name", LayerSortCol::Name, Length::Fixed(name_col_w), sc, sa),
+            text(t!("Status")).size(10).style(muted_style).width(50),
+            sortable_header(t!("Name"), LayerSortCol::Name, Length::Fixed(name_col_w), sc, sa),
             // Draggable divider: adjusts the Name column width (#359).
             iced::widget::mouse_area(
                 container(iced::widget::Space::new().width(2).height(14)).style(
@@ -383,14 +385,14 @@ impl LayerPanel {
             )
             .on_press(Message::LayerNameColGrab)
             .interaction(iced::mouse::Interaction::ResizingHorizontally),
-            sortable_header("On", LayerSortCol::On, Length::Fixed(COL_ICON), sc, sa),
-            sortable_header("Freeze", LayerSortCol::Freeze, Length::Fixed(COL_ICON), sc, sa),
-            sortable_header("Lock", LayerSortCol::Lock, Length::Fixed(COL_ICON), sc, sa),
-            sortable_header("Color", LayerSortCol::Color, Length::Fixed(COL_COLOR), sc, sa),
-            sortable_header("Linetype", LayerSortCol::Linetype, Length::Fixed(COL_LT), sc, sa),
-            sortable_header("Lineweight", LayerSortCol::Lineweight, Length::Fixed(COL_LW), sc, sa),
+            sortable_header(t!("On"), LayerSortCol::On, Length::Fixed(COL_ICON), sc, sa),
+            sortable_header(t!("Freeze"), LayerSortCol::Freeze, Length::Fixed(COL_ICON), sc, sa),
+            sortable_header(t!("Lock"), LayerSortCol::Lock, Length::Fixed(COL_ICON), sc, sa),
+            sortable_header(t!("Color"), LayerSortCol::Color, Length::Fixed(COL_COLOR), sc, sa),
+            sortable_header(t!("Linetype"), LayerSortCol::Linetype, Length::Fixed(COL_LT), sc, sa),
+            sortable_header(t!("Lineweight"), LayerSortCol::Lineweight, Length::Fixed(COL_LW), sc, sa),
             sortable_header(
-                "Transparency",
+                t!("Transparency"),
                 LayerSortCol::Transparency,
                 Length::Fixed(COL_TRANS),
                 sc,
@@ -535,7 +537,7 @@ fn color_sort_key(c: AcadColor) -> u32 {
 /// A clickable column header that sorts the table by `col`. Shows an up/down
 /// SVG arrow when it is the active sort column (#133).
 fn sortable_header<'a>(
-    label: &'a str,
+    label: Cow<'static, str>,
     col: LayerSortCol,
     width: Length,
     active: Option<LayerSortCol>,
@@ -566,7 +568,7 @@ fn sortable_header<'a>(
 
 // ── Toolbar buttons ───────────────────────────────────────────────────────
 
-fn toolbar_btn<'a>(icon: &'static [u8], label: &'a str, msg: Message) -> Element<'a, Message> {
+fn toolbar_btn<'a>(icon: &'static [u8], label: Cow<'static, str>, msg: Message) -> Element<'a, Message> {
     button(
         row![
             crate::ui::icons::themed(icon, 12.0),
@@ -601,7 +603,7 @@ fn toolbar_btn<'a>(icon: &'static [u8], label: &'a str, msg: Message) -> Element
 
 fn toolbar_btn_cond<'a>(
     icon: &'static [u8],
-    label: &'a str,
+    label: Cow<'static, str>,
     msg: Message,
     enabled: bool,
 ) -> Element<'a, Message> {
@@ -791,7 +793,7 @@ fn layer_row<'a>(
     let lt_cell: Element<'_, Message> = if let Some(state) = lt_combo {
         combo_box(
             state,
-            "linetype",
+            t!("linetype").as_ref(),
             Some(&cur_lt_item),
             |item: LinetypeItem| Message::LayerLinetypeSet(item.name),
         )
@@ -816,7 +818,7 @@ fn layer_row<'a>(
     // Lineweight cell
     let cur_lw_item = LwItem(layer.lineweight);
     let lw_cell: Element<'_, Message> = if let Some(state) = lw_combo_state {
-        combo_box(state, "lineweight", Some(&cur_lw_item), |item: LwItem| {
+        combo_box(state, t!("lineweight").as_ref(), Some(&cur_lw_item), |item: LwItem| {
             Message::LayerLineweightSet(item.0)
         })
         .size(FONT_SZ)

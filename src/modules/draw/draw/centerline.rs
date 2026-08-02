@@ -17,6 +17,7 @@
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle, Line};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -216,9 +217,9 @@ impl CadCommand for CenterLineCommand {
 
     fn prompt(&self) -> String {
         if self.first.is_none() {
-            "CENTERLINE  Select first line:".to_string()
+            t!("CENTERLINE  Select first line:").into_owned()
         } else {
-            "CENTERLINE  Select second line:".to_string()
+            t!("CENTERLINE  Select second line:").into_owned()
         }
     }
 

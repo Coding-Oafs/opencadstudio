@@ -1,4 +1,5 @@
 use acadrust::entities::{LwPolyline, LwVertex};
+use crate::t;
 use truck_modeling::{builder, Edge, Point3, Wire};
 
 use crate::command::EntityTransform;
@@ -616,24 +617,24 @@ fn properties(pline: &LwPolyline) -> Vec<PropSection> {
     };
     vec![
         PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                stepper("Current Vertex", "current_vertex", vertex_label),
-                edit("Vertex X", "vertex_x", vx),
-                edit("Vertex Y", "vertex_y", vy),
-                edit("Start segment width", "start_width", start_w),
-                edit("End segment width", "end_width", end_w),
-                edit("Global width", "global_width", pline.constant_width),
-                edit("Elevation", "elevation", pline.elevation),
-                ro("Area", "area", format!("{:.4}", mp.area)),
-                ro("Length", "length", format!("{:.4}", mp.perimeter)),
+                stepper(t!("Current Vertex").as_ref(), "current_vertex", vertex_label),
+                edit(t!("Vertex X").as_ref(), "vertex_x", vx),
+                edit(t!("Vertex Y").as_ref(), "vertex_y", vy),
+                edit(t!("Start segment width").as_ref(), "start_width", start_w),
+                edit(t!("End segment width").as_ref(), "end_width", end_w),
+                edit(t!("Global width").as_ref(), "global_width", pline.constant_width),
+                edit(t!("Elevation").as_ref(), "elevation", pline.elevation),
+                ro(t!("Area").as_ref(), "area", format!("{:.4}", mp.area)),
+                ro(t!("Length").as_ref(), "length", format!("{:.4}", mp.perimeter)),
             ],
         },
         PropSection {
-            title: "Misc".into(),
+            title: t!("Misc").into_owned(),
             props: vec![
                 Property {
-                    label: "Closed".into(),
+                    label: t!("Closed").into_owned(),
                     field: "closed",
                     value: PropValue::BoolToggle {
                         field: "closed",
@@ -641,7 +642,7 @@ fn properties(pline: &LwPolyline) -> Vec<PropSection> {
                     },
                 },
                 Property {
-                    label: "Linetype generation".into(),
+                    label: t!("Linetype generation").into_owned(),
                     field: "plinegen",
                     value: PropValue::BoolToggle {
                         field: "plinegen",

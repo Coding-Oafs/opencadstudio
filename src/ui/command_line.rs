@@ -4,6 +4,7 @@ use iced::time::Instant;
 
 use crate::app::Message;
 use crate::command::CmdOption;
+use crate::t;
 use iced::widget::{
     button, column, container, opaque, row, rule, text, text_editor, text_input, tooltip, Space,
 };
@@ -194,20 +195,20 @@ impl CommandLine {
     }
 
     pub fn push_command(&mut self, cmd: &str) {
-        self.push(EntryKind::Command, format!("Command: {cmd}"));
+        self.push(EntryKind::Command, format!("{} {cmd}", t!("Command:")));
     }
     pub fn push_output(&mut self, msg: &str) {
         self.push(EntryKind::Output, msg.to_string());
     }
     pub fn push_error(&mut self, msg: &str) {
-        self.push(EntryKind::Error, format!("*Invalid*  {msg}"));
+        self.push(EntryKind::Error, format!("*{}*  {msg}", t!("Invalid")));
     }
     /// Append an error unless it is already the latest history line. Repeated
     /// retry failures should refresh the concise message, not flood history
     /// with identical copies (#498).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn push_error_once(&mut self, msg: &str) {
-        let text = format!("*Invalid*  {msg}");
+        let text = format!("*{}*  {msg}", t!("Invalid"));
         if let Some(last) = self
             .history
             .last_mut()
@@ -579,7 +580,7 @@ impl CommandLine {
             let copy_btn = button(
                 row![
                     crate::ui::icons::themed_success(crate::ui::icons::COPY, 11.0),
-                    text("Copy").size(11),
+                    text(t!("Copy")).size(11),
                 ]
                 .spacing(4)
                 .align_y(iced::Center),
@@ -590,7 +591,7 @@ impl CommandLine {
             let clear_btn = button(
                 row![
                     crate::ui::icons::themed_warning(crate::ui::icons::TRASH, 11.0),
-                    text("Clear").size(11),
+                    text(t!("Clear")).size(11),
                 ]
                 .spacing(4)
                 .align_y(iced::Center),
@@ -814,8 +815,8 @@ mod tests {
     fn issue_498_repeated_save_error_is_not_duplicated() {
         let mut line = CommandLine::new();
         let initial_len = line.history.len();
-        line.push_error_once("Unable to save: file is in use.");
-        line.push_error_once("Unable to save: file is in use.");
+        line.push_error_once(t!("Unable to save: file is in use.").as_ref());
+        line.push_error_once(t!("Unable to save: file is in use.").as_ref());
         assert_eq!(line.history.len(), initial_len + 1);
     }
 }

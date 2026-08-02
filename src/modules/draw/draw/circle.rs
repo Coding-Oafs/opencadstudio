@@ -10,6 +10,7 @@
 
 use acadrust::types::Vector3;
 use acadrust::{Circle, EntityType};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, DynField, TangentObject};
 use crate::modules::draw::defaults;
@@ -135,11 +136,19 @@ impl CadCommand for CircleCommand {
     }
     fn prompt(&self) -> String {
         match &self.step {
-            StepCR::Center => "CIRCLE  Specify center point:".into(),
-            StepCR::Radius(c) => format!(
-                "CIRCLE  Specify radius or type value  <{:.4}>  [center ({:.3},{:.3})]:",
-                self.default_r, c.x, c.y
-            ),
+            StepCR::Center => t!("CIRCLE  Specify center point:").into_owned(),
+            StepCR::Radius(c) => {
+                let r = format!("{:.4}", self.default_r);
+                let cx = format!("{:.3}", c.x);
+                let cy = format!("{:.3}", c.y);
+                t!(
+                    "CIRCLE  Specify radius or type value  <%{r}>  [center (%{cx},%{cy})]:",
+                    r = r,
+                    cx = cx,
+                    cy = cy
+                )
+                .into_owned()
+            }
         }
     }
 
@@ -151,7 +160,7 @@ impl CadCommand for CircleCommand {
                 CmdOption::new("2P", "2P"),
                 CmdOption::new("Ttr", "TTR"),
                 CmdOption::new("Ttt", "TTT"),
-                CmdOption::new("Diameter", "D"),
+                CmdOption::new(t!("Diameter").as_ref(), "D"),
             ],
             StepCR::Radius(_) => vec![],
         }
@@ -259,11 +268,12 @@ impl CadCommand for CircleCDCommand {
     }
     fn prompt(&self) -> String {
         match &self.step {
-            StepCR::Center => "CIRCLE CD  Specify center point:".into(),
-            StepCR::Radius(c) => format!(
+            StepCR::Center => t!("CIRCLE CD  Specify center point:").into_owned(),
+            StepCR::Radius(c) => crate::tf!(
                 "CIRCLE CD  Specify diameter or type value  <{:.4}>  [center ({:.3},{:.3})]:",
                 self.default_d, c.x, c.y
-            ),
+            )
+            .into_owned(),
         }
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
@@ -343,9 +353,9 @@ impl CadCommand for Circle2PCommand {
     }
     fn prompt(&self) -> String {
         if self.p1.is_none() {
-            "CIRCLE 2P  Specify first end of diameter:".into()
+            crate::t!("CIRCLE 2P  Specify first end of diameter:").into_owned()
         } else {
-            "CIRCLE 2P  Specify second end of diameter:".into()
+            crate::t!("CIRCLE 2P  Specify second end of diameter:").into_owned()
         }
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
@@ -393,9 +403,9 @@ impl CadCommand for Circle3PCommand {
     }
     fn prompt(&self) -> String {
         match self.pts.len() {
-            0 => "CIRCLE 3P  Specify first point:".into(),
-            1 => "CIRCLE 3P  Specify second point:".into(),
-            _ => "CIRCLE 3P  Specify third point:".into(),
+            0 => crate::t!("CIRCLE 3P  Specify first point:").into_owned(),
+            1 => crate::t!("CIRCLE 3P  Specify second point:").into_owned(),
+            _ => crate::t!("CIRCLE 3P  Specify third point:").into_owned(),
         }
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
@@ -897,9 +907,9 @@ impl CadCommand for CircleTTRCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            StepTTR::First => "CIRCLE TTR  Select first tangent object:".into(),
-            StepTTR::Second { .. } => "CIRCLE TTR  Select second tangent object:".into(),
-            StepTTR::Radius { .. } => "CIRCLE TTR  Specify radius:".into(),
+            StepTTR::First => crate::t!("CIRCLE TTR  Select first tangent object:").into_owned(),
+            StepTTR::Second { .. } => crate::t!("CIRCLE TTR  Select second tangent object:").into_owned(),
+            StepTTR::Radius { .. } => crate::t!("CIRCLE TTR  Specify radius:").into_owned(),
         }
     }
 
@@ -992,9 +1002,9 @@ impl CadCommand for CircleTTTCommand {
 
     fn prompt(&self) -> String {
         match self.objs.len() {
-            0 => "CIRCLE TTT  Select first tangent object:".into(),
-            1 => "CIRCLE TTT  Select second tangent object:".into(),
-            _ => "CIRCLE TTT  Select third tangent object:".into(),
+            0 => crate::t!("CIRCLE TTT  Select first tangent object:").into_owned(),
+            1 => crate::t!("CIRCLE TTT  Select second tangent object:").into_owned(),
+            _ => crate::t!("CIRCLE TTT  Select third tangent object:").into_owned(),
         }
     }
 

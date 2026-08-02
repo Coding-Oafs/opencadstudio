@@ -52,8 +52,8 @@ impl CadCommand for SplineditCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::SelectSpline => "SPLINEDIT  Select spline:".to_string(),
-            Step::SubCommand { .. } => "SPLINEDIT  [CLOSE/OPEN/REVERSE/EXIT]:".to_string(),
+            Step::SelectSpline => crate::t!("SPLINEDIT  Select spline:").into_owned(),
+            Step::SubCommand { .. } => crate::t!("SPLINEDIT  [CLOSE/OPEN/REVERSE/EXIT]:").into_owned(),
         }
     }
 

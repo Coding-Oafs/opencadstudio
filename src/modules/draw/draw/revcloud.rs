@@ -8,6 +8,7 @@ use acadrust::entities::LwPolyline;
 use acadrust::types::Vector2;
 use acadrust::{entities::LwVertex, EntityType};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -47,15 +48,17 @@ impl CadCommand for RevCloudCommand {
 
     fn prompt(&self) -> String {
         if self.points.is_empty() {
-            format!(
-                "REVCLOUD  Specify start point (arc length = {:.2}):",
-                self.arc_length
+            t!(
+                "REVCLOUD  Specify start point (arc length = %{arc_length}):",
+                arc_length = format!("{:.2}", self.arc_length)
             )
+            .into_owned()
         } else {
-            format!(
-                "REVCLOUD  Specify next point ({} pts, Enter to close):",
-                self.points.len()
+            t!(
+                "REVCLOUD  Specify next point (%{count} pts, Enter to close):",
+                count = self.points.len()
             )
+            .into_owned()
         }
     }
 

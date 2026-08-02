@@ -11,6 +11,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, DynField, EntityTransform};
 use crate::modules::draw::defaults;
@@ -71,29 +72,32 @@ impl CadCommand for RotateCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::Center => format!(
-                "ROTATE  Specify rotation center  [{} objects]:",
-                self.handles.len()
-            ),
-            Step::Angle { .. } => format!(
-                "ROTATE  Specify rotation angle  <{:.4}>:",
-                self.default_angle
-            ),
-            Step::RefFirst { .. } => {
-                "ROTATE  Specify first reference point or type reference angle:".into()
+            Step::Center => t!(
+                "ROTATE  Specify rotation center  [%{count} objects]:",
+                count = self.handles.len()
+            )
+            .into_owned(),
+            Step::Angle { .. } => {
+                let a = format!("{:.4}", self.default_angle);
+                t!("ROTATE  Specify rotation angle  <%{a}>:", a = a).into_owned()
             }
-            Step::RefSecond { .. } => "ROTATE  Specify second reference point:".into(),
-            Step::RefNew { ref_angle, .. } => format!(
-                "ROTATE  Specify new absolute angle  [ref={:.1}°]:",
-                ref_angle.to_degrees()
-            ),
+            Step::RefFirst { .. } => {
+                t!("ROTATE  Specify first reference point or type reference angle:").into_owned()
+            }
+            Step::RefSecond { .. } => {
+                t!("ROTATE  Specify second reference point:").into_owned()
+            }
+            Step::RefNew { ref_angle, .. } => {
+                let a = format!("{:.1}°", ref_angle.to_degrees());
+                t!("ROTATE  Specify new absolute angle  [ref=%{a}]:", a = a).into_owned()
+            }
         }
     }
 
     fn options(&self) -> Vec<crate::command::CmdOption> {
         use crate::command::CmdOption;
         match self.step {
-            Step::Angle { .. } => vec![CmdOption::new("Reference", "R")],
+            Step::Angle { .. } => vec![CmdOption::new(t!("Reference").as_ref(), "R")],
             _ => vec![],
         }
     }

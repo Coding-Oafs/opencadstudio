@@ -4,6 +4,7 @@ use acadrust::entities::{LwPolyline, LwVertex, Viewport};
 use acadrust::tables::View;
 use acadrust::types::{Vector2, Vector3};
 use acadrust::{EntityType, Handle};
+use crate::t;
 
 use crate::command::{CadCommand, CmdOption, CmdResult};
 use crate::modules::draw::draw::polyline::{
@@ -267,53 +268,60 @@ impl CadCommand for MviewCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            Step::RectangleFirst => {
-                "MVIEW  Specify corner of viewport or [Polygonal/Object/Fit/Insert view]:".into()
-            }
-            Step::RectangleSecond => "MVIEW  Specify opposite corner:".into(),
+            Step::RectangleFirst => t!(
+                "MVIEW  Specify corner of viewport or [Polygonal/Object/Fit/Insert view]:"
+            )
+            .into_owned(),
+            Step::RectangleSecond => t!("MVIEW  Specify opposite corner:").into_owned(),
             Step::Polygon if self.polygon.is_empty() => {
-                "MVIEW Polygonal  Specify start point:".into()
+                t!("MVIEW Polygonal  Specify start point:").into_owned()
             }
             Step::Polygon => {
                 let mode = match self.polygon_mode {
-                    PolygonMode::Line => "Line",
-                    PolygonMode::Arc => "Arc",
+                    PolygonMode::Line => t!("Line"),
+                    PolygonMode::Arc => t!("Arc"),
                 };
-                format!(
-                    "MVIEW Polygonal [{mode}]  Specify next point or [Arc/Line/Close/Undo] ({} points):",
-                    self.polygon.len()
+                t!(
+                    "MVIEW Polygonal [%{mode}]  Specify next point or [Arc/Line/Close/Undo] (%{count} points):",
+                    mode = mode,
+                    count = self.polygon.len()
                 )
+                .into_owned()
             }
             Step::Object => {
-                "MVIEW Object  Select a circle, full ellipse, or closed polyline:".into()
+                t!("MVIEW Object  Select a circle, full ellipse, or closed polyline:").into_owned()
             }
             Step::ChooseView if self.views.is_empty() => {
-                "MVIEW Insert view  No named views; choose [New]:".into()
+                t!("MVIEW Insert view  No named views; choose [New]:").into_owned()
             }
-            Step::ChooseView => "MVIEW Insert view  Choose a named view or [New]:".into(),
-            Step::DefineNewFirst => "MVIEW New view  Specify first model-space corner:".into(),
-            Step::DefineNewSecond => "MVIEW New view  Specify opposite model-space corner:".into(),
-            Step::PlaceView => "MVIEW Insert view  Specify placement point:".into(),
+            Step::ChooseView => t!("MVIEW Insert view  Choose a named view or [New]:").into_owned(),
+            Step::DefineNewFirst => {
+                t!("MVIEW New view  Specify first model-space corner:").into_owned()
+            }
+            Step::DefineNewSecond => {
+                t!("MVIEW New view  Specify opposite model-space corner:").into_owned()
+            }
+            Step::PlaceView => t!("MVIEW Insert view  Specify placement point:").into_owned(),
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         match self.step {
             Step::RectangleFirst => vec![
-                CmdOption::new("Polygonal", "POLYGONAL"),
-                CmdOption::new("Object", "OBJECT"),
-                CmdOption::new("Fit", "FIT"),
-                CmdOption::new("Insert view", "INSERT"),
+                CmdOption::new(t!("Polygonal").as_ref(), "POLYGONAL"),
+                CmdOption::new(t!("Object").as_ref(), "OBJECT"),
+                CmdOption::new(t!("Fit").as_ref(), "FIT"),
+                CmdOption::new(t!("Insert view").as_ref(), "INSERT"),
             ],
             Step::Polygon if !self.polygon.is_empty() => vec![
-                CmdOption::new("Arc", "ARC"),
-                CmdOption::new("Line", "LINE"),
-                CmdOption::new("Close", "CLOSE"),
-                CmdOption::new("Undo", "UNDO"),
-                CmdOption::enter("Done"),
+                CmdOption::new(t!("Arc").as_ref(), "ARC"),
+                CmdOption::new(t!("Line").as_ref(), "LINE"),
+                CmdOption::new(t!("Close").as_ref(), "CLOSE"),
+                CmdOption::new(t!("Undo").as_ref(), "UNDO"),
+                CmdOption::enter(t!("Done").as_ref()),
             ],
             Step::ChooseView => {
-                let mut options = vec![CmdOption::new("New", "NEW")];
+                let mut options = vec![CmdOption::new(t!("New").as_ref(), "NEW")];
                 options.extend(
                     self.views
                         .iter()

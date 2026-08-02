@@ -2,6 +2,7 @@ use acadrust::entities::{AttributeDefinition, AttributeEntity, Entity, Insert};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::{DVec3, Vec3};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -105,15 +106,16 @@ impl CadCommand for InsertBlockCommand {
                 } else {
                     format!("  [{}]", self.available.join(", "))
                 };
-                format!("INSERT  Enter block name:{hint}")
+                t!("INSERT  Enter block name:%{hint}", hint = hint).into_owned()
             }
             Step::Point { name } => match self.awaiting {
-                Some(AwaitKind::Scale) => "INSERT  Specify scale factor <1>:".to_string(),
-                Some(AwaitKind::Rotation) => "INSERT  Specify rotation angle <0>:".to_string(),
-                None => format!(
-                    "INSERT  Specify insertion point for \"{}\"  [Scale/Rotate]:",
-                    name
-                ),
+                Some(AwaitKind::Scale) => t!("INSERT  Specify scale factor <1>:").into_owned(),
+                Some(AwaitKind::Rotation) => t!("INSERT  Specify rotation angle <0>:").into_owned(),
+                None => t!(
+                    "INSERT  Specify insertion point for \"%{name}\"  [Scale/Rotate]:",
+                    name = name
+                )
+                .into_owned(),
             },
             Step::FillAttr { attdefs, idx, .. } => {
                 if let Some(ad) = attdefs.get(*idx) {
@@ -127,9 +129,14 @@ impl CadCommand for InsertBlockCommand {
                     } else {
                         ad.prompt.as_str()
                     };
-                    format!("INSERT  {prompt_text}{default_hint}:")
+                    t!(
+                        "INSERT  %{prompt}%{hint}:",
+                        prompt = prompt_text,
+                        hint = default_hint
+                    )
+                    .into_owned()
                 } else {
-                    "INSERT  Filling attributes...".into()
+                    t!("INSERT  Filling attributes...").into_owned()
                 }
             }
         }

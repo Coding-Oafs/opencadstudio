@@ -7,6 +7,7 @@
 // the MeshModel vertices to match.
 
 use acadrust::entities::{Body, Region, Solid3D, Surface};
+use crate::t;
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_prop as edit, parse_f64, ro_prop as ro};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable};
@@ -119,46 +120,40 @@ fn acis_sections(
     );
     vec![
         PropSection {
-            title: "Modeler Geometry".into(),
+            title: t!("Modeler Geometry").into_owned(),
             props: vec![
-                ro(
-                    "Format",
+                ro(t!("Format").as_ref(),
                     "acis_format",
                     if acis.is_binary { "SAB" } else { "SAT" },
                 ),
-                ro("Version", "acis_version", format!("{:?}", acis.version)),
-                ro("Data Size", "acis_size", format!("{} bytes", acis.size())),
-                ro("Revision", "acis_revision", revision),
-                ro("Material Bindings", "acis_materials", bindings),
-                ro("Extra Modeler Data", "acis_extra", extra),
-                ro("History", "acis_history", handle_text(history)),
+                ro(t!("Version").as_ref(), "acis_version", format!("{:?}", acis.version)),
+                ro(t!("Data Size").as_ref(), "acis_size", format!("{} bytes", acis.size())),
+                ro(t!("Revision").as_ref(), "acis_revision", revision),
+                ro(t!("Material Bindings").as_ref(), "acis_materials", bindings),
+                ro(t!("Extra Modeler Data").as_ref(), "acis_extra", extra),
+                ro(t!("History").as_ref(), "acis_history", handle_text(history)),
             ],
         },
         PropSection {
-            title: "Modeler Display Data".into(),
+            title: t!("Modeler Display Data").into_owned(),
             props: vec![
-                ro(
-                    "Wireframe Cache",
+                ro(t!("Wireframe Cache").as_ref(),
                     "acis_wireframe",
                     yes_no(acis.wireframe_data_present),
                 ),
-                ro(
-                    "Reference Point",
+                ro(t!("Reference Point").as_ref(),
                     "acis_wireframe_point",
                     yes_no(acis.wireframe_point_present),
                 ),
-                ro(
-                    "Isoline List",
+                ro(t!("Isoline List").as_ref(),
                     "acis_wireframe_isolines",
                     yes_no(acis.wireframe_isoline_present),
                 ),
-                ro(
-                    "Isolines",
+                ro(t!("Isolines").as_ref(),
                     "acis_isolines",
                     acis.wireframe_isolines.to_string(),
                 ),
-                ro(
-                    "Wires",
+                ro(t!("Wires").as_ref(),
                     "acis_wires",
                     format!(
                         "{} (unknown {}, silhouette {}, visible {}, hidden {}, isoline {}; {} points; {} transformed)",
@@ -172,8 +167,7 @@ fn acis_sections(
                         transformed
                     ),
                 ),
-                ro(
-                    "View Silhouettes",
+                ro(t!("View Silhouettes").as_ref(),
                     "acis_silhouettes",
                     format!(
                         "{} views; {} wires",
@@ -194,11 +188,11 @@ fn position_section(prefix: &str, p: &acadrust::types::Vector3) -> PropSection {
         _ => ["s3d_px", "s3d_py", "s3d_pz"],
     };
     PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![
-            edit("Position X", fields[0], p.x),
-            edit("Position Y", fields[1], p.y),
-            edit("Position Z", fields[2], p.z),
+            edit(t!("Position X").as_ref(), fields[0], p.x),
+            edit(t!("Position Y").as_ref(), fields[1], p.y),
+            edit(t!("Position Z").as_ref(), fields[2], p.z),
         ],
     }
 }
@@ -259,7 +253,7 @@ impl PropertyEditable for Solid3D {
             acis_sections(&self.acis_data, &self.wires, &self.silhouettes, self.history_handle);
         sections[0]
             .props
-            .insert(0, ro("UID", "s3d_uid", self.uid.clone()));
+            .insert(0, ro(t!("UID").as_ref(), "s3d_uid", self.uid.clone()));
         sections.push(position_section("s3d", &self.point_of_reference));
         sections
     }
@@ -304,14 +298,14 @@ impl PropertyEditable for Region {
             acis_sections(&self.acis_data, &self.wires, &self.silhouettes, self.history_handle);
         sections[0]
             .props
-            .insert(0, ro("UID", "rgn_uid", self.uid.clone()));
+            .insert(0, ro(t!("UID").as_ref(), "rgn_uid", self.uid.clone()));
         let mut geometry = position_section("rgn", &self.point_of_reference);
         geometry
             .props
-            .push(ro("Area", "rgn_area", format!("{area:.4}")));
+            .push(ro(t!("Area").as_ref(), "rgn_area", format!("{area:.4}")));
         geometry
             .props
-            .push(ro("Perimeter", "rgn_perimeter", format!("{perimeter:.4}")));
+            .push(ro(t!("Perimeter").as_ref(), "rgn_perimeter", format!("{perimeter:.4}")));
         sections.push(geometry);
         sections
     }
@@ -355,7 +349,7 @@ impl PropertyEditable for Body {
             acis_sections(&self.acis_data, &self.wires, &self.silhouettes, self.history_handle);
         sections[0]
             .props
-            .insert(0, ro("UID", "bdy_uid", self.uid.clone()));
+            .insert(0, ro(t!("UID").as_ref(), "bdy_uid", self.uid.clone()));
         sections.push(position_section("bdy", &self.point_of_reference));
         sections
     }
@@ -433,19 +427,16 @@ fn sweep_options_text(options: &acadrust::entities::SurfaceSweepOptions) -> Stri
 fn surface_construction_section(surface: &Surface) -> PropSection {
     use acadrust::entities::SurfaceData;
     let mut props = vec![
-        ro("Kind", "srf_kind", format!("{:?}", surface.kind)),
-        ro(
-            "Modeler Format",
+        ro(t!("Kind").as_ref(), "srf_kind", format!("{:?}", surface.kind)),
+        ro(t!("Modeler Format").as_ref(),
             "srf_modeler_version",
             surface.modeler_format_version.to_string(),
         ),
-        edit(
-            "U Isolines",
+        edit(t!("U Isolines").as_ref(),
             "srf_u_isolines",
             surface.u_isolines as f64,
         ),
-        edit(
-            "V Isolines",
+        edit(t!("V Isolines").as_ref(),
             "srf_v_isolines",
             surface.v_isolines as f64,
         ),
@@ -453,8 +444,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
     match &surface.surface_data {
         SurfaceData::Generic => {}
         SurfaceData::Plane { class_version } => {
-            props.push(ro(
-                "Class Version",
+            props.push(ro(t!("Class Version").as_ref(),
                 "srf_class_version",
                 class_version.to_string(),
             ));
@@ -466,25 +456,21 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
             sweep_transform,
         } => {
             props.extend([
-                ro(
-                    "Sweep Entity",
+                ro(t!("Sweep Entity").as_ref(),
                     "srf_sweep_entity",
                     embedded_name(sweep_entity.as_ref()),
                 ),
-                ro("Sweep Vector", "srf_sweep_vector", vector_text(sweep_vector)),
-                ro("Sweep Options", "srf_sweep_options", sweep_options_text(options)),
-                ro(
-                    "Sweep Transform",
+                ro(t!("Sweep Vector").as_ref(), "srf_sweep_vector", vector_text(sweep_vector)),
+                ro(t!("Sweep Options").as_ref(), "srf_sweep_options", sweep_options_text(options)),
+                ro(t!("Sweep Transform").as_ref(),
                     "srf_sweep_transform",
                     matrix_text(sweep_transform),
                 ),
-                ro(
-                    "Sweep Entity Transform",
+                ro(t!("Sweep Entity Transform").as_ref(),
                     "srf_sweep_entity_transform",
                     matrix_text(&options.sweep_entity_transform),
                 ),
-                ro(
-                    "Path Entity Transform",
+                ro(t!("Path Entity Transform").as_ref(),
                     "srf_path_entity_transform",
                     matrix_text(&options.path_entity_transform),
                 ),
@@ -513,8 +499,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
             path_curve,
         } => {
             props.extend([
-                ro(
-                    "Embedded Curves",
+                ro(t!("Embedded Curves").as_ref(),
                     "srf_loft_embedded",
                     format!(
                         "{} cross sections; {} guides; path {}",
@@ -523,8 +508,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
                         embedded_name(path_entity.as_ref())
                     ),
                 ),
-                ro(
-                    "Database Curves",
+                ro(t!("Database Curves").as_ref(),
                     "srf_loft_handles",
                     format!(
                         "{} cross sections; {} guides; path {}",
@@ -533,8 +517,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
                         handle_text(*path_curve)
                     ),
                 ),
-                ro(
-                    "Draft",
+                ro(t!("Draft").as_ref(),
                     "srf_loft_draft",
                     format!(
                         "type {}; angle {:.6}→{:.6}; magnitude {:.6}→{:.6}",
@@ -545,8 +528,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
                         end_draft_magnitude
                     ),
                 ),
-                ro(
-                    "Loft Flags",
+                ro(t!("Loft Flags").as_ref(),
                     "srf_loft_flags",
                     format!(
                         "arc-length {}; no-twist {}; align {}; simple {}; closed {}; solid {}; ruled {}; virtual-guide {}",
@@ -560,8 +542,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
                         yes_no(*virtual_guide)
                     ),
                 ),
-                ro(
-                    "Loft Transform",
+                ro(t!("Loft Transform").as_ref(),
                     "srf_loft_transform",
                     matrix_text(loft_transform),
                 ),
@@ -584,33 +565,28 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
             close_to_axis,
         } => {
             props.extend([
-                ro(
-                    "Revolve Entity",
+                ro(t!("Revolve Entity").as_ref(),
                     "srf_revolve_entity",
                     embedded_name(revolve_entity.as_ref()),
                 ),
-                ro(
-                    "Class / Entity",
+                ro(t!("Class / Entity").as_ref(),
                     "srf_revolve_ids",
                     format!("{class_version} / {entity_id}"),
                 ),
-                ro("Axis Point", "srf_axis_point", vector_text(axis_point)),
-                ro("Axis Vector", "srf_axis_vector", vector_text(axis_vector)),
-                ro(
-                    "Angles",
+                ro(t!("Axis Point").as_ref(), "srf_axis_point", vector_text(axis_point)),
+                ro(t!("Axis Vector").as_ref(), "srf_axis_vector", vector_text(axis_vector)),
+                ro(t!("Angles").as_ref(),
                     "srf_revolve_angles",
                     format!(
                         "start {:.6}; revolve {:.6}; draft {:.6}; twist {:.6}",
                         start_angle, revolve_angle, draft_angle, twist_angle
                     ),
                 ),
-                ro(
-                    "Draft Distances",
+                ro(t!("Draft Distances").as_ref(),
                     "srf_revolve_draft_distances",
                     format!("{draft_start_distance:.6}→{draft_end_distance:.6}"),
                 ),
-                ro(
-                    "Revolve Flags",
+                ro(t!("Revolve Flags").as_ref(),
                     "srf_revolve_flags",
                     format!(
                         "solid {}; close-to-axis {}",
@@ -618,8 +594,7 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
                         yes_no(*close_to_axis)
                     ),
                 ),
-                ro(
-                    "Entity Transform",
+                ro(t!("Entity Transform").as_ref(),
                     "srf_revolve_transform",
                     matrix_text(entity_transform),
                 ),
@@ -634,13 +609,11 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
             options,
         } => {
             props.extend([
-                ro(
-                    "Class Version",
+                ro(t!("Class Version").as_ref(),
                     "srf_class_version",
                     class_version.to_string(),
                 ),
-                ro(
-                    "Sweep / Path",
+                ro(t!("Sweep / Path").as_ref(),
                     "srf_swept_entities",
                     format!(
                         "{} / {}",
@@ -648,24 +621,20 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
                         embedded_name(path_entity.as_ref())
                     ),
                 ),
-                ro("Sweep Options", "srf_sweep_options", sweep_options_text(options)),
-                ro(
-                    "Sweep Transform",
+                ro(t!("Sweep Options").as_ref(), "srf_sweep_options", sweep_options_text(options)),
+                ro(t!("Sweep Transform").as_ref(),
                     "srf_sweep_transform",
                     matrix_text(sweep_transform),
                 ),
-                ro(
-                    "Path Transform",
+                ro(t!("Path Transform").as_ref(),
                     "srf_path_transform",
                     matrix_text(path_transform),
                 ),
-                ro(
-                    "Sweep Entity Transform",
+                ro(t!("Sweep Entity Transform").as_ref(),
                     "srf_sweep_entity_transform",
                     matrix_text(&options.sweep_entity_transform),
                 ),
-                ro(
-                    "Path Entity Transform",
+                ro(t!("Path Entity Transform").as_ref(),
                     "srf_path_entity_transform",
                     matrix_text(&options.path_entity_transform),
                 ),
@@ -680,25 +649,23 @@ fn surface_construction_section(surface: &Surface) -> PropSection {
             v_vector2,
         } => {
             props.extend([
-                ro(
-                    "NURB Version",
+                ro(t!("NURB Version").as_ref(),
                     "srf_nurb_version",
                     short_170.to_string(),
                 ),
-                ro(
-                    "CV Hull",
+                ro(t!("CV Hull").as_ref(),
                     "srf_nurb_cv_hull",
                     yes_no(*cv_hull_display),
                 ),
-                ro("U Vector 1", "srf_nurb_u1", vector_text(u_vector1)),
-                ro("V Vector 1", "srf_nurb_v1", vector_text(v_vector1)),
-                ro("U Vector 2", "srf_nurb_u2", vector_text(u_vector2)),
-                ro("V Vector 2", "srf_nurb_v2", vector_text(v_vector2)),
+                ro(t!("U Vector 1").as_ref(), "srf_nurb_u1", vector_text(u_vector1)),
+                ro(t!("V Vector 1").as_ref(), "srf_nurb_v1", vector_text(v_vector1)),
+                ro(t!("U Vector 2").as_ref(), "srf_nurb_u2", vector_text(u_vector2)),
+                ro(t!("V Vector 2").as_ref(), "srf_nurb_v2", vector_text(v_vector2)),
             ]);
         }
     }
     PropSection {
-        title: "Surface Construction".into(),
+        title: t!("Surface Construction").into_owned(),
         props,
     }
 }

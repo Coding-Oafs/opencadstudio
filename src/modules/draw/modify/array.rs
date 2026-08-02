@@ -15,6 +15,7 @@
 
 use acadrust::Handle;
 use glam::{DVec3, Mat4};
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, EntityTransform};
 use crate::modules::draw::defaults;
@@ -114,19 +115,24 @@ impl CadCommand for ArrayRectCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            RectStep::Rows => format!("ARRAYRECT  Enter row count <{}>:", self.default_rows),
-            RectStep::Cols { rows } => format!(
+            RectStep::Rows => {
+                crate::tf!("ARRAYRECT  Enter row count <{}>:", self.default_rows).into_owned()
+            }
+            RectStep::Cols { rows } => crate::tf!(
                 "ARRAYRECT  Enter column count <{}>  [{rows} rows]:",
                 self.default_cols
-            ),
-            RectStep::RowSp { rows, cols } => format!(
+            )
+            .into_owned(),
+            RectStep::RowSp { rows, cols } => crate::tf!(
                 "ARRAYRECT  Row spacing <{:.0}>  [{rows}×{cols}]:",
                 self.default_row_sp
-            ),
-            RectStep::ColSp { rows, cols, row_sp } => format!(
+            )
+            .into_owned(),
+            RectStep::ColSp { rows, cols, row_sp } => crate::tf!(
                 "ARRAYRECT  Column spacing <{:.0}>  [{rows}×{cols}, row={row_sp:.0}]:",
                 self.default_col_sp
-            ),
+            )
+            .into_owned(),
         }
     }
 
@@ -277,17 +283,19 @@ impl CadCommand for ArrayPolarCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            PolarStep::Center => format!(
+            PolarStep::Center => crate::tf!(
                 "ARRAYPOLAR  Specify center point  [{} objects]:",
                 self.handles.len()
-            ),
+            )
+            .into_owned(),
             PolarStep::Count { .. } => {
-                format!("ARRAYPOLAR  Enter item count <{}>:", self.default_count)
+                crate::tf!("ARRAYPOLAR  Enter item count <{}>:", self.default_count).into_owned()
             }
-            PolarStep::Angle { count, .. } => format!(
+            PolarStep::Angle { count, .. } => crate::tf!(
                 "ARRAYPOLAR  Enter total angle in degrees <{:.0}>  [{count} items]:",
                 self.default_angle
-            ),
+            )
+            .into_owned(),
         }
     }
 
@@ -699,12 +707,13 @@ impl CadCommand for ArrayPathCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            PathStep::SelectPath => format!(
+            PathStep::SelectPath => crate::tf!(
                 "ARRAYPATH  Select path entity  [{} objects]:",
                 self.handles.len()
-            ),
+            )
+            .into_owned(),
             PathStep::Count { .. } => {
-                format!("ARRAYPATH  Enter item count <{}>:", self.default_count)
+                crate::tf!("ARRAYPATH  Enter item count <{}>:", self.default_count).into_owned()
             }
         }
     }
@@ -911,29 +920,58 @@ impl CadCommand for Array3DCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            Array3DStep::Rows => "ARRAY3D  Enter row count:".into(),
-            Array3DStep::Cols { rows } => format!("ARRAY3D  Enter column count  [{rows} rows]:"),
-            Array3DStep::Levels { rows, cols } => {
-                format!("ARRAY3D  Enter level count  [{rows}×{cols}]:")
+            Array3DStep::Rows => t!("ARRAY3D  Enter row count:").into_owned(),
+            Array3DStep::Cols { rows } => {
+                t!("ARRAY3D  Enter column count  [%{rows} rows]:", rows = rows).into_owned()
             }
-            Array3DStep::RowSp { rows, cols, levels } => {
-                format!("ARRAY3D  Row spacing  [{rows}×{cols}×{levels}]:")
-            }
+            Array3DStep::Levels { rows, cols } => t!(
+                "ARRAY3D  Enter level count  [%{rows}×%{cols}]:",
+                rows = rows,
+                cols = cols
+            )
+            .into_owned(),
+            Array3DStep::RowSp { rows, cols, levels } => t!(
+                "ARRAY3D  Row spacing  [%{rows}×%{cols}×%{levels}]:",
+                rows = rows,
+                cols = cols,
+                levels = levels
+            )
+            .into_owned(),
             Array3DStep::ColSp {
                 rows,
                 cols,
                 levels,
                 row_sp,
-            } => format!("ARRAY3D  Column spacing  [{rows}×{cols}×{levels}, row={row_sp:.0}]:"),
+            } => {
+                let rs = format!("{:.0}", row_sp);
+                t!(
+                    "ARRAY3D  Column spacing  [%{rows}×%{cols}×%{levels}, row=%{rs}]:",
+                    rows = rows,
+                    cols = cols,
+                    levels = levels,
+                    rs = rs
+                )
+                .into_owned()
+            }
             Array3DStep::LvlSp {
                 rows,
                 cols,
                 levels,
                 row_sp,
                 col_sp,
-            } => format!(
-                "ARRAY3D  Level spacing  [{rows}×{cols}×{levels}, r={row_sp:.0} c={col_sp:.0}]:"
-            ),
+            } => {
+                let rs = format!("{:.0}", row_sp);
+                let cs = format!("{:.0}", col_sp);
+                t!(
+                    "ARRAY3D  Level spacing  [%{rows}×%{cols}×%{levels}, r=%{rs} c=%{cs}]:",
+                    rows = rows,
+                    cols = cols,
+                    levels = levels,
+                    rs = rs,
+                    cs = cs
+                )
+                .into_owned()
+            }
         }
     }
 

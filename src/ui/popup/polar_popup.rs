@@ -2,6 +2,7 @@
 
 use iced::widget::{button, container, row, text, text_input};
 use iced::{Element, Fill, Length};
+use crate::t;
 
 use crate::app::Message;
 use crate::ui::statusbar::status_menu::Entry;
@@ -32,7 +33,7 @@ pub fn menu_entries<'a>(
         .collect();
 
     // Free-entry custom angle: type a value and press Enter to apply.
-    let custom_field = text_input("Custom…", custom)
+    let custom_field = text_input(t!("Custom…").as_ref(), custom)
         .on_input(Message::PolarCustomInput)
         .on_submit(Message::SubmitPolarCustom)
         .size(11)

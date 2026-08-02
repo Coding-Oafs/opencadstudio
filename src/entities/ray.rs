@@ -1,4 +1,5 @@
 use acadrust::entities::{Ray, XLine};
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_prop as edit, square_grip};
@@ -91,14 +92,14 @@ impl Grippable for Ray {
 impl PropertyEditable for Ray {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                edit("Start X", "ray_bx", self.base_point.x),
-                edit("Start Y", "ray_by", self.base_point.y),
-                edit("Start Z", "ray_bz", self.base_point.z),
-                edit("Direction vector X", "ray_dx", self.direction.x),
-                edit("Direction vector Y", "ray_dy", self.direction.y),
-                edit("Direction vector Z", "ray_dz", self.direction.z),
+                edit(t!("Start X").as_ref(), "ray_bx", self.base_point.x),
+                edit(t!("Start Y").as_ref(), "ray_by", self.base_point.y),
+                edit(t!("Start Z").as_ref(), "ray_bz", self.base_point.z),
+                edit(t!("Direction vector X").as_ref(), "ray_dx", self.direction.x),
+                edit(t!("Direction vector Y").as_ref(), "ray_dy", self.direction.y),
+                edit(t!("Direction vector Z").as_ref(), "ray_dz", self.direction.z),
             ],
         }]
     }
@@ -229,14 +230,14 @@ impl Grippable for XLine {
 impl PropertyEditable for XLine {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                edit("Base X", "xl_bx", self.base_point.x),
-                edit("Base Y", "xl_by", self.base_point.y),
-                edit("Base Z", "xl_bz", self.base_point.z),
-                edit("Direction vector X", "xl_dx", self.direction.x),
-                edit("Direction vector Y", "xl_dy", self.direction.y),
-                edit("Direction vector Z", "xl_dz", self.direction.z),
+                edit(t!("Base X").as_ref(), "xl_bx", self.base_point.x),
+                edit(t!("Base Y").as_ref(), "xl_by", self.base_point.y),
+                edit(t!("Base Z").as_ref(), "xl_bz", self.base_point.z),
+                edit(t!("Direction vector X").as_ref(), "xl_dx", self.direction.x),
+                edit(t!("Direction vector Y").as_ref(), "xl_dy", self.direction.y),
+                edit(t!("Direction vector Z").as_ref(), "xl_dz", self.direction.z),
             ],
         }]
     }

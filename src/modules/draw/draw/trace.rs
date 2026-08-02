@@ -14,6 +14,7 @@
 use acadrust::entities::{LwPolyline, LwVertex};
 use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -88,12 +89,13 @@ impl CadCommand for TraceCommand {
 
     fn prompt(&self) -> String {
         if !self.width_set {
-            return format!("TRACE  Specify trace width <{:.4}>:", self.width);
+            let w = format!("{:.4}", self.width);
+            return t!("TRACE  Specify trace width <%{w}>:", w = w).into_owned();
         }
         match self.points.len() {
-            0 => "TRACE  Specify start point:".to_string(),
-            1 => "TRACE  Specify next point  [Undo]:".to_string(),
-            _ => "TRACE  Specify next point  [Undo]:".to_string(),
+            0 => t!("TRACE  Specify start point:").into_owned(),
+            1 => t!("TRACE  Specify next point  [Undo]:").into_owned(),
+            _ => t!("TRACE  Specify next point  [Undo]:").into_owned(),
         }
     }
 

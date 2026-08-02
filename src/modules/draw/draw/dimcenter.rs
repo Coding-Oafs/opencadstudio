@@ -10,6 +10,7 @@
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle, Line};
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -72,7 +73,7 @@ impl CadCommand for DimCenterCommand {
     }
 
     fn prompt(&self) -> String {
-        "DIMCENTER  Select arc or circle:".to_string()
+        t!("DIMCENTER  Select arc or circle:").into_owned()
     }
 
     fn needs_entity_pick(&self) -> bool {

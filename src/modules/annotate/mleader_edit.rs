@@ -13,6 +13,7 @@ use glam::{DVec3, Vec3};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 // ── MLEADERADD ────────────────────────────────────────────────────────────────
 
@@ -60,12 +61,15 @@ impl CadCommand for MLeaderAddCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            AddStep::PickMLeader => "MLEADERADD  Select a multileader:".into(),
-            AddStep::PickArrowhead { .. } => "MLEADERADD  Specify arrowhead location:".into(),
-            AddStep::CollectPoints { pts, .. } => format!(
-                "MLEADERADD  Specify next leader point ({} pts, Enter to finish):",
-                pts.len()
-            ),
+            AddStep::PickMLeader => t!("MLEADERADD  Select a multileader:").into_owned(),
+            AddStep::PickArrowhead { .. } => {
+                t!("MLEADERADD  Specify arrowhead location:").into_owned()
+            }
+            AddStep::CollectPoints { pts, .. } => t!(
+                "MLEADERADD  Specify next leader point (%{count} pts, Enter to finish):",
+                count = pts.len()
+            )
+            .into_owned(),
         }
     }
 
@@ -192,9 +196,9 @@ impl CadCommand for MLeaderRemoveCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            RemoveStep::PickMLeader => "MLEADERREMOVE  Select a multileader:".into(),
+            RemoveStep::PickMLeader => t!("MLEADERREMOVE  Select a multileader:").into_owned(),
             RemoveStep::PickLeaderToRemove { .. } => {
-                "MLEADERREMOVE  Click near the leader line to remove:".into()
+                t!("MLEADERREMOVE  Click near the leader line to remove:").into_owned()
             }
         }
     }
@@ -300,13 +304,13 @@ impl CadCommand for MLeaderAlignCommand {
     fn prompt(&self) -> String {
         match &self.step {
             AlignStep::Gathering => {
-                "MLEADERALIGN  Select multileaders to align (Enter when done):".into()
+                t!("MLEADERALIGN  Select multileaders to align (Enter when done):").into_owned()
             }
             AlignStep::PickDirection { .. } => {
-                "MLEADERALIGN  Specify direction — pick start point:".into()
+                t!("MLEADERALIGN  Specify direction — pick start point:").into_owned()
             }
             AlignStep::PickEndDir { .. } => {
-                "MLEADERALIGN  Specify end point of alignment direction:".into()
+                t!("MLEADERALIGN  Specify end point of alignment direction:").into_owned()
             }
         }
     }
@@ -405,10 +409,10 @@ impl CadCommand for MLeaderCollectCommand {
     fn prompt(&self) -> String {
         match &self.step {
             CollectStep::Gathering => {
-                "MLEADERCOLLECT  Select multileaders to collect (Enter when done):".into()
+                t!("MLEADERCOLLECT  Select multileaders to collect (Enter when done):").into_owned()
             }
             CollectStep::PickLocation { .. } => {
-                "MLEADERCOLLECT  Specify collected multileader location:".into()
+                t!("MLEADERCOLLECT  Specify collected multileader location:").into_owned()
             }
         }
     }

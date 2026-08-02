@@ -17,6 +17,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -93,20 +94,27 @@ impl CadCommand for StretchCommand {
                 if self.handles.is_empty() {
                     // Implicit mode: the window both selects the objects and
                     // marks which of their points move.
-                    "STRETCH  Specify first corner of crossing window:".into()
+                    t!("STRETCH  Specify first corner of crossing window:").into_owned()
                 } else {
-                    format!(
-                        "STRETCH  Specify first corner of crossing window  [{} objects]:",
-                        self.handles.len()
+                    t!(
+                        "STRETCH  Specify first corner of crossing window  [%{count} objects]:",
+                        count = self.handles.len()
                     )
+                    .into_owned()
                 }
             }
-            Step::WindowCorner2(_) => "STRETCH  Specify opposite corner:".into(),
-            Step::Base { .. } => "STRETCH  Specify base point:".into(),
-            Step::Target { base, .. } => format!(
-                "STRETCH  Specify new point  [base {:.3},{:.3}]:",
-                base.x, base.z
-            ),
+            Step::WindowCorner2(_) => t!("STRETCH  Specify opposite corner:").into_owned(),
+            Step::Base { .. } => t!("STRETCH  Specify base point:").into_owned(),
+            Step::Target { base, .. } => {
+                let bx = format!("{:.3}", base.x);
+                let bz = format!("{:.3}", base.z);
+                t!(
+                    "STRETCH  Specify new point  [base %{bx},%{bz}]:",
+                    bx = bx,
+                    bz = bz
+                )
+                .into_owned()
+            }
         }
     }
 

@@ -6,6 +6,8 @@ use iced::widget::{
     button, canvas, checkbox, column, container, row, scrollable, text, text_input, Space,
 };
 use iced::{mouse, Background, Border, Element, Length, Point, Rectangle, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 /// View-model for the Text Style editor window.
 pub struct TextStyleView<'a> {
@@ -217,7 +219,7 @@ pub fn view_window<'a>(
 
     let font_panel = container(
         column![
-            text("Font File").size(10).style(muted_style),
+            text(t!("Font File")).size(10).style(muted_style),
             container(scrollable(column(font_items).spacing(1)).height(sizing.height))
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
@@ -234,7 +236,7 @@ pub fn view_window<'a>(
                 .width(sizing.width)
                 .height(sizing.height)
                 .padding(2),
-            text_input("font file…", font_buf)
+            text_input(t!("font file…").as_ref(), font_buf)
                 .on_input(|v| Message::TextStyleEdit {
                     field: "font",
                     value: v
@@ -252,14 +254,14 @@ pub fn view_window<'a>(
 
     // Labeled numeric/text field row → TextStyleEdit { field, value }.
     fn frow<'a>(
-        label: &'a str,
-        ph: &'a str,
+        label: impl Into<Cow<'static, str>>,
+        ph: impl Into<Cow<'static, str>>,
         buf: &'a str,
         field: &'static str,
     ) -> Element<'a, Message> {
         row![
-            text(label).size(11).style(muted_style).width(120),
-            text_input(ph, buf)
+            text(label.into()).size(11).style(muted_style).width(120),
+            text_input(ph.into().as_ref(), buf)
                 .on_input(move |v| Message::TextStyleEdit { field, value: v })
                 .style(field_style)
                 .size(11)
@@ -295,41 +297,41 @@ pub fn view_window<'a>(
     // ── Right: Properties ─────────────────────────────────────────────────
     let props_panel = container(
         column![
-            text("Properties").size(11).style(primary_style),
-            frow("Big Font:", "big-font file…", bigfont_buf, "bigfont"),
-            frow("TrueType Font:", "e.g. Arial", ttf_buf, "ttf"),
+            text(t!("Properties")).size(11).style(primary_style),
+            frow(t!("Big Font:"), t!("big-font file…"), bigfont_buf, "bigfont"),
+            frow(t!("TrueType Font:"), t!("e.g. Arial"), ttf_buf, "ttf"),
             frow(
                 if annotative {
-                    "Paper Text Height:"
+                    t!("Paper Text Height:")
                 } else {
-                    "Fixed Height:"
+                    t!("Fixed Height:")
                 },
-                "0 = variable",
+                t!("0 = variable"),
                 height_buf,
                 "height",
             ),
-            frow("Width Factor:", "1.0", width_buf, "width"),
-            frow("Oblique (°):", "0.0", oblique_buf, "oblique"),
+            frow(t!("Width Factor:"), "1.0", width_buf, "width"),
+            frow(t!("Oblique (°):"), "0.0", oblique_buf, "oblique"),
             row![
                 checkbox(backward)
-                    .label("Backward")
+                    .label(t!("Backward"))
                     .on_toggle(|_| Message::TextStyleToggle("backward"))
                     .size(15)
                     .text_size(11),
                 checkbox(upside_down)
-                    .label("Upside down")
+                    .label(t!("Upside down"))
                     .on_toggle(|_| Message::TextStyleToggle("upside_down"))
                     .size(15)
                     .text_size(11),
             ]
             .spacing(16),
             checkbox(annotative)
-                .label("Annotative")
+                .label(t!("Annotative"))
                 .on_toggle(|_| Message::TextStyleToggle("annotative"))
                 .size(15)
                 .text_size(11),
             Space::new().height(8),
-            text("Preview").size(10).style(muted_style),
+            text(t!("Preview")).size(10).style(muted_style),
             container(preview)
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
@@ -377,7 +379,7 @@ pub fn view_window<'a>(
 
     let ttf_panel = container(
         column![
-            text("TrueType (system)").size(10).style(muted_style),
+            text(t!("TrueType (system)")).size(10).style(muted_style),
             container(scrollable(column(ttf_items).spacing(1)).height(sizing.height))
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
@@ -394,7 +396,7 @@ pub fn view_window<'a>(
                 .width(sizing.width)
                 .height(sizing.height)
                 .padding(2),
-            text_input("TrueType font…", ttf_buf)
+            text_input(t!("TrueType font…").as_ref(), ttf_buf)
                 .on_input(|v| Message::TextStyleEdit {
                     field: "ttf",
                     value: v

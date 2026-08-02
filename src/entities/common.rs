@@ -187,7 +187,7 @@ pub fn triangle_grip(id: usize, world: glam::DVec3) -> GripDef {
 /// LINEAR formatter, so LUNITS=Architectural showed a block rotation as
 /// feet-and-inches and the string wouldn't parse back (#297). Value in
 /// DEGREES, matching every angle call site.
-pub fn edit_angle_prop(label: &'static str, field: &'static str, value_deg: f64) -> Property {
+pub fn edit_angle_prop(label: &str, field: &'static str, value_deg: f64) -> Property {
     Property {
         label: label.into(),
         field,
@@ -195,7 +195,7 @@ pub fn edit_angle_prop(label: &'static str, field: &'static str, value_deg: f64)
     }
 }
 
-pub fn edit_prop(label: &'static str, field: &'static str, value: f64) -> Property {
+pub fn edit_prop(label: &str, field: &'static str, value: f64) -> Property {
     Property {
         label: label.into(),
         field,
@@ -203,7 +203,7 @@ pub fn edit_prop(label: &'static str, field: &'static str, value: f64) -> Proper
     }
 }
 
-pub fn ro_prop(label: &'static str, field: &'static str, value: impl Into<String>) -> Property {
+pub fn ro_prop(label: &str, field: &'static str, value: impl Into<String>) -> Property {
     Property {
         label: label.into(),
         field,
@@ -215,7 +215,7 @@ pub fn ro_prop(label: &'static str, field: &'static str, value: impl Into<String
 /// read-only value using the same length formatting. Used where a field's
 /// editability depends on entity state (e.g. a text point that is only live for
 /// certain justifications, or an MText column dimension).
-pub fn num_prop(label: &'static str, field: &'static str, value: f64, editable: bool) -> Property {
+pub fn num_prop(label: &str, field: &'static str, value: f64, editable: bool) -> Property {
     if editable {
         edit_prop(label, field, value)
     } else {
@@ -226,7 +226,7 @@ pub fn num_prop(label: &'static str, field: &'static str, value: f64, editable: 
 /// A ◀ / ▶ index navigator row (e.g. a polyline's Current Vertex). `display` is
 /// the label shown between the arrows (e.g. "2 / 7").
 pub fn stepper_prop(
-    label: &'static str,
+    label: &str,
     field: &'static str,
     display: impl Into<String>,
 ) -> Property {

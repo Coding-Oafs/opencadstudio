@@ -26,6 +26,7 @@ mod collapse;
 use collapse::{CollapsePanels, Panel};
 pub use collapse::CollapseMode;
 use crate::ui::wrap_bar::{PosReport, WrapBar, WrapFlow};
+use crate::t;
 
 // ── Ribbon state ───────────────────────────────────────────────────────────
 
@@ -742,7 +743,7 @@ impl Ribbon {
                     button(
                         row![
                             crate::ui::icons::themed_check_cell(m == current),
-                            text(m.label()).size(11),
+                            text(t!(m.label())).size(11),
                         ]
                         .spacing(4)
                         .align_y(iced::Center),
@@ -824,7 +825,7 @@ impl Ribbon {
                         .width(Length::Fixed(20.0))
                         .into();
                 let label_el =
-                    text(*label)
+                    text(t!(*label))
                         .size(11)
                         .style(move |theme: &Theme| iced::widget::text::Style {
                             color: (!is_current).then_some(
@@ -958,14 +959,14 @@ impl Ribbon {
         let row_count = rows.len().max(1);
         let list_h = (row_count as f32 * 26.0).min(420.0);
         // Search box (#343): filters the list live as the user types.
-        let search = iced::widget::text_input("Search layers…", &self.layer_filter)
+        let search = iced::widget::text_input(t!("Search layers…").as_ref(), &self.layer_filter)
             .on_input(Message::RibbonLayerFilterChanged)
             .size(11)
             .padding([4, 6]);
         let state_manager = button(
             row![
                 crate::ui::icons::themed_arrow_right(9.0),
-                text("Layer State Manager…").size(11),
+                text(t!("Layer State Manager…")).size(11),
             ]
             .spacing(7)
             .align_y(iced::Center),
@@ -1081,7 +1082,7 @@ impl Ribbon {
 
         if let Some(mgr) = manager_cmd {
             rows.push(
-                button(text("Manage…").size(11))
+                button(text(t!("Manage…")).size(11))
                     .on_press(Message::Command(mgr.to_string()))
                     .style(popup_row_style)
                     .width(Fill)
@@ -1323,7 +1324,7 @@ fn render_group<'a>(
 
     column![
         tools_el,
-        container(text(group.title).size(9).style(muted_text_style)).padding([1, 4]),
+        container(text(t!(group.title)).size(9).style(muted_text_style)).padding([1, 4]),
     ]
     .align_x(iced::Center)
     .spacing(0)
@@ -1410,7 +1411,7 @@ fn collapse_button<'a>(
             column![
                 icon,
                 row![
-                    text(title.to_string()).size(9).style(muted_text_style),
+                    text(t!(title)).size(9).style(muted_text_style),
                     crate::ui::icons::themed_secondary_arrow_down(8.0),
                 ]
                 .spacing(3)

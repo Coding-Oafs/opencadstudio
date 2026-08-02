@@ -11,6 +11,7 @@ use acadrust::Handle;
 use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult};
+use crate::t;
 
 /// Parse a TEXTEDITMODE value. Accepts `0`/`m`/`multiple`/`false` (Multiple → false)
 /// and `1`/`s`/`single`/`true` (Single → true), case-insensitive. Returns `None`
@@ -69,24 +70,27 @@ impl CadCommand for TexteditCommand {
         match self.step {
             Step::PickObject => {
                 if self.edit_count == 0 {
-                    "TEXTEDIT Select an annotation object or [Undo Mode]:".to_string()
+                    t!("TEXTEDIT Select an annotation object or [Undo Mode]:").into_owned()
                 } else {
-                    "TEXTEDIT Select an annotation object or [Undo Mode] <exit>:".to_string()
+                    t!("TEXTEDIT Select an annotation object or [Undo Mode] <exit>:").into_owned()
                 }
             }
             Step::EnterMode => {
                 let prefix = if self.invalid_mode {
-                    "Requires Single or Multiple. "
+                    format!("{} ", t!("Requires Single or Multiple."))
                 } else {
-                    ""
+                    String::new()
                 };
-                format!(
-                    "{prefix}TEXTEDIT Enter text edit mode [Single/Multiple] <{}>:",
-                    match self.mode {
-                        TextEditMode::Single => "Single",
-                        TextEditMode::Multiple => "Multiple",
-                    }
+                let mode = match self.mode {
+                    TextEditMode::Single => t!("Single"),
+                    TextEditMode::Multiple => t!("Multiple"),
+                };
+                t!(
+                    "%{prefix}TEXTEDIT Enter text edit mode [Single/Multiple] <%{mode}>:",
+                    prefix = prefix,
+                    mode = mode
                 )
+                .into_owned()
             }
         }
     }
@@ -220,11 +224,16 @@ impl CadCommand for TexteditmodeCommand {
     fn prompt(&self) -> String {
         let v = if self.current { 1 } else { 0 };
         let prefix = if self.invalid {
-            "Requires 0 OR 1 OR MULTIPLE OR SINGLE. "
+            format!("{} ", t!("Requires 0 OR 1 OR MULTIPLE OR SINGLE."))
         } else {
-            ""
+            String::new()
         };
-        format!("{prefix}TEXTEDITMODE Enter new value for TEXTEDITMODE <{v}>:")
+        t!(
+            "%{prefix}TEXTEDITMODE Enter new value for TEXTEDITMODE <%{v}>:",
+            prefix = prefix,
+            v = v
+        )
+        .into_owned()
     }
 
     fn wants_text_input(&self) -> bool {

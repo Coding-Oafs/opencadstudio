@@ -13,6 +13,7 @@ use acadrust::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline};
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::t;
 
 const TAU: f64 = std::f64::consts::TAU;
 
@@ -1221,18 +1222,20 @@ impl CadCommand for FilletCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            FilletStep::First => format!(
+            FilletStep::First => crate::tf!(
                 "FILLET  Select first object (Line/Arc/LwPolyline)  [R={:.4}]:",
                 self.radius
-            ),
+            )
+            .into_owned(),
             FilletStep::WaitingForRadius => {
-                format!("FILLET  Enter fillet radius <{:.4}>:", self.radius)
+                crate::tf!("FILLET  Enter fillet radius <{:.4}>:", self.radius).into_owned()
             }
             FilletStep::Second { .. } => {
-                format!(
+                crate::tf!(
                     "FILLET  Select second object (Line/Arc/LwPolyline)  [R={:.4}]:",
                     self.radius
                 )
+                .into_owned()
             }
         }
     }
@@ -1604,25 +1607,44 @@ impl CadCommand for ChamferCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            ChamferStep::First => format!(
-                "CHAMFER  Select first line  [D1={:.4} D2={:.4}]:",
-                self.dist1, self.dist2
-            ),
-            ChamferStep::WaitingForDist1 => {
-                format!("CHAMFER  Enter first chamfer distance <{:.4}>:", self.dist1)
+            ChamferStep::First => {
+                let d1 = format!("{:.4}", self.dist1);
+                let d2 = format!("{:.4}", self.dist2);
+                t!(
+                    "CHAMFER  Select first line  [D1=%{d1} D2=%{d2}]:",
+                    d1 = d1,
+                    d2 = d2
+                )
+                .into_owned()
             }
-            ChamferStep::WaitingForDist2 => format!(
-                "CHAMFER  Enter second chamfer distance <{:.4}>:",
-                self.dist2
-            ),
-            ChamferStep::Second { .. } => format!(
-                "CHAMFER  Select second line  [D1={:.4} D2={:.4}]:",
-                self.dist1, self.dist2
-            ),
-            ChamferStep::SecondPoly { .. } => format!(
-                "CHAMFER  Select the adjacent polyline segment  [D1={:.4} D2={:.4}]:",
-                self.dist1, self.dist2
-            ),
+            ChamferStep::WaitingForDist1 => {
+                let d1 = format!("{:.4}", self.dist1);
+                t!("CHAMFER  Enter first chamfer distance <%{d1}>:", d1 = d1).into_owned()
+            }
+            ChamferStep::WaitingForDist2 => {
+                let d2 = format!("{:.4}", self.dist2);
+                t!("CHAMFER  Enter second chamfer distance <%{d2}>:", d2 = d2).into_owned()
+            }
+            ChamferStep::Second { .. } => {
+                let d1 = format!("{:.4}", self.dist1);
+                let d2 = format!("{:.4}", self.dist2);
+                t!(
+                    "CHAMFER  Select second line  [D1=%{d1} D2=%{d2}]:",
+                    d1 = d1,
+                    d2 = d2
+                )
+                .into_owned()
+            }
+            ChamferStep::SecondPoly { .. } => {
+                let d1 = format!("{:.4}", self.dist1);
+                let d2 = format!("{:.4}", self.dist2);
+                t!(
+                    "CHAMFER  Select the adjacent polyline segment  [D1=%{d1} D2=%{d2}]:",
+                    d1 = d1,
+                    d2 = d2
+                )
+                .into_owned()
+            }
         }
     }
 
@@ -1633,7 +1655,7 @@ impl CadCommand for ChamferCommand {
             // is already handled by on_text_input.
             ChamferStep::First
             | ChamferStep::Second { .. }
-            | ChamferStep::SecondPoly { .. } => vec![CmdOption::new("Distance", "D")],
+            | ChamferStep::SecondPoly { .. } => vec![CmdOption::new(t!("Distance").as_ref(), "D")],
             ChamferStep::WaitingForDist1 | ChamferStep::WaitingForDist2 => vec![],
         }
     }

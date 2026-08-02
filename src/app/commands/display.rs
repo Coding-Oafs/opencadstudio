@@ -8,7 +8,7 @@ impl OpenCADStudio {
             "PAN" => {
                 self.tabs[i].pan_mode = true;
                 self.command_line
-                    .push_output("PAN: drag with the left mouse button. Press Esc to exit.");
+                    .push_output(crate::t!("PAN: drag with the left mouse button. Press Esc to exit.").as_ref());
             }
 
             // ── TABLE cell editing ─────────────────────────────────────────────
@@ -46,18 +46,18 @@ impl OpenCADStudio {
                             if found {
                                 self.push_undo_snapshot(i, "TABLE CELL");
                                 self.tabs[i].dirty = true;
-                                self.command_line.push_output(&format!(
+                                self.command_line.push_output(crate::tf!(
                                     "TABLE CELL: set [{row},{col}] = \"{text}\"."
-                                ));
+                                ).as_ref());
                             } else {
                                 self.command_line.push_error(
-                                    "TABLE CELL: select a Table entity first, or row/col out of range."
+                                    crate::t!("TABLE CELL: select a Table entity first, or row/col out of range.").as_ref()
                                 );
                             }
                         }
                         _ => {
                             self.command_line
-                                .push_info("Usage: TABLE CELL <row> <col> <text>");
+                                .push_info(crate::t!("Usage: TABLE CELL <row> <col> <text>").as_ref());
                         }
                     }
                 } else {
@@ -111,9 +111,9 @@ impl OpenCADStudio {
                             }
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(&format!(
+                        self.command_line.push_output(crate::tf!(
                             "UCSICON {sub}: updated {count} viewport(s) + model space."
-                        ));
+                        ).as_ref());
                     }
                     "" => {
                         // Bare UCSICON toggles visibility.
@@ -128,11 +128,11 @@ impl OpenCADStudio {
                         }
                         self.tabs[i].dirty = true;
                         let state = if visible { "ON" } else { "OFF" };
-                        self.command_line.push_output(&format!("UCSICON {state}"));
+                        self.command_line.push_output(crate::tf!("UCSICON {state}").as_ref());
                     }
                     _ => {
                         self.command_line
-                            .push_info("Usage: UCSICON ON | OFF | NOORIGIN | ORIGIN");
+                            .push_info(crate::t!("Usage: UCSICON ON | OFF | NOORIGIN | ORIGIN").as_ref());
                     }
                 }
             }
@@ -172,12 +172,12 @@ impl OpenCADStudio {
                     tokens.iter().map(|value| value.parse()).collect();
                 let Ok(values) = values else {
                     self.command_line
-                        .push_error("LIMITS: four numeric coordinates required.");
+                        .push_error(crate::t!("LIMITS: four numeric coordinates required.").as_ref());
                     return Some(Task::none());
                 };
                 if tokens.len() != 4 || !values.iter().all(|value| value.is_finite()) {
                     self.command_line
-                        .push_error("LIMITS: four finite numeric coordinates required.");
+                        .push_error(crate::t!("LIMITS: four finite numeric coordinates required.").as_ref());
                 } else {
                     let first = glam::DVec2::new(values[0], values[1]);
                     let opposite = glam::DVec2::new(values[2], values[3]);
@@ -185,15 +185,15 @@ impl OpenCADStudio {
                     let max = first.max(opposite);
                     if min.x == max.x || min.y == max.y {
                         self.command_line
-                            .push_error("LIMITS: corners must define a non-zero area.");
+                            .push_error(crate::t!("LIMITS: corners must define a non-zero area.").as_ref());
                     } else {
                         self.push_undo_snapshot(i, "LIMITS");
                         self.tabs[i].scene.set_current_drawing_limits(min, max);
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(&format!(
+                        self.command_line.push_output(crate::tf!(
                             "Drawing limits: {:.4},{:.4} to {:.4},{:.4}.",
                             min.x, min.y, max.x, max.y
-                        ));
+                        ).as_ref());
                     }
                 }
             }
@@ -249,13 +249,13 @@ impl OpenCADStudio {
             // ── TOOLPALETTES — not yet implemented ───────────────────────────────
             "TOOLPALETTES" => {
                 self.command_line
-                    .push_info("TOOLPALETTES: Tool Palettes not yet implemented.");
+                    .push_info(crate::t!("TOOLPALETTES: Tool Palettes not yet implemented.").as_ref());
             }
 
             // ── SHEETSET — not yet implemented ───────────────────────────────────
             "SHEETSET" => {
                 self.command_line
-                    .push_info("SHEETSET: Sheet Set Manager not yet implemented.");
+                    .push_info(crate::t!("SHEETSET: Sheet Set Manager not yet implemented.").as_ref());
             }
 
             // ── XDATA — read/write extended entity data ──────────────────────────
@@ -288,7 +288,7 @@ impl OpenCADStudio {
                     .collect();
                 if selected_handles.is_empty() {
                     self.command_line
-                        .push_error("XDATA: select entities first.");
+                        .push_error(crate::t!("XDATA: select entities first.").as_ref());
                 } else {
                     match sub.as_str() {
                         "LIST" | "" => {
@@ -297,18 +297,18 @@ impl OpenCADStudio {
                                     let xd = &entity.common().extended_data;
                                     if xd.is_empty() {
                                         self.command_line
-                                            .push_output(&format!("  {:x}: no xdata.", sh.value()));
+                                            .push_output(crate::tf!("  {:x}: no xdata.", sh.value()).as_ref());
                                     } else {
                                         for rec in xd.records() {
-                                            self.command_line.push_output(&format!(
+                                            self.command_line.push_output(crate::tf!(
                                                 "  {:x} [{}]: {} value(s)",
                                                 sh.value(),
                                                 rec.application_name,
                                                 rec.values.len()
-                                            ));
+                                            ).as_ref());
                                             for v in &rec.values {
                                                 self.command_line
-                                                    .push_output(&format!("    {:?}", v));
+                                                    .push_output(crate::tf!("    {:?}", v).as_ref());
                                             }
                                         }
                                     }
@@ -329,10 +329,10 @@ impl OpenCADStudio {
                                 }
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(&format!(
+                            self.command_line.push_output(crate::tf!(
                                 "XDATA: set [{app}] = \"{val}\" on {} entity/entities.",
                                 selected_handles.len()
-                            ));
+                            ).as_ref());
                         }
                         "CLEAR" => {
                             let app_filter = parts.get(1).copied();
@@ -360,11 +360,11 @@ impl OpenCADStudio {
                                 }
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output("XDATA: cleared.");
+                            self.command_line.push_output(crate::t!("XDATA: cleared.").as_ref());
                         }
                         _ => {
                             self.command_line
-                                .push_info("Usage: XDATA LIST | SET <app> <value> | CLEAR [app]");
+                                .push_info(crate::t!("Usage: XDATA LIST | SET <app> <value> | CLEAR [app]").as_ref());
                         }
                     }
                 }
@@ -486,7 +486,7 @@ impl OpenCADStudio {
                     }
                     _ => {
                         self.command_line
-                            .push_error("Usage: PLOTSTYLE [LOAD | CLEAR | STATUS]");
+                            .push_error(crate::t!("Usage: PLOTSTYLE [LOAD | CLEAR | STATUS]").as_ref());
                     }
                 }
             }
@@ -529,7 +529,7 @@ impl OpenCADStudio {
                     .collect();
                 if handles.is_empty() {
                     self.command_line
-                        .push_error("UNDERLAY: select underlay entities first.");
+                        .push_error(crate::t!("UNDERLAY: select underlay entities first.").as_ref());
                 } else {
                     let parts: Vec<&str> = sub.splitn(2, char::is_whitespace).collect();
                     let action = parts.first().copied().unwrap_or("");
@@ -589,7 +589,7 @@ impl OpenCADStudio {
                                 },
                                 _ => {
                                     // No sub-command: print status.
-                                    self.command_line.push_output(&format!(
+                                    self.command_line.push_output(crate::tf!(
                                         "Underlay {:x}: fade={}, contrast={}, on={}, clip={}, mono={}",
                                         h.value(),
                                         ul.fade,
@@ -597,7 +597,7 @@ impl OpenCADStudio {
                                         ul.is_on(),
                                         ul.is_clipping(),
                                         ul.is_monochrome(),
-                                    ));
+                                    ).as_ref());
                                 }
                             }
                         }
@@ -605,10 +605,10 @@ impl OpenCADStudio {
                     if changed > 0 {
                         self.tabs[i].dirty = true;
                         self.command_line
-                            .push_info(&format!("Updated {changed} underlay(s)."));
+                            .push_info(crate::tf!("Updated {changed} underlay(s).").as_ref());
                     } else if !action.is_empty() {
                         self.command_line.push_error(
-                            "Usage: UNDERLAY [FADE <n>|CONTRAST <n>|ON|OFF|CLIP ON|OFF|MONO ON|OFF]"
+                            crate::t!("Usage: UNDERLAY [FADE <n>|CONTRAST <n>|ON|OFF|CLIP ON|OFF|MONO ON|OFF]").as_ref()
                         );
                     }
                 }
@@ -635,13 +635,13 @@ impl OpenCADStudio {
                     .collect();
                 if handles.is_empty() {
                     self.command_line
-                        .push_error("OBJECTSCALE: select objects first.");
+                        .push_error(crate::t!("OBJECTSCALE: select objects first.").as_ref());
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "OBJECTSCALE");
                 let Some(scale) = self.tabs[i].scene.creation_annotation_scale_handle() else {
                     self.command_line
-                        .push_error("OBJECTSCALE: the active annotation scale is unavailable.");
+                        .push_error(crate::t!("OBJECTSCALE: the active annotation scale is unavailable.").as_ref());
                     return Some(Task::none());
                 };
                 let mut n = 0usize;
@@ -665,9 +665,9 @@ impl OpenCADStudio {
                     .collect();
                 self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(&format!(
+                self.command_line.push_output(crate::tf!(
                     "OBJECTSCALE: added the active scale to {n} object(s)."
-                ));
+                ).as_ref());
                 return Some(Task::none());
             }
 
@@ -688,13 +688,13 @@ impl OpenCADStudio {
                 use acadrust::xdata::{ExtendedDataRecord, XDataValue};
                 let url = cmd.strip_prefix("HYPERLINK").unwrap_or("").trim().to_string();
                 if url.is_empty() {
-                    self.command_line.push_info("Usage: HYPERLINK <url>   (select objects first)");
+                    self.command_line.push_info(crate::t!("Usage: HYPERLINK <url>   (select objects first)").as_ref());
                     return Some(Task::none());
                 }
                 let handles: Vec<acadrust::Handle> =
                     self.tabs[i].scene.selected_entities().iter().map(|(h, _)| *h).collect();
                 if handles.is_empty() {
-                    self.command_line.push_error("HYPERLINK: select objects first.");
+                    self.command_line.push_error(crate::t!("HYPERLINK: select objects first.").as_ref());
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "HYPERLINK");
@@ -710,7 +710,7 @@ impl OpenCADStudio {
                 }
                 self.tabs[i].dirty = true;
                 self.command_line
-                    .push_output(&format!("HYPERLINK: attached to {n} object(s)."));
+                    .push_output(crate::tf!("HYPERLINK: attached to {n} object(s).").as_ref());
                 return Some(Task::none());
             }
 
@@ -745,10 +745,10 @@ impl OpenCADStudio {
                     .collect();
                 if handles.is_empty() {
                     self.command_line
-                        .push_error("ADJUST: select raster image(s) first.");
+                        .push_error(crate::t!("ADJUST: select raster image(s) first.").as_ref());
                 } else if action.is_empty() {
                     self.command_line
-                        .push_info("Usage: ADJUST BRIGHTNESS|CONTRAST|FADE <0-100>");
+                        .push_info(crate::t!("Usage: ADJUST BRIGHTNESS|CONTRAST|FADE <0-100>").as_ref());
                 } else if let Ok(v) = arg.parse::<u8>() {
                     let v = v.min(100);
                     self.push_undo_snapshot(i, "ADJUST");
@@ -792,14 +792,14 @@ impl OpenCADStudio {
                             .collect();
                         self.tabs[i].scene.bump_entities(&changes);
                         self.command_line
-                            .push_output(&format!("ADJUST: {action} = {v} on {changed} image(s)."));
+                            .push_output(crate::tf!("ADJUST: {action} = {v} on {changed} image(s).").as_ref());
                     } else {
                         self.command_line.push_error(
                             "ADJUST: no raster images selected, or unknown property (use BRIGHTNESS|CONTRAST|FADE).",
                         );
                     }
                 } else {
-                    self.command_line.push_error("ADJUST: value must be 0-100.");
+                    self.command_line.push_error(crate::t!("ADJUST: value must be 0-100.").as_ref());
                 }
             }
 
@@ -837,7 +837,7 @@ impl OpenCADStudio {
                     }
                     _ => self
                         .command_line
-                        .push_error("ANNOALLVISIBLE: enter 0 or 1."),
+                        .push_error(crate::t!("ANNOALLVISIBLE: enter 0 or 1.").as_ref()),
                 }
             }
             "ANNOAUTOSCALE" => {
@@ -867,7 +867,7 @@ impl OpenCADStudio {
                     .collect();
                 if handles.is_empty() {
                     self.command_line
-                        .push_error("ANNOUPDATE: select annotation objects first.");
+                        .push_error(crate::t!("ANNOUPDATE: select annotation objects first.").as_ref());
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "ANNOUPDATE");
@@ -891,7 +891,7 @@ impl OpenCADStudio {
                     self.tabs[i].dirty = true;
                 }
                 self.command_line
-                    .push_output(&format!("ANNOUPDATE: updated {updated} object(s)."));
+                    .push_output(crate::tf!("ANNOUPDATE: updated {updated} object(s).").as_ref());
                 return Some(Task::none());
             }
             cmd if cmd.starts_with("ANNOSCALE ") || cmd.starts_with("CANNOSCALE ") => {
@@ -909,7 +909,7 @@ impl OpenCADStudio {
                         .current_annotation_scale
                         .clone();
                     self.command_line
-                        .push_output(&format!("Current annotation scale: {name}"));
+                        .push_output(crate::tf!("Current annotation scale: {name}").as_ref());
                     return Some(Task::none());
                 }
                 let previous = self.tabs[i].scene.displayed_annotation_scale_handle();
@@ -924,11 +924,11 @@ impl OpenCADStudio {
                         }
                         self.tabs[i].dirty = true;
                         self.command_line
-                            .push_output(&format!("Annotation scale: {arg}"));
+                            .push_output(crate::tf!("Annotation scale: {arg}").as_ref());
                     }
                     None => self
                         .command_line
-                        .push_error("Usage: ANNOSCALE <ratio>  e.g. 1:50, 2:1, or a factor"),
+                        .push_error(crate::t!("Usage: ANNOSCALE <ratio>  e.g. 1:50, 2:1, or a factor").as_ref()),
                 }
             }
 
@@ -962,19 +962,19 @@ impl OpenCADStudio {
                                 if self.tabs[i].scene.add_scale(arg, paper, drawing) {
                                     self.tabs[i].dirty = true;
                                     self.command_line
-                                        .push_output(&format!("Added annotation scale {arg}."));
+                                        .push_output(crate::tf!("Added annotation scale {arg}.").as_ref());
                                 } else {
                                     self.command_line
-                                        .push_info(&format!("Scale {arg} already exists."));
+                                        .push_info(crate::tf!("Scale {arg} already exists.").as_ref());
                                 }
                             }
                             _ => self
                                 .command_line
-                                .push_error("SCALELISTEDIT ADD: use a ratio like 1:50."),
+                                .push_error(crate::t!("SCALELISTEDIT ADD: use a ratio like 1:50.").as_ref()),
                         },
                         None => self
                             .command_line
-                            .push_error("SCALELISTEDIT ADD: use a ratio like 1:50."),
+                            .push_error(crate::t!("SCALELISTEDIT ADD: use a ratio like 1:50.").as_ref()),
                     },
                     "DELETE" | "REMOVE" => {
                         let current = self.tabs[i]
@@ -984,20 +984,20 @@ impl OpenCADStudio {
                             .current_annotation_scale
                             .clone();
                         if arg.is_empty() {
-                            self.command_line.push_info("Usage: SCALELISTEDIT DELETE <name>");
+                            self.command_line.push_info(crate::t!("Usage: SCALELISTEDIT DELETE <name>").as_ref());
                         } else if arg.eq_ignore_ascii_case(&current) {
-                            self.command_line.push_error(&format!(
+                            self.command_line.push_error(crate::tf!(
                                 "Cannot delete the current annotation scale ({arg})."
-                            ));
+                            ).as_ref());
                         } else {
                             self.push_undo_snapshot(i, "SCALELISTEDIT");
                             if self.tabs[i].scene.remove_scale(arg) {
                                 self.tabs[i].dirty = true;
                                 self.command_line
-                                    .push_output(&format!("Removed annotation scale {arg}."));
+                                    .push_output(crate::tf!("Removed annotation scale {arg}.").as_ref());
                             } else {
                                 self.command_line
-                                    .push_info(&format!("No annotation scale named {arg}."));
+                                    .push_info(crate::tf!("No annotation scale named {arg}.").as_ref());
                             }
                         }
                     }
@@ -1009,15 +1009,15 @@ impl OpenCADStudio {
                             .map(|(n, _, _)| n)
                             .collect();
                         if names.is_empty() {
-                            self.command_line.push_info("No annotation scales defined.");
+                            self.command_line.push_info(crate::t!("No annotation scales defined.").as_ref());
                         } else {
                             self.command_line
-                                .push_output(&format!("Annotation scales: {}", names.join(", ")));
+                                .push_output(crate::tf!("Annotation scales: {}", names.join(", ")).as_ref());
                         }
                     }
                     _ => self
                         .command_line
-                        .push_info("Usage: SCALELISTEDIT [ADD 1:50 | DELETE 1:50]"),
+                        .push_info(crate::t!("Usage: SCALELISTEDIT [ADD 1:50 | DELETE 1:50]").as_ref()),
                 }
             }
 
@@ -1056,7 +1056,7 @@ impl OpenCADStudio {
                         let ncols = rows_data.iter().map(|r| r.len()).max().unwrap_or(0);
                         if nrows == 0 || ncols == 0 {
                             self.command_line
-                                .push_error("DATALINK: the CSV file is empty.");
+                                .push_error(crate::t!("DATALINK: the CSV file is empty.").as_ref());
                             return Some(Task::none());
                         }
                         use acadrust::entities::TableBuilder;
@@ -1076,13 +1076,13 @@ impl OpenCADStudio {
                             .scene
                             .add_entity_clone(acadrust::EntityType::Table(table));
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(&format!(
+                        self.command_line.push_output(crate::tf!(
                             "DATALINK: imported {nrows}×{ncols} cells into a table at the origin."
-                        ));
+                        ).as_ref());
                     }
                     Err(e) => {
                         self.command_line
-                            .push_error(&format!("DATALINK: cannot read \"{path}\": {e}"));
+                            .push_error(crate::tf!("DATALINK: cannot read \"{path}\": {e}").as_ref());
                     }
                 }
             }
@@ -1110,7 +1110,7 @@ impl OpenCADStudio {
                         let pts = parse_landxml_cgpoints(&xml);
                         if pts.is_empty() {
                             self.command_line
-                                .push_info("LANDXMLIMPORT: no <CgPoint> survey points found.");
+                                .push_info(crate::t!("LANDXMLIMPORT: no <CgPoint> survey points found.").as_ref());
                             return Some(Task::none());
                         }
                         self.push_undo_snapshot(i, "LANDXMLIMPORT");
@@ -1122,21 +1122,21 @@ impl OpenCADStudio {
                                 .add_entity_clone(acadrust::EntityType::Point(p));
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(&format!(
+                        self.command_line.push_output(crate::tf!(
                             "LANDXMLIMPORT: imported {} survey point(s). Use ZOOM EXTENTS to view.",
                             pts.len()
-                        ));
+                        ).as_ref());
                     }
                     Err(e) => self
                         .command_line
-                        .push_error(&format!("LANDXMLIMPORT: cannot read \"{path}\": {e}")),
+                        .push_error(crate::tf!("LANDXMLIMPORT: cannot read \"{path}\": {e}").as_ref()),
                 }
             }
 
             "POINTCLOUDATTACH" | "RECAP" | "SYNCPVIEWPORTS" | "UNDERLAYLAYERS"
             | "UOSNAP" => {
                 self.command_line
-                    .push_info(&format!("{cmd}: not yet implemented."));
+                    .push_info(crate::tf!("{cmd}: not yet implemented.").as_ref());
             }
 
             _ => return None,

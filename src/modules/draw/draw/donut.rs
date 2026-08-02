@@ -13,6 +13,7 @@
 use acadrust::entities::{LwPolyline, LwVertex};
 use acadrust::EntityType;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -45,9 +46,11 @@ impl CadCommand for DonutCommand {
 
     fn prompt(&self) -> String {
         match &self.state {
-            DonutState::AskInner => "DONUT  Specify inside diameter <0>:".into(),
-            DonutState::AskOuter => "DONUT  Specify outside diameter:".into(),
-            DonutState::PlaceCenter => "DONUT  Specify center of donut (Enter to exit):".into(),
+            DonutState::AskInner => t!("DONUT  Specify inside diameter <0>:").into_owned(),
+            DonutState::AskOuter => t!("DONUT  Specify outside diameter:").into_owned(),
+            DonutState::PlaceCenter => {
+                t!("DONUT  Specify center of donut (Enter to exit):").into_owned()
+            }
         }
     }
 

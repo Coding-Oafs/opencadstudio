@@ -20,6 +20,9 @@ use iced::widget::{
     button, checkbox, column, container, row, scrollable, text, text_input, Space,
 };
 use iced::{Background, Border, Element, Length, Theme};
+use crate::t;
+use std::borrow::Cow;
+use std::fmt;
 
 use crate::ui::properties::{lw_options, LwItem};
 
@@ -59,7 +62,8 @@ pub struct AttrRow {
 }
 
 /// Combined justification options (horizontal × vertical), matching the
-/// standard text-justification list.
+/// standard text-justification list. The stored labels are the English source
+/// texts; `justify_label` / `justify_from_label` translate both directions.
 pub const JUSTIFY: &[(&str, HorizontalAlignment, VerticalAlignment)] = &[
     ("Left", HorizontalAlignment::Left, VerticalAlignment::Baseline),
     ("Center", HorizontalAlignment::Center, VerticalAlignment::Baseline),
@@ -78,13 +82,15 @@ pub const JUSTIFY: &[(&str, HorizontalAlignment, VerticalAlignment)] = &[
     ("Bottom Right", HorizontalAlignment::Right, VerticalAlignment::Bottom),
 ];
 
-/// The justification label for an (h, v) pair (defaults to "Left").
-pub fn justify_label(h: HorizontalAlignment, v: VerticalAlignment) -> &'static str {
+/// The justification label for an (h, v) pair (defaults to "Left"). Kept in
+/// English (like the colour names) — the labels are standard CAD terms and
+/// their keys would collide with ribbon tool labels such as "Right".
+pub fn justify_label(h: HorizontalAlignment, v: VerticalAlignment) -> Cow<'static, str> {
     JUSTIFY
         .iter()
         .find(|(_, jh, jv)| *jh == h && *jv == v)
-        .map(|(l, _, _)| *l)
-        .unwrap_or("Left")
+        .map(|(l, _, _)| Cow::Borrowed(*l))
+        .unwrap_or(Cow::Borrowed("Left"))
 }
 
 /// Resolve a justification label back to its (h, v) pair.
@@ -171,7 +177,7 @@ fn hdivider<'a>(width: Length) -> Element<'a, Message> {
 
 /// One `label : widget` row with a fixed-width label column.
 fn field_row<'a>(
-    label: &'a str,
+    label: Cow<'static, str>,
     widget: Element<'a, Message>,
     width: Length,
 ) -> Element<'a, Message> {
@@ -187,7 +193,7 @@ fn field_row<'a>(
 
 /// A labelled editable text field for one of the selected row's string buffers.
 fn edit_field<'a>(
-    label: &'a str,
+    label: Cow<'static, str>,
     value: &'a str,
     on_input: impl Fn(String) -> Message + 'a,
     width: Length,
@@ -204,7 +210,7 @@ fn edit_field<'a>(
 
 /// A labelled pick_list of owned string options.
 fn pick_field<'a>(
-    label: &'a str,
+    label: Cow<'static, str>,
     options: Vec<String>,
     selected: Option<String>,
     on_select: impl Fn(String) -> Message + 'a,
@@ -218,7 +224,47 @@ fn pick_field<'a>(
     field_row(label, pl.into(), width)
 }
 
-fn tab_button<'a>(label: &'a str, this: AttrTab, active: AttrTab) -> Element<'a, Message> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalizedChoice {
+    raw: String,
+    label: String,
+}
+
+impl LocalizedChoice {
+    fn new(raw: String) -> Self {
+        let label = raw
+            .strip_prefix("Color ")
+            .map(|number| crate::tf!("Color {}", number).into_owned())
+            .unwrap_or_else(|| crate::i18n::translate(&raw).into_owned());
+        Self { raw, label }
+    }
+}
+
+impl fmt::Display for LocalizedChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// A translated pick list which keeps the stored and emitted value unchanged.
+fn localized_pick_field<'a>(
+    label: Cow<'static, str>,
+    options: Vec<String>,
+    selected: Option<String>,
+    on_select: impl Fn(String) -> Message + 'a,
+    width: Length,
+) -> Element<'a, Message> {
+    let options = options.into_iter().map(LocalizedChoice::new).collect::<Vec<_>>();
+    let selected = selected.map(LocalizedChoice::new);
+    let pl = iced::widget::pick_list(selected, options, |value| value.to_string())
+        .on_select(move |choice: LocalizedChoice| on_select(choice.raw))
+        .text_size(13)
+        .padding([3, 6])
+        .width(width);
+    field_row(label, pl.into(), width)
+}
+
+fn tab_button<'a>(label: Cow<'static, str>, this: AttrTab, active: AttrTab) -> Element<'a, Message> {
     let is_active = this == active;
     button(text(label).size(11))
         .padding([4, 12])
@@ -264,13 +310,13 @@ pub fn view_window<'a>(
     let height = sizing.height;
     // ── Top toolbar: block name on the left, Apply on the right ───────────
     // Mirrors the style-manager windows (actions left, primary action right).
-    let apply = button(text("Apply").size(11))
+    let apply = button(text(t!("Apply")).size(11))
         .padding([4, 14])
         .on_press(Message::AttrEditorApply)
         .style(button::primary);
     let toolbar = container(
         row![
-            text(format!("Block:  {block}")).size(12).style(muted_style),
+            text(t!("Block:  %{block}", block = block)).size(12).style(muted_style),
             Space::new().width(width),
             apply,
         ]
@@ -286,14 +332,14 @@ pub fn view_window<'a>(
     .padding([5, 8]);
 
     let tabs = row![
-        tab_button("Attribute", AttrTab::Attribute, tab),
-        tab_button("Text Options", AttrTab::TextOptions, tab),
-        tab_button("Properties", AttrTab::Properties, tab),
+        tab_button(t!("Attribute"), AttrTab::Attribute, tab),
+        tab_button(t!("Text Options"), AttrTab::TextOptions, tab),
+        tab_button(t!("Properties"), AttrTab::Properties, tab),
     ]
     .spacing(2);
 
     let body: Element<'_, Message> = if rows.is_empty() {
-        text("This block has no attributes.").size(13).style(muted_style).into()
+        text(t!("This block has no attributes.")).size(13).style(muted_style).into()
     } else {
         match tab {
             AttrTab::Attribute => attribute_tab(rows, selected, width, height),
@@ -337,9 +383,9 @@ fn attribute_tab<'a>(
     height: Length,
 ) -> Element<'a, Message> {
     let head = row![
-        container(text("Tag").size(11).style(muted_style)).width(130),
-        container(text("Prompt").size(11).style(muted_style)).width(width),
-        container(text("Value").size(11).style(muted_style)).width(140),
+        container(text(t!("Tag")).size(11).style(muted_style)).width(130),
+        container(text(t!("Prompt")).size(11).style(muted_style)).width(width),
+        container(text(t!("Value")).size(11).style(muted_style)).width(140),
     ]
     .spacing(6);
 
@@ -389,7 +435,7 @@ fn attribute_tab<'a>(
         head,
         scrollable(list).width(width).height(height),
         Space::new().height(8),
-        field_row("Value:", value_box.into(), width),
+        field_row(t!("Value:"), value_box.into(), width),
     ]
     .spacing(6)
     .width(width)
@@ -409,24 +455,24 @@ fn text_options_tab<'a>(
     } else {
         Some(r.text_style.clone())
     };
-    let justify_opts: Vec<String> = JUSTIFY.iter().map(|(l, _, _)| l.to_string()).collect();
+    let justify_opts: Vec<String> = JUSTIFY.iter().map(|(l, _, _)| (*l).to_string()).collect();
     let justify_sel = Some(justify_label(r.h_align, r.v_align).to_string());
 
     column![
-        pick_field("Text Style", styles, style_sel, |s| {
+        pick_field(t!("Text Style"), styles, style_sel, |s| {
             Message::AttrEditorTextStyle(s)
         }, width),
-        pick_field("Justification", justify_opts, justify_sel, |s| {
+        localized_pick_field(t!("Justification"), justify_opts, justify_sel, |s| {
             Message::AttrEditorJustify(s)
         }, width),
-        edit_field("Height", &r.height, Message::AttrEditorHeight, width),
-        edit_field("Rotation", &r.rotation, Message::AttrEditorRotation, width),
-        edit_field("Width Factor", &r.width_factor, Message::AttrEditorWidth, width),
-        edit_field("Oblique Angle", &r.oblique, Message::AttrEditorOblique, width),
+        edit_field(t!("Height"), &r.height, Message::AttrEditorHeight, width),
+        edit_field(t!("Rotation"), &r.rotation, Message::AttrEditorRotation, width),
+        edit_field(t!("Width Factor"), &r.width_factor, Message::AttrEditorWidth, width),
+        edit_field(t!("Oblique Angle"), &r.oblique, Message::AttrEditorOblique, width),
         field_row(
-            "",
+            Cow::Borrowed(""),
             checkbox(r.backwards)
-                .label("Backwards")
+                .label(t!("Backwards"))
                 .on_toggle(Message::AttrEditorBackwards)
                 .size(15)
                 .text_size(12)
@@ -434,9 +480,9 @@ fn text_options_tab<'a>(
             width,
         ),
         field_row(
-            "",
+            Cow::Borrowed(""),
             checkbox(r.upside_down)
-                .label("Upside down")
+                .label(t!("Upside down"))
                 .on_toggle(Message::AttrEditorUpsideDown)
                 .size(15)
                 .text_size(12)
@@ -483,12 +529,12 @@ fn properties_tab<'a>(
     .width(width);
 
     column![
-        pick_field("Layer", layers, layer_sel, Message::AttrEditorLayer, width),
-        pick_field("Linetype", linetypes, lt_sel, Message::AttrEditorLinetype, width),
-        pick_field("Color", color_opts, color_sel, |s| {
+        pick_field(t!("Layer"), layers, layer_sel, Message::AttrEditorLayer, width),
+        localized_pick_field(t!("Linetype"), linetypes, lt_sel, Message::AttrEditorLinetype, width),
+        localized_pick_field(t!("Color"), color_opts, color_sel, |s| {
             Message::AttrEditorColor(s)
         }, width),
-        field_row("Lineweight", lw.into(), width),
+        field_row(t!("Lineweight"), lw.into(), width),
     ]
     .spacing(8)
     .width(width)

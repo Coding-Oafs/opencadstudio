@@ -11,6 +11,8 @@ use crate::app::{Message, StyleKind};
 use iced::widget::button::{Status, Style};
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Background, Border, Element, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 /// Everything the shared frame needs. The per-manager `editor` element is the
 /// only bespoke part.
@@ -51,12 +53,12 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
     let height = s.sizing.height;
     // ── Toolbar: New / Copy / Delete | … | Set Current / Apply ────────────
     let bar = row![
-        tb_button("New", s.on_new, false),
-        tb_button("Copy", s.on_copy, false),
-        tb_button("Delete", s.on_delete, false),
+        tb_button(t!("New"), s.on_new, false),
+        tb_button(t!("Copy"), s.on_copy, false),
+        tb_button(t!("Delete"), s.on_delete, false),
         Space::new().width(width),
-        tb_button("Set Current", s.on_set_current, false),
-        tb_button("Apply", s.on_apply, true),
+        tb_button(t!("Set Current"), s.on_set_current, false),
+        tb_button(t!("Apply"), s.on_apply, true),
     ]
     .spacing(4)
     .align_y(iced::Center);
@@ -91,7 +93,7 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
 
     let list_panel = container(
         column![
-            text("Styles").size(10).style(muted_text_style),
+            text(t!("Styles")).size(10).style(muted_text_style),
             container(scrollable(column(rows).spacing(1)).height(height))
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
@@ -137,9 +139,13 @@ pub fn view<'a, 'b>(s: Scaffold<'a, 'b>) -> Element<'a, Message> {
 
 // ── Shared chrome ──────────────────────────────────────────────────────────
 
-pub(crate) fn tb_button<'a>(label: &'a str, msg: Message, accent: bool) -> Element<'a, Message> {
+pub(crate) fn tb_button(
+    label: impl Into<Cow<'static, str>>,
+    msg: Message,
+    accent: bool,
+) -> Element<'static, Message> {
     let pad = if accent { [4, 14] } else { [4, 10] };
-    button(text(label).size(11))
+    button(text(label.into()).size(11))
         .on_press(msg)
         .style(btn_s(accent))
         .padding(pad)

@@ -659,7 +659,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             .is_some_and(|(loaded, current)| loaded != current)
         {
             self.command_line.push_error_once(
-                "Drawing changed on disk while it was opening; Save will require conflict resolution.",
+                crate::t!(
+                    "Drawing changed on disk while it was opening; Save will require conflict resolution."
+                )
+                .as_ref(),
             );
         }
         self.tabs[i].disk_fingerprint =
@@ -667,9 +670,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         match crate::io::edit_lock::EditLease::acquire(path) {
             Ok(lease) => {
                 if let Some(warning) = lease.platform_warning() {
-                    self.command_line.push_info(&format!(
+                    self.command_line.push_info(crate::tf!(
                         "Edit lease active; {warning}. External-change checks remain active."
-                    ));
+                    ).as_ref());
                 }
                 self.tabs[i].edit_lease = Some(lease);
                 self.tabs[i].edit_lock_conflict = false;
@@ -677,16 +680,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => {
                 self.tabs[i].edit_lease = None;
                 self.tabs[i].edit_lock_conflict = true;
-                self.command_line.push_error_once(&format!(
+                self.command_line.push_error_once(crate::tf!(
                     "Opened read-only against other editors: {error}"
-                ));
+                ).as_ref());
             }
             Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
                 self.tabs[i].edit_lease = None;
                 self.tabs[i].edit_lock_conflict = false;
-                self.command_line.push_info(&format!(
+                self.command_line.push_info(crate::tf!(
                     "{error}. External-change checks remain active."
-                ));
+                ).as_ref());
             }
         }
     }
@@ -718,22 +721,22 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Some(Ok(warning)) => {
                 self.tabs[i].edit_lock_conflict = false;
                 if let Some(warning) = warning {
-                    self.command_line.push_info(&format!(
+                    self.command_line.push_info(crate::tf!(
                         "{warning}. External-change checks remain active."
-                    ));
+                    ).as_ref());
                 }
             }
             Some(Err(crate::io::edit_lock::EditLeaseError::Locked(error))) => {
                 self.tabs[i].edit_lock_conflict = true;
-                self.command_line.push_error_once(&format!(
+                self.command_line.push_error_once(crate::tf!(
                     "Saved, but the refreshed drawing is locked by another editor: {error}"
-                ));
+                ).as_ref());
             }
             Some(Err(crate::io::edit_lock::EditLeaseError::Unavailable(error))) => {
                 self.tabs[i].edit_lock_conflict = false;
-                self.command_line.push_info(&format!(
+                self.command_line.push_info(crate::tf!(
                     "{error}. External-change checks remain active."
-                ));
+                ).as_ref());
             }
             None => self.install_native_edit_guard(i, path, None),
         }
@@ -765,9 +768,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Err(crate::io::SaveFailure::file_in_use(error));
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
-                    self.command_line.push_info(&format!(
+                    self.command_line.push_info(crate::tf!(
                         "{error}. External-change checks remain active."
-                    ));
+                    ).as_ref());
                     None
                 }
             }
@@ -829,9 +832,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     let warning = lease.platform_warning().map(str::to_owned);
                     self.tabs[i].edit_lock_conflict = false;
                     if let Some(warning) = warning {
-                        self.command_line.push_info(&format!(
+                        self.command_line.push_info(crate::tf!(
                             "{warning}. External-change checks remain active."
-                        ));
+                        ).as_ref());
                     }
                     return Ok(());
                 }
@@ -840,9 +843,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
                     self.tabs[i].edit_lock_conflict = false;
-                    self.command_line.push_info(&format!(
+                    self.command_line.push_info(crate::tf!(
                         "{error}. External-change checks remain active."
-                    ));
+                    ).as_ref());
                     return Ok(());
                 }
             }
@@ -854,18 +857,18 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].edit_lease = Some(lease);
                 self.tabs[i].edit_lock_conflict = false;
                 if let Some(warning) = warning {
-                    self.command_line.push_info(&format!(
+                    self.command_line.push_info(crate::tf!(
                         "{warning}. External-change checks remain active."
-                    ));
+                    ).as_ref());
                 }
                 Ok(())
             }
             Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => Err(error),
             Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
                 self.tabs[i].edit_lock_conflict = false;
-                self.command_line.push_info(&format!(
+                self.command_line.push_info(crate::tf!(
                     "{error}. External-change checks remain active."
-                ));
+                ).as_ref());
                 Ok(())
             }
         }
@@ -883,34 +886,34 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let timings = caches.timings;
                 let entity_count = doc.entities().count();
                 self.command_line
-                    .push_output(&format!("Opened \"{name}\" — {entity_count} entities"));
+                    .push_output(crate::tf!("Opened \"{name}\" — {entity_count} entities").as_ref());
                 if caches.corrupt_dropped > 0 {
-                    self.command_line.push_error(&format!(
+                    self.command_line.push_error(crate::tf!(
                         "Warning: {} corrupt entities dropped (parser junk — bad normals / counts)",
                         caches.corrupt_dropped
-                    ));
+                    ).as_ref());
                 }
         if caches.xref_dropped > 0 {
-            self.command_line.push_error(&format!(
+            self.command_line.push_error(crate::tf!(
                 "Warning: {} corrupt xref entities dropped",
                 caches.xref_dropped
-            ));
+            ).as_ref());
         }
         for info in &caches.xrefs {
             match info.status {
                 crate::io::xref::XrefStatus::Loaded => {
                     self.command_line
-                        .push_output(&format!("XREF  Loaded \"{}\"", info.name));
+                        .push_output(crate::tf!("XREF  Loaded \"{}\"", info.name).as_ref());
                 }
                 crate::io::xref::XrefStatus::NotFound => {
-                    self.command_line.push_error(&format!(
+                    self.command_line.push_error(crate::tf!(
                         "XREF  Not found: \"{}\" ({})",
                         info.name, info.path
-                    ));
+                    ).as_ref());
                 }
                 crate::io::xref::XrefStatus::Unloaded => {
                     self.command_line
-                        .push_info(&format!("XREF  Unloaded (skipped): \"{}\"", info.name));
+                        .push_info(crate::tf!("XREF  Unloaded (skipped): \"{}\"", info.name).as_ref());
                 }
             }
         }
@@ -982,10 +985,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let total_ms = open_started
                     .map(|s| s.elapsed().as_millis() as u32)
                     .unwrap_or(0);
-                self.command_line.push_info(&format!(
+                self.command_line.push_info(crate::tf!(
                     "  parse {}ms · purge {}ms · caches {}ms · xref {}ms · total {}ms",
                     timings.parse_ms, timings.purge_ms, timings.caches_ms, timings.xref_ms, total_ms
-                ));
+                ).as_ref());
 
                 // Caches were built on the background thread inside open_path().
                 self.tabs[i].scene.local_extent_max = caches.local_extent_max;
@@ -1209,7 +1212,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         if self.active_save_jobs.contains_key(&tab_id) {
             if purpose != crate::app::SavePurpose::Autosave {
                 self.command_line
-                    .push_info("Save already running for this drawing.");
+                    .push_info(crate::t!("Save already running for this drawing.").as_ref());
             }
             return Task::none();
         }
@@ -1218,12 +1221,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             && self.tabs[i].edit_lock_conflict
         {
             let error = "Drawing edit lock is held by another editor.".to_string();
-            self.command_line.push_error_once(&format!(
+            self.command_line.push_error_once(crate::tf!(
                 "Unable to save \"{}\": {error}",
                 path.file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string())
-            ));
+            ).as_ref());
             self.pending_save_failure = Some(crate::app::PendingSaveFailure {
                 tab_id,
                 path,
@@ -1248,12 +1251,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.pending_save_leases.insert(tab_id, lease);
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => {
-                    self.command_line.push_error_once(&format!(
+                    self.command_line.push_error_once(crate::tf!(
                         "Unable to save \"{}\": {error}",
                         path.file_name()
                             .map(|name| name.to_string_lossy().into_owned())
                             .unwrap_or_else(|| path.display().to_string())
-                    ));
+                    ).as_ref());
                     self.pending_save_failure = Some(crate::app::PendingSaveFailure {
                         tab_id,
                         path,
@@ -1268,9 +1271,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
-                    self.command_line.push_info(&format!(
+                    self.command_line.push_info(crate::tf!(
                         "{error}. External-change checks remain active."
-                    ));
+                    ).as_ref());
                 }
             }
         }
@@ -1424,9 +1427,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| outcome.path.display().to_string());
-                self.command_line.push_error_once(&format!(
+                self.command_line.push_error_once(crate::tf!(
                     "Save stopped: \"{file_name}\" changed outside Open CAD Studio."
-                ));
+                ).as_ref());
                 self.pending_external_change = Some(crate::app::PendingExternalChange {
                     tab_id: outcome.tab_id,
                     path: outcome.path.clone(),
@@ -1445,9 +1448,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| outcome.path.display().to_string());
-                self.command_line.push_error_once(&format!(
+                self.command_line.push_error_once(crate::tf!(
                     "Unable to save \"{file_name}\": file is in use by another application."
-                ));
+                ).as_ref());
                 self.pending_save_failure = Some(crate::app::PendingSaveFailure {
                     tab_id: outcome.tab_id,
                     path: outcome.path.clone(),
@@ -1470,7 +1473,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 return Task::none();
             }
             self.command_line
-                .push_error(&format!("Save failed: {error}"));
+                .push_error(crate::tf!("Save failed: {error}").as_ref());
             return match outcome.continuation {
                 crate::app::SaveContinuation::CloseTab => {
                     self.pending_close = Some(crate::app::PendingClose::Tab(i));
@@ -1496,7 +1499,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
         match outcome.purpose {
             crate::app::SavePurpose::Autosave => {
-                self.command_line.push_output("Autosaved 1 drawing");
+                self.command_line.push_output(crate::t!("Autosaved 1 drawing").as_ref());
             }
             crate::app::SavePurpose::Manual | crate::app::SavePurpose::SaveAs => {
                 let path_changed = outcome.set_current_path
@@ -1507,7 +1510,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             !native_paths_match(current, &outcome.path)
                         });
                 self.command_line
-                    .push_output(&format!("Saved: {}", outcome.path.display()));
+                    .push_output(crate::tf!("Saved: {}", outcome.path.display()).as_ref());
                 self.recent_thumbs.remove(&outcome.path);
                 if let Some(previous) = outcome.previous_autosave {
                     if previous != outcome.path {
@@ -1594,7 +1597,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.pending_save_failure = Some(failure);
                 self.restore_failed_save_continuation(continuation, i);
                 self.command_line
-                    .push_error_once(&format!("Unable to acquire edit lock: {error}"));
+                    .push_error_once(crate::tf!("Unable to acquire edit lock: {error}").as_ref());
                 self.active_modal = Some(crate::app::ModalKind::FileInUse);
                 return Task::none();
             }
@@ -1690,7 +1693,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Err(error) => {
                 self.close_active_modal();
                 self.command_line
-                    .push_error(&format!("Reload failed: {error}"));
+                    .push_error(crate::tf!("Reload failed: {error}").as_ref());
                 return Task::none();
             }
         };
@@ -1709,7 +1712,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     pub(super) fn on_save_file(&mut self) -> Task<Message> {
                 if self.read_only {
                     self.command_line
-                        .push_error("Read-only session (--read-only): saving is disabled.");
+                        .push_error(crate::t!("Read-only session (--read-only): saving is disabled.").as_ref());
                     return Task::none();
                 }
                 let i = self.active_tab;
@@ -1859,11 +1862,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                                 },
                                 Message::WebRecentStored,
                             );
-                            self.command_line.push_output(&format!("Saved: {filename}"));
+                            self.command_line.push_output(crate::tf!("Saved: {filename}").as_ref());
                             true
                         }
                         Err(e) => {
-                            self.command_line.push_error(&format!("Save failed: {e}"));
+                            self.command_line.push_error(crate::tf!("Save failed: {e}").as_ref());
                             false
                         }
                     };
@@ -2163,10 +2166,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
             self.tabs[i].dirty = true;
             self.tabs[i].scene.bump_geometry_no_blocks();
-            self.command_line.push_info(&format!(
+            self.command_line.push_info(crate::tf!(
                 "Page setup: {w:.1}×{h:.1} mm  area={plot_area}  \
                  center={center}  rot={rotation}°"
-            ));
+            ).as_ref());
         }
     }
 
@@ -2178,7 +2181,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             self.direct_plot_params()
         else {
             self.command_line
-                .push_error("Nothing to plot: model space contains no printable geometry.");
+                .push_error(crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref());
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
@@ -2221,7 +2224,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             job
         else {
             self.command_line
-                .push_error("Plot area is empty. Pick a larger window.");
+                .push_error(crate::t!("Plot area is empty. Pick a larger window.").as_ref());
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
@@ -2533,12 +2536,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             self.direct_plot_params()
         else {
             self.command_line
-                .push_error("Nothing to plot: model space contains no printable geometry.");
+                .push_error(crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref());
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
         let options = self.plot_print_options(&self.plot_dialog, group_splits);
-        self.command_line.push_info("Sending to system printer…");
+        self.command_line.push_info(crate::t!("Sending to system printer…").as_ref());
         background_task(
             move || {
                 iced::futures::executor::block_on(
@@ -2561,7 +2564,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let i = self.active_tab;
         if self.tabs[i].scene.current_layout != "Model" {
             self.command_line
-                .push_error("Quick print works in model space.");
+                .push_error(crate::t!("Quick print works in model space.").as_ref());
             return Task::none();
         }
         let set: std::collections::HashSet<acadrust::Handle> = handles.into_iter().collect();
@@ -2593,12 +2596,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
         if !any {
             self.command_line
-                .push_error("Selection has no printable geometry.");
+                .push_error(crate::t!("Selection has no printable geometry.").as_ref());
             return Task::none();
         }
         if !(x1 > x0 && y1 > y0) {
             self.command_line
-                .push_error("Selection has no printable area.");
+                .push_error(crate::t!("Selection has no printable area.").as_ref());
             return Task::none();
         }
         // Small margin so the outermost strokes aren't clipped flush to the edge.
@@ -2786,7 +2789,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 match crate::io::print_to_printer::open_printer_properties(
                     self.plot_dialog.printer.as_deref(),
                 ) {
-                    Ok(()) => self.command_line.push_info("Opened printer properties."),
+                    Ok(()) => self.command_line.push_info(crate::t!("Opened printer properties.").as_ref()),
                     Err(error) => self.command_line.push_error(&error),
                 }
                 Task::none()
@@ -2924,7 +2927,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             }
             M::SetCurrent => {
                 self.apply_dialog_to_layout();
-                self.command_line.push_info("Page setup applied to the layout.");
+                self.command_line.push_info(crate::t!("Page setup applied to the layout.").as_ref());
                 Task::none()
             }
             M::NewSetup => {
@@ -3327,10 +3330,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
         let d = self.plot_dialog.clone();
         if d.style_missing {
-            self.command_line.push_error(&format!(
+            self.command_line.push_error(crate::tf!(
                 "Plot style table '{}' is not loaded.",
                 d.style_name
-            ));
+            ).as_ref());
             return Task::none();
         }
         // Remember the user's print preferences across sessions.
@@ -3365,7 +3368,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             )) = job
             else {
                 self.command_line
-                    .push_error("Plot area is empty. Pick a larger window.");
+                    .push_error(crate::t!("Plot area is empty. Pick a larger window.").as_ref());
                 self.active_modal = Some(crate::app::ModalKind::Plot);
                 return Task::none();
             };
@@ -3436,7 +3439,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
 
         let opts = self.plot_print_options(&d, group_splits);
-        self.command_line.push_info("Sending to system printer…");
+        self.command_line.push_info(crate::t!("Sending to system printer…").as_ref());
         let work = move || {
             iced::futures::executor::block_on(
                     crate::io::print_to_printer::print_wires_with(
@@ -3692,7 +3695,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             entry.screening = sc.min(100);
                         }
                         self.command_line
-                            .push_output(&format!("Plot style ACI {aci} updated."));
+                            .push_output(crate::tf!("Plot style ACI {aci} updated.").as_ref());
                     }
                 } else {
                     // No table loaded: create an identity table and apply.
@@ -3714,7 +3717,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     }
                     self.active_plot_style = Some(table);
                     self.command_line
-                        .push_output(&format!("Created new CTB table, ACI {aci} updated."));
+                        .push_output(crate::tf!("Created new CTB table, ACI {aci} updated.").as_ref());
                 }
                 Task::none()
     }
@@ -3722,7 +3725,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     pub(super) fn on_plot_style_panel_save(&mut self) -> Task<Message> {
                 if self.active_plot_style.is_none() {
                     self.command_line
-                        .push_error("No plot style table loaded. Load or create one first.");
+                        .push_error(crate::t!("No plot style table loaded. Load or create one first.").as_ref());
                     return Task::none();
                 }
                 let default_name = self

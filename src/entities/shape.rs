@@ -6,6 +6,7 @@
 // gives a rough indication of the glyph orientation.
 
 use acadrust::entities::Shape;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_angle_prop as edit_angle, edit_prop as edit, ro_prop as ro, square_grip};
@@ -254,29 +255,29 @@ impl PropertyEditable for Shape {
             _ => "(none)".to_string(),
         };
         vec![PropSection {
-            title: "Geometry".into(),
+            title: t!("Geometry").into_owned(),
             props: vec![
-                ro("Name", "shp_name", self.shape_name.clone()),
-                ro("Number", "shp_number", self.shape_number.to_string()),
+                ro(t!("Name").as_ref(), "shp_name", self.shape_name.clone()),
+                ro(t!("Number").as_ref(), "shp_number", self.shape_number.to_string()),
                 Property {
-                    label: "Style".into(),
+                    label: t!("Style").into_owned(),
                     field: "shp_style",
                     value: PropValue::Choice {
                         selected: self.style_name.clone(),
                         options: text_style_names.to_vec(),
                     },
                 },
-                ro("Style Handle", "shp_style_handle", style_handle_display),
-                edit("Insert X", "shp_ix", self.insertion_point.x),
-                edit("Insert Y", "shp_iy", self.insertion_point.y),
-                edit("Insert Z", "shp_iz", self.insertion_point.z),
-                edit("Size", "shp_sz", self.size),
-                edit_angle("Rotation", "shp_rot", self.rotation.to_degrees()),
-                edit("Width Factor", "shp_xs", self.relative_x_scale),
-                edit_angle("Oblique Angle", "shp_ob", self.oblique_angle.to_degrees()),
-                edit("Normal X", "shp_nx", self.normal.x),
-                edit("Normal Y", "shp_ny", self.normal.y),
-                edit("Normal Z", "shp_nz", self.normal.z),
+                ro(t!("Style Handle").as_ref(), "shp_style_handle", style_handle_display),
+                edit(t!("Insert X").as_ref(), "shp_ix", self.insertion_point.x),
+                edit(t!("Insert Y").as_ref(), "shp_iy", self.insertion_point.y),
+                edit(t!("Insert Z").as_ref(), "shp_iz", self.insertion_point.z),
+                edit(t!("Size").as_ref(), "shp_sz", self.size),
+                edit_angle(t!("Rotation").as_ref(), "shp_rot", self.rotation.to_degrees()),
+                edit(t!("Width Factor").as_ref(), "shp_xs", self.relative_x_scale),
+                edit_angle(t!("Oblique Angle").as_ref(), "shp_ob", self.oblique_angle.to_degrees()),
+                edit(t!("Normal X").as_ref(), "shp_nx", self.normal.x),
+                edit(t!("Normal Y").as_ref(), "shp_ny", self.normal.y),
+                edit(t!("Normal Z").as_ref(), "shp_nz", self.normal.z),
             ],
         }]
     }

@@ -1,6 +1,8 @@
 use crate::app::Message;
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Background, Border, Element, Theme};
+use crate::t;
+use std::borrow::Cow;
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
@@ -18,7 +20,7 @@ fn primary_style(theme: &Theme) -> iced::widget::text::Style {
 /// flag tints the border + label with the accent colour, making the new
 /// version the visual anchor of the row.
 fn version_card<'a>(
-    label: &'static str,
+    label: Cow<'static, str>,
     value: String,
     highlight: bool,
     width: iced::Length,
@@ -132,8 +134,8 @@ pub fn view_window<'a>(
 ) -> Element<'a, Message> {
     let header = container(
         column![
-            text("New Release Available").size(20).style(primary_style),
-            text("A newer Open CAD Studio version is published on GitHub.")
+            text(t!("New Release Available")).size(20).style(primary_style),
+            text(t!("A newer Open CAD Studio version is published on GitHub."))
                 .size(11)
                 .style(muted_style),
         ]
@@ -153,12 +155,12 @@ pub fn view_window<'a>(
     // one accent-tinted to draw the eye. Replaces the previous label/value
     // row layout. The arrow between them is purely decorative.
     let installed = version_card(
-        "Installed",
+        t!("Installed"),
         format!("v{}", env!("CARGO_PKG_VERSION")),
         false,
         sizing.width,
     );
-    let latest_card = version_card("Latest", format!("v{}", latest), true, sizing.width);
+    let latest_card = version_card(t!("Latest"), format!("v{}", latest), true, sizing.width);
     let arrow = container(crate::ui::icons::themed_secondary(
         crate::ui::icons::ARROW_LONG_RIGHT,
         20.0,
@@ -172,12 +174,12 @@ pub fn view_window<'a>(
         .align_y(iced::Center)
         .width(sizing.width);
 
-    let later_btn = button(text("Later").size(11))
+    let later_btn = button(text(t!("Later")).size(11))
         .on_press(Message::UpdateNoticeClose)
         .style(button::secondary)
         .padding([6, 16]);
 
-    let open_btn = button(text("Open Release Page").size(11))
+    let open_btn = button(text(t!("Open Release Page")).size(11))
         .on_press(Message::UpdateNoticeOpenRelease)
         .style(button::primary)
         .padding([6, 16]);
@@ -195,7 +197,7 @@ pub fn view_window<'a>(
     // Release notes panel. Rendered as a light-markdown column inside a
     // bordered scrollable so long bodies stay contained and don't
     // explode the window. Empty body → "No release notes provided."
-    let notes_heading = container(text("What's new").size(11).style(muted_style))
+    let notes_heading = container(text(t!("What's new")).size(11).style(muted_style))
         .padding(iced::Padding {
             top: 10.0,
             right: 0.0,
@@ -204,7 +206,7 @@ pub fn view_window<'a>(
         });
 
     let notes_body: Element<'a, Message> = if body.trim().is_empty() {
-        text("No release notes provided.")
+        text(t!("No release notes provided."))
             .size(11)
             .style(muted_style)
             .into()

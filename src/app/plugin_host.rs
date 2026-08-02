@@ -595,7 +595,7 @@ mod tests {
     }
     impl ocs_plugin_api::host::InteractiveCommand for PlacePoint {
         fn prompt(&self) -> String {
-            "Pick a point".into()
+            crate::t!("Pick a point").into_owned()
         }
         fn on_point(&mut self, pt: [f64; 3]) -> ocs_plugin_api::host::CommandStep {
             use ocs_plugin_api::host::CommandStep;
@@ -632,7 +632,7 @@ mod tests {
     struct PickThenMark;
     impl ocs_plugin_api::host::InteractiveCommand for PickThenMark {
         fn prompt(&self) -> String {
-            "Pick an object".into()
+            crate::t!("Pick an object").into_owned()
         }
         fn on_point(&mut self, _pt: [f64; 3]) -> ocs_plugin_api::host::CommandStep {
             ocs_plugin_api::host::CommandStep::Cancel

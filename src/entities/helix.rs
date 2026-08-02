@@ -7,6 +7,7 @@
 // as the Geometry property group.
 
 use acadrust::entities::{Helix, HelixConstraint};
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::ro_prop as ro;
@@ -70,20 +71,20 @@ fn properties(helix: &Helix) -> Vec<PropSection> {
     };
 
     vec![PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![
-            ro("Base point X", "base_x", format!("{:.4}", bp.x)),
-            ro("Base point Y", "base_y", format!("{:.4}", bp.y)),
-            ro("Base point Z", "base_z", format!("{:.4}", bp.z)),
-            ro("Number of turns", "num_turns", format!("{turns:.4}")),
-            ro("Turn height", "turn_height", format!("{turn_height:.4}")),
-            ro("Turns", "turns", format!("{turns:.4}")),
-            ro("Height", "height", format!("{height:.4}")),
-            ro("Base radius", "base_radius", format!("{base_radius:.4}")),
-            ro("Top radius", "top_radius", format!("{top_radius:.4}")),
-            ro("Turn slope", "turn_slope", format!("{turn_slope:.4}")),
-            ro("Twist", "twist", twist),
-            ro("Constrain", "constrain", constrain),
+            ro(t!("Base point X").as_ref(), "base_x", format!("{:.4}", bp.x)),
+            ro(t!("Base point Y").as_ref(), "base_y", format!("{:.4}", bp.y)),
+            ro(t!("Base point Z").as_ref(), "base_z", format!("{:.4}", bp.z)),
+            ro(t!("Number of turns").as_ref(), "num_turns", format!("{turns:.4}")),
+            ro(t!("Turn height").as_ref(), "turn_height", format!("{turn_height:.4}")),
+            ro(t!("Turns").as_ref(), "turns", format!("{turns:.4}")),
+            ro(t!("Height").as_ref(), "height", format!("{height:.4}")),
+            ro(t!("Base radius").as_ref(), "base_radius", format!("{base_radius:.4}")),
+            ro(t!("Top radius").as_ref(), "top_radius", format!("{top_radius:.4}")),
+            ro(t!("Turn slope").as_ref(), "turn_slope", format!("{turn_slope:.4}")),
+            ro(t!("Twist").as_ref(), "twist", twist),
+            ro(t!("Constrain").as_ref(), "constrain", constrain),
         ],
     }]
 }

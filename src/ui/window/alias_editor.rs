@@ -7,6 +7,7 @@
 use crate::app::Message;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Background, Element, Length, Theme};
+use crate::t;
 
 /// Which column of an alias row a text edit targets.
 #[derive(Clone, Copy, Debug)]
@@ -29,11 +30,10 @@ pub fn view_window(
     rows: &[(String, String)],
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'_, Message> {
-    let title = text("Command Aliases").size(15);
-    let hint = text(
-        "Type an alias and the command it runs (e.g. L → LINE). \
-         Apply to save to ocad.pgp; closing discards unapplied edits.",
-    )
+    let title = text(t!("Command Aliases")).size(15);
+    let hint = text(t!(
+        "Type an alias and the command it runs (e.g. L → LINE). Apply to save to ocad.pgp; closing discards unapplied edits."
+    ))
     .size(11)
     .style(muted_style);
 
@@ -44,8 +44,8 @@ pub fn view_window(
 
     let head = container(
         row![
-            container(text("Alias").size(11).style(muted_style)).width(Length::Fixed(120.0)),
-            container(text("Command").size(11).style(muted_style)).width(sizing.width),
+            container(text(t!("Alias")).size(11).style(muted_style)).width(Length::Fixed(120.0)),
+            container(text(t!("Command")).size(11).style(muted_style)).width(sizing.width),
             Space::new().width(Length::Fixed(30.0)),
         ]
         .spacing(8),
@@ -54,12 +54,12 @@ pub fn view_window(
 
     let mut list = column![].spacing(3);
     for (idx, (alias, cmd)) in rows.iter().enumerate() {
-        let alias_box = text_input("alias", alias)
+        let alias_box = text_input(t!("alias").as_ref(), alias)
             .on_input(move |v| Message::AliasEditorInput { idx, field: AliasField::Alias, value: v })
             .size(13)
             .padding([3, 6])
             .width(Length::Fixed(120.0));
-        let cmd_box = text_input("command", cmd)
+        let cmd_box = text_input(t!("command").as_ref(), cmd)
             .on_input(move |v| Message::AliasEditorInput { idx, field: AliasField::Command, value: v })
             .size(13)
             .padding([3, 6])
@@ -75,13 +75,13 @@ pub fn view_window(
         );
     }
 
-    let add = button(text("+ Add alias").size(12))
+    let add = button(text(t!("+ Add alias")).size(12))
         .on_press(Message::AliasEditorAdd)
         .padding([4, 10])
         .style(button::secondary);
 
     // Apply — primary action; commits the rows to ocad.pgp and stays open.
-    let apply = button(text("Apply").size(12))
+    let apply = button(text(t!("Apply")).size(12))
         .on_press(Message::AliasEditorApply)
         .padding([4, 16])
         .style(button::primary);

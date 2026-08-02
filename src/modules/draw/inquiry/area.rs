@@ -2,6 +2,7 @@
 // Press Enter to close and calculate.
 
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::scene::model::wire_model::WireModel;
@@ -23,12 +24,14 @@ impl CadCommand for AreaCommand {
 
     fn prompt(&self) -> String {
         if self.points.is_empty() {
-            "AREA  Specify first corner point (Enter to cancel):".into()
+            t!("AREA  Specify first corner point (Enter to cancel):").into_owned()
         } else {
-            format!(
-                "AREA  Specify next point ({} picked, Enter to calculate):",
-                self.points.len()
+            let n = self.points.len();
+            t!(
+                "AREA  Specify next point (%{n} picked, Enter to calculate):",
+                n = n
             )
+            .into_owned()
         }
     }
 
@@ -56,7 +59,14 @@ impl CadCommand for AreaCommand {
             perimeter += (self.points[(idx + 1) % n] - self.points[idx]).length();
         }
         let area = (area_sum * 0.5).abs();
-        let msg = format!("Area = {area:.4},  Perimeter = {perimeter:.4}");
+        let area_s = format!("{area:.4}");
+        let perimeter_s = format!("{perimeter:.4}");
+        let msg = t!(
+            "Area = %{area},  Perimeter = %{perimeter}",
+            area = area_s,
+            perimeter = perimeter_s
+        )
+        .into_owned();
         CmdResult::Measurement(msg)
     }
 

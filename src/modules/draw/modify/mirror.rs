@@ -10,6 +10,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, EntityTransform};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -66,15 +67,24 @@ impl CadCommand for MirrorCommand {
 
     fn prompt(&self) -> String {
         match &self.step {
-            Step::P1 => format!(
-                "MIRROR  Specify first mirror-line point  [{} objects]:",
-                self.handles.len()
-            ),
-            Step::P2(p1) => format!(
-                "MIRROR  Specify second point  [p1={:.2},{:.2}]:",
-                p1.x, p1.y
-            ),
-            Step::AskErase { .. } => "MIRROR  Erase source objects? [Yes/No] <No>:".to_string(),
+            Step::P1 => t!(
+                "MIRROR  Specify first mirror-line point  [%{count} objects]:",
+                count = self.handles.len()
+            )
+            .into_owned(),
+            Step::P2(p1) => {
+                let px = format!("{:.2}", p1.x);
+                let py = format!("{:.2}", p1.y);
+                t!(
+                    "MIRROR  Specify second point  [p1=%{px},%{py}]:",
+                    px = px,
+                    py = py
+                )
+                .into_owned()
+            }
+            Step::AskErase { .. } => {
+                t!("MIRROR  Erase source objects? [Yes/No] <No>:").into_owned()
+            }
         }
     }
 

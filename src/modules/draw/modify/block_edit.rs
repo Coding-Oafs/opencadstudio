@@ -94,7 +94,7 @@ impl CadCommand for BlockEditPickCommand {
         "BEDIT"
     }
     fn prompt(&self) -> String {
-        "BEDIT  Select block reference to edit:".into()
+        crate::t!("BEDIT  Select block reference to edit:").into_owned()
     }
     fn needs_entity_pick(&self) -> bool {
         true

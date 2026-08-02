@@ -16,6 +16,7 @@ use crate::modules::{IconKind, ModuleEvent, RibbonItem, StyleKey, ToolDef};
 use crate::ui::wrap_bar::PosReport;
 use crate::ui::icons;
 use crate::ui::properties::{acad_color_display, LwItem};
+use crate::t;
 
 use super::LayerInfo;
 
@@ -311,7 +312,7 @@ pub(super) fn render_small<'a>(
             let dim = start_dimmed(&state, &t.event);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
-            let tip_text = format!("{}\nCommand: {}", t.label, t.id);
+            let tip_text = format!("{}\n{} {}", t!(t.label), t!("Command:"), t.id);
             let btn = button(make_icon_dim(t.icon, SMALL_ICON, dim))
                 .on_press(Message::RibbonToolClick { tool_id, event })
                 .style(move |theme: &Theme, status| tool_btn_style(theme, active, status))
@@ -373,7 +374,7 @@ pub(super) fn render_small<'a>(
                 })
                 .or_else(|| items.first().map(|(_, lbl, _)| *lbl))
                 .unwrap_or(*id);
-            let tip_text = format!("{}\nCommand: {}", cur_label, last);
+            let tip_text = format!("{}\n{} {}", t!(cur_label), t!("Command:"), last);
 
             let icon_btn = button(make_icon_dim(cur_icon, SMALL_ICON, dim))
                 .on_press(Message::RibbonToolClick {
@@ -385,7 +386,7 @@ pub(super) fn render_small<'a>(
                 .height(ROW_H)
                 .padding([4, 4]);
 
-            let arr_tip = format!("{} options", cur_label);
+            let arr_tip = format!("{} {}", t!(cur_label), t!("options"));
             let arr_btn = button(
                 container(icons::themed_arrow_down(8.0))
                     .width(Fill)
@@ -431,7 +432,7 @@ pub(super) fn render_small<'a>(
 pub(super) fn render_large_dropdown<'a>(
     id: &'static str,
     icon: IconKind,
-    explicit_label: Option<&str>,
+    explicit_label: Option<&'a str>,
     items: &[(&'static str, &'static str, IconKind)],
     default: &'static str,
     active_tool: &Option<String>,
@@ -459,14 +460,14 @@ pub(super) fn render_large_dropdown<'a>(
         .or_else(|| items.first().map(|(_, lbl, _)| *lbl))
         .unwrap_or(id);
     let label = explicit_label.unwrap_or(cur_label);
-    let tip_text = format!("{}\nCommand: {}", cur_label, last);
-    let arr_tip = format!("{} options", label);
+    let tip_text = format!("{}\n{} {}", t!(cur_label), t!("Command:"), last);
+    let arr_tip = format!("{} {}", t!(label), t!("options"));
 
     // Icon on top with the label beneath it, then the ▾ strip at the very bottom.
     let top_btn = button(
         column![
             make_icon_dim(cur_icon, LARGE_ICON, dim),
-            text(label.to_string())
+            text(t!(label))
                 .size(10)
                 .style(move |theme: &Theme| tool_label_style(theme, dim)),
         ]
@@ -545,11 +546,11 @@ pub(super) fn render_large<'a>(
             let dim = start_dimmed(&state, &t.event);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
-            let tip_text = format!("{}\nCommand: {}", t.label, t.id);
+            let tip_text = format!("{}\n{} {}", t!(t.label), t!("Command:"), t.id);
             let btn = button(
                 column![
                     make_icon_dim(t.icon, LARGE_ICON, dim),
-                    text(t.label)
+                    text(t!(t.label))
                         .size(10)
                         .style(move |theme: &Theme| tool_label_style(theme, dim)),
                 ]
@@ -685,7 +686,7 @@ pub(super) fn render_large<'a>(
                     .map(|t| {
                         let is_active = active_tool.as_deref() == Some(t.id);
                         let dim = start_dimmed(&state, &t.event);
-                        let tip = t.label;
+                        let tip = t!(t.label);
                         let event = t.event.clone();
                         let icon_el: Element<Message> = if dim {
                             make_icon_dim(t.icon, 16.0, true)
@@ -752,11 +753,16 @@ pub(super) fn render_large<'a>(
                 let mp_dim = start_dimmed(&state, &match_prop.event);
                 let mp_event = match_prop.event.clone();
                 let mp_id = match_prop.id.to_string();
-                let mp_tip = format!("{}\nCommand: {}", match_prop.label, match_prop.id);
+                let mp_tip = format!(
+                    "{}\n{} {}",
+                    t!(match_prop.label),
+                    t!("Command:"),
+                    match_prop.id
+                );
                 let mp_btn = button(
                     column![
                         make_icon_dim(match_prop.icon, LARGE_ICON, mp_dim),
-                        text(match_prop.label)
+                        text(t!(match_prop.label))
                             .size(10)
                             .style(move |theme: &Theme| tool_label_style(theme, mp_dim)),
                     ]
@@ -906,7 +912,7 @@ pub(super) fn render_large<'a>(
                     .map(|t| {
                         let is_active = active_tool.as_deref() == Some(t.id);
                         let dim = start_dimmed(&state, &t.event);
-                        let tip = t.label;
+                        let tip = t!(t.label);
                         let event = t.event.clone();
                         let icon_el: Element<Message> = if dim {
                             make_icon_dim(t.icon, 16.0, true)
@@ -1006,7 +1012,7 @@ pub(super) fn quick_access_btn<'a>(
     .width(Length::Fixed(TOP_HIST_W))
     .height(24)
     .padding([2, 0]);
-    tooltip(btn, make_tip(label.to_string()), TipPos::Bottom)
+    tooltip(btn, make_tip(t!(label).into_owned()), TipPos::Bottom)
         .gap(6.0)
         .delay(Duration::from_millis(400))
         .style(tip_style)
@@ -1052,7 +1058,11 @@ pub(super) fn render_history_control<'a>(
         };
         tooltip(
             btn,
-            make_tip(format!("{label}\n{count} steps available")),
+            make_tip(format!(
+                "{}\n{}",
+                t!(label),
+                t!("%{count} steps available", count = count)
+            )),
             TipPos::Right,
         )
         .gap(6.0)
@@ -1085,7 +1095,10 @@ pub(super) fn render_history_control<'a>(
         };
         tooltip(
             btn,
-            make_tip(format!("Choose {label} history")),
+            make_tip(format!(
+                "{}",
+                t!("%{label} history", label = t!(label))
+            )),
             TipPos::Right,
         )
         .gap(6.0)

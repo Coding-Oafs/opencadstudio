@@ -4,6 +4,7 @@
 use crate::command::{CadCommand, CmdResult};
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 pub struct QuickPrintCommand {
     /// Latest selection set, refreshed on every selection action.
@@ -23,12 +24,13 @@ impl CadCommand for QuickPrintCommand {
 
     fn prompt(&self) -> String {
         if self.handles.is_empty() {
-            "QUICKPRINT  Select objects to quick-print:".into()
+            t!("QUICKPRINT  Select objects to quick-print:").into_owned()
         } else {
-            format!(
-                "QUICKPRINT  {} selected — Enter to plot, or keep selecting:",
-                self.handles.len()
+            t!(
+                "QUICKPRINT  %{count} selected — Enter to plot, or keep selecting:",
+                count = self.handles.len()
             )
+            .into_owned()
         }
     }
 

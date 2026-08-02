@@ -515,7 +515,7 @@ impl OpenCADStudio {
         if self.tabs[i].scene.set_active_viewport_render_mode(mode) {
             self.tabs[i].scene.bump_geometry_no_blocks();
             self.command_line
-                .push_output(&format!("Viewport visual style: {label}"));
+                .push_output(crate::tf!("Viewport visual style: {label}").as_ref());
             return Task::none();
         }
         self.tabs[i].render_mode = mode;
@@ -533,7 +533,7 @@ impl OpenCADStudio {
         // pipeline keys its upload cache off `geometry_epoch`.
         self.tabs[i].scene.bump_geometry_no_blocks();
         self.command_line
-            .push_output(&format!("Visual style: {label}"));
+            .push_output(crate::tf!("Visual style: {label}").as_ref());
         Task::none()
     }
 
@@ -2616,7 +2616,7 @@ impl OpenCADStudio {
                         .as_mut()
                         .map(|c| c.on_structure_pick(pick.handle, center));
                     self.command_line
-                        .push_info(&format!("{} acquired.", pick.label));
+                        .push_info(crate::tf!("{} acquired.", pick.label).as_ref());
                     result
                 } else {
                     let msg = self.tabs[i]
@@ -2745,7 +2745,7 @@ impl OpenCADStudio {
                             self.tabs[i].active_cmd = Some(cmd);
                         } else {
                             self.command_line
-                                .push_error("HATCHEDIT: not a hatch entity.");
+                                .push_error(crate::t!("HATCHEDIT: not a hatch entity.").as_ref());
                             self.tabs[i].active_cmd = None;
                         }
                     }
@@ -2772,7 +2772,7 @@ impl OpenCADStudio {
                     }
                     result
                 } else {
-                    self.command_line.push_info("Nothing found at that point.");
+                    self.command_line.push_info(crate::t!("Nothing found at that point.").as_ref());
                     None
                 }
             } else if self.tabs[i]
@@ -2787,7 +2787,7 @@ impl OpenCADStudio {
                         .as_mut()
                         .map(|c| c.on_tangent_point(obj, pick_wcs))
                 } else {
-                    self.command_line.push_info("Select a tangent object.");
+                    self.command_line.push_info(crate::t!("Select a tangent object.").as_ref());
                     None
                 }
             } else if !self.command_point_allowed(i, world_pt) {
@@ -3250,9 +3250,9 @@ impl OpenCADStudio {
                                 // `selection_just_completed`, or a
                                 // gather command (MOVE's "select
                                 // objects") would wrongly finish.
-                                self.command_line.push_info(&format!(
+                                self.command_line.push_info(crate::tf!(
                                             "Object is on locked layer \"{layer}\" — unlock the layer to select or edit it."
-                                        ));
+                                        ).as_ref());
                             } else {
                                 // Individual picks accumulate (issue #47):
                                 // each plain click adds to the selection,
@@ -3513,9 +3513,9 @@ impl OpenCADStudio {
                     // Locked layer: double-click must not open any editor
                     // (text / attribute / in-place block edit).
                     if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
-                        self.command_line.push_info(&format!(
+                        self.command_line.push_info(crate::tf!(
                             "Object is on locked layer \"{layer}\" — unlock the layer to edit it."
-                        ));
+                        ).as_ref());
                         return Task::none();
                     }
                     // Any text-bearing entity opens its in-place editor
@@ -3693,7 +3693,7 @@ impl OpenCADStudio {
             self.tabs[i]
                 .scene
                 .record_nav_perf(crate::scene::NavPerfOp::Zoom, now);
-            self.command_line.push_output("Zoom Extents");
+            self.command_line.push_output(crate::t!("Zoom Extents").as_ref());
         }
         Task::none()
     }
@@ -3891,7 +3891,7 @@ impl OpenCADStudio {
         }
         self.tabs[i].scene.camera_generation += 1;
         self.command_line
-            .push_output(&format!("View: {}", region.label()));
+            .push_output(crate::tf!("View: {}", region.label()).as_ref());
         Task::none()
     }
 
@@ -4094,7 +4094,7 @@ impl OpenCADStudio {
             .position(|session| session.block_name == name)
         else {
             self.command_line
-                .push_error(&format!("BEDIT: block tab \"{name}\" is not open."));
+                .push_error(crate::tf!("BEDIT: block tab \"{name}\" is not open.").as_ref());
             return Task::none();
         };
         if self.tabs[i].active_block_edit == Some(target_index) {
@@ -4156,7 +4156,7 @@ impl OpenCADStudio {
         let i = self.active_tab;
         if self.tabs[i].is_start {
             self.command_line
-                .push_info("Open or create a drawing to switch layouts.");
+                .push_info(crate::t!("Open or create a drawing to switch layouts.").as_ref());
             return Task::none();
         }
         let perf = crate::perf::enabled();
@@ -4270,7 +4270,7 @@ impl OpenCADStudio {
         let i = self.active_tab;
         if self.tabs[i].is_start {
             self.command_line
-                .push_info("Open or create a drawing to add a layout.");
+                .push_info(crate::t!("Open or create a drawing to add a layout.").as_ref());
             return Task::none();
         }
         let cancel_task = self.cancel_active_command_for_space_change();
@@ -4310,15 +4310,15 @@ impl OpenCADStudio {
                 self.tabs[i].scene.ensure_sheet_viewport(&new_name);
                 let switch_task = self.on_layout_switch(new_name.clone());
                 self.tabs[i].scene.fit_all();
-                self.command_line.push_output(&format!(
+                self.command_line.push_output(crate::tf!(
                     "Layout \"{new_name}\" created — use MVIEW to add a viewport"
-                ));
+                ).as_ref());
                 self.tabs[i].dirty = true;
                 return Task::batch([cancel_task, switch_task]);
             }
             Err(e) => self
                 .command_line
-                .push_error(&format!("Failed to create layout: {e}")),
+                .push_error(crate::tf!("Failed to create layout: {e}").as_ref()),
         }
         cancel_task
     }
@@ -4342,7 +4342,7 @@ impl OpenCADStudio {
                         .is_some()
                     {
                         self.command_line
-                            .push_error(&format!("\"{}\" name already in use", new_name));
+                            .push_error(crate::tf!("\"{}\" name already in use", new_name).as_ref());
                     } else {
                         self.push_undo_snapshot(i, "BLOCK RENAME");
                         if self.tabs[i].scene.rename_block(&orig, &new_name) {
@@ -4358,10 +4358,10 @@ impl OpenCADStudio {
                             }
                             self.tabs[i].dirty = true;
                             self.command_line
-                                .push_output(&format!("Block \"{orig}\" → \"{new_name}\""));
+                                .push_output(crate::tf!("Block \"{orig}\" → \"{new_name}\"").as_ref());
                         } else {
                             self.command_line
-                                .push_error(&format!("Could not rename block \"{orig}\""));
+                                .push_error(crate::tf!("Could not rename block \"{orig}\"").as_ref());
                         }
                     }
                     return Task::none();
@@ -4373,7 +4373,7 @@ impl OpenCADStudio {
                     .any(|n| *n == new_name);
                 if exists {
                     self.command_line
-                        .push_error(&format!("\"{}\" name already in use", new_name));
+                        .push_error(crate::tf!("\"{}\" name already in use", new_name).as_ref());
                 } else {
                     self.push_undo_snapshot(i, "LAYOUT RENAME");
                     self.tabs[i].scene.rename_layout(&orig, &new_name);
@@ -4382,7 +4382,7 @@ impl OpenCADStudio {
                     }
                     self.tabs[i].dirty = true;
                     self.command_line
-                        .push_output(&format!("Layout \"{orig}\" → \"{new_name}\""));
+                        .push_output(crate::tf!("Layout \"{orig}\" → \"{new_name}\"").as_ref());
                 }
             }
         }

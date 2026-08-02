@@ -11,6 +11,7 @@
 
 use acadrust::Handle;
 use glam::DVec3;
+use crate::t;
 
 use crate::command::{CadCommand, CmdResult, EntityTransform};
 
@@ -53,15 +54,20 @@ impl CadCommand for AlignCommand {
 
     fn prompt(&self) -> String {
         match self.state {
-            AlignState::Gathering => format!(
-                "ALIGN  Select objects ({} selected, Enter when done):",
-                self.handles.len()
-            ),
-            AlignState::Src1 => "ALIGN  Specify 1st source point:".into(),
-            AlignState::Dst1 => "ALIGN  Specify 1st destination point:".into(),
-            AlignState::Src2 => "ALIGN  Specify 2nd source point (Enter = translate only):".into(),
-            AlignState::Dst2 => "ALIGN  Specify 2nd destination point:".into(),
-            AlignState::AskScale => "ALIGN  Scale objects based on alignment points? [Y/N]:".into(),
+            AlignState::Gathering => t!(
+                "ALIGN  Select objects (%{count} selected, Enter when done):",
+                count = self.handles.len()
+            )
+            .into_owned(),
+            AlignState::Src1 => t!("ALIGN  Specify 1st source point:").into_owned(),
+            AlignState::Dst1 => t!("ALIGN  Specify 1st destination point:").into_owned(),
+            AlignState::Src2 => {
+                t!("ALIGN  Specify 2nd source point (Enter = translate only):").into_owned()
+            }
+            AlignState::Dst2 => t!("ALIGN  Specify 2nd destination point:").into_owned(),
+            AlignState::AskScale => {
+                t!("ALIGN  Scale objects based on alignment points? [Y/N]:").into_owned()
+            }
         }
     }
 

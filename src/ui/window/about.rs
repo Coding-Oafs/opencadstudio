@@ -1,8 +1,12 @@
 use crate::app::Message;
 use iced::widget::{button, column, container, row, text};
 use iced::{Background, Element, Theme};
+use crate::t;
 
-fn info_row<'a>(label: &'static str, value: String) -> Element<'a, Message> {
+fn info_row<'a>(
+    label: std::borrow::Cow<'static, str>,
+    value: String,
+) -> Element<'a, Message> {
     row![
         text(label)
             .size(11)
@@ -30,7 +34,7 @@ pub fn view_window<'a>() -> Element<'a, Message> {
                 .style(|theme: &Theme| iced::widget::text::Style {
                     color: Some(theme.palette().primary.base.color),
                 }),
-            text("CAD application for Architecture & Engineering")
+            text(t!("CAD application for Architecture & Engineering"))
                 .size(11)
                 .style(|theme: &Theme| iced::widget::text::Style {
                     color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
@@ -49,16 +53,16 @@ pub fn view_window<'a>() -> Element<'a, Message> {
 
     let info_block = container(
         column![
-            info_row("Version", format!("v{}", version)),
-            info_row("Platform", os.to_string()),
-            info_row("Arch", arch.to_string()),
+            info_row(t!("Version"), format!("v{}", version)),
+            info_row(t!("Platform"), os.to_string()),
+            info_row(t!("Arch"), arch.to_string()),
         ]
         .spacing(2)
         .padding([12, 16]),
     )
     .style(container::bordered_box);
 
-    let copy_btn = button(text("Copy Info").size(11))
+    let copy_btn = button(text(t!("Copy Info")).size(11))
         .on_press(Message::AboutCopyInfo)
         .style(button::primary)
         .padding([6, 16]);

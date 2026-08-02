@@ -1,4 +1,5 @@
 use acadrust::entities::Arc;
+use crate::t;
 use truck_modeling::{builder, Point3};
 
 use crate::command::EntityTransform;
@@ -152,26 +153,26 @@ fn properties(arc: &Arc) -> Vec<PropSection> {
     let (ex, ey, ez) = arc_pt(ea);
 
     vec![PropSection {
-        title: "Geometry".into(),
+        title: t!("Geometry").into_owned(),
         props: vec![
-            ro("Start X", "start_x", format!("{sx:.4}")),
-            ro("Start Y", "start_y", format!("{sy:.4}")),
-            ro("Start Z", "start_z", format!("{sz:.4}")),
-            edit("Center X", "center_x", arc.center.x),
-            edit("Center Y", "center_y", arc.center.y),
-            edit("Center Z", "center_z", arc.center.z),
-            ro("End X", "end_x", format!("{ex:.4}")),
-            ro("End Y", "end_y", format!("{ey:.4}")),
-            ro("End Z", "end_z", format!("{ez:.4}")),
-            edit("Radius", "radius", arc.radius),
-            edit_angle("Start angle", "start_angle", sa.to_degrees()),
-            edit_angle("End angle", "end_angle", ea.to_degrees()),
-            ro("Total angle", "total_angle", format!("{total_angle:.2}")),
-            ro("Arc length", "arc_length", format!("{arc_length:.4}")),
-            ro("Area", "area", format!("{area:.4}")),
-            ro("Normal X", "normal_x", format!("{:.4}", arc.normal.x)),
-            ro("Normal Y", "normal_y", format!("{:.4}", arc.normal.y)),
-            ro("Normal Z", "normal_z", format!("{:.4}", arc.normal.z)),
+            ro(t!("Start X").as_ref(), "start_x", format!("{sx:.4}")),
+            ro(t!("Start Y").as_ref(), "start_y", format!("{sy:.4}")),
+            ro(t!("Start Z").as_ref(), "start_z", format!("{sz:.4}")),
+            edit(t!("Center X").as_ref(), "center_x", arc.center.x),
+            edit(t!("Center Y").as_ref(), "center_y", arc.center.y),
+            edit(t!("Center Z").as_ref(), "center_z", arc.center.z),
+            ro(t!("End X").as_ref(), "end_x", format!("{ex:.4}")),
+            ro(t!("End Y").as_ref(), "end_y", format!("{ey:.4}")),
+            ro(t!("End Z").as_ref(), "end_z", format!("{ez:.4}")),
+            edit(t!("Radius").as_ref(), "radius", arc.radius),
+            edit_angle(t!("Start angle").as_ref(), "start_angle", sa.to_degrees()),
+            edit_angle(t!("End angle").as_ref(), "end_angle", ea.to_degrees()),
+            ro(t!("Total angle").as_ref(), "total_angle", format!("{total_angle:.2}")),
+            ro(t!("Arc length").as_ref(), "arc_length", format!("{arc_length:.4}")),
+            ro(t!("Area").as_ref(), "area", format!("{area:.4}")),
+            ro(t!("Normal X").as_ref(), "normal_x", format!("{:.4}", arc.normal.x)),
+            ro(t!("Normal Y").as_ref(), "normal_y", format!("{:.4}", arc.normal.y)),
+            ro(t!("Normal Z").as_ref(), "normal_z", format!("{:.4}", arc.normal.z)),
         ],
     }]
 }

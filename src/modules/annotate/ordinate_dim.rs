@@ -16,6 +16,7 @@ use glam::{DVec3, Vec3};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
+use crate::t;
 
 pub fn tool() -> ToolDef {
     ToolDef {
@@ -50,8 +51,8 @@ impl CadCommand for OrdinateDimCommand {
 
     fn prompt(&self) -> String {
         match self.step {
-            Step::FeaturePoint => "DIMORDINATE  Specify feature location:".into(),
-            Step::LeaderEndpoint { .. } => "DIMORDINATE  Specify leader endpoint:".into(),
+            Step::FeaturePoint => t!("DIMORDINATE  Specify feature location:").into_owned(),
+            Step::LeaderEndpoint { .. } => t!("DIMORDINATE  Specify leader endpoint:").into_owned(),
         }
     }
 
