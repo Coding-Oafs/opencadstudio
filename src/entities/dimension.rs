@@ -1388,6 +1388,27 @@ fn apply_dimension_breaks(
     *lines = output;
 }
 
+pub(crate) fn uses_custom_arrow_blocks(document: &CadDocument, dim: &Dimension) -> bool {
+    let style_name = &dim.base().style_name;
+    let Some(style) = document.dim_styles.iter().find(|style| {
+        style.name.eq_ignore_ascii_case(style_name)
+            || (style_name.trim().is_empty() && style.name.eq_ignore_ascii_case("Standard"))
+    }) else {
+        return false;
+    };
+    if style.dimtsz > 1e-9 {
+        return false;
+    }
+    let is_custom = |handle| {
+        crate::scene::convert::tessellate::arrow_block_is_custom(document, handle)
+    };
+    if style.dimsah {
+        is_custom(style.dimblk1) || is_custom(style.dimblk2)
+    } else {
+        is_custom(style.dimblk)
+    }
+}
+
 pub trait DimensionTess {
     fn tessellate(
         &self,
@@ -1528,7 +1549,7 @@ fn tessellate_dimension_inner(
         let t = ArrowKind::Tick {
             size: (dimtsz_raw as f32).max(0.001),
         };
-        (t, t)
+        (t.clone(), t)
     } else if let Some(s) = style {
         if dimsah {
             (
@@ -1537,7 +1558,7 @@ fn tessellate_dimension_inner(
             )
         } else {
             let a = arrow_from_block(document, s.dimblk, dimasz);
-            (a, a)
+            (a.clone(), a)
         }
     } else {
         let a = ArrowKind::Triangle {
@@ -1545,7 +1566,7 @@ fn tessellate_dimension_inner(
             filled: true,
             size_mul: 1.0,
         };
-        (a, a)
+        (a.clone(), a)
     };
 
     // Text box (local space) so the dim line can be broken where the text

@@ -434,7 +434,10 @@ fn build_defn(
             // drew nothing. Expand the `*D` block's entities here as block-local
             // subs so they transform with the parent insert. (Empty block_name
             // — a non-baked dimension — falls through to the default arm.)
-            EntityType::Dimension(dim) if !dim.base().block_name.trim().is_empty() => {
+            EntityType::Dimension(dim)
+                if !dim.base().block_name.trim().is_empty()
+                    && !crate::entities::dimension::uses_custom_arrow_blocks(doc, dim) =>
+            {
                 let dblk = doc
                     .block_records
                     .iter()

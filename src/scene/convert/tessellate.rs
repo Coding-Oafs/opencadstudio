@@ -1503,7 +1503,7 @@ pub fn tessellate(
 
 
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum ArrowKind {
     None,
     Triangle { size: f32, filled: bool, size_mul: f32 },
@@ -1513,6 +1513,11 @@ pub(crate) enum ArrowKind {
     Origin { size: f32 },
     Box_ { size: f32, filled: bool },
     Datum { size: f32, filled: bool },
+    Custom {
+        size: f32,
+        lines: Vec<[f32; 3]>,
+        fill: Vec<[f32; 3]>,
+    },
 }
 
 pub(crate) fn arrow_from_block(
@@ -1520,100 +1525,288 @@ pub(crate) fn arrow_from_block(
     handle: acadrust::types::Handle,
     dimasz: f32,
 ) -> ArrowKind {
-    let name = if handle.is_null() {
-        None
-    } else {
-        doc.block_records
-            .iter()
-            .find(|b| b.handle == handle)
-            .map(|b| b.name.as_str())
+    if handle.is_null() {
+        return arrow_from_block_name(None, dimasz);
+    }
+    let Some(record) = doc.block_records.iter().find(|b| b.handle == handle) else {
+        return arrow_from_block_name(None, dimasz);
     };
-    arrow_from_block_name(name, dimasz)
+    if let Some(arrow) = builtin_arrow_from_block_name(&record.name, dimasz) {
+        return arrow;
+    }
+    custom_arrow_from_block(doc, record, dimasz)
+        .unwrap_or_else(|| arrow_from_block_name(None, dimasz))
+}
+
+pub(crate) fn arrow_block_is_custom(
+    doc: &CadDocument,
+    handle: acadrust::types::Handle,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    doc.block_records
+        .iter()
+        .find(|record| record.handle == handle)
+        .is_some_and(|record| {
+            !record.entity_handles.is_empty()
+                && !record.is_layout()
+                && !record.is_model_space()
+                && !record.is_paper_space()
+                && !record.flags.is_xref
+                && !record.flags.is_xref_overlay
+                && !record.flags.is_external
+                && builtin_arrow_from_block_name(&record.name, 1.0).is_none()
+        })
 }
 
 fn arrow_from_block_name(name: Option<&str>, dimasz: f32) -> ArrowKind {
-    // AutoCAD's standard arrow blocks are prefixed with "_" (e.g. "_OPEN").
-    // Strip the prefix, upper-case, and switch on canonical names. Unknown
-    // / missing names default to ClosedFilled.
-    let n = name
-        .map(|s| s.trim().trim_start_matches('_').to_ascii_uppercase())
-        .unwrap_or_default();
-    match n.as_str() {
-        "" | "CLOSEDFILLED" => ArrowKind::Triangle {
+    name.and_then(|name| builtin_arrow_from_block_name(name, dimasz))
+        .unwrap_or(ArrowKind::Triangle {
             size: dimasz,
             filled: true,
             size_mul: 1.0,
-        },
-        "CLOSED" | "CLOSEDBLANK" => ArrowKind::Triangle {
+        })
+}
+
+fn builtin_arrow_from_block_name(name: &str, dimasz: f32) -> Option<ArrowKind> {
+    // Built-in arrow block names may carry a leading underscore. Normalize it
+    // before matching the canonical names.
+    let n = name
+        .trim()
+        .trim_start_matches('_')
+        .to_ascii_uppercase();
+    match n.as_str() {
+        "" | "CLOSEDFILLED" => Some(ArrowKind::Triangle {
+            size: dimasz,
+            filled: true,
+            size_mul: 1.0,
+        }),
+        "CLOSED" | "CLOSEDBLANK" => Some(ArrowKind::Triangle {
             size: dimasz,
             filled: false,
             size_mul: 1.0,
-        },
-        "SMALL" => ArrowKind::Triangle {
+        }),
+        "SMALL" => Some(ArrowKind::Triangle {
             size: dimasz,
             filled: true,
             size_mul: 0.5,
-        },
-        "OPEN" => ArrowKind::Open {
+        }),
+        "OPEN" => Some(ArrowKind::Open {
             size: dimasz,
             half_angle: 9.5_f32.to_radians(),
-        },
-        "OPEN30" => ArrowKind::Open {
+        }),
+        "OPEN30" => Some(ArrowKind::Open {
             size: dimasz,
             half_angle: 15.0_f32.to_radians(),
-        },
-        "OPEN90" => ArrowKind::Open {
+        }),
+        "OPEN90" => Some(ArrowKind::Open {
             size: dimasz,
             half_angle: 45.0_f32.to_radians(),
-        },
-        "DOT" => ArrowKind::Dot {
+        }),
+        "DOT" => Some(ArrowKind::Dot {
             size: dimasz,
             filled: true,
-        },
-        "DOTSMALL" => ArrowKind::Dot {
+        }),
+        "DOTSMALL" => Some(ArrowKind::Dot {
             size: dimasz * 0.5,
             filled: true,
-        },
-        "DOTBLANK" => ArrowKind::Dot {
+        }),
+        "DOTBLANK" => Some(ArrowKind::Dot {
             size: dimasz,
             filled: false,
-        },
-        "DOTSMALLBLANK" => ArrowKind::Dot {
+        }),
+        "DOTSMALLBLANK" => Some(ArrowKind::Dot {
             size: dimasz * 0.5,
             filled: false,
-        },
+        }),
         "ORIGIN" | "ORIGIN2" | "ORIGININDICATOR" | "ORIGININDICATOR2" => {
-            ArrowKind::Origin { size: dimasz }
+            Some(ArrowKind::Origin { size: dimasz })
         }
         // `ArrowKind::Tick` draws the stroke `size` to either side of the tip
-        // (total 2·size — its `size` is a half-length, matching DIMTSZ). As an
-        // arrowhead block, though, DIMASZ is the stroke's *full* length like
-        // every other arrowhead here, so pass half of it — otherwise the
-        // oblique tick renders twice the intended DIMASZ.
-        "OBLIQUE" | "ARCHTICK" => ArrowKind::Tick { size: dimasz * 0.5 },
-        "BOXFILLED" => ArrowKind::Box_ {
+        // (total 2·size — its `size` is a half-length, matching DIMTSZ). For
+        // a block-selected tick DIMASZ is the full stroke length, so halve it.
+        "OBLIQUE" | "ARCHTICK" => Some(ArrowKind::Tick { size: dimasz * 0.5 }),
+        "BOXFILLED" => Some(ArrowKind::Box_ {
             size: dimasz,
             filled: true,
-        },
-        "BOXBLANK" | "BOX" => ArrowKind::Box_ {
+        }),
+        "BOXBLANK" | "BOX" => Some(ArrowKind::Box_ {
             size: dimasz,
             filled: false,
-        },
-        "DATUMFILLED" | "DATUMTRIANGLEFILLED" => ArrowKind::Datum {
+        }),
+        "DATUMFILLED" | "DATUMTRIANGLEFILLED" => Some(ArrowKind::Datum {
             size: dimasz,
             filled: true,
-        },
-        "DATUMBLANK" | "DATUMTRIANGLE" => ArrowKind::Datum {
+        }),
+        "DATUMBLANK" | "DATUMTRIANGLE" => Some(ArrowKind::Datum {
             size: dimasz,
             filled: false,
-        },
-        "NONE" => ArrowKind::None,
-        // INTEGRAL and other complex glyphs aren't reproduced here; fall through.
-        _ => ArrowKind::Triangle {
+        }),
+        "NONE" => Some(ArrowKind::None),
+        _ => None,
+    }
+}
+
+fn custom_arrow_from_block(
+    doc: &CadDocument,
+    record: &acadrust::tables::BlockRecord,
+    dimasz: f32,
+) -> Option<ArrowKind> {
+    if record.is_layout()
+        || record.is_model_space()
+        || record.is_paper_space()
+        || record.flags.is_xref
+        || record.flags.is_xref_overlay
+        || record.flags.is_external
+    {
+        return None;
+    }
+    let base = block_base_point(doc, record);
+    let mut lines = Vec::new();
+    let mut fill = Vec::new();
+    let mut stack = vec![record.name.clone()];
+    for &entity_handle in &record.entity_handles {
+        let Some(entity) = doc.get_entity(entity_handle) else {
+            continue;
+        };
+        collect_custom_arrow_entity(doc, entity, base, &mut lines, &mut fill, &mut stack, 0);
+    }
+    if lines.is_empty() && fill.is_empty() {
+        None
+    } else {
+        Some(ArrowKind::Custom {
             size: dimasz,
-            filled: true,
-            size_mul: 1.0,
-        },
+            lines,
+            fill,
+        })
+    }
+}
+
+fn block_base_point(
+    doc: &CadDocument,
+    record: &acadrust::tables::BlockRecord,
+) -> acadrust::types::Vector3 {
+    doc.get_entity(record.block_entity_handle)
+        .and_then(|entity| match entity {
+            EntityType::Block(block) => Some(block.base_point),
+            _ => None,
+        })
+        .unwrap_or(acadrust::types::Vector3::ZERO)
+}
+
+fn collect_custom_arrow_entity(
+    doc: &CadDocument,
+    entity: &EntityType,
+    root_base: acadrust::types::Vector3,
+    lines: &mut Vec<[f32; 3]>,
+    fill: &mut Vec<[f32; 3]>,
+    stack: &mut Vec<String>,
+    depth: usize,
+) {
+    if depth >= 32 || entity.common().invisible {
+        return;
+    }
+    match entity {
+        EntityType::Block(_)
+        | EntityType::BlockEnd(_)
+        | EntityType::AttributeDefinition(_)
+        | EntityType::Dimension(_)
+        | EntityType::Leader(_)
+        | EntityType::MultiLeader(_) => return,
+        EntityType::Insert(insert) => {
+            if stack.iter().any(|name| name.eq_ignore_ascii_case(&insert.block_name)) {
+                return;
+            }
+            let Some(record) = doc.block_records.get(&insert.block_name) else {
+                return;
+            };
+            let nested_base = block_base_point(doc, record);
+            let transform = insert.get_transform();
+            let transformed_zero = transform.apply(acadrust::types::Vector3::ZERO);
+            let transformed_base = transform.apply(nested_base);
+            let correction = transformed_zero - transformed_base;
+            stack.push(insert.block_name.clone());
+            for mut child in insert.explode_from_document(doc) {
+                child.as_entity_mut().translate(correction);
+                collect_custom_arrow_entity(
+                    doc,
+                    &child,
+                    root_base,
+                    lines,
+                    fill,
+                    stack,
+                    depth + 1,
+                );
+            }
+            stack.pop();
+            return;
+        }
+        _ => {}
+    }
+
+    let wires = tessellate(
+        doc,
+        entity.common().handle,
+        entity,
+        false,
+        [1.0; 4],
+        0.0,
+        [0.0; 8],
+        1.0,
+        1.0,
+        None,
+        None,
+        [0.0, 0.0, 0.0, 1.0],
+        true,
+    );
+    for wire in wires {
+        append_custom_wire_points(&wire.points, &wire.points_low, root_base, lines);
+        append_custom_fill_points(&wire.fill_tris, &wire.fill_tris_low, root_base, fill);
+    }
+}
+
+fn append_custom_wire_points(
+    points: &[[f32; 3]],
+    points_low: &[[f32; 3]],
+    base: acadrust::types::Vector3,
+    out: &mut Vec<[f32; 3]>,
+) {
+    if points.is_empty() {
+        return;
+    }
+    if !out.is_empty() && !out.last().is_some_and(|p| p[0].is_nan()) {
+        out.push([f32::NAN; 3]);
+    }
+    for (index, point) in points.iter().enumerate() {
+        if point[0].is_nan() {
+            if !out.last().is_some_and(|p| p[0].is_nan()) {
+                out.push([f32::NAN; 3]);
+            }
+            continue;
+        }
+        let low = points_low.get(index).copied().unwrap_or([0.0; 3]);
+        out.push([
+            (point[0] as f64 + low[0] as f64 - base.x) as f32,
+            (point[1] as f64 + low[1] as f64 - base.y) as f32,
+            (point[2] as f64 + low[2] as f64 - base.z) as f32,
+        ]);
+    }
+}
+
+fn append_custom_fill_points(
+    points: &[[f32; 3]],
+    points_low: &[[f32; 3]],
+    base: acadrust::types::Vector3,
+    out: &mut Vec<[f32; 3]>,
+) {
+    for (index, point) in points.iter().enumerate() {
+        let low = points_low.get(index).copied().unwrap_or([0.0; 3]);
+        out.push([
+            (point[0] as f64 + low[0] as f64 - base.x) as f32,
+            (point[1] as f64 + low[1] as f64 - base.y) as f32,
+            (point[2] as f64 + low[2] as f64 - base.z) as f32,
+        ]);
     }
 }
 
@@ -1775,43 +1968,43 @@ pub(crate) fn push_tri(out: &mut Vec<[f32; 3]>, a: Vec3, b: Vec3, c: Vec3) {
 pub(crate) fn append_arrow(g: &mut DimGeom, tip: Vec3, dir: Vec3, arrow: &ArrowKind) {
     let dir = normalized_or(dir, Vec3::X);
     let perp = Vec3::new(-dir.y, dir.x, 0.0);
-    match *arrow {
+    match arrow {
         ArrowKind::None => {}
         ArrowKind::Triangle {
             size,
             filled,
             size_mul,
         } => {
-            let size = size * size_mul;
+            let size = *size * *size_mul;
             let base = tip + dir * size;
             // ~1:6 length:half-width ratio (≈9.5° half-angle) matches
-            // AutoCAD's standard ClosedFilled block.
+            // the standard closed-filled block.
             let half_w = size / 6.0;
             let left = base + perp * half_w;
             let right = base - perp * half_w;
             add_segment(&mut g.dim_lines, tip, left);
             add_segment(&mut g.dim_lines, left, right);
             add_segment(&mut g.dim_lines, right, tip);
-            if filled {
+            if *filled {
                 push_tri(&mut g.arrow_fill, tip, left, right);
             }
         }
         ArrowKind::Tick { size } => {
             // 45° oblique tick crossing the dim line at the tip; `size` is
-            // the half-length (matches AutoCAD's DIMTSZ semantics).
-            let off = (dir + perp).normalize_or_zero() * size;
+            // the half-length used by DIMTSZ.
+            let off = (dir + perp).normalize_or_zero() * *size;
             add_segment(&mut g.dim_lines, tip - off, tip + off);
         }
         ArrowKind::Open { size, half_angle } => {
-            let base = tip + dir * size;
-            let half_w = size * half_angle.tan();
+            let base = tip + dir * *size;
+            let half_w = *size * half_angle.tan();
             let left = base + perp * half_w;
             let right = base - perp * half_w;
             add_segment(&mut g.dim_lines, tip, left);
             add_segment(&mut g.dim_lines, tip, right);
         }
         ArrowKind::Dot { size, filled } => {
-            let r = size * 0.5;
+            let r = *size * 0.5;
             const N: usize = 16;
             let mut ring: Vec<Vec3> = Vec::with_capacity(N + 1);
             for i in 0..=N {
@@ -1819,7 +2012,7 @@ pub(crate) fn append_arrow(g: &mut DimGeom, tip: Vec3, dir: Vec3, arrow: &ArrowK
                 ring.push(tip + Vec3::new(a.cos() * r, a.sin() * r, 0.0));
             }
             add_polyline(&mut g.dim_lines, &ring);
-            if filled {
+            if *filled {
                 for i in 0..N {
                     push_tri(&mut g.arrow_fill, tip, ring[i], ring[i + 1]);
                 }
@@ -1828,7 +2021,7 @@ pub(crate) fn append_arrow(g: &mut DimGeom, tip: Vec3, dir: Vec3, arrow: &ArrowK
         ArrowKind::Origin { size } => {
             // Small filled dot at the tip with a perpendicular tick crossing
             // the dim line — matches "_ORIGIN" / "_ORIGIN2" blocks.
-            let r = size * 0.25;
+            let r = *size * 0.25;
             const N: usize = 12;
             let mut ring: Vec<Vec3> = Vec::with_capacity(N + 1);
             for i in 0..=N {
@@ -1839,11 +2032,11 @@ pub(crate) fn append_arrow(g: &mut DimGeom, tip: Vec3, dir: Vec3, arrow: &ArrowK
             for i in 0..N {
                 push_tri(&mut g.arrow_fill, tip, ring[i], ring[i + 1]);
             }
-            let half = size * 0.5;
+            let half = *size * 0.5;
             add_segment(&mut g.dim_lines, tip - perp * half, tip + perp * half);
         }
         ArrowKind::Box_ { size, filled } => {
-            let half = size * 0.5;
+            let half = *size * 0.5;
             let p1 = tip - dir * half - perp * half;
             let p2 = tip + dir * half - perp * half;
             let p3 = tip + dir * half + perp * half;
@@ -1852,7 +2045,7 @@ pub(crate) fn append_arrow(g: &mut DimGeom, tip: Vec3, dir: Vec3, arrow: &ArrowK
             add_segment(&mut g.dim_lines, p2, p3);
             add_segment(&mut g.dim_lines, p3, p4);
             add_segment(&mut g.dim_lines, p4, p1);
-            if filled {
+            if *filled {
                 push_tri(&mut g.arrow_fill, p1, p2, p3);
                 push_tri(&mut g.arrow_fill, p1, p3, p4);
             }
@@ -1860,15 +2053,45 @@ pub(crate) fn append_arrow(g: &mut DimGeom, tip: Vec3, dir: Vec3, arrow: &ArrowK
         ArrowKind::Datum { size, filled } => {
             // Right-pointing triangle with the base perpendicular to the dim
             // line at the tip and the apex along +dir.
-            let half = size * 0.5;
+            let half = *size * 0.5;
             let base_a = tip + perp * half;
             let base_b = tip - perp * half;
-            let apex = tip + dir * size;
+            let apex = tip + dir * *size;
             add_segment(&mut g.dim_lines, base_a, apex);
             add_segment(&mut g.dim_lines, apex, base_b);
             add_segment(&mut g.dim_lines, base_b, base_a);
-            if filled {
+            if *filled {
                 push_tri(&mut g.arrow_fill, base_a, apex, base_b);
+            }
+        }
+        ArrowKind::Custom { size, lines, fill } => {
+            let transform = |point: &[f32; 3]| {
+                tip - dir * (point[0] * *size) - perp * (point[1] * *size)
+                    + Vec3::Z * (point[2] * *size)
+            };
+            if !lines.is_empty()
+                && !g.dim_lines.is_empty()
+                && !g.dim_lines.last().is_some_and(|point| point[0].is_nan())
+            {
+                g.dim_lines.push([f32::NAN; 3]);
+            }
+            for point in lines {
+                if point[0].is_nan() {
+                    if !g.dim_lines.last().is_some_and(|point| point[0].is_nan()) {
+                        g.dim_lines.push([f32::NAN; 3]);
+                    }
+                    continue;
+                }
+                let point = transform(point);
+                g.dim_lines.push([point.x, point.y, point.z]);
+            }
+            for triangle in fill.chunks_exact(3) {
+                push_tri(
+                    &mut g.arrow_fill,
+                    transform(&triangle[0]),
+                    transform(&triangle[1]),
+                    transform(&triangle[2]),
+                );
             }
         }
     }

@@ -738,15 +738,17 @@ pub(crate) fn tessellate_entity(
 
     // ── Dimension baked-block fast path ─────────────────────────────────────
     //
-    // AutoCAD bakes each dimension's final geometry (extension lines, dim
-    // line, arrows, text MText) into a per-instance block — usually
+    // A saved dimension may carry final geometry (extension lines, dim line,
+    // arrows and text) in a per-instance block — usually
     // `*D<n>`, but custom names like `DIMBLOCK###-4NP` also occur. When the
     // block exists we render its contents through `tessellate_entity` so
     // sub-Text/MText get the standard baseline/greek/full LOD ladder, and
     // DIMTXT × DIMSCALE isn't re-applied on already-baked geometry.
     if let EntityType::Dimension(dim) = e {
         let block_name = &dim.base().block_name;
-        if !block_name.trim().is_empty() {
+        if !block_name.trim().is_empty()
+            && !crate::entities::dimension::uses_custom_arrow_blocks(document, dim)
+        {
             if let Some(br) = document
                 .block_records
                 .iter()
@@ -773,8 +775,8 @@ pub(crate) fn tessellate_entity(
                             continue;
                         };
                         // A dimension's definition points are baked into the
-                        // block as POINTs on the Defpoints layer. AutoCAD never
-                        // draws them as PDMODE glyphs — they're grip markers, not
+                        // block as POINTs on the Defpoints layer. They are grip
+                        // markers rather than PDMODE display geometry, so
                         // geometry — so rendering them adds a stray tick at each
                         // measured point that makes the extension lines look like
                         // they run past the geometry. Skip them.

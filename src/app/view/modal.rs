@@ -611,7 +611,20 @@ impl OpenCADStudio {
             // Dropdown options (names must match the records exactly so the
             // selection can be resolved back to a handle on the update side).
             let mut block_opts: Vec<String> = vec!["Default".to_string()];
-            block_opts.extend(doc.block_records.iter().map(|b| b.name.clone()));
+            block_opts.extend(
+                doc.block_records
+                    .iter()
+                    .filter(|b| {
+                        !b.is_layout()
+                            && !b.is_model_space()
+                            && !b.is_paper_space()
+                            && !b.flags.is_xref
+                            && !b.flags.is_xref_overlay
+                            && !b.flags.is_external
+                            && !b.name.starts_with('*')
+                    })
+                    .map(|b| b.name.clone()),
+            );
             let mut lt_opts: Vec<String> = vec!["ByBlock".to_string()];
             lt_opts.extend(doc.line_types.iter().map(|lt| lt.name.clone()));
             let blk_name = |h: acadrust::types::Handle| -> String {

@@ -360,13 +360,13 @@ fn dim_terminator(
         s.common.handle = Handle::NULL;
         out.push(EntityType::Solid(s));
     };
-    match *arrow {
+    match arrow {
         A::None => {}
         A::Triangle { size, filled, size_mul } => {
-            let size = (size * size_mul) as f64;
+            let size = (*size * *size_mul) as f64;
             let hw = size / 6.0;
             let (l, r) = (pt(size, hw), pt(size, -hw));
-            if filled {
+            if *filled {
                 tri(tip, l, r, &mut out);
             } else {
                 out.push(dim_seg(tip, l, common));
@@ -375,7 +375,7 @@ fn dim_terminator(
             }
         }
         A::Tick { size } => {
-            let s = size as f64;
+            let s = *size as f64;
             let (ox, oy) = (dx + px, dy + py);
             let m = (ox * ox + oy * oy).sqrt().max(1e-9);
             let (ox, oy) = (ox / m * s, oy / m * s);
@@ -386,40 +386,70 @@ fn dim_terminator(
             ));
         }
         A::Open { size, half_angle } => {
-            let size = size as f64;
-            let hw = size * (half_angle as f64).tan();
+            let size = *size as f64;
+            let hw = size * (*half_angle as f64).tan();
             out.push(dim_seg(tip, pt(size, hw), common));
             out.push(dim_seg(tip, pt(size, -hw), common));
         }
         A::Dot { size, filled } => {
-            let r = size as f64 * 0.5;
-            terminator_circle(tip, r, filled, common, &mut out);
+            let r = *size as f64 * 0.5;
+            terminator_circle(tip, r, *filled, common, &mut out);
         }
         A::Origin { size } => {
-            terminator_circle(tip, size as f64 * 0.25, true, common, &mut out);
-            let half = size as f64 * 0.5;
+            terminator_circle(tip, *size as f64 * 0.25, true, common, &mut out);
+            let half = *size as f64 * 0.5;
             out.push(dim_seg(pt(0.0, -half), pt(0.0, half), common));
         }
         A::Box_ { size, filled } => {
-            let h = size as f64 * 0.5;
+            let h = *size as f64 * 0.5;
             let (p1, p2, p3, p4) = (pt(-h, -h), pt(h, -h), pt(h, h), pt(-h, h));
             out.push(dim_seg(p1, p2, common));
             out.push(dim_seg(p2, p3, common));
             out.push(dim_seg(p3, p4, common));
             out.push(dim_seg(p4, p1, common));
-            if filled {
+            if *filled {
                 tri(p1, p2, p3, &mut out);
                 tri(p1, p3, p4, &mut out);
             }
         }
         A::Datum { size, filled } => {
-            let half = size as f64 * 0.5;
-            let (ba, bb, apex) = (pt(0.0, half), pt(0.0, -half), pt(size as f64, 0.0));
+            let half = *size as f64 * 0.5;
+            let (ba, bb, apex) = (pt(0.0, half), pt(0.0, -half), pt(*size as f64, 0.0));
             out.push(dim_seg(ba, apex, common));
             out.push(dim_seg(apex, bb, common));
             out.push(dim_seg(bb, ba, common));
-            if filled {
+            if *filled {
                 tri(ba, apex, bb, &mut out);
+            }
+        }
+        A::Custom { size, lines, fill } => {
+            let custom_pt = |point: &[f32; 3]| {
+                let mut placed = pt(
+                    -(point[0] as f64) * *size as f64,
+                    -(point[1] as f64) * *size as f64,
+                );
+                placed.z += point[2] as f64 * *size as f64;
+                placed
+            };
+            let mut previous = None;
+            for point in lines {
+                if point[0].is_nan() {
+                    previous = None;
+                    continue;
+                }
+                let current = custom_pt(point);
+                if let Some(previous) = previous {
+                    out.push(dim_seg(previous, current, common));
+                }
+                previous = Some(current);
+            }
+            for triangle in fill.chunks_exact(3) {
+                tri(
+                    custom_pt(&triangle[0]),
+                    custom_pt(&triangle[1]),
+                    custom_pt(&triangle[2]),
+                    &mut out,
+                );
             }
         }
     }
@@ -576,17 +606,17 @@ fn dim_metrics(dim: &Dimension, doc: &CadDocument) -> DimMetrics {
     // else closed-filled.
     let (arrow1, arrow2) = if dimtsz > 1e-9 {
         let t = ArrowKind::Tick { size: dimtsz as f32 };
-        (t, t)
+        (t.clone(), t)
     } else if let Some(s) = style {
         if s.dimsah {
             (arrow_from_block(doc, s.dimblk1, asz), arrow_from_block(doc, s.dimblk2, asz))
         } else {
             let a = arrow_from_block(doc, s.dimblk, asz);
-            (a, a)
+            (a.clone(), a)
         }
     } else {
         let a = ArrowKind::Triangle { size: asz, filled: true, size_mul: 1.0 };
-        (a, a)
+        (a.clone(), a)
     };
     DimMetrics {
         dimasz,
