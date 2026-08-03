@@ -906,6 +906,8 @@ pub enum CmdResult {
     ZoomToWindow { p1: DVec3, p2: DVec3 },
     /// Print a measurement result to the command line and end the command.
     Measurement(String),
+    /// Print a measurement result and keep the command active.
+    ReportMeasurement(String),
     /// Break `handle` at points `p1` and `p2`; replace with computed fragments.
     BreakEntity { handle: Handle, p1: DVec3, p2: DVec3 },
     /// Attempt to join the given entities into fewer merged entities.
@@ -1566,6 +1568,11 @@ pub trait CadCommand: Send {
     /// that need to read/modify it (e.g. DIMTEDIT, MLEADERADD, MLEADERREMOVE).
     /// Default: no-op.
     fn inject_picked_entity(&mut self, _entity: acadrust::EntityType) {}
+
+    /// Supply the tessellated surface area associated with the picked entity.
+    /// Commands that measure mesh-backed objects can opt in without owning the
+    /// scene's render cache.
+    fn inject_picked_surface_area(&mut self, _area: f64) {}
 
     /// What the command is asking for at this step, used to label the
     /// dynamic-input overlay. Default is a point pick; commands waiting

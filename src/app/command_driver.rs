@@ -1789,6 +1789,14 @@ impl OpenCADStudio {
                 self.restore_pre_cmd_tangent();
                 self.command_line.push_output(&msg);
             }
+            CmdResult::ReportMeasurement(msg) => {
+                self.tabs[i].snap_result = None;
+                self.tabs[i].scene.clear_preview_wire();
+                self.command_line.push_output(&msg);
+                if let Some(prompt) = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt()) {
+                    self.command_line.push_info(&prompt);
+                }
+            }
             CmdResult::AlignSelected {
                 handles,
                 src1,

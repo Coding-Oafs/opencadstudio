@@ -1376,7 +1376,6 @@ pub(crate) fn collect_loop_polygon(
 
 /// All loops of a face: the outer boundary first, then any inner hole loops.
 /// Each loop is returned as an ordered 3-D polygon (≥ 3 points).
-#[cfg(feature = "solid3d")]
 pub(crate) fn collect_face_loops(
     sat: &SatDocument,
     face: &SatFace,

@@ -2710,11 +2710,20 @@ impl OpenCADStudio {
                         .map(|c| c.inject_before_entity_pick())
                         .unwrap_or(false);
                     if inject_first {
+                        let surface_area = self.tabs[i]
+                            .scene
+                            .meshes
+                            .get(&handle)
+                            .or_else(|| self.tabs[i].scene.block_meshes.get(&handle))
+                            .map(|mesh| mesh.metrics.surface_area);
                         if let Some(entity) =
                             self.tabs[i].scene.document.get_entity(handle).cloned()
                         {
                             if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
                                 cmd.inject_picked_entity(entity);
+                                if let Some(area) = surface_area {
+                                    cmd.inject_picked_surface_area(area);
+                                }
                             }
                         }
                     }

@@ -1,7 +1,7 @@
 use acadrust::entities::Spline;
 use crate::t;
 use truck_modeling::{
-    base::{BoundedCurve, ParametricCurve, Vector4},
+    base::{BoundedCurve, ParameterDivision1D, ParametricCurve, Vector4},
     builder, BSplineCurve, Curve, Edge, KnotVec, NurbsCurve, Point3, Wire,
 };
 
@@ -127,6 +127,77 @@ fn to_truck(spl: &Spline) -> TruckEntity {
     }
 }
 
+pub(crate) fn measurement_polyline(spl: &Spline) -> Vec<[f64; 3]> {
+    let count = spl.control_points.len();
+    if count < 2 {
+        if spl.fit_points.len() < 2 {
+            return spl.control_points.iter().map(|p| [p.x, p.y, p.z]).collect();
+        }
+        return if spl.flags.closed || spl.flags.periodic {
+            catmull_rom_polyline(&spl.fit_points, true)
+        } else {
+            fit_spline_polyline(spl)
+        };
+    }
+
+    let degree = spl.degree.max(0) as usize;
+    if degree == 0 || degree >= count {
+        return spl.control_points.iter().map(|p| [p.x, p.y, p.z]).collect();
+    }
+    let knot_vec = if spl.knots.len() == count + degree + 1 {
+        KnotVec::from(spl.knots.clone())
+    } else {
+        KnotVec::uniform_knot(degree, count - 1)
+    };
+
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for point in &spl.control_points {
+        min[0] = min[0].min(point.x);
+        min[1] = min[1].min(point.y);
+        min[2] = min[2].min(point.z);
+        max[0] = max[0].max(point.x);
+        max[1] = max[1].max(point.y);
+        max[2] = max[2].max(point.z);
+    }
+    let diagonal = ((max[0] - min[0]).powi(2)
+        + (max[1] - min[1]).powi(2)
+        + (max[2] - min[2]).powi(2))
+    .sqrt();
+    let tolerance = crate::scene::convert::tess_util::fill_chord_tol(diagonal.max(1.0));
+
+    if spl.weights.len() == count {
+        let controls = spl
+            .control_points
+            .iter()
+            .zip(&spl.weights)
+            .map(|(point, &weight)| {
+                let weight = if weight.abs() < 1e-12 { 1.0 } else { weight };
+                Vector4::new(
+                    point.x * weight,
+                    point.y * weight,
+                    point.z * weight,
+                    weight,
+                )
+            })
+            .collect::<Vec<_>>();
+        let curve = NurbsCurve::new(BSplineCurve::new(knot_vec, controls));
+        let range = curve.range_tuple();
+        let (_, points) = curve.parameter_division(range, tolerance);
+        points.into_iter().map(|point| [point.x, point.y, point.z]).collect()
+    } else {
+        let controls = spl
+            .control_points
+            .iter()
+            .map(|point| Point3::new(point.x, point.y, point.z))
+            .collect::<Vec<_>>();
+        let curve = BSplineCurve::new(knot_vec, controls);
+        let range = curve.range_tuple();
+        let (_, points) = curve.parameter_division(range, tolerance);
+        points.into_iter().map(|point| [point.x, point.y, point.z]).collect()
+    }
+}
+
 /// Sample a Catmull-Rom spline through `pts` into a dense polyline. The curve
 /// passes through every input point; open ends use reflected phantom points so
 /// they don't kink, closed curves wrap around.
@@ -195,9 +266,8 @@ fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[
 
 /// Interpolate an open fit-point spline into a dense polyline: the C² cubic that
 /// passes through every fit point, clamped to the stored start/end tangents when
-/// present (natural end otherwise). This is what a fit spline *is* — the same
-/// interpolation AutoCAD-family tools draw — so its ends follow the specified
-/// tangents instead of the local slopes Catmull-Rom would use.
+/// present (natural end otherwise), so its ends follow the specified tangents
+/// instead of the local slopes Catmull-Rom would use.
 fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
     let p: Vec<[f64; 3]> = spl.fit_points.iter().map(|q| [q.x, q.y, q.z]).collect();
     let n = p.len();

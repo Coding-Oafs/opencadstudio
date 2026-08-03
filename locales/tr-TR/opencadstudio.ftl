@@ -40,6 +40,24 @@ command-line-hint = Bir komut yazın veya şeridi kullanın. OBJ dosyasını Ekl
 command-line-label = Komut:
 command-line-literal-spaces = Değişmez boşluklar: Boşluk, komutu çalıştırmak yerine satırda kalır. Yeniden kapatılana kadar etkin kalır.
 
+area-option-object = Nesne
+area-option-add = Alan ekle
+area-option-subtract = Alan çıkar
+area-prompt-first = AREA  İlk köşe noktasını belirtin veya [Nesne/Alan ekle/Alan çıkar] <Nesne>:
+area-prompt-add = AREA EKLE  İlk köşe noktasını belirtin veya [Nesne/Alan çıkar] <Nesne>:
+area-prompt-subtract = AREA ÇIKAR  İlk köşe noktasını belirtin veya [Nesne/Alan ekle] <Nesne>:
+area-prompt-next = AREA  Sonraki noktayı belirtin ({ $count } seçildi, hesaplamak için Enter):
+area-prompt-object = AREA  Nesne seçin:
+area-object-not-measurable = AREA: Seçilen nesnenin ölçülebilir alanı yok.
+area-result = Alan = { $area },  Çevre = { $perimeter }
+area-result-area-only = Alan = { $area }
+area-running-result =
+    Alan = { $area },  Çevre = { $perimeter }
+    Toplam alan = { $total_area },  Toplam çevre = { $total_perimeter }
+area-running-result-area-only =
+    Alan = { $area }
+    Toplam alan = { $total_area }
+
 start-new-drawing = Yeni Çizim
 start-open-file = Dosya Aç…
 start-donate = Bağış Yap
