@@ -1,7 +1,7 @@
 use crate::app::Message;
 use crate::io::recovery::{RecoveryReport, RecoveryStatus};
 use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{Background, Border, Element, Fill, Theme};
+use iced::{Background, Border, Element, Fill, Length, Shrink, Theme};
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
@@ -188,8 +188,18 @@ pub fn view_prompt<'a>(
     error: &'a str,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
+    let content_width = if matches!(sizing.width, Length::Fill) {
+        Fill
+    } else {
+        Shrink
+    };
+    let content_height = if matches!(sizing.height, Length::Fill) {
+        Fill
+    } else {
+        Shrink
+    };
     let actions = row![
-        Space::new().width(Fill),
+        Space::new().width(content_width),
         button(text(crate::tr!("recovery-decline")).size(12))
             .on_press(Message::RecoveryDecline)
             .style(button::secondary)
@@ -208,10 +218,10 @@ pub fn view_prompt<'a>(
             text(crate::tr!("recovery-prompt-description"))
                 .size(11)
                 .style(muted_style),
-            container(scrollable(text(error).size(10)).height(Fill))
+            container(scrollable(text(error).size(10)).height(content_height))
                 .padding([10, 12])
-                .width(Fill)
-                .height(Fill)
+                .width(content_width)
+                .height(content_height)
                 .style(container::bordered_box),
             actions,
         ]
