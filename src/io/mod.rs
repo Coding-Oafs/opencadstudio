@@ -12,6 +12,7 @@ pub mod single_instance;
 pub mod pdf_export;
 pub mod plot_style;
 pub mod print_to_printer;
+pub mod recovery;
 pub mod step;
 pub mod stl;
 pub mod xref;
@@ -28,7 +29,9 @@ pub(crate) mod web_recent;
 use crate::scene::DerivedCaches;
 use acadrust::entities::EntityType;
 use acadrust::io::dwg::DwgReader;
-use acadrust::{CadDocument, DwgWriter, DxfReader, DxfWriter};
+use acadrust::{
+    CadDocument, DwgReadOptions, DwgWriter, DxfReader, DxfReaderConfiguration, DxfWriter,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -75,6 +78,82 @@ impl OpenProgressState {
     }
 }
 
+pub fn open_phase_name(phase: u8) -> &'static str {
+    match phase {
+        crate::app::OPEN_PHASE_READING => "reading",
+        crate::app::OPEN_PHASE_PARSING => "parsing",
+        crate::app::OPEN_PHASE_XREF => "references",
+        crate::app::OPEN_PHASE_CACHING => "derived-caches",
+        crate::app::OPEN_PHASE_FINALIZING => "finalizing",
+        _ => "unknown",
+    }
+}
+
+fn recovery_fingerprint_needed(caches: &DerivedCaches) -> bool {
+    let parser_issue = caches.read_stats.as_ref().is_some_and(|stats| {
+        stats.recovered()
+            || stats.skipped_source_records > 0
+            || !stats.stream_completed
+    });
+    let reference_issue = caches.xrefs.iter().any(|item| {
+        matches!(
+            item.status,
+            crate::io::xref::XrefStatus::Recovered | crate::io::xref::XrefStatus::Failed
+        )
+    });
+    parser_issue || caches.corrupt_dropped > 0 || caches.xref_dropped > 0 || reference_issue
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenLoadError {
+    pub message: String,
+    pub source_sha256: Option<String>,
+    pub read_stats: Option<acadrust::ReadStats>,
+    pub recovery_available: bool,
+}
+
+impl OpenLoadError {
+    fn new(message: impl Into<String>, source_sha256: Option<String>) -> Self {
+        Self {
+            message: message.into(),
+            source_sha256,
+            read_stats: None,
+            recovery_available: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recovery_prompt(
+        message: impl Into<String>,
+        read_stats: Option<acadrust::ReadStats>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            source_sha256: None,
+            read_stats,
+            recovery_available: true,
+        }
+    }
+}
+
+impl std::fmt::Display for OpenLoadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl From<String> for OpenLoadError {
+    fn from(message: String) -> Self {
+        Self::new(message, None)
+    }
+}
+
+impl From<&str> for OpenLoadError {
+    fn from(message: &str) -> Self {
+        Self::new(message, None)
+    }
+}
+
 // ── Open ──────────────────────────────────────────────────────────────────
 
 /// Show the file picker and return the chosen path plus its size in bytes.
@@ -101,22 +180,89 @@ pub async fn pick_open_path() -> Option<(PathBuf, u64)> {
 /// the load. Writes phase markers into `phase` so the UI can show
 /// "Parsing entities…" / "Building caches…" / "Finalizing…" while the loader
 /// thread runs.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn open_path_with_phase(
     path: PathBuf,
     progress: Arc<OpenProgressState>,
     model_bg: [f32; 4],
-) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), OpenLoadError> {
+    open_path_with_phase_attempt(path, progress, model_bg, OpenAttempt::Strict).await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn open_path_with_phase(
+    _path: PathBuf,
+    _progress: Arc<OpenProgressState>,
+    _model_bg: [f32; 4],
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), OpenLoadError> {
+    Err(OpenLoadError::from(
+        "filesystem path opening is unavailable on this target",
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn recover_path_with_phase(
+    path: PathBuf,
+    progress: Arc<OpenProgressState>,
+    model_bg: [f32; 4],
+    initial_error: String,
+    initial_stats: Option<acadrust::ReadStats>,
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), OpenLoadError> {
+    open_path_with_phase_attempt(
+        path,
+        progress,
+        model_bg,
+        OpenAttempt::Recovery(initial_error, initial_stats),
+    )
+    .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+enum OpenAttempt {
+    Strict,
+    Recovery(String, Option<acadrust::ReadStats>),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct OpenAttemptFailure {
+    message: String,
+    read_stats: Option<acadrust::ReadStats>,
+    recoverable: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<String> for OpenAttemptFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            read_stats: None,
+            recoverable: false,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn open_path_with_phase_attempt(
+    path: PathBuf,
+    progress: Arc<OpenProgressState>,
+    model_bg: [f32; 4],
+    attempt: OpenAttempt,
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), OpenLoadError> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown".into());
     let path2 = path.clone();
     let progress2 = progress.clone();
+    let recovery_available = matches!(attempt, OpenAttempt::Strict);
     let (sender, receiver) = iced::futures::channel::oneshot::channel();
     std::thread::Builder::new()
         .name("ocs-file-open".to_string())
         .spawn(move || {
-            let result = (|| -> Result<_, String> {
+            let initial_fingerprint = crate::io::edit_lock::FileFingerprint::capture(&path2).ok();
+            let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (|| -> Result<_, OpenAttemptFailure> {
         use iced::time::Instant;
                 progress2.set(crate::app::OPEN_PHASE_PARSING, 200, 0, 1000);
         let t_parse = Instant::now();
@@ -133,12 +279,28 @@ pub async fn open_path_with_phase(
                     });
                     callback
                 };
-                let mut doc = load_file_with_progress(&path2, Some(parser_progress))?;
+                std::fs::File::open(&path2).map_err(|error| OpenAttemptFailure {
+                    message: format!("failed to open drawing: {error}"),
+                    read_stats: None,
+                    recoverable: false,
+                })?;
+                let outcome = load_file_for_open(&path2, Some(parser_progress), &attempt)?;
+                let read_stats = outcome.stats;
+                let mut doc = outcome.document;
         let parse_ms = t_parse.elapsed().as_millis() as u32;
                 progress2.set(crate::app::OPEN_PHASE_PARSING, 5800, 1000, 1000);
         let t_purge = Instant::now();
         let dropped = purge_corrupt_entities(&mut doc);
         let purge_ms = t_purge.elapsed().as_millis() as u32;
+                if matches!(attempt, OpenAttempt::Strict) && dropped > 0 {
+                    return Err(OpenAttemptFailure {
+                        message: format!(
+                            "normal read found {dropped} structurally invalid drawing records"
+                        ),
+                        read_stats: Some(read_stats),
+                        recoverable: true,
+                    });
+                }
                 progress2.set(crate::app::OPEN_PHASE_XREF, 6000, 0, 1);
                 let t_xref = Instant::now();
                 let (xref_infos, xref_dropped) = if let Some(base_dir) = path2.parent() {
@@ -188,23 +350,87 @@ pub async fn open_path_with_phase(
                     xref_ms,
         };
         caches.corrupt_dropped = dropped;
+                caches.read_stats = Some(read_stats);
                 caches.xref_dropped = xref_dropped;
                 caches.xrefs = xref_infos;
+                if recovery_fingerprint_needed(&caches) {
+                    caches.source_sha256 = stable_sha256_file(
+                        &path2,
+                        initial_fingerprint.as_ref(),
+                    );
+                }
                 progress2.set(crate::app::OPEN_PHASE_FINALIZING, 9600, 0, 1);
                 let (prepared_doc, prepared_geometry) =
                     crate::scene::prepare_open_geometry(doc, &caches, model_bg);
                 doc = prepared_doc;
                 caches.prepared_geometry = Some(prepared_geometry);
                 progress2.set(crate::app::OPEN_PHASE_FINALIZING, 9950, 1, 1);
-        Ok((doc, caches))
-    })();
+                    Ok((doc, caches))
+                })()
+            }));
+            let result = match attempted {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(failure)) => Err(if recovery_available && failure.recoverable {
+                    OpenLoadError::recovery_prompt(failure.message, failure.read_stats)
+                } else {
+                    OpenLoadError {
+                        message: failure.message,
+                        source_sha256: stable_sha256_file(
+                            &path2,
+                            initial_fingerprint.as_ref(),
+                        ),
+                        read_stats: failure.read_stats,
+                        recovery_available: false,
+                    }
+                }),
+                Err(payload) => {
+                    let message = format!(
+                        "file-open worker panicked: {}",
+                        panic_message(payload.as_ref())
+                    );
+                    Err(OpenLoadError {
+                        message,
+                        source_sha256: stable_sha256_file(
+                            &path2,
+                            initial_fingerprint.as_ref(),
+                        ),
+                        read_stats: None,
+                        recovery_available: false,
+                    })
+                }
+            };
             let _ = sender.send(result);
     })
-        .map_err(|error| format!("failed to start parser thread: {error}"))?;
+        .map_err(|error| OpenLoadError::from(format!("failed to start parser thread: {error}")))?;
     let (doc, caches) = receiver
         .await
-        .map_err(|_| "parser thread stopped without a result".to_string())??;
+        .map_err(|_| OpenLoadError::from("parser thread stopped without a result"))??;
     Ok((name, path, doc, caches))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn stable_sha256_file(
+    path: &Path,
+    initial: Option<&crate::io::edit_lock::FileFingerprint>,
+) -> Option<String> {
+    let initial = initial?;
+    let before = crate::io::edit_lock::FileFingerprint::capture(path).ok()?;
+    if &before != initial {
+        return None;
+    }
+    let digest = crate::io::recovery::sha256_file(path).ok()?;
+    let after = crate::io::edit_lock::FileFingerprint::capture(path).ok()?;
+    (after == before).then_some(digest)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown panic payload");
+    message.chars().take(500).collect()
 }
 
 /// Web file open: show the browser picker, read the chosen file's bytes, parse
@@ -213,26 +439,54 @@ pub async fn open_path_with_phase(
 /// handler. There is no filesystem path on the web, so a name-only `PathBuf`
 /// stands in for the document path.
 #[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone)]
+pub struct WebOpenOutcome {
+    pub name: String,
+    pub size_bytes: u64,
+    pub result: Result<(String, PathBuf, CadDocument, DerivedCaches), OpenLoadError>,
+    pub recovery_bytes: Option<Arc<[u8]>>,
+    pub cache_bytes: Option<Arc<[u8]>>,
+    pub record_recent: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn pick_and_load_web(
     progress: Arc<OpenProgressState>,
-) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
-    let handle = crate::sys::file_dialog()
+) -> WebOpenOutcome {
+    let Some(handle) = crate::sys::file_dialog()
         .set_title("Open CAD file")
         .add_filter("CAD Files", &["dwg", "dxf", "DWG", "DXF"])
         .add_filter("All Files", &["*"])
         .pick_file()
         .await
-        .ok_or_else(|| "Cancelled".to_string())?;
+    else {
+        return WebOpenOutcome {
+            name: "Opening…".to_string(),
+            size_bytes: 0,
+            result: Err(OpenLoadError::from("Cancelled")),
+            recovery_bytes: None,
+            cache_bytes: None,
+            record_recent: false,
+        };
+    };
     let name = handle.file_name();
     progress.set(crate::app::OPEN_PHASE_READING, 500, 1, 2);
-    let bytes = handle.read().await;
-    let parsed = load_web_bytes(&name, &bytes, progress.clone());
-    let cached = web_recent::store(&name, &bytes);
-    let (result, cache_result) = iced::futures::future::join(parsed, cached).await;
-    if result.is_err() && cache_result.is_ok() {
-        let _ = web_recent::remove(&name).await;
+    let bytes: Arc<[u8]> = Arc::from(handle.read().await);
+    let size_bytes = bytes.len() as u64;
+    let result = load_web_bytes(&name, &bytes, progress.clone(), false, "", None).await;
+    let keep_for_recovery = result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.recovery_available);
+    let cache_bytes = result.is_ok().then(|| Arc::clone(&bytes));
+    WebOpenOutcome {
+        name,
+        size_bytes,
+        result,
+        recovery_bytes: keep_for_recovery.then(|| Arc::clone(&bytes)),
+        cache_bytes,
+        record_recent: false,
     }
-    result
 }
 
 /// Reopen a browser-private recent copy without showing the file picker.
@@ -240,21 +494,92 @@ pub async fn pick_and_load_web(
 pub async fn open_recent_web(
     path: PathBuf,
     progress: Arc<OpenProgressState>,
-) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
+) -> WebOpenOutcome {
+    open_recent_web_attempt(path, progress, false, String::new()).await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn recover_web_bytes(
+    name: String,
+    bytes: Arc<[u8]>,
+    progress: Arc<OpenProgressState>,
+    initial_error: String,
+    initial_stats: Option<acadrust::ReadStats>,
+) -> WebOpenOutcome {
+    let size_bytes = bytes.len() as u64;
+    let result = load_web_bytes(
+        &name,
+        &bytes,
+        progress,
+        true,
+        &initial_error,
+        initial_stats,
+    )
+    .await;
+    WebOpenOutcome {
+        name,
+        size_bytes,
+        result,
+        recovery_bytes: None,
+        cache_bytes: None,
+        record_recent: false,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn open_recent_web_attempt(
+    path: PathBuf,
+    progress: Arc<OpenProgressState>,
+    recovery_mode: bool,
+    initial_error: String,
+) -> WebOpenOutcome {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .ok_or_else(|| "Recent drawing has no file name".to_string())?;
-    let bytes = web_recent::read(&name)
-        .await
-        .map_err(|error| format!("Recent copy unavailable for \"{name}\": {error}"))?;
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let bytes = match web_recent::read(&name).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return WebOpenOutcome {
+                name: name.clone(),
+                size_bytes: 0,
+                result: Err(OpenLoadError::from(format!(
+                    "Recent copy unavailable for \"{name}\": {error}"
+                ))),
+                recovery_bytes: None,
+                cache_bytes: None,
+                record_recent: false,
+            };
+        }
+    };
     progress.set(
         crate::app::OPEN_PHASE_READING,
         1000,
         bytes.len(),
         bytes.len(),
     );
-    load_web_bytes(&name, &bytes, progress).await
+    let result = load_web_bytes(
+        &name,
+        &bytes,
+        progress,
+        recovery_mode,
+        &initial_error,
+        None,
+    )
+    .await;
+    let keep_for_recovery = result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.recovery_available);
+    let record_recent = result.is_ok();
+    WebOpenOutcome {
+        name: name.clone(),
+        size_bytes: bytes.len() as u64,
+        result,
+        recovery_bytes: keep_for_recovery.then(|| Arc::from(bytes)),
+        cache_bytes: None,
+        record_recent,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -262,12 +587,48 @@ async fn load_web_bytes(
     name: &str,
     bytes: &[u8],
     progress: Arc<OpenProgressState>,
-) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
+    recovery_mode: bool,
+    initial_error: &str,
+    mut initial_stats: Option<acadrust::ReadStats>,
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), OpenLoadError> {
     progress.set(crate::app::OPEN_PHASE_PARSING, 1000, 0, 1);
-    let mut doc = match web_worker::parse_document(name, bytes).await {
-        Ok(document) => document,
-        Err(error) => return Err(format!("Web parser worker: {error}")),
+    let (outcome, mut source_sha256) = match web_worker::parse_document(
+        name,
+        bytes,
+        recovery_mode,
+        initial_error,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let recoverable_parse_error = error.recovery_available;
+            let mut source_sha256 = error.source_sha256;
+            if recovery_mode && source_sha256.is_none() {
+                source_sha256 = web_worker::sha256_document(bytes).await.ok();
+            }
+            let read_stats = merge_read_stats(error.read_stats, initial_stats.take());
+            let message = if recovery_mode && !error.message.contains("initial read failed:") {
+                format!(
+                    "initial read failed: {initial_error}; recovery read failed: {}",
+                    error.message
+                )
+            } else {
+                error.message
+            };
+            return Err(OpenLoadError {
+                message: format!("Web parser worker: {message}"),
+                recovery_available: !recovery_mode && recoverable_parse_error,
+                source_sha256,
+                read_stats,
+            });
+        }
     };
+    let mut outcome = outcome;
+    if let Some(initial_stats) = initial_stats.take() {
+        merge_read_diagnostics(&mut outcome.stats, initial_stats);
+    }
+    let mut doc = outcome.document;
     if name.to_ascii_lowercase().ends_with(".dxf") {
         fix_dxf_dimension_rotations(&mut doc);
         fix_dxf_layout_plot_settings(&mut doc);
@@ -276,8 +637,23 @@ async fn load_web_bytes(
     fix_current_style_names(&mut doc);
     progress.set(crate::app::OPEN_PHASE_CACHING, 7000, 0, 1);
     let dropped = purge_corrupt_entities(&mut doc);
+    if !recovery_mode && dropped > 0 {
+        return Err(OpenLoadError {
+            message: format!(
+                "normal read found {dropped} structurally invalid drawing records"
+            ),
+            source_sha256: None,
+            read_stats: Some(outcome.stats),
+            recovery_available: true,
+        });
+    }
     let mut caches = crate::scene::build_derived_caches(&doc);
     caches.corrupt_dropped = dropped;
+    caches.read_stats = Some(outcome.stats);
+    if source_sha256.is_none() && recovery_fingerprint_needed(&caches) {
+        source_sha256 = web_worker::sha256_document(bytes).await.ok();
+    }
+    caches.source_sha256 = source_sha256;
     progress.set(crate::app::OPEN_PHASE_FINALIZING, 9900, 1, 1);
     let path = PathBuf::from(name);
     Ok((name.to_string(), path, doc, caches))
@@ -334,13 +710,181 @@ fn sniff_dwg_or_dxf(path: &Path) -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_file(path: &Path) -> Result<CadDocument, String> {
-    load_file_with_progress(path, None)
+    load_file_with_progress(path, None).map(|outcome| outcome.document)
 }
 
 pub(crate) fn load_file_with_progress(
     path: &Path,
     _progress: Option<Arc<dyn Fn(u16) + Send + Sync>>,
-) -> Result<CadDocument, String> {
+) -> Result<acadrust::ReadOutcome, String> {
+    let outcome = read_file_attempt(path, _progress, false).map_err(|failure| failure.message)?;
+    if !outcome.stats.has_usable_drawing_data() {
+        return Err("initial read returned no source drawing records".to_string());
+    }
+    finalize_loaded_outcome(path, outcome)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_file_for_open(
+    path: &Path,
+    progress: Option<Arc<dyn Fn(u16) + Send + Sync>>,
+    attempt: &OpenAttempt,
+) -> Result<acadrust::ReadOutcome, OpenAttemptFailure> {
+    let outcome = match attempt {
+        OpenAttempt::Strict => {
+            let outcome = read_file_attempt(path, progress, false).map_err(|failure| {
+                OpenAttemptFailure {
+                    message: failure.message,
+                    read_stats: None,
+                    recoverable: failure.recoverable,
+                }
+            })?;
+            if !outcome.stats.has_usable_drawing_data() {
+                return Err(OpenAttemptFailure {
+                    message: "initial read returned no source drawing records".to_string(),
+                    read_stats: Some(outcome.stats),
+                    recoverable: true,
+                });
+            }
+            if outcome.stats.recovered()
+                || outcome.stats.skipped_source_records > 0
+                || !outcome.stats.stream_completed
+            {
+                let message = outcome
+                    .stats
+                    .diagnostics
+                    .first()
+                    .map(|diagnostic| diagnostic.message.clone())
+                    .unwrap_or_else(|| {
+                        "normal read detected recoverable drawing errors".to_string()
+                    });
+                return Err(OpenAttemptFailure {
+                    message,
+                    read_stats: Some(outcome.stats),
+                    recoverable: true,
+                });
+            }
+            outcome
+        }
+        OpenAttempt::Recovery(initial_error, initial_stats) => {
+            let mut outcome = read_file_attempt(path, progress, true).map_err(|failure| {
+                OpenAttemptFailure {
+                    message: format!(
+                        "initial read failed: {initial_error}; recovery read failed: {}",
+                        failure.message
+                    ),
+                    read_stats: initial_stats.clone(),
+                    recoverable: false,
+                }
+            })?;
+            if !outcome.stats.has_usable_drawing_data() {
+                if let Some(initial_stats) = initial_stats.clone() {
+                    merge_read_diagnostics(&mut outcome.stats, initial_stats);
+                }
+                return Err(OpenAttemptFailure {
+                    message: format!(
+                        "initial read failed: {initial_error}; recovery found no usable drawing data"
+                    ),
+                    read_stats: Some(outcome.stats),
+                    recoverable: false,
+                });
+            }
+            outcome.document.notifications.notify(
+                acadrust::notification::NotificationType::Error,
+                format!("Initial read failed; recovery mode continued: {initial_error}"),
+            );
+            acadrust::push_read_diagnostic(
+                &mut outcome.stats.diagnostics,
+                acadrust::ReadDiagnostic::new(
+                    "strict-read-failed",
+                    acadrust::ReadStage::RecordStream,
+                    initial_error.clone(),
+                ),
+            );
+            outcome.stats.recovered_errors = outcome.stats.recovered_errors.saturating_add(1);
+            if let Some(initial_stats) = initial_stats.clone() {
+                merge_read_diagnostics(&mut outcome.stats, initial_stats);
+            }
+            outcome
+        }
+    };
+    finalize_loaded_outcome(path, outcome).map_err(OpenAttemptFailure::from)
+}
+
+struct ReaderFailure {
+    message: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    recoverable: bool,
+}
+
+impl ReaderFailure {
+    fn from_reader(error: acadrust::DxfError) -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            recoverable: recoverable_reader_error(&error),
+            message: error.to_string(),
+        }
+    }
+
+    fn terminal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recoverable: false,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn recoverable_reader_error(error: &acadrust::DxfError) -> bool {
+    matches!(
+        error,
+        acadrust::DxfError::Compression(_)
+            | acadrust::DxfError::Parse(_)
+            | acadrust::DxfError::InvalidDxfCode(_)
+            | acadrust::DxfError::InvalidHandle(_)
+            | acadrust::DxfError::ObjectNotFound(_)
+            | acadrust::DxfError::InvalidEntityType(_)
+            | acadrust::DxfError::ChecksumMismatch { .. }
+            | acadrust::DxfError::InvalidHeader(_)
+            | acadrust::DxfError::InvalidFormat(_)
+            | acadrust::DxfError::InvalidSentinel(_)
+            | acadrust::DxfError::Decompression(_)
+            | acadrust::DxfError::Encoding(_)
+    )
+}
+
+fn merge_read_diagnostics(
+    target: &mut acadrust::ReadStats,
+    source: acadrust::ReadStats,
+) {
+    for diagnostic in source.diagnostics {
+        if !target.diagnostics.contains(&diagnostic) {
+            acadrust::push_read_diagnostic(&mut target.diagnostics, diagnostic);
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn merge_read_stats(
+    primary: Option<acadrust::ReadStats>,
+    fallback: Option<acadrust::ReadStats>,
+) -> Option<acadrust::ReadStats> {
+    match (primary, fallback) {
+        (Some(mut primary), Some(fallback)) => {
+            merge_read_diagnostics(&mut primary, fallback);
+            Some(primary)
+        }
+        (Some(primary), None) => Some(primary),
+        (None, fallback) => fallback,
+    }
+}
+
+fn read_file_attempt(
+    path: &Path,
+    progress: Option<Arc<dyn Fn(u16) + Send + Sync>>,
+    failsafe: bool,
+) -> Result<acadrust::ReadOutcome, ReaderFailure> {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -355,45 +899,67 @@ pub(crate) fn load_file_with_progress(
     };
 
     match effective.as_str() {
-        "dwg" => {
-            #[cfg(not(target_arch = "wasm32"))]
-            let mut doc = {
-                let mut reader = DwgReader::from_mmap(path)
-                .map_err(|e| e.to_string())?;
-                if let Some(progress) = _progress {
-                    reader.set_progress_callback(progress);
-                }
-                reader.read()
-                .map_err(|e| e.to_string())?
-            };
-            #[cfg(target_arch = "wasm32")]
-            let mut doc = DwgReader::from_file(path)
-                .map_err(|e| e.to_string())?
-                .read()
-                .map_err(|e| e.to_string())?;
-            normalize_block_origins(&mut doc);
-            fix_viewport_status_flags(&mut doc);
-            fix_current_style_names(&mut doc);
-            resolve_raster_image_paths(&mut doc, path.parent());
-            doc.source_path = Some(path.to_string_lossy().into_owned());
-            Ok(doc)
-        }
-        "dxf" => {
-            let mut doc = DxfReader::from_file(path)
-                .map_err(|e| e.to_string())?
-                .read()
-                .map_err(|e| e.to_string())?;
-            normalize_block_origins(&mut doc);
-            fix_dxf_dimension_rotations(&mut doc);
-            fix_dxf_layout_plot_settings(&mut doc);
-            fix_viewport_status_flags(&mut doc);
-            fix_current_style_names(&mut doc);
-            resolve_raster_image_paths(&mut doc, path.parent());
-            doc.source_path = Some(path.to_string_lossy().into_owned());
-            Ok(doc)
-        }
-        _ => Err(format!("Unsupported file format: .{ext}")),
+        "dwg" => read_dwg_path(path, progress, failsafe),
+        "dxf" => read_dxf_path(path, failsafe),
+        _ => Err(ReaderFailure::terminal(format!(
+            "Unsupported file format: .{ext}"
+        ))),
     }
+}
+
+fn finalize_loaded_outcome(
+    path: &Path,
+    mut outcome: acadrust::ReadOutcome,
+) -> Result<acadrust::ReadOutcome, String> {
+    let doc = &mut outcome.document;
+    normalize_block_origins(doc);
+    if outcome.stats.source_format == Some(acadrust::SourceFormat::Dxf) {
+        fix_dxf_dimension_rotations(doc);
+        fix_dxf_layout_plot_settings(doc);
+    }
+    fix_viewport_status_flags(doc);
+    fix_current_style_names(doc);
+    resolve_raster_image_paths(doc, path.parent());
+    doc.source_path = Some(path.to_string_lossy().into_owned());
+    Ok(outcome)
+}
+
+fn read_dwg_path(
+    path: &Path,
+    progress: Option<Arc<dyn Fn(u16) + Send + Sync>>,
+    failsafe: bool,
+) -> Result<acadrust::ReadOutcome, ReaderFailure> {
+    let options = if failsafe {
+        DwgReadOptions::failsafe()
+    } else {
+        DwgReadOptions::default()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut reader = {
+        let mut reader = DwgReader::from_mmap(path).map_err(ReaderFailure::from_reader)?;
+        reader.options = options;
+        reader
+    };
+    #[cfg(target_arch = "wasm32")]
+    let mut reader = DwgReader::from_file_with_options(path, options)
+        .map_err(ReaderFailure::from_reader)?;
+    if let Some(progress) = progress {
+        reader.set_progress_callback(progress);
+    }
+    reader
+        .read_with_stats()
+        .map_err(ReaderFailure::from_reader)
+}
+
+fn read_dxf_path(path: &Path, failsafe: bool) -> Result<acadrust::ReadOutcome, ReaderFailure> {
+    DxfReader::from_file(path)
+        .map_err(ReaderFailure::from_reader)?
+        .with_configuration(DxfReaderConfiguration {
+            failsafe,
+            ..DxfReaderConfiguration::default()
+        })
+        .read_with_stats()
+        .map_err(ReaderFailure::from_reader)
 }
 
 /// Canonicalise legacy block-table origins to the post-R10 representation:
@@ -542,6 +1108,19 @@ pub fn canonical_save_format(format: &str) -> &'static str {
         .copied()
         .find(|candidate| candidate.eq_ignore_ascii_case(format))
         .unwrap_or(DEFAULT_SAVE_FORMAT)
+}
+
+pub fn source_is_dxf(path: Option<&Path>, document: &CadDocument) -> bool {
+    match path
+        .and_then(Path::extension)
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("dxf") => true,
+        Some("dwg") => false,
+        _ => document.dwg_source_version.is_none(),
+    }
 }
 
 /// Parse a format string like "DWG 2013" or "DXF 2007" into

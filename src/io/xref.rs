@@ -8,11 +8,20 @@ use acadrust::{CadDocument, EntityType};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
+type SourceFingerprint = crate::io::edit_lock::FileFingerprint;
+#[cfg(target_arch = "wasm32")]
+type SourceFingerprint = ();
+
 /// Status of an external reference block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XrefStatus {
     /// File was found and loaded successfully.
     Loaded,
+    /// File was loaded with recoverable parser errors.
+    Recovered,
+    /// File was found but could not produce usable drawing data.
+    Failed,
     /// File path is set but the file could not be found or read.
     NotFound,
     /// XRef is marked Unloaded in the host DWG — we honor that and
@@ -29,6 +38,10 @@ pub struct XrefInfo {
     /// Resolved file path (or raw path if not found).
     pub path: String,
     pub status: XrefStatus,
+    /// Reader diagnostics retained for the recovery report.
+    pub diagnostics: Vec<String>,
+    pub read_stats: Option<acadrust::ReadStats>,
+    pub source_sha256: Option<String>,
 }
 
 /// Scan `doc` for XREF block-records, resolve their paths relative to
@@ -78,11 +91,25 @@ pub fn resolve_xrefs_with_progress(
             .map(|_| std::sync::atomic::AtomicU16::new(0))
             .collect(),
     );
-    let parsed: Vec<(String, String, Handle, Option<PathBuf>, Option<CadDocument>)> = xref_entries
+    let parsed: Vec<(
+        String,
+        String,
+        Handle,
+        Option<PathBuf>,
+        Option<Result<acadrust::ReadOutcome, String>>,
+        Option<String>,
+        Option<SourceFingerprint>,
+    )> = xref_entries
         .into_par_iter()
         .enumerate()
         .map(|(xref_index, (block_name, raw_path, br_handle))| {
             let resolved = resolve_path(&raw_path, base_dir);
+            #[cfg(not(target_arch = "wasm32"))]
+            let initial_fingerprint = resolved.as_ref().and_then(|path| {
+                crate::io::edit_lock::FileFingerprint::capture(path).ok()
+            });
+            #[cfg(target_arch = "wasm32")]
+            let initial_fingerprint = None;
             let units = std::sync::Arc::clone(&parse_units);
             let nested_progress = progress.as_ref().map(|progress| {
                 let progress = std::sync::Arc::clone(progress);
@@ -98,7 +125,31 @@ pub fn resolve_xrefs_with_progress(
                     });
                 callback
             });
-            let xref_doc = resolved.as_ref().and_then(|p| super::load_file_with_progress(p, nested_progress).ok());
+            let xref_outcome = resolved
+                .as_ref()
+                .map(|path| super::load_file_with_progress(path, nested_progress));
+            let source_sha256 = resolved.as_ref().and_then(|path| {
+                let needs_fingerprint = match &xref_outcome {
+                    Some(Ok(outcome)) => {
+                        outcome.stats.recovered()
+                            || outcome.stats.skipped_source_records > 0
+                            || !outcome.stats.stream_completed
+                    }
+                    Some(Err(_)) => true,
+                    None => false,
+                };
+                if !needs_fingerprint {
+                    return None;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    super::stable_sha256_file(path, initial_fingerprint.as_ref())
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    crate::io::recovery::sha256_file(path).ok()
+                }
+            });
             parse_units[xref_index].store(1000, std::sync::atomic::Ordering::Relaxed);
             if let Some(progress) = &progress {
                 let completed = parse_units
@@ -107,7 +158,15 @@ pub fn resolve_xrefs_with_progress(
                     .sum();
                 progress(completed, total_units);
             }
-            (block_name, raw_path, br_handle, resolved, xref_doc)
+            (
+                block_name,
+                raw_path,
+                br_handle,
+                resolved,
+                xref_outcome,
+                source_sha256,
+                initial_fingerprint,
+            )
         })
         .collect();
 
@@ -115,15 +174,68 @@ pub fn resolve_xrefs_with_progress(
     // block order (par_iter preserves it), so handle allocation is deterministic.
     let mut result = Vec::with_capacity(parsed.len());
     let mut dropped = 0usize;
-    for (merge_index, (block_name, raw_path, br_handle, resolved, xref_doc)) in parsed.into_iter().enumerate()
+    #[allow(unused_mut, unused_variables)]
+    for (
+        merge_index,
+        (
+            block_name,
+            raw_path,
+            br_handle,
+            resolved,
+            xref_outcome,
+            mut source_sha256,
+            initial_fingerprint,
+        ),
+    ) in parsed.into_iter().enumerate()
     {
-        let status = if let Some(xref_doc) = xref_doc {
-            ensure_block_entities(doc, &block_name);
-            dropped += merge_xref_into_block(doc, &block_name, br_handle, xref_doc);
-            XrefStatus::Loaded
-        } else {
-            // Path unresolved or the file failed to parse — both are NotFound.
-            XrefStatus::NotFound
+        let (status, diagnostics, read_stats) = match xref_outcome {
+            Some(Ok(mut outcome)) => {
+                let recovered = outcome.stats.recovered()
+                    || outcome.stats.skipped_source_records > 0
+                    || !outcome.stats.stream_completed
+                    || outcome.document.notifications.iter().any(|item| {
+                    item.notification_type == acadrust::notification::NotificationType::Error
+                });
+                let mut diagnostics: Vec<String> = outcome
+                    .document
+                    .notifications
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                diagnostics.extend(
+                    outcome
+                        .stats
+                        .diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.message.clone()),
+                );
+                let invalid = super::purge_corrupt_entities(&mut outcome.document);
+                if invalid > 0 {
+                    diagnostics.push(format!(
+                        "normal read found {invalid} structurally invalid reference records"
+                    ));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if source_sha256.is_none() {
+                        source_sha256 = resolved.as_ref().and_then(|path| {
+                            super::stable_sha256_file(path, initial_fingerprint.as_ref())
+                        });
+                    }
+                }
+                if recovered || invalid > 0 {
+                    (XrefStatus::Failed, diagnostics, Some(outcome.stats))
+                } else {
+                ensure_block_entities(doc, &block_name);
+                dropped += merge_xref_into_block(
+                    doc,
+                    &block_name,
+                    br_handle,
+                    outcome.document,
+                );
+                    (XrefStatus::Loaded, diagnostics, Some(outcome.stats))
+                }
+            }
+            Some(Err(error)) => (XrefStatus::Failed, vec![error], None),
+            None => (XrefStatus::NotFound, Vec::new(), None),
         };
 
         result.push(XrefInfo {
@@ -132,6 +244,9 @@ pub fn resolve_xrefs_with_progress(
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or(raw_path),
             status,
+            diagnostics,
+            read_stats,
+            source_sha256,
         });
         if let Some(progress) = &progress {
             progress(

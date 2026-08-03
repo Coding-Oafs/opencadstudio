@@ -164,6 +164,7 @@ impl OpenCADStudio {
                 self.layer_state_edit_filter.clear();
                 self.layer_state_edit_color_open = None;
             }
+            Some(Recovery) => self.recovery_report = None,
             _ => {}
         }
         // The tool that opened this dialog is done with it now. Keep the
@@ -344,15 +345,21 @@ impl OpenCADStudio {
                     let state = std::sync::Arc::new(crate::io::OpenProgressState::new(
                         crate::app::OPEN_PHASE_READING,
                     ));
+                    let open_id = self.next_open_id();
                     self.opening = Some(crate::app::OpenProgress {
+                        id: open_id,
                         name,
+                        source_path: Some(path.clone()),
                         size_bytes: 0,
                         state: state.clone(),
                         started: Instant::now(),
+                        recovery_error: None,
+                        recovery_read_stats: None,
+                        recovery_bytes: None,
                     });
                     Task::perform(
                         crate::io::open_recent_web(path, state),
-                        Message::FileOpened,
+                        move |outcome| Message::WebFileOpened(open_id, outcome),
                     )
                 }
             }
@@ -382,15 +389,13 @@ impl OpenCADStudio {
                     ]),
                     None => Task::none(),
                 };
-                // Already open → go to that tab rather than load a second copy
-                // of the same drawing. Checked before the queue: switching is
-                // instant and needs no load slot.
-                if let Some(idx) = self.tab_showing(&path) {
-                    return Task::batch([raise, self.update(Message::TabSwitch(idx))]);
-                }
-                if self.opening.is_some() {
+                if self.opening.is_some()
+                    || self.active_modal == Some(super::ModalKind::Recovery)
+                {
                     self.pending_opens.push_back(path);
                     raise
+                } else if let Some(idx) = self.tab_showing(&path) {
+                    Task::batch([raise, self.update(Message::TabSwitch(idx))])
                 } else {
                     Task::batch([raise, self.update(Message::OpenRecent(path))])
                 }
@@ -513,14 +518,15 @@ impl OpenCADStudio {
                     ).as_ref());
                     return Task::none();
                 }
-                // Already open → switch to its tab; a load in progress →
-                // queue behind it (multi-file drops arrive one event each).
-                if let Some(idx) = self.tab_showing(&path) {
-                    return self.update(Message::TabSwitch(idx));
-                }
-                if self.opening.is_some() {
+                // A load or recovery report owns the open slot; queue another
+                // drop until that state is acknowledged.
+                if self.opening.is_some()
+                    || self.active_modal == Some(super::ModalKind::Recovery)
+                {
                     self.pending_opens.push_back(path);
                     Task::none()
+                } else if let Some(idx) = self.tab_showing(&path) {
+                    self.update(Message::TabSwitch(idx))
                 } else {
                     self.update(Message::OpenRecent(path))
                 }
@@ -552,11 +558,18 @@ impl OpenCADStudio {
                 let progress = std::sync::Arc::new(crate::io::OpenProgressState::new(
                     super::OPEN_PHASE_READING,
                 ));
+                let open_id = self.next_open_id();
                 self.opening = Some(super::OpenProgress {
+                    id: open_id,
                     name: name.clone(),
+                    source_path: Some(path.clone()),
                     size_bytes,
                     state: progress.clone(),
                     started: Instant::now(),
+                    recovery_error: None,
+                    recovery_read_stats: None,
+                    #[cfg(target_arch = "wasm32")]
+                    recovery_bytes: None,
                     #[cfg(not(target_arch = "wasm32"))]
                     fingerprint:
                         crate::io::edit_lock::FileFingerprint::capture(&path).ok(),
@@ -572,7 +585,7 @@ impl OpenCADStudio {
                 ]);
                 Task::perform(
                     crate::io::open_path_with_phase(path, progress, model_bg),
-                    Message::FileOpened,
+                    move |result| Message::FileOpened(open_id, result),
                 )
             }
 
@@ -584,16 +597,105 @@ impl OpenCADStudio {
                 self.drain_pending_open()
             }
 
-            Message::FileOpened(Ok((name, path, doc, caches))) => {
+            #[cfg(target_arch = "wasm32")]
+            Message::WebFileOpened(open_id, mut outcome) => {
+                if self.opening.as_ref().map(|opening| opening.id) != Some(open_id) {
+                    return Task::none();
+                }
+                if let Some(opening) = self.opening.as_mut() {
+                    opening.name = outcome.name.clone();
+                    opening.source_path = Some(std::path::PathBuf::from(&outcome.name));
+                    if outcome.size_bytes > 0 || opening.size_bytes == 0 {
+                        opening.size_bytes = outcome.size_bytes;
+                    }
+                    opening.recovery_bytes = outcome.recovery_bytes.take();
+                }
+                if let Some(bytes) = outcome.cache_bytes.take() {
+                    let name = outcome.name.clone();
+                    return Task::perform(
+                        async move {
+                            let result =
+                                crate::io::web_recent::store_open(&name, bytes, open_id).await;
+                            (outcome, result)
+                        },
+                        move |(outcome, result)| {
+                            Message::WebFileCached(open_id, outcome, result)
+                        },
+                    );
+                }
+                let recent_task = if outcome.record_recent && outcome.result.is_ok() {
+                    self.push_recent(std::path::PathBuf::from(&outcome.name))
+                } else {
+                    Task::none()
+                };
+                let opened_task = self.update(Message::FileOpened(open_id, outcome.result));
+                Task::batch([recent_task, opened_task])
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            Message::WebFileCached(open_id, outcome, cache_result) => {
+                if self.opening.as_ref().map(|opening| opening.id) != Some(open_id) {
+                    return Task::none();
+                }
+                let recent_task = match cache_result {
+                    Ok(()) => self.push_recent(std::path::PathBuf::from(&outcome.name)),
+                    Err(error) => {
+                        self.command_line.push_error(crate::tf!(
+                            "Opened drawing, but recent copy could not be stored: {error}"
+                        ).as_ref());
+                        Task::none()
+                    }
+                };
+                let opened_task = self.update(Message::FileOpened(open_id, outcome.result));
+                Task::batch([recent_task, opened_task])
+            }
+
+            Message::FileOpened(open_id, Ok((name, path, doc, caches))) => {
+                if self.opening.as_ref().map(|opening| opening.id) != Some(open_id) {
+                    return Task::none();
+                }
                 self.on_file_opened(name, path, doc, caches)
             }
 
-            Message::FileOpened(Err(e)) => {
+            Message::FileOpened(open_id, Err(e)) => {
+                if self.opening.as_ref().map(|opening| opening.id) != Some(open_id) {
+                    return Task::none();
+                }
+                if e.recovery_available {
+                    if let Some(opening) = self.opening.as_mut() {
+                        opening.recovery_error = Some(e.message);
+                        opening.recovery_read_stats = e.read_stats;
+                        self.active_modal = Some(super::ModalKind::RecoveryPrompt);
+                        return Task::none();
+                    }
+                }
                 // If the user cancelled, the overlay was already cleared and
                 // we suppress the noise.
-                let was_open = self.opening.take().is_some();
-                if was_open && e != "Cancelled" {
+                let opening = self.opening.take();
+                if let Some(opening) = opening.filter(|_| e.message != "Cancelled") {
                     self.command_line.push_error(crate::tf!("Open failed: {e}").as_ref());
+                    let total_ms = opening.started.elapsed().as_millis() as u32;
+                    let failure_phase = crate::io::open_phase_name(
+                        opening
+                            .state
+                            .phase
+                            .load(std::sync::atomic::Ordering::Acquire),
+                    )
+                    .to_string();
+                    let mut report = crate::io::recovery::RecoveryReport::failed(
+                        opening.source_path,
+                        opening.name,
+                        opening.size_bytes,
+                        e.source_sha256,
+                        e.read_stats,
+                        failure_phase,
+                        e.message,
+                        total_ms,
+                    );
+                    report.persist();
+                    self.recovery_report = Some(report);
+                    self.active_modal = Some(super::ModalKind::Recovery);
+                    return Task::none();
                 }
                 // A drawing that fails to parse must not strand the ones queued
                 // behind it.
@@ -1020,6 +1122,9 @@ impl OpenCADStudio {
             }
 
             Message::TabSwitch(idx) => {
+                if self.active_modal == Some(super::ModalKind::Recovery) {
+                    return Task::none();
+                }
                 self.layout_list_open = false;
                 self.layout_rename_state = None;
                 if idx < self.tabs.len() {
@@ -4345,7 +4450,159 @@ impl OpenCADStudio {
             }
 
             Message::CloseModal => {
+                if self.active_modal == Some(super::ModalKind::RecoveryPrompt) {
+                    return self.update(Message::RecoveryDecline);
+                }
+                let resume_open_queue = self.active_modal == Some(super::ModalKind::Recovery);
                 self.close_active_modal();
+                if resume_open_queue {
+                    self.drain_pending_open()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::RecoveryClose => {
+                self.close_active_modal();
+                self.drain_pending_open()
+            }
+            Message::RecoveryAttempt => {
+                let open_id = self.next_open_id();
+                let Some(opening) = self.opening.as_mut() else {
+                    self.close_active_modal();
+                    return Task::none();
+                };
+                let model_bg = self.default_bg_color.unwrap_or([
+                    33.0 / 255.0,
+                    40.0 / 255.0,
+                    48.0 / 255.0,
+                    1.0,
+                ]);
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(path) = opening.source_path.clone() {
+                    let current_fingerprint =
+                        crate::io::edit_lock::FileFingerprint::capture(&path).ok();
+                    if current_fingerprint.as_ref() != opening.fingerprint.as_ref() {
+                        let progress = std::sync::Arc::new(crate::io::OpenProgressState::new(
+                            super::OPEN_PHASE_READING,
+                        ));
+                        opening.id = open_id;
+                        opening.state = progress.clone();
+                        opening.started = Instant::now();
+                        opening.recovery_error = None;
+                        opening.recovery_read_stats = None;
+                        opening.fingerprint = current_fingerprint;
+                        opening.size_bytes = std::fs::metadata(&path)
+                            .map(|metadata| metadata.len())
+                            .unwrap_or(0);
+                        self.close_active_modal();
+                        return Task::perform(
+                            crate::io::open_path_with_phase(path, progress, model_bg),
+                            move |result| Message::FileOpened(open_id, result),
+                        );
+                    }
+                }
+                let Some(initial_error) = opening.recovery_error.take() else {
+                    self.close_active_modal();
+                    return Task::none();
+                };
+                let initial_stats = opening.recovery_read_stats.take();
+                let Some(path) = opening.source_path.clone() else {
+                    self.close_active_modal();
+                    return Task::none();
+                };
+                let progress = std::sync::Arc::new(crate::io::OpenProgressState::new(
+                    super::OPEN_PHASE_READING,
+                ));
+                opening.id = open_id;
+                opening.state = progress.clone();
+                opening.started = Instant::now();
+                #[cfg(target_arch = "wasm32")]
+                let recovery_bytes = opening.recovery_bytes.take();
+                self.close_active_modal();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    Task::perform(
+                        crate::io::recover_path_with_phase(
+                            path,
+                            progress,
+                            model_bg,
+                            initial_error,
+                            initial_stats,
+                        ),
+                        move |result| Message::FileOpened(open_id, result),
+                    )
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = model_bg;
+                    let Some(bytes) = recovery_bytes else {
+                        self.opening = None;
+                        return self.drain_pending_open();
+                    };
+                    Task::perform(
+                        crate::io::recover_web_bytes(
+                            path.to_string_lossy().into_owned(),
+                            bytes,
+                            progress,
+                            initial_error,
+                            initial_stats,
+                        ),
+                        move |outcome| Message::WebFileOpened(open_id, outcome),
+                    )
+                }
+            }
+            Message::RecoveryDecline => {
+                let declined = self.opening.take();
+                self.close_active_modal();
+                if let Some(opening) = declined {
+                    self.command_line.push_info(crate::tf!(
+                        "Recovery cancelled: \"{}\"",
+                        opening.name
+                    ).as_ref());
+                }
+                self.drain_pending_open()
+            }
+            Message::RecoverySaveAs => {
+                if !self.pending_opens.is_empty() {
+                    self.close_active_modal();
+                    return self.drain_pending_open();
+                }
+                let Some(tab_id) = self
+                    .recovery_report
+                    .as_ref()
+                    .and_then(|report| report.tab_id)
+                else {
+                    self.close_active_modal();
+                    return Task::none();
+                };
+                let Some(i) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+                    self.close_active_modal();
+                    return Task::none();
+                };
+                self.close_active_modal();
+                self.active_tab = i;
+                self.open_save_dialog_window(i)
+            }
+            Message::RecoveryShowLog => {
+                let Some(report) = self.recovery_report.as_ref() else {
+                    return Task::none();
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if let Some(path) = &report.log_path {
+                        if let Err(error) = crate::sys::reveal_in_file_manager(path) {
+                            self.command_line.push_error(crate::tf!(
+                                "Could not show recovery log: {error}"
+                            ).as_ref());
+                        }
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let name = report.suggested_download_name();
+                    let body = report.log_text();
+                    crate::sys::download_bytes(&name, body.as_bytes());
+                }
                 Task::none()
             }
             Message::AttrEditorOpen(handle) => {

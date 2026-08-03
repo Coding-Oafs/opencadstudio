@@ -534,6 +534,8 @@ pub(crate) fn valid_block_name(name: &str) -> bool {
 /// Produced in the file-load background task so the UI thread only assigns.
 #[derive(Debug, Clone)]
 pub struct DerivedCaches {
+    pub read_stats: Option<acadrust::ReadStats>,
+    pub source_sha256: Option<String>,
     pub local_extent_max: f32,
     pub local_center: [f64; 2],
     pub hatches: HashMap<Handle, HatchModel>,
@@ -825,6 +827,8 @@ fn build_derived_caches_impl(
     }
 
     DerivedCaches {
+        read_stats: None,
+        source_sha256: None,
         local_extent_max,
         local_center,
         hatches,

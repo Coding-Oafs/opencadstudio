@@ -7,6 +7,53 @@
 use std::path::Path;
 
 fn main() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
+        if let Some(reference) = head.trim().strip_prefix("ref: ") {
+            println!("cargo:rerun-if-changed=.git/{reference}");
+        }
+    }
+    let revision = std::process::Command::new("git")
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let dirty = std::process::Command::new("git")
+        .args(["diff-index", "--quiet", "HEAD", "--"])
+        .status()
+        .ok()
+        .is_some_and(|status| !status.success());
+    let revision = if dirty {
+        format!("{revision}-dirty")
+    } else {
+        revision
+    };
+    println!("cargo:rustc-env=OCS_GIT_REV={revision}");
+    println!(
+        "cargo:rustc-env=OCS_BUILD_PROFILE={}",
+        std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string())
+    );
+    let mut features: Vec<String> = std::env::vars()
+        .filter_map(|(name, value)| {
+            (value == "1")
+                .then(|| name.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
+                .flatten()
+        })
+        .collect();
+    features.sort();
+    println!(
+        "cargo:rustc-env=OCS_BUILD_FEATURES={}",
+        if features.is_empty() {
+            "none".to_string()
+        } else {
+            features.join(",")
+        }
+    );
+
     // The Patreon token is baked in at compile time via `option_env!` in
     // src/patreon.rs. `option_env!` is not tracked by Cargo, so without this a
     // token change wouldn't trigger a rebuild — declare the dependency so an

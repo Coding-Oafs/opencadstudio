@@ -550,9 +550,21 @@ impl OpenCADStudio {
                                     self.command_line
                                         .push_output(crate::tf!("XREF  Reloaded \"{}\"", info.name).as_ref());
                                 }
+                                crate::io::xref::XrefStatus::Recovered => {
+                                    self.command_line.push_error(crate::tf!(
+                                        "XREF  Reloaded with repairs: \"{}\"",
+                                        info.name
+                                    ).as_ref());
+                                }
                                 crate::io::xref::XrefStatus::NotFound => {
                                     self.command_line.push_error(crate::tf!(
                                         "XREF  Not found: \"{}\" ({})",
+                                        info.name, info.path
+                                    ).as_ref());
+                                }
+                                crate::io::xref::XrefStatus::Failed => {
+                                    self.command_line.push_error(crate::tf!(
+                                        "XREF  Reload failed: \"{}\" ({})",
                                         info.name, info.path
                                     ).as_ref());
                                 }

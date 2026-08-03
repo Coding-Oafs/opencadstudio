@@ -121,6 +121,9 @@ pub(super) struct DocumentTab {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) disk_fingerprint: Option<crate::io::edit_lock::FileFingerprint>,
     pub(super) dirty: bool,
+    /// Direct Save is redirected to Save As after open-time repairs so the
+    /// source drawing cannot be overwritten accidentally.
+    pub(super) recovery_save_as_required: bool,
     /// Monotonic committed-edit/undo/redo revision. Background save completion
     /// uses it with scene epochs so an older snapshot never clears newer work.
     pub(super) edit_revision: u64,
@@ -434,6 +437,7 @@ impl DocumentTab {
             #[cfg(not(target_arch = "wasm32"))]
             disk_fingerprint: None,
             dirty: false,
+            recovery_save_as_required: false,
             edit_revision: 0,
             prev_selection: Vec::new(),
             tab_title: format!("Drawing{}", n),

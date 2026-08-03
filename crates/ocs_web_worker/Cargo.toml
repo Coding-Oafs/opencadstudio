@@ -13,4 +13,5 @@ bincode = "1.3"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 js-sys = "0.3"
+sha2 = "0.10"
 wasm-bindgen = "0.2"

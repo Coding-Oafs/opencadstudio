@@ -1,18 +1,29 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use acadrust::CadDocument;
 use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
-pub(super) async fn parse_document(name: &str, bytes: &[u8]) -> Result<CadDocument, String> {
+const HASH_MARKER: &str = "\nreport-source-sha256:";
+const PROTOCOL_VERSION: u16 = 3;
+const WORKER_URL: &str = "ocs-parse-worker.js?v=3";
+
+pub(super) async fn parse_document(
+    name: &str,
+    bytes: &[u8],
+    recovery_mode: bool,
+    initial_error: &str,
+) -> Result<(acadrust::ReadOutcome, Option<String>), super::OpenLoadError> {
     let options = WorkerOptions::new();
     options.set_type(WorkerType::Module);
-    let worker = Worker::new_with_options("ocs-parse-worker.js", &options).map_err(js_error)?;
+    let worker = Worker::new_with_options(WORKER_URL, &options)
+        .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
 
-    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let (sender, receiver) = iced::futures::channel::oneshot::channel::<
+        Result<(acadrust::ReadOutcome, Option<String>), super::OpenLoadError>,
+    >();
     let sender = Rc::new(RefCell::new(Some(sender)));
     let message_sender = sender.clone();
     let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
@@ -23,16 +34,41 @@ pub(super) async fn parse_document(name: &str, bytes: &[u8]) -> Result<CadDocume
             .unwrap_or(false);
         let result = if ok {
             Reflect::get(&data, &JsValue::from_str("data"))
-                .map_err(js_error)
+                .map_err(|error| super::OpenLoadError::from(js_error(error)))
                 .and_then(|value| {
                     let bytes = Uint8Array::new(&value).to_vec();
-                    bincode::deserialize(&bytes).map_err(|error| error.to_string())
+                    let payload: (
+                        u16,
+                        Result<
+                            acadrust::ReadOutcome,
+                            (String, Option<acadrust::ReadStats>),
+                        >,
+                        Option<String>,
+                        bool,
+                    ) = bincode::deserialize(&bytes)
+                        .map_err(|error| super::OpenLoadError::from(error.to_string()))?;
+                    if payload.0 != PROTOCOL_VERSION {
+                        return Err(super::OpenLoadError::from(format!(
+                            "parser worker protocol mismatch: expected {}, received {}",
+                            PROTOCOL_VERSION, payload.0
+                        )));
+                    }
+                    match payload.1 {
+                        Ok(outcome) => Ok((outcome, payload.2)),
+                        Err((message, read_stats)) => Err(super::OpenLoadError {
+                            message,
+                            source_sha256: payload.2,
+                            read_stats,
+                            recovery_available: payload.3,
+                        }),
+                    }
                 })
         } else {
-            Err(Reflect::get(&data, &JsValue::from_str("error"))
+            let message = Reflect::get(&data, &JsValue::from_str("error"))
                 .ok()
                 .and_then(|value| value.as_string())
-                .unwrap_or_else(|| "CAD parser worker failed".to_string()))
+                .unwrap_or_else(|| "CAD parser worker failed".to_string());
+            Err(decode_worker_error(message))
         };
         if let Some(sender) = message_sender.borrow_mut().take() {
             let _ = sender.send(result);
@@ -43,7 +79,7 @@ pub(super) async fn parse_document(name: &str, bytes: &[u8]) -> Result<CadDocume
     let error_sender = sender;
     let on_error = Closure::<dyn FnMut(ErrorEvent)>::new(move |event: ErrorEvent| {
         if let Some(sender) = error_sender.borrow_mut().take() {
-            let _ = sender.send(Err(event.message()));
+            let _ = sender.send(Err(super::OpenLoadError::from(event.message())));
         }
     });
     worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
@@ -54,20 +90,100 @@ pub(super) async fn parse_document(name: &str, bytes: &[u8]) -> Result<CadDocume
         &JsValue::from_str("name"),
         &JsValue::from_str(name),
     )
-    .map_err(js_error)?;
+    .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
+    Reflect::set(
+        &payload,
+        &JsValue::from_str("recoveryMode"),
+        &JsValue::from_bool(recovery_mode),
+    )
+    .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
+    Reflect::set(
+        &payload,
+        &JsValue::from_str("initialError"),
+        &JsValue::from_str(initial_error),
+    )
+    .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
     let input = Uint8Array::from(bytes);
-    Reflect::set(&payload, &JsValue::from_str("bytes"), &input.buffer()).map_err(js_error)?;
+    Reflect::set(&payload, &JsValue::from_str("bytes"), &input.buffer())
+        .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
     let transfer = Array::new();
     transfer.push(&input.buffer());
     worker
         .post_message_with_transfer(&payload, &transfer)
-        .map_err(js_error)?;
+        .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
 
     let result = receiver
         .await
-        .map_err(|_| "CAD parser worker closed without a result".to_string())?;
+        .map_err(|_| super::OpenLoadError::from("CAD parser worker closed without a result"))?;
     worker.terminate();
     result
+}
+
+pub(super) async fn sha256_document(bytes: &[u8]) -> Result<String, super::OpenLoadError> {
+    let options = WorkerOptions::new();
+    options.set_type(WorkerType::Module);
+    let worker = Worker::new_with_options(WORKER_URL, &options)
+        .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
+
+    let (sender, receiver) = iced::futures::channel::oneshot::channel::<
+        Result<String, super::OpenLoadError>,
+    >();
+    let sender = Rc::new(RefCell::new(Some(sender)));
+    let message_sender = sender.clone();
+    let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+        let data = event.data();
+        let result = Reflect::get(&data, &JsValue::from_str("digest"))
+            .map_err(|error| super::OpenLoadError::from(js_error(error)))
+            .and_then(|value| {
+                value
+                    .as_string()
+                    .ok_or_else(|| super::OpenLoadError::from("hash worker returned no digest"))
+            });
+        if let Some(sender) = message_sender.borrow_mut().take() {
+            let _ = sender.send(result);
+        }
+    });
+    worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+
+    let error_sender = sender;
+    let on_error = Closure::<dyn FnMut(ErrorEvent)>::new(move |event: ErrorEvent| {
+        if let Some(sender) = error_sender.borrow_mut().take() {
+            let _ = sender.send(Err(super::OpenLoadError::from(event.message())));
+        }
+    });
+    worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
+    let payload = Object::new();
+    Reflect::set(
+        &payload,
+        &JsValue::from_str("action"),
+        &JsValue::from_str("hash"),
+    )
+    .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
+    let input = Uint8Array::from(bytes);
+    Reflect::set(&payload, &JsValue::from_str("bytes"), &input.buffer())
+        .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
+    let transfer = Array::new();
+    transfer.push(&input.buffer());
+    worker
+        .post_message_with_transfer(&payload, &transfer)
+        .map_err(|error| super::OpenLoadError::from(js_error(error)))?;
+
+    let result = receiver
+        .await
+        .map_err(|_| super::OpenLoadError::from("hash worker closed without a result"))?;
+    worker.terminate();
+    result
+}
+
+fn decode_worker_error(message: String) -> super::OpenLoadError {
+    let Some((message, digest)) = message.rsplit_once(HASH_MARKER) else {
+        return super::OpenLoadError::from(message);
+    };
+    let digest = digest.trim_start().get(..64).unwrap_or_default();
+    let source_sha256 = (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase());
+    super::OpenLoadError::new(message.to_string(), source_sha256)
 }
 
 fn js_error(value: JsValue) -> String {

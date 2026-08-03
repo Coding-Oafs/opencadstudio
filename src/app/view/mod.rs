@@ -1565,7 +1565,11 @@ impl OpenCADStudio {
             iced::widget::Space::new().width(0).height(0).into()
         };
 
-        let open_progress_layer: Element<'_, Message> = if let Some(p) = &self.opening {
+        let open_progress_layer: Element<'_, Message> = if let Some(p) = self
+            .opening
+            .as_ref()
+            .filter(|progress| progress.recovery_error.is_none())
+        {
             crate::ui::window::open_progress::view(p, iced::time::Instant::now())
         } else {
             iced::widget::Space::new().width(0).height(0).into()
@@ -1641,7 +1645,10 @@ impl OpenCADStudio {
         // (currently just the open-progress indicator). Without this gate the
         // app burned 2-3% CPU continuously redrawing an unchanged view.
         // See #18.
-        let needs_frames = self.opening.is_some();
+        let needs_frames = self
+            .opening
+            .as_ref()
+            .is_some_and(|progress| progress.recovery_error.is_none());
         let frames = if needs_frames {
             window::frames().map(Message::Tick)
         } else {

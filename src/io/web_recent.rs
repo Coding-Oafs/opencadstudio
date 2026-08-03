@@ -7,6 +7,18 @@
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
+struct OpenStoreState {
+    latest_id: u64,
+    latest_bytes: std::sync::Arc<[u8]>,
+    active_writers: usize,
+}
+
+thread_local! {
+    static OPEN_STORES: std::cell::RefCell<
+        std::collections::HashMap<String, OpenStoreState>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 const RECENT_DIRECTORY: &str = "opencadstudio-recent";
 const THUMBNAIL_MAGIC: &[u8; 4] = b"OCST";
 const THUMBNAIL_MAX_DIM: u32 = 256;
@@ -33,6 +45,70 @@ pub async fn store(name: &str, bytes: &[u8]) -> Result<(), String> {
         let _ = JsFuture::from(directory.remove_entry(&thumbnail_key(name))).await;
     }
     Ok(())
+}
+
+pub async fn store_open(
+    name: &str,
+    bytes: std::sync::Arc<[u8]>,
+    open_id: u64,
+) -> Result<(), String> {
+    let key = name.to_string();
+    let (mut pending_id, mut pending_bytes) = OPEN_STORES.with(|stores| {
+        let mut stores = stores.borrow_mut();
+        let state = stores.entry(key.clone()).or_insert_with(|| OpenStoreState {
+            latest_id: open_id,
+            latest_bytes: std::sync::Arc::clone(&bytes),
+            active_writers: 0,
+        });
+        state.active_writers = state.active_writers.saturating_add(1);
+        if open_id > state.latest_id {
+            state.latest_id = open_id;
+            state.latest_bytes = bytes;
+        }
+        (state.latest_id, std::sync::Arc::clone(&state.latest_bytes))
+    });
+    loop {
+        if let Err(error) = store(name, &pending_bytes).await {
+            OPEN_STORES.with(|stores| {
+                let mut stores = stores.borrow_mut();
+                let remove = if let Some(state) = stores.get_mut(&key) {
+                    state.active_writers = state.active_writers.saturating_sub(1);
+                    state.active_writers == 0
+                } else {
+                    false
+                };
+                if remove {
+                    stores.remove(&key);
+                }
+            });
+            return Err(error);
+        }
+
+        let latest = OPEN_STORES.with(|stores| {
+            let mut stores = stores.borrow_mut();
+            let Some(state) = stores.get_mut(&key) else {
+                return None;
+            };
+            if state.latest_id != pending_id {
+                return Some((
+                    state.latest_id,
+                    std::sync::Arc::clone(&state.latest_bytes),
+                ));
+            }
+            state.active_writers = state.active_writers.saturating_sub(1);
+            if state.active_writers == 0 {
+                stores.remove(&key);
+            }
+            None
+        });
+        match latest {
+            Some((latest_id, latest_bytes)) => {
+                pending_id = latest_id;
+                pending_bytes = latest_bytes;
+            }
+            None => return Ok(()),
+        }
+    }
 }
 
 async fn write_entry(

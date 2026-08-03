@@ -206,10 +206,16 @@ pub const OPEN_PHASE_FINALIZING: u8 = 4;
 
 #[derive(Debug, Clone)]
 pub struct OpenProgress {
+    pub id: u64,
     pub name: String,
+    pub source_path: Option<std::path::PathBuf>,
     pub size_bytes: u64,
     pub state: Arc<crate::io::OpenProgressState>,
     pub started: Instant,
+    pub recovery_error: Option<String>,
+    pub recovery_read_stats: Option<acadrust::ReadStats>,
+    #[cfg(target_arch = "wasm32")]
+    pub recovery_bytes: Option<std::sync::Arc<[u8]>>,
     /// Disk state captured before parsing starts. If another editor changes the
     /// file while it loads, the first Save must not silently overwrite it.
     #[cfg(not(target_arch = "wasm32"))]
@@ -816,6 +822,9 @@ pub(super) struct OpenCADStudio {
     /// `Some` while a CAD file is loading — drives the modal overlay.
     /// Cleared when the load finishes, errors, or the user cancels.
     pub(super) opening: Option<OpenProgress>,
+    open_job_serial: u64,
+    /// Last repair or failed-open report shown in the recovery modal.
+    recovery_report: Option<crate::io::recovery::RecoveryReport>,
     /// Drawings handed to us by other launches while `opening` was busy.
     /// `opening` is a single slot that a second `OpenPathPicked` would
     /// overwrite, and `on_file_opened` drops any result arriving once it is
@@ -1409,6 +1418,8 @@ pub enum ModalKind {
     DimStyle,
     Unsaved,
     SaveDialog,
+    Recovery,
+    RecoveryPrompt,
     Options,
     FindReplace,
     AecDropWarning,
@@ -1603,7 +1614,19 @@ pub enum Message {
     /// User clicked Cancel on the loading overlay. The parser thread keeps
     /// running but its result is discarded.
     OpenCancel,
-    FileOpened(Result<(String, PathBuf, CadDocument, crate::scene::DerivedCaches), String>),
+    #[cfg(target_arch = "wasm32")]
+    WebFileOpened(u64, crate::io::WebOpenOutcome),
+    #[cfg(target_arch = "wasm32")]
+    WebFileCached(u64, crate::io::WebOpenOutcome, Result<(), String>),
+    FileOpened(u64, Result<
+        (String, PathBuf, CadDocument, crate::scene::DerivedCaches),
+        crate::io::OpenLoadError,
+    >),
+    RecoveryClose,
+    RecoveryAttempt,
+    RecoveryDecline,
+    RecoverySaveAs,
+    RecoveryShowLog,
     /// Web: an asynchronous OPFS copy written after Save is ready for recents.
     #[cfg(target_arch = "wasm32")]
     WebRecentStored(Result<PathBuf, String>),
@@ -2867,6 +2890,8 @@ impl OpenCADStudio {
             plot_dialog: crate::ui::window::plot::PlotDialogState::default(),
             plot_prev: None,
             opening: None,
+            open_job_serial: 0,
+            recovery_report: None,
             pending_opens: std::collections::VecDeque::new(),
             active_interaction_index: None,
             queued_interaction_indices: std::collections::VecDeque::new(),

@@ -594,14 +594,27 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             let state = std::sync::Arc::new(crate::io::OpenProgressState::new(
                 crate::app::OPEN_PHASE_READING,
             ));
+                    let open_id = self.next_open_id();
                     self.opening = Some(crate::app::OpenProgress {
+                        id: open_id,
                         name: "Opening…".into(),
+                        source_path: None,
                         size_bytes: 0,
                         state: state.clone(),
                         started: Instant::now(),
+                        recovery_error: None,
+                        recovery_read_stats: None,
+                        recovery_bytes: None,
                     });
-                    Task::perform(crate::io::pick_and_load_web(state), Message::FileOpened)
+                    Task::perform(crate::io::pick_and_load_web(state), move |outcome| {
+                        Message::WebFileOpened(open_id, outcome)
+                    })
                 }
+    }
+
+    pub(in crate::app) fn next_open_id(&mut self) -> u64 {
+        self.open_job_serial = self.open_job_serial.wrapping_add(1).max(1);
+        self.open_job_serial
     }
 
     /// Index of a tab already showing `path`, or `None`.
@@ -751,6 +764,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         path: std::path::PathBuf,
         set_current_path: bool,
     ) -> Result<(), crate::io::SaveFailure> {
+        let previous_autosave = self.autosave_target(i);
+        if self.tabs[i].recovery_save_as_required
+            && self.tabs[i]
+                .current_path
+                .as_deref()
+                .is_some_and(|source| native_paths_match(source, &path))
+        {
+            return Err(crate::io::SaveFailure::other(
+                "repaired drawing must be saved to a new file",
+            ));
+        }
         let path_changed = self.tabs[i]
             .current_path
             .as_deref()
@@ -816,7 +840,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             destination_lease,
         );
         self.tabs[i].dirty = false;
-        let _ = std::fs::remove_file(path.with_extension("sv$"));
+        if set_current_path {
+            self.tabs[i].recovery_save_as_required = false;
+        }
+        let _ = std::fs::remove_file(previous_autosave);
         Ok(())
     }
 
@@ -883,8 +910,36 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 }
                 let open_started = self.opening.as_ref().map(|p| p.started);
+                let size_bytes = self
+                    .opening
+                    .as_ref()
+                    .map(|progress| progress.size_bytes)
+                    .unwrap_or(0);
                 let timings = caches.timings;
                 let entity_count = doc.entities().count();
+                let parser_errors_recovered = caches.read_stats.as_ref().is_some_and(|stats| {
+                    stats.recovered()
+                        || stats.skipped_source_records > 0
+                        || !stats.stream_completed
+                }) || doc.notifications.iter().any(|item| {
+                    item.notification_type == acadrust::notification::NotificationType::Error
+                });
+                let reference_recovered = caches
+                    .xrefs
+                    .iter()
+                    .any(|item| item.status == crate::io::xref::XrefStatus::Recovered);
+                let reference_failed = caches
+                    .xrefs
+                    .iter()
+                    .any(|item| item.status == crate::io::xref::XrefStatus::Failed);
+                let document_repaired = parser_errors_recovered
+                    || reference_recovered
+                    || caches.corrupt_dropped > 0
+                    || caches.xref_dropped > 0;
+                let recovery_needed = document_repaired || reference_failed;
+                let total_ms = open_started
+                    .map(|started| started.elapsed().as_millis() as u32)
+                    .unwrap_or(0);
                 self.command_line
                     .push_output(crate::tf!("Opened \"{name}\" — {entity_count} entities").as_ref());
                 if caches.corrupt_dropped > 0 {
@@ -905,9 +960,21 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.command_line
                         .push_output(crate::tf!("XREF  Loaded \"{}\"", info.name).as_ref());
                 }
+                crate::io::xref::XrefStatus::Recovered => {
+                    self.command_line.push_error(crate::tf!(
+                        "XREF  Recovered with warnings: \"{}\"",
+                        info.name
+                    ).as_ref());
+                }
                 crate::io::xref::XrefStatus::NotFound => {
                     self.command_line.push_error(crate::tf!(
                         "XREF  Not found: \"{}\" ({})",
+                        info.name, info.path
+                    ).as_ref());
+                }
+                crate::io::xref::XrefStatus::Failed => {
+                    self.command_line.push_error(crate::tf!(
+                        "XREF  Recovery failed: \"{}\" ({})",
                         info.name, info.path
                     ).as_ref());
                 }
@@ -917,7 +984,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 }
             }
         }
+                #[cfg(not(target_arch = "wasm32"))]
                 let thumbs_task = self.push_recent(path.clone());
+                #[cfg(target_arch = "wasm32")]
+                let thumbs_task = Task::none();
 
                 let current_is_empty = {
                     let t = &self.tabs[self.active_tab];
@@ -937,6 +1007,27 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.apply_bg_default(idx);
                     idx
                 };
+
+                let mut recovery_report = recovery_needed.then(|| {
+                    crate::io::recovery::RecoveryReport::recovered(
+                        self.tabs[i].id,
+                        &path,
+                        size_bytes,
+                        caches.source_sha256.clone(),
+                        caches.read_stats.clone(),
+                        entity_count.saturating_add(caches.corrupt_dropped),
+                        caches.corrupt_dropped,
+                        caches.xref_dropped,
+                        &caches.xrefs,
+                        &doc.notifications,
+                        document_repaired,
+                        timings,
+                        total_ms,
+                    )
+                });
+                if let Some(report) = recovery_report.as_mut() {
+                    report.persist();
+                }
 
                 #[cfg(not(target_arch = "wasm32"))]
                 let opened_fingerprint = self
@@ -982,9 +1073,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 // `total` is wall time from the Open click to here (post-xref,
                 // pre-first-frame); the phase figures are the background-thread
                 // parse/purge/cache spans plus the UI-thread xref resolve.
-                let total_ms = open_started
-                    .map(|s| s.elapsed().as_millis() as u32)
-                    .unwrap_or(0);
                 self.command_line.push_info(crate::tf!(
                     "  parse {}ms · purge {}ms · caches {}ms · xref {}ms · total {}ms",
                     timings.parse_ms, timings.purge_ms, timings.caches_ms, timings.xref_ms, total_ms
@@ -1074,7 +1162,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.adopt_view_display(i);
                 self.sync_render_mode_to_active_tile(i);
                 self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
-                self.tabs[i].dirty = false;
+                self.tabs[i].dirty = document_repaired;
+                self.tabs[i].recovery_save_as_required = document_repaired;
                 self.tabs[i].history = crate::app::document::HistoryState::default();
                 self.refresh_properties();
                 #[cfg(not(target_arch = "wasm32"))]
@@ -1092,7 +1181,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .set(crate::app::OPEN_PHASE_FINALIZING, 10000, 1, 1);
         }
         self.opening.take();
-                let pending_open_task = self.drain_pending_open();
+                let pending_open_task = if let Some(report) = recovery_report {
+                    self.recovery_report = Some(report);
+                    self.active_modal = Some(crate::app::ModalKind::Recovery);
+                    Task::none()
+                } else {
+                    self.drain_pending_open()
+                };
                 Task::batch([thumbs_task, pending_open_task, interaction_task])
     }
 
@@ -1216,6 +1311,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             }
             return Task::none();
         }
+        let destination_is_current = self.tabs[i]
+            .current_path
+            .as_deref()
+            .is_some_and(|current| native_paths_match(current, &path));
+        if purpose != crate::app::SavePurpose::Autosave
+            && self.tabs[i].recovery_save_as_required
+            && destination_is_current
+        {
+            self.command_line.push_error_once(
+                crate::tr!("recovery-save-new-file-required").as_ref(),
+            );
+            self.restore_failed_save_continuation(continuation, i);
+            self.active_tab = i;
+            self.save_dialog_for_unsaved =
+                continuation != crate::app::SaveContinuation::None;
+            return self.open_save_dialog_window(i);
+        }
         if purpose != crate::app::SavePurpose::Autosave
             && !set_current_path
             && self.tabs[i].edit_lock_conflict
@@ -1241,10 +1353,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             return Task::none();
         }
 
-        let destination_is_current = self.tabs[i]
-            .current_path
-            .as_deref()
-            .is_some_and(|current| native_paths_match(current, &path));
         if set_current_path && !destination_is_current {
             match crate::io::edit_lock::EditLease::acquire(&path) {
                 Ok(lease) => {
@@ -1320,7 +1428,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.save_job_serial = self.save_job_serial.wrapping_add(1);
         let job_id = self.save_job_serial;
         self.active_save_jobs.insert(tab_id, job_id);
-        let previous_autosave = set_current_path.then(|| self.autosave_target(i));
+        let previous_autosave =
+            (purpose != crate::app::SavePurpose::Autosave).then(|| self.autosave_target(i));
         let backup = purpose != crate::app::SavePurpose::Autosave && self.backup_on_save;
         let expected_fingerprint =
             if check_external_change && purpose != crate::app::SavePurpose::Autosave {
@@ -1520,6 +1629,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 if outcome.set_current_path {
                     self.tabs[i].current_path = Some(outcome.path.clone());
                     self.tabs[i].scene.document.version = outcome.version;
+                    if outcome.purpose == crate::app::SavePurpose::SaveAs {
+                        self.tabs[i].recovery_save_as_required = false;
+                    }
                     tasks.push(self.push_recent(outcome.path.clone()));
                 }
                 self.refresh_native_edit_guard_after_save(
@@ -1530,7 +1642,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 );
                 if snapshot_is_current {
                     self.tabs[i].dirty = false;
-                    let _ = std::fs::remove_file(outcome.path.with_extension("sv$"));
                 }
             }
         }
@@ -1726,19 +1837,21 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 // Native: save straight to the known path. Web has no path
                 // (downloads instead), so always go through the Save dialog.
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = self.tabs[i].current_path.clone() {
-                    // A direct Save preserves the document's current version.
-                    let ver = self.tabs[i].scene.document.version;
-                    self.prepare_native_save(i);
-                    return self.queue_native_save(
-                        i,
-                        path,
-                        ver,
-                        crate::app::SavePurpose::Manual,
-                        crate::app::SaveContinuation::None,
-                        false,
-                        true,
-                    );
+                if !self.tabs[i].recovery_save_as_required {
+                    if let Some(path) = self.tabs[i].current_path.clone() {
+                        // A direct Save preserves the document's current version.
+                        let ver = self.tabs[i].scene.document.version;
+                        self.prepare_native_save(i);
+                        return self.queue_native_save(
+                            i,
+                            path,
+                            ver,
+                            crate::app::SavePurpose::Manual,
+                            crate::app::SaveContinuation::None,
+                            false,
+                            true,
+                        );
+                    }
                 }
                 self.save_dialog_for_unsaved = false;
                 self.save_with_default_format(i)
@@ -1750,7 +1863,21 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// save-before-close flow — the version picker is reserved for Save As.
     pub(in crate::app) fn save_with_default_format(&mut self, tab_idx: usize) -> Task<Message> {
         self.active_tab = tab_idx;
-        self.save_dialog_format = self.default_save_format.clone();
+        self.save_dialog_format = if self.tabs[tab_idx].recovery_save_as_required {
+            let document = &self.tabs[tab_idx].scene.document;
+            let is_dxf = crate::io::source_is_dxf(
+                self.tabs[tab_idx].current_path.as_deref(),
+                document,
+            );
+            let version = if is_dxf {
+                document.version
+            } else {
+                document.dwg_source_version.unwrap_or(document.version)
+            };
+            crate::io::format_for_version(version, is_dxf)
+        } else {
+            self.default_save_format.clone()
+        };
         let (ext, _) = crate::io::parse_save_format(&self.save_dialog_format);
         self.save_dialog_filename = self.tabs[tab_idx]
             .current_path
@@ -1758,6 +1885,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| format!("{}.{ext}", self.tabs[tab_idx].tab_display_name()));
+        if self.tabs[tab_idx].recovery_save_as_required {
+            let path = std::path::Path::new(&self.save_dialog_filename);
+            let stem = path
+                .file_stem()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "drawing".to_string());
+            self.save_dialog_filename = format!("{stem}_recovered.{ext}");
+        }
         self.aec_drop_acknowledged = false;
         self.on_save_dialog_confirm()
     }
@@ -1851,6 +1986,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                             self.tabs[i].current_path = Some(path.clone());
                             self.tabs[i].scene.document.version = version;
                             self.tabs[i].dirty = false;
+                            self.tabs[i].recovery_save_as_required = false;
                             recent_task = Task::perform(
                                 async move {
                                     crate::io::web_recent::store(
@@ -1939,14 +2075,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// document's source type and version, then save.
     pub(super) fn on_aec_drop_same_version(&mut self) -> Task<Message> {
         let tab = &self.tabs[self.active_tab];
-        let is_dxf = tab
-            .current_path
-            .as_ref()
-            .and_then(|path| path.extension())
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.eq_ignore_ascii_case("dxf"))
-            .unwrap_or(false);
         let document = &tab.scene.document;
+        let is_dxf = crate::io::source_is_dxf(tab.current_path.as_deref(), document);
         let src = if is_dxf {
             document.version
         } else {
@@ -1964,20 +2094,27 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.on_save_dialog_confirm()
     }
 
-    /// Where the autosave recovery copy for tab `i` lives: beside a saved
-    /// drawing as `<file>.sv$`, or — for an unsaved drawing with no path yet —
-    /// under the system temp dir keyed by the tab's display name.
+    /// Where the autosave recovery copy for tab `i` lives.
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn autosave_target(&self, i: usize) -> std::path::PathBuf {
         match &self.tabs[i].current_path {
-            Some(p) => p.with_extension("sv$"),
+            Some(p) => {
+                let name = p
+                    .file_name()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "drawing".to_string());
+                p.with_file_name(format!("{name}.ocs-autosave.sv$"))
+            }
             None => {
                 let safe: String = self.tabs[i]
                     .tab_display_name()
                     .chars()
                     .map(|c| if c.is_alphanumeric() { c } else { '_' })
                     .collect();
-                std::env::temp_dir().join(format!("OpenCADStudio_{safe}.sv$"))
+                std::env::temp_dir().join(format!(
+                    "OpenCADStudio_{safe}_{}.sv$",
+                    self.tabs[i].id
+                ))
             }
         }
     }

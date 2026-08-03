@@ -45,6 +45,7 @@ rust-embed = "8"
 inventory = "0.3"
 truck-shapeops = { version = "0.4", optional = true }
 rustc-hash = "2"
+sha2 = "0.10"
 fontdb = "0.23"
 ttf-parser = "0.25"
 cosmic-text = "0.15"
@@ -61,7 +62,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "wayland"] }
 
 [patch.crates-io]
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "78b57b0" }
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "6f9a92f" }
 iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 

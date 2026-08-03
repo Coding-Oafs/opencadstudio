@@ -41,6 +41,8 @@ impl OpenCADStudio {
             Some(K::PointStyle) => crate::tr!("modal-point-style"),
             Some(K::AttributeEditor) => crate::tr!("modal-attribute-editor"),
             Some(K::SaveDialog) => crate::tr!("modal-save-drawing-as"),
+            Some(K::Recovery) => crate::tr!("modal-recovery-report"),
+            Some(K::RecoveryPrompt) => crate::tr!("modal-recovery-prompt"),
             None => String::new(),
         }
     }
@@ -1285,6 +1287,27 @@ impl OpenCADStudio {
                     save_as_dialog_window(
                         &self.save_dialog_filename,
                         &self.save_dialog_format,
+                        flow,
+                    )
+                })
+            }
+            super::super::ModalKind::Recovery => {
+                let report = self.recovery_report.as_ref()?;
+                sized_flow(ex, 680, 460, |flow| {
+                    crate::ui::window::recovery::view_window(
+                        report,
+                        self.pending_opens.is_empty(),
+                        flow,
+                    )
+                })
+            }
+            super::super::ModalKind::RecoveryPrompt => {
+                let opening = self.opening.as_ref()?;
+                let error = opening.recovery_error.as_deref()?;
+                automatic_flow(ex, |flow| {
+                    crate::ui::window::recovery::view_prompt(
+                        &opening.name,
+                        error,
                         flow,
                     )
                 })

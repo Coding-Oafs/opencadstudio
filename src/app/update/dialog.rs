@@ -29,12 +29,8 @@ impl OpenCADStudio {
         // re-targeting it. A new/unsaved drawing has no source format, so it
         // uses the application-wide default chosen in Options (#529).
         self.save_dialog_format = if let Some(path) = &self.tabs[tab_idx].current_path {
-            let is_dxf = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("dxf"))
-                .unwrap_or(false);
             let document = &self.tabs[tab_idx].scene.document;
+            let is_dxf = crate::io::source_is_dxf(Some(path), document);
             let version = if is_dxf {
                 document.version
             } else {
@@ -54,6 +50,14 @@ impl OpenCADStudio {
         } else {
             let (ext, _) = crate::io::parse_save_format(&self.save_dialog_format);
             self.save_dialog_filename = format!("{}.{ext}", self.tabs[tab_idx].tab_display_name());
+        }
+        if self.tabs[tab_idx].recovery_save_as_required {
+            let (ext, _) = crate::io::parse_save_format(&self.save_dialog_format);
+            let stem = std::path::Path::new(&self.save_dialog_filename)
+                .file_stem()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.tabs[tab_idx].tab_display_name());
+            self.save_dialog_filename = format!("{stem}_recovered.{ext}");
         }
         self.aec_drop_acknowledged = false;
         self.active_modal = Some(crate::app::ModalKind::SaveDialog);
@@ -269,20 +273,22 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 return Task::none();
             }
 
-            if let Some(path) = self.tabs[idx].current_path.clone() {
-                let version = self.tabs[idx].scene.document.version;
-                self.prepare_native_save(idx);
-                let close = self.close_unsaved_dialog_window();
-                let save = self.queue_native_save(
-                    idx,
-                    path,
-                    version,
-                    crate::app::SavePurpose::Manual,
-                    continuation,
-                    false,
-                    true,
-                );
-                return Task::batch([close, save]);
+            if !self.tabs[idx].recovery_save_as_required {
+                if let Some(path) = self.tabs[idx].current_path.clone() {
+                    let version = self.tabs[idx].scene.document.version;
+                    self.prepare_native_save(idx);
+                    let close = self.close_unsaved_dialog_window();
+                    let save = self.queue_native_save(
+                        idx,
+                        path,
+                        version,
+                        crate::app::SavePurpose::Manual,
+                        continuation,
+                        false,
+                        true,
+                    );
+                    return Task::batch([close, save]);
+                }
             }
 
             self.active_tab = idx;

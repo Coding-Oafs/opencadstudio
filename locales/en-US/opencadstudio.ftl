@@ -92,6 +92,29 @@ modal-unsaved-changes = Unsaved Changes
 modal-point-style = Point Style
 modal-attribute-editor = Attribute Editor
 modal-save-drawing-as = Save Drawing As
+modal-recovery-report = Drawing Recovery Report
+modal-recovery-prompt = Drawing Recovery
+
+recovery-opened-with-repairs = Drawing opened with a recovery report
+recovery-open-failed = Drawing could not be opened
+recovery-repaired-description = Problems were detected while opening the drawing. Review the report; if drawing data was repaired, save it as a new file.
+recovery-failed-description = Recovery could not produce usable drawing data. Review the report and try a backup or automatic-save copy.
+recovery-entities-checked = Entities checked
+recovery-issues-found = Issues found
+recovery-entities-removed = Entities removed
+recovery-references-checked = References checked
+recovery-referenced-entities-removed = Referenced entities removed
+recovery-references-unavailable = References unavailable
+recovery-log-path = Recovery log
+recovery-log-write-failed = Recovery log could not be written
+recovery-log-download-ready = The recovery report is ready to download.
+recovery-save-copy = Save Repaired Copy
+recovery-show-log = Show Recovery Log
+recovery-save-new-file-required = A repaired drawing must be saved to a new file.
+recovery-prompt-heading = Normal opening failed
+recovery-prompt-description = The drawing was not changed. Recovery mode can try to salvage usable data, but damaged records may be skipped. Do you want to continue?
+recovery-attempt = Try Recovery
+recovery-decline = Cancel
 
 command-move-base =
     MOVE  Specify base point  [{ $count ->

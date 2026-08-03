@@ -898,11 +898,22 @@ mod tests {
         );
         assert_eq!(app.pending_opens.front(), Some(&b));
 
-        // A drawing that fails to parse must still release the queue behind it.
-        let _ = app.update(Message::FileOpened(Err("boom".into())));
+        // A failed drawing pauses the queue while its recovery report is shown.
+        let open_id = app.opening.as_ref().map(|opening| opening.id).unwrap();
+        let _ = app.update(Message::FileOpened(open_id, Err("boom".into())));
+        assert!(
+            app.active_modal == Some(crate::app::ModalKind::Recovery),
+            "failed open should show its recovery report"
+        );
+        assert_eq!(
+            app.pending_opens.len(),
+            1,
+            "queued drawing should wait until the report is acknowledged"
+        );
+        let _ = app.update(Message::RecoveryClose);
         assert!(
             app.pending_opens.is_empty(),
-            "a failed open must drain the queue, not strand it"
+            "closing the report must release the queued drawing"
         );
 
         let _ = std::fs::remove_file(&a);
