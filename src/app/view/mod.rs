@@ -2738,6 +2738,10 @@ fn start_page_content<'a>(
             Space::new().height(iced::Length::Fixed(12.0)),
         ]
         .spacing(6)
+        .padding(iced::Padding {
+            right: 12.0,
+            ..iced::Padding::ZERO
+        })
         .width(Fill);
         for (name, cents) in patrons {
             // Cents → the campaign currency's main unit. Symbol assumed "$";

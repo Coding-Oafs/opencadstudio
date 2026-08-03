@@ -7,8 +7,6 @@ run-name: ${{ github.event.release.tag_name || github.ref_name }} Web
 on:
   release:
     types: [published]
-  discussion:
-    types: [created, edited, deleted, transferred, pinned, unpinned, labeled, unlabeled, locked, unlocked, category_changed, answered, unanswered]
   workflow_dispatch:
 
 permissions:
@@ -81,11 +79,25 @@ jobs:
             echo '[]' > dist/supporters.json; exit 0
           fi
           curl -sf -H "Authorization: Bearer $OCS_PATREON_TOKEN" \
-            "https://www.patreon.com/api/oauth2/v2/campaigns/$CID/members?fields%5Bmember%5D=full_name,patron_status,currently_entitled_amount_cents&page%5Bcount%5D=200" \
-            | jq -c '[.data[]
-                | select(.attributes.patron_status=="active_patron")
-                | select(.attributes.currently_entitled_amount_cents>0)
-                | {name: .attributes.full_name, cents: .attributes.currently_entitled_amount_cents}]
+            "https://www.patreon.com/api/oauth2/v2/campaigns/$CID/members?include=pledge_history&fields%5Bmember%5D=full_name,patron_status,currently_entitled_amount_cents&fields%5Bpledge-event%5D=amount_cents,date,payment_status&page%5Bcount%5D=200" \
+            | jq -c '
+                (.included // []
+                  | map(select(.type == "pledge-event"))
+                  | map({key: .id, value: .attributes})
+                  | from_entries) as $events
+                | [.data[]
+                    | select(.attributes.patron_status == "active_patron")
+                    | . as $member
+                    | ([($member.relationships.pledge_history.data // [])[]
+                        | $events[.id]
+                        | select(.payment_status == "Paid")
+                        | select(.amount_cents > 0)]
+                       | sort_by(.date)
+                       | last) as $last_paid
+                    | {name: ((.attributes.full_name // "") | gsub("^\\s+|\\s+$"; "")),
+                       cents: ($last_paid.amount_cents // .attributes.currently_entitled_amount_cents)}
+                    | select(.name != "")
+                    | select(.cents > 0)]
                 | sort_by(-.cents)' \
             > dist/supporters.json || echo '[]' > dist/supporters.json
           echo "supporters: $(jq 'length' dist/supporters.json)"

@@ -60,12 +60,18 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
     let mut patrons: Vec<(String, i64)> = Vec::new();
     let mut url = format!(
         "https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members\
-         ?fields%5Bmember%5D=full_name,patron_status,currently_entitled_amount_cents\
+         ?include=pledge_history\
+         &fields%5Bmember%5D=full_name,patron_status,currently_entitled_amount_cents\
+         &fields%5Bpledge-event%5D=amount_cents,date,payment_status\
          &page%5Bcount%5D=200"
     );
     // Bound the loop so a malformed `next` link can never spin forever.
     for _ in 0..50 {
         let page = get_json(&agent, token, &url)?;
+        let included = page["included"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if let Some(arr) = page["data"].as_array() {
             for m in arr {
                 let attrs = &m["attributes"];
@@ -75,7 +81,15 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
                 if attrs["patron_status"].as_str() != Some("active_patron") {
                     continue;
                 }
-                let cents = attrs["currently_entitled_amount_cents"].as_i64().unwrap_or(0);
+                // The entitlement can retain the previous tier amount after a
+                // pledge change. The latest successful pledge event records
+                // what was actually paid; retain the entitlement as a fallback
+                // for memberships whose history is unavailable.
+                let cents = latest_paid_amount(m, included).unwrap_or_else(|| {
+                    attrs["currently_entitled_amount_cents"]
+                        .as_i64()
+                        .unwrap_or(0)
+                });
                 if cents <= 0 {
                     continue;
                 }
@@ -94,6 +108,48 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
     // Highest pledge first, then alphabetical.
     patrons.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     Ok(patrons)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn latest_paid_amount(
+    member: &serde_json::Value,
+    included: &[serde_json::Value],
+) -> Option<i64> {
+    let history = member["relationships"]["pledge_history"]["data"].as_array()?;
+    let mut latest: Option<(String, i64)> = None;
+
+    for relationship in history {
+        let Some(id) = relationship["id"].as_str() else {
+            continue;
+        };
+        let Some(resource_type) = relationship["type"].as_str() else {
+            continue;
+        };
+        let Some(event) = included.iter().find(|entry| {
+            entry["id"].as_str() == Some(id)
+                && entry["type"].as_str() == Some(resource_type)
+        }) else {
+            continue;
+        };
+        let attrs = &event["attributes"];
+        if attrs["payment_status"].as_str() != Some("Paid") {
+            continue;
+        }
+        let cents = attrs["amount_cents"].as_i64().unwrap_or(0);
+        if cents <= 0 {
+            continue;
+        }
+        let date = attrs["date"].as_str().unwrap_or("");
+        if latest
+            .as_ref()
+            .map(|(current, _)| date > current.as_str())
+            .unwrap_or(true)
+        {
+            latest = Some((date.to_string(), cents));
+        }
+    }
+
+    latest.map(|(_, cents)| cents)
 }
 
 /// Web build: the browser can't call the Patreon API directly (CORS + the
