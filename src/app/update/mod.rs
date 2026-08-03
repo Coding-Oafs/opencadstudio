@@ -255,9 +255,8 @@ impl OpenCADStudio {
 
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
         match msg {
-            // Web: a drawing referenced a script whose Noto subset isn't loaded
-            // yet (recorded during text tessellation). Kick off one fetch per
-            // pending script; the result comes back as `WebFontLoaded`. (#141)
+            // Web: fetch every script queued by startup language selection or
+            // drawing text discovery. Each script has one shared store entry.
             Message::PollWebFonts => {
                 let pending = crate::scene::text::web_font::take_pending();
                 if pending.is_empty() {
@@ -270,9 +269,8 @@ impl OpenCADStudio {
                 }))
             }
 
-            // Web: a per-script font arrived. Store it, drop the stale fallback
-            // glyph cache (entries that resolved to nothing while it loaded),
-            // and re-tessellate so the text appears. (#141)
+            // Web: a per-script font arrived. The same bytes feed drawing text,
+            // the UI renderer, and the navigation-cube label atlas.
             Message::WebFontLoaded(script, res) => {
                 match res {
                     Ok(bytes) => {
@@ -281,12 +279,39 @@ impl OpenCADStudio {
                         for tab in self.tabs.iter_mut() {
                             tab.scene.invalidate_text_geometry_dependencies();
                         }
+                        return Task::done(Message::ApplyWebFont(script));
                     }
                     Err(e) => {
                         crate::scene::text::web_font::insert(script, None);
                         self.command_line
                             .push_error(crate::tf!("Font load failed ({script:?}): {e}").as_ref());
                     }
+                }
+                Task::none()
+            }
+
+            Message::ApplyWebFont(script) => {
+                let Some(bytes) = crate::scene::text::web_font::loaded(script) else {
+                    return Task::none();
+                };
+                iced::font::load((*bytes).clone()).map(move |result| {
+                    Message::WebUiFontLoaded(
+                        script,
+                        result.map_err(|error| format!("{error:?}")),
+                    )
+                })
+            }
+
+            Message::WebUiFontLoaded(script, result) => {
+                if let Err(error) = result {
+                    self.command_line.push_error(
+                        crate::tf!("Font load failed ({script:?}): {error}").as_ref(),
+                    );
+                    return Task::none();
+                }
+                if script == crate::scene::text::web_font::primary_script() {
+                    let family = iced::font::Family::name(script.family());
+                    return iced::font::set_defaults(iced::Font::with_family(family), 16.0);
                 }
                 Task::none()
             }
@@ -4436,6 +4461,16 @@ impl OpenCADStudio {
                     Ok(()) => {
                         self.language = language;
                         self.persist_settings_if_changed();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let script = crate::scene::text::web_font::preload_language(
+                                &crate::i18n::active_language_tag(),
+                            );
+                            return Task::batch([
+                                Task::done(Message::PollWebFonts),
+                                Task::done(Message::ApplyWebFont(script)),
+                            ]);
+                        }
                     }
                     Err(error) => self
                         .command_line

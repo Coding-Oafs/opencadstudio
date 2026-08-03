@@ -16,6 +16,16 @@ use iced::wgpu;
 use iced::{Rectangle, Size};
 use crate::t;
 
+#[path = "viewcube_text_atlas.rs"]
+mod viewcube_text_atlas;
+
+use viewcube_text_atlas::{
+    build_label_atlas, empty_label_atlas, AtlasTile, ATLAS_HEIGHT, ATLAS_WIDTH,
+    CARDINAL_TILE_START, FACE_TILE_COUNT, TILE_COUNT,
+};
+
+const VIEWCUBE_MSAA_SAMPLES: u32 = 4;
+
 // ── ViewCube layout ───────────────────────────────────────────────────────
 pub const VIEWCUBE_PX: u32 = 84; // 30% smaller cube (was 120)
 pub const VIEWCUBE_SCALE: f32 = 0.36;
@@ -28,6 +38,7 @@ pub const VIEWCUBE_PAD: f32 = 12.0;
 pub const NAV_INSET_F: f32 = 2.0;
 /// Side of the whole nav widget (cube + compass ring + controls) in pixels.
 pub const VIEWCUBE_REGION_PX: f32 = VIEWCUBE_DRAW_PX * NAV_INSET_F;
+pub const VIEWCUBE_RENDER_PX: f32 = VIEWCUBE_REGION_PX + 8.0;
 /// Z height of the compass ring + cardinals in cube-local space. The cube
 /// spans ±1, so −1 parks the ring at the cube's base — it sits *under* the
 /// cube in 3D views and reads as a ground compass.
@@ -54,10 +65,7 @@ pub enum NudgeDir {
     Right,
 }
 
-/// Face labels in the current UI language, sourced from `locales/*.yml`
-/// (`ViewCube Top` …). The cube text is drawn from a fixed bitmap atlas,
-/// so the translated values must stay inside the atlas glyph set — the same
-/// vocabulary the `glyph_index`/`latin_rows`/`han_rows` tables below agree on.
+/// Face labels in the current UI language.
 fn face_labels() -> [std::borrow::Cow<'static, str>; 6] {
     [
         t!("ViewCube Top"),
@@ -77,6 +85,18 @@ const FACE_CENTERS: [[f32; 3]; 6] = [
     [1.0, 0.0, 0.0],
     [-1.0, 0.0, 0.0],
 ];
+
+fn face_label_axes(face: usize) -> (Vec3, Vec3) {
+    match face {
+        FACE_TOP => (Vec3::X, Vec3::Y),
+        FACE_BOTTOM => (Vec3::X, -Vec3::Y),
+        FACE_FRONT => (Vec3::X, Vec3::Z),
+        FACE_BACK => (-Vec3::X, Vec3::Z),
+        FACE_RIGHT => (Vec3::Y, Vec3::Z),
+        FACE_LEFT => (-Vec3::Y, Vec3::Z),
+        _ => (Vec3::X, Vec3::Y),
+    }
+}
 
 pub const FACE_TOP: usize = 0;
 pub const FACE_BOTTOM: usize = 1;
@@ -202,6 +222,24 @@ impl CubeVertex {
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
+struct LineVertex {
+    pos: [f32; 3],
+}
+
+impl LineVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x3];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 pub struct CubeUniforms {
     pub view_proj: [f32; 16],
     pub rotation: [f32; 16],
@@ -240,33 +278,11 @@ impl CubeUniforms {
     }
 }
 
-// ── Bitmap text ───────────────────────────────────────────────────────────
-//
-// Atlas grid: 8 × 3 cells of 16×18 px (128×54 texture). Each cell holds one
-// glyph, centered. Latin label glyphs are the original 5×7 bitmaps; the six
-// Simplified-Chinese face labels are 14×16 bitmaps traced from the system's
-// Noto Sans CJK font (see the `han_rows` table below), which keeps the shapes
-// correct instead of hand-drawn approximations.
+// ── Shaped label text ─────────────────────────────────────────────────────
 
-const CELL_W: usize = 16;
-const CELL_H: usize = 18;
-const ATLAS_COLS: usize = 8;
-const ATLAS_ROWS: usize = 3;
-// Latin label glyphs: 5×7 bitmaps centered in their cell.
-const LATIN_W: usize = 5;
-const LATIN_H: usize = 7;
-const LATIN_OX: usize = (CELL_W - LATIN_W) / 2;
-const LATIN_OY: usize = (CELL_H - LATIN_H) / 2;
-// Han label glyphs: 14×16 font bitmaps centered in their cell.
-const HAN_W: usize = 14;
-const HAN_H: usize = 16;
-const HAN_OX: usize = (CELL_W - HAN_W) / 2;
-const HAN_OY: usize = (CELL_H - HAN_H) / 2;
-const MAX_LABEL_CHARS: usize = 6;
-const LABEL_COUNT: usize = 6;
-// Face labels + the four compass cardinals (one glyph each).
-const MAX_GLYPHS: usize = MAX_LABEL_CHARS * LABEL_COUNT + 4;
-const MAX_VERTS: usize = MAX_GLYPHS * 6;
+const MAX_VERTS: usize = TILE_COUNT * 6;
+const FACE_LABEL_HEIGHT: f32 = 0.46;
+const CARDINAL_LABEL_HEIGHT: f32 = FACE_LABEL_HEIGHT;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -278,14 +294,14 @@ struct TextUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct TextVertex {
-    pos: [f32; 2],
+    pos: [f32; 3],
     uv: [f32; 2],
     color: [f32; 4],
 }
 
 impl TextVertex {
     const ATTRIBS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
-        0 => Float32x2, 1 => Float32x2, 2 => Float32x4,
+        0 => Float32x3, 1 => Float32x2, 2 => Float32x4,
     ];
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -296,220 +312,49 @@ impl TextVertex {
     }
 }
 
-fn glyph_index(c: char) -> Option<usize> {
-    match c {
-        'A' => Some(0),
-        'B' => Some(1),
-        'C' => Some(2),
-        'E' => Some(3),
-        'F' => Some(4),
-        'G' => Some(5),
-        'H' => Some(6),
-        'I' => Some(7),
-        'K' => Some(8),
-        'L' => Some(9),
-        'M' => Some(10),
-        'N' => Some(11),
-        'O' => Some(12),
-        'P' => Some(13),
-        'R' => Some(14),
-        'T' => Some(15),
-        'S' => Some(16),
-        'W' => Some(17),
-        // Simplified-Chinese face labels (atlas cells 18..24).
-        '上' => Some(18),
-        '下' => Some(19),
-        '前' => Some(20),
-        '后' => Some(21),
-        '右' => Some(22),
-        '左' => Some(23),
-        _ => None,
-    }
+fn face_label_strings() -> [String; FACE_TILE_COUNT] {
+    let labels = face_labels();
+    std::array::from_fn(|index| labels[index].to_string())
 }
 
-/// 5×7 Latin glyph rows (existing shapes, unchanged) for the English labels
-/// and compass cardinals. `None` for any other character.
-fn latin_rows(c: char) -> Option<[u8; 7]> {
-    match c {
-        'A' => Some([
-            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ]),
-        'B' => Some([
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
-        ]),
-        'C' => Some([
-            0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
-        ]),
-        'E' => Some([
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
-        ]),
-        'F' => Some([
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
-        ]),
-        'G' => Some([
-            0b01111, 0b10000, 0b10000, 0b10011, 0b10001, 0b10001, 0b01111,
-        ]),
-        'H' => Some([
-            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ]),
-        'I' => Some([
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
-        ]),
-        'K' => Some([
-            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
-        ]),
-        'L' => Some([
-            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
-        ]),
-        'M' => Some([
-            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
-        ]),
-        'N' => Some([
-            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
-        ]),
-        'O' => Some([
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ]),
-        'P' => Some([
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
-        ]),
-        'R' => Some([
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
-        ]),
-        'T' => Some([
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
-        ]),
-        'S' => Some([
-            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
-        ]),
-        'W' => Some([
-            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
-        ]),
-        _ => None,
-    }
-}
-
-/// 14×16 Han glyph rows for the Simplified-Chinese face labels (上/下/前/后/右/左),
-/// traced from Noto Sans CJK Bold (system font) so the stroke shapes are the
-/// real printed forms rather than hand-drawn approximations. Each row is a
-/// 14-bit mask, bit 13 = leftmost pixel. `None` for any other character.
-fn han_rows(c: char) -> Option<[u16; HAN_H]> {
-    match c {
-        '上' => Some([
-            0b00000000000000, 0b00000000000000, 0b00000110000000, 0b00000110000000,
-            0b00000110000000, 0b00000110000000, 0b00000111111100, 0b00000111111100,
-            0b00000110000000, 0b00000110000000, 0b00000110000000, 0b00000110000000,
-            0b11111111111110, 0b11111111111110, 0b00000000000000, 0b00000000000000,
-        ]),
-        '下' => Some([
-            0b00000000000000, 0b11111111111110, 0b11111111111110, 0b00000110000000,
-            0b00000110000000, 0b00000111100000, 0b00000111110000, 0b00000110111100,
-            0b00000110001100, 0b00000110000000, 0b00000110000000, 0b00000110000000,
-            0b00000110000000, 0b00000110000000, 0b00000000000000, 0b00000000000000,
-        ]),
-        '前' => Some([
-            0b00000000000000, 0b00010000010000, 0b00011000011000, 0b11111111111110,
-            0b11111111111110, 0b00000000000100, 0b01111100101100, 0b01100100101100,
-            0b01111100101100, 0b01100100101100, 0b01111100101100, 0b01100110001100,
-            0b01100110011100, 0b01101100011100, 0b00000000000000, 0b00000000000000,
-        ]),
-        '后' => Some([
-            0b00000000000000, 0b00000000111000, 0b00111111111100, 0b01111000000000,
-            0b00100000000000, 0b00111111111110, 0b01111111111100, 0b01100000000000,
-            0b01101111111100, 0b01101111111100, 0b01101100001100, 0b01101100001100,
-            0b11001111111100, 0b11001100001100, 0b00000000000000, 0b00000000000000,
-        ]),
-        '右' => Some([
-            0b00000000000000, 0b00000100000000, 0b00000110000000, 0b00001110000000,
-            0b11111111111110, 0b00011100000000, 0b00011000000000, 0b00011000000000,
-            0b00111111111100, 0b01111000001100, 0b11111000001100, 0b01011000001100,
-            0b00011111111100, 0b00011111111100, 0b00011000001100, 0b00000000000000,
-        ]),
-        '左' => Some([
-            0b00000000000000, 0b00001100000000, 0b00001100000000, 0b01111111111100,
-            0b11111111111110, 0b00011000000000, 0b00011000000000, 0b00011111111100,
-            0b00111111111100, 0b00110001100000, 0b01100001100000, 0b01100001100000,
-            0b11011111111110, 0b00011111111110, 0b00000000000000, 0b00000000000000,
-        ]),
-        _ => None,
-    }
-}
-
-fn build_atlas() -> (Vec<u8>, u32, u32) {
-    let w = (ATLAS_COLS * CELL_W) as u32;
-    let h = (ATLAS_ROWS * CELL_H) as u32;
-    let mut data = vec![0u8; (w * h) as usize];
-    let glyphs = [
-        'A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'T', 'S', 'W',
-        '上', '下', '前', '后', '右', '左',
-    ];
-    for (i, &ch) in glyphs.iter().enumerate() {
-        let col = i % ATLAS_COLS;
-        let row = i / ATLAS_COLS;
-        let x0 = col * CELL_W;
-        let y0 = row * CELL_H;
-        if let Some(rows) = latin_rows(ch) {
-            for y in 0..LATIN_H {
-                let bits = rows[y];
-                for x in 0..LATIN_W {
-                    if (bits >> (LATIN_W - 1 - x)) & 1 == 0 {
-                        continue;
-                    }
-                    data[(y0 + y + LATIN_OY) as usize * w as usize + (x0 + x + LATIN_OX)] = 255;
-                }
-            }
-        } else if let Some(rows) = han_rows(ch) {
-            for y in 0..HAN_H {
-                let bits = rows[y];
-                for x in 0..HAN_W {
-                    if (bits >> (HAN_W - 1 - x)) & 1 == 0 {
-                        continue;
-                    }
-                    data[(y0 + y + HAN_OY) as usize * w as usize + (x0 + x + HAN_OX)] = 255;
-                }
-            }
-        }
-    }
-    (data, w, h)
-}
-
-fn glyph_uv(index: usize, atlas_w: f32, atlas_h: f32) -> (f32, f32, f32, f32) {
-    let col = index % ATLAS_COLS;
-    let row = index / ATLAS_COLS;
-    let (ox, oy, gw, gh) = if index < 18 {
-        (LATIN_OX, LATIN_OY, LATIN_W, LATIN_H)
-    } else {
-        (HAN_OX, HAN_OY, HAN_W, HAN_H)
-    };
-    let x0 = (col * CELL_W + ox) as f32;
-    let y0 = (row * CELL_H + oy) as f32;
-    (
-        x0 / atlas_w,
-        y0 / atlas_h,
-        (x0 + gw as f32) / atlas_w,
-        (y0 + gh as f32) / atlas_h,
-    )
+fn write_label_atlas(queue: &wgpu::Queue, texture: &wgpu::Texture, pixels: &[u8]) {
+    queue.write_texture(
+        texture.as_image_copy(),
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(ATLAS_WIDTH),
+            rows_per_image: Some(ATLAS_HEIGHT),
+        },
+        wgpu::Extent3d {
+            width: ATLAS_WIDTH,
+            height: ATLAS_HEIGHT,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 struct ViewCubeText {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
-    vertex_capacity: u32,
     vertex_count: u32,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    atlas_w: f32,
-    atlas_h: f32,
+    atlas_texture: wgpu::Texture,
+    tiles: [AtlasTile; TILE_COUNT],
+    labels: [String; FACE_TILE_COUNT],
+    font_generation: u64,
 }
 
 impl ViewCubeText {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let (atlas, w, h) = build_atlas();
+        let labels = face_label_strings();
+        let atlas = build_label_atlas(&labels).unwrap_or_else(empty_label_atlas);
         let atlas_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("vc.text_atlas"),
             size: wgpu::Extent3d {
-                width: w,
-                height: h,
+                width: ATLAS_WIDTH,
+                height: ATLAS_HEIGHT,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -519,39 +364,12 @@ impl ViewCubeText {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let bytes_per_row = w;
-        let aligned_bpr = ((bytes_per_row + 255) / 256) * 256;
-        let atlas_bytes = if aligned_bpr == bytes_per_row {
-            atlas
-        } else {
-            let mut padded = vec![0u8; (aligned_bpr * h) as usize];
-            for row in 0..h as usize {
-                let src = row * bytes_per_row as usize;
-                let dst = row * aligned_bpr as usize;
-                padded[dst..dst + bytes_per_row as usize]
-                    .copy_from_slice(&atlas[src..src + bytes_per_row as usize]);
-            }
-            padded
-        };
-        queue.write_texture(
-            atlas_tex.as_image_copy(),
-            &atlas_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(aligned_bpr),
-                rows_per_image: Some(h),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        write_label_atlas(queue, &atlas_tex, &atlas.pixels);
         let atlas_view = atlas_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("vc.text_sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -634,8 +452,18 @@ impl ViewCubeText {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: VIEWCUBE_MSAA_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
@@ -659,12 +487,13 @@ impl ViewCubeText {
         Self {
             pipeline,
             vertex_buffer,
-            vertex_capacity,
             vertex_count: 0,
             uniform_buffer,
             bind_group,
-            atlas_w: w as f32,
-            atlas_h: h as f32,
+            atlas_texture: atlas_tex,
+            tiles: atlas.tiles,
+            labels,
+            font_generation: crate::scene::text::web_font::generation(),
         }
     }
 
@@ -677,7 +506,7 @@ impl ViewCubeText {
         vp_w: u32,
         vp_h: u32,
         cube_px: u32,
-        text_color: [f32; 4],
+        _text_color: [f32; 4],
     ) {
         let (vw, vh) = (vp_w as f32, vp_h as f32);
         let cube_half = cube_px as f32 * VIEWCUBE_SCALE;
@@ -691,22 +520,21 @@ impl ViewCubeText {
             ))
             * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
 
-        // Glyph size in cube-local units. Letters are screen-aligned per face
-        // (see the axis projection below), so they read upright on every face
-        // as the cube rotates instead of turning with the face's local axes.
-        const GW: f32 = 0.17; // glyph width
-        const GH: f32 = 0.24; // glyph height
-        const ADV: f32 = 0.22; // pen advance
-        // Local directions that map onto the screen's up / right once rotated
-        // by `cam_rotation`. Used to project label axes onto each face plane.
-        let inv_rot = cam_rotation.inverse();
-        let screen_up_local = inv_rot.transform_vector3(Vec3::Y);
-        let screen_right_local = inv_rot.transform_vector3(Vec3::X);
+        let labels = face_label_strings();
+        let font_generation = crate::scene::text::web_font::generation();
+        if labels != self.labels || font_generation != self.font_generation {
+            if let Some(atlas) = build_label_atlas(&labels) {
+                write_label_atlas(queue, &self.atlas_texture, &atlas.pixels);
+                self.tiles = atlas.tiles;
+            }
+            self.labels = labels;
+            self.font_generation = font_generation;
+        }
+
         let mut verts: Vec<TextVertex> = Vec::with_capacity(MAX_VERTS);
         let view_dir = Vec3::Z;
-        let labels = face_labels();
         // Local cube point → screen pixel.
-        let project = |local: Vec3| -> Option<[f32; 2]> {
+        let project = |local: Vec3| -> Option<[f32; 3]> {
             let world = cam_rotation.transform_point3(local);
             let clip = view_proj * Vec4::new(world.x, world.y, world.z, 1.0);
             if clip.w.abs() < 1e-6 {
@@ -715,6 +543,7 @@ impl ViewCubeText {
             Some([
                 (clip.x / clip.w + 1.0) * 0.5 * vw,
                 (1.0 - clip.y / clip.w) * 0.5 * vh,
+                clip.z / clip.w,
             ])
         };
 
@@ -725,77 +554,27 @@ impl ViewCubeText {
             if dot < 0.12 {
                 continue;
             }
-            let alpha = ((dot - 0.12) / 0.88).clamp(0.0, 1.0);
-            let color = [
-                text_color[0],
-                text_color[1],
-                text_color[2],
-                text_color[3] * alpha,
-            ];
-            // Screen-aligned label axes: project the screen's up direction onto
-            // the face plane so the text reads upright (never rotated with the
-            // face) on every visible face. `u` is then completed in-plane and
-            // flipped toward screen-right so letters read left→right.
-            let n = face_n;
-            let mut v = screen_up_local - n * screen_up_local.dot(n);
-            if v.length_squared() < 1e-6 {
-                // Face normal is (anti-)parallel to screen-up, so the projected
-                // up vanishes; project screen-right instead and rebuild the frame.
-                let mut u = screen_right_local - n * screen_right_local.dot(n);
-                if u.length_squared() < 1e-6 {
-                    u = Vec3::Z - n * Vec3::Z.dot(n);
-                }
-                u = u.normalize();
-                v = n.cross(u);
-            } else {
-                v = v.normalize();
+            let color = [0.0, 0.0, 0.0, 1.0];
+            let (u, v) = face_label_axes(fi);
+            let center = face_n * 1.002;
+            let tile = self.tiles[fi];
+            if tile.aspect <= 0.0 {
+                continue;
             }
-            let mut u = n.cross(v);
-            if u.dot(screen_right_local) < 0.0 {
-                u = -u;
-            }
-            let center = face_n; // unit normal = face surface centre (distance E)
-
-            let label = &labels[fi];
-            // Han labels are single characters; render them ~2.6× larger so the
-            // 14×16 font bitmap stays ~1:1 and crisp. Multi-letter Latin labels
-            // keep the compact size so "BOTTOM" still fits the face.
-            let is_han = label.chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c));
-            let (gw, gh, adv) = if is_han {
-                (0.45, 0.52, 0.45)
-            } else {
-                (GW, GH, ADV)
-            };
-            let total_w = label.chars().count() as f32 * adv;
-            let mut pen = -total_w * 0.5;
-            for ch in label.chars() {
-                let Some(gi) = glyph_index(ch) else {
-                    pen += adv;
-                    continue;
-                };
-                let (u0, v0, u1, v1) = glyph_uv(gi, self.atlas_w, self.atlas_h);
-                // Glyph quad corners on the face plane, then projected.
-                let corner = |lx: f32, ly: f32| center + u * lx + v * ly;
-                let tl = project(corner(pen, gh * 0.5));
-                let tr = project(corner(pen + gw, gh * 0.5));
-                let br = project(corner(pen + gw, -gh * 0.5));
-                let bl = project(corner(pen, -gh * 0.5));
-                if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
-                    let mk = |pos: [f32; 2], uv: [f32; 2]| TextVertex { pos, uv, color };
-                    verts.push(mk(tl, [u0, v0]));
-                    verts.push(mk(tr, [u1, v0]));
-                    verts.push(mk(br, [u1, v1]));
-                    verts.push(mk(tl, [u0, v0]));
-                    verts.push(mk(br, [u1, v1]));
-                    verts.push(mk(bl, [u0, v1]));
-                }
-                pen += adv;
-                if verts.len() >= self.vertex_capacity as usize {
-                    break;
-                }
-            }
-            if verts.len() >= self.vertex_capacity as usize {
-                break;
+            let label_width = FACE_LABEL_HEIGHT * tile.aspect;
+            let corner = |lx: f32, ly: f32| center + u * lx + v * ly;
+            let tl = project(corner(-label_width * 0.5, FACE_LABEL_HEIGHT * 0.5));
+            let tr = project(corner(label_width * 0.5, FACE_LABEL_HEIGHT * 0.5));
+            let br = project(corner(label_width * 0.5, -FACE_LABEL_HEIGHT * 0.5));
+            let bl = project(corner(-label_width * 0.5, -FACE_LABEL_HEIGHT * 0.5));
+            if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
+                let mk = |pos: [f32; 3], uv: [f32; 2]| TextVertex { pos, uv, color };
+                verts.push(mk(tl, tile.uv_min));
+                verts.push(mk(tr, [tile.uv_max[0], tile.uv_min[1]]));
+                verts.push(mk(br, tile.uv_max));
+                verts.push(mk(tl, tile.uv_min));
+                verts.push(mk(br, tile.uv_max));
+                verts.push(mk(bl, [tile.uv_min[0], tile.uv_max[1]]));
             }
         }
 
@@ -807,7 +586,7 @@ impl ViewCubeText {
         // The compass is world-fixed: it projects through `compass_rotation`
         // (camera only, no UCS), so N/E/S/W stay aligned to world even when the
         // cube reorients with the active UCS.
-        let project_world = |local: Vec3| -> Option<[f32; 2]> {
+        let project_world = |local: Vec3| -> Option<[f32; 3]> {
             let world = compass_rotation.transform_point3(local);
             let clip = view_proj * Vec4::new(world.x, world.y, world.z, 1.0);
             if clip.w.abs() < 1e-6 {
@@ -816,50 +595,36 @@ impl ViewCubeText {
             Some([
                 (clip.x / clip.w + 1.0) * 0.5 * vw,
                 (1.0 - clip.y / clip.w) * 0.5 * vh,
+                clip.z / clip.w,
             ])
         };
-        const CARD_GW: f32 = 0.16; // glyph size in cube-local units
-        const CARD_GH: f32 = 0.22;
         let cardinals = [
-            ('N', Vec3::new(0.0, 1.0, 0.0)),
-            ('E', Vec3::new(1.0, 0.0, 0.0)),
-            ('S', Vec3::new(0.0, -1.0, 0.0)),
-            ('W', Vec3::new(-1.0, 0.0, 0.0)),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
         ];
-        for (ch, dir) in cardinals {
-            let Some(gi) = glyph_index(ch) else {
+        for (index, dir) in cardinals.into_iter().enumerate() {
+            let tile = self.tiles[CARDINAL_TILE_START + index];
+            if tile.aspect <= 0.0 {
                 continue;
-            };
-            let center = Vec3::new(dir.x * R_CARD, dir.y * R_CARD, RING_Z);
-            // Dim a cardinal whose ring point sits behind the cube.
-            let alpha = if compass_rotation.transform_point3(center).z >= -0.15 {
-                1.0
-            } else {
-                0.5
-            };
-            let color = [
-                text_color[0],
-                text_color[1],
-                text_color[2],
-                text_color[3] * alpha,
-            ];
-            let (u0, v0, u1, v1) = glyph_uv(gi, self.atlas_w, self.atlas_h);
-            let corner = |lx: f32, ly: f32| center + Vec3::X * lx + Vec3::Y * ly;
-            let tl = project_world(corner(-CARD_GW * 0.5, CARD_GH * 0.5));
-            let tr = project_world(corner(CARD_GW * 0.5, CARD_GH * 0.5));
-            let br = project_world(corner(CARD_GW * 0.5, -CARD_GH * 0.5));
-            let bl = project_world(corner(-CARD_GW * 0.5, -CARD_GH * 0.5));
-            if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
-                let mk = |pos: [f32; 2], uv: [f32; 2]| TextVertex { pos, uv, color };
-                verts.push(mk(tl, [u0, v0]));
-                verts.push(mk(tr, [u1, v0]));
-                verts.push(mk(br, [u1, v1]));
-                verts.push(mk(tl, [u0, v0]));
-                verts.push(mk(br, [u1, v1]));
-                verts.push(mk(bl, [u0, v1]));
             }
-            if verts.len() >= self.vertex_capacity as usize {
-                break;
+            let card_width = CARDINAL_LABEL_HEIGHT * tile.aspect;
+            let center = Vec3::new(dir.x * R_CARD, dir.y * R_CARD, RING_Z + 0.004);
+            let color = [0.0, 0.0, 0.0, 1.0];
+            let corner = |lx: f32, ly: f32| center + Vec3::X * lx + Vec3::Y * ly;
+            let tl = project_world(corner(-card_width * 0.5, CARDINAL_LABEL_HEIGHT * 0.5));
+            let tr = project_world(corner(card_width * 0.5, CARDINAL_LABEL_HEIGHT * 0.5));
+            let br = project_world(corner(card_width * 0.5, -CARDINAL_LABEL_HEIGHT * 0.5));
+            let bl = project_world(corner(-card_width * 0.5, -CARDINAL_LABEL_HEIGHT * 0.5));
+            if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
+                let mk = |pos: [f32; 3], uv: [f32; 2]| TextVertex { pos, uv, color };
+                verts.push(mk(tl, tile.uv_min));
+                verts.push(mk(tr, [tile.uv_max[0], tile.uv_min[1]]));
+                verts.push(mk(br, tile.uv_max));
+                verts.push(mk(tl, tile.uv_min));
+                verts.push(mk(br, tile.uv_max));
+                verts.push(mk(bl, [tile.uv_min[0], tile.uv_max[1]]));
             }
         }
         self.vertex_count = verts.len() as u32;
@@ -880,6 +645,7 @@ impl ViewCubeText {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
         clip: Rectangle<u32>,
     ) {
         if self.vertex_count == 0 {
@@ -896,7 +662,14 @@ impl ViewCubeText {
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
@@ -920,14 +693,7 @@ impl ViewCubeText {
 
 const F: f32 = 0.80;
 const E: f32 = 1.00;
-const C_TOP: [f32; 3] = [0.70, 0.80, 0.94];
-const C_BOTTOM: [f32; 3] = [0.32, 0.32, 0.36];
-const C_FRONT: [f32; 3] = [0.80, 0.83, 0.90];
-const C_BACK: [f32; 3] = [0.46, 0.47, 0.52];
-const C_RIGHT: [f32; 3] = [0.62, 0.60, 0.56];
-const C_LEFT: [f32; 3] = [0.54, 0.55, 0.64];
-const C_EDGE: [f32; 3] = [0.24, 0.25, 0.28];
-const C_CORNER: [f32; 3] = [0.16, 0.17, 0.19];
+const SURFACE_RGB: [f32; 3] = [0.62, 0.76, 0.84];
 
 fn push_quad(
     corners: [[f32; 3]; 4],
@@ -1006,98 +772,98 @@ pub fn build_geometry() -> (Vec<CubeVertex>, Vec<u32>) {
     let (mut vs, mut is) = (Vec::<CubeVertex>::new(), Vec::<u32>::new());
     push_quad(
         [[-F, -F, E], [F, -F, E], [F, F, E], [-F, F, E]],
-        C_TOP,
+        SURFACE_RGB,
         FACE_TOP,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, F, -E], [F, F, -E], [F, -F, -E], [-F, -F, -E]],
-        C_BOTTOM,
+        SURFACE_RGB,
         FACE_BOTTOM,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[F, -E, -F], [-F, -E, -F], [-F, -E, F], [F, -E, F]],
-        C_FRONT,
+        SURFACE_RGB,
         FACE_FRONT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, E, -F], [F, E, -F], [F, E, F], [-F, E, F]],
-        C_BACK,
+        SURFACE_RGB,
         FACE_BACK,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[E, F, -F], [E, -F, -F], [E, -F, F], [E, F, F]],
-        C_RIGHT,
+        SURFACE_RGB,
         FACE_RIGHT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-E, -F, -F], [-E, F, -F], [-E, F, F], [-E, -F, F]],
-        C_LEFT,
+        SURFACE_RGB,
         FACE_LEFT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[F, -F, E], [-F, -F, E], [-F, -E, F], [F, -E, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_TOP_FRONT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, F, E], [F, F, E], [F, E, F], [-F, E, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_TOP_BACK,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[F, F, E], [F, -F, E], [E, -F, F], [E, F, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_TOP_RIGHT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, -F, E], [-F, F, E], [-E, F, F], [-E, -F, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_TOP_LEFT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[F, -F, -E], [-F, -F, -E], [-F, -E, -F], [F, -E, -F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_BOT_FRONT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, F, -E], [F, F, -E], [F, E, -F], [-F, E, -F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_BOT_BACK,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[F, F, -E], [F, -F, -E], [E, -F, -F], [E, F, -F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_BOT_RIGHT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, -F, -E], [-F, F, -E], [-E, F, -F], [-E, -F, -F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_BOT_LEFT,
         &mut vs,
         &mut is,
@@ -1106,28 +872,28 @@ pub fn build_geometry() -> (Vec<CubeVertex>, Vec<u32>) {
     // Each strip spans from one face edge to the adjacent face edge — not flat in one plane.
     push_quad(
         [[F, -E, -F], [F, -E, F], [E, -F, F], [E, -F, -F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_FRONT_RIGHT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, -E, F], [-F, -E, -F], [-E, -F, -F], [-E, -F, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_FRONT_LEFT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[F, E, F], [F, E, -F], [E, F, -F], [E, F, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_BACK_RIGHT,
         &mut vs,
         &mut is,
     );
     push_quad(
         [[-F, E, F], [-F, E, -F], [-E, F, -F], [-E, F, F]],
-        C_EDGE,
+        SURFACE_RGB,
         EDGE_BACK_LEFT,
         &mut vs,
         &mut is,
@@ -1146,24 +912,28 @@ pub fn build_geometry() -> (Vec<CubeVertex>, Vec<u32>) {
             [sx * F, sy * F, sz * E],
             [sx * F, sy * E, sz * F],
             [sx * E, sy * F, sz * F],
-            C_CORNER,
+            SURFACE_RGB,
             region,
             &mut vs,
             &mut is,
         );
     }
-    build_ring(&mut vs, &mut is);
     (vs, is)
+}
+
+fn build_ring_geometry() -> (Vec<CubeVertex>, Vec<u32>) {
+    let (mut vertices, mut indices) = (Vec::new(), Vec::new());
+    build_ring(&mut vertices, &mut indices);
+    (vertices, indices)
 }
 
 /// A flat compass ring in the cube's local XY plane (the ground plane),
 /// surrounding the cube. Pushed with a sentinel `region_f = -1.0` so the
-/// shader never highlights it on hover, and a constant grey colour.
+/// shader never highlights it on hover.
 fn build_ring(vs: &mut Vec<CubeVertex>, is: &mut Vec<u32>) {
     const SEG: usize = 64;
     const R0: f32 = 1.40; // inner radius — clear gap to the cube faces
     const R1: f32 = 1.74; // outer radius — wider, thicker band
-    const RING_RGB: [f32; 3] = [0.22, 0.23, 0.26];
     for s in 0..SEG {
         let a0 = s as f32 / SEG as f32 * std::f32::consts::TAU;
         let a1 = (s + 1) as f32 / SEG as f32 * std::f32::consts::TAU;
@@ -1180,12 +950,53 @@ fn build_ring(vs: &mut Vec<CubeVertex>, is: &mut Vec<u32>) {
             vs.push(CubeVertex {
                 pos,
                 normal: [0.0, 0.0, 1.0],
-                color: RING_RGB,
+                color: SURFACE_RGB,
                 region_f: -1.0,
             });
         }
         is.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+}
+
+fn surface_edge_lines(vertices: &[CubeVertex], indices: &[u32]) -> Vec<LineVertex> {
+    use std::collections::HashMap;
+
+    type PointKey = [i32; 3];
+    type EdgeKey = (u32, PointKey, PointKey);
+
+    fn point_key(point: [f32; 3]) -> PointKey {
+        point.map(|value| (value * 1_000_000.0).round() as i32)
+    }
+
+    let mut edges: HashMap<EdgeKey, ([f32; 3], [f32; 3], u32)> = HashMap::new();
+    for triangle in indices.chunks_exact(3) {
+        let region = vertices[triangle[0] as usize].region_f.to_bits();
+        for (a_index, b_index) in [
+            (triangle[0], triangle[1]),
+            (triangle[1], triangle[2]),
+            (triangle[2], triangle[0]),
+        ] {
+            let a = vertices[a_index as usize].pos;
+            let b = vertices[b_index as usize].pos;
+            let a_key = point_key(a);
+            let b_key = point_key(b);
+            let (start_key, end_key, start, end) = if a_key <= b_key {
+                (a_key, b_key, a, b)
+            } else {
+                (b_key, a_key, b, a)
+            };
+            let entry = edges
+                .entry((region, start_key, end_key))
+                .or_insert((start, end, 0));
+            entry.2 += 1;
+        }
+    }
+
+    edges
+        .into_values()
+        .filter(|(_, _, count)| *count == 1)
+        .flat_map(|(start, end, _)| [LineVertex { pos: start }, LineVertex { pos: end }])
+        .collect()
 }
 
 pub fn region_centroids() -> [[f32; 3]; NUM_REGIONS] {
@@ -1235,13 +1046,32 @@ fn threshold_sq(id: usize, cube_half_px: f32) -> f32 {
 
 pub struct ViewCubePipeline {
     pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    line_vertex_buffer: wgpu::Buffer,
+    line_vertex_count: u32,
+    ring_vertex_buffer: wgpu::Buffer,
+    ring_index_buffer: wgpu::Buffer,
+    ring_index_count: u32,
+    ring_line_vertex_buffer: wgpu::Buffer,
+    ring_line_vertex_count: u32,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    ring_uniform_buffer: wgpu::Buffer,
+    ring_uniform_bind_group: wgpu::BindGroup,
     depth_texture_size: Size<u32>,
+    alloc_size: Size<u32>,
     depth_view: wgpu::TextureView,
+    msaa_view: wgpu::TextureView,
+    resolve_view: wgpu::TextureView,
+    composite_pipeline: wgpu::RenderPipeline,
+    composite_bind_group_layout: wgpu::BindGroupLayout,
+    composite_sampler: wgpu::Sampler,
+    composite_bind_group: wgpu::BindGroup,
+    composite_uniform_buffer: wgpu::Buffer,
+    surface_format: wgpu::TextureFormat,
     pub cube_px: u32,
     text: ViewCubeText,
 }
@@ -1250,6 +1080,9 @@ impl ViewCubePipeline {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         use wgpu::util::DeviceExt;
         let (verts, idxs) = build_geometry();
+        let line_verts = surface_edge_lines(&verts, &idxs);
+        let (ring_verts, ring_idxs) = build_ring_geometry();
+        let ring_line_verts = surface_edge_lines(&ring_verts, &ring_idxs);
         let cube_px = VIEWCUBE_PX;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vc.vb"),
@@ -1261,8 +1094,35 @@ impl ViewCubePipeline {
             contents: bytemuck::cast_slice(&idxs),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let line_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vc.line_vb"),
+            contents: bytemuck::cast_slice(&line_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ring_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vc.ring_vb"),
+            contents: bytemuck::cast_slice(&ring_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ring_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vc.ring_ib"),
+            contents: bytemuck::cast_slice(&ring_idxs),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let ring_line_vertex_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vc.ring_line_vb"),
+                contents: bytemuck::cast_slice(&ring_line_verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vc.ub"),
+            size: std::mem::size_of::<CubeUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ring_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vc.ring_ub"),
             size: std::mem::size_of::<CubeUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -1288,6 +1148,14 @@ impl ViewCubePipeline {
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
+        let ring_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vc.ring_bg"),
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: ring_uniform_buffer.as_entire_binding(),
+            }],
+        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vc.layout"),
             bind_group_layouts: &[&bgl].map(Some),
@@ -1299,8 +1167,13 @@ impl ViewCubePipeline {
                 "../../shaders/viewcube.wgsl"
             ))),
         });
-        let depth_tex = create_depth_texture(device, Size::new(1, 1));
+        let init_size = Size::new(1, 1);
+        let depth_tex = create_depth_texture(device, init_size);
         let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let msaa_tex = create_msaa_texture(device, init_size, format);
+        let msaa_view = msaa_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let resolve_tex = create_resolve_texture(device, init_size, format);
+        let resolve_view = resolve_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("vc.pipe"),
             layout: Some(&layout),
@@ -1322,7 +1195,11 @@ impl ViewCubePipeline {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: VIEWCUBE_MSAA_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
@@ -1336,16 +1213,175 @@ impl ViewCubePipeline {
             multiview_mask: None,
             cache: None,
         });
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vc.line_pipe"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("line_vs_main"),
+                buffers: &[LineVertex::desc()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: VIEWCUBE_MSAA_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("line_fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vc.composite_shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "../../shaders/viewcube_composite.wgsl"
+            ))),
+        });
+        let composite_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("vc.composite_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let composite_uniform_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vc.composite_uniform"),
+                contents: bytemuck::cast_slice(&[1.0f32, 1.0, 0.0, 0.0]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+        let composite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("vc.composite_sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vc.composite_bg"),
+            layout: &composite_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&resolve_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&composite_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: composite_uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vc.composite_layout"),
+            bind_group_layouts: &[&composite_bind_group_layout].map(Some),
+            immediate_size: 0,
+        });
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vc.composite_pipe"),
+            layout: Some(&composite_layout),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let text = ViewCubeText::new(device, queue, format);
         Self {
             pipeline,
+            line_pipeline,
             vertex_buffer,
             index_buffer,
             index_count: idxs.len() as u32,
+            line_vertex_buffer,
+            line_vertex_count: line_verts.len() as u32,
+            ring_vertex_buffer,
+            ring_index_buffer,
+            ring_index_count: ring_idxs.len() as u32,
+            ring_line_vertex_buffer,
+            ring_line_vertex_count: ring_line_verts.len() as u32,
             uniform_buffer,
             uniform_bind_group,
+            ring_uniform_buffer,
+            ring_uniform_bind_group,
             depth_texture_size: Size::new(1, 1),
+            alloc_size: Size::new(0, 0),
             depth_view,
+            msaa_view,
+            resolve_view,
+            composite_pipeline,
+            composite_bind_group_layout,
+            composite_sampler,
+            composite_bind_group,
+            composite_uniform_buffer,
+            surface_format: format,
             cube_px,
             text,
         }
@@ -1358,39 +1394,89 @@ impl ViewCubePipeline {
         queue: &wgpu::Queue,
         cam_rotation: Mat4,
         compass_rotation: Mat4,
-        vp_w: u32,
-        vp_h: u32,
         hover: Option<usize>,
         text_color: [f32; 4],
     ) {
+        let render_size = VIEWCUBE_RENDER_PX.ceil() as u32;
         queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::bytes_of(&CubeUniforms::new(
                 cam_rotation,
                 self.cube_px,
-                vp_w,
-                vp_h,
+                render_size,
+                render_size,
                 hover,
             )),
+        );
+        queue.write_buffer(
+            &self.ring_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&CubeUniforms::new(
+                compass_rotation,
+                self.cube_px,
+                render_size,
+                render_size,
+                None,
+            )),
+        );
+        let alloc_w = self.alloc_size.width.max(1) as f32;
+        let alloc_h = self.alloc_size.height.max(1) as f32;
+        queue.write_buffer(
+            &self.composite_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[
+                self.depth_texture_size.width as f32 / alloc_w,
+                self.depth_texture_size.height as f32 / alloc_h,
+                0.0,
+                0.0,
+            ]),
         );
         self.text
             .update(
                 queue,
                 cam_rotation,
                 compass_rotation,
-                vp_w,
-                vp_h,
+                render_size,
+                render_size,
                 self.cube_px,
                 text_color,
             );
     }
 
     pub fn ensure_depth_texture(&mut self, device: &wgpu::Device, size: Size<u32>) {
-        if self.depth_texture_size != size {
-            let tex = create_depth_texture(device, size);
-            self.depth_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.depth_texture_size = size;
+        self.depth_texture_size = size;
+        let alloc = Size::new(
+            round_up_viewcube_texture(size.width),
+            round_up_viewcube_texture(size.height),
+        );
+        if self.alloc_size != alloc {
+            let depth_tex = create_depth_texture(device, alloc);
+            self.depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let msaa_tex = create_msaa_texture(device, alloc, self.surface_format);
+            self.msaa_view = msaa_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let resolve_tex = create_resolve_texture(device, alloc, self.surface_format);
+            let resolve_view = resolve_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("vc.composite_bg"),
+                layout: &self.composite_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&resolve_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.composite_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.composite_uniform_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            self.resolve_view = resolve_view;
+            self.alloc_size = alloc;
         }
     }
 
@@ -1400,14 +1486,16 @@ impl ViewCubePipeline {
         target: &wgpu::TextureView,
         clip: Rectangle<u32>,
     ) {
+        let render_width = self.depth_texture_size.width.max(1);
+        let render_height = self.depth_texture_size.height.max(1);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("vc.pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: &self.msaa_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -1423,21 +1511,82 @@ impl ViewCubePipeline {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_viewport(
-            clip.x as f32,
-            clip.y as f32,
-            clip.width as f32,
-            clip.height as f32,
-            0.0,
-            1.0,
-        );
+        pass.set_viewport(0.0, 0.0, render_width as f32, render_height as f32, 0.0, 1.0);
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..self.index_count, 0, 0..1);
+        pass.set_bind_group(0, &self.ring_uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.ring_vertex_buffer.slice(..));
+        pass.set_index_buffer(
+            self.ring_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint32,
+        );
+        pass.draw_indexed(0..self.ring_index_count, 0, 0..1);
+        pass.set_pipeline(&self.line_pipeline);
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.line_vertex_buffer.slice(..));
+        pass.draw(0..self.line_vertex_count, 0..1);
+        pass.set_bind_group(0, &self.ring_uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.ring_line_vertex_buffer.slice(..));
+        pass.draw(0..self.ring_line_vertex_count, 0..1);
         drop(pass);
-        self.text.render(encoder, target, clip);
+        let local_clip = Rectangle {
+            x: 0,
+            y: 0,
+            width: render_width,
+            height: render_height,
+        };
+        self.text
+            .render(encoder, &self.msaa_view, &self.depth_view, local_clip);
+        {
+            let _resolve = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("vc.resolve_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.msaa_view,
+                    depth_slice: None,
+                    resolve_target: Some(&self.resolve_view),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        let mut composite = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("vc.composite_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let dest_width = render_width.min(clip.width);
+        let dest_height = render_height.min(clip.height);
+        composite.set_viewport(
+            (clip.x + clip.width - dest_width) as f32,
+            clip.y as f32,
+            dest_width as f32,
+            dest_height as f32,
+            0.0,
+            1.0,
+        );
+        composite.set_pipeline(&self.composite_pipeline);
+        composite.set_bind_group(0, &self.composite_bind_group, &[]);
+        composite.draw(0..6, 0..1);
     }
 }
 
@@ -1456,12 +1605,59 @@ fn create_depth_texture(device: &wgpu::Device, size: Size<u32>) -> wgpu::Texture
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count: VIEWCUBE_MSAA_SAMPLES,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth24PlusStencil8,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     })
+}
+
+fn create_msaa_texture(
+    device: &wgpu::Device,
+    size: Size<u32>,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("vc.msaa_texture"),
+        size: wgpu::Extent3d {
+            width: size.width.max(1),
+            height: size.height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: VIEWCUBE_MSAA_SAMPLES,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    })
+}
+
+fn create_resolve_texture(
+    device: &wgpu::Device,
+    size: Size<u32>,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("vc.resolve_texture"),
+        size: wgpu::Extent3d {
+            width: size.width.max(1),
+            height: size.height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
+fn round_up_viewcube_texture(value: u32) -> u32 {
+    const GRID: u32 = 128;
+    ((value.max(1) + GRID - 1) / GRID) * GRID
 }
 
 // ── Hit test ──────────────────────────────────────────────────────────────

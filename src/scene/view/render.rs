@@ -250,8 +250,6 @@ impl shader::Primitive for Primitive {
         viewport: &Viewport,
     ) {
         let nav_prepare_started = iced::time::Instant::now();
-        let phys = viewport.physical_size();
-        let full_size = Size::new(phys.width, phys.height);
         let scale = viewport.scale_factor() as f32;
         let instance_ids: Vec<u64> = self.viewports.iter().map(|vp| vp.instance_id).collect();
         let slots = pipeline.resolve_slots(device, queue, &instance_ids);
@@ -300,7 +298,11 @@ impl shader::Primitive for Primitive {
                 (vp.screen_rect.height * bounds.height * scale).ceil().max(1.0) as u32,
             );
             inner.ensure_depth_texture(device, clip_size);
-            inner.viewcube.ensure_depth_texture(device, full_size);
+            let viewcube_side =
+                (crate::scene::VIEWCUBE_RENDER_PX.ceil() * scale).ceil().max(1.0) as u32;
+            inner
+                .viewcube
+                .ensure_depth_texture(device, Size::new(viewcube_side, viewcube_side));
             // Compute the UV crop for this viewport. `screen_rect` is in
             // normalized canvas units (0..1) but may extend negative or
             // beyond 1 when the viewport hangs off the canvas. The on-
@@ -335,8 +337,6 @@ impl shader::Primitive for Primitive {
                         queue,
                         vp.cam_rotation,
                         vp.compass_rotation,
-                        (vp.screen_rect.width * bounds.width) as u32,
-                        (vp.screen_rect.height * bounds.height) as u32,
                         vp.hover_region,
                         self.viewcube_text_color,
                     );
@@ -974,8 +974,6 @@ impl shader::Primitive for Primitive {
                     queue,
                     vp.cam_rotation,
                     vp.compass_rotation,
-                    (vp.screen_rect.width * bounds.width) as u32,
-                    (vp.screen_rect.height * bounds.height) as u32,
                     vp.hover_region,
                     self.viewcube_text_color,
                 );

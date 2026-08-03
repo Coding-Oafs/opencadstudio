@@ -325,6 +325,9 @@ pub fn fallback_glyph(ch: char) -> Option<Arc<Glyph>> {
 /// outline. (#141)
 pub fn clear_fallback_cache() {
     fallback_cache().lock().unwrap().clear();
+    shape_cache().lock().unwrap().clear();
+    #[cfg(target_arch = "wasm32")]
+    crate::scene::text::sdf_atlas::reset_font_entries();
 }
 
 /// Web: outline the glyph from the lazily-fetched per-script Noto subset that
@@ -334,8 +337,12 @@ pub fn clear_fallback_cache() {
 fn build_fallback(ch: char) -> Option<Arc<Glyph>> {
     let script = crate::scene::text::web_font::script_of(ch)?;
     let bytes = crate::scene::text::web_font::request(script)?;
-    let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
-    let gid = face.glyph_index(ch)?;
+    let face_count = ttf_parser::fonts_in_collection(&bytes).unwrap_or(1);
+    let (face, gid) = (0..face_count).find_map(|face_index| {
+        let face = ttf_parser::Face::parse(&bytes, face_index).ok()?;
+        let gid = face.glyph_index(ch)?;
+        Some((face, gid))
+    })?;
     let k = cap_scale(&face);
     let advance = face.glyph_hor_advance(gid).unwrap_or(0) as f32 * k;
     let mut fl = OutlineFlattener::new(k);
@@ -389,11 +396,95 @@ fn build_fallback(ch: char) -> Option<Arc<Glyph>> {
     None
 }
 
-/// Web: no system fonts → no shaping (TTF faces don't occur on the web anyway,
-/// since system-font discovery is empty).
 #[cfg(target_arch = "wasm32")]
-fn build_shaped(_family: &str, _text: &str) -> Option<ShapedRun> {
-    None
+fn build_shaped(_family: &str, text: &str) -> Option<ShapedRun> {
+    use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+
+    let mut fonts: Vec<Arc<Vec<u8>>> = Vec::new();
+    let mut waiting = false;
+    for script in text
+        .chars()
+        .filter_map(crate::scene::text::web_font::script_of)
+    {
+        match crate::scene::text::web_font::request(script) {
+            Some(bytes) => {
+                if !fonts.iter().any(|loaded| Arc::ptr_eq(loaded, &bytes)) {
+                    fonts.push(bytes);
+                }
+            }
+            None => waiting = true,
+        }
+    }
+    if waiting || fonts.is_empty() {
+        return None;
+    }
+
+    let primary_face = ttf_parser::Face::parse(&fonts[0], 0).ok()?;
+    let upem = primary_face.units_per_em() as f32;
+    let cap = primary_face
+        .capital_height()
+        .filter(|height| *height > 0)
+        .map(|height| height as f32)
+        .unwrap_or(0.7 * upem);
+    let px_to_9 = CAP_UNITS * upem / (SHAPE_FS * cap);
+
+    let mut database = fontdb::Database::new();
+    for bytes in fonts {
+        database.load_font_data((*bytes).clone());
+    }
+    database.set_sans_serif_family(crate::scene::text::web_font::primary_script().family());
+    let mut font_system = FontSystem::new_with_locale_and_db(
+        crate::i18n::active_language_tag(),
+        database,
+    );
+    let attrs = Attrs::new().family(Family::SansSerif);
+    let mut buffer = Buffer::new(&mut font_system, Metrics::new(SHAPE_FS, SHAPE_FS));
+    buffer.set_size(&mut font_system, None, None);
+    buffer.set_text(&mut font_system, text, &attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(&mut font_system, false);
+
+    let mut glyphs = Vec::new();
+    let mut advance = 0.0_f32;
+    for run in buffer.layout_runs() {
+        advance = advance.max(run.line_w * px_to_9);
+        for glyph in run.glyphs.iter() {
+            let face_index = font_system
+                .db_mut()
+                .face(glyph.font_id)
+                .map(|face| face.index)
+                .unwrap_or(0);
+            let Some(font) = font_system.get_font(glyph.font_id, glyph.font_weight) else {
+                continue;
+            };
+            let Ok(face) = ttf_parser::Face::parse(font.data(), face_index) else {
+                continue;
+            };
+            let scale = (SHAPE_FS / face.units_per_em() as f32) * px_to_9;
+            let pen_x = (glyph.x + SHAPE_FS * glyph.x_offset) * px_to_9;
+            let pen_y = -(SHAPE_FS * glyph.y_offset) * px_to_9;
+            let mut flattener = OutlineFlattener::new(scale);
+            flattener.offset = [pen_x, pen_y];
+            face.outline_glyph(
+                ttf_parser::GlyphId(glyph.glyph_id),
+                &mut flattener,
+            );
+            flattener.flush();
+            if flattener.contours.is_empty() {
+                continue;
+            }
+            let fill_tris = triangulate_contours(&flattener.contours);
+            glyphs.push(PlacedGlyph {
+                strokes: flattener.contours,
+                fill_tris,
+            });
+        }
+    }
+
+    if advance <= 0.0 && glyphs.is_empty() {
+        None
+    } else {
+        Some(ShapedRun { glyphs, advance })
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -8,7 +8,7 @@ struct Uniforms {
 @group(0) @binding(2) var tex: texture_2d<f32>;
 
 struct VsIn {
-    @location(0) pos: vec2<f32>,
+    @location(0) pos: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) color: vec4<f32>,
 };
@@ -26,7 +26,7 @@ fn vs_main(input: VsIn) -> VsOut {
         (input.pos.x / u.screen.x) * 2.0 - 1.0,
         1.0 - (input.pos.y / u.screen.y) * 2.0
     );
-    out.pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.pos = vec4<f32>(ndc, input.pos.z, 1.0);
     out.uv = input.uv;
     out.color = input.color;
     return out;

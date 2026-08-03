@@ -1,4 +1,4 @@
-// ViewCube shader — Phong lighting + hover highlight.
+// ViewCube shader — flat surface fill, hover highlight, and edge lines.
 
 struct Uniforms {
     view_proj:    mat4x4<f32>,
@@ -26,9 +26,22 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let is_hovered = abs(in.region_f - u.hover_region.x) < 0.001 && u.hover_region.x >= 0.0;
     var final_rgb = in.color;
     if is_hovered {
-        let glow = vec3<f32>(0.68, 0.88, 1.0);
-        final_rgb = mix(final_rgb, glow, 0.60);
-        final_rgb = clamp(final_rgb * 1.30, vec3<f32>(0.0), vec3<f32>(1.0));
+        final_rgb = vec3<f32>(0.20, 0.72, 0.66);
     }
     return vec4<f32>(final_rgb, 1.0);
+}
+
+struct LineIn {
+    @location(0) pos: vec3<f32>,
+}
+
+@vertex
+fn line_vs_main(in: LineIn) -> @builtin(position) vec4<f32> {
+    let rotated = (u.rotation * vec4<f32>(in.pos, 1.0)).xyz;
+    return u.view_proj * vec4<f32>(rotated, 1.0);
+}
+
+@fragment
+fn line_fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.05, 0.08, 0.13, 1.0);
 }

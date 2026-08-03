@@ -122,6 +122,7 @@ fn load_language(
     if requested.is_empty() {
         requested.push(loader.fallback_language().clone());
     }
+    #[allow(unused_variables)]
     let selected = i18n_embed::select(loader, &Localizations, &requested)?;
     #[cfg(target_arch = "wasm32")]
     if let Some(language) = selected.first() {
@@ -153,6 +154,16 @@ pub fn loader() -> &'static FluentLanguageLoader {
 /// so the next Iced view pass immediately receives the new language.
 pub fn set_language(language: Language) -> Result<(), i18n_embed::I18nEmbedError> {
     load_language(loader(), language)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn active_language_tag() -> String {
+    loader()
+        .current_languages()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| loader().fallback_language().clone())
+        .to_string()
 }
 
 /// Translate an application-facing source label from the complete UI catalog.

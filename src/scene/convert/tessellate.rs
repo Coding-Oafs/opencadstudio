@@ -487,17 +487,19 @@ pub fn tessellate(
                 };
 
                 let anno = anno_scale as f64;
-                // SDF text is decided PER GROUP by whether the group carries a
-                // `GlyphRun`: a run-group renders as textured quads (built
-                // below) so its strokes are suppressed; a run-less group keeps
-                // its strokes. TEXT / MTEXT / dim / block / mleader text are all
-                // run-groups → fully SDF; a composite object that packs geometry
-                // and text into one Text object (a tolerance frame: box lines =
-                // run-less, cell text = run-groups) keeps the geometry as
-                // strokes and draws only the text as SDF.
+                // Run groups normally render as textured quads. Web runs that
+                // require bidi or joined-script shaping keep their already
+                // shaped vector geometry because the per-glyph SDF path has no
+                // cluster-position data.
                 for group in stroke_groups
                     .iter()
-                    .filter(|g| force_text_strokes || g.run.is_none())
+                    .filter(|group| {
+                        force_text_strokes
+                            || group.run.is_none()
+                            || group.run.as_ref().is_some_and(|run| {
+                                crate::scene::text::web_font::requires_shaping(&run.text)
+                            })
+                    })
                 {
                     let lx_v = group.origin[0];
                     let ly_v = group.origin[1];
@@ -548,6 +550,9 @@ pub fn tessellate(
                         // colours (bin key) win, falling back to entity colour.
                         for group in &stroke_groups {
                             let Some(run) = &group.run else { continue };
+                            if crate::scene::text::web_font::requires_shaping(&run.text) {
+                                continue;
+                            }
                             let slx_v = (group.origin[0] - ref_lx_v) * anno + ref_lx_v;
                             let sly_v = (group.origin[1] - ref_ly_v) * anno + ref_ly_v;
                             // Base colour only (inline `\C` wins). Selection /

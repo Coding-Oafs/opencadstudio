@@ -74,8 +74,12 @@ pub fn textfill() -> bool {
 /// re-baked tiles.
 pub fn set_textfill(on: bool) {
     TEXTFILL.store(on, std::sync::atomic::Ordering::Relaxed);
-    if let Ok(mut a) = text_atlas().lock() {
-        a.reset();
+    reset_font_entries();
+}
+
+pub fn reset_font_entries() {
+    if let Ok(mut atlas) = text_atlas().lock() {
+        atlas.reset();
     }
 }
 

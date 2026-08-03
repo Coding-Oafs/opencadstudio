@@ -1550,6 +1550,13 @@ pub enum Message {
         crate::scene::text::web_font::Script,
         Result<Vec<u8>, String>,
     ),
+    /// Register a font already held by the shared web store with the UI renderer.
+    ApplyWebFont(crate::scene::text::web_font::Script),
+    /// Completion of the UI renderer's runtime font registration.
+    WebUiFontLoaded(
+        crate::scene::text::web_font::Script,
+        Result<(), String>,
+    ),
     /// Ctrl+V. Routed by `update`: into the open text/MText editor (via an async
     /// system-clipboard read, which is the only paste path that works on the
     /// web) or, with no editor open, the entity paste command.
@@ -3309,6 +3316,13 @@ impl OpenCADStudio {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut s = Self::new();
         let focus = s.focus_cmd_input();
+        let primary_font = crate::scene::text::web_font::preload_language(
+            &crate::i18n::active_language_tag(),
+        );
+        let fonts = Task::batch([
+            Task::done(Message::PollWebFonts),
+            Task::done(Message::ApplyWebFont(primary_font)),
+        ]);
         // Web can't reach the Patreon API directly (CORS); fetch the CI-built
         // supporters.json served on the same origin instead.
         let patrons = Task::perform(
@@ -3328,7 +3342,7 @@ impl OpenCADStudio {
         let thumbs_fetch = s.refresh_recent_thumbs();
         (
             s,
-            Task::batch([focus, patrons, videos, discussions, thumbs_fetch]),
+            Task::batch([focus, fonts, patrons, videos, discussions, thumbs_fetch]),
         )
     }
 }

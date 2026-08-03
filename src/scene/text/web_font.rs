@@ -1,17 +1,19 @@
-//! Per-script web font store + lazy fetch (#141).
+//! Shared web font store + per-script fetch (#141).
 //!
 //! The desktop build outlines glyphs for non-LFF scripts from the user's
 //! installed system fonts (see `ttf_glyph::build_fallback`). The web build has
-//! no system-font access, so it instead lazily fetches a per-script Noto subset
-//! — served from `fonts/<script>.ttf`, one alphabet per file — the first time a
-//! drawing uses that script, then outlines glyphs from it. Splitting per script
-//! keeps each download small (Latin/Cyrillic/Greek ~50–100 KB; CJK loads only
-//! when a CJK drawing is opened).
+//! no system-font access, so startup fetches the active UI language's Noto
+//! subset and shares those bytes with UI, drawing text, and navigation labels.
+//! Every language file also carries the common Latin ranges; other scripts are
+//! still fetched on demand when a drawing needs them. CJK remains split by
+//! language because the same code point can require a different glyph form.
 //!
 //! The store and fetch are web-only; the desktop side keeps no-op stubs so the
 //! shared call sites (`ttf_glyph`, the app message loop) compile unchanged.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
 /// A script we ship a Noto subset for. [`script_of`] maps a char to one.
 ///
@@ -51,11 +53,131 @@ impl Script {
             Script::Korean => "fonts/korean.ttf",
         }
     }
+
+    pub fn family(self) -> &'static str {
+        match self {
+            Script::Chinese => "Noto Sans CJK SC",
+            Script::Japanese => "Noto Sans CJK JP",
+            Script::Korean => "Noto Sans CJK KR",
+            Script::Latin
+            | Script::Cyrillic
+            | Script::Greek
+            | Script::Arabic
+            | Script::Hebrew
+            | Script::Thai
+            | Script::Devanagari => "Noto Sans",
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Script::Cyrillic,
+            2 => Script::Greek,
+            3 => Script::Arabic,
+            4 => Script::Hebrew,
+            5 => Script::Thai,
+            6 => Script::Devanagari,
+            7 => Script::Chinese,
+            8 => Script::Japanese,
+            9 => Script::Korean,
+            _ => Script::Latin,
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn as_u8(self) -> u8 {
+        match self {
+            Script::Latin => 0,
+            Script::Cyrillic => 1,
+            Script::Greek => 2,
+            Script::Arabic => 3,
+            Script::Hebrew => 4,
+            Script::Thai => 5,
+            Script::Devanagari => 6,
+            Script::Chinese => 7,
+            Script::Japanese => 8,
+            Script::Korean => 9,
+        }
+    }
 }
 
 /// Language used to render shared Han ideographs: 0 = Chinese, 1 = Japanese,
 /// 2 = Korean. Set from the active document's code page.
 static CJK_LANG: AtomicU8 = AtomicU8::new(0);
+static PRIMARY_SCRIPT: AtomicU8 = AtomicU8::new(0);
+static FONT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn generation() -> u64 {
+    FONT_GENERATION.load(Ordering::Relaxed)
+}
+
+fn bump_generation() {
+    FONT_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn scripts_for_language_tag(language: &str) -> Vec<Script> {
+    let language = language
+        .split(['-', '_'])
+        .next()
+        .unwrap_or(language)
+        .to_ascii_lowercase();
+    let script = match language.as_str() {
+        "ar" | "fa" | "ur" => Some(Script::Arabic),
+        "el" => Some(Script::Greek),
+        "he" | "yi" => Some(Script::Hebrew),
+        "hi" | "mr" | "ne" => Some(Script::Devanagari),
+        "ja" => Some(Script::Japanese),
+        "ko" => Some(Script::Korean),
+        "ru" | "uk" | "bg" | "sr" => Some(Script::Cyrillic),
+        "th" => Some(Script::Thai),
+        "zh" => Some(Script::Chinese),
+        _ => None,
+    };
+    vec![script.unwrap_or(Script::Latin)]
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn preload_language(language: &str) -> Script {
+    let script = scripts_for_language_tag(language)
+        .into_iter()
+        .next()
+        .unwrap_or(Script::Latin);
+    PRIMARY_SCRIPT.store(script.as_u8(), Ordering::Relaxed);
+    bump_generation();
+    let _ = imp::request(script);
+    script
+}
+
+pub fn primary_script() -> Script {
+    Script::from_u8(PRIMARY_SCRIPT.load(Ordering::Relaxed))
+}
+
+pub fn requires_shaping(text: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return text.chars().any(|ch| {
+            matches!(
+                ch as u32,
+                0x0590..=0x05FF
+                    | 0x0600..=0x06FF
+                    | 0x0750..=0x077F
+                    | 0x08A0..=0x08FF
+                    | 0x0900..=0x097F
+                    | 0x0E00..=0x0E7F
+                    | 0xA8E0..=0xA8FF
+                    | 0xFB1D..=0xFB4F
+                    | 0xFB50..=0xFDFF
+                    | 0xFE70..=0xFEFF
+            )
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = text;
+        false
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 fn cjk_lang() -> Script {
@@ -94,7 +216,7 @@ pub fn script_of(ch: char) -> Option<Script> {
         0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF => {
             Script::Arabic
         }
-        0x0900..=0x097F => Script::Devanagari,
+        0x0900..=0x097F | 0xA8E0..=0xA8FF => Script::Devanagari,
         // Hangul → always Korean; kana → always Japanese.
         0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3 => Script::Korean,
         0x3040..=0x30FF | 0x31F0..=0x31FF => Script::Japanese,
@@ -155,11 +277,32 @@ mod imp {
 
     /// Record a fetch result: `Some(bytes)` on success, `None` on failure.
     pub fn insert(script: Script, bytes: Option<Vec<u8>>) {
-        let st = match bytes {
-            Some(b) => State::Loaded(Arc::new(b)),
-            None => State::Failed,
-        };
-        store().lock().unwrap().states.insert(script, st);
+        let mut store = store().lock().unwrap();
+        match bytes {
+            Some(bytes) => {
+                let bytes = Arc::new(bytes);
+                store.states.insert(script, State::Loaded(bytes.clone()));
+                if script != Script::Latin {
+                    store
+                        .states
+                        .entry(Script::Latin)
+                        .or_insert_with(|| State::Loaded(bytes));
+                }
+            }
+            None => {
+                store.states.insert(script, State::Failed);
+            }
+        }
+        drop(store);
+        super::bump_generation();
+    }
+
+    pub fn loaded(script: Script) -> Option<Arc<Vec<u8>>> {
+        let s = store().lock().unwrap();
+        match s.states.get(&script) {
+            Some(State::Loaded(bytes)) => Some(bytes.clone()),
+            _ => None,
+        }
     }
 
     /// Fetch a script font over HTTP from the same origin.
@@ -183,8 +326,7 @@ mod imp {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod imp {
-    use super::Script;
-    use std::sync::Arc;
+    use super::{Arc, Script};
 
     // Kept for parity with the wasm impl; only the wasm path has a caller.
     #[allow(dead_code)]
@@ -194,13 +336,18 @@ mod imp {
     pub fn take_pending() -> Vec<Script> {
         Vec::new()
     }
-    pub fn insert(_script: Script, _bytes: Option<Vec<u8>>) {}
+    pub fn insert(_script: Script, _bytes: Option<Vec<u8>>) {
+        super::bump_generation();
+    }
+    pub fn loaded(_script: Script) -> Option<Arc<Vec<u8>>> {
+        None
+    }
     pub async fn fetch(_script: Script) -> Result<Vec<u8>, String> {
         Err("web only".into())
     }
 }
 
-pub use imp::{fetch, insert, take_pending};
+pub use imp::{fetch, insert, loaded, take_pending};
 // `request` only has a caller in the wasm font-fallback path.
 #[cfg(target_arch = "wasm32")]
 pub use imp::request;

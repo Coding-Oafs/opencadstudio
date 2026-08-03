@@ -395,6 +395,10 @@ pub fn tessellate_text_run(
 
     let toks = tokenize_run(text);
     let ttf_family = face.ttf_family();
+    let shaping_family = ttf_family.or_else(|| {
+        crate::scene::text::web_font::requires_shaping(text)
+            .then(|| crate::scene::text::web_font::primary_script().family())
+    });
 
     // Render a stroke directly (LFF glyph) or per shaped contour (TTF), applying
     // the run transform at the current pen position.
@@ -420,7 +424,7 @@ pub fn tessellate_text_run(
         if seg.is_empty() {
             return;
         }
-        let family = ttf_family.unwrap_or("");
+        let family = shaping_family.unwrap_or("");
         if let Some(run) = crate::scene::text::ttf_glyph::shape_run(family, seg) {
             for g in &run.glyphs {
                 emit_glyph(out, &g.strokes, *cursor_x);
@@ -454,12 +458,12 @@ pub fn tessellate_text_run(
         // TTF shaping batches consecutive glyphs; any break (space, missing,
         // decoration toggle, end of run) flushes the buffer first so pen
         // positions stay correct for decorations.
-        if ttf_family.is_some() && !matches!(tok, Tok::Glyph(_)) {
+        if shaping_family.is_some() && !matches!(tok, Tok::Glyph(_) | Tok::Space) {
             flush_ttf(&mut seg, &mut cursor_x, &mut out, &mut fill_tris);
         }
         match tok {
             Tok::Glyph(c) => {
-                if ttf_family.is_some() {
+                if shaping_family.is_some() {
                     seg.push(*c);
                 } else {
                     match face.glyph(*c) {
@@ -475,6 +479,7 @@ pub fn tessellate_text_run(
                     }
                 }
             }
+            Tok::Space if shaping_family.is_some() => seg.push(' '),
             Tok::Space => cursor_x += face.word_spacing(),
             Tok::Missing => cursor_x += 6.0 + face.letter_spacing() * tracking,
             Tok::Deco(deco, op) => {
@@ -507,7 +512,7 @@ pub fn tessellate_text_run(
             }
         }
     }
-    if ttf_family.is_some() {
+    if shaping_family.is_some() {
         flush_ttf(&mut seg, &mut cursor_x, &mut out, &mut fill_tris);
     }
 
