@@ -384,11 +384,7 @@ impl shader::Primitive for Primitive {
                 inner.upload_preview_hatches(
                     device,
                     queue,
-                    if fill_mode {
-                        &vp.preview_hatches[..]
-                    } else {
-                        &[]
-                    },
+                    &vp.preview_hatches[..],
                 );
                 inner.cached_preview_hatch_source =
                     Some(Arc::clone(&vp.preview_hatches));

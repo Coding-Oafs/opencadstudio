@@ -20,6 +20,25 @@ pub struct ObjectPickHit {
     pub label: &'static str,
 }
 
+#[derive(Clone)]
+pub struct SelectionEntity {
+    pub handle: Handle,
+    pub entity: EntityType,
+    pub surface_area: Option<f64>,
+}
+
+#[derive(Clone)]
+pub enum AreaPreviewSource {
+    Handles(Vec<Handle>),
+    Boundary(Vec<[f64; 2]>),
+}
+
+#[derive(Clone)]
+pub struct AreaPreviewRegion {
+    pub source: AreaPreviewSource,
+    pub subtract: bool,
+}
+
 // ── Transform ─────────────────────────────────────────────────────────────
 
 /// A geometric transformation applied to existing entities.
@@ -908,6 +927,10 @@ pub enum CmdResult {
     Measurement(String),
     /// Print a measurement result and keep the command active.
     ReportMeasurement(String),
+    /// Print a measurement result, clear the current selection, and keep the command active.
+    ReportMeasurementAndDeselect(String),
+    /// Clear the current selection and keep the command active at its updated step.
+    DeselectAndContinue,
     /// Break `handle` at points `p1` and `p2`; replace with computed fragments.
     BreakEntity { handle: Handle, p1: DVec3, p2: DVec3 },
     /// Attempt to join the given entities into fewer merged entities.
@@ -1473,11 +1496,21 @@ pub trait CadCommand: Send {
         false
     }
 
+    fn selection_forces_add(&self) -> bool {
+        false
+    }
+
     /// Called after a selection action completes while `is_selection_gathering` is true.
     /// `handles` is the full set of currently selected entities.
     /// Return `Relaunch` to fire the pending command, or `NeedPoint` to keep gathering.
     fn on_selection_complete(&mut self, _handles: Vec<Handle>) -> CmdResult {
         CmdResult::Cancel
+    }
+
+    fn inject_selection_entities(&mut self, _entities: Vec<SelectionEntity>) {}
+
+    fn area_preview_regions(&self) -> Option<Vec<AreaPreviewRegion>> {
+        None
     }
 
     /// Returns `true` when the current step picks a corner of a selection

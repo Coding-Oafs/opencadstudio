@@ -1,7 +1,9 @@
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdOption, CmdResult};
+use crate::command::{
+    AreaPreviewRegion, AreaPreviewSource, CadCommand, CmdOption, CmdResult, SelectionEntity,
+};
 use crate::entities::traits::EntityTypeOps;
 use crate::scene::model::wire_model::WireModel;
 
@@ -21,9 +23,9 @@ struct AreaMeasurement {
 pub struct AreaCommand {
     mode: AreaMode,
     points: Vec<DVec3>,
-    object_pick: bool,
-    picked_entity: Option<EntityType>,
-    picked_surface_area: Option<f64>,
+    objects_gathering: bool,
+    selected_entities: Vec<SelectionEntity>,
+    preview_regions: Vec<AreaPreviewRegion>,
     total_area: f64,
     total_perimeter: f64,
 }
@@ -33,9 +35,9 @@ impl AreaCommand {
         Self {
             mode: AreaMode::Single,
             points: Vec::new(),
-            object_pick: false,
-            picked_entity: None,
-            picked_surface_area: None,
+            objects_gathering: false,
+            selected_entities: Vec::new(),
+            preview_regions: Vec::new(),
             total_area: 0.0,
             total_perimeter: 0.0,
         }
@@ -176,6 +178,38 @@ impl AreaCommand {
         }
     }
 
+    fn selection_entity_measurement(entity: &SelectionEntity) -> Option<AreaMeasurement> {
+        Self::entity_measurement(&entity.entity).or_else(|| {
+            entity.surface_area.map(|area| AreaMeasurement {
+                area,
+                perimeter: None,
+            })
+        })
+    }
+
+    fn selection_measurement(&self) -> Option<(AreaMeasurement, Vec<Handle>)> {
+        let measured = self
+            .selected_entities
+            .iter()
+            .filter_map(|entity| {
+                Self::selection_entity_measurement(entity)
+                    .map(|measurement| (entity.handle, measurement))
+            })
+            .collect::<Vec<_>>();
+        if measured.is_empty() {
+            return None;
+        }
+
+        let area = measured.iter().map(|(_, measurement)| measurement.area).sum();
+        let perimeter = measured
+            .iter()
+            .map(|(_, measurement)| measurement.perimeter)
+            .collect::<Option<Vec<_>>>()
+            .map(|values| values.into_iter().sum());
+        let handles = measured.into_iter().map(|(handle, _)| handle).collect();
+        Some((AreaMeasurement { area, perimeter }, handles))
+    }
+
     fn result_message(measurement: AreaMeasurement) -> String {
         match measurement.perimeter {
             Some(perimeter) => crate::tr!(
@@ -204,7 +238,11 @@ impl AreaCommand {
         }
     }
 
-    fn finish_measurement(&mut self, measurement: AreaMeasurement) -> CmdResult {
+    fn finish_measurement(
+        &mut self,
+        measurement: AreaMeasurement,
+        deselect: bool,
+    ) -> CmdResult {
         if self.mode == AreaMode::Single {
             return CmdResult::Measurement(Self::result_message(measurement));
         }
@@ -215,8 +253,14 @@ impl AreaCommand {
             self.total_perimeter += sign * perimeter;
         }
         self.points.clear();
-        self.object_pick = false;
-        CmdResult::ReportMeasurement(self.running_result_message(measurement))
+        self.objects_gathering = false;
+        self.selected_entities.clear();
+        let message = self.running_result_message(measurement);
+        if deselect {
+            CmdResult::ReportMeasurementAndDeselect(message)
+        } else {
+            CmdResult::ReportMeasurement(message)
+        }
     }
 }
 
@@ -226,8 +270,11 @@ impl CadCommand for AreaCommand {
     }
 
     fn prompt(&self) -> String {
-        if self.object_pick {
-            return crate::tr!("area-prompt-object");
+        if self.objects_gathering {
+            return crate::tr!(
+                "area-prompt-objects",
+                count = self.selected_entities.len()
+            );
         }
         if !self.points.is_empty() {
             return crate::tr!("area-prompt-next", count = self.points.len());
@@ -240,33 +287,54 @@ impl CadCommand for AreaCommand {
     }
 
     fn options(&self) -> Vec<CmdOption> {
-        if self.object_pick || !self.points.is_empty() {
+        if self.objects_gathering {
+            return vec![Self::option(crate::tr!("area-option-back"), "BACK")];
+        }
+        if !self.points.is_empty() {
             return Vec::new();
         }
-        let object = || Self::option(crate::tr!("area-option-object"), "OBJECT");
+        let objects = || Self::option(crate::tr!("area-option-objects"), "OBJECTS");
         let add = || Self::option(crate::tr!("area-option-add"), "ADD");
         let subtract = || Self::option(crate::tr!("area-option-subtract"), "SUBTRACT");
         match self.mode {
-            AreaMode::Single => vec![object(), add(), subtract()],
-            AreaMode::Add => vec![object(), subtract()],
-            AreaMode::Subtract => vec![object(), add()],
+            AreaMode::Single => vec![objects(), add(), subtract()],
+            AreaMode::Add => vec![objects(), subtract()],
+            AreaMode::Subtract => vec![objects(), add()],
         }
     }
 
     fn wants_text_input(&self) -> bool {
-        !self.object_pick
+        !self.objects_gathering
     }
 
     fn point_step_accepts_keywords(&self) -> bool {
-        !self.object_pick
+        !self.objects_gathering
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        if self.object_pick || !self.points.is_empty() {
+        let input = text.trim().to_ascii_uppercase();
+        if self.objects_gathering {
+            if matches!(input.as_str(), "B" | "BACK") {
+                if let Some((measurement, handles)) = self.selection_measurement() {
+                    if self.mode != AreaMode::Single {
+                        self.preview_regions.push(AreaPreviewRegion {
+                            source: AreaPreviewSource::Handles(handles),
+                            subtract: self.mode == AreaMode::Subtract,
+                        });
+                    }
+                    return Some(self.finish_measurement(measurement, true));
+                }
+                self.objects_gathering = false;
+                self.selected_entities.clear();
+                return Some(CmdResult::DeselectAndContinue);
+            }
             return Some(CmdResult::NeedPoint);
         }
-        match text.trim().to_ascii_uppercase().as_str() {
-            "O" | "OBJECT" => self.object_pick = true,
+        if !self.points.is_empty() {
+            return Some(CmdResult::NeedPoint);
+        }
+        match input.as_str() {
+            "O" | "OBJECT" | "OBJECTS" => self.objects_gathering = true,
             "A" | "ADD" => self.mode = AreaMode::Add,
             "S" | "SUBTRACT" => self.mode = AreaMode::Subtract,
             _ => return Some(CmdResult::NeedPoint),
@@ -274,73 +342,67 @@ impl CadCommand for AreaCommand {
         Some(CmdResult::NeedPoint)
     }
 
-    fn needs_entity_pick(&self) -> bool {
-        self.object_pick
+    fn is_selection_gathering(&self) -> bool {
+        self.objects_gathering
     }
 
-    fn entity_pick_includes_fills(&self) -> bool {
-        true
+    fn selection_forces_add(&self) -> bool {
+        self.objects_gathering
     }
 
-    fn entity_pick_highlights_hover(&self) -> bool {
-        true
+    fn inject_selection_entities(&mut self, entities: Vec<SelectionEntity>) {
+        self.selected_entities = entities;
     }
 
-    fn inject_before_entity_pick(&self) -> bool {
-        true
-    }
-
-    fn inject_picked_entity(&mut self, entity: EntityType) {
-        self.picked_entity = Some(entity);
-        self.picked_surface_area = None;
-    }
-
-    fn inject_picked_surface_area(&mut self, area: f64) {
-        self.picked_surface_area = Some(area);
-    }
-
-    fn on_entity_pick(&mut self, handle: Handle, _point: DVec3) -> CmdResult {
-        if handle.is_null() {
-            return CmdResult::NeedPoint;
-        }
-        let measurement = self
-            .picked_entity
-            .take()
-            .and_then(|entity| Self::entity_measurement(&entity))
-            .or_else(|| {
-                self.picked_surface_area.take().map(|area| AreaMeasurement {
-                    area,
-                    perimeter: None,
-                })
-            });
-        match measurement {
-            Some(measurement) => self.finish_measurement(measurement),
-            None => CmdResult::ReportMeasurement(crate::tr!("area-object-not-measurable")),
-        }
+    fn on_selection_complete(&mut self, _handles: Vec<Handle>) -> CmdResult {
+        CmdResult::NeedPoint
     }
 
     fn on_point(&mut self, point: DVec3) -> CmdResult {
+        if self.objects_gathering {
+            return CmdResult::NeedPoint;
+        }
         self.points.push(point);
         CmdResult::NeedPoint
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        if self.object_pick {
-            return CmdResult::Cancel;
+        if self.objects_gathering {
+            let Some((measurement, handles)) = self.selection_measurement() else {
+                self.selected_entities.clear();
+                return CmdResult::ReportMeasurementAndDeselect(crate::tr!(
+                    "area-objects-not-measurable"
+                ));
+            };
+            if self.mode != AreaMode::Single {
+                self.preview_regions.push(AreaPreviewRegion {
+                    source: AreaPreviewSource::Handles(handles),
+                    subtract: self.mode == AreaMode::Subtract,
+                });
+            }
+            return self.finish_measurement(measurement, true);
         }
         if self.points.is_empty() {
-            self.object_pick = true;
+            self.objects_gathering = true;
             return CmdResult::NeedPoint;
         }
         if self.points.len() < 3 {
             return CmdResult::Cancel;
         }
         let measurement = Self::point_measurement(&self.points, true);
-        self.finish_measurement(measurement)
+        if self.mode != AreaMode::Single {
+            self.preview_regions.push(AreaPreviewRegion {
+                source: AreaPreviewSource::Boundary(
+                    self.points.iter().map(|point| [point.x, point.y]).collect(),
+                ),
+                subtract: self.mode == AreaMode::Subtract,
+            });
+        }
+        self.finish_measurement(measurement, false)
     }
 
     fn on_mouse_move(&mut self, point: DVec3) -> Option<WireModel> {
-        if self.object_pick || self.points.is_empty() {
+        if self.objects_gathering || self.points.is_empty() {
             return None;
         }
         let to_render = |p: DVec3| [p.x as f32, p.y as f32, p.z as f32];
@@ -374,6 +436,31 @@ impl CadCommand for AreaCommand {
             fill_tris: Vec::new(),
             fill_tris_low: Vec::new(),
         })
+    }
+
+    fn area_preview_regions(&self) -> Option<Vec<AreaPreviewRegion>> {
+        let mut regions = self.preview_regions.clone();
+        if self.objects_gathering {
+            let handles = self
+                .selected_entities
+                .iter()
+                .map(|entity| entity.handle)
+                .collect::<Vec<_>>();
+            if !handles.is_empty() {
+                regions.push(AreaPreviewRegion {
+                    source: AreaPreviewSource::Handles(handles),
+                    subtract: self.mode == AreaMode::Subtract,
+                });
+            }
+        } else if self.points.len() >= 3 {
+            regions.push(AreaPreviewRegion {
+                source: AreaPreviewSource::Boundary(
+                    self.points.iter().map(|point| [point.x, point.y]).collect(),
+                ),
+                subtract: self.mode == AreaMode::Subtract,
+            });
+        }
+        Some(regions)
     }
 }
 

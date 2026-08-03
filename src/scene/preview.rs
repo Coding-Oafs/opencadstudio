@@ -1,5 +1,7 @@
 // Auto-split from scene/mod.rs. Pure text-move; behaviour unchanged.
 use super::*;
+use crate::command::{AreaPreviewRegion, AreaPreviewSource};
+use crate::scene::model::hatch_model::HatchPattern;
 
 impl Scene {
     // ── Preview wire ──────────────────────────────────────────────────────
@@ -25,6 +27,158 @@ impl Scene {
         }
         models.extend(self.preview_insert_hatch_models(handles));
         self.preview_hatches = std::sync::Arc::new(models);
+    }
+
+    pub fn set_area_preview_regions(&mut self, regions: &[AreaPreviewRegion]) {
+        let mut models = Vec::new();
+        for region in regions {
+            match &region.source {
+                AreaPreviewSource::Handles(handles) => {
+                    for &handle in handles {
+                        self.append_area_preview_handle(handle, region.subtract, &mut models);
+                    }
+                }
+                AreaPreviewSource::Boundary(boundary) => {
+                    if let Some(model) = Self::area_preview_hatch(
+                        std::slice::from_ref(boundary),
+                        region.subtract,
+                    ) {
+                        models.push(model);
+                    }
+                }
+            }
+        }
+        self.preview_hatches = std::sync::Arc::new(models);
+    }
+
+    fn append_area_preview_handle(
+        &self,
+        handle: Handle,
+        subtract: bool,
+        models: &mut Vec<HatchModel>,
+    ) {
+        if let Some(mut model) = self.hatches.get(&handle).cloned() {
+            Self::style_area_preview_hatch(&mut model, subtract);
+            models.push(model);
+            return;
+        }
+
+        let direct_boundary = crate::scene::project::clip_boundary_polygon_for_document(
+            &self.document,
+            handle,
+            0.0,
+        );
+        let mut rings = if direct_boundary.len() >= 3 {
+            vec![direct_boundary
+                .into_iter()
+                .map(|point| [point[0] as f64, point[1] as f64])
+                .collect()]
+        } else {
+            Vec::new()
+        };
+        if !rings.is_empty() {
+            if let Some(model) = Self::area_preview_hatch(&rings, subtract) {
+                models.push(model);
+            }
+            return;
+        }
+        for wire in self.wire_models_for(&[handle]) {
+            let mut ring = Vec::new();
+            for (index, point) in wire.points.iter().enumerate() {
+                let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
+                let x = point[0] as f64 + low[0] as f64;
+                let y = point[1] as f64 + low[1] as f64;
+                if x.is_finite() && y.is_finite() {
+                    let candidate = [x, y];
+                    if ring.last().is_none_or(|last| *last != candidate) {
+                        ring.push(candidate);
+                    }
+                } else {
+                    Self::push_area_preview_ring(&mut rings, &mut ring);
+                }
+            }
+            Self::push_area_preview_ring(&mut rings, &mut ring);
+        }
+        if let Some(model) = Self::area_preview_hatch(&rings, subtract) {
+            models.push(model);
+        }
+    }
+
+    fn push_area_preview_ring(rings: &mut Vec<Vec<[f64; 2]>>, ring: &mut Vec<[f64; 2]>) {
+        if ring.len() >= 3 {
+            let min_x = ring.iter().map(|point| point[0]).fold(f64::INFINITY, f64::min);
+            let max_x = ring
+                .iter()
+                .map(|point| point[0])
+                .fold(f64::NEG_INFINITY, f64::max);
+            let min_y = ring.iter().map(|point| point[1]).fold(f64::INFINITY, f64::min);
+            let max_y = ring
+                .iter()
+                .map(|point| point[1])
+                .fold(f64::NEG_INFINITY, f64::max);
+            let diagonal_sq = (max_x - min_x).powi(2) + (max_y - min_y).powi(2);
+            let twice_area = ring
+                .iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+                .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+                .sum::<f64>()
+                .abs();
+            if twice_area > diagonal_sq * 1e-12 {
+                rings.push(std::mem::take(ring));
+                return;
+            }
+        }
+        ring.clear();
+    }
+
+    fn area_preview_hatch(rings: &[Vec<[f64; 2]>], subtract: bool) -> Option<HatchModel> {
+        let origin = rings.iter().find_map(|ring| ring.first()).copied()?;
+        let mut boundary = Vec::new();
+        let mut first = true;
+        for ring in rings.iter().filter(|ring| ring.len() >= 3) {
+            if !first {
+                boundary.push([f32::NAN, f32::NAN]);
+            }
+            first = false;
+            boundary.extend(
+                ring.iter()
+                    .map(|point| [(point[0] - origin[0]) as f32, (point[1] - origin[1]) as f32]),
+            );
+        }
+        if boundary.len() < 3 {
+            return None;
+        }
+        let mut model = HatchModel {
+            world_origin: origin,
+            boundary: std::sync::Arc::new(boundary),
+            boundary_wcs: None,
+            pattern: HatchPattern::Solid,
+            name: "AREA_PREVIEW".into(),
+            color: [0.0; 4],
+            aci: 0,
+            line_weight_px: 1.0,
+            angle_offset: 0.0,
+            scale: 1.0,
+            draw_depth: 0.0,
+        };
+        Self::style_area_preview_hatch(&mut model, subtract);
+        Some(model)
+    }
+
+    fn style_area_preview_hatch(model: &mut HatchModel, subtract: bool) {
+        model.pattern = HatchPattern::Solid;
+        model.name = "AREA_PREVIEW".into();
+        model.color = if subtract {
+            [1.0, 0.28, 0.18, 0.16]
+        } else {
+            [0.15, 0.55, 1.0, 0.12]
+        };
+        model.aci = 0;
+        model.line_weight_px = 1.0;
+        model.angle_offset = 0.0;
+        model.scale = 1.0;
+        model.draw_depth = 0.0;
     }
 
     fn append_preview_hatch(&self, handle: Handle, models: &mut Vec<HatchModel>) {

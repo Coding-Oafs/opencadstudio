@@ -1,9 +1,19 @@
 use super::{Message, OpenCADStudio};
-use crate::command::{CmdResult, StepInput};
+use crate::command::{CmdResult, SelectionEntity, StepInput};
 use acadrust::Handle;
 use iced::Task;
 
 impl OpenCADStudio {
+    fn refresh_area_preview(&mut self, i: usize) {
+        let regions = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.area_preview_regions());
+        if let Some(regions) = regions {
+            self.tabs[i].scene.set_area_preview_regions(&regions);
+        }
+    }
+
     /// Point supplied by a bare Enter before LINE/PLINE's first click. Prefer
     /// the current endpoint of the most recently created path drawable in the
     /// active space. A loaded drawing has no runtime anchor, so recover its
@@ -258,6 +268,31 @@ impl OpenCADStudio {
             self.reset_tracking_after_point();
             self.push_ucs_to_cmd(i);
         }
+        if let StepInput::SelectionComplete(handles) = &input {
+            let entities = {
+                let scene = &self.tabs[i].scene;
+                handles
+                    .iter()
+                    .filter_map(|handle| {
+                        scene.document.get_entity(*handle).cloned().map(|entity| {
+                            let surface_area = scene
+                                .meshes
+                                .get(handle)
+                                .or_else(|| scene.block_meshes.get(handle))
+                                .map(|mesh| mesh.metrics.surface_area);
+                            SelectionEntity {
+                                handle: *handle,
+                                entity,
+                                surface_area,
+                            }
+                        })
+                    })
+                    .collect()
+            };
+            if let Some(command) = self.tabs[i].active_cmd.as_mut() {
+                command.inject_selection_entities(entities);
+            }
+        }
         let ctrl = self.ctrl_down;
         let shift = self.shift_down;
         let result: Option<CmdResult> = {
@@ -399,14 +434,7 @@ impl OpenCADStudio {
             .into_iter()
             .map(|(h, _)| h)
             .collect();
-        let result = self.tabs[i]
-            .active_cmd
-            .as_mut()
-            .map(|cmd| cmd.on_selection_complete(handles));
-        Some(match result {
-            Some(r) => self.apply_cmd_result(r),
-            None => Task::none(),
-        })
+        Some(self.feed_command(StepInput::SelectionComplete(handles)))
     }
 
     pub(super) fn feed_active_cmd(&mut self, token: &str) {
@@ -557,6 +585,7 @@ impl OpenCADStudio {
                 // and typed digits land in it rather than the command line,
                 // instead of waiting for the next cursor move to resync.
                 self.sync_dyn_fields();
+                self.refresh_area_preview(i);
             }
             CmdResult::Preview(wire) => {
                 self.tabs[i].scene.set_preview_wires(vec![wire]);
@@ -1792,7 +1821,29 @@ impl OpenCADStudio {
             CmdResult::ReportMeasurement(msg) => {
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
+                self.refresh_area_preview(i);
                 self.command_line.push_output(&msg);
+                if let Some(prompt) = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt()) {
+                    self.command_line.push_info(&prompt);
+                }
+            }
+            CmdResult::ReportMeasurementAndDeselect(msg) => {
+                self.tabs[i].snap_result = None;
+                self.tabs[i].scene.deselect_all();
+                self.tabs[i].scene.clear_preview_wire();
+                self.refresh_area_preview(i);
+                self.refresh_properties();
+                self.command_line.push_output(&msg);
+                if let Some(prompt) = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt()) {
+                    self.command_line.push_info(&prompt);
+                }
+            }
+            CmdResult::DeselectAndContinue => {
+                self.tabs[i].snap_result = None;
+                self.tabs[i].scene.deselect_all();
+                self.tabs[i].scene.clear_preview_wire();
+                self.refresh_area_preview(i);
+                self.refresh_properties();
                 if let Some(prompt) = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt()) {
                     self.command_line.push_info(&prompt);
                 }

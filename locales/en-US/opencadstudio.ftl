@@ -40,15 +40,16 @@ command-line-hint = Type a command or use the ribbon. Open OBJ from the Insert t
 command-line-label = Command:
 command-line-literal-spaces = Literal spaces: Space stays in the line instead of running the command. Stays on until toggled off.
 
-area-option-object = Object
+area-option-objects = Objects
+area-option-back = Back
 area-option-add = Add area
 area-option-subtract = Subtract area
-area-prompt-first = AREA  Specify first corner point or [Object/Add area/Subtract area] <Object>:
-area-prompt-add = AREA ADD  Specify first corner point or [Object/Subtract area] <Object>:
-area-prompt-subtract = AREA SUBTRACT  Specify first corner point or [Object/Add area] <Object>:
+area-prompt-first = AREA  Specify first corner point or [Objects/Add area/Subtract area] <Objects>:
+area-prompt-add = AREA ADD  Specify first corner point or [Objects/Subtract area] <Objects>:
+area-prompt-subtract = AREA SUBTRACT  Specify first corner point or [Objects/Add area] <Objects>:
 area-prompt-next = AREA  Specify next point ({ $count } picked, Enter to calculate):
-area-prompt-object = AREA  Select object:
-area-object-not-measurable = AREA: the selected object has no measurable area.
+area-prompt-objects = AREA  Select objects ({ $count } selected, Enter to calculate):
+area-objects-not-measurable = AREA: none of the selected objects has a measurable area.
 area-result = Area = { $area },  Perimeter = { $perimeter }
 area-result-area-only = Area = { $area }
 area-running-result =
