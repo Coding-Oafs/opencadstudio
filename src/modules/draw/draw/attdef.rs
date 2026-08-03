@@ -33,15 +33,25 @@ enum Step {
 
 pub struct AttdefCommand {
     step: Step,
-    /// Text height in world units.
     height: f64,
+    text_style: String,
+    width_factor: f64,
+    oblique_angle: f64,
 }
 
 impl AttdefCommand {
-    pub fn new() -> Self {
+    pub fn with_text_defaults(
+        height: f64,
+        text_style: String,
+        width_factor: f64,
+        oblique_angle: f64,
+    ) -> Self {
         Self {
             step: Step::Tag,
-            height: 0.2,
+            height,
+            text_style,
+            width_factor,
+            oblique_angle,
         }
     }
 }
@@ -130,6 +140,9 @@ impl CadCommand for AttdefCommand {
                 default_value: default.clone(),
                 insertion_point: Vector3::new(pt.x, pt.y, pt.z),
                 height: self.height,
+                text_style: self.text_style.clone(),
+                width_factor: self.width_factor,
+                oblique_angle: self.oblique_angle,
                 ..Default::default()
             };
             attdef.common.layer = "0".into();

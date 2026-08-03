@@ -34,11 +34,36 @@ pub fn tool() -> ToolDef {
 pub struct LeaderCommand {
     verts: Vec<DVec3>,
     ucs: Mat4,
+    dimension_style: String,
+    text_style: String,
+    text_height: f64,
+    display_scale: f64,
+    gap: f64,
+    arrow_size: f64,
+    annotative: bool,
 }
 
 impl LeaderCommand {
-    pub fn new() -> Self {
-        Self { verts: Vec::new(), ucs: Mat4::IDENTITY }
+    pub fn with_defaults(
+        defaults: crate::scene::creation_style::DimensionCreationDefaults,
+        annotation_multiplier: f64,
+    ) -> Self {
+        let display_scale = if defaults.annotative {
+            annotation_multiplier
+        } else {
+            defaults.scale
+        };
+        Self {
+            verts: Vec::new(),
+            ucs: Mat4::IDENTITY,
+            dimension_style: defaults.style_name,
+            text_style: defaults.text_style_name,
+            text_height: defaults.text_height,
+            display_scale,
+            gap: defaults.gap,
+            arrow_size: defaults.arrow_size,
+            annotative: defaults.annotative,
+        }
     }
 }
 
@@ -74,9 +99,30 @@ impl CadCommand for LeaderCommand {
         }
         // Place the leader plus an empty MText annotation, link them, then open
         // the in-place MText editor so the user types the annotation text.
-        let leader = build_leader(&self.verts, self.ucs);
-        let (anchor, attach) = annotation_anchor(&self.verts, leader.text_height, self.ucs);
-        let mtext = build_mtext("", anchor, leader.text_height, attach, self.ucs);
+        let leader = build_leader(
+            &self.verts,
+            self.ucs,
+            &self.dimension_style,
+            self.text_height,
+            self.gap,
+            self.arrow_size,
+        );
+        let displayed_height = self.text_height * self.display_scale;
+        let (anchor, attach) = annotation_anchor(&self.verts, displayed_height, self.ucs);
+        let mtext_height = if self.annotative {
+            self.text_height
+        } else {
+            displayed_height
+        };
+        let mtext = build_mtext(
+            "",
+            anchor,
+            mtext_height,
+            attach,
+            self.ucs,
+            &self.text_style,
+            self.annotative,
+        );
         CmdResult::CommitManyAndEditText {
             entities: vec![EntityType::Leader(leader), EntityType::MText(mtext)],
             edit_index: 1,
@@ -93,7 +139,10 @@ impl CadCommand for LeaderCommand {
         }
         let mut pts: Vec<Vec3> = self.verts.iter().map(|p| p.as_vec3()).collect();
         pts.push(pt.as_vec3());
-        Some(preview_wire(&pts))
+        Some(preview_wire(
+            &pts,
+            (self.arrow_size * self.display_scale) as f32,
+        ))
     }
 }
 
@@ -103,10 +152,21 @@ fn dv3(p: DVec3) -> Vector3 {
     Vector3::new(p.x, p.y, p.z)
 }
 
-fn build_leader(verts: &[DVec3], ucs: Mat4) -> Leader {
+fn build_leader(
+    verts: &[DVec3],
+    ucs: Mat4,
+    dimension_style: &str,
+    text_height: f64,
+    gap: f64,
+    arrow_size: f64,
+) -> Leader {
     let mut l = Leader::from_vertices(verts.iter().map(|p| dv3(*p)).collect());
     l.creation_type = LeaderCreationType::WithText;
     l.hookline_enabled = true;
+    l.dimension_style = dimension_style.to_string();
+    l.text_height = text_height;
+    l.dimension_gap = gap;
+    l.arrow_size = arrow_size;
     // The hookline / text read along the UCS X axis (DXF "horizontal direction
     // for text"); the renderer uses it instead of world horizontal.
     let ux = ucs.transform_vector3(Vec3::X).normalize_or(Vec3::X);
@@ -143,11 +203,15 @@ fn build_mtext(
     height: f64,
     attach: AttachmentPoint,
     ucs: Mat4,
+    text_style: &str,
+    annotative: bool,
 ) -> MText {
     let mut m = MText::new();
     m.value = text.to_string();
     m.insertion_point = dv3(pos);
     m.height = height;
+    m.style = text_style.to_string();
+    m.is_annotative = annotative;
     m.attachment_point = attach;
     // Text reads along the UCS X axis.
     let ux = ucs.transform_vector3(Vec3::X);
@@ -155,10 +219,10 @@ fn build_mtext(
     m
 }
 
-fn preview_wire(pts: &[Vec3]) -> WireModel {
+fn preview_wire(pts: &[Vec3], arrow_size: f32) -> WireModel {
     let mut points: Vec<[f32; 3]> = pts.iter().map(|p| [p.x, p.y, p.z]).collect();
     if pts.len() >= 2 {
-        let [w1, w2] = arrowhead_wings(pts[0], pts[1], 2.5);
+        let [w1, w2] = arrowhead_wings(pts[0], pts[1], arrow_size);
         points.push([f32::NAN; 3]);
         points.push([w1.x, w1.y, w1.z]);
         points.push([pts[0].x, pts[0].y, pts[0].z]);

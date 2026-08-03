@@ -49,7 +49,11 @@ impl OpenCADStudio {
             // quick leader-plus-annotation operation.
             "LEADER" | "QLEADER" => {
                 use crate::modules::annotate::leader_cmd::LeaderCommand;
-                let new_cmd = LeaderCommand::new();
+                let defaults = crate::scene::creation_style::current_dimension_defaults(
+                    &self.tabs[i].scene.document,
+                );
+                let multiplier = self.tabs[i].scene.creation_annotation_multiplier();
+                let new_cmd = LeaderCommand::with_defaults(defaults, multiplier);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -486,7 +490,31 @@ impl OpenCADStudio {
 
             "MLEADER" => {
                 use crate::modules::annotate::mleader_cmd::MLeaderCommand;
-                let new_cmd = MLeaderCommand::new();
+                let name = self.tabs[i]
+                    .scene
+                    .document
+                    .header
+                    .current_mleader_style_name
+                    .clone();
+                let style = self.tabs[i]
+                    .scene
+                    .document
+                    .objects
+                    .iter()
+                    .find_map(|(handle, object)| match object {
+                        acadrust::objects::ObjectType::MultiLeaderStyle(style)
+                            if style.name.eq_ignore_ascii_case(&name) =>
+                        {
+                            let mut style = style.clone();
+                            style.handle = *handle;
+                            Some(style)
+                        }
+                        _ => None,
+                    });
+                let multiplier = self.tabs[i].scene.creation_annotation_multiplier();
+                let new_cmd = style.map_or_else(MLeaderCommand::new, |style| {
+                    MLeaderCommand::with_style(style, multiplier)
+                });
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -500,7 +528,29 @@ impl OpenCADStudio {
 
             "TABLE" => {
                 use crate::modules::annotate::table_cmd::TableCommand;
-                let cmd = TableCommand::new();
+                let name = self.tabs[i]
+                    .scene
+                    .document
+                    .header
+                    .current_table_style_name
+                    .clone();
+                let style = self.tabs[i]
+                    .scene
+                    .document
+                    .objects
+                    .iter()
+                    .find_map(|(handle, object)| match object {
+                        acadrust::objects::ObjectType::TableStyle(style)
+                            if style.name.eq_ignore_ascii_case(&name) =>
+                        {
+                            Some((*handle, style.clone()))
+                        }
+                        _ => None,
+                    });
+                let multiplier = self.tabs[i].scene.creation_annotation_multiplier();
+                let cmd = style.as_ref().map_or_else(TableCommand::new, |(handle, style)| {
+                    TableCommand::with_style(*handle, style, multiplier)
+                });
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }

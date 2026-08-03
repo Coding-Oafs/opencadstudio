@@ -21,12 +21,14 @@ enum Step {
 
 pub struct TextCommand {
     step: Step,
+    height: f64,
 }
 
 impl TextCommand {
-    pub fn new() -> Self {
+    pub fn with_height(height: f64) -> Self {
         Self {
             step: Step::InsertPoint,
+            height,
         }
     }
 }
@@ -48,7 +50,7 @@ impl CadCommand for TextCommand {
             pos: pt,
             handle: None,
             initial: String::new(),
-            height: 0.25,
+            height: self.height,
         }
     }
 

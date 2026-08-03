@@ -29,11 +29,35 @@ pub fn tool() -> ToolDef {
 pub struct MLeaderCommand {
     verts: Vec<DVec3>,
     ucs: Mat4,
+    style: Option<acadrust::objects::MultiLeaderStyle>,
+    display_scale: f64,
 }
 
 impl MLeaderCommand {
     pub fn new() -> Self {
-        Self { verts: Vec::new(), ucs: Mat4::IDENTITY }
+        Self {
+            verts: Vec::new(),
+            ucs: Mat4::IDENTITY,
+            style: None,
+            display_scale: 1.0,
+        }
+    }
+
+    pub fn with_style(
+        style: acadrust::objects::MultiLeaderStyle,
+        annotation_multiplier: f64,
+    ) -> Self {
+        let display_scale = if style.is_annotative {
+            annotation_multiplier
+        } else {
+            style.scale_factor
+        };
+        Self {
+            verts: Vec::new(),
+            ucs: Mat4::IDENTITY,
+            style: Some(style),
+            display_scale,
+        }
     }
 }
 
@@ -69,7 +93,13 @@ impl CadCommand for MLeaderCommand {
         }
         // Place the leader with empty text, then open the in-place MText editor
         // so the user types the annotation into the rich editor.
-        let ml = build_mleader("", &self.verts, self.ucs);
+        let ml = build_mleader(
+            "",
+            &self.verts,
+            self.ucs,
+            self.style.as_ref(),
+            self.display_scale,
+        );
         CmdResult::CommitAndEditText(EntityType::MultiLeader(ml))
     }
 
@@ -84,7 +114,12 @@ impl CadCommand for MLeaderCommand {
         // Preview / rubber-band is GPU screen-space: downcast to f32 here.
         let mut pts: Vec<Vec3> = self.verts.iter().map(|p| p.as_vec3()).collect();
         pts.push(pt.as_vec3());
-        Some(preview_wire(&pts))
+        let arrow_size = self
+            .style
+            .as_ref()
+            .map_or(2.5, |style| style.arrowhead_size)
+            * self.display_scale;
+        Some(preview_wire(&pts, arrow_size as f32))
     }
 }
 
@@ -94,7 +129,13 @@ fn v3(p: DVec3) -> Vector3 {
     Vector3::new(p.x, p.y, p.z)
 }
 
-fn build_mleader(text: &str, verts: &[DVec3], ucs: Mat4) -> MultiLeader {
+fn build_mleader(
+    text: &str,
+    verts: &[DVec3],
+    ucs: Mat4,
+    style: Option<&acadrust::objects::MultiLeaderStyle>,
+    display_scale: f64,
+) -> MultiLeader {
     // Last vertex = content/text location; remaining = leader line points
     let (leader_pts, content_pt) = verts.split_at(verts.len() - 1);
     let content_pt = content_pt[0];
@@ -103,14 +144,22 @@ fn build_mleader(text: &str, verts: &[DVec3], ucs: Mat4) -> MultiLeader {
     let content_v3 = v3(content_pt);
 
     let mut ml = MultiLeader::with_text(text, content_v3, leader_v3);
+    if let Some(style) = style {
+        crate::scene::annotative::apply_mleader_style(&mut ml, style);
+    } else {
+        ml.text_height = 2.5;
+        ml.context.text_height = 2.5;
+        ml.arrowhead_size = 2.5;
+        ml.context.arrowhead_size = 2.5;
+        ml.dogleg_length = 2.5;
+    }
 
-    // Match Leader entity defaults
-    ml.text_height = 2.5;
-    ml.context.text_height = 2.5;
-    ml.arrowhead_size = 2.5;
-    ml.dogleg_length = 2.5;
-
-    const DOGLEG: f64 = 2.5;
+    let landing_distance = ml.dogleg_length * display_scale;
+    let landing_gap = ml.context.landing_gap * display_scale;
+    ml.context.scale_factor = display_scale;
+    ml.context.text_height = ml.text_height * display_scale;
+    ml.context.arrowhead_size = ml.arrowhead_size * display_scale;
+    ml.context.landing_gap = landing_gap;
     // "Horizontal" landing + text run along the active UCS X axis (identity =
     // world), so the annotation reads square to the user's coordinate system.
     let ux = ucs.transform_vector3(Vec3::X).normalize_or(Vec3::X);
@@ -130,22 +179,22 @@ fn build_mleader(text: &str, verts: &[DVec3], ucs: Mat4) -> MultiLeader {
         // the text along the UCS X axis.
         root.direction = Vector3::new(landing.x as f64, landing.y as f64, 0.0);
         root.connection_point = content_v3;
-        root.landing_distance = DOGLEG;
+        root.landing_distance = landing_distance;
     }
 
     // Seed the text one landing-length past the leader end, on the side the
     // user dragged toward, offset along the UCS X axis.
-    let off = landing * DOGLEG as f32;
+    let off = landing * (landing_distance + landing_gap) as f32;
     ml.context.text_location =
         Vector3::new(content_v3.x + off.x as f64, content_v3.y + off.y as f64, content_v3.z);
 
     ml
 }
 
-fn preview_wire(pts: &[Vec3]) -> WireModel {
+fn preview_wire(pts: &[Vec3], arrow_size: f32) -> WireModel {
     let mut points: Vec<[f32; 3]> = pts.iter().map(|p| [p.x, p.y, p.z]).collect();
     if pts.len() >= 2 {
-        let [w1, w2] = arrowhead_wings(pts[0], pts[1], 2.5);
+        let [w1, w2] = arrowhead_wings(pts[0], pts[1], arrow_size);
         points.push([f32::NAN; 3]);
         points.push([w1.x, w1.y, w1.z]);
         points.push([pts[0].x, pts[0].y, pts[0].z]);

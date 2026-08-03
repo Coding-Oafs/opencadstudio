@@ -13,8 +13,28 @@ impl OpenCADStudio {
 
             "MLINE" => {
                 use crate::modules::draw::draw::mline::MlineCommand;
-                let style = self.tabs[i].scene.document.header.multiline_style.clone();
-                let cmd_obj = MlineCommand::with_style(style);
+                let style_name = self.tabs[i].scene.document.header.multiline_style.clone();
+                let style = self.tabs[i]
+                    .scene
+                    .document
+                    .objects
+                    .iter()
+                    .find_map(|(handle, object)| match object {
+                        acadrust::objects::ObjectType::MLineStyle(style)
+                            if style.name.eq_ignore_ascii_case(&style_name) =>
+                        {
+                            Some((*handle, style.elements.len()))
+                        }
+                        _ => None,
+                    });
+                let (style_handle, element_count) = style
+                    .map(|(handle, count)| (Some(handle), count))
+                    .unwrap_or((None, 2));
+                let cmd_obj = MlineCommand::with_style(
+                    style_name,
+                    style_handle,
+                    element_count,
+                );
                 self.command_line.push_info(&cmd_obj.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
             }
@@ -47,7 +67,15 @@ impl OpenCADStudio {
 
             "ATTDEF" => {
                 use crate::modules::draw::draw::attdef::AttdefCommand;
-                let cmd = AttdefCommand::new();
+                let defaults = crate::scene::creation_style::current_text_defaults(
+                    &self.tabs[i].scene.document,
+                );
+                let cmd = AttdefCommand::with_text_defaults(
+                    defaults.height,
+                    defaults.style_name,
+                    defaults.width_factor,
+                    defaults.oblique_angle,
+                );
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
@@ -1049,7 +1077,11 @@ impl OpenCADStudio {
             // ── Annotate commands ──────────────────────────────────────────
             "TEXT" => {
                 use crate::modules::annotate::text::TextCommand;
-                let new_cmd = TextCommand::new();
+                let height = crate::scene::creation_style::current_text_defaults(
+                    &self.tabs[i].scene.document,
+                )
+                .height;
+                let new_cmd = TextCommand::with_height(height);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -1080,7 +1112,11 @@ impl OpenCADStudio {
 
             "MTEXT" => {
                 use crate::modules::annotate::mtext::MTextCommand;
-                let new_cmd = MTextCommand::new();
+                let height = crate::scene::creation_style::current_text_defaults(
+                    &self.tabs[i].scene.document,
+                )
+                .height;
+                let new_cmd = MTextCommand::with_height(height);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }

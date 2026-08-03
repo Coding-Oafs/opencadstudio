@@ -639,8 +639,31 @@ pub fn effective_annotation_scale_for(
     fallback: f32,
     scale_handle: Option<Handle>,
 ) -> f32 {
-    if !is_annotative(doc, entity) {
+    let context_annotative = is_annotative(doc, entity);
+    let style_annotative = annotation_style_is_annotative(doc, entity);
+    if !context_annotative && !style_annotative {
         return 1.0;
+    }
+
+    if matches!(
+        entity,
+        EntityType::Dimension(_)
+            | EntityType::Leader(_)
+            | EntityType::Tolerance(_)
+            | EntityType::Table(_)
+    ) {
+        return fallback;
+    }
+    if style_annotative
+        && matches!(
+            entity,
+            EntityType::Text(_)
+                | EntityType::MText(_)
+                | EntityType::AttributeEntity(_)
+                | EntityType::AttributeDefinition(_)
+        )
+    {
+        return fallback;
     }
 
     // Unlike MTEXT / DIMENSION contexts, an MLEADER context carries its
@@ -1392,6 +1415,15 @@ fn mleader_style_annotative(doc: &CadDocument, handle: Option<Handle>) -> bool {
     })
 }
 
+fn table_style_annotative(doc: &CadDocument, handle: Option<Handle>) -> bool {
+    let Some(handle) = handle else {
+        return false;
+    };
+    doc.objects.iter().any(|(object_handle, object)| {
+        matches!(object, ObjectType::TableStyle(style) if *object_handle == handle && style.annotative)
+    })
+}
+
 /// Whether an object carries a per-object annotation context with at least one
 /// per-scale representation — its extension dictionary holds an
 /// `AcDbContextDataManager` whose `ACDB_ANNOTATIONSCALES` collection is
@@ -1454,6 +1486,7 @@ pub fn annotation_style_is_annotative(doc: &CadDocument, entity: &EntityType) ->
         EntityType::MultiLeader(leader) => {
             mleader_style_annotative(doc, leader.style_handle)
         }
+        EntityType::Table(table) => table_style_annotative(doc, table.table_style_handle),
         _ => false,
     }
 }
@@ -1473,6 +1506,8 @@ pub fn apply_mleader_style(
     entity.dogleg_length = style.landing_distance;
     entity.arrowhead_handle = style.arrowhead_handle;
     entity.arrowhead_size = style.arrowhead_size;
+    entity.context.arrowhead_size = style.arrowhead_size;
+    entity.context.landing_gap = style.landing_gap;
     entity.text_style_handle = style.text_style_handle;
     entity.text_color = style.text_color;
     entity.text_frame = style.text_frame;
@@ -1509,6 +1544,20 @@ pub fn apply_mleader_style(
     entity.context.block_content_scale = entity.block_scale;
     entity.context.scale_factor = style.scale_factor;
     entity.enable_annotation_scale = style.is_annotative;
+    for root in &mut entity.context.leader_roots {
+        root.landing_distance = style.landing_distance;
+        root.text_attachment_direction = entity.text_attachment_direction;
+        for line in &mut root.lines {
+            if line.override_flags.is_empty() {
+                line.path_type = entity.path_type;
+                line.line_color = style.line_color;
+                line.line_type_handle = style.line_type_handle;
+                line.line_weight = style.line_weight;
+                line.arrowhead_handle = style.arrowhead_handle;
+                line.arrowhead_size = style.arrowhead_size;
+            }
+        }
+    }
 }
 
 pub fn apply_mleader_style_to_object(

@@ -1848,74 +1848,10 @@ impl OpenCADStudio {
             entity.common_mut().linetype_scale = celtscale;
         }
 
-        // A new dimension inherits the document's current dimension style
-        // (DIMSTYLE) instead of staying at the entity "Standard" default. Only
-        // fill in when still at the default so an explicitly-styled dimension
-        // is preserved. See #92.
-        if let acadrust::EntityType::Dimension(ref mut d) = entity {
-            let cur = self.tabs[i]
-                .scene
-                .document
-                .header
-                .current_dimstyle_name
-                .clone();
-            let s = d.base().style_name.clone();
-            if (s.is_empty() || s.eq_ignore_ascii_case("Standard")) && !cur.is_empty() {
-                d.base_mut().style_name = cur;
-            }
-        }
-
-        // MultiLeader / Table inherit the document's current style (#92). These
-        // styles live in the objects dictionary, so resolve the current style
-        // name to its object handle. Left untouched when the command already
-        // assigned a style or no matching style object exists.
-        match &mut entity {
-            acadrust::EntityType::MultiLeader(ml) if ml.style_handle.is_none() => {
-                let name = self.tabs[i]
-                    .scene
-                    .document
-                    .header
-                    .current_mleader_style_name
-                    .clone();
-                if !name.is_empty() {
-                    let found =
-                        self.tabs[i].scene.document.objects.iter().find_map(|(h, o)| match o {
-                            acadrust::objects::ObjectType::MultiLeaderStyle(s)
-                                if s.name.eq_ignore_ascii_case(&name) =>
-                            {
-                                Some((*h, s.clone()))
-                            }
-                            _ => None,
-                        });
-                    if let Some((h, s)) = found {
-                        debug_assert_eq!(h, s.handle);
-                        crate::scene::annotative::apply_mleader_style(ml, &s);
-                    }
-                }
-            }
-            acadrust::EntityType::Table(t) if t.table_style_handle.is_none() => {
-                let name = self.tabs[i]
-                    .scene
-                    .document
-                    .header
-                    .current_table_style_name
-                    .clone();
-                if !name.is_empty() {
-                    t.table_style_handle =
-                        self.tabs[i].scene.document.objects.iter().find_map(|(h, o)| {
-                            match o {
-                                acadrust::objects::ObjectType::TableStyle(s)
-                                    if s.name.eq_ignore_ascii_case(&name) =>
-                                {
-                                    Some(*h)
-                                }
-                                _ => None,
-                            }
-                        });
-                }
-            }
-            _ => {}
-        }
+        crate::scene::creation_style::apply_current_creation_styles(
+            &self.tabs[i].scene.document,
+            &mut entity,
+        );
 
         let text_style_annotative = match &entity {
             acadrust::EntityType::Text(text) => {

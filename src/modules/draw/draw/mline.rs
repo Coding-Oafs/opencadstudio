@@ -19,6 +19,8 @@ pub struct MlineCommand {
     scale: f64,
     waiting_scale: bool,
     style_name: String,
+    style_handle: Option<acadrust::Handle>,
+    style_element_count: usize,
 }
 
 impl MlineCommand {
@@ -29,15 +31,23 @@ impl MlineCommand {
             scale: 1.0,
             waiting_scale: false,
             style_name: "Standard".into(),
+            style_handle: None,
+            style_element_count: 2,
         }
     }
 
-    pub fn with_style(style_name: impl Into<String>) -> Self {
+    pub fn with_style(
+        style_name: impl Into<String>,
+        style_handle: Option<acadrust::Handle>,
+        style_element_count: usize,
+    ) -> Self {
         Self {
             points: vec![],
             scale: 1.0,
             waiting_scale: false,
             style_name: style_name.into(),
+            style_handle,
+            style_element_count: style_element_count.max(1),
         }
     }
 }
@@ -94,7 +104,14 @@ impl CadCommand for MlineCommand {
 
         // Close command
         if (up == "C" || up == "CLOSE") && self.points.len() >= 3 {
-            let entity = build_mline(&self.points, self.scale, true, &self.style_name);
+            let entity = build_mline(
+                &self.points,
+                self.scale,
+                true,
+                &self.style_name,
+                self.style_handle,
+                self.style_element_count,
+            );
             return Some(CmdResult::CommitAndExit(entity));
         }
 
@@ -126,7 +143,14 @@ impl CadCommand for MlineCommand {
         if self.points.len() < 2 {
             return CmdResult::Cancel;
         }
-        let entity = build_mline(&self.points, self.scale, false, &self.style_name);
+        let entity = build_mline(
+            &self.points,
+            self.scale,
+            false,
+            &self.style_name,
+            self.style_handle,
+            self.style_element_count,
+        );
         CmdResult::CommitAndExit(entity)
     }
 
@@ -171,18 +195,25 @@ impl CadCommand for MlineCommand {
     }
 }
 
-fn build_mline(pts: &[DVec3], scale: f64, closed: bool, style_name: &str) -> EntityType {
-    let verts: Vec<Vector3> = pts
-        .iter()
-        .map(|p| Vector3::new(p.x, p.y, p.z))
-        .collect();
-    let mut mline = if closed {
-        MLine::closed_from_points(&verts)
-    } else {
-        MLine::from_points(&verts)
-    };
+fn build_mline(
+    pts: &[DVec3],
+    scale: f64,
+    closed: bool,
+    style_name: &str,
+    style_handle: Option<acadrust::Handle>,
+    style_element_count: usize,
+) -> EntityType {
+    let mut mline = MLine::new();
     mline.scale_factor = scale;
     mline.style_name = style_name.to_string();
+    mline.style_handle = style_handle;
+    mline.style_element_count = style_element_count;
+    for point in pts {
+        mline.add_vertex(Vector3::new(point.x, point.y, point.z));
+    }
+    if closed {
+        mline.close();
+    }
     EntityType::MLine(mline)
 }
 

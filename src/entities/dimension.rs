@@ -1581,9 +1581,8 @@ fn tessellate_dimension_inner(
     }
     let style = effective_style.as_ref();
 
-    // DIMSCALE rule:
-    //   dimstyle.dimscale > 0  →  final multiplier; ignore anno_scale.
-    //   dimstyle.dimscale == 0 →  annotative: use anno_scale (= 1/vp_scale).
+    // A positive style scale is fixed. A zero style scale uses the multiplier
+    // resolved by the scene for the current annotation or viewport context.
     let dim_scale = style
         .map(|s| {
             if s.dimscale > 1e-6 {

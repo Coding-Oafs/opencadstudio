@@ -41,12 +41,46 @@ enum Step {
 
 pub struct TableCommand {
     step: Step,
+    style_handle: Option<acadrust::Handle>,
+    column_width: f64,
+    row_height: f64,
+    preview_scale: f64,
 }
 
 impl TableCommand {
     pub fn new() -> Self {
         Self {
             step: Step::Columns,
+            style_handle: None,
+            column_width: COL_WIDTH,
+            row_height: ROW_HEIGHT,
+            preview_scale: 1.0,
+        }
+    }
+
+    pub fn with_style(
+        style_handle: acadrust::Handle,
+        style: &acadrust::objects::TableStyle,
+        annotation_multiplier: f64,
+    ) -> Self {
+        let text_height = style
+            .data_row_style
+            .text_height
+            .max(style.header_row_style.text_height)
+            .max(style.title_row_style.text_height)
+            .max(1.0e-6);
+        let row_height = text_height * 1.5 + style.vertical_margin * 2.0;
+        let column_width = text_height * 8.0 + style.horizontal_margin * 2.0;
+        Self {
+            step: Step::Columns,
+            style_handle: Some(style_handle),
+            column_width,
+            row_height,
+            preview_scale: if style.annotative {
+                annotation_multiplier
+            } else {
+                1.0
+            },
         }
     }
 }
@@ -130,11 +164,12 @@ impl CadCommand for TableCommand {
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if let Step::Insertion { cols, rows } = self.step {
             let ins = Vector3::new(pt.x, pt.y, pt.z);
-            let table = TableBuilder::new(rows, cols)
+            let mut table = TableBuilder::new(rows, cols)
                 .at(ins)
-                .row_height(ROW_HEIGHT)
-                .column_width(COL_WIDTH)
+                .row_height(self.row_height)
+                .column_width(self.column_width)
                 .build();
+            table.table_style_handle = self.style_handle;
             CmdResult::CommitAndExit(EntityType::Table(table))
         } else {
             CmdResult::NeedPoint
@@ -144,8 +179,8 @@ impl CadCommand for TableCommand {
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
         if let Step::Insertion { cols, rows } = self.step {
             // Preview: outline of the table bounding box.
-            let w = (cols as f32) * COL_WIDTH as f32;
-            let h = (rows as f32) * ROW_HEIGHT as f32;
+            let w = (cols as f32) * (self.column_width * self.preview_scale) as f32;
+            let h = (rows as f32) * (self.row_height * self.preview_scale) as f32;
             let x = pt.x;
             let y = pt.y;
             let z = pt.z;
