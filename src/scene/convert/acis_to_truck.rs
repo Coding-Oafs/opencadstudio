@@ -374,9 +374,9 @@ fn loop_normal(pts: &[[f64; 3]]) -> [f64; 3] {
 
 // ── Cone / cylinder face ─────────────────────────────────────────────────────
 
-/// Build a cone/cylinder lateral surface as revolution faces. A plain closed
-/// revolution uses the parametric sampler; a pierced one stays here so its
-/// additional boundary loops can trim holes into the curved surface.
+/// Build a pierced cone/cylinder lateral surface as revolution faces. A
+/// single-loop face uses the parametric sampler, avoiding partial revolution
+/// segments that can disappear when the profile crosses a coordinate plane.
 fn cone_faces(
     sat: &SatDocument,
     face: &SatFace,
@@ -411,6 +411,9 @@ fn cone_faces(
     };
 
     let loops = collect_face_loops(sat, face, BOUNDARY_CHORD_FRAC);
+    if loops.len() == 1 {
+        return None;
+    }
     let arcs: Vec<(f64, f64)> = loops
         .iter()
         .map(|lp| cone_boundary_arc(lp, [cx, cy, cz], axis, udir, vdir))

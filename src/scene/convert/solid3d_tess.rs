@@ -1424,17 +1424,23 @@ pub(crate) fn append_coedge_points(
             // The edge's own sense (relative to its curve) decides the ellipse
             // winding; a reversed edge samples the opposite handedness.
             let reversed = matches!(edge.sense(), Sense::Reversed);
-            let mut sampled = sample_ellipse_arc(
+            // Orient the parameter range before sampling. Reversing an
+            // endpoint-exclusive sample afterwards would drop the traversal
+            // start and retain its end, duplicating the next coedge's point and
+            // cutting the connector corner out of the face boundary.
+            let (start, end) = if fwd {
+                (edge.start_param(), edge.end_param())
+            } else {
+                (edge.end_param(), edge.start_param())
+            };
+            let sampled = sample_ellipse_arc(
                 &ellipse,
-                edge.start_param(),
-                edge.end_param(),
+                start,
+                end,
                 chord_frac,
                 reversed,
             );
             if !sampled.is_empty() {
-                if !fwd {
-                    sampled.reverse();
-                }
                 pts.extend(sampled);
                 return;
             }
@@ -1452,12 +1458,13 @@ pub(crate) fn append_coedge_points(
                 .into_iter()
                 .map(|(x, y, z)| [x, y, z])
                 .collect();
-            // Drop the shared end point so adjacent coedges don't double up.
+            // Orient the inclusive sample first, then drop the traversal end so
+            // the adjacent coedge contributes that shared point.
+            if !fwd {
+                sampled.reverse();
+            }
             sampled.pop();
             if sampled.len() >= 2 {
-                if !fwd {
-                    sampled.reverse();
-                }
                 pts.extend(sampled);
                 return;
             }
