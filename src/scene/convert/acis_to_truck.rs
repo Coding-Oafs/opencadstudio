@@ -6,7 +6,8 @@
 // instead of the bespoke per-surface sampler in `solid3d_tess`.
 //
 //   plane-surface   → planar face from the sampled boundary loop
-//   cone-surface    → surface of revolution (cylinder / cone) via rsweep
+//   cone-surface    → partial revolutions via rsweep; closed revolutions use
+//                     the parametric sampler
 //   sphere-surface  → bespoke sampler, clipped to the boundary window (truck
 //                     builds a full ball and cannot trim it to a partial face)
 //   torus-surface   → bespoke sampler, clipped to the revolution arc between
@@ -301,26 +302,6 @@ fn plane_face(sat: &SatDocument, face: &SatFace) -> Option<Face> {
     if loops.is_empty() {
         return None;
     }
-    let build_wire = |pts: &[[f64; 3]], reverse: bool| -> Option<Wire> {
-        if pts.len() < 3 {
-            return None;
-        }
-        let verts: Vec<_> = if reverse {
-            pts.iter()
-                .rev()
-                .map(|p| builder::vertex(Point3::new(p[0], p[1], p[2])))
-                .collect::<Vec<_>>()
-        } else {
-            pts.iter()
-                .map(|p| builder::vertex(Point3::new(p[0], p[1], p[2])))
-                .collect::<Vec<_>>()
-        };
-        let n = verts.len();
-        let edges: Vec<_> = (0..n)
-            .map(|i| builder::line(&verts[i], &verts[(i + 1) % n]))
-            .collect();
-        Some(edges.into())
-    };
     // The outer boundary is the loop that encloses the rest — i.e. the one with
     // the largest area. ACIS does not guarantee it comes first in the face's
     // loop list (a pierced wall lists its window holes before the wall edge),
@@ -343,17 +324,38 @@ fn plane_face(sat: &SatDocument, face: &SatFace) -> Option<Face> {
     // test robust against sampling noise on small holes. (#123)
     let outer_n = loop_normal(&loops[outer_idx]);
     let mut wires: Vec<Wire> = Vec::new();
-    wires.push(build_wire(&loops[outer_idx], false)?);
+    wires.push(polygon_wire(&loops[outer_idx], false)?);
     for (i, lp) in loops.iter().enumerate() {
         if i == outer_idx {
             continue;
         }
         let same = vdot(loop_normal(lp), outer_n) > 0.0;
-        if let Some(w) = build_wire(lp, same) {
+        if let Some(w) = polygon_wire(lp, same) {
             wires.push(w);
         }
     }
     builder::try_attach_plane(&wires).ok()
+}
+
+fn polygon_wire(pts: &[[f64; 3]], reverse: bool) -> Option<Wire> {
+    if pts.len() < 3 {
+        return None;
+    }
+    let verts: Vec<_> = if reverse {
+        pts.iter()
+            .rev()
+            .map(|p| builder::vertex(Point3::new(p[0], p[1], p[2])))
+            .collect()
+    } else {
+        pts.iter()
+            .map(|p| builder::vertex(Point3::new(p[0], p[1], p[2])))
+            .collect()
+    };
+    let n = verts.len();
+    let edges: Vec<_> = (0..n)
+        .map(|i| builder::line(&verts[i], &verts[(i + 1) % n]))
+        .collect();
+    Some(edges.into())
 }
 
 /// Newell area-weighted normal of a closed 3-D polygon (orientation only).
@@ -372,11 +374,9 @@ fn loop_normal(pts: &[[f64; 3]]) -> [f64; 3] {
 
 // ── Cone / cylinder face ─────────────────────────────────────────────────────
 
-/// Build the lateral surface of a cone/cylinder as revolution faces. The
-/// height span comes from the solid's coaxial rims (plus a true cone's apex);
-/// the angular span comes from the face's own boundary loop, so a partial
-/// (arc) face — e.g. a curved mullion bar — sweeps only its arc instead of
-/// ballooning into a full circle of the surface radius.
+/// Build a cone/cylinder lateral surface as revolution faces. A plain closed
+/// revolution uses the parametric sampler; a pierced one stays here so its
+/// additional boundary loops can trim holes into the curved surface.
 fn cone_faces(
     sat: &SatDocument,
     face: &SatFace,
@@ -400,7 +400,8 @@ fn cone_faces(
     );
     let center = Point3::new(cx, cy, cz);
 
-    let (hmin, hmax) = cone_axis_span(sat, cone, [axis.x, axis.y, axis.z], [cx, cy, cz])?;
+    let (hmin, hmax) =
+        cone_axis_span(sat, face, cone, [axis.x, axis.y, axis.z], [cx, cy, cz])?;
     let r_at = |h: f64| {
         if cos.abs() > 1e-9 {
             radius + h * sin / cos
@@ -409,10 +410,26 @@ fn cone_faces(
         }
     };
 
-    // Angular extent of this face from its boundary loop (seam-robust).
-    let poly =
-        crate::scene::convert::solid3d_tess::collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
-    let (theta0, sweep) = cone_boundary_arc(&poly, [cx, cy, cz], axis, udir, vdir);
+    let loops = collect_face_loops(sat, face, BOUNDARY_CHORD_FRAC);
+    let arcs: Vec<(f64, f64)> = loops
+        .iter()
+        .map(|lp| cone_boundary_arc(lp, [cx, cy, cz], axis, udir, vdir))
+        .collect();
+    let outer_idx = arcs
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)?;
+    let (theta0, sweep) = arcs[outer_idx];
+    let closed = sweep >= std::f64::consts::TAU;
+    let hole_indices: Vec<usize> = arcs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, arc)| (i != outer_idx && arc.1 < std::f64::consts::TAU).then_some(i))
+        .collect();
+    if closed && hole_indices.is_empty() {
+        return None;
+    }
     // Radial direction at the arc's start angle (u rotated by theta0 about axis).
     let rad0 = udir * theta0.cos() + vdir * theta0.sin();
 
@@ -420,6 +437,14 @@ fn cone_faces(
     let p1 = center + rad0 * r_at(hmax) + axis * hmax;
     let profile = builder::line(&builder::vertex(p0), &builder::vertex(p1));
     let shell: Shell = builder::rsweep(&profile, center, axis, Rad(sweep));
+    let mut faces: Vec<Face> = shell.face_iter().cloned().collect();
+    if closed {
+        let lateral = faces.first_mut()?;
+        for index in hole_indices {
+            let wire = polygon_wire(&loops[index], false)?;
+            lateral.try_add_boundary(wire).ok()?;
+        }
+    }
 
     let out = Outward::Cone {
         center: [cx, cy, cz],
@@ -427,7 +452,7 @@ fn cone_faces(
         sin,
         cos,
     };
-    Some((shell.face_iter().cloned().collect(), out))
+    Some((faces, out))
 }
 
 /// Smallest angular arc `(theta_start, sweep)` about the cone axis enclosing the
@@ -474,7 +499,7 @@ fn cone_boundary_arc(
     }
     let span = TAU - max_gap;
     // Nearly a full revolution → treat as a closed rim.
-    if span > TAU * 0.98 || span < 1e-6 {
+    if span >= TAU * 0.98 - 1e-9 || span < 1e-6 {
         return (0.0, FULL);
     }
     // Start at the sample just after the largest gap, sweep CCW by `span`.

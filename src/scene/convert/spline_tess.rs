@@ -9,7 +9,7 @@
 
 use acadrust::entities::acis::types::Sense;
 use acadrust::entities::acis::{
-    SatCoedge, SatDocument, SatFace, SatLoop, SatPCurve, SatRecord, SatToken,
+    SatCoedge, SatDocument, SatFace, SatLoop, SatPCurve, SatRecord, SatSplineSurface, SatToken,
 };
 use rustc_hash::FxHashSet;
 use truck_modeling::base::{Vector3, Vector4};
@@ -287,6 +287,10 @@ fn range_bounds(r: (std::ops::Bound<f64>, std::ops::Bound<f64>)) -> (f64, f64) {
 /// Parse the `nubs` control net + knot vectors out of a `spline-surface`
 /// record's token stream into a truck `BSplineSurface`.
 fn build_spline_surface(sat: &SatDocument, rec: &SatRecord) -> Option<SplineSurf> {
+    if let Some(surface) = build_decoded_spline_surface(sat, rec) {
+        return Some(surface);
+    }
+
     let mut toks = rec.tokens.as_slice();
     if let Some(reference) = primary_subtype_reference(toks) {
         toks = sat.subtype_tokens(reference)?;
@@ -414,6 +418,35 @@ fn build_spline_surface(sat: &SatDocument, rec: &SatRecord) -> Option<SplineSurf
             }
         };
         Some(SplineSurf::Bs(bs))
+    }
+}
+
+fn build_decoded_spline_surface(sat: &SatDocument, rec: &SatRecord) -> Option<SplineSurf> {
+    let spline = SatSplineSurface::from_record(rec)?;
+    let decoded = spline.bspline(sat)?;
+    let uk = KnotVec::from(decoded.u_knots);
+    let vk = KnotVec::from(decoded.v_knots);
+    let mut ctrl = vec![Vec::with_capacity(decoded.control_count_v); decoded.control_count_u];
+
+    if decoded.rational {
+        for v in 0..decoded.control_count_v {
+            for u in 0..decoded.control_count_u {
+                let point = decoded.control_points[v * decoded.control_count_u + u];
+                ctrl[u].push(Vector4::new(point[0], point[1], point[2], point[3]));
+            }
+        }
+        let surface = BSplineSurface::try_new((uk, vk), ctrl).ok()?;
+        Some(SplineSurf::Nurbs(NurbsSurface::new(surface)))
+    } else {
+        let mut points = vec![Vec::with_capacity(decoded.control_count_v); decoded.control_count_u];
+        for v in 0..decoded.control_count_v {
+            for u in 0..decoded.control_count_u {
+                let point = decoded.control_points[v * decoded.control_count_u + u];
+                points[u].push(Point3::new(point[0], point[1], point[2]));
+            }
+        }
+        let surface = BSplineSurface::try_new((uk, vk), points).ok()?;
+        Some(SplineSurf::Bs(surface))
     }
 }
 

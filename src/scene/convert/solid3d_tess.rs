@@ -409,7 +409,7 @@ fn cone_face_geom(sat: &SatDocument, face: &SatFace) -> Option<ConeFaceGeom> {
     let (mut h_min, mut h_max, mut theta_min, mut theta_max, full) =
         angular_range(cx, cy, cz, axis, u_dir, v_dir, &poly);
     if (h_max - h_min).abs() < 1e-9 {
-        if let Some((vmin, vmax)) = cone_axis_span(sat, &cone, axis, [cx, cy, cz]) {
+        if let Some((vmin, vmax)) = cone_axis_span(sat, face, &cone, axis, [cx, cy, cz]) {
             h_min = vmin;
             h_max = vmax;
             if full {
@@ -1652,7 +1652,7 @@ pub(crate) fn tess_cone_face(
     // boundary really is a closed rim; a bounded arc face (e.g. a curved
     // mullion bar) keeps its own angular span, else it balloons to a circle.
     if (h_max - h_min).abs() < 1e-9 {
-        if let Some((vmin, vmax)) = cone_axis_span(sat, cone, axis, [cx, cy, cz]) {
+        if let Some((vmin, vmax)) = cone_axis_span(sat, face, cone, axis, [cx, cy, cz]) {
             h_min = vmin;
             h_max = vmax;
             if full_circle {
@@ -1835,20 +1835,54 @@ fn angular_range(
 /// circular rims or B-rep vertices when the face boundary collapses to a
 /// single height.
 ///
-/// Scans every ellipse/circle curve in the document, keeps those coaxial with
-/// this cone (centre on the axis line, normal parallel to the axis), and
-/// projects their centres onto the axis to get rim heights. Some imported
-/// solids represent circular rims as spline/intcurve edges, so point records
-/// lying on the analytic cone are the secondary source. For a true cone with a
-/// single rim, the tip is added analytically. Returns `None` when no span is
-/// recoverable.
+/// Uses this face's own boundary loops first. If that topology is incomplete,
+/// matching coaxial rims and points on the analytic surface provide a fallback.
+/// For a true cone with a single rim, the tip is added analytically. Returns
+/// `None` when no span is recoverable.
 pub(crate) fn cone_axis_span(
     sat: &SatDocument,
+    face: &SatFace,
     cone: &SatConeSurface,
     axis: [f64; 3],
     center: [f64; 3],
 ) -> Option<(f64, f64)> {
     let mut heights: Vec<f64> = Vec::new();
+
+    // Prefer the boundaries owned by this face. A body may contain several
+    // coaxial cylinders, so document-wide rims cannot identify this face's
+    // axial extent reliably.
+    for point in collect_face_loops(sat, face, BOUNDARY_CHORD_FRAC)
+        .into_iter()
+        .flatten()
+    {
+        heights.push(dot3(
+            [
+                point[0] - center[0],
+                point[1] - center[1],
+                point[2] - center[2],
+            ],
+            axis,
+        ));
+    }
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    heights.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    if heights.len() >= 2 {
+        let h_min = heights[0];
+        let h_max = *heights.last().unwrap();
+        if (h_max - h_min).abs() >= 1e-9 {
+            return Some((h_min, h_max));
+        }
+    }
+
+    let local_height = heights.first().copied();
+    heights.clear();
+    let sin_a = cone.sin_half_angle();
+    let cos_a = cone.cos_half_angle();
+    let tangent = if cos_a.abs() > 1e-9 {
+        sin_a / cos_a
+    } else {
+        0.0
+    };
     for rec in &sat.records {
         if rec.entity_type != "ellipse-curve" {
             continue;
@@ -1864,18 +1898,19 @@ pub(crate) fn cone_axis_span(
         let radial_len = dot3(radial, radial).sqrt();
         let n = e.normal();
         let n_dot = dot3(norm3([n.0, n.1, n.2]), axis).abs();
-        if radial_len < 1e-6 && n_dot > 0.999 {
+        let major = e.major_axis();
+        let curve_radius = dot3([major.0, major.1, major.2], [major.0, major.1, major.2])
+            .sqrt();
+        let expected_radius = (cone.radius() + h * tangent).abs();
+        let scale = curve_radius.max(expected_radius).max(1.0);
+        if radial_len < scale * 1e-6
+            && n_dot > 0.999
+            && (curve_radius - expected_radius).abs() < scale * 1e-5
+        {
             heights.push(h);
         }
     }
     if heights.len() < 2 {
-        let sin_a = cone.sin_half_angle();
-        let cos_a = cone.cos_half_angle();
-        let tangent = if cos_a.abs() > 1e-9 {
-            sin_a / cos_a
-        } else {
-            0.0
-        };
         for rec in &sat.records {
             let Some(point) = SatPoint::from_record(rec) else {
                 continue;
@@ -1906,12 +1941,33 @@ pub(crate) fn cone_axis_span(
     heights.sort_by(|a, b| a.partial_cmp(b).unwrap());
     heights.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
+    if let Some(anchor) = local_height {
+        if let Some(mate) = heights
+            .iter()
+            .copied()
+            .filter(|h| (*h - anchor).abs() >= 1e-6)
+            .min_by(|a, b| {
+                (a - anchor)
+                    .abs()
+                    .partial_cmp(&(b - anchor).abs())
+                    .unwrap()
+            })
+        {
+            return Some((anchor.min(mate), anchor.max(mate)));
+        }
+        if sin_a.abs() > 1e-6 {
+            let apex = -cone.radius() * cos_a / sin_a;
+            if (apex - anchor).abs() >= 1e-9 {
+                return Some((anchor.min(apex), anchor.max(apex)));
+            }
+        }
+        return None;
+    }
+
     let mut h_min = heights[0];
     let mut h_max = *heights.last().unwrap();
 
     // True cone with a single rim: close the surface at its apex (r = 0).
-    let sin_a = cone.sin_half_angle();
-    let cos_a = cone.cos_half_angle();
     if sin_a.abs() > 1e-6 && heights.len() <= 1 {
         let apex = -cone.radius() * cos_a / sin_a;
         h_min = h_min.min(apex);
