@@ -1793,13 +1793,12 @@ impl Pipeline {
         device: &wgpu::Device,
         wires: &[WireModel],
         selected: &rustc_hash::FxHashSet<acadrust::Handle>,
-        hover: Option<acadrust::Handle>,
+        hovered: &rustc_hash::FxHashSet<acadrust::Handle>,
         annotation_context_wires: &[WireModel],
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
-        let hover = hover.filter(|h| !selected.contains(h));
-        if selected.is_empty() && hover.is_none() && annotation_context_wires.is_empty() {
+        if selected.is_empty() && hovered.is_empty() && annotation_context_wires.is_empty() {
             self.gpu_selected_wires = vec![];
             return;
         }
@@ -1818,7 +1817,7 @@ impl Pipeline {
                 }
             }
         }
-        if let Some(h) = hover {
+        for h in hovered.iter().filter(|handle| !selected.contains(handle)) {
             if let Some(idxs) = self.wire_handle_index.get(&h.value()) {
                 let mut slots = idxs.clone();
                 slots.sort_unstable();
@@ -1857,7 +1856,11 @@ impl Pipeline {
                 crate::perf_record!(
                     "[perf] wire-highlight {:>7.1}ms handles={} wires={}",
                     elapsed_ms,
-                    selected.len() + usize::from(hover.is_some()),
+                    selected.len()
+                        + hovered
+                            .iter()
+                            .filter(|handle| !selected.contains(handle))
+                            .count(),
                     selected_wires.len() + hover_wires.len(),
                 );
             }
@@ -1873,12 +1876,11 @@ impl Pipeline {
         device: &wgpu::Device,
         wires: &[WireModel],
         selected: &rustc_hash::FxHashSet<acadrust::Handle>,
-        hover: Option<acadrust::Handle>,
+        hovered: &rustc_hash::FxHashSet<acadrust::Handle>,
         annotation_context_wires: &[WireModel],
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
-        let hover = hover.filter(|h| !selected.contains(h));
-        if selected.is_empty() && hover.is_none() && annotation_context_wires.is_empty() {
+        if selected.is_empty() && hovered.is_empty() && annotation_context_wires.is_empty() {
             self.text_highlight_vbuf = None;
             self.text_highlight_vcount = 0;
             return;
@@ -1902,7 +1904,7 @@ impl Pipeline {
         for h in selected {
             push(h.value(), WireModel::SELECTED, wires, &mut out);
         }
-        if let Some(h) = hover {
+        for h in hovered.iter().filter(|handle| !selected.contains(handle)) {
             push(h.value(), WireModel::HOVER, wires, &mut out);
         }
         for wire in annotation_context_wires {
@@ -2638,7 +2640,7 @@ impl Pipeline {
     pub fn update_mesh_highlight(
         &mut self,
         selected: &rustc_hash::FxHashSet<acadrust::Handle>,
-        hover: Option<acadrust::Handle>,
+        hovered: &rustc_hash::FxHashSet<acadrust::Handle>,
     ) {
         let mut out = Vec::new();
         for handle in selected {
@@ -2649,7 +2651,7 @@ impl Pipeline {
                 }));
             }
         }
-        if let Some(handle) = hover.filter(|handle| !selected.contains(handle)) {
+        for handle in hovered.iter().filter(|handle| !selected.contains(handle)) {
             if let Some(ranges) = self.mesh_ranges_by_handle.get(&handle) {
                 out.extend(ranges.iter().copied().map(|range| MeshHighlightDraw {
                     range,

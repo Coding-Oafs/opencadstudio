@@ -175,23 +175,36 @@ impl Scene {
         count
     }
 
-    /// If `handle` belongs to any selectable groups, also select all other members of those groups.
+    /// Return `handles` plus every member of a selectable group containing one
+    /// of them. Selection and rollover highlighting share this expansion so the
+    /// preview matches what a click will select.
+    pub fn handles_expanded_for_selectable_groups(
+        &self,
+        handles: &[Handle],
+    ) -> HashSet<Handle> {
+        let mut expanded: HashSet<Handle> = handles.iter().copied().collect();
+        expanded.extend(
+            self.document
+                .objects
+                .values()
+                .filter_map(|obj| match obj {
+                    ObjectType::Group(g)
+                        if g.selectable
+                            && handles.iter().any(|handle| g.contains(*handle)) =>
+                    {
+                        Some(g.entities.clone())
+                    }
+                    _ => None,
+                })
+                .flatten(),
+        );
+        expanded
+    }
+
+    /// If any handle belongs to a selectable group, also select every member.
     pub fn expand_selection_for_groups(&mut self, handles: &[Handle]) {
-        let to_add: Vec<Handle> = self
-            .document
-            .objects
-            .values()
-            .filter_map(|obj| match obj {
-                ObjectType::Group(g) if g.selectable && handles.iter().any(|h| g.contains(*h)) => {
-                    Some(g.entities.clone())
-                }
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        for h in to_add {
-            self.selected.insert(h);
-        }
+        self.selected
+            .extend(self.handles_expanded_for_selectable_groups(handles));
         self.bump_selection();
     }
 }

@@ -4235,16 +4235,31 @@ impl Scene {
         if self.hover_highlight == handle {
             return;
         }
-        // Hover is folded into the highlight set (selected ∪ {hover}) that
-        // drives the xray overlay. A hover handle that's already selected
-        // contributes nothing, so the effective set is unchanged — skip the
-        // overlay refresh then. The field is still updated for hit-test / UI.
-        let contribution = |h: Option<Handle>| h.filter(|h| !self.selected.contains(h));
-        let changed = contribution(self.hover_highlight) != contribution(handle);
+        // Selectable groups roll over as one unit, matching click selection.
+        // Exclude already-selected members because they already contribute to
+        // the overlay and remain in the selected colour.
+        let contribution = |scene: &Scene, hovered: Option<Handle>| {
+            hovered
+                .map(|handle| scene.handles_expanded_for_selectable_groups(&[handle]))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|handle| !scene.selected.contains(handle))
+                .collect::<HashSet<_>>()
+        };
+        let changed = contribution(self, self.hover_highlight) != contribution(self, handle);
         self.hover_highlight = handle;
         if changed {
             self.bump_selection();
         }
+    }
+
+    /// Handles that currently contribute the rollover colour. The stored hover
+    /// remains the picked member for hit-test/UI bookkeeping; rendering expands
+    /// it to the same selectable group that a click would select.
+    pub fn hover_highlight_handles(&self) -> HashSet<Handle> {
+        self.hover_highlight
+            .map(|handle| self.handles_expanded_for_selectable_groups(&[handle]))
+            .unwrap_or_default()
     }
 
     /// Keep the current selection visible and temporarily filter every other

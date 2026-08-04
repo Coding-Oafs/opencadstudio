@@ -137,8 +137,8 @@ pub struct ViewportData {
     pub(in crate::scene) wire_patch: Option<(u64, Arc<crate::scene::WireGpuPatch>)>,
     /// Selected handles only (no hover) — solid meshes tint these blue.
     pub(in crate::scene) selected_handles: Arc<rustc_hash::FxHashSet<acadrust::Handle>>,
-    /// Currently hovered handle — solid meshes tint it orange.
-    pub(in crate::scene) hover_handle: Option<acadrust::Handle>,
+    /// Currently hovered selectable unit — solid meshes tint it orange.
+    pub(in crate::scene) hover_handles: Arc<rustc_hash::FxHashSet<acadrust::Handle>>,
     /// Bumped on selection / hover change. Paired with `wire_content_id` to
     /// decide when the xray overlay batch needs rebuilding.
     pub(in crate::scene) selection_generation: u64,
@@ -789,12 +789,12 @@ impl shader::Primitive for Primitive {
             // wire buffers.
             let sel_key = (vp.wire_content_id, vp.selection_generation);
             let highlighted_geometry_unchanged =
-                vp.selected_handles.is_empty() && vp.hover_handle.is_none()
+                vp.selected_handles.is_empty() && vp.hover_handles.is_empty()
                     || vp.wire_patch.as_ref().is_some_and(|(previous, patch)| {
                         *previous == inner.cached_selection.0
                             && patch.changes.iter().all(|(handle, _)| {
                                 !vp.selected_handles.contains(handle)
-                                    && vp.hover_handle != Some(*handle)
+                                    && !vp.hover_handles.contains(handle)
                             })
                     });
             let selection_changed = inner.cached_selection.1 != vp.selection_generation;
@@ -813,7 +813,7 @@ impl shader::Primitive for Primitive {
                     device,
                     &vp_wires[..],
                     &vp.selected_handles,
-                    vp.hover_handle,
+                    &vp.hover_handles,
                     &vp.annotation_context_wires,
                     &draw_depths,
                 );
@@ -824,7 +824,7 @@ impl shader::Primitive for Primitive {
                     device,
                     &vp_wires[..],
                     &vp.selected_handles,
-                    vp.hover_handle,
+                    &vp.hover_handles,
                     &vp.annotation_context_wires,
                 );
                 inner.cached_annotation_highlight_source =
@@ -864,7 +864,7 @@ impl shader::Primitive for Primitive {
                 vp.selection_generation,
             );
             if hl_key != inner.cached_highlight_key {
-                inner.update_mesh_highlight(&vp.selected_handles, vp.hover_handle);
+                inner.update_mesh_highlight(&vp.selected_handles, &vp.hover_handles);
                 inner.cached_highlight_key = hl_key;
             }
             // Live overlay (command preview / interim / grip drag) — small and
@@ -1978,12 +1978,12 @@ impl Scene {
             .copied()
             .map(|handle| (handle, true))
             .collect();
-        if let Some(handle) = self
-            .hover_highlight
-            .filter(|handle| !self.selected.contains(handle))
-        {
-            highlighted.push((handle, false));
-        }
+        highlighted.extend(
+            self.hover_highlight_handles()
+                .into_iter()
+                .filter(|handle| !self.selected.contains(handle))
+                .map(|handle| (handle, false)),
+        );
         highlighted.sort_unstable_by_key(|(handle, _)| handle.value());
 
         let empty_selection = rustc_hash::FxHashSet::default();
@@ -2581,7 +2581,7 @@ impl Scene {
             wire_content_id,
             wire_patch,
             selected_handles: Arc::new(self.selected.iter().copied().collect()),
-            hover_handle: self.hover_highlight,
+            hover_handles: Arc::new(self.hover_highlight_handles()),
             selection_generation: self.selection_generation,
             selected_sig: self.selected_set_sig(),
             screen_rect,
