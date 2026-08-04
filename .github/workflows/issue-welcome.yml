@@ -6,6 +6,7 @@ on:
 
 permissions:
   issues: write
+  actions: write
 
 jobs:
   supporter-priority-note:
@@ -22,3 +23,9 @@ jobs:
 
           If you support OpenCADStudio on [Patreon](https://www.patreon.com/HakanSeven12), send me either your GitHub username or this issue number in a Patreon message. After I verify your support, I will prioritize the issue.
           EOF
+
+      - name: Remove this run from Actions history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh api --method DELETE "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID"
