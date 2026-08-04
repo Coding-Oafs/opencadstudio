@@ -54,12 +54,9 @@ impl OpenCADStudio {
     pub(super) fn modal_content<'s>(&'s self) -> Option<Element<'s, Message>> {
         let ex = self.modal_resize;
         Some(match self.active_modal? {
-            super::super::ModalKind::About => automatic_flow(ex, |flow| {
-                container(crate::ui::window::about::view_window())
-                    .width(flow.width)
-                    .height(flow.height)
-                    .into()
-            }),
+            super::super::ModalKind::About => {
+                automatic_flow(ex, crate::ui::window::about::view_window)
+            }
             super::super::ModalKind::Shortcuts => {
                 sized_flow(
                     ex,

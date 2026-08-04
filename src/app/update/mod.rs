@@ -5006,8 +5006,8 @@ impl OpenCADStudio {
                 let info = format!(
                     "Open CAD Studio v{}\nOS: {}\nArch: {}",
                     env!("CARGO_PKG_VERSION"),
-                    std::env::consts::OS,
-                    std::env::consts::ARCH,
+                    crate::ui::window::about::platform_name(),
+                    crate::ui::window::about::architecture_name(),
                 );
                 iced::clipboard::write(info).discard()
             }
