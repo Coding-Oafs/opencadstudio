@@ -1,10 +1,26 @@
 use super::*;
 use super::super::document::{DynComponent, DynFieldEntry};
 use super::super::Message;
-use iced::widget::{
-    button, container, mouse_area, row,
-};
+use iced::widget::{button, container, mouse_area, row, tooltip};
 use iced::{Background, Border, Element, Theme};
+use std::time::Duration;
+
+fn viewport_tooltip<'a>(
+    control: impl Into<Element<'a, Message>>,
+    title: String,
+    command: &'static str,
+) -> Element<'a, Message> {
+    let text = format!("{title}\n{} {command}", crate::t!("Command:"));
+    tooltip(
+        control,
+        crate::ui::ribbon::tooltip_content(text),
+        tooltip::Position::Bottom,
+    )
+    .gap(6.0)
+    .delay(Duration::from_millis(400))
+    .style(crate::ui::ribbon::tooltip_style)
+    .into()
+}
 
 pub(super) fn viewport_controls<'a>(
     render_mode: acadrust::entities::ViewportRenderMode,
@@ -23,8 +39,11 @@ pub(super) fn viewport_controls<'a>(
         RenderModeChoice(M::FlatShadedWithEdges),
         RenderModeChoice(M::GouraudShadedWithEdges),
     ];
-    let danger_btn = move |bytes: &'static [u8], msg: Message| {
-        button(crate::ui::icons::themed_danger(bytes, 15.0))
+    let danger_btn = move |bytes: &'static [u8],
+                           msg: Message,
+                           title: String,
+                           command: &'static str| {
+        let button = button(crate::ui::icons::themed_danger(bytes, 15.0))
             .on_press(msg)
             .padding([4, 6])
             .style(move |theme: &Theme, status| iced::widget::button::Style {
@@ -33,26 +52,29 @@ pub(super) fn viewport_controls<'a>(
                     iced::widget::button::Status::Hovered
                         | iced::widget::button::Status::Pressed
                 )
-                .then_some(Background::Color(
-                    theme.palette().danger.weak.color
-                )),
+                .then_some(Background::Color(theme.palette().danger.weak.color)),
                 border: Border {
                     radius: 3.0.into(),
                     ..Default::default()
                 },
                 text_color: theme.palette().danger.base.color,
                 ..Default::default()
-            })
+            });
+        viewport_tooltip(button, title, command)
     };
 
     // Borderless icon button; an `active` toggle gets an accent tint + fill.
-    let icon_btn = move |bytes: &'static [u8], active: bool, msg: Message| {
+    let icon_btn = move |bytes: &'static [u8],
+                         active: bool,
+                         msg: Message,
+                         title: String,
+                         command: &'static str| {
         let icon = if active {
             crate::ui::icons::themed_primary(bytes, 15.0)
         } else {
             crate::ui::icons::themed(bytes, 15.0)
         };
-        button(icon)
+        let button = button(icon)
             .on_press(msg)
             .padding([4, 6])
             .style(move |theme: &Theme, status| {
@@ -75,7 +97,8 @@ pub(super) fn viewport_controls<'a>(
                     .unwrap_or(palette.background.base.text),
                 ..Default::default()
                 }
-            })
+            });
+        viewport_tooltip(button, title, command)
     };
 
     // Render-mode picker, restyled borderless so the outer chip frames it.
@@ -100,6 +123,11 @@ pub(super) fn viewport_controls<'a>(
         handle_color: text,
         }
     });
+    let picker = viewport_tooltip(
+        picker,
+        crate::t!("Visual Style").into_owned(),
+        "VISUALSTYLES",
+    );
 
     // Thin vertical divider between control groups.
     let sep = || {
@@ -117,17 +145,41 @@ pub(super) fn viewport_controls<'a>(
         .spacing(3)
         .align_y(iced::alignment::Vertical::Center);
     bar = bar
-        .push(icon_btn(crate::ui::icons::GRID, show_grid, Message::ToggleGrid))
+        .push(icon_btn(
+            crate::ui::icons::GRID,
+            show_grid,
+            Message::ToggleGrid,
+            crate::t!("Toggle Grid").into_owned(),
+            "GRID",
+        ))
         .push(sep())
-        .push(icon_btn(crate::ui::icons::SNAP, snap_on, Message::ToggleGridSnap))
+        .push(icon_btn(
+            crate::ui::icons::SNAP,
+            snap_on,
+            Message::ToggleGridSnap,
+            crate::t!("Toggle Grid Snap").into_owned(),
+            "SNAP",
+        ))
         .push(sep())
         .push(picker);
     if include_split {
         bar = bar
             .push(sep())
-            .push(icon_btn(crate::ui::icons::SPLIT_V, false, Message::SplitModelViewport(false)))
+            .push(icon_btn(
+                crate::ui::icons::SPLIT_V,
+                false,
+                Message::SplitModelViewport(false),
+                crate::tr!("viewport-split-vertical"),
+                "VPORTS 2V",
+            ))
             .push(sep())
-            .push(icon_btn(crate::ui::icons::SPLIT_H, false, Message::SplitModelViewport(true)));
+            .push(icon_btn(
+                crate::ui::icons::SPLIT_H,
+                false,
+                Message::SplitModelViewport(true),
+                crate::tr!("viewport-split-horizontal"),
+                "VPORTS 2H",
+            ));
         // Drag handle + close: only meaningful with more than one model tile.
         // The handle is a `mouse_area` (not a button) so it fires on press-DOWN,
         // letting the drag continue onto the target pane to swap them (a button
@@ -146,11 +198,17 @@ pub(super) fn viewport_controls<'a>(
             )
             .interaction(iced::mouse::Interaction::Grab)
             .on_press(Message::PaneMoveStart);
+            let drag = viewport_tooltip(drag, crate::tr!("viewport-move"), "VPORTS");
             bar = bar
                 .push(sep())
                 .push(drag)
                 .push(sep())
-                .push(danger_btn(crate::ui::icons::CLOSE, Message::CloseModelViewport));
+                .push(danger_btn(
+                    crate::ui::icons::CLOSE,
+                    Message::CloseModelViewport,
+                    crate::tr!("viewport-close"),
+                    "VPORTS SINGLE",
+                ));
         }
     }
 

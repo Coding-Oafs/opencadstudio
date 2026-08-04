@@ -28,6 +28,14 @@ pub use collapse::CollapseMode;
 use crate::ui::wrap_bar::{PosReport, WrapBar, WrapFlow};
 use crate::t;
 
+pub(crate) fn tooltip_content(text: String) -> Element<'static, Message> {
+    widgets::make_tip(text)
+}
+
+pub(crate) fn tooltip_style(theme: &Theme) -> container::Style {
+    widgets::tip_style(theme)
+}
+
 // ── Ribbon state ───────────────────────────────────────────────────────────
 
 pub struct Ribbon {
