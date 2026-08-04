@@ -14,11 +14,11 @@ pub const RELEASES_PAGE: &str =
 
 /// Minimum age before a freshly-published release is offered to the user.
 /// GitHub Actions takes ~15 min to build and attach the platform binaries
-/// after a tag is pushed, so suppressing notifications for the first 30
-/// minutes prevents users from clicking through to a release page whose
+/// after a tag is pushed, so suppressing notifications for the first hour
+/// prevents users from clicking through to a release page whose
 /// asset list is still empty.
 #[cfg(not(target_arch = "wasm32"))]
-const MIN_RELEASE_AGE_SECS: u64 = 30 * 60;
+const MIN_RELEASE_AGE_SECS: u64 = 60 * 60;
 
 /// What `check_for_update` reports when a newer release exists.
 #[derive(Debug, Clone)]
