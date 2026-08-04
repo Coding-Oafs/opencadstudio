@@ -1575,7 +1575,11 @@ impl OpenCADStudio {
                 ));
             }
             if self.show_file_tabs {
-                col = col.push(doc_tab_bar(&self.tabs, self.active_tab));
+                col = col.push(doc_tab_bar(
+                    &self.tabs,
+                    self.active_tab,
+                    self.hovered_doc_tab,
+                ));
             }
             col.push(center_stack)
                 .push({
@@ -2032,7 +2036,11 @@ fn doc_tab_context_menu(
     .into()
 }
 
-pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Element<'a, Message> {
+pub(super) fn doc_tab_bar<'a>(
+    tabs: &'a [DocumentTab],
+    active_tab: usize,
+    hovered_tab: Option<usize>,
+) -> Element<'a, Message> {
     // Document tabs live in a flex-wrap flow so they spill onto lower rows when
     // there are more tabs than the width can hold on one line.
     let mut items: Vec<Element<'_, Message>> = Vec::new();
@@ -2045,6 +2053,7 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
 
     for (idx, tab) in tabs.iter().enumerate() {
         let is_active = idx == active_tab;
+        let is_hovered = hovered_tab == Some(idx);
         let name = crate::ui::text_util::elide(&tab.tab_display_name(), 24);
         let title_inner: Element<'_, Message> = if tab.dirty {
             row![
@@ -2061,19 +2070,15 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
         let title_btn = button(title_inner)
             .on_press(Message::TabSwitch(idx))
             .height(Fill)
-            .padding([4, 12])
-            .style(move |theme: &Theme, status| {
+            .padding([5, 14])
+            .style(move |theme: &Theme, _status| {
                 let palette = theme.palette();
-                let background = match (is_active, status) {
-                    (false, button::Status::Hovered) => {
-                        Some(Background::Color(palette.background.weak.color))
-                    }
-                    _ => None,
-                };
                 button::Style {
-                    background,
+                    background: None,
                     text_color: if is_active {
                         palette.primary.weak.text
+                    } else if is_hovered {
+                        palette.background.weak.text
                     } else {
                         palette.background.base.text.scale_alpha(0.72)
                     },
@@ -2100,8 +2105,32 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
             let close_btn = button(text("×").size(12))
                 .on_press(Message::TabClose(idx))
                 .height(Fill)
-                .padding([4, 8])
-                .style(button::subtle);
+                .padding([5, 9])
+                .style(move |theme: &Theme, status| {
+                    let palette = theme.palette();
+                    button::Style {
+                        background: matches!(
+                            status,
+                            button::Status::Hovered | button::Status::Pressed
+                        )
+                        .then_some(Background::Color(palette.warning.weak.color)),
+                        text_color: if matches!(
+                            status,
+                            button::Status::Hovered | button::Status::Pressed
+                        ) {
+                            palette.warning.weak.text
+                        } else if is_active {
+                            palette.primary.weak.text
+                        } else if is_hovered {
+                            palette.background.weak.text
+                        } else {
+                            palette.background.base.text.scale_alpha(0.72)
+                        },
+                        border: Border::default(),
+                        shadow: iced::Shadow::default(),
+                        snap: false,
+                    }
+                });
             row![title_btn, close_btn]
                 .spacing(0)
                 .height(Fill)
@@ -2109,22 +2138,25 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
         };
 
         let tab_container = container(row_inner)
-            .height(iced::Length::Fixed(23.0))
+            .height(iced::Length::Fixed(28.0))
             .style(move |theme: &Theme| {
                 let palette = theme.palette();
+                let background = if is_active {
+                    palette.primary.weak.color
+                } else if is_hovered {
+                    palette.background.weak.color
+                } else {
+                    palette.background.base.color
+                };
                 container::Style {
-                    background: Some(Background::Color(if is_active {
-                        palette.primary.weak.color
-                    } else {
-                        palette.background.base.color
-                    })),
+                    background: Some(Background::Color(background)),
                     border: Border {
                         color: if is_active {
                             palette.primary.base.color
                         } else {
-                            Color::TRANSPARENT
+                            palette.background.neutral.color
                         },
-                        width: if is_active { 1.0 } else { 0.0 },
+                        width: 1.0,
                         radius: 0.0.into(),
                     },
                     ..Default::default()
@@ -2157,22 +2189,58 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
             )
             .into()
         };
-        items.push(tab_element);
+        items.push(
+            mouse_area(tab_element)
+                .on_enter(Message::DocTabHover(Some(idx)))
+                .on_exit(Message::DocTabHover(None))
+                .into(),
+        );
     }
 
     let new_btn = button(text("+").size(14))
         .on_press(Message::TabNew)
-        .padding([4, 10])
-        .style(button::subtle);
+        .height(iced::Length::Fixed(28.0))
+        .padding([5, 10])
+        .style(|theme: &Theme, status| {
+            let palette = theme.palette();
+            let hovered = matches!(
+                status,
+                button::Status::Hovered | button::Status::Pressed
+            );
+            button::Style {
+                background: Some(Background::Color(if hovered {
+                    palette.background.weak.color
+                } else {
+                    palette.background.base.color
+                })),
+                text_color: palette.background.base.text,
+                border: Border {
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                    radius: 3.0.into(),
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            }
+        });
 
-    items.push(new_btn.into());
+    items.push(
+        container(new_btn)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 6.0,
+            })
+            .into(),
+    );
 
     container(
         Row::with_children(items)
             .spacing(0.0)
             .align_y(iced::Center)
             .wrap()
-            .vertical_spacing(0.0),
+            .vertical_spacing(2.0),
     )
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
@@ -2186,7 +2254,7 @@ pub(super) fn doc_tab_bar<'a>(tabs: &'a [DocumentTab], active_tab: usize) -> Ele
             ..Default::default()
         })
         .width(Fill)
-        .padding([0, 2])
+        .padding([2, 2])
         .into()
 }
 

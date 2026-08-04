@@ -1333,6 +1333,11 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::DocTabHover(index) => {
+                self.hovered_doc_tab = index.filter(|&idx| idx < self.tabs.len());
+                Task::none()
+            }
+
             Message::TabReorder { from, to, after } => {
                 let Some(insertion) =
                     reorder_insertion_index(from, to, after, self.tabs.len())
@@ -1351,10 +1356,14 @@ impl OpenCADStudio {
                 if let Some(index) = self.tabs.iter().position(|tab| tab.id == active_id) {
                     self.active_tab = index;
                 }
+                self.hovered_doc_tab = None;
                 Task::none()
             }
 
-            Message::TabClose(idx) => self.on_tab_close(idx),
+            Message::TabClose(idx) => {
+                self.hovered_doc_tab = None;
+                self.on_tab_close(idx)
+            }
 
             Message::DocTabSaveAll => self.dispatch_command("SAVEALL"),
 

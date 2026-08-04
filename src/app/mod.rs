@@ -263,6 +263,7 @@ pub(super) struct OpenCADStudio {
     start: Instant,
     tabs: Vec<DocumentTab>,
     active_tab: usize,
+    hovered_doc_tab: Option<usize>,
     tab_counter: usize,
     ribbon: Ribbon,
     /// Recently opened files, newest first — backs the Start page panel.
@@ -1730,6 +1731,8 @@ pub enum Message {
     TabNew,
     /// Switch to the given tab index.
     TabSwitch(usize),
+    /// Drawing tab currently under the pointer; controls integrated close affordance.
+    DocTabHover(Option<usize>),
     /// Move a drawing tab before/after another drawing tab.
     TabReorder {
         from: usize,
@@ -2834,6 +2837,7 @@ impl OpenCADStudio {
             start: Instant::now(),
             tabs: vec![start_tab],
             active_tab: 0,
+            hovered_doc_tab: None,
             tab_counter: 0,
             ribbon: Ribbon::new(),
             // Populated from the consolidated config after construction
