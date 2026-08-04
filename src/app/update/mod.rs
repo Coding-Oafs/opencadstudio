@@ -3585,9 +3585,43 @@ impl OpenCADStudio {
             // Ctrl+V. The MText editor and (on the web) the TEXT editor read the
             // system clipboard asynchronously — the only paste path that works
             // in the browser, where the synchronous clipboard the iced
-            // text_input expects is empty. With no editor open it falls through
-            // to the entity paste command.
+            // text_input expects is empty. With no editor open, drawing objects
+            // take priority and system text is used when that clipboard is empty.
             Message::PasteShortcut => self.on_paste_shortcut(),
+
+            Message::SystemClipboardPaste(result) => {
+                use super::SystemClipboardText as Text;
+
+                match result {
+                    Text::Text(text) => {
+                        let flat = text.replace(['\r', '\n'], " ").to_uppercase();
+                        self.command_line.input.push_str(&flat);
+                        self.command_line.autocomplete_cursor = None;
+                        self.focus_cmd_input()
+                    }
+                    Text::EmptyOrUnsupported => {
+                        self.command_line.push_error(
+                            crate::tr!("clipboard-no-supported-content").as_ref(),
+                        );
+                        Task::none()
+                    }
+                    Text::Unavailable => {
+                        self.command_line
+                            .push_error(crate::tr!("clipboard-unavailable").as_ref());
+                        Task::none()
+                    }
+                    Text::Occupied => {
+                        self.command_line
+                            .push_error(crate::tr!("clipboard-occupied").as_ref());
+                        Task::none()
+                    }
+                    Text::ConversionFailed => {
+                        self.command_line
+                            .push_error(crate::tr!("clipboard-conversion-failed").as_ref());
+                        Task::none()
+                    }
+                }
+            }
 
             Message::SelectAllShortcut => {
                 let i = self.active_tab;

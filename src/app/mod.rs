@@ -1586,10 +1586,11 @@ pub enum Message {
         crate::scene::text::web_font::Script,
         Result<(), String>,
     ),
-    /// Ctrl+V. Routed by `update`: into the open text/MText editor (via an async
-    /// system-clipboard read, which is the only paste path that works on the
-    /// web) or, with no editor open, the entity paste command.
+    /// Ctrl+V. Routed by `update` into an open text editor, the drawing-object
+    /// clipboard, or the system text clipboard.
     PasteShortcut,
+    /// Completion of a system text clipboard read requested by PASTECLIP.
+    SystemClipboardPaste(SystemClipboardText),
     /// Ctrl/Cmd+A — select all layer rows when the Layer Manager is open, or all
     /// drawing objects otherwise (#236).
     SelectAllShortcut,
@@ -2789,6 +2790,15 @@ pub enum Message {
         std::path::PathBuf,
         Result<crate::scene::model::mesh_model::MeshModel, String>,
     ),
+}
+
+#[derive(Debug, Clone)]
+pub enum SystemClipboardText {
+    Text(String),
+    EmptyOrUnsupported,
+    Unavailable,
+    Occupied,
+    ConversionFailed,
 }
 
 impl OpenCADStudio {

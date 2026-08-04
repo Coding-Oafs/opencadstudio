@@ -1475,14 +1475,13 @@ fn unsaved_changes_dialog_window(
     name: &str,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'static, Message> {
-    let body_text = t!(
-        "Do you want to save changes to \"%{name}\"?",
-        name = name
-    );
-
     container(
         column![
-            text(body_text).size(13),
+            text(name.to_owned()).size(14),
+            iced::widget::Space::new().height(4),
+            text(crate::tr!("modal-unsaved-save-prompt"))
+                .size(12)
+                .style(dialog_muted_text_style),
             iced::widget::Space::new().height(20),
             row![
                 dialog_button(t!("Save"), Message::UnsavedDialogSave, button::primary),

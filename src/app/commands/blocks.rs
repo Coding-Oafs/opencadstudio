@@ -193,7 +193,7 @@ impl OpenCADStudio {
 
             "PASTECLIP" => {
                 if self.clipboard.is_empty() {
-                    self.command_line.push_error(crate::t!("Clipboard is empty.").as_ref());
+                    return Some(self.read_system_clipboard_for_paste());
                 } else {
                     let wires = self.tabs[i].scene.wires_for_entities(&self.clipboard);
                     let base = self.clipboard_base;

@@ -1259,7 +1259,44 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     #[cfg(not(target_arch = "wasm32"))]
                     return Task::none();
                 }
-                Task::done(Message::Command("PASTECLIP".to_string()))
+                if self.clipboard.is_empty() {
+                    self.read_system_clipboard_for_paste()
+                } else {
+                    Task::done(Message::Command("PASTECLIP".to_string()))
+                }
+    }
+
+    pub(in crate::app) fn read_system_clipboard_for_paste(&self) -> Task<Message> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Task::perform(crate::sys::read_clipboard_text(), |text| {
+                Message::SystemClipboardPaste(match text {
+                    Some(text) if !text.is_empty() => {
+                        crate::app::SystemClipboardText::Text(text)
+                    }
+                    _ => crate::app::SystemClipboardText::EmptyOrUnsupported,
+                })
+            })
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            iced::clipboard::read_text().map(|result| {
+                use crate::app::SystemClipboardText as Text;
+                use iced::clipboard::Error;
+
+                let result = match result {
+                    Ok(text) if !text.is_empty() => Text::Text((*text).clone()),
+                    Ok(_) | Err(Error::ContentNotAvailable) => Text::EmptyOrUnsupported,
+                    Err(Error::ClipboardUnavailable) | Err(Error::Unknown { .. }) => {
+                        Text::Unavailable
+                    }
+                    Err(Error::ClipboardOccupied) => Text::Occupied,
+                    Err(Error::ConversionFailure) => Text::ConversionFailed,
+                };
+                Message::SystemClipboardPaste(result)
+            })
+        }
     }
 
     pub(super) fn on_qselect_open(&mut self) -> Task<Message> {

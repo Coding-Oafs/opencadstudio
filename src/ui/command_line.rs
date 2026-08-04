@@ -10,6 +10,7 @@ use iced::widget::{
     text_input, tooltip, Space,
 };
 use iced::{Background, Border, Color, Element, Length, Padding, Theme};
+use std::ops::Range;
 
 pub const CMD_INPUT_ID: &str = "cmd_input";
 pub const HISTORY_SCROLL_ID: &str = "command_history_scroll";
@@ -125,6 +126,58 @@ pub enum EntryKind {
     Output,
     Error,
     Info,
+}
+
+/// Per-logical-line entry kinds for the selectable full-history editor.
+/// Keeping this metadata beside the editor's plain text preserves drag
+/// selection and copy while allowing the renderer to restore each entry's
+/// original color.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HistoryHighlightSettings {
+    line_kinds: Vec<EntryKind>,
+}
+
+#[derive(Debug)]
+struct HistoryHighlighter {
+    settings: HistoryHighlightSettings,
+    current_line: usize,
+}
+
+impl iced::advanced::text::Highlighter for HistoryHighlighter {
+    type Settings = HistoryHighlightSettings;
+    type Highlight = EntryKind;
+    type Iterator<'a> = std::option::IntoIter<(Range<usize>, EntryKind)>;
+
+    fn new(settings: &Self::Settings) -> Self {
+        Self {
+            settings: settings.clone(),
+            current_line: 0,
+        }
+    }
+
+    fn update(&mut self, settings: &Self::Settings) {
+        self.settings = settings.clone();
+        self.current_line = 0;
+    }
+
+    fn change_line(&mut self, line: usize) {
+        self.current_line = line;
+    }
+
+    fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
+        let kind = self
+            .settings
+            .line_kinds
+            .get(self.current_line)
+            .cloned()
+            .unwrap_or(EntryKind::Output);
+        self.current_line += 1;
+        Some((0..line.len(), kind)).into_iter()
+    }
+
+    fn current_line(&self) -> usize {
+        self.current_line
+    }
 }
 
 impl CommandLine {
@@ -317,6 +370,17 @@ impl CommandLine {
             .join("\n")
     }
 
+    fn history_highlight_settings(&self) -> HistoryHighlightSettings {
+        let line_kinds = self
+            .history
+            .iter()
+            .flat_map(|entry| {
+                std::iter::repeat(entry.kind.clone()).take(entry.text.split('\n').count())
+            })
+            .collect();
+        HistoryHighlightSettings { line_kinds }
+    }
+
     /// Drop every history line. The step-prompt mirror is reset too so a
     /// later step still repins correctly.
     pub fn clear_history(&mut self) {
@@ -395,6 +459,7 @@ impl CommandLine {
             visible.push(pinned);
         }
         let start = visible.len().saturating_sub(4);
+        let has_recent_history = start < visible.len();
         let history_rows = visible[start..]
             .iter()
             .fold(column![].spacing(0), |col, entry| {
@@ -600,6 +665,10 @@ impl CommandLine {
                 .size(11)
                 .padding([2, 8])
                 .height(Length::Shrink)
+                .highlight_with::<HistoryHighlighter>(
+                    self.history_highlight_settings(),
+                    history_highlight_format,
+                )
                 .style(|theme: &Theme, _status| {
                     let palette = theme.palette();
                     text_editor::Style {
@@ -678,7 +747,7 @@ impl CommandLine {
         // The transient recent lines and the full archive are two views of the
         // same history. Showing both while the archive is open creates a fake
         // second history region and visually disconnects the input row (#555).
-        let recent_history: Element<'a, Message> = if self.history_open {
+        let recent_history: Element<'a, Message> = if self.history_open || !has_recent_history {
             container(column![]).height(0).into()
         } else {
             container(history_rows)
@@ -698,34 +767,40 @@ impl CommandLine {
             container(column![]).height(0).into()
         };
 
-        container(column![
-            autocomplete,
-            dropdown,
-            recent_history,
-            history_divider,
-            container(input_row)
-                .style(|theme: &Theme| {
-                    let palette = theme.palette();
-                    container::Style {
-                    background: Some(Background::Color(palette.background.weakest.color)),
-                    ..Default::default()
-                    }
-                })
-                .width(Length::Fill)
-                // Match the drawing tab bar / status bar height, and vertically
-                // centre the prompt/input/dropdown within it (issue #216).
-                .center_y(Length::Fixed(30.0)),
-        ])
-        .style(|theme: &Theme| {
+        let history_open = self.history_open;
+        container(
+            column![
+                autocomplete,
+                dropdown,
+                recent_history,
+                history_divider,
+                container(input_row)
+                    .style(|theme: &Theme| {
+                        let palette = theme.palette();
+                        container::Style {
+                            background: Some(Background::Color(
+                                palette.background.weakest.color,
+                            )),
+                            ..Default::default()
+                        }
+                    })
+                    .width(Length::Fill)
+                    // Match the drawing tab bar / status bar height, and vertically
+                    // centre the prompt/input/dropdown within it (issue #216).
+                    .center_y(Length::Fixed(30.0)),
+            ]
+            .width(Length::Fill),
+        )
+        .style(move |theme: &Theme| {
             let palette = theme.palette();
             container::Style {
-            background: Some(Background::Color(palette.background.base.color)),
-            border: Border {
-                color: palette.background.neutral.color,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..Default::default()
+                background: Some(Background::Color(palette.background.base.color)),
+                border: Border {
+                    color: palette.background.neutral.color,
+                    width: if history_open { 1.0 } else { 0.0 },
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
             }
         })
         .width(Length::Fill.max(720.0))
@@ -816,6 +891,16 @@ fn history_color(theme: &Theme, kind: &EntryKind) -> Color {
         EntryKind::Output => palette.background.base.text.scale_alpha(0.72),
         EntryKind::Error => palette.danger.base.color,
         EntryKind::Info => palette.primary.base.color,
+    }
+}
+
+fn history_highlight_format(
+    kind: &EntryKind,
+    theme: &Theme,
+) -> iced::advanced::text::highlighter::Format<iced::Font> {
+    iced::advanced::text::highlighter::Format {
+        color: Some(history_color(theme, kind)),
+        font: None,
     }
 }
 
