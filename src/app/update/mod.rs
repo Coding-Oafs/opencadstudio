@@ -2420,7 +2420,7 @@ impl OpenCADStudio {
             }
 
             // ── Cursor / viewport messages ─────────────────────────────────
-            Message::CursorMoved(p) => self.on_cursor_moved(p),
+            Message::CursorMoved(p, viewport) => self.on_cursor_moved(p, viewport),
 
             Message::ViewportMove(p) => self.on_viewport_move(p),
 
@@ -2587,7 +2587,7 @@ impl OpenCADStudio {
 
             Message::ViewportScroll(delta) => self.on_viewport_scroll(delta),
 
-            Message::ViewportClick => self.on_viewport_click(),
+            Message::ViewportClick(viewport) => self.on_viewport_click(viewport),
 
             Message::WindowResized(w, h) => {
                 self.vp_size = ((w - 440.0).max(200.0), h);

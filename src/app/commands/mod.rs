@@ -76,9 +76,10 @@ impl OpenCADStudio {
             // template-property override too (#239).
             self.restore_add_selected_defaults();
         }
-        // Starting any command leaves interactive PAN mode (the PAN arm below
-        // re-enables it).
+        // Starting any command leaves interactive navigation modes (their own
+        // command arms below re-enable the selected one).
         self.tabs[i].pan_mode = false;
+        self.tabs[i].orbit_mode = false;
         // Reset the last committed point so the first click of the new command
         // is not constrained by ortho/polar relative to a previous command's endpoint.
         self.last_point = None;

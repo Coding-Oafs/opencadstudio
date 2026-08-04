@@ -2,14 +2,21 @@
 // free functions used by the Ribbon view/overlay methods.
 
 use rustc_hash::FxHashMap as HashMap;
+use std::cell::RefCell;
 use std::time::Duration;
 
 use acadrust::types::{Color as AcadColor, LineWeight};
+use iced::advanced::{
+    layout, mouse, overlay, renderer, text as advanced_text, widget, Layout, Shell, Widget,
+};
 // Ribbon tooltips anchor to the right of their button so the cursor — which
 // rests on the button itself — never covers the tip text. (#143)
 use iced::widget::tooltip::Position as TipPos;
 use iced::widget::{button, column, container, row, text, tooltip};
-use iced::{Background, Border, Color, Element, Fill, Length, Padding, Theme};
+use iced::{
+    Background, Border, Color, Element, Event, Fill, Length, Padding, Pixels, Rectangle, Size,
+    Theme, Vector,
+};
 
 use crate::app::Message;
 use crate::modules::{IconKind, ModuleEvent, RibbonItem, StyleKey, ToolDef};
@@ -48,6 +55,11 @@ pub(super) const LARGE_ICON: f32 = ROW_H * 1.5;
 pub(super) const SMALL_ICON: f32 = ROW_H * 0.7;
 /// Width of a 3-row (large) button.
 pub(super) const LARGE_W: f32 = ROW_H * 2.2;
+/// Horizontal button padding surrounding a large tool's label.
+const LARGE_LABEL_HPAD: f32 = 8.0;
+/// Large ribbon labels use at most two lines before their button grows.
+const LARGE_LABEL_LINES: f32 = 2.0;
+const LARGE_LABEL_SIZE: f32 = 10.0;
 /// Width of a 1-row (small) button.
 pub(super) const SMALL_W: f32 = ROW_H;
 /// Width of the ▾ strip on a small dropdown.
@@ -60,6 +72,215 @@ pub(super) const TOOL_BAR_H: f32 = 3.0 * ROW_H + 18.0;
 /// its label). A collapsed button is this face plus the title opener, so it is
 /// shorter than a full 3-row panel — the ribbon height follows it down.
 pub(super) const COLLAPSED_FACE_H: f32 = LARGE_ICON + 20.0;
+
+// ── Automatic large-button sizing ────────────────────────────────────────
+
+thread_local! {
+    /// Ribbon layout runs on every pointer-driven view update. Cache the font-
+    /// measured width per translated label so the automatic sizing stays cheap.
+    static LARGE_WIDTH_CACHE: RefCell<HashMap<String, f32>> =
+        RefCell::new(HashMap::default());
+}
+
+fn ribbon_label_bounds(
+    renderer: &iced::Renderer,
+    label: &str,
+    width: f32,
+    wrapping: advanced_text::Wrapping,
+) -> Size {
+    use advanced_text::{Paragraph as _, Renderer as _};
+
+    let paragraph = <iced::Renderer as advanced_text::Renderer>::Paragraph::with_text(
+        advanced_text::Text {
+            content: label,
+            bounds: Size::new(width, f32::INFINITY),
+            size: Pixels(LARGE_LABEL_SIZE),
+            line_height: advanced_text::LineHeight::default(),
+            font: renderer.default_font(),
+            align_x: advanced_text::Alignment::Center,
+            align_y: iced::alignment::Vertical::Center,
+            shaping: advanced_text::Shaping::default(),
+            wrapping,
+            ellipsis: advanced_text::Ellipsis::None,
+            hint_factor: None,
+        },
+    );
+    paragraph.min_bounds()
+}
+
+/// Measure the translated label at the normal button width. It wraps first;
+/// only labels that would need more than two lines widen their button. The
+/// binary search uses the renderer's real font metrics, so locale and UI scale
+/// changes do not rely on character-count estimates.
+fn measure_large_width(renderer: &iced::Renderer, label: &str) -> f32 {
+    let base_inner = (LARGE_W - LARGE_LABEL_HPAD).max(1.0);
+    let line_height = advanced_text::LineHeight::default()
+        .to_absolute(Pixels(LARGE_LABEL_SIZE))
+        .0;
+    let max_label_height = line_height * LARGE_LABEL_LINES + 0.5;
+    let fits = |width: f32| {
+        ribbon_label_bounds(
+            renderer,
+            label,
+            width,
+            advanced_text::Wrapping::WordOrGlyph,
+        )
+        .height
+            <= max_label_height
+    };
+
+    if fits(base_inner) {
+        return LARGE_W;
+    }
+
+    let natural = ribbon_label_bounds(
+        renderer,
+        label,
+        f32::INFINITY,
+        advanced_text::Wrapping::None,
+    )
+    .width
+    .max(base_inner);
+    if !fits(natural) {
+        return (natural + LARGE_LABEL_HPAD).ceil();
+    }
+
+    let mut low = base_inner;
+    let mut high = natural;
+    for _ in 0..10 {
+        let mid = (low + high) * 0.5;
+        if fits(mid) {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    (high + LARGE_LABEL_HPAD).ceil().max(LARGE_W)
+}
+
+fn automatic_large_width(renderer: &iced::Renderer, label: &str) -> f32 {
+    if let Some(width) = LARGE_WIDTH_CACHE.with(|cache| cache.borrow().get(label).copied()) {
+        return width;
+    }
+
+    let width = measure_large_width(renderer, label);
+    LARGE_WIDTH_CACHE.with(|cache| {
+        cache.borrow_mut().insert(label.to_string(), width);
+    });
+    width
+}
+
+struct AutomaticLargeWidth<'a> {
+    label: String,
+    content: Element<'a, Message>,
+}
+
+impl Widget<Message, Theme, iced::Renderer> for AutomaticLargeWidth<'_> {
+    fn tag(&self) -> widget::tree::Tag {
+        self.content.as_widget().tag()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        self.content.as_widget().state()
+    }
+
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        self.content.as_widget_mut().diff(tree);
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Shrink, self.content.as_widget().size().height)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let width = automatic_large_width(renderer, &self.label);
+        self.content.as_widget_mut().layout(
+            tree,
+            renderer,
+            &limits.width(Length::Fixed(width)),
+        )
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(tree, layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            tree, event, layout, cursor, renderer, shell, viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        self.content
+            .as_widget()
+            .mouse_interaction(tree, layout, cursor, viewport, renderer)
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.content
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        self.content
+            .as_widget_mut()
+            .overlay(tree, layout, renderer, viewport, translation)
+    }
+}
+
+pub(super) fn automatic_large_button<'a>(
+    label: String,
+    content: Element<'a, Message>,
+) -> Element<'a, Message> {
+    Element::new(AutomaticLargeWidth { label, content })
+}
 
 // ── Tab-bar constants ──────────────────────────────────────────────────────
 
@@ -459,30 +680,40 @@ pub(super) fn render_large_dropdown<'a>(
         .and_then(|cmd| items.iter().find(|(c, _, _)| *c == cmd).map(|(_, lbl, _)| *lbl))
         .or_else(|| items.first().map(|(_, lbl, _)| *lbl))
         .unwrap_or(id);
-    let label = explicit_label.unwrap_or(cur_label);
+    let label = t!(explicit_label.unwrap_or(cur_label)).into_owned();
     let tip_text = format!("{}\n{} {}", t!(cur_label), t!("Command:"), last);
-    let arr_tip = format!("{} {}", t!(label), t!("options"));
+    let arr_tip = format!("{} {}", label, t!("options"));
 
-    // Icon on top with the label beneath it, then the ▾ strip at the very bottom.
+    // The label owns the bottom of the face. The icon's Fill container centers
+    // it in all remaining space between the button top and the label.
     let top_btn = button(
         column![
-            make_icon_dim(cur_icon, LARGE_ICON, dim),
-            text(t!(label))
+            container(make_icon_dim(cur_icon, LARGE_ICON, dim))
+                .width(Fill)
+                .height(Fill)
+                .align_x(iced::Center)
+                .align_y(iced::Center),
+            text(label.clone())
                 .size(10)
+                .width(Fill)
+                .align_x(iced::Center)
+                .wrapping(advanced_text::Wrapping::WordOrGlyph)
                 .style(move |theme: &Theme| tool_label_style(theme, dim)),
         ]
         .align_x(iced::Center)
-        .spacing(3),
+        .spacing(0)
+        .width(Fill)
+        .height(Fill),
     )
     .on_press(Message::RibbonToolClick {
         tool_id: last.to_string(),
         event: ModuleEvent::Command(last.to_string()),
     })
     .style(move |theme: &Theme, status| tool_btn_style(theme, active, status))
-    .width(Length::Fixed(LARGE_W))
+    .width(Fill)
     .height(Fill)
     .padding(Padding {
-        top: 6.0,
+        top: 4.0,
         right: 4.0,
         bottom: 2.0,
         left: 4.0,
@@ -499,7 +730,7 @@ pub(super) fn render_large_dropdown<'a>(
     .style(move |theme: &Theme, status| {
         tool_btn_style(theme, dd_open, status)
     })
-    .width(Length::Fixed(LARGE_W))
+    .width(Fill)
     .height(LARGE_ARR)
     .padding(0);
 
@@ -512,13 +743,12 @@ pub(super) fn render_large_dropdown<'a>(
         .delay(Duration::from_millis(400))
         .style(tip_style);
 
-    PosReport::new(
-        id,
-        column![top_with_tip, arr_with_tip]
-            .spacing(0)
-            .width(Length::Fixed(LARGE_W))
-            .height(Fill),
-    )
+    let content = column![top_with_tip, arr_with_tip]
+        .spacing(0)
+        .width(Fill)
+        .height(Fill);
+
+    PosReport::new(id, automatic_large_button(label, content.into()))
     .into()
 }
 
@@ -546,28 +776,42 @@ pub(super) fn render_large<'a>(
             let dim = start_dimmed(&state, &t.event);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
-            let tip_text = format!("{}\n{} {}", t!(t.label), t!("Command:"), t.id);
+            let label = t!(t.label).into_owned();
+            let tip_text = format!("{}\n{} {}", label, t!("Command:"), t.id);
             let btn = button(
                 column![
-                    make_icon_dim(t.icon, LARGE_ICON, dim),
-                    text(t!(t.label))
+                    container(make_icon_dim(t.icon, LARGE_ICON, dim))
+                        .width(Fill)
+                        .height(Fill)
+                        .align_x(iced::Center)
+                        .align_y(iced::Center),
+                    text(label.clone())
                         .size(10)
+                        .width(Fill)
+                        .align_x(iced::Center)
+                        .wrapping(advanced_text::Wrapping::WordOrGlyph)
                         .style(move |theme: &Theme| tool_label_style(theme, dim)),
                 ]
                 .align_x(iced::Center)
-                .spacing(3),
+                .spacing(0)
+                .width(Fill)
+                .height(Fill),
             )
             .on_press(Message::RibbonToolClick { tool_id, event })
             .style(move |theme: &Theme, status| tool_btn_style(theme, active, status))
-            .width(Length::Fixed(LARGE_W))
+            .width(Fill)
             .height(Fill)
             .padding(Padding {
-                top: 6.0,
+                top: 4.0,
                 right: 4.0,
                 bottom: 4.0,
                 left: 4.0,
             });
-            tooltip(btn, make_tip(tip_text), TipPos::Right)
+            tooltip(
+                automatic_large_button(label, btn.into()),
+                make_tip(tip_text),
+                TipPos::Right,
+            )
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style)
@@ -749,44 +993,20 @@ pub(super) fn render_large<'a>(
                     state,
                 )
             } else {
-                let mp_active = is_active_tool(match_prop.id, active_tool, &state);
-                let mp_dim = start_dimmed(&state, &match_prop.event);
-                let mp_event = match_prop.event.clone();
-                let mp_id = match_prop.id.to_string();
-                let mp_tip = format!(
-                    "{}\n{} {}",
-                    t!(match_prop.label),
-                    t!("Command:"),
-                    match_prop.id
-                );
-                let mp_btn = button(
-                    column![
-                        make_icon_dim(match_prop.icon, LARGE_ICON, mp_dim),
-                        text(t!(match_prop.label))
-                            .size(10)
-                            .style(move |theme: &Theme| tool_label_style(theme, mp_dim)),
-                    ]
-                    .align_x(iced::Center)
-                    .spacing(3),
+                render_large(
+                    &RibbonItem::LargeTool(match_prop.clone()),
+                    active_tool,
+                    open_dd,
+                    last_cmd,
+                    state,
+                    layer_infos,
+                    active_layer,
+                    active_color,
+                    active_linetype,
+                    active_lineweight,
+                    style_ctx,
+                    false,
                 )
-                .on_press(Message::RibbonToolClick {
-                    tool_id: mp_id,
-                    event: mp_event,
-                })
-                .style(move |theme: &Theme, status| tool_btn_style(theme, mp_active, status))
-                .width(Length::Fixed(LARGE_W))
-                .height(Fill)
-                .padding(Padding {
-                    top: 6.0,
-                    right: 4.0,
-                    bottom: 4.0,
-                    left: 4.0,
-                });
-                tooltip(mp_btn, make_tip(mp_tip), TipPos::Right)
-                    .gap(6.0)
-                    .delay(Duration::from_millis(400))
-                    .style(tip_style)
-                    .into()
             };
 
             const PROP_W: f32 = 130.0;

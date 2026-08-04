@@ -52,7 +52,9 @@ fn vc_btn<'a>(content: Element<'a, Message>, size: f32, msg: Message) -> Element
 
 /// Overlay of home / roll / nudge controls sized to the whole nav region, so
 /// the caller can position it exactly like the cube hit area.
-pub(super) fn viewcube_nav_controls<'a>() -> Element<'a, Message> {
+pub(super) fn viewcube_nav_controls<'a>(
+    viewport: Option<acadrust::Handle>,
+) -> Element<'a, Message> {
     use crate::scene::NudgeDir;
     use crate::ui::icons;
     let r = VIEWCUBE_REGION_PX;
@@ -81,8 +83,8 @@ pub(super) fn viewcube_nav_controls<'a>() -> Element<'a, Message> {
             .width(iced::Length::Fixed(r))
             .height(iced::Length::Fixed(r)),
     )
-    .on_move(Message::CursorMoved)
-    .on_press(Message::ViewportClick);
+    .on_move(move |point| Message::CursorMoved(point, viewport))
+    .on_press(Message::ViewportClick(viewport));
 
     let controls = stack![
         cube_hit,

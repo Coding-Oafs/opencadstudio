@@ -482,6 +482,12 @@ impl OpenCADStudio {
                 if let Some(session) = self.tabs[i].active_block_edit_session_mut() {
                     session.editor_camera = camera;
                 }
+            } else if self.tabs[i].scene.active_viewport.is_some() {
+                // Floating-viewport navigation writes its camera straight to
+                // the viewport entity. Syncing the separate main camera here
+                // can overwrite the saved Model/Paper view with a camera that
+                // does not own this change.
+                self.tabs[i].dirty = true;
             } else if self.tabs[i].scene.sync_camera_to_document() {
                 self.tabs[i].dirty = true;
             }
@@ -541,7 +547,11 @@ impl OpenCADStudio {
         Task::none()
     }
 
-    pub(super) fn on_cursor_moved(&mut self, p: Point) -> Task<Message> {
+    pub(super) fn on_cursor_moved(
+        &mut self,
+        p: Point,
+        expected_viewport: Option<acadrust::Handle>,
+    ) -> Task<Message> {
         if self.color_pick_target.is_some() {
             return Task::none();
         }
@@ -552,6 +562,12 @@ impl OpenCADStudio {
         // the full canvas in model space, or of the active
         // viewport's screen rectangle in a paper layout.
         let i = self.active_tab;
+        if self.tabs[i].scene.active_viewport != expected_viewport
+            || (expected_viewport.is_none()
+                && self.tabs[i].scene.current_layout != "Model")
+        {
+            return Task::none();
+        }
         let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
         let (ox, oy) = match self.tabs[i]
             .scene
@@ -716,7 +732,7 @@ impl OpenCADStudio {
                 // — the requested Zoom=wheel / Pan=MMB / Rotate=Shift+MMB
                 // scheme (#229). Floating viewports and paper keep the
                 // plain MMB pan.
-                if self.shift_down {
+                if self.shift_down || self.tabs[i].orbit_mode {
                     if self.tabs[i].scene.active_viewport.is_some() {
                         // Orbit the floating viewport's own model view.
                         drop(sel);
@@ -746,8 +762,12 @@ impl OpenCADStudio {
                         self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
                         return Task::none();
                     }
-                    // Paper sheet is top-locked: Shift+MMB falls through
-                    // to the plain pan below.
+                    // Paper sheet is top-locked. Shift+MMB keeps its existing
+                    // pan fallback; the explicit orbit tool does nothing here.
+                    if self.tabs[i].orbit_mode {
+                        sel.middle_last_pos = Some(p);
+                        return Task::none();
+                    }
                 }
                 // Pan scale uses the active tile's size (ortho size
                 // is relative to viewport height), so a tiled pane
@@ -2185,10 +2205,9 @@ impl OpenCADStudio {
         };
         let (vw, vh) = vp_size;
 
-        // PAN mode: a left press begins a pan drag. Reuse the middle-
-        // button pan path (the move handler pans whenever `middle_down`),
-        // so no selection/pick logic runs while panning.
-        if self.tabs[i].pan_mode {
+        // Interactive navigation tools reuse the middle-button movement path,
+        // so no selection/pick logic runs while the left button drives them.
+        if self.tabs[i].orbit_mode || self.tabs[i].pan_mode {
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
             sel.middle_down = true;
             sel.middle_last_pos = Some(p);
@@ -2357,12 +2376,13 @@ impl OpenCADStudio {
     pub(super) fn on_viewport_left_release(&mut self) -> Task<Message> {
         let i = self.active_tab;
 
-        // PAN mode: end the pan drag but stay in pan mode for the next
-        // drag (exit is Esc / another command). Mirror of the press.
-        if self.tabs[i].pan_mode {
+        // Navigation mode: end this drag but keep the tool armed for the next
+        // left drag (exit is Esc / another command). Mirror of the press.
+        if self.tabs[i].orbit_mode || self.tabs[i].pan_mode {
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
             sel.middle_down = false;
             sel.middle_last_pos = None;
+            sel.orbit_pivot = None;
             return Task::none();
         }
 
@@ -3886,8 +3906,17 @@ impl OpenCADStudio {
         }
     }
 
-    pub(super) fn on_viewport_click(&mut self) -> Task<Message> {
+    pub(super) fn on_viewport_click(
+        &mut self,
+        expected_viewport: Option<acadrust::Handle>,
+    ) -> Task<Message> {
         let i = self.active_tab;
+        if self.tabs[i].scene.active_viewport != expected_viewport
+            || (expected_viewport.is_none()
+                && self.tabs[i].scene.current_layout != "Model")
+        {
+            return Task::none();
+        }
         let rot = self.tabs[i].scene.active_view_rotation_mat();
         let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
         // The ViewCube draws in the top-right of whichever area
@@ -3929,17 +3958,17 @@ impl OpenCADStudio {
             } else {
                 scene::CubeRegion::Corner(id)
             };
-            return Task::done(Message::ViewCubeSnap(region));
+            return self.on_view_cube_snap(region);
         }
         if let Some(region) = scene::hit_test(cx, cy, w, h, rot, VIEWCUBE_PX) {
-            return Task::done(Message::ViewCubeSnap(region));
+            return self.on_view_cube_snap(region);
         }
         // Compass cardinals are world-fixed: hit-test through the camera-
         // only rotation (strip the UCS) so the target matches the drawn
         // N/E/S/W, and snap in world frame.
         let rot_world = rot * self.tabs[i].scene.viewcube_ucs_mat().inverse();
         if let Some(card) = scene::hit_test_cardinal(cx, cy, w, h, rot_world, VIEWCUBE_PX) {
-            return Task::done(Message::ViewCubeSnapWorld(card.face_region()));
+            return self.on_view_cube_snap_world(card.face_region());
         }
         Task::none()
     }

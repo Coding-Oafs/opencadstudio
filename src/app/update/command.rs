@@ -569,16 +569,25 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.tabs[i].snap_result = None;
                     return Task::none();
                 }
-                // Leave interactive PAN mode (and end any in-flight pan drag).
-                if self.tabs[self.active_tab].pan_mode {
+                // Leave an interactive navigation mode and end its in-flight
+                // drag. Orbit exits silently; PAN keeps its existing message.
+                if self.tabs[self.active_tab].pan_mode
+                    || self.tabs[self.active_tab].orbit_mode
+                {
                     let i = self.active_tab;
+                    let was_pan = self.tabs[i].pan_mode;
                     self.tabs[i].pan_mode = false;
+                    self.tabs[i].orbit_mode = false;
                     {
                         let mut sel = self.tabs[i].scene.selection.borrow_mut();
                         sel.middle_down = false;
                         sel.middle_last_pos = None;
+                        sel.orbit_pivot = None;
                     }
-                    self.command_line.push_output(crate::t!("PAN ended.").as_ref());
+                    if was_pan {
+                        self.command_line.push_output(crate::t!("PAN ended.").as_ref());
+                    }
+                    self.ribbon.deactivate_tool();
                     return Task::none();
                 }
                 // Grip popup intercepts Escape — dismisses the menu

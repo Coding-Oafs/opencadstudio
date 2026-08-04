@@ -4,8 +4,7 @@ impl OpenCADStudio {
     pub(super) fn dispatch_inquiry(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             "3DORBIT" => {
-                self.command_line
-                    .push_info(crate::t!("3D Orbit: drag with right mouse button.").as_ref());
+                self.tabs[i].orbit_mode = true;
             }
 
             // ── Selection utilities ───────────────────────────────────────

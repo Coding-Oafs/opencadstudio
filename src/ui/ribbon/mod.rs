@@ -1398,6 +1398,7 @@ fn collapse_button<'a>(
     compact: bool,
 ) -> Element<'a, Message> {
     let title = group.title;
+    let localized_title = t!(title).into_owned();
 
     // Tightest form: one button = the panel's FIRST tool icon + its title + ▾.
     // Clicking opens the flyout listing every tool; no tool runs directly at this
@@ -1407,23 +1408,31 @@ fn collapse_button<'a>(
             Some(ik) => make_icon(ik, SMALL_ICON),
             None => text("").into(),
         };
-        return button(
+        let content = button(
             column![
                 icon,
                 row![
-                    text(t!(title)).size(9).style(muted_text_style),
+                    text(localized_title.clone())
+                        .size(9)
+                        .width(Fill)
+                        .align_x(iced::Center)
+                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph)
+                        .style(muted_text_style),
                     crate::ui::icons::themed_secondary_arrow_down(8.0),
                 ]
                 .spacing(3)
+                .width(Fill)
                 .align_y(iced::Center),
             ]
             .align_x(iced::Center)
-            .spacing(2),
+            .spacing(2)
+            .width(Fill),
         )
         .on_press(Message::ToggleRibbonPanel(title.to_string()))
         .style(button::subtle)
-        .padding([3, 5])
-        .into();
+        .width(Fill)
+        .padding([3, 5]);
+        return automatic_large_button(localized_title, content.into());
     }
 
     // Collapsed (not yet tight): a large representative-tool face — a live button
@@ -1464,15 +1473,23 @@ fn collapse_button<'a>(
 
     let opener = button(
         row![
-            text(title.to_string()).size(9).style(muted_text_style),
+            text(localized_title.clone())
+                .size(9)
+                .width(Fill)
+                .align_x(iced::Center)
+                .wrapping(iced::advanced::text::Wrapping::WordOrGlyph)
+                .style(muted_text_style),
             crate::ui::icons::themed_secondary_arrow_down(8.0),
         ]
         .spacing(3)
+        .width(Fill)
         .align_y(iced::Center),
     )
     .on_press(Message::ToggleRibbonPanel(title.to_string()))
     .style(button::subtle)
+    .width(Fill)
     .padding([1, 4]);
+    let opener = automatic_large_button(localized_title, opener.into());
 
     // The large face fills a fixed slot so a collapsed panel is shorter than a full
     // 3-row panel, letting `CollapsePanels` shrink the ribbon row.

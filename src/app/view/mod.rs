@@ -671,7 +671,7 @@ impl OpenCADStudio {
                 dividers,
                 pane_move_rect,
                 pane_drop_rect,
-                tab.pan_mode,
+                tab.pan_mode || tab.orbit_mode,
                 self.ribbon.open_dropdown.is_some(),
                 hover_locked,
                 crosshair_background(tab, is_paper),
@@ -886,15 +886,18 @@ impl OpenCADStudio {
         // both layered ABOVE the viewport mouse_area so they receive
         // clicks (the shader viewport sits below it). Positioned with
         // leading Spaces sized to the viewport's screen rectangle.
-        let active_vp_rect: Option<iced::Rectangle> = if is_paper && !tab.is_start {
-            tab.scene.active_viewport.and_then(|h| {
-                let (cw, ch) = tab.scene.selection.borrow().vp_size;
-                tab.scene.viewport_screen_rect(h, (cw, ch))
-            })
-        } else {
-            None
-        };
-        if let Some(rect) = active_vp_rect {
+        let active_vp_rect: Option<(acadrust::Handle, iced::Rectangle)> =
+            if is_paper && !tab.is_start {
+                tab.scene.active_viewport.and_then(|h| {
+                    let (cw, ch) = tab.scene.selection.borrow().vp_size;
+                    tab.scene
+                        .viewport_screen_rect(h, (cw, ch))
+                        .map(|rect| (h, rect))
+                })
+            } else {
+                None
+            };
+        if let Some((active_vp, rect)) = active_vp_rect {
             // Clip the outline to the visible canvas. Clamping only the origin
             // (max(0.0)) while keeping the full width/height shifted the whole
             // outline inward when the viewport ran off the top/left edge, so
@@ -964,7 +967,7 @@ impl OpenCADStudio {
                 let cube_x = (rect.x + rect.width - VIEWCUBE_HIT_SIZE - VIEWCUBE_PAD).max(0.0);
                 let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
 
-                let controls = iced::widget::pin(viewcube_nav_controls())
+                let controls = iced::widget::pin(viewcube_nav_controls(Some(active_vp)))
                     .position(iced::Point::new(cube_x, cube_y));
                 viewport_stack = viewport_stack.push(controls);
 
@@ -1003,7 +1006,7 @@ impl OpenCADStudio {
             let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
 
             // Cube hit area + nav controls (home / roll / nudge) as one layer.
-            let controls = iced::widget::pin(viewcube_nav_controls())
+            let controls = iced::widget::pin(viewcube_nav_controls(None))
                 .position(iced::Point::new(cube_x, cube_y));
             viewport_stack = viewport_stack.push(controls);
 

@@ -99,6 +99,7 @@ impl OpenCADStudio {
         self.ucs_icon_selected = false;
         self.ucs_icon_hover = false;
         self.tabs[i].pan_mode = false;
+        self.tabs[i].orbit_mode = false;
         let _ = self.on_viewport_exit();
     }
 

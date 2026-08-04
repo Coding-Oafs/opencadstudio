@@ -138,7 +138,11 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         // dialog owners keep theirs; the command end / modal
                         // close clears those. (#355)
                         let i = self.active_tab;
-                        if self.tabs[i].active_cmd.is_none() && self.active_modal.is_none() {
+                        if self.tabs[i].active_cmd.is_none()
+                            && self.active_modal.is_none()
+                            && !self.tabs[i].pan_mode
+                            && !self.tabs[i].orbit_mode
+                        {
                             self.ribbon.deactivate_tool();
                         }
                         return task;

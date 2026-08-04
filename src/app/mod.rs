@@ -1893,8 +1893,12 @@ pub enum Message {
     LayerStateEditorFilter(String),
     LayerStateEditorSave,
     LayerStateEditorCancel,
-    CursorMoved(Point),
-    ViewportClick,
+    /// ViewCube-local cursor movement, tagged with the floating viewport that
+    /// owned the overlay when the event was produced (`None` = Model layout).
+    CursorMoved(Point, Option<acadrust::Handle>),
+    /// ViewCube press with the same owner tag, so a stale overlay event can
+    /// never fall through and rotate a different camera.
+    ViewportClick(Option<acadrust::Handle>),
     ViewportMove(Point),
     ViewportLeftPress,
     ViewportLeftRelease,
