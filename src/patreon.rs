@@ -7,13 +7,20 @@
 //! can still be extracted from a shipped binary, so it should be a
 //! campaign-scoped token with the minimum needed access.
 
+#[cfg(not(target_arch = "wasm32"))]
+const SUPPORT_WINDOW_DAYS: u64 = 31;
+
+#[cfg(not(target_arch = "wasm32"))]
+const USD_RATES_URL: &str = "https://api.frankfurter.dev/v2/rates?base=USD";
+
 /// Supporters who donated outside Patreon (direct transfer, crypto, one-off
 /// gifts, …), maintained by hand here. They are merged with the fetched patrons
 /// and ranked together by amount, so the combined Start-page list is ordered by
 /// pledge regardless of where the donation came from.
 ///
-/// To add a supporter, add a `("Display name", cents)` line below. The amount is
-/// in **cents**: a $25 donation is `2500`, €10 is `1000`.
+/// To add a supporter, add a `("Display name", usd_cents)` line below. The
+/// amount is in **USD cents**: a $25 donation is `2500`; convert other
+/// currencies to USD before adding them.
 const MANUAL_SUPPORTERS: &[(&str, i64)] = &[
     ("Stefano", 8750), // $87.50
 ];
@@ -38,9 +45,9 @@ pub fn merge_manual(mut patrons: Vec<(String, i64)>) -> Vec<(String, i64)> {
 #[cfg(not(target_arch = "wasm32"))]
 const UA: &str = concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION"));
 
-/// Fetch the paying patrons from the Patreon API as `(display name, amount in
-/// cents)`, highest pledge first. `Err` when no token is configured or the API
-/// call fails.
+/// Fetch patrons with a successful payment in the last month from the Patreon
+/// API as `(display name, amount in USD cents)`, highest payment first. `Err`
+/// when no token is configured or an API call fails.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
     let token = option_env!("OCS_PATREON_TOKEN")
@@ -55,14 +62,17 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
         .as_str()
         .ok_or("no Patreon campaign found for this token")?
         .to_string();
+    let usd_rates = fetch_usd_rates(&agent)?;
+    let cutoff_date = utc_date_days_ago(SUPPORT_WINDOW_DAYS);
 
-    // Page through the campaign members, keeping only paying patrons.
+    // Page through the campaign members, keeping only patrons whose latest
+    // successful payment falls inside the rolling one-month window.
     let mut patrons: Vec<(String, i64)> = Vec::new();
     let mut url = format!(
         "https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/members\
          ?include=pledge_history\
-         &fields%5Bmember%5D=full_name,patron_status,currently_entitled_amount_cents\
-         &fields%5Bpledge-event%5D=amount_cents,date,payment_status\
+         &fields%5Bmember%5D=full_name\
+         &fields%5Bpledge-event%5D=amount_cents,currency_code,date,payment_status\
          &page%5Bcount%5D=200"
     );
     // Bound the loop so a malformed `next` link can never spin forever.
@@ -75,27 +85,17 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
         if let Some(arr) = page["data"].as_array() {
             for m in arr {
                 let attrs = &m["attributes"];
-                // Paying supporters only: an active patron currently entitled to
-                // a non-zero amount (excludes free followers, $0 tiers, declined
-                // and former patrons).
-                if attrs["patron_status"].as_str() != Some("active_patron") {
+                let Some(usd_cents) = latest_recent_paid_usd(
+                    m,
+                    included,
+                    &usd_rates,
+                    &cutoff_date,
+                ) else {
                     continue;
-                }
-                // The entitlement can retain the previous tier amount after a
-                // pledge change. The latest successful pledge event records
-                // what was actually paid; retain the entitlement as a fallback
-                // for memberships whose history is unavailable.
-                let cents = latest_paid_amount(m, included).unwrap_or_else(|| {
-                    attrs["currently_entitled_amount_cents"]
-                        .as_i64()
-                        .unwrap_or(0)
-                });
-                if cents <= 0 {
-                    continue;
-                }
+                };
                 let name = attrs["full_name"].as_str().unwrap_or("").trim();
                 if !name.is_empty() {
-                    patrons.push((name.to_string(), cents));
+                    patrons.push((name.to_string(), usd_cents));
                 }
             }
         }
@@ -111,12 +111,14 @@ pub fn fetch_patrons() -> Result<Vec<(String, i64)>, String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn latest_paid_amount(
+fn latest_recent_paid_usd(
     member: &serde_json::Value,
     included: &[serde_json::Value],
+    usd_rates: &std::collections::HashMap<String, f64>,
+    cutoff_date: &str,
 ) -> Option<i64> {
     let history = member["relationships"]["pledge_history"]["data"].as_array()?;
-    let mut latest: Option<(String, i64)> = None;
+    let mut latest: Option<(String, i64, String)> = None;
 
     for relationship in history {
         let Some(id) = relationship["id"].as_str() else {
@@ -140,22 +142,96 @@ fn latest_paid_amount(
             continue;
         }
         let date = attrs["date"].as_str().unwrap_or("");
+        let Some(event_date) = date.get(..10) else {
+            continue;
+        };
+        if event_date < cutoff_date {
+            continue;
+        }
+        let Some(currency) = attrs["currency_code"].as_str() else {
+            continue;
+        };
+        let currency = currency.trim().to_uppercase();
+        if currency.is_empty() {
+            continue;
+        }
         if latest
             .as_ref()
-            .map(|(current, _)| date > current.as_str())
+            .map(|(current, _, _)| date > current.as_str())
             .unwrap_or(true)
         {
-            latest = Some((date.to_string(), cents));
+            latest = Some((date.to_string(), cents, currency));
         }
     }
 
-    latest.map(|(_, cents)| cents)
+    let (_, cents, currency) = latest?;
+    let rate = *usd_rates.get(&currency)?;
+    if !rate.is_finite() || rate <= 0.0 {
+        return None;
+    }
+    Some((cents as f64 / rate).round() as i64)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_usd_rates(
+    agent: &ureq::Agent,
+) -> Result<std::collections::HashMap<String, f64>, String> {
+    let json = get_public_json(agent, USD_RATES_URL)?;
+    let entries = json
+        .as_array()
+        .ok_or("exchange-rate response is not an array")?;
+    let mut rates = std::collections::HashMap::new();
+    rates.insert("USD".to_string(), 1.0);
+    for entry in entries {
+        let Some(currency) = entry["quote"].as_str() else {
+            continue;
+        };
+        let Some(rate) = entry["rate"].as_f64() else {
+            continue;
+        };
+        if rate.is_finite() && rate > 0.0 {
+            rates.insert(currency.to_uppercase(), rate);
+        }
+    }
+    Ok(rates)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn utc_date_days_ago(days_ago: u64) -> String {
+    let unix_days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86_400;
+    let (year, month, day) = civil_from_days(unix_days as i64 - days_ago as i64);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+// Convert days since 1970-01-01 to a Gregorian calendar date.
+#[cfg(not(target_arch = "wasm32"))]
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096)
+            / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month, day)
 }
 
 /// Web build: the browser can't call the Patreon API directly (CORS + the
 /// token would be exposed in the bundle), so it fetches a pre-generated
 /// `supporters.json` published next to the app on the same origin (produced by
-/// CI with the token held server-side). Shape: `[{ "name": .., "cents": .. }]`.
+/// CI with the token held server-side). Shape:
+/// `[{ "name": .., "cents": <USD cents> }]`.
 #[cfg(target_arch = "wasm32")]
 pub async fn fetch_patrons_web() -> Result<Vec<(String, i64)>, String> {
     use wasm_bindgen::JsCast;
@@ -197,6 +273,19 @@ fn get_json(
     let body = agent
         .get(url)
         .header("Authorization", &format!("Bearer {token}"))
+        .header("User-Agent", UA)
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&body).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_public_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, String> {
+    let body = agent
+        .get(url)
         .header("User-Agent", UA)
         .call()
         .map_err(|e| e.to_string())?

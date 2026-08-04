@@ -2744,8 +2744,8 @@ fn start_page_content<'a>(
         })
         .width(Fill);
         for (name, cents) in patrons {
-            // Cents → the campaign currency's main unit. Symbol assumed "$";
-            // adjust if the campaign bills in another currency.
+            // Patreon payments are normalized to USD cents while the list is
+            // generated; hand-maintained entries use USD cents as well.
             let amount = format!("${:.2}", *cents as f64 / 100.0);
             list = list.push(
                 iced::widget::row![

@@ -277,8 +277,8 @@ pub(super) struct OpenCADStudio {
     /// mid-edit; applied on Enter). Kept in sync when the +/- buttons change it.
     recent_limit_input: String,
     command_line: CommandLine,
-    /// Paying Patreon supporters shown on the Start page (name, pledge cents),
-    /// fetched once at boot, highest pledge first.
+    /// Recent Patreon supporters shown on the Start page (name, USD cents),
+    /// fetched once at boot, highest payment first.
     patrons: Vec<(String, i64)>,
     /// Tutorial-playlist videos for the Start page: seeded from the on-disk
     /// cache at boot, refreshed by a live playlist fetch.
@@ -2287,7 +2287,7 @@ pub enum Message {
     PluginRegistryErrorDetailsToggle,
     /// Copy registry URL, platform, version, and raw error details.
     PluginRegistryCopyDiagnostics,
-    /// Patreon supporters fetched at boot for the Start page (name, pledge cents).
+    /// Patreon supporters fetched at boot for the Start page (name, USD cents).
     PatronsFetched(Result<Vec<(String, i64)>, String>),
     /// Tutorial-playlist videos fetched at boot for the Start page.
     VideosFetched(Result<Vec<crate::videos::VideoEntry>, String>),
