@@ -179,6 +179,14 @@ jobs:
           print(f"supporters: {len(supporters)}")
           PY
 
+      # Publish an OpenCADStudio-branded star-history chart for the README.
+      # The timestamp media type returns when each current stargazer starred
+      # the repository; the script follows every API page and emits both themes.
+      - name: Generate star history charts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/generate-star-history.py --output-dir dist
+
       # Browsers cannot reliably fetch YouTube playlist/oEmbed responses because
       # of CORS. Build a same-origin listing and thumbnail directory for the
       # Start page. Keep the checked-in snapshot if YouTube is temporarily
