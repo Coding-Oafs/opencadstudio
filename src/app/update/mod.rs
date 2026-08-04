@@ -111,10 +111,10 @@ impl OpenCADStudio {
         if self.history_content.text() == latest {
             return;
         }
-        use iced::widget::text_editor::{Action, Motion};
         self.history_content = iced::widget::text_editor::Content::with_text(&latest);
-        self.history_content
-            .perform(Action::Move(Motion::DocumentEnd));
+        // The outer scrollable is anchored to the newest lines. Leaving the
+        // editor cursor at its initial position also keeps horizontal scroll at
+        // zero, so the first glyph of each line cannot be clipped.
     }
 
     /// Close the active in-canvas modal (Plan B), mirroring what closing the
@@ -1565,7 +1565,53 @@ impl OpenCADStudio {
 
             Message::CommandHistoryToggle => {
                 self.command_line.toggle_history();
+                if !self.command_line.history_open {
+                    self.command_history_resizing = false;
+                    self.command_history_drag_last = None;
+                }
                 self.sync_open_command_history();
+                Task::none()
+            }
+
+            Message::CommandHistoryResizeGrab => {
+                if self.command_line.history_open {
+                    self.command_history_resizing = true;
+                    self.command_history_drag_last = None;
+                }
+                Task::none()
+            }
+
+            Message::CommandHistoryResizeMove(point) => {
+                if self.command_history_resizing {
+                    if let Some(last) = self.command_history_drag_last {
+                        let dy = point.y - last.y;
+                        let max_height =
+                            crate::ui::command_line::history_max_height(self.win_size.1);
+                        self.command_line.history_height = (self.command_line.history_height - dy)
+                            .clamp(
+                                crate::ui::command_line::HISTORY_HEIGHT_MIN,
+                                max_height,
+                            );
+                    }
+                    self.command_history_drag_last = Some(point);
+                }
+                Task::none()
+            }
+
+            Message::CommandHistoryResizeRelease => {
+                let changed = self.command_history_resizing;
+                self.command_history_resizing = false;
+                self.command_history_drag_last = None;
+                if changed {
+                    self.save_config();
+                }
+                Task::none()
+            }
+
+            Message::CommandHistoryHeightReset => {
+                self.command_line.history_height =
+                    crate::ui::command_line::HISTORY_HEIGHT_DEFAULT;
+                self.save_config();
                 Task::none()
             }
 
@@ -1599,12 +1645,24 @@ impl OpenCADStudio {
             }
 
             Message::CommandHistoryEdit(action) => {
-                // Read-only: drop edits, keep selection / cursor / scroll so
-                // the user can still highlight and Ctrl+C the log.
-                if !action.is_edit() {
-                    self.history_content.perform(action);
+                // Read-only: drop edits, keep selection/cursor actions, and
+                // route wheel input to the outer scrollbar. The text editor
+                // remains one selectable buffer while the scrollbar stays
+                // visible and draggable.
+                if let iced::widget::text_editor::Action::Scroll { lines } = action {
+                    iced::widget::operation::scroll_by(
+                        iced::widget::Id::new(crate::ui::command_line::HISTORY_SCROLL_ID),
+                        iced::widget::scrollable::AbsoluteOffset {
+                            x: 0.0,
+                            y: lines as f32 * 14.0,
+                        },
+                    )
+                } else {
+                    if !action.is_edit() {
+                        self.history_content.perform(action);
+                    }
+                    Task::none()
                 }
-                Task::none()
             }
 
             Message::CommandSuggestionPick(cmd) => {

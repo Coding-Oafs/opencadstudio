@@ -6,15 +6,31 @@ use crate::app::Message;
 use crate::command::CmdOption;
 use crate::t;
 use iced::widget::{
-    button, column, container, opaque, row, rule, text, text_editor, text_input, tooltip, Space,
+    button, column, container, opaque, row, rule, scrollable, stack, text, text_editor,
+    text_input, tooltip, Space,
 };
-use iced::{Background, Border, Color, Element, Length, Theme};
+use iced::{Background, Border, Color, Element, Length, Padding, Theme};
 
 pub const CMD_INPUT_ID: &str = "cmd_input";
+pub const HISTORY_SCROLL_ID: &str = "command_history_scroll";
 
 /// How long a history entry stays visible on the overlay before fading
 /// out. Picking the full archive happens through the dropdown button.
 const HISTORY_VISIBLE_SECS: f32 = 3.0;
+
+/// Resizable full-history editor bounds. The live upper bound also follows the
+/// window height so the command input and a useful drawing area remain visible.
+pub const HISTORY_HEIGHT_MIN: f32 = 72.0;
+pub const HISTORY_HEIGHT_DEFAULT: f32 = 180.0;
+pub const HISTORY_HEIGHT_MAX: f32 = 560.0;
+
+pub fn history_max_height(window_height: f32) -> f32 {
+    if window_height.is_finite() {
+        (window_height * 0.60).clamp(HISTORY_HEIGHT_MIN, HISTORY_HEIGHT_MAX)
+    } else {
+        HISTORY_HEIGHT_DEFAULT
+    }
+}
 
 /// How many autocomplete matches the suggestion popup shows at once.
 const AUTOCOMPLETE_LIMIT: usize = 8;
@@ -63,6 +79,8 @@ pub struct CommandLine {
     recall_draft: String,
     /// When `true`, the dropdown showing the full backlog is open.
     pub history_open: bool,
+    /// Persisted height of the full-history editor in logical pixels.
+    pub history_height: f32,
     /// Index of the currently-highlighted autocomplete suggestion, or
     /// `None` when the user hasn't yet started navigating with the
     /// arrow keys. Reset on every keystroke.
@@ -112,6 +130,7 @@ pub enum EntryKind {
 impl CommandLine {
     pub fn new() -> Self {
         let mut cl = Self::default();
+        cl.history_height = HISTORY_HEIGHT_DEFAULT;
         cl.push_info(&crate::tr!("command-line-ready"));
         cl.push_info(&crate::tr!("command-line-hint"));
         cl
@@ -358,6 +377,7 @@ impl CommandLine {
         show_autocomplete: bool,
         dyn_capturing: bool,
         history_content: &'a text_editor::Content,
+        window_height: f32,
     ) -> Element<'a, Message> {
         // Only the most recent entries pushed within the last few
         // seconds show on the overlay. The dropdown button keeps the
@@ -482,9 +502,12 @@ impl CommandLine {
                 .on_input(Message::CommandInput)
                 .on_submit(Message::CommandSubmit);
         }
-        let input = input
-            .size(11)
-            .padding([4, 6]);
+        let input = input.size(11).padding(Padding {
+            top: 4.0,
+            right: 30.0,
+            bottom: 4.0,
+            left: 6.0,
+        });
         // Autocomplete suggestions panel, shown above the input row
         // when the user has typed a prefix that matches at least one
         // command. Each row is a button — clicking it dispatches the
@@ -546,9 +569,18 @@ impl CommandLine {
         };
         let dropdown_btn = button(dropdown_icon)
             .on_press(Message::CommandHistoryToggle)
-        .style(button::subtle)
-        .padding([2, 6]);
-        let input_row = row![prompt, literal_btn, input, dropdown_btn]
+            .style(button::text)
+            .padding([4, 8]);
+        let input_with_history = stack![
+            input,
+            container(dropdown_btn)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Right)
+                .align_y(iced::alignment::Vertical::Center),
+        ]
+        .width(Length::Fill);
+        let input_row = row![prompt, literal_btn, input_with_history]
             .spacing(4)
             .align_y(iced::Center);
 
@@ -556,16 +588,18 @@ impl CommandLine {
         // whole log is rendered in ONE read-only `text_editor` (backed by
         // `history_content`) rather than per-line labels, so a single mouse
         // drag selects across lines and Ctrl+C copies the lot — issue #232.
-        // Edits are dropped in the update handler, keeping it read-only. The
-        // editor scrolls internally past `max_height`; `opaque` stops its
-        // mouse-wheel events bubbling to the viewport shader behind it (else
-        // scrolling the history zoomed the drawing).
+        // Edits are dropped in the update handler, keeping it read-only. A
+        // surrounding scrollable supplies the visible scrollbar while
+        // `opaque` stops its mouse-wheel events reaching the drawing behind it.
         let dropdown: Element<'a, Message> = if self.history_open {
+            let history_height = self
+                .history_height
+                .clamp(HISTORY_HEIGHT_MIN, history_max_height(window_height));
             let log = text_editor(history_content)
                 .on_action(Message::CommandHistoryEdit)
                 .size(11)
                 .padding([2, 8])
-                .height(Length::Fit.max(180.0))
+                .height(Length::Shrink)
                 .style(|theme: &Theme, _status| {
                     let palette = theme.palette();
                     text_editor::Style {
@@ -576,6 +610,15 @@ impl CommandLine {
                         selection: palette.primary.base.color.scale_alpha(0.5),
                     }
                 });
+            let log = scrollable(log)
+                .id(iced::widget::Id::new(HISTORY_SCROLL_ID))
+                .height(Length::Fixed(history_height))
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new()
+                        .width(8)
+                        .scroller_width(6),
+                ))
+                .anchor_bottom();
             // Header strip: a Copy-all and a Clear button pinned above the log.
             let copy_btn = button(
                 row![
@@ -608,7 +651,25 @@ impl CommandLine {
             .padding([2, 6]);
             let panel = container(column![header, log])
                 .width(Length::Fill)
-                .padding([4, 0]);
+                .padding([4, 8]);
+            let resize = iced::widget::mouse_area(
+                container(crate::ui::icons::themed_primary(
+                    crate::ui::icons::RESIZE,
+                    15.0,
+                ))
+                .padding([0, 2]),
+            )
+            .on_press(Message::CommandHistoryResizeGrab)
+            .on_double_click(Message::CommandHistoryHeightReset)
+            .interaction(iced::mouse::Interaction::ResizingVertically);
+            let panel = stack![
+                panel,
+                container(resize)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Left)
+                    .align_y(iced::alignment::Vertical::Top),
+            ];
             opaque(panel).into()
         } else {
             container(column![]).height(0).into()

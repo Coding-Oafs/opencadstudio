@@ -320,6 +320,9 @@ pub(super) struct OpenCADStudio {
     /// the log can be drag-selected across lines and copied (issue #232).
     /// Rebuilt from the history each time the dropdown is opened.
     history_content: iced::widget::text_editor::Content,
+    /// Pointer state while the command-history panel's top edge is dragged.
+    command_history_resizing: bool,
+    command_history_drag_last: Option<Point>,
     status_bar: StatusBar,
     cursor_pos: Point,
     vp_size: (f32, f32),
@@ -1808,6 +1811,12 @@ pub enum Message {
     CommandHistoryNext,
     /// Toggle the dropdown listing the full command-line history.
     CommandHistoryToggle,
+    /// Grab/move/release the expanded history panel's top resize edge.
+    CommandHistoryResizeGrab,
+    CommandHistoryResizeMove(Point),
+    CommandHistoryResizeRelease,
+    /// Restore the expanded history panel to its default height.
+    CommandHistoryHeightReset,
     /// Start dragging the Layer Manager's Name-column divider.
     LayerNameColGrab,
     /// Toggle the persistent literal-space mode (the `>` button): while on,
@@ -2837,6 +2846,8 @@ impl OpenCADStudio {
             properties_drag_last: None,
             properties_dock_preview: None,
             history_content: iced::widget::text_editor::Content::new(),
+            command_history_resizing: false,
+            command_history_drag_last: None,
             status_bar: StatusBar::new(),
             cursor_pos: Point::ORIGIN,
             vp_size: (1280.0, 720.0),

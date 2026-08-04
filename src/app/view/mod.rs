@@ -1499,6 +1499,7 @@ impl OpenCADStudio {
             allow_autocomplete,
             dyn_capturing,
             &self.history_content,
+            self.win_size.1,
         );
         let center_stack: Element<'_, Message> = if tab.is_start {
             column![
@@ -1532,6 +1533,16 @@ impl OpenCADStudio {
                 .width(Fill)
                 .height(Fill)
                 .into()
+        };
+
+        let center_stack: Element<'_, Message> = if self.command_history_resizing {
+            mouse_area(center_stack)
+                .on_move(Message::CommandHistoryResizeMove)
+                .on_release(Message::CommandHistoryResizeRelease)
+                .interaction(iced::mouse::Interaction::ResizingVertically)
+                .into()
+        } else {
+            center_stack
         };
 
         let main_ui = container({

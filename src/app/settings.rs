@@ -116,6 +116,8 @@ pub struct UserSettings {
     /// instead of submitting (as if every line started with `>`), until the
     /// user toggles it back off.
     pub literal_spaces: bool,
+    /// Height of the expanded command-history editor in logical pixels.
+    pub command_history_height: f32,
     /// Running object-snap set + master toggle as an `$OSMODE`-style bitmask.
     /// App-level, not per-drawing: modern DWG (R2000+) has no file slot for
     /// OSMODE (it moved to the registry), so the set follows the user. A
@@ -167,6 +169,7 @@ impl Default for UserSettings {
             disabled_plugins: Vec::new(),
             plugin_repos: Vec::new(),
             literal_spaces: false,
+            command_history_height: crate::ui::command_line::HISTORY_HEIGHT_DEFAULT,
             // Snapper::default(): END|MID|CEN|NODE|QUAD|INT|NEA (575), master
             // off (suppress bit 16384).
             osmode: 575 | OSMODE_SUPPRESS,

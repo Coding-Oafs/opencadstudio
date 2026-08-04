@@ -274,6 +274,7 @@ impl OpenCADStudio {
             },
             plugin_repos: self.plugin_repos.clone(),
             literal_spaces: self.command_line.literal_spaces,
+            command_history_height: self.command_line.history_height,
             osmode: crate::app::settings::osmode_from_snaps(
                 self.snapper.enabled.iter(),
                 self.snapper.snap_enabled,
@@ -304,6 +305,14 @@ impl OpenCADStudio {
         self.disabled_plugins = s.disabled_plugins.iter().cloned().collect();
         self.plugin_repos = s.plugin_repos.clone();
         self.command_line.literal_spaces = s.literal_spaces;
+        self.command_line.history_height = if s.command_history_height.is_finite() {
+            s.command_history_height.clamp(
+                crate::ui::command_line::HISTORY_HEIGHT_MIN,
+                crate::ui::command_line::HISTORY_HEIGHT_MAX,
+            )
+        } else {
+            crate::ui::command_line::HISTORY_HEIGHT_DEFAULT
+        };
         let (modes, snap_enabled) = crate::app::settings::snaps_from_osmode(s.osmode);
         self.snapper.enabled = modes.into_iter().collect();
         self.snapper.snap_enabled = snap_enabled;
@@ -587,7 +596,11 @@ impl OpenCADStudio {
 
     /// Back-compat name for the many "a preference changed, persist it" sites.
     pub(in crate::app) fn persist_settings_if_changed(&mut self) {
-        self.save_config();
+        // Keep resize feedback live without writing settings on every pointer
+        // move. The release message saves the final height once.
+        if !self.command_history_resizing {
+            self.save_config();
+        }
     }
 
     /// Record that the one-time default-association prompt has been answered and
