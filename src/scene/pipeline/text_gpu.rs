@@ -260,6 +260,7 @@ pub fn create_pipelines(
     atlas_bgl: &wgpu::BindGroupLayout,
     color_format: wgpu::TextureFormat,
     sample_count: u32,
+    content_stencil: &wgpu::StencilState,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text.wgsl"),
@@ -298,7 +299,7 @@ pub fn create_pipelines(
                 format: wgpu::TextureFormat::Depth24PlusStencil8,
                 depth_write_enabled,
                 depth_compare,
-                stencil: wgpu::StencilState::default(),
+                stencil: content_stencil.clone(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState {

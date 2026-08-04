@@ -1473,7 +1473,14 @@ impl Pipeline {
         // ── Text (SDF glyph quads) ─────────────────────────────────────────
         let text_atlas_bgl = text_gpu::TextAtlasGpu::bind_group_layout(device);
         let (text_pipeline, text_highlight_pipeline) =
-            text_gpu::create_pipelines(device, &frame_bgl, &text_atlas_bgl, format, MSAA_SAMPLES);
+            text_gpu::create_pipelines(
+                device,
+                &frame_bgl,
+                &text_atlas_bgl,
+                format,
+                MSAA_SAMPLES,
+                &content_stencil,
+            );
 
         let viewcube = ViewCubePipeline::new(device, queue, format);
 
