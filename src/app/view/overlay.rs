@@ -1,9 +1,14 @@
 use super::super::Message;
+use iced::advanced::layout;
+use iced::advanced::mouse;
+use iced::advanced::overlay;
+use iced::advanced::renderer;
+use iced::advanced::widget;
+use iced::advanced::{Layout, Shell, Widget};
 use iced::widget::{
-    button, column, container, mouse_area, row, stack, text, text_input,
-    Space,
+    button, column, container, mouse_area, row, scrollable, stack, text, text_input, Space,
 };
-use iced::{Background, Border, Color, Element, Fill, Theme};
+use iced::{Background, Border, Color, Element, Event, Fill, Length, Rectangle, Size, Theme, Vector};
 use crate::t;
 
 pub(super) fn position_canvas_overlay<'a>(
@@ -734,10 +739,193 @@ fn mtext_editor_content<'a>(
     .into()
 }
 
+/// Position a cursor-anchored panel inside the drawing's safe rectangle. The
+/// panel is laid out first, so edge flipping uses its actual translated size
+/// instead of estimates. `bottom_inset` reserves overlaid controls such as the
+/// command line.
+fn position_canvas_overlay_clamped<'a>(
+    anchor: iced::Point,
+    bottom_inset: f32,
+    panel: Element<'a, Message>,
+) -> Element<'a, Message> {
+    Element::new(ClampedPin {
+        content: iced::widget::opaque(panel),
+        anchor,
+        bottom_inset: bottom_inset.max(0.0),
+    })
+}
+
+struct ClampedPin<'a> {
+    content: Element<'a, Message>,
+    anchor: iced::Point,
+    bottom_inset: f32,
+}
+
+impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
+    fn tag(&self) -> widget::tree::Tag {
+        self.content.as_widget().tag()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        self.content.as_widget().state()
+    }
+
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        self.content.as_widget_mut().diff(tree);
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        const MARGIN: f32 = 4.0;
+
+        let max = limits.max();
+        let safe = Size::new(
+            (max.width - MARGIN * 2.0).max(0.0),
+            (max.height - self.bottom_inset - MARGIN * 2.0).max(0.0),
+        );
+        let mut node = self.content.as_widget_mut().layout(
+            tree,
+            renderer,
+            &layout::Limits::new(Size::ZERO, safe),
+        );
+        let content = node.size();
+
+        let max_x = (max.width - MARGIN - content.width).max(MARGIN);
+        let right = self.anchor.x;
+        let left = self.anchor.x - content.width;
+        let x = if right <= max_x {
+            right.max(MARGIN)
+        } else if left >= MARGIN {
+            left
+        } else {
+            max_x
+        };
+
+        let max_y =
+            (max.height - self.bottom_inset - MARGIN - content.height).max(MARGIN);
+        let below = self.anchor.y;
+        let above = self.anchor.y - content.height;
+        let y = if below <= max_y {
+            below.max(MARGIN)
+        } else if above >= MARGIN {
+            above
+        } else {
+            max_y
+        };
+
+        node = node.move_to(iced::Point::new(x, y));
+        let size = limits.resolve(Length::Fill, Length::Fill, node.size());
+        layout::Node::with_children(size, vec![node])
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.content.as_widget_mut().operate(
+            tree,
+            layout.children().next().unwrap(),
+            renderer,
+            operation,
+        );
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            tree,
+            event,
+            layout.children().next().unwrap(),
+            cursor,
+            renderer,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        self.content.as_widget().mouse_interaction(
+            tree,
+            layout.children().next().unwrap(),
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        if let Some(clipped_viewport) = bounds.intersection(viewport) {
+            self.content.as_widget().draw(
+                tree,
+                renderer,
+                theme,
+                style,
+                layout.children().next().unwrap(),
+                cursor,
+                &clipped_viewport,
+            );
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        self.content.as_widget_mut().overlay(
+            tree,
+            layout.children().next().unwrap(),
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
 // ── Viewport right-click context menu ──────────────────────────────────────
 
 pub(super) fn viewport_context_menu_overlay(
     pos: iced::Point,
+    bottom_inset: f32,
     has_cmd: bool,
     has_selection: bool,
     isolation_active: bool,
@@ -884,14 +1072,21 @@ pub(super) fn viewport_context_menu_overlay(
         ));
     }
 
-    let menu_col = column(items).spacing(0).width(iced::Length::Fixed(180.0));
+    let menu_col = column(items).spacing(0).width(Length::Fixed(180.0));
+    let menu_col = scrollable(menu_col)
+        .height(Length::Shrink)
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new()
+                .width(8)
+                .scroller_width(6),
+        ));
 
     let menu = container(menu_col)
         .style(container::bordered_box)
         .padding([4, 0])
-        .width(iced::Length::Fixed(180.0));
+        .width(Length::Fixed(180.0));
 
-    position_canvas_overlay(pos, menu.into())
+    position_canvas_overlay_clamped(pos, bottom_inset, menu.into())
 }
 
 /// One-shot snap override menu (Shift+RMB, #337): a cursor-anchored grid of

@@ -1353,8 +1353,19 @@ impl OpenCADStudio {
                     .take(3)
                     .cloned()
                     .collect();
+                // The command line overlays the bottom of the drawing stack.
+                // Keep context menus above its interactive input/history area.
+                let command_line_inset = if self.command_line.history_open {
+                    self.command_line.history_height.clamp(
+                        crate::ui::command_line::HISTORY_HEIGHT_MIN,
+                        crate::ui::command_line::history_max_height(self.win_size.1),
+                    ) + 72.0
+                } else {
+                    34.0
+                };
                 viewport_stack = viewport_stack.push(viewport_context_menu_overlay(
                     p,
+                    command_line_inset,
                     has_cmd,
                     has_selection,
                     isolation_active,
