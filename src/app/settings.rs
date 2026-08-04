@@ -147,6 +147,8 @@ pub struct UserSettings {
     /// PICKDRAG (#226): `false` (default) = press-drag draws the freeform
     /// lasso; `true` = press-drag draws a rectangle marquee instead.
     pub pick_drag_rect: bool,
+    /// Show the floating Quick Properties panel when objects are selected.
+    pub quick_properties: bool,
     /// Persisted viewport background colours (0–255 RGB); `None` = app default
     /// (dark grey model / off-white paper). Applied to every drawing tab on
     /// launch and to tabs opened later, so a chosen background survives restarts
@@ -181,6 +183,7 @@ impl Default for UserSettings {
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             pick_add: true,
             pick_drag_rect: false,
+            quick_properties: false,
             bg_color: None,
             paper_bg_color: None,
             language: crate::i18n::Language::default(),

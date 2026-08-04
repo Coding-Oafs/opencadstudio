@@ -287,6 +287,7 @@ impl OpenCADStudio {
             default_save_format: self.default_save_format.clone(),
             pick_add: self.pick_add,
             pick_drag_rect: self.pick_drag_rect,
+            quick_properties: self.quick_properties,
             bg_color: self.default_bg_color.map(f4_to_u3),
             paper_bg_color: self.default_paper_bg_color.map(f4_to_u3),
             language: self.language,
@@ -325,6 +326,7 @@ impl OpenCADStudio {
             crate::io::canonical_save_format(&s.default_save_format).to_string();
         self.pick_add = s.pick_add;
         self.pick_drag_rect = s.pick_drag_rect;
+        self.quick_properties = s.quick_properties;
         self.default_bg_color = s.bg_color.map(u3_to_f4);
         self.default_paper_bg_color = s.paper_bg_color.map(u3_to_f4);
         if crate::i18n::set_language(s.language).is_ok() {

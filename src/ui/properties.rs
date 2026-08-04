@@ -504,7 +504,7 @@ impl PropertiesPanel {
     /// editable section rows as the docked panel, sized to its content.
     /// Returns `None` when nothing is selected.
     pub fn quick_view(&self) -> Option<Element<'_, Message>> {
-        if self.sections.is_empty() {
+        if self.source_handles.is_empty() || self.sections.is_empty() {
             return None;
         }
         let title = container(
@@ -527,13 +527,15 @@ impl PropertiesPanel {
             .width(Length::Fill)
             .padding([4, 10]);
 
-        let mut col = column![title].spacing(0);
+        let mut sections = column![].spacing(0);
         for section in &self.sections {
-            col = col.push(self.render_section(section));
+            sections = sections.push(self.render_section(section));
         }
 
+        let content = scrollable(sections).height(Length::Shrink);
+
         Some(
-            container(col)
+            container(column![title, content].spacing(0))
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
                     container::Style {

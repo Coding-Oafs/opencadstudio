@@ -23,8 +23,8 @@ mod viewcube;
 
 use controls::{dyn_component_value, viewport_controls};
 use overlay::{
-    mtext_editor_overlay, position_canvas_overlay, qselect_overlay, text_inline_overlay,
-    viewport_context_menu_overlay,
+    mtext_editor_overlay, position_canvas_overlay, position_canvas_overlay_near_cursor,
+    qselect_overlay, text_inline_overlay, viewport_context_menu_overlay,
 };
 use viewcube::{viewcube_nav_controls, viewcube_ucs_picker, UCS_PICKER_W};
 
@@ -1208,12 +1208,25 @@ impl OpenCADStudio {
             }
         }
 
-        // Quick Properties: compact floating property panel on selection,
-        // anchored at the canvas top-left so it doesn't track the cursor.
+        // Reserve the overlaid command line when placing cursor-anchored panels.
+        let command_line_inset = if self.command_line.history_open {
+            self.command_line.history_height.clamp(
+                crate::ui::command_line::HISTORY_HEIGHT_MIN,
+                crate::ui::command_line::history_max_height(self.win_size.1),
+            ) + 72.0
+        } else {
+            34.0
+        };
+
+        // Quick Properties: stay near the selection cursor, flipping around
+        // it as needed to remain inside the visible drawing area.
         if self.quick_properties && !tab.is_start {
             if let Some(panel) = tab.properties.quick_view() {
-                viewport_stack = viewport_stack
-                    .push(position_canvas_overlay(iced::Point::new(12.0, 12.0), panel));
+                viewport_stack = viewport_stack.push(position_canvas_overlay_near_cursor(
+                    self.quick_properties_anchor,
+                    command_line_inset,
+                    panel,
+                ));
             }
         }
 
@@ -1353,16 +1366,6 @@ impl OpenCADStudio {
                     .take(3)
                     .cloned()
                     .collect();
-                // The command line overlays the bottom of the drawing stack.
-                // Keep context menus above its interactive input/history area.
-                let command_line_inset = if self.command_line.history_open {
-                    self.command_line.history_height.clamp(
-                        crate::ui::command_line::HISTORY_HEIGHT_MIN,
-                        crate::ui::command_line::history_max_height(self.win_size.1),
-                    ) + 72.0
-                } else {
-                    34.0
-                };
                 viewport_stack = viewport_stack.push(viewport_context_menu_overlay(
                     p,
                     command_line_inset,

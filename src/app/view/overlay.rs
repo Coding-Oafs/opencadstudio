@@ -752,6 +752,22 @@ fn position_canvas_overlay_clamped<'a>(
         content: iced::widget::opaque(panel),
         anchor,
         bottom_inset: bottom_inset.max(0.0),
+        gap: 0.0,
+    })
+}
+
+/// Keep a floating panel close to the cursor without letting it cover the
+/// pointer or leave the drawing's safe rectangle.
+pub(super) fn position_canvas_overlay_near_cursor<'a>(
+    cursor: iced::Point,
+    bottom_inset: f32,
+    panel: Element<'a, Message>,
+) -> Element<'a, Message> {
+    Element::new(ClampedPin {
+        content: iced::widget::opaque(panel),
+        anchor: cursor,
+        bottom_inset: bottom_inset.max(0.0),
+        gap: 12.0,
     })
 }
 
@@ -759,6 +775,7 @@ struct ClampedPin<'a> {
     content: Element<'a, Message>,
     anchor: iced::Point,
     bottom_inset: f32,
+    gap: f32,
 }
 
 impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
@@ -799,8 +816,8 @@ impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
         let content = node.size();
 
         let max_x = (max.width - MARGIN - content.width).max(MARGIN);
-        let right = self.anchor.x;
-        let left = self.anchor.x - content.width;
+        let right = self.anchor.x + self.gap;
+        let left = self.anchor.x - self.gap - content.width;
         let x = if right <= max_x {
             right.max(MARGIN)
         } else if left >= MARGIN {
@@ -811,8 +828,8 @@ impl Widget<Message, Theme, iced::Renderer> for ClampedPin<'_> {
 
         let max_y =
             (max.height - self.bottom_inset - MARGIN - content.height).max(MARGIN);
-        let below = self.anchor.y;
-        let above = self.anchor.y - content.height;
+        let below = self.anchor.y + self.gap;
+        let above = self.anchor.y - self.gap - content.height;
         let y = if below <= max_y {
             below.max(MARGIN)
         } else if above >= MARGIN {

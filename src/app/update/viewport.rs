@@ -3530,6 +3530,10 @@ impl OpenCADStudio {
             sel.left_dragging = false;
         }
 
+        if selection_just_completed {
+            self.quick_properties_anchor = p_full;
+        }
+
         if is_gathering && selection_just_completed {
             let handles: Vec<Handle> = self.tabs[i]
                 .scene
