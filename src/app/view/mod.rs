@@ -199,6 +199,21 @@ impl OpenCADStudio {
             theme_text.a,
         ];
         let is_paper = tab.scene.current_layout != "Model";
+        let committed_render_mode = if is_paper {
+            tab.scene
+                .active_viewport_render_mode()
+                .unwrap_or(tab.render_mode)
+        } else {
+            tab.render_mode
+        };
+        // Gallery hover is a non-destructive live preview: only the shader's
+        // input changes. Dismissal restores the committed mode, while clicking
+        // a row follows the normal SetRenderMode path and persists it.
+        let viewport_render_mode = if self.render_mode_menu_open {
+            self.render_mode_preview.unwrap_or(committed_render_mode)
+        } else {
+            committed_render_mode
+        };
         // Adaptive corner widgets: the ViewCube shows only while the active
         // viewport is wide enough to hold it *beside* the render-mode bar, whose
         // real width is measured each frame by its `DensitySwap` and read back
@@ -250,7 +265,7 @@ impl OpenCADStudio {
             shader(ViewportPane::model(
                 &tab.scene,
                 viewcube_visible,
-                tab.render_mode,
+                viewport_render_mode,
                 viewcube_text_color,
             ))
             .width(Fill)
@@ -268,7 +283,7 @@ impl OpenCADStudio {
             // mouse_areas' hover state and drops their move events).
             let scene = &tab.scene;
             let show_viewcube = viewcube_visible;
-            let render_mode = tab.render_mode;
+            let render_mode = viewport_render_mode;
             let size_probe: Element<'_, Message> = responsive(move |size| {
                 {
                     let mut sel = scene.selection.borrow_mut();
@@ -856,6 +871,8 @@ impl OpenCADStudio {
                 self.snapper.grid_snap(),
                 true,
                 tab.scene.model_tiles.borrow().len(),
+                self.render_mode_menu_open,
+                self.render_mode_preview,
             );
             // Adaptive: DensitySwap measures the bar's real width every frame
             // (reported into `render_bar_w`, which the ViewCube reads to decide
@@ -946,6 +963,8 @@ impl OpenCADStudio {
                 self.snapper.grid_snap(),
                 false,
                 0,
+                self.render_mode_menu_open,
+                self.render_mode_preview,
             );
             let adaptive: Element<'_, Message> = DensitySwap::new(vec![
                 iced::widget::opaque(bar),

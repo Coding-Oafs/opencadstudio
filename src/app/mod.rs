@@ -498,6 +498,11 @@ pub(super) struct OpenCADStudio {
     /// next frame to decide whether the ViewCube still has room beside it — so
     /// the two corner widgets adapt to the bar's real width, not an estimate.
     render_bar_w: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Whether the visual-style flyout beside the active viewport is open.
+    render_mode_menu_open: bool,
+    /// Mode whose sample is shown while the pointer moves through the flyout.
+    /// This does not alter the drawing until the corresponding row is clicked.
+    render_mode_preview: Option<acadrust::entities::ViewportRenderMode>,
     /// Whether the Properties panel is shown on the left (PROPERTIES).
     show_properties: bool,
     /// Whether the document file tabs are shown at the top (FILETAB).
@@ -1708,6 +1713,12 @@ pub enum Message {
     /// styles). Replaces the binary `SetWireframe` over time; the older
     /// message stays for ribbon/CLI back-compat and forwards.
     SetRenderMode(acadrust::entities::ViewportRenderMode),
+    /// Open or close the active viewport's visual-style flyout.
+    ToggleRenderModeMenu(acadrust::entities::ViewportRenderMode),
+    /// Close the visual-style flyout after Escape or an outside click.
+    DismissRenderModeMenu,
+    /// Change only the sample shown beside the visual-style list.
+    PreviewRenderMode(acadrust::entities::ViewportRenderMode),
     /// Switch camera projection: true = Orthographic, false = Perspective.
     SetProjection(bool),
     /// Select a ribbon module tab by index.
@@ -2933,6 +2944,8 @@ impl OpenCADStudio {
             ucs_icon_at_origin: true,
             show_viewcube: true,
             render_bar_w: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            render_mode_menu_open: false,
+            render_mode_preview: None,
             show_properties: true,
             show_file_tabs: true,
             show_layout_tabs: true,

@@ -82,8 +82,10 @@ impl Scene {
     ///   scene camera (tiled splits will append more later). `model_mode`
     ///   supplies its render mode (held on the tab, not the scene).
     /// - **Paper layout**: one instance per content viewport entity
-    ///   (`id > 1`, owned by the current layout block, switched on),
-    ///   using each viewport's own camera and render mode.
+    ///   (`id > 1`, owned by the current layout block, switched on), using each
+    ///   viewport's own camera and render mode. `model_mode` temporarily
+    ///   overrides the active viewport so the visual-style gallery can preview
+    ///   on hover without modifying the document.
     pub fn active_viewports(
         &self,
         canvas_w: f32,
@@ -182,7 +184,11 @@ impl Scene {
                 tile_idx: None,
                 screen_rect,
                 camera,
-                render_mode: vp.render_mode,
+                render_mode: if self.active_viewport == Some(h) {
+                    model_mode
+                } else {
+                    vp.render_mode
+                },
                 active: self.active_viewport == Some(h),
                 grid_on: vp.status.grid_on,
                 paper_sheet: false,

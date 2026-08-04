@@ -108,12 +108,15 @@ impl Face3DGpu {
     ///   true depth; fills with empty `fill_tris_low` (2D fills — text greek,
     ///   MultiLeader / dimension backgrounds) feed the 2D draw-order buffer.
     /// - `keep_3d_mesh_fills`: when false (wireframe modes), the 3D side
-    ///   is left empty; the 2D side is always populated.
+    ///   is left empty.
+    /// - `show_2d_solid_fills`: false only for Wireframe 3D; removes the
+    ///   legacy planar SOLID interior while keeping other 2-D overlays.
     pub fn from_wires(
         device: &wgpu::Device,
         face3d_wires: &[WireModel],
         all_wires: &[WireModel],
         keep_3d_mesh_fills: bool,
+        show_2d_solid_fills: bool,
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) -> Self {
         let depth_of =
@@ -168,11 +171,15 @@ impl Face3DGpu {
         // with both fill_tris and points (mesh edges + faces) keep the dim
         // so PolyfaceMesh / PolygonMesh still look 3-D-shaded.
         //
-        // 2-D fills always go to `verts_2d` (visible in every mode).
+        // 2-D fills go to `verts_2d`; only legacy planar SOLID interiors are
+        // omitted by Wireframe 3D.
         // 3-D mesh face data goes to `verts_3d` only when
         // `keep_3d_mesh_fills` is true.
         for wire in all_wires {
             if wire.fill_tris.is_empty() {
+                continue;
+            }
+            if !show_2d_solid_fills && wire.fill_is_2d_solid {
                 continue;
             }
             // A real 3-D surface fill (PolyfaceMesh / PolygonMesh) carries a

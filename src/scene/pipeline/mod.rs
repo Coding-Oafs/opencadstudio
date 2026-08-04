@@ -296,11 +296,12 @@ pub struct Pipeline {
     /// a pick bumps only `selection_generation`, refreshing the overlay without
     /// touching the main wire buffers.
     pub cached_selection: (u64, u64),
-    /// `(wire_content_id, face3d_fill_active)` the Face3D edge/fill buffers were
-    /// uploaded for. A stable content id avoids retaining the resident wire Arc:
+    /// `(wire_content_id, face3d_fill_active, show_2d_solid_fills)` the Face3D
+    /// edge/fill buffers were uploaded for. A stable content id avoids retaining
+    /// the resident wire Arc:
     /// that Arc must stay uniquely owned by Scene so a small edit can splice it
     /// in place instead of rebuilding the whole drawing.
-    pub cached_face3d_key: (u64, bool),
+    pub cached_face3d_key: (u64, bool, bool),
     /// Handle → indices into the resident wire set, built once per wire upload
     /// (when `cached_wire_id` changes). Lets the selection/hover xray overlay
     /// gather just the highlighted entity's wires (`O(highlighted)`) instead of
@@ -1710,7 +1711,7 @@ impl Pipeline {
             cached_epoch: (u64::MAX, u64::MAX, u64::MAX),
             cached_wire_id: u64::MAX,
             cached_selection: (u64::MAX, u64::MAX),
-            cached_face3d_key: (u64::MAX, false),
+            cached_face3d_key: (u64::MAX, false, false),
             wire_handle_index: std::sync::Arc::new(rustc_hash::FxHashMap::default()),
             render_sig: u64::MAX,
             skip_geometry: false,
@@ -2269,6 +2270,7 @@ impl Pipeline {
         face3d_wires: &[WireModel],
         all_wires: &[WireModel],
         wireframe_only: bool,
+        show_2d_solid_fills: bool,
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) {
         let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
@@ -2279,11 +2281,15 @@ impl Pipeline {
         // Fill buffer split: 3D quads + PolyfaceMesh / PolygonMesh face
         // tris go to `chunks_3d` (gated by `keep_3d_mesh_fills`);
         // 2D fills (text-LOD greek, MultiLeader background) go to
-        // `chunks_2d` and are visible in every mode.
+        // `chunks_2d`. The 3-D wireframe additionally removes only legacy
+        // planar SOLID interiors; HATCH is handled by a separate pass.
         let keep_3d_mesh_fills = !wireframe_only;
+        let solid_fill_hidden = |wire: &WireModel| {
+            !show_2d_solid_fills && wire.fill_is_2d_solid
+        };
         let has_any_2d_fill = all_wires
             .iter()
-            .any(|w| !w.fill_tris.is_empty() && w.points.is_empty());
+            .any(|w| !w.fill_tris.is_empty() && w.points.is_empty() && !solid_fill_hidden(w));
         let has_any_3d_fill = !face3d_wires.is_empty()
             || all_wires
                 .iter()
@@ -2297,6 +2303,7 @@ impl Pipeline {
                 face3d_wires,
                 all_wires,
                 keep_3d_mesh_fills,
+                show_2d_solid_fills,
                 depth_map,
             ));
         }

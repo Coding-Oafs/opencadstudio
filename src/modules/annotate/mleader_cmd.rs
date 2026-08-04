@@ -205,6 +205,7 @@ fn preview_wire(pts: &[Vec3], arrow_size: f32) -> WireModel {
         world_width: 0.0,
         depth_override: None,
         fill_is_3d: false,
+        fill_is_2d_solid: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,

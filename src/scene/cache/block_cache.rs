@@ -48,6 +48,9 @@ pub struct LocalWire {
     pub tangent_geoms: Vec<TangentGeom>,
     pub fill_tris: Vec<[f32; 3]>,
     pub fill_tris_low: Vec<[f32; 3]>,
+    /// Preserves the planar SOLID classification through block expansion so
+    /// it never gets merged with unrelated annotation fills of the same style.
+    pub fill_is_2d_solid: bool,
     /// Thickness-wall pick geometry, transformed by the insert like `points`
     /// so a block child's extruded wall stays selectable at the instance's
     /// place and scale. Never reaches the GPU.
@@ -736,6 +739,7 @@ fn tessellate_sub_local(
             tangent_geoms: wire.tangent_geoms,
             fill_tris: wire.fill_tris,
             fill_tris_low: wire.fill_tris_low,
+            fill_is_2d_solid: wire.fill_is_2d_solid,
             pick_tris: wire.pick_tris,
             pick_tris_low: wire.pick_tris_low,
             color: wire.color,
@@ -1191,6 +1195,9 @@ struct StyleKey {
     /// discriminator, so greek fills must stay in their own batches even
     /// when their color/style would otherwise collide with regular wires.
     is_fill_only: bool,
+    /// Part of the batch key so planar SOLID fills remain independently
+    /// switchable after block geometry is merged by style.
+    fill_is_2d_solid: bool,
     /// Bit-cast composed block-local depth for band wires (`0` = no override).
     /// Keeps bands of different in-block draw ranks in separate batches so
     /// each finalized WireModel carries one correct `depth_override`.
@@ -1220,6 +1227,7 @@ struct BatchEntry {
     /// reconstructs `high + low`). Without it absolute f32 fills quantize to
     /// ~0.5 m and the greek-text rectangles shear.
     fill_tris_low: Vec<[f32; 3]>,
+    fill_is_2d_solid: bool,
     /// Accumulated thickness-wall pick geometry, paired high/low like
     /// `fill_tris`. Pick-only — no GPU batch reads this.
     pick_tris: Vec<[f32; 3]>,
@@ -1261,6 +1269,7 @@ impl BatchEntry {
         aci: u8,
         plinegen: bool,
         _is_fill_only: bool,
+        fill_is_2d_solid: bool,
     ) -> Self {
         // `is_fill_only` is part of the StyleKey hash so greek fills never
         // share a batch with regular wires (otherwise the finalized
@@ -1275,6 +1284,7 @@ impl BatchEntry {
             world_width,
             aci,
             plinegen,
+            fill_is_2d_solid,
             min_x: f32::INFINITY,
             min_y: f32::INFINITY,
             max_x: f32::NEG_INFINITY,
@@ -1308,6 +1318,7 @@ impl Batches {
                     world_width: b.world_width,
                     depth_override: b.local_depth,
                     fill_is_3d: false,
+                    fill_is_2d_solid: b.fill_is_2d_solid,
                     pick_tris: b.pick_tris,
                     pick_tris_low: b.pick_tris_low,
                     dash_from_start: false,
@@ -1352,6 +1363,7 @@ fn style_key(
     aci: u8,
     plinegen: bool,
     is_fill_only: bool,
+    fill_is_2d_solid: bool,
     local_depth: Option<f32>,
 ) -> StyleKey {
     StyleKey {
@@ -1377,6 +1389,7 @@ fn style_key(
         aci,
         plinegen,
         is_fill_only,
+        fill_is_2d_solid,
         depth_bits: local_depth.map_or(0, f32::to_bits),
     }
 }
@@ -1708,6 +1721,7 @@ fn emit_wire(
         lw.aci,
         lw.plinegen,
         lw.is_fill_only,
+        lw.fill_is_2d_solid,
         local_depth,
     );
 
@@ -1730,6 +1744,7 @@ fn emit_wire(
             lw.aci,
             lw.plinegen,
             lw.is_fill_only,
+            lw.fill_is_2d_solid,
         )
     });
     entry.local_depth = local_depth;

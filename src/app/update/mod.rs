@@ -1191,7 +1191,30 @@ impl OpenCADStudio {
                 Task::done(Message::SetRenderMode(mode))
             }
 
-            Message::SetRenderMode(mode) => self.on_set_render_mode(mode),
+            Message::SetRenderMode(mode) => {
+                self.render_mode_menu_open = false;
+                self.render_mode_preview = None;
+                self.on_set_render_mode(mode)
+            }
+
+            Message::ToggleRenderModeMenu(mode) => {
+                self.render_mode_menu_open = !self.render_mode_menu_open;
+                self.render_mode_preview = self.render_mode_menu_open.then_some(mode);
+                Task::none()
+            }
+
+            Message::DismissRenderModeMenu => {
+                self.render_mode_menu_open = false;
+                self.render_mode_preview = None;
+                Task::none()
+            }
+
+            Message::PreviewRenderMode(mode) => {
+                if self.render_mode_menu_open {
+                    self.render_mode_preview = Some(mode);
+                }
+                Task::none()
+            }
 
             Message::SetProjection(ortho) => {
                 use crate::scene::Projection;

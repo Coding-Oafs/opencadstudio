@@ -16,8 +16,9 @@ use iced::{mouse, Event, Rectangle};
 pub struct ViewportPane<'a> {
     pub scene: &'a Scene,
     pub show_viewcube: bool,
-    /// Render mode applied to the Model layout's tiles. Paper-space content
-    /// viewports use the render mode stored on their own viewport entity.
+    /// Render mode applied to the active Model tile or active paper viewport.
+    /// The app may supply a temporary gallery-hover mode; inactive viewports
+    /// keep the values stored on their own tile/entity.
     pub render_mode: acadrust::entities::ViewportRenderMode,
     /// `Some(tile_idx)` → this widget renders a single Model pane (one shader
     /// per `pane_grid` pane, filling its own bounds). `None` → the unified

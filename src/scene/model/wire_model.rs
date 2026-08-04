@@ -145,6 +145,9 @@ pub struct WireModel {
     /// every view mode. The render pass can't infer this from `fill_tris_low`
     /// alone — a 2-D fill at UTM scale carries a low residual too.
     pub fill_is_3d: bool,
+    /// `true` only for a planar SOLID entity's interior. Wireframe 3D omits
+    /// this fill while preserving its perimeter and every other 2-D overlay.
+    pub fill_is_2d_solid: bool,
 }
 
 impl WireModel {
@@ -196,6 +199,7 @@ impl WireModel {
             world_width: 0.0,
             depth_override: None,
             fill_is_3d: false,
+            fill_is_2d_solid: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             text_verts: Vec::new(),
@@ -430,6 +434,7 @@ impl Default for WireModel {
             fill_tris_low: Vec::new(),
             depth_override: None,
             fill_is_3d: false,
+            fill_is_2d_solid: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
         }

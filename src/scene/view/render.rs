@@ -100,6 +100,10 @@ pub struct ViewportData {
     /// Hatch / wipeout uploads are deliberately *not* gated by this flag —
     /// the user toggle should only affect 3D solids, not 2D fills.
     pub(in crate::scene) view_wireframe: bool,
+    /// Legacy planar SOLID interiors remain filled in the optimized 2-D
+    /// wireframe, but become outlines in the 3-D wireframe. HATCH uses its
+    /// own pipeline and is intentionally unaffected.
+    pub(in crate::scene) show_2d_solid_fills: bool,
     /// Whether the active render mode wants 3D mesh fills uploaded. Off
     /// in `Wireframe2D` / `Wireframe3D`; on for every shaded variant. Set
     /// at the same point `view_wireframe` is computed so the two stay in
@@ -169,7 +173,9 @@ pub struct Primitive {
 /// Flags the render pipeline consumes, derived from
 /// [`acadrust::entities::ViewportRenderMode`]. Each shaded variant fills
 /// 3D faces and meshes; the pure wireframes drop the fill and keep only
-/// edges. `*WithEdges` variants render both. HiddenLine uses a depth
+/// edges. The optimized 2-D wireframe retains planar SOLID interiors and
+/// entity draw order; the 3-D wireframe uses true depth and outlines them.
+/// `*WithEdges` variants render both. HiddenLine uses a depth
 /// prepass: face/mesh fills are uploaded but routed through depth-only
 /// pipelines so hidden edges drop out. `FlatShaded` vs `GouraudShaded`
 /// differ in shader uniform only and produce identical fill flags here.
@@ -179,6 +185,7 @@ pub struct RenderModeFlags {
     pub mesh_fill: bool,
     pub show_3d_edges: bool,
     pub hidden_line: bool,
+    pub show_2d_solid_fills: bool,
     /// `true` for FlatShaded / FlatShadedWithEdges. The mesh shader
     /// reads `Uniforms.flat_shade` and replaces the smooth per-vertex
     /// normal with a per-triangle face normal so each triangle reads
@@ -191,11 +198,20 @@ pub fn render_mode_flags(
 ) -> RenderModeFlags {
     use acadrust::entities::ViewportRenderMode as M;
     match mode {
-        M::Wireframe2D | M::Wireframe3D => RenderModeFlags {
+        M::Wireframe2D => RenderModeFlags {
             face3d_fill: false,
             mesh_fill: false,
             show_3d_edges: true,
             hidden_line: false,
+            show_2d_solid_fills: true,
+            flat_shade: false,
+        },
+        M::Wireframe3D => RenderModeFlags {
+            face3d_fill: false,
+            mesh_fill: false,
+            show_3d_edges: true,
+            hidden_line: false,
+            show_2d_solid_fills: false,
             flat_shade: false,
         },
         M::HiddenLine => RenderModeFlags {
@@ -203,6 +219,7 @@ pub fn render_mode_flags(
             mesh_fill: true,
             show_3d_edges: true,
             hidden_line: true,
+            show_2d_solid_fills: true,
             flat_shade: false,
         },
         M::FlatShaded => RenderModeFlags {
@@ -210,6 +227,7 @@ pub fn render_mode_flags(
             mesh_fill: true,
             show_3d_edges: false,
             hidden_line: false,
+            show_2d_solid_fills: true,
             flat_shade: true,
         },
         M::GouraudShaded => RenderModeFlags {
@@ -217,6 +235,7 @@ pub fn render_mode_flags(
             mesh_fill: true,
             show_3d_edges: false,
             hidden_line: false,
+            show_2d_solid_fills: true,
             flat_shade: false,
         },
         M::FlatShadedWithEdges => RenderModeFlags {
@@ -224,6 +243,7 @@ pub fn render_mode_flags(
             mesh_fill: true,
             show_3d_edges: true,
             hidden_line: false,
+            show_2d_solid_fills: true,
             flat_shade: true,
         },
         M::GouraudShadedWithEdges => RenderModeFlags {
@@ -231,6 +251,7 @@ pub fn render_mode_flags(
             mesh_fill: true,
             show_3d_edges: true,
             hidden_line: false,
+            show_2d_solid_fills: true,
             flat_shade: false,
         },
     }
@@ -271,7 +292,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_wire_id = u64::MAX;
                 inner.cached_selection = (u64::MAX, u64::MAX);
                 inner.cached_mesh_content_id = u64::MAX;
-                inner.cached_face3d_key = (u64::MAX, false);
+                inner.cached_face3d_key = (u64::MAX, false, false);
                 inner.cached_hatch_source = None;
                 inner.cached_preview_hatch_source = None;
                 inner.cached_wipeout_source = None;
@@ -440,18 +461,26 @@ impl shader::Primitive for Primitive {
                     .map_or(true, |source| !Arc::ptr_eq(&source, &draw_depths))
                 || (inner.cached_face3d_key.0 != vp.wire_content_id
                     && !face_pass_unchanged);
-            if face3d_changed || face3d_fill_active != inner.cached_face3d_key.1 {
+            if face3d_changed
+                || face3d_fill_active != inner.cached_face3d_key.1
+                || vp.show_2d_solid_fills != inner.cached_face3d_key.2
+            {
                 inner.upload_face3d(
                     device,
                     &vp.face3d_wires[..],
                     &vp_wires[..],
                     !face3d_fill_active,
+                    vp.show_2d_solid_fills,
                     &draw_depths,
                 );
                 inner.cached_face3d_source = Some(Arc::clone(&vp.face3d_wires));
                 inner.cached_face3d_depth_source = Some(Arc::downgrade(&draw_depths));
             }
-            inner.cached_face3d_key = (vp.wire_content_id, face3d_fill_active);
+            inner.cached_face3d_key = (
+                vp.wire_content_id,
+                face3d_fill_active,
+                vp.show_2d_solid_fills,
+            );
             // Wire buffers are world-space, so a camera move alone doesn't
             // change them — only the view_proj uniform (uploaded every frame).
             // Gate the upload on the wire content id instead of the camera tick:
@@ -1117,6 +1146,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     vp.wire_content_id.hash(&mut h);
     vp.fill_mode.hash(&mut h);
     vp.view_wireframe.hash(&mut h);
+    vp.show_2d_solid_fills.hash(&mut h);
     vp.mesh_fill.hash(&mut h);
     vp.show_3d_edges.hash(&mut h);
     vp.hidden_line.hash(&mut h);
@@ -2272,15 +2302,15 @@ impl Scene {
         // are NOT part of this buffer anymore (they go in a separate per-frame
         // overlay buffer below), so the base id is the source's stable content
         // gen — a drag or camera move never re-uploads the base wire set.
-        let wire_content_id = self.last_model_wire_gen.get();
-        let wire_patch = self.model_wire_patch_for(wire_content_id);
+        let base_wire_content_id = self.last_model_wire_gen.get();
+        let base_wire_patch = self.model_wire_patch_for(base_wire_content_id);
         // Split Face3D wires from the rest. The split is content-only (keyed
         // by the wire-set content id), so while the geometry is unchanged it's
         // memoized rather than re-walking every wire (handle lookup + clone)
         // each frame — for every source, since all ids are stable now.
         let (face3d_wires, other_arc) = {
-            let cached = { self.split_cache.borrow().get(&wire_content_id).cloned() };
-            let inherited_empty = if let Some((base, patch)) = wire_patch.as_ref() {
+            let cached = { self.split_cache.borrow().get(&base_wire_content_id).cloned() };
+            let inherited_empty = if let Some((base, patch)) = base_wire_patch.as_ref() {
                 if patch.face_pass_changed {
                     None
                 } else {
@@ -2311,12 +2341,12 @@ impl Scene {
                 if c.len() > 8 {
                     c.clear();
                 }
-                c.insert(wire_content_id, (fa.clone(), oa.clone()));
+                c.insert(base_wire_content_id, (fa.clone(), oa.clone()));
                 (fa, oa)
             });
             self.split_cache
                 .borrow_mut()
-                .entry(wire_content_id)
+                .entry(base_wire_content_id)
                 .or_insert_with(|| (fa.clone(), oa.clone()));
             (fa, oa.unwrap_or_else(|| Arc::clone(&base_arc)))
         };
@@ -2325,6 +2355,24 @@ impl Scene {
         // per-frame buffer so the (potentially huge) base buffer stays resident
         // and unchanged while a command preview or grip drag is live.
         let all_wires = other_arc;
+        // The 3-D wireframe deliberately ignores entity draw order and lets
+        // true depth decide overlaps. Tag its resident wire id separately so
+        // switching between the 2-D and 3-D styles rebuilds the GPU constants
+        // even though the world-space geometry itself did not change. The
+        // incremental patch's base id receives the same tag, preserving the
+        // arena fast path after the first mode switch.
+        let wire_mode_tag = u64::from(
+            inst.render_mode == acadrust::entities::ViewportRenderMode::Wireframe3D,
+        );
+        let wire_content_id = base_wire_content_id
+            .wrapping_mul(2)
+            .wrapping_add(wire_mode_tag);
+        let wire_patch = base_wire_patch.map(|(base, patch)| {
+            (
+                base.wrapping_mul(2).wrapping_add(wire_mode_tag),
+                patch,
+            )
+        });
         // A live overlay belongs to one drawing space, but every viewport that
         // displays that space must project the same world-space preview. In a
         // paper layout, model-space overlays go to all content viewports while
@@ -2490,7 +2538,13 @@ impl Scene {
         } else {
             0x3000_0000_0000_0000 | inst.handle.value()
         };
-        let draw_depths = self.draw_depth_map();
+        let draw_depths = if inst.render_mode
+            == acadrust::entities::ViewportRenderMode::Wireframe3D
+        {
+            Arc::clone(&self.no_draw_depths)
+        } else {
+            self.draw_depth_map()
+        };
         let text_verts = self.gather_text_verts(
             &all_wires,
             wire_content_id,
@@ -2567,6 +2621,7 @@ impl Scene {
             show_viewcube: inst.active && show_viewcube,
             fill_mode: self.document.header.fill_mode,
             view_wireframe,
+            show_2d_solid_fills: flags.show_2d_solid_fills,
             mesh_fill: flags.mesh_fill,
             show_3d_edges: flags.show_3d_edges,
             display_silhouette: flags.hidden_line || self.document.header.display_silhouette,
