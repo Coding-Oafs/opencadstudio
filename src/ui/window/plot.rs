@@ -623,7 +623,6 @@ pub fn view_window(
         Space::new().height(0).into()
     };
     let mut output_row = row![
-        text(t!("Output")).size(11).style(muted_style).width(92),
         iced::widget::pick_list(printer_sel, printer_opts, |value| value.to_string())
             .on_select(|choice| Message::PlotDlg(PlotDlgMsg::Printer(choice.raw)))
             .text_size(12)
@@ -640,6 +639,12 @@ pub fn view_window(
                 .padding([4, 8]),
         );
     }
+    let output_field = column![
+        text(t!("Output")).size(11).style(muted_style),
+        output_row,
+    ]
+    .spacing(4)
+    .width(Length::Fill);
     let copies_row: Element<'_, Message> = if s.to_file {
         Space::new().height(0).into()
     } else {
@@ -648,7 +653,7 @@ pub fn view_window(
     let printer_panel = panel(
         column![
             section_label(t!("Printer / plotter")),
-            output_row,
+            output_field,
             copies_row,
         ]
         .spacing(7),
