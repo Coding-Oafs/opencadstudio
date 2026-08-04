@@ -139,7 +139,7 @@ catalog-unit-type-419ce6a5da = इकाई का प्रकार:
 catalog-updated-julian-6-d935762c42 = अद्यतन (Julian): __ocs_fmt_0__
 catalog-user-elapsed-4-43a1242325 = उपयोगकर्ता को छोड़ दिया: __ocs_fmt_0__
 catalog-user-timer-70edaf24f6 = उपयोगकर्ता टाइमर: __ocs_fmt_0__
-catalog-user-vars-int-6bc5221565 = A var (int): __ocs_fmt_0__ __ocs_fmt_1__ __ocs_fmt_2__ __ocs_fmt_3__ __ocs_fmt_4__}
+catalog-user-vars-int-6bc5221565 = उपयोगकर्ता चर (पूर्णांक): __ocs_fmt_0__ __ocs_fmt_1__ __ocs_fmt_2__ __ocs_fmt_3__ __ocs_fmt_4__
 catalog-user-vars-real-6-6-6-6-6-ad2697f888 =   उपयोगकर्ता बनाम (वास्तविक):  __ocs_fmt_0__ __ocs_fmt_1__ __ocs_fmt_2__ __ocs_fmt_3__ __ocs_fmt_4__
 catalog-vp-id-w-1-h-1-1-1-scale-scale-4-state-4bf2fa0893 = VP #__ocs_fmt_0__: __ocs_fmt_1__ ×__ocs_fmt_2__ @ (__ocs_fmt_3__,__ocs_fmt_4__) स्केल = __ocs_fmt_5__ [__ocs_fmt_6__]
 catalog-version-guid-aac810d967 = संस्करण GUID: __ocs_fmt_0__
@@ -1134,7 +1134,7 @@ catalog-fillet-select-first-object-line-arc-lwpolyline-58adc645a9 = FILLET प�
 catalog-fillet-select-second-object-line-arc-lwpolylin-1ce334bd3e = FILLET दूसरा ऑब्जेक्ट चुनें (रेखा/आर्क/पॉलीलाइन) [R=__ocs_fmt_0__]:
 catalog-find-replace-replaced-1-occurrence-of-search-421cec5a6c = FIND/REPLACE: "__ocs_fmt_0__" की 1 घटना बदली।
 catalog-find-replace-replaced-replaced-occurrence-s-of-bc672bade0 = FIND/REPLACE: प्रतिस्थापित __ocs_fmt_0__ "(s)" की घटना__ocs_fmt_1__".
-catalog-find-replace-replaced-occurrence-s-of-67afb0211a = FIND/REPLACE: "__ocs_fmt_0__" → "__ocs_fmt_1__" की जगह __ocs_fmt_2__ की पुनरावृत्ति(s)"} की जगह ली।
+catalog-find-replace-replaced-occurrence-s-of-67afb0211a = FIND/REPLACE: "__ocs_fmt_1__" की __ocs_fmt_0__ आवृत्ति को "__ocs_fmt_2__" से बदला गया।
 catalog-find-not-found-8d3f5ddc7b = FIND: "__ocs_fmt_0__" नहीं मिला।
 catalog-find-specify-search-text-14b919119c = FIND: खोज पाठ निर्दिष्ट करें।
 catalog-find-match-es-for-51e43d7c22 = FIND: __ocs_fmt_0__ मैच (es) "__ocs_fmt_1__" के लिए।
