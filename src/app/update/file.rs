@@ -530,6 +530,13 @@ impl OpenCADStudio {
                 collapse: self.ribbon.collapse_mode(),
             },
             plot: self.plot_dialog.clone(),
+            shortcuts: crate::app::config::ShortcutConfig {
+                bindings: self
+                    .shortcut_bindings
+                    .iter()
+                    .map(|(key, command)| (key.clone(), command.clone()))
+                    .collect(),
+            },
         }
     }
 
@@ -565,6 +572,7 @@ impl OpenCADStudio {
         self.annotation_auto_scale = cfg.annotation_auto_scale.clamp(-4, 4);
         self.ribbon.set_collapse_mode(cfg.ribbon.collapse);
         self.plot_dialog = cfg.plot;
+        self.shortcut_bindings = cfg.shortcuts.bindings.into_iter().collect();
     }
 
     /// Write the config only when it changed since the last write, so a toggle

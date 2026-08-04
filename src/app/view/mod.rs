@@ -114,6 +114,47 @@ fn hatch_pattern_key_event(
     }
 }
 
+fn shortcut_key_name(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<String> {
+    let key = match key {
+        keyboard::Key::Character(value) if !value.is_empty() => value.to_uppercase(),
+        keyboard::Key::Named(named) => {
+            let name = format!("{named:?}");
+            match name.as_str() {
+                "ArrowUp" => "UP".to_string(),
+                "ArrowDown" => "DOWN".to_string(),
+                "ArrowLeft" => "LEFT".to_string(),
+                "ArrowRight" => "RIGHT".to_string(),
+                "PageUp" => "PAGEUP".to_string(),
+                "PageDown" => "PAGEDOWN".to_string(),
+                "Enter" | "Space" | "Escape" | "Delete" | "Backspace" | "Tab" | "Home"
+                | "End" | "Insert" => name.to_uppercase(),
+                _ if name.starts_with('F')
+                    && name[1..].chars().all(|ch| ch.is_ascii_digit()) =>
+                {
+                    name
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let mut parts = Vec::with_capacity(5);
+    if modifiers.control() {
+        parts.push("CTRL".to_string());
+    }
+    if modifiers.logo() {
+        parts.push("CMD".to_string());
+    }
+    if modifiers.alt() {
+        parts.push("ALT".to_string());
+    }
+    if modifiers.shift() {
+        parts.push("SHIFT".to_string());
+    }
+    parts.push(key);
+    Some(parts.join("+"))
+}
+
 /// `ViewportRenderMode` enum carries the raw DXF integers, not a label,
 /// so wrap it locally with a friendly name renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1842,12 +1883,10 @@ impl OpenCADStudio {
                         text,
                         ..
                     }) => {
-                        // Platform-aware accelerator modifier: Cmd on macOS,
-                        // Ctrl on Windows/Linux. Using `command()` rather than
-                        // `control()` makes Cmd+C/V/S/Z etc. work on Mac, per
-                        // the platform's keyboard conventions.
+                        #[cfg(target_arch = "wasm32")]
                         let accel = modifiers.command();
-                        let shift = modifiers.shift();
+                        let shortcut_modifier =
+                            modifiers.control() || modifiers.alt() || modifiers.logo();
                         // Any key that produces a printable glyph types it,
                         // even when its logical key resolves to navigation
                         // (NumLock-on Numpad8 / Numpad2 arrive as
@@ -1860,7 +1899,7 @@ impl OpenCADStudio {
                         // (a comma on German/European layouts), which the
                         // coordinate parser rejects. Force it to a decimal point
                         // from the physical key, independent of layout.
-                        if !accel
+                        if !shortcut_modifier
                             && status == Status::Ignored
                             && matches!(
                                 physical_key,
@@ -1872,7 +1911,7 @@ impl OpenCADStudio {
                         {
                             return Some(Message::CommandAppendChar(".".to_string()));
                         }
-                        if !accel && status == Status::Ignored {
+                        if !shortcut_modifier && status == Status::Ignored {
                             if let Some(t) = text.as_deref() {
                                 if !t.is_empty()
                                     && t.chars().all(|c| !c.is_control() && !c.is_whitespace())
@@ -1881,141 +1920,23 @@ impl OpenCADStudio {
                                 }
                             }
                         }
-                        match key {
-                            // Space is a literal space inside the MText preview
-                            // but finalises a command otherwise; the handler
-                            // decides based on editor state.
-                            keyboard::Key::Named(keyboard::key::Named::Space)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::CommandSpace)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::Enter)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::CommandFinalize)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                                Some(Message::CommandEscape)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::Delete)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::DeleteSelected)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::Backspace)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::CommandBackspace)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::Tab)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::DynTabNext)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::ArrowUp)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::CommandHistoryPrev)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::ArrowDown)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::CommandHistoryNext)
-                            }
-                            // Caret movement in the MText preview (no-op
-                            // otherwise; these arrows are unused elsewhere).
-                            keyboard::Key::Named(keyboard::key::Named::ArrowLeft)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::MTextCaretMove(-1))
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::ArrowRight)
-                                if status == Status::Ignored =>
-                            {
-                                Some(Message::MTextCaretMove(1))
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F1) => {
-                                Some(Message::Command("HELP".to_string()))
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F2) => {
-                                Some(Message::CommandHistoryToggle)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F3) => {
-                                Some(Message::ToggleSnapEnabled)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F7) => {
-                                Some(Message::ToggleGrid)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F8) => {
-                                Some(Message::ToggleOrtho)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F9) => {
-                                Some(Message::ToggleGridSnap)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F10) => {
-                                Some(Message::TogglePolar)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F11) => {
-                                Some(Message::ToggleOTrack)
-                            }
-                            keyboard::Key::Named(keyboard::key::Named::F12) => {
-                                Some(Message::ToggleDynInput)
-                            }
-                            keyboard::Key::Character(c) if accel => match c.as_str() {
-                                "0" => Some(Message::ToggleCleanScreen),
-                                "1" => Some(Message::ToggleProperties),
-                                "n" => Some(Message::TabNew),
-                                "o" => Some(Message::OpenFile),
-                                "p" => Some(Message::Command("PLOT".to_string())),
-                                "q" => Some(Message::Command("QUIT".to_string())),
-                                "s" if !shift => Some(Message::SaveFile),
-                                "s" if shift => Some(Message::SaveAs),
-                                "z" if !shift => Some(Message::Undo),
-                                "z" if shift => Some(Message::Redo),
-                                "y" => Some(Message::Redo),
-                                "f" | "h" => Some(Message::FindReplaceOpen),
-                                // Ctrl/Cmd+A: select all layer rows when the
-                                // Layer Manager is open, else all objects. The
-                                // update handler branches on the active modal.
-                                "a" if status == Status::Ignored => {
-                                    Some(Message::SelectAllShortcut)
+                        // A focused web text field needs the browser clipboard;
+                        // drawing shortcuts only run for ignored C/V events.
+                        #[cfg(target_arch = "wasm32")]
+                        if accel && status == Status::Captured {
+                            if let keyboard::Key::Character(value) = &key {
+                                if value.eq_ignore_ascii_case("v") {
+                                    return Some(Message::WebFieldPaste);
                                 }
-                                // Clipboard accelerators defer to a focused
-                                // text widget: when the command-line history
-                                // editor (or any text field) captures Ctrl+C/
-                                // X/V it copies/cuts/pastes its own text and
-                                // marks the event Captured, so we must NOT also
-                                // fire the drawing's COPYCLIP/CUTCLIP/paste.
-                                // Only when nothing captured (the drawing has
-                                // focus, status Ignored) do these run. (#232)
-                                "c" if shift && status == Status::Ignored => {
-                                    Some(Message::Command("COPYBASE".to_string()))
+                                if value.eq_ignore_ascii_case("c") {
+                                    return Some(Message::WebFieldCopy);
                                 }
-                                "c" if status == Status::Ignored => {
-                                    Some(Message::Command("COPYCLIP".to_string()))
-                                }
-                                "x" if status == Status::Ignored => {
-                                    Some(Message::Command("CUTCLIP".to_string()))
-                                }
-                                "v" if shift && status == Status::Ignored => {
-                                    Some(Message::Command("PASTEBLOCK".to_string()))
-                                }
-                                "v" if status == Status::Ignored => Some(Message::PasteShortcut),
-                                // Web: a focused text field captured Ctrl+C/V,
-                                // but iced's clipboard is a no-op there — route
-                                // through the async browser clipboard (#346).
-                                #[cfg(target_arch = "wasm32")]
-                                "v" => Some(Message::WebFieldPaste),
-                                #[cfg(target_arch = "wasm32")]
-                                "c" => Some(Message::WebFieldCopy),
-                                _ => None,
-                            },
-                            // Printable glyphs are already handled by the
-                            // text guard above the match; anything reaching
-                            // here is a non-typing key we don't bind.
-                            _ => None,
+                            }
                         }
+                        let shortcut = shortcut_key_name(&key, modifiers)?;
+                        (status == Status::Ignored
+                            || crate::app::shortcuts::is_global_key(&shortcut))
+                        .then_some(Message::ShortcutPressed(shortcut))
                     }
                     _ => None,
                 }

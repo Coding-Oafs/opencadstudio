@@ -19,6 +19,7 @@ pub mod plugin_host;
 mod properties;
 mod recent;
 mod settings;
+mod shortcuts;
 mod style_ops;
 mod text_inline;
 mod update;
@@ -790,8 +791,10 @@ pub(super) struct OpenCADStudio {
     theme_color_inputs: [String; 6],
 
     // ── Keyboard Shortcut Editor ──────────────────────────────────────────
-    /// User-defined function-key overrides: "F3" → command string.
-    shortcut_overrides: rustc_hash::FxHashMap<String, String>,
+    /// Complete editable key → command/action table.
+    shortcut_bindings: rustc_hash::FxHashMap<String, String>,
+    /// Working rows shown by the shortcut editor until Apply is pressed.
+    shortcut_editor_rows: Vec<(String, String)>,
 
     // ── Command Aliases ───────────────────────────────────────────────────
     /// Command-line aliases: uppercase abbreviation → uppercase command
@@ -2237,6 +2240,16 @@ pub enum Message {
     ShortcutsPanelOpen,
     #[allow(dead_code)]
     ShortcutsPanelClose,
+    ShortcutEditorInput {
+        idx: usize,
+        field: crate::ui::window::shortcuts::ShortcutField,
+        value: String,
+    },
+    ShortcutEditorAdd,
+    ShortcutEditorRemove(usize),
+    ShortcutEditorApply,
+    /// Canonical key emitted by the global keyboard subscription.
+    ShortcutPressed(String),
     // ── Command Alias Editor (ALIASEDIT) ────────────────────────────────
     /// Open the command-alias editor modal, seeding rows from the alias table.
     AliasEditorOpen,
@@ -3000,7 +3013,8 @@ impl OpenCADStudio {
             ui_theme: config::UiThemeConfig::default(),
             theme_color_inputs: config::UiThemePalette::default().hex_values(),
             // Keyboard shortcuts
-            shortcut_overrides: rustc_hash::FxHashMap::default(),
+            shortcut_bindings: rustc_hash::FxHashMap::default(),
+            shortcut_editor_rows: Vec::new(),
             // Command aliases (populated from ocad.pgp just after construction)
             command_aliases: rustc_hash::FxHashMap::default(),
             alias_editor_rows: Vec::new(),

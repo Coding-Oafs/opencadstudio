@@ -1,19 +1,17 @@
-//! Keyboard Shortcuts Reference window — fills the entire OS window.
+//! Editable keyboard shortcut table opened by CUI / SHORTCUTS.
 
 use crate::app::Message;
-use iced::widget::{column, container, row, scrollable, text, Space};
-use iced::{Background, Element, Theme};
 use crate::t;
-use std::borrow::Cow;
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::{Background, Element, Length, Theme};
 
-/// Display name of the primary accelerator modifier on this platform.
-/// Mirrors the runtime binding in `app::view`, which uses
-/// `Modifiers::command()` — the Cmd key on macOS, Ctrl elsewhere — so the
-/// reference window shows the key the user actually presses.
-#[cfg(target_os = "macos")]
-const MOD: &str = "Cmd";
-#[cfg(not(target_os = "macos"))]
-const MOD: &str = "Ctrl";
+#[derive(Clone, Copy, Debug)]
+pub enum ShortcutField {
+    Key,
+    Command,
+}
+
+const GUTTER: f32 = 16.0;
 
 fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
@@ -21,186 +19,99 @@ fn muted_style(theme: &Theme) -> iced::widget::text::Style {
     }
 }
 
-fn primary_style(theme: &Theme) -> iced::widget::text::Style {
-    iced::widget::text::Style {
-        color: Some(theme.palette().primary.base.color),
-    }
-}
-
-fn hdivider<'a>(width: iced::Length) -> Element<'a, Message> {
-    container(Space::new().width(width).height(1))
-        .width(width)
-        .height(1)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.neutral.color,
-            )),
-            ..Default::default()
-        })
-        .into()
-}
-
-fn shortcut_row<'a>(
-    key: impl Into<Cow<'static, str>>,
-    action: Cow<'static, str>,
-) -> Element<'a, Message> {
-    row![
-        text(key.into())
-            .size(11)
-            .style(primary_style)
-            .font(iced::Font::MONOSPACE)
-            .width(160),
-        text(action).size(11),
-    ]
-    .spacing(8)
-    .align_y(iced::Center)
-    .padding([2, 0])
-    .into()
-}
-
-fn section<'a>(title: impl Into<Cow<'static, str>>) -> Element<'a, Message> {
-    container(text(title.into()).size(11).style(muted_style))
-        .padding(iced::Padding {
-            top: 6.0,
-            right: 0.0,
-            bottom: 2.0,
-            left: 0.0,
-        })
-        .into()
-}
-
-pub fn view_window<'a>(
-    overrides: &'a rustc_hash::FxHashMap<String, String>,
+pub fn view_window(
+    rows: &[(String, String)],
     sizing: crate::ui::modal::ModalSizing,
-) -> Element<'a, Message> {
-    // ── Toolbar ───────────────────────────────────────────────────────────
-    let toolbar = container(
+) -> Element<'_, Message> {
+    let title = text(t!("Keyboard Shortcuts")).size(15);
+    let hint = text(t!(
+        "Type  SHORTCUTS SET <key> <cmd>  to add custom shortcuts."
+    ))
+    .size(11)
+    .style(muted_style);
+    let gutter = iced::Padding {
+        top: 0.0,
+        right: GUTTER,
+        bottom: 0.0,
+        left: 0.0,
+    };
+
+    let head = container(
         row![
-            text(t!("Type  SHORTCUTS SET <key> <cmd>  to add custom shortcuts."))
-                .size(10)
-                .style(muted_style),
+            container(text(t!("Key")).size(11).style(muted_style))
+                .width(Length::Fixed(180.0)),
+            container(text(t!("Command")).size(11).style(muted_style)).width(sizing.width),
+            Space::new().width(Length::Fixed(30.0)),
         ]
-        .align_y(iced::Center),
+        .spacing(8),
     )
-    .style(|theme: &Theme| container::Style {
-        background: Some(Background::Color(
-            theme.palette().background.weakest.color,
-        )),
-        ..Default::default()
-    })
-    .width(sizing.width)
-    .padding([5, 10]);
+    .padding(gutter);
 
-    // ── Shortcut entries ──────────────────────────────────────────────────
-    let mut rows: Vec<Element<'_, Message>> = vec![
-        section(t!("── Function Keys ──────────────────────────────────────")),
-        shortcut_row("F1", t!("Help")),
-        shortcut_row("F2", t!("Toggle Command History")),
-        shortcut_row("F3", t!("Toggle Object Snap")),
-        shortcut_row("F7", t!("Toggle Grid")),
-        shortcut_row("F8", t!("Toggle Ortho")),
-        shortcut_row("F9", t!("Toggle Grid Snap")),
-        shortcut_row("F10", t!("Toggle Polar Tracking")),
-        shortcut_row("F11", t!("Toggle Object Snap Tracking")),
-        shortcut_row("F12", t!("Toggle Dynamic Input")),
-        section(t!(
-            "── %{MOD} Shortcuts ──────────────────────────────────────",
-            MOD = MOD
-        )),
-        shortcut_row(format!("{MOD}+0"), t!("Clean Screen")),
-        shortcut_row(format!("{MOD}+1"), t!("Properties")),
-        shortcut_row(format!("{MOD}+N"), t!("New Drawing")),
-        shortcut_row(format!("{MOD}+O"), t!("Open File")),
-        shortcut_row(format!("{MOD}+P"), t!("Plot")),
-        shortcut_row(format!("{MOD}+Q"), t!("Close")),
-        shortcut_row(format!("{MOD}+S"), t!("Save")),
-        shortcut_row(format!("{MOD}+Shift+S"), t!("Save As")),
-        shortcut_row(format!("{MOD}+Z"), t!("Undo")),
-        shortcut_row(format!("{MOD}+Shift+Z / {MOD}+Y"), t!("Redo")),
-        shortcut_row(format!("{MOD}+F / {MOD}+H"), t!("Find and Replace")),
-        shortcut_row(format!("{MOD}+C"), t!("Copy to Clipboard")),
-        shortcut_row(format!("{MOD}+Shift+C"), t!("Copy with Base Point")),
-        shortcut_row(format!("{MOD}+X"), t!("Cut to Clipboard")),
-        shortcut_row(format!("{MOD}+V"), t!("Paste from Clipboard")),
-        shortcut_row(format!("{MOD}+Shift+V"), t!("Paste as Block")),
-        section(t!("── Other Keys ──────────────────────────────────────────")),
-        shortcut_row("Enter / Space", t!("Finalize command / Repeat last")),
-        shortcut_row("Escape", t!("Cancel active command")),
-        shortcut_row("Delete", t!("Delete selected entities")),
-        shortcut_row("↑ / ↓", t!("Command history navigation")),
-    ];
-
-    // Custom overrides section
-    rows.push(section(
-        t!("── Custom Overrides (SHORTCUTS SET) ──────────────────"),
-    ));
-    if overrides.is_empty() {
-        rows.push(
-            text(t!("  (none — use: SHORTCUTS SET <key> <command>)"))
-                .size(11)
-                .style(muted_style)
-                .into(),
-        );
-    } else {
-        let mut sorted: Vec<_> = overrides.iter().collect();
-        sorted.sort_by_key(|(k, _)| k.as_str());
-        for (key, cmd) in sorted {
-            rows.push(
-                row![
-                    text(key.as_str())
-                        .size(11)
-                        .style(primary_style)
-                        .font(iced::Font::MONOSPACE)
-                        .width(160),
-                    text(cmd.as_str()).size(11),
-                ]
+    let mut list = column![].spacing(3);
+    for (idx, (key, command)) in rows.iter().enumerate() {
+        let key_box = text_input("Ctrl+Key", key)
+            .on_input(move |value| Message::ShortcutEditorInput {
+                idx,
+                field: ShortcutField::Key,
+                value,
+            })
+            .size(13)
+            .padding([3, 6])
+            .width(Length::Fixed(180.0));
+        let command_box = text_input(t!("command").as_ref(), command)
+            .on_input(move |value| Message::ShortcutEditorInput {
+                idx,
+                field: ShortcutField::Command,
+                value,
+            })
+            .size(13)
+            .padding([3, 6])
+            .width(sizing.width);
+        let remove = button(crate::ui::icons::themed_danger_text(
+            crate::ui::icons::CLOSE,
+            12.0,
+        ))
+        .on_press(Message::ShortcutEditorRemove(idx))
+        .padding([2, 6])
+        .style(button::danger);
+        list = list.push(
+            row![key_box, command_box, remove]
                 .spacing(8)
-                .align_y(iced::Center)
-                .padding([2, 0])
-                .into(),
-            );
-        }
+                .align_y(iced::Center),
+        );
     }
 
-    // ── Section headers styled separately ────────────────────────────────
-    let content = scrollable(column(rows).spacing(3).padding([12, 16]))
-        .width(sizing.width)
-        .height(sizing.height);
-
-    // ── Header row with accent ────────────────────────────────────────────
-    let header = container(
-        row![
-            text(t!("Key")).size(10).style(primary_style).width(160),
-            text(t!("Action")).size(10).style(primary_style),
-        ]
-        .spacing(8)
-        .padding([4, 16]),
-    )
-    .style(|theme: &Theme| container::Style {
-        background: Some(Background::Color(
-            theme.palette().primary.weak.color,
-        )),
-        ..Default::default()
-    })
-    .width(sizing.width);
+    let add = button(text(format!("+ {}", t!("Add"))).size(12))
+        .on_press(Message::ShortcutEditorAdd)
+        .padding([4, 10])
+        .style(button::secondary);
+    let apply = button(text(t!("Apply")).size(12))
+        .on_press(Message::ShortcutEditorApply)
+        .padding([4, 16])
+        .style(button::primary);
 
     container(
         column![
-            toolbar,
-            hdivider(sizing.width),
-            header,
-            hdivider(sizing.width),
-            content
+            title,
+            hint,
+            Space::new().height(6),
+            head,
+            scrollable(container(list).padding(gutter)).height(sizing.height),
+            Space::new().height(6),
+            row![add, Space::new().width(sizing.width), apply].align_y(iced::Center),
         ]
-        .spacing(0),
-    )
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.base.color,
-            )),
-            ..Default::default()
-        })
+        .spacing(6)
         .width(sizing.width)
-        .height(sizing.height)
-        .into()
+        .height(sizing.height),
+    )
+    .padding(12)
+    .width(sizing.width)
+    .height(sizing.height)
+    .style(|theme: &Theme| container::Style {
+        background: Some(Background::Color(
+            theme.palette().background.base.color,
+        )),
+        ..Default::default()
+    })
+    .into()
 }

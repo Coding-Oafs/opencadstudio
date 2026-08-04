@@ -261,10 +261,10 @@ impl OpenCADStudio {
                     );
                     return Some(Task::none());
                 }
-                let mut keys: Vec<(&String, &String)> = self.shortcut_overrides.iter().collect();
+                let mut keys: Vec<(&String, &String)> = self.shortcut_bindings.iter().collect();
                 keys.sort_by(|a, b| a.0.cmp(b.0));
                 let text: String = keys.iter().map(|(k, v)| format!("{k} {v}\n")).collect();
-                let count = self.shortcut_overrides.len();
+                let count = self.shortcut_bindings.len();
                 match std::fs::write(path, text) {
                     Ok(()) => self.command_line.push_output(crate::tf!(
                         "CUIEXPORT: wrote {count} shortcut(s) to \"{path}\"."
@@ -303,11 +303,15 @@ impl OpenCADStudio {
                                 continue;
                             }
                             if let Some((k, v)) = line.split_once(char::is_whitespace) {
-                                self.shortcut_overrides
-                                    .insert(k.trim().to_uppercase(), v.trim().to_uppercase());
-                                n += 1;
+                                let key = crate::app::shortcuts::normalize_key(k);
+                                if !key.is_empty() {
+                                    self.shortcut_bindings
+                                        .insert(key, v.trim().to_uppercase());
+                                    n += 1;
+                                }
                             }
                         }
+                        self.persist_settings_if_changed();
                         self.command_line.push_output(crate::tf!(
                             "CUIIMPORT: loaded {n} shortcut(s) from \"{path}\"."
                         ).as_ref());
@@ -335,16 +339,27 @@ impl OpenCADStudio {
                         if key.is_empty() || cmd_str.is_empty() {
                             self.command_line.push_error(crate::t!("Usage: SHORTCUTS SET <key> <command>  e.g. SHORTCUTS SET CTRL+D DIST").as_ref());
                         } else {
-                            self.shortcut_overrides.insert(key.clone(), cmd_str.clone());
-                            self.command_line
-                                .push_output(crate::tf!("Shortcut set: {key} → {cmd_str}").as_ref());
+                            let key = crate::app::shortcuts::normalize_key(&key);
+                            if key.is_empty() {
+                                self.command_line.push_error(crate::t!("Usage: SHORTCUTS SET <key> <command>  e.g. SHORTCUTS SET CTRL+D DIST").as_ref());
+                            } else {
+                                self.shortcut_bindings.insert(key.clone(), cmd_str.clone());
+                                self.persist_settings_if_changed();
+                                self.command_line
+                                    .push_output(crate::tf!("Shortcut set: {key} → {cmd_str}").as_ref());
+                            }
                         }
                     }
                     "CLEAR" | "DELETE" | "REMOVE" => {
                         let key = parts.get(1).map(|s| s.to_uppercase()).unwrap_or_default();
                         if key.is_empty() {
                             self.command_line.push_error(crate::t!("Usage: SHORTCUTS CLEAR <key>").as_ref());
-                        } else if self.shortcut_overrides.remove(&key).is_some() {
+                        } else if self
+                            .shortcut_bindings
+                            .remove(&crate::app::shortcuts::normalize_key(&key))
+                            .is_some()
+                        {
+                            self.persist_settings_if_changed();
                             self.command_line
                                 .push_output(crate::tf!("Shortcut '{key}' removed.").as_ref());
                         } else {

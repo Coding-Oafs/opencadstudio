@@ -36,6 +36,8 @@ pub struct AppConfig {
     /// Print dialog preferences (only the persisted fields; runtime state is
     /// skipped by `PlotDialogState`'s serde attributes).
     pub plot: PlotDialogState,
+    /// Complete editable keyboard shortcut table.
+    pub shortcuts: ShortcutConfig,
 }
 
 impl Default for AppConfig {
@@ -50,6 +52,21 @@ impl Default for AppConfig {
             annotation_auto_scale: -4,
             ribbon: RibbonConfig::default(),
             plot: PlotDialogState::default(),
+            shortcuts: ShortcutConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShortcutConfig {
+    pub bindings: std::collections::BTreeMap<String, String>,
+}
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self {
+            bindings: super::shortcuts::default_bindings(),
         }
     }
 }

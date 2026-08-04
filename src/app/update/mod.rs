@@ -29,6 +29,7 @@ fn is_modal_blocked_key_msg(msg: &Message) -> bool {
             | Message::TogglePolar
             | Message::ToggleOTrack
             | Message::ToggleDynInput
+            | Message::ShortcutPressed(_)
             | Message::TabNew
             | Message::OpenFile
             | Message::SaveFile
@@ -171,9 +172,8 @@ impl OpenCADStudio {
             }
             // Closing (✕) discards edits made since the last Apply — matching the
             // style editors. Committing happens only through the Apply button.
-            Some(Aliases) => {
-                self.alias_editor_rows.clear();
-            }
+            Some(Aliases) => self.alias_editor_rows.clear(),
+            Some(Shortcuts) => self.shortcut_editor_rows.clear(),
             Some(LayerStateEditor) => {
                 self.layer_state_edit_draft = None;
                 self.layer_state_edit_filter.clear();
@@ -206,7 +206,9 @@ impl OpenCADStudio {
         // the modal's own text fields keep working because they emit their own
         // (non-blocked) messages. (#126)
         if self.active_modal.is_some() {
-            if matches!(msg, Message::CommandEscape) {
+            if matches!(msg, Message::CommandEscape)
+                || matches!(&msg, Message::ShortcutPressed(key) if key.rsplit('+').next() == Some("ESCAPE"))
+            {
                 return self.update(Message::CloseModal);
             }
             if is_modal_blocked_key_msg(&msg) {
@@ -4475,6 +4477,13 @@ impl OpenCADStudio {
 
             // ── Keyboard Shortcuts Panel ──────────────────────────────────────
             Message::ShortcutsPanelOpen => {
+                let mut rows: Vec<(String, String)> = self
+                    .shortcut_bindings
+                    .iter()
+                    .map(|(key, command)| (key.clone(), command.clone()))
+                    .collect();
+                rows.sort_by(|a, b| a.0.cmp(&b.0));
+                self.shortcut_editor_rows = rows;
                 self.active_modal = Some(super::ModalKind::Shortcuts);
                 Task::none()
             }
@@ -4482,6 +4491,35 @@ impl OpenCADStudio {
                 self.close_active_modal();
                 Task::none()
             }
+            Message::ShortcutEditorInput { idx, field, value } => {
+                use crate::ui::window::shortcuts::ShortcutField;
+                if let Some(row) = self.shortcut_editor_rows.get_mut(idx) {
+                    match field {
+                        ShortcutField::Key => row.0 = value.to_uppercase(),
+                        ShortcutField::Command => row.1 = value.to_uppercase(),
+                    }
+                }
+                Task::none()
+            }
+            Message::ShortcutEditorAdd => {
+                self.shortcut_editor_rows
+                    .push((String::new(), String::new()));
+                Task::none()
+            }
+            Message::ShortcutEditorRemove(idx) => {
+                if idx < self.shortcut_editor_rows.len() {
+                    self.shortcut_editor_rows.remove(idx);
+                }
+                Task::none()
+            }
+            Message::ShortcutEditorApply => {
+                self.apply_shortcut_editor_rows();
+                self.command_line.push_info(
+                    crate::tf!("{} shortcut(s) applied.", self.shortcut_bindings.len()).as_ref(),
+                );
+                Task::none()
+            }
+            Message::ShortcutPressed(key) => self.run_shortcut(&key),
 
             // ── Command Alias Editor (ALIASEDIT) ──────────────────────────────
             Message::AliasEditorOpen => {

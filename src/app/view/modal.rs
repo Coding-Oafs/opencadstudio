@@ -67,7 +67,7 @@ impl OpenCADStudio {
                     520,
                     |flow| {
                         crate::ui::window::shortcuts::view_window(
-                            &self.shortcut_overrides,
+                            &self.shortcut_editor_rows,
                             flow,
                         )
                     },
