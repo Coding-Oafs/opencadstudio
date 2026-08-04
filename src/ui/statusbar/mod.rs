@@ -636,7 +636,7 @@ fn tip_node<'a>(content: Element<'a, Message>, body: Element<'a, Message>) -> El
 /// call site already wraps it with.
 fn toggle_pill(icon: &'static [u8], active: bool, msg: Message) -> Element<'static, Message> {
     let icon = if active {
-        crate::ui::icons::themed_primary(icon, 17.0)
+        crate::ui::icons::themed_primary_weak_text(icon, 17.0)
     } else {
         crate::ui::icons::themed_secondary(icon, 17.0)
     };
@@ -646,12 +646,12 @@ fn toggle_pill(icon: &'static [u8], active: bool, msg: Message) -> Element<'stat
             let mut style = button::subtle(theme, status);
             if active {
                 let palette = theme.palette();
-                style.background = Some(Background::Color(match status {
-                    button::Status::Hovered => palette.primary.base.color,
-                    _ => palette.primary.weak.color,
-                }));
+                style.background = Some(Background::Color(palette.primary.weak.color));
                 style.text_color = palette.primary.weak.text;
-                style.border.color = palette.primary.base.color;
+                style.border.color = match status {
+                    button::Status::Hovered => palette.primary.strong.color,
+                    _ => palette.primary.base.color,
+                };
                 style.border.width = 1.0;
             }
             style
@@ -724,7 +724,7 @@ fn polar_pill<'a>(
     };
 
     let polar_icon = if active {
-        crate::ui::icons::themed_primary(crate::ui::icons::ST_POLAR, 17.0)
+        crate::ui::icons::themed_primary_weak_text(crate::ui::icons::ST_POLAR, 17.0)
     } else {
         crate::ui::icons::themed_secondary(crate::ui::icons::ST_POLAR, 17.0)
     };
@@ -735,7 +735,7 @@ fn polar_pill<'a>(
                 let palette = theme.palette();
                 text::Style {
                     color: Some(if active {
-                        palette.primary.base.color
+                        palette.primary.weak.text
                     } else {
                         palette.background.base.text.scale_alpha(0.72)
                     }),
@@ -759,7 +759,7 @@ fn polar_pill<'a>(
         menu_tip(
             mouse_area(
                 container(if active {
-                    crate::ui::icons::themed_primary_arrow_down(9.0)
+                    crate::ui::icons::themed_primary_weak_arrow_down(9.0)
                 } else {
                     crate::ui::icons::themed_secondary_arrow_down(9.0)
                 })
@@ -789,7 +789,7 @@ fn osnap_btn<'a>(
 ) -> Element<'a, Message> {
     let on = active || snap_enabled;
     let snap_icon = if on {
-        crate::ui::icons::themed_primary(crate::ui::icons::ST_OSNAP, 17.0)
+        crate::ui::icons::themed_primary_weak_text(crate::ui::icons::ST_OSNAP, 17.0)
     } else {
         crate::ui::icons::themed_secondary(crate::ui::icons::ST_OSNAP, 17.0)
     };
@@ -804,7 +804,7 @@ fn osnap_btn<'a>(
         menu_tip(
             mouse_area(
                 container(if on {
-                    crate::ui::icons::themed_primary_arrow_down(9.0)
+                    crate::ui::icons::themed_primary_weak_arrow_down(9.0)
                 } else {
                     crate::ui::icons::themed_secondary_arrow_down(9.0)
                 })

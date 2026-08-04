@@ -64,7 +64,7 @@ pub fn view_window(
             .size(13)
             .padding([3, 6])
             .width(sizing.width);
-        let del = button(crate::ui::icons::themed_danger(crate::ui::icons::CLOSE, 12.0))
+        let del = button(crate::ui::icons::themed_danger_text(crate::ui::icons::CLOSE, 12.0))
             .on_press(Message::AliasEditorRemove(idx))
             .padding([2, 6])
             .style(button::danger);

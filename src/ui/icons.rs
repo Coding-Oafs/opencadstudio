@@ -449,6 +449,20 @@ pub fn themed_primary<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a,
         .into()
 }
 
+/// Render an icon with the foreground chosen for a weak primary surface.
+pub fn themed_primary_weak_text<'a, M: 'a>(
+    bytes: &'static [u8],
+    size: f32,
+) -> Element<'a, M> {
+    svg(svg::Handle::from_memory(bytes))
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, _| svg::Style {
+            color: Some(theme.palette().primary.weak.text),
+        })
+        .into()
+}
+
 /// Render a positive-state chrome icon with the active Iced theme's success color.
 pub fn themed_success<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
     svg(svg::Handle::from_memory(bytes))
@@ -569,8 +583,8 @@ pub fn themed_arrow_left<'a, M: 'a>(size: f32) -> Element<'a, M> {
     themed(TRI_LEFT, size)
 }
 
-pub fn themed_primary_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {
-    themed_primary(TRI_DOWN, size)
+pub fn themed_primary_weak_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    themed_primary_weak_text(TRI_DOWN, size)
 }
 
 pub fn themed_secondary_arrow_down<'a, M: 'a>(size: f32) -> Element<'a, M> {

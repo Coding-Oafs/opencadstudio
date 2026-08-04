@@ -783,9 +783,6 @@ enum Step {
         /// pre-selection when OFFSET starts with objects selected (#422).
         targets: Vec<EntityType>,
         locked: Option<f64>,
-        /// True when the targets came from the pre-selection: the commit ends
-        /// the command instead of looping back for another pick.
-        from_selection: bool,
         /// Keep the side-pick step active and use each new result as the source
         /// for the next offset.
         multiple: bool,
@@ -796,6 +793,10 @@ pub struct OffsetCommand {
     step: Step,
     all_entities: Vec<EntityType>,
     entity_index: ModifyEntityIndex,
+    /// Live entity supplied by the scene before an object-pick is handled.
+    /// Unlike the command's opening snapshot, this also includes objects
+    /// created by earlier offsets while the command remains active.
+    picked: Option<EntityType>,
     /// Pre-selected offsettable objects (pick-first, #422); consumed when the
     /// distance step resolves.
     preselected: Vec<EntityType>,
@@ -822,6 +823,7 @@ impl OffsetCommand {
             step: Step::Distance,
             all_entities,
             entity_index,
+            picked: None,
             preselected: Vec::new(),
         }
     }
@@ -834,6 +836,7 @@ impl OffsetCommand {
             step: Step::Distance,
             all_entities,
             entity_index,
+            picked: None,
             preselected: targets,
         }
     }
@@ -848,7 +851,6 @@ impl OffsetCommand {
             self.step = Step::PickSide {
                 targets: std::mem::take(&mut self.preselected),
                 locked,
-                from_selection: true,
                 multiple: false,
             };
         }
@@ -931,6 +933,14 @@ impl CadCommand for OffsetCommand {
         matches!(self.step, Step::SelectObject { .. })
     }
 
+    fn inject_before_entity_pick(&self) -> bool {
+        true
+    }
+
+    fn inject_picked_entity(&mut self, entity: EntityType) {
+        self.picked = Some(entity);
+    }
+
     fn on_entity_pick(&mut self, handle: Handle, _pt: DVec3) -> CmdResult {
         let locked = match &self.step {
             Step::SelectObject { locked } => *locked,
@@ -940,9 +950,11 @@ impl CadCommand for OffsetCommand {
             return CmdResult::NeedPoint;
         }
 
-        let entity = self
-            .entity_index.get(&self.all_entities, handle)
-            .cloned();
+        let entity = self.picked.take().or_else(|| {
+            self.entity_index
+                .get(&self.all_entities, handle)
+                .cloned()
+        });
 
         // Accept every type compute_offsets can offset — including XLine (#296),
         // and Ellipse/Spline whose offset functions existed but weren't reachable.
@@ -951,7 +963,6 @@ impl CadCommand for OffsetCommand {
                 self.step = Step::PickSide {
                     targets: vec![e],
                     locked,
-                    from_selection: false,
                     multiple: false,
                 };
                 CmdResult::NeedPoint
@@ -1044,13 +1055,12 @@ impl CadCommand for OffsetCommand {
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        let (locked, targets, from_selection, multiple) = match &self.step {
+        let (locked, targets, multiple) = match &self.step {
             Step::PickSide {
                 locked,
                 targets,
-                from_selection,
                 multiple,
-            } => (*locked, targets.clone(), *from_selection, *multiple),
+            } => (*locked, targets.clone(), *multiple),
             _ => return CmdResult::NeedPoint,
         };
         // Each target offsets by its own through-distance (or the locked
@@ -1073,7 +1083,6 @@ impl CadCommand for OffsetCommand {
             self.step = Step::PickSide {
                 targets: news.clone(),
                 locked,
-                from_selection,
                 multiple: true,
             };
             return if news.len() == 1 {
@@ -1082,17 +1091,13 @@ impl CadCommand for OffsetCommand {
                 CmdResult::CommitEntities(news)
             };
         }
-        if from_selection {
-            // Pre-selection commit ends the command in one undo step.
-            return CmdResult::ReplaceMany(vec![], news);
-        }
         // Classic loop (#418): commit this offset and go back to the object
         // pick at the same distance, until Enter / Esc finishes.
         self.step = Step::SelectObject { locked };
         if news.len() == 1 {
             CmdResult::CommitEntity(news.pop().unwrap())
         } else {
-            CmdResult::ReplaceMany(vec![], news)
+            CmdResult::CommitEntities(news)
         }
     }
 
