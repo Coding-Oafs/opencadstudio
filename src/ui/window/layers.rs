@@ -328,6 +328,10 @@ impl LayerPanel {
             .selected
             .map(|i| self.layers.get(i).map(|l| l.name == "0").unwrap_or(false))
             .unwrap_or(false);
+        let can_set_current = self
+            .selected
+            .and_then(|i| self.layers.get(i))
+            .is_some_and(|layer| layer.name != self.current_layer);
 
         // ── Toolbar ───────────────────────────────────────────────────────
         let toolbar = container(
@@ -343,7 +347,7 @@ impl LayerPanel {
                     crate::ui::icons::CHECK,
                     t!("Set Current"),
                     Message::LayerSetCurrent,
-                    has_sel,
+                    can_set_current,
                 ),
                 iced::widget::Space::new().width(sizing.width),
                 // Search box: filters rows by name as the user types (#343).

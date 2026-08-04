@@ -879,6 +879,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 if let Some(idx) = self.tabs[i].layers.selected {
                     if let Some(layer) = self.tabs[i].layers.layers.get(idx) {
                         let name = layer.name.clone();
+                        if name == self.tabs[i].layers.current_layer {
+                            return Task::none();
+                        }
                         // Mirror the change into the document header (CLAYER) too,
                         // not just the per-tab default. Otherwise the no-selection
                         // ribbon refresh (e.g. after Esc) re-reads the stale header
