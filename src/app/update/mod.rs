@@ -121,6 +121,21 @@ impl OpenCADStudio {
     /// changes, and the ribbon tool that launched the dialog is de-highlighted.
     fn close_active_modal(&mut self) {
         use super::ModalKind::*;
+        if self.active_modal == Some(Plot) && self.print_all_options {
+            if let Some(previous) = self.print_all_options_prev.take() {
+                self.plot_dialog = previous;
+            }
+            if let Some(previous) = self.print_all_plot_style_prev.take() {
+                self.active_plot_style = previous;
+            }
+            if let Some(previous) = self.print_all_plot_window_prev.take() {
+                self.plot_window = previous;
+            }
+            self.print_all_options = false;
+            self.active_modal = Some(PrintAll);
+            self.reset_modal_geometry();
+            return;
+        }
         if matches!(
             self.active_modal,
             Some(TextStyle | DimStyle | TableStyle | MLeaderStyle | MlStyle)
@@ -5461,6 +5476,73 @@ impl OpenCADStudio {
             }
             Message::PlotDialogOpen => self.on_plot_dialog_open(),
             Message::PlotDlg(m) => self.on_plot_dlg(m),
+            Message::PrintAllOpen => self.on_print_all_open(),
+            Message::PrintAllToggle(name) => {
+                if let Some((_, selected)) = self
+                    .print_all_layouts
+                    .iter_mut()
+                    .find(|(layout, _)| layout == &name)
+                {
+                    *selected = !*selected;
+                }
+                Task::none()
+            }
+            Message::PrintAllSelectAll => {
+                for (_, selected) in &mut self.print_all_layouts {
+                    *selected = true;
+                }
+                Task::none()
+            }
+            Message::PrintAllSelectNone => {
+                for (_, selected) in &mut self.print_all_layouts {
+                    *selected = false;
+                }
+                Task::none()
+            }
+            Message::PrintAllOptions => self.on_print_all_options(),
+            Message::PrintAllPdf => {
+                let i = self.active_tab;
+                let stem = self.tabs[i]
+                    .current_path
+                    .as_deref()
+                    .and_then(|path| path.file_stem())
+                    .map(|name| format!("{}_layouts", name.to_string_lossy()))
+                    .unwrap_or_else(|| "drawing_layouts".into());
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let Some(window_id) = self.main_window else {
+                        return Task::done(Message::PrintAllPdfPath(None));
+                    };
+                    iced::window::run(window_id, move |parent| {
+                        crate::io::pdf_export::pick_pdf_path_owned(stem, parent)
+                    })
+                    .map(Message::PrintAllPdfPath)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = stem;
+                    self.command_line.push_error(
+                        crate::t!("PDF export is not available in the web version.").as_ref(),
+                    );
+                    Task::none()
+                }
+            }
+            Message::PrintAllPdfPath(None) => Task::none(),
+            Message::PrintAllPdfPath(Some(path)) => self.on_print_all_pdf_path_some(path),
+            Message::PrintAllPrint => self.on_print_all_print(),
+            Message::PrintAllFinished(result) => {
+                match result {
+                    Ok(message) => self.command_line.push_info(&message),
+                    Err(error) => {
+                        self.command_line.push_error(&error);
+                        if self.active_modal.is_none() {
+                            self.active_modal = Some(super::ModalKind::PrintAll);
+                            self.reset_modal_geometry();
+                        }
+                    }
+                }
+                Task::none()
+            }
 
             // ── Plot / Export ─────────────────────────────────────────────
             Message::PlotExport => {

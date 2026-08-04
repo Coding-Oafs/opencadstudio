@@ -21,6 +21,7 @@ impl OpenCADStudio {
             Some(K::LayerStateManager) => crate::tr!("modal-layer-state-manager"),
             Some(K::LayerStateEditor) => crate::tr!("modal-edit-layer-state"),
             Some(K::Plot) => crate::tr!("modal-plot"),
+            Some(K::PrintAll) => t!("Print All").into_owned(),
             Some(K::LayoutManager) => crate::tr!("modal-layout-manager"),
             Some(K::ScaleManager) => crate::tr!("modal-scale-manager"),
             Some(K::AnnoObjectScale) => crate::tr!("modal-annotation-object-scale"),
@@ -238,9 +239,27 @@ impl OpenCADStudio {
                     ex,
                     760,
                     540,
-                    |flow| crate::ui::window::plot::view_window(&self.plot_dialog, flow),
+                    |flow| {
+                        crate::ui::window::plot::view_window(
+                            &self.plot_dialog,
+                            self.print_all_options,
+                            flow,
+                        )
+                    },
                 )
             }
+            super::super::ModalKind::PrintAll => sized_flow(
+                ex,
+                520,
+                420,
+                |flow| {
+                    crate::ui::window::print_all::view_window(
+                        &self.print_all_layouts,
+                        self.plot_dialog.printer.as_deref(),
+                        flow,
+                    )
+                },
+            ),
             super::super::ModalKind::LayoutManager => {
                 let i = self.active_tab;
                 let layouts = self.tabs[i].scene.layout_names();

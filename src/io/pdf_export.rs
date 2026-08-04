@@ -47,6 +47,15 @@ pub fn export_pdf(
 }
 
 #[cfg(target_arch = "wasm32")]
+pub fn export_pdf_pages(
+    _pages: &[PdfPageInput],
+    _path: &Path,
+    _plot_style: Option<&PlotStyleTable>,
+) -> Result<(), String> {
+    Err("PDF export is not available in the web version.".into())
+}
+
+#[cfg(target_arch = "wasm32")]
 pub async fn pick_pdf_path_owned(_stem: String) -> Option<std::path::PathBuf> {
     None
 }
@@ -81,6 +90,22 @@ pub struct PlotGroupSplits {
     pub wires: usize,
     pub hatches: usize,
     pub wipeouts: usize,
+}
+
+/// Owned render data for one page in a multi-page PDF.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub struct PdfPageInput {
+    pub wires: std::sync::Arc<Vec<WireModel>>,
+    pub hatches: Vec<HatchModel>,
+    pub wipeouts: Vec<HatchModel>,
+    pub paper_w: f64,
+    pub paper_h: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub rotation_deg: i32,
+    pub scale: f32,
+    pub clip: Option<(f32, f32, f32, f32)>,
+    pub options: PdfPlotOptions,
 }
 
 impl Default for PdfPlotOptions {
@@ -138,6 +163,21 @@ pub fn export_pdf(
     file.write_all(&bytes).map_err(|e| e.to_string())
 }
 
+/// Export several independently sized pages into one PDF file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_pdf_pages(
+    pages: &[PdfPageInput],
+    path: &Path,
+    plot_style: Option<&PlotStyleTable>,
+) -> Result<(), String> {
+    if pages.is_empty() {
+        return Err("No pages were selected.".into());
+    }
+    let bytes = build_pdf_pages(pages, plot_style);
+    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())
+}
+
 /// Show a parented PDF save-file dialog and return the chosen path.
 ///
 /// The parent comes from `iced::window::run`, keeping the portal request tied
@@ -181,6 +221,65 @@ fn build_pdf(
     options: PdfPlotOptions,
 ) -> Vec<u8> {
     let mut doc = PdfDocument::new("Open CAD Studio Export");
+    append_pdf_page(
+        &mut doc,
+        wires,
+        hatches,
+        wipeouts,
+        paper_w,
+        paper_h,
+        ox,
+        oy,
+        rotation_deg,
+        scale,
+        clip,
+        plot_style,
+        options,
+    );
+    let mut warnings = Vec::new();
+    doc.save(&PdfSaveOptions::default(), &mut warnings)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn build_pdf_pages(pages: &[PdfPageInput], plot_style: Option<&PlotStyleTable>) -> Vec<u8> {
+    let mut doc = PdfDocument::new("Open CAD Studio Export");
+    for page in pages {
+        append_pdf_page(
+            &mut doc,
+            &page.wires,
+            &page.hatches,
+            &page.wipeouts,
+            page.paper_w as f32,
+            page.paper_h as f32,
+            page.offset_x,
+            page.offset_y,
+            page.rotation_deg,
+            page.scale,
+            page.clip,
+            plot_style,
+            page.options,
+        );
+    }
+    let mut warnings = Vec::new();
+    doc.save(&PdfSaveOptions::default(), &mut warnings)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn append_pdf_page(
+    doc: &mut PdfDocument,
+    wires: &[WireModel],
+    hatches: &[HatchModel],
+    wipeouts: &[HatchModel],
+    paper_w: f32,
+    paper_h: f32,
+    ox: f64,
+    oy: f64,
+    rotation_deg: i32,
+    scale: f32,
+    clip: Option<(f32, f32, f32, f32)>,
+    plot_style: Option<&PlotStyleTable>,
+    options: PdfPlotOptions,
+) {
     let mut ops: Vec<Op> = Vec::new();
 
     // White page background.
@@ -474,9 +573,6 @@ fn build_pdf(
 
     let page = PdfPage::new(Mm(paper_w), Mm(paper_h), ops);
     doc.pages.push(page);
-
-    let mut warnings = Vec::new();
-    doc.save(&PdfSaveOptions::default(), &mut warnings)
 }
 
 /// Build a PDF dash array (in points) from a WireModel linetype pattern.

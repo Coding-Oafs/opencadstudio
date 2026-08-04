@@ -490,11 +490,18 @@ fn choices(items: &[&str]) -> Vec<PlotChoice> {
 
 pub fn view_window(
     s: &PlotDialogState,
+    print_all_options: bool,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'_, Message> {
     let width = sizing.width;
     let height = sizing.height;
-    let action = if s.to_file { t!("Export PDF") } else { t!("Print") };
+    let action = if print_all_options {
+        t!("Apply")
+    } else if s.to_file {
+        t!("Export PDF")
+    } else {
+        t!("Print")
+    };
     let is_special = s.selected_setup == SETUP_NONE || s.selected_setup == SETUP_PREV;
     let sel_is_layout = s.selected_setup.len() >= 2
         && s.selected_setup.starts_with('*')
@@ -578,23 +585,26 @@ pub fn view_window(
         left: 12.0,
     });
 
+    let mut new_button = button(text(t!("New")).size(11))
+        .style(btn(false))
+        .padding([4, 12]);
+    if !print_all_options {
+        new_button = new_button.on_press(Message::PlotDlg(PlotDlgMsg::NewSetup));
+    }
     let mut copy_button = button(text(t!("Copy")).size(11))
         .style(btn(false))
         .padding([4, 12]);
-    if can_copy {
+    if can_copy && !print_all_options {
         copy_button = copy_button.on_press(Message::PlotDlg(PlotDlgMsg::CopySetup));
     }
     let mut delete_button = button(text(t!("Delete")).size(11))
         .style(btn(false))
         .padding([4, 12]);
-    if is_named {
+    if is_named && !print_all_options {
         delete_button = delete_button.on_press(Message::PlotDlg(PlotDlgMsg::DeleteSetup));
     }
     let left_bar = row![
-        button(text(t!("New")).size(11))
-            .on_press(Message::PlotDlg(PlotDlgMsg::NewSetup))
-            .style(btn(false))
-            .padding([4, 12]),
+        new_button,
         copy_button,
         delete_button,
     ]
@@ -672,8 +682,12 @@ pub fn view_window(
         paper_note,
     ].spacing(7));
 
-    let mut area_options = choices(&["Extents", "Display", "Window"]);
-    if s.paper_space {
+    let mut area_options = if print_all_options {
+        choices(&["Layout"])
+    } else {
+        choices(&["Extents", "Display", "Window"])
+    };
+    if s.paper_space && !print_all_options {
         area_options.insert(0, PlotChoice::localized("Layout"));
     }
     let mut area_row = row![
@@ -690,7 +704,7 @@ pub fn view_window(
     ]
     .spacing(8)
     .align_y(iced::Center);
-    if s.area == "Window" {
+    if s.area == "Window" && !print_all_options {
         area_row = area_row.push(
             button(text(t!("Pick…")).size(11))
                 .on_press(Message::PlotDlg(PlotDlgMsg::PickWindow))
@@ -877,27 +891,31 @@ pub fn view_window(
     let body = row![list_panel, vsep(height), detail]
         .width(width)
         .height(height);
-    let toolbar = container(
-        row![
-            left_bar,
-            Space::new().width(width),
-            button(text(t!("Set current")).size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::SetCurrent))
-                .style(btn(false))
-                .padding([4, 12]),
-            Space::new().width(6),
-            button(text(t!("Preview")).size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::Preview))
-                .style(btn(false))
-                .padding([4, 12]),
-            Space::new().width(6),
-            button(text(action).size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::Commit))
-                .style(btn(true))
-                .padding([4, 18]),
-        ]
-        .align_y(iced::Center),
-    )
+    let mut toolbar_row = row![left_bar, Space::new().width(width)].align_y(iced::Center);
+    if !print_all_options {
+        toolbar_row = toolbar_row
+            .push(
+                button(text(t!("Set current")).size(11))
+                    .on_press(Message::PlotDlg(PlotDlgMsg::SetCurrent))
+                    .style(btn(false))
+                    .padding([4, 12]),
+            )
+            .push(Space::new().width(6))
+            .push(
+                button(text(t!("Preview")).size(11))
+                    .on_press(Message::PlotDlg(PlotDlgMsg::Preview))
+                    .style(btn(false))
+                    .padding([4, 12]),
+            )
+            .push(Space::new().width(6));
+    }
+    toolbar_row = toolbar_row.push(
+        button(text(action).size(11))
+            .on_press(Message::PlotDlg(PlotDlgMsg::Commit))
+            .style(btn(true))
+            .padding([4, 18]),
+    );
+    let toolbar = container(toolbar_row)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(theme.palette().background.weak.color)),
             ..Default::default()

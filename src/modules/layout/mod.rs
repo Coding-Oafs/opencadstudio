@@ -18,10 +18,10 @@ pub fn paper_space_tools() -> Vec<ToolDef> {
             event: ModuleEvent::Command("PAGESETUP".to_string()),
         },
         ToolDef {
-            id: "PLOT",
-            label: "Export PDF",
+            id: "PRINTALL",
+            label: "Print All",
             icon: IconKind::Svg(include_bytes!("../../../assets/icons/plot.svg")),
-            event: ModuleEvent::Command("PLOT".to_string()),
+            event: ModuleEvent::Command("PRINTALL".to_string()),
         },
     ]
 }
@@ -57,10 +57,10 @@ impl CadModule for LayoutModule {
                         }
                         .into(),
                         ToolDef {
-                            id: "PLOT",
-                            label: "Export PDF",
+                            id: "PRINTALL",
+                            label: "Print All",
                             icon: IconKind::Svg(include_bytes!("../../../assets/icons/plot.svg")),
-                            event: ModuleEvent::Command("PLOT".to_string()),
+                            event: ModuleEvent::Command("PRINTALL".to_string()),
                         }
                         .into(),
                     ],

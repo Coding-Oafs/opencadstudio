@@ -448,6 +448,9 @@ impl OpenCADStudio {
             "PLOT" | "PRINT" => {
                 return Some(Task::done(Message::PlotDialogOpen));
             }
+            "PRINTALL" => {
+                return Some(Task::done(Message::PrintAllOpen));
+            }
             "EXPORT" | "EXPORTPDF" => {
                 return Some(Task::done(Message::PlotExport));
             }

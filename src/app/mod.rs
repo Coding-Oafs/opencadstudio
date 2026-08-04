@@ -669,6 +669,16 @@ pub(super) struct OpenCADStudio {
     /// Snapshot of the dialog's settings taken when it opened, restored by the
     /// `<previous>` list entry.
     plot_prev: Option<crate::ui::window::plot::PlotDialogState>,
+    /// Paper layouts shown by Print All, in tab order with their selection.
+    print_all_layouts: Vec<(String, bool)>,
+    /// True while the Plot dialog is editing settings for Print All.
+    print_all_options: bool,
+    /// Settings restored when the Print All options dialog is cancelled.
+    print_all_options_prev: Option<crate::ui::window::plot::PlotDialogState>,
+    /// Plot style restored together with cancelled Print All options.
+    print_all_plot_style_prev: Option<Option<crate::io::plot_style::PlotStyleTable>>,
+    /// Plot window restored together with cancelled Print All options.
+    print_all_plot_window_prev: Option<Option<(f64, f64, f64, f64)>>,
 
     // ── Plot Style Table ──────────────────────────────────────────────────
     /// Currently loaded CTB/STB table (None = no override).
@@ -1409,6 +1419,7 @@ pub enum ModalKind {
     LayerStateManager,
     LayerStateEditor,
     Plot,
+    PrintAll,
     LayoutManager,
     Plotstyle,
     TextStyle,
@@ -2455,6 +2466,23 @@ pub enum Message {
     PlotDialogOpen,
     /// An edit inside the Plot / Print dialog.
     PlotDlg(crate::ui::window::plot::PlotDlgMsg),
+    /// Open the paper-layout batch output dialog.
+    PrintAllOpen,
+    /// Toggle one paper layout in the batch.
+    PrintAllToggle(String),
+    /// Select or clear every paper layout in the batch.
+    PrintAllSelectAll,
+    PrintAllSelectNone,
+    /// Edit the shared batch output settings in the Plot dialog.
+    PrintAllOptions,
+    /// Save the selected layouts as one multi-page PDF.
+    PrintAllPdf,
+    /// Callback after the multi-page PDF path is picked or cancelled.
+    PrintAllPdfPath(Option<std::path::PathBuf>),
+    /// Send the selected layouts to the configured printer as one job.
+    PrintAllPrint,
+    /// Completion of a Print All PDF or printer job.
+    PrintAllFinished(Result<String, String>),
     // ── Plot Style Table ─────────────────────────────────────────────────
     /// Open file dialog to load a CTB/STB plot style table.
     PlotStyleLoad,
@@ -2896,6 +2924,11 @@ impl OpenCADStudio {
             plot_orientation: crate::io::paper_sizes::Orientation::Landscape,
             plot_dialog: crate::ui::window::plot::PlotDialogState::default(),
             plot_prev: None,
+            print_all_layouts: Vec::new(),
+            print_all_options: false,
+            print_all_options_prev: None,
+            print_all_plot_style_prev: None,
+            print_all_plot_window_prev: None,
             opening: None,
             open_job_serial: 0,
             recovery_report: None,
