@@ -1935,6 +1935,12 @@ impl OpenCADStudio {
                             {
                                 Some(Message::MTextCaretMove(1))
                             }
+                            keyboard::Key::Named(keyboard::key::Named::F1) => {
+                                Some(Message::Command("HELP".to_string()))
+                            }
+                            keyboard::Key::Named(keyboard::key::Named::F2) => {
+                                Some(Message::CommandHistoryToggle)
+                            }
                             keyboard::Key::Named(keyboard::key::Named::F3) => {
                                 Some(Message::ToggleSnapEnabled)
                             }
@@ -1957,8 +1963,12 @@ impl OpenCADStudio {
                                 Some(Message::ToggleDynInput)
                             }
                             keyboard::Key::Character(c) if accel => match c.as_str() {
+                                "0" => Some(Message::ToggleCleanScreen),
+                                "1" => Some(Message::ToggleProperties),
                                 "n" => Some(Message::TabNew),
                                 "o" => Some(Message::OpenFile),
+                                "p" => Some(Message::Command("PLOT".to_string())),
+                                "q" => Some(Message::Command("QUIT".to_string())),
                                 "s" if !shift => Some(Message::SaveFile),
                                 "s" if shift => Some(Message::SaveAs),
                                 "z" if !shift => Some(Message::Undo),
@@ -1979,11 +1989,17 @@ impl OpenCADStudio {
                                 // fire the drawing's COPYCLIP/CUTCLIP/paste.
                                 // Only when nothing captured (the drawing has
                                 // focus, status Ignored) do these run. (#232)
+                                "c" if shift && status == Status::Ignored => {
+                                    Some(Message::Command("COPYBASE".to_string()))
+                                }
                                 "c" if status == Status::Ignored => {
                                     Some(Message::Command("COPYCLIP".to_string()))
                                 }
                                 "x" if status == Status::Ignored => {
                                     Some(Message::Command("CUTCLIP".to_string()))
+                                }
+                                "v" if shift && status == Status::Ignored => {
+                                    Some(Message::Command("PASTEBLOCK".to_string()))
                                 }
                                 "v" if status == Status::Ignored => Some(Message::PasteShortcut),
                                 // Web: a focused text field captured Ctrl+C/V,
