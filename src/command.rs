@@ -1025,6 +1025,8 @@ pub enum CmdResult {
     /// Replace / delete multiple entities and add new ones; command ends.
     /// Each pair: (handle_to_erase, replacement_entities) — empty vec = delete only.
     ReplaceMany(Vec<(Handle, Vec<EntityType>)>, Vec<EntityType>),
+    /// Replace several entities as one undo step while keeping the command active.
+    ReplaceManyContinue(Vec<(Handle, Vec<EntityType>)>),
     /// Cancel: discard any preview and end the command.
     Cancel,
     /// Cancel because the active drawing space changed. Cleanup is identical
@@ -1560,6 +1562,24 @@ pub trait CadCommand: Send {
     /// `old` is the erased handle; `new_handles` are the handles assigned to the replacement entities.
     /// Commands that stay active across replaces should update their internal snapshots here.
     fn on_entity_replaced(&mut self, _old: Handle, _new_handles: &[Handle]) {}
+
+    /// Consume a lasso or drag-box gesture while the command is active.
+    /// `fence` is the gesture boundary in drawing coordinates; `window` is
+    /// present for rectangular gestures. Returning `Some` prevents the normal
+    /// selection system from selecting the crossed entities.
+    fn on_drag_selection(
+        &mut self,
+        _fence: &[[f64; 2]],
+        _window: Option<([f64; 2], [f64; 2])>,
+    ) -> Option<CmdResult> {
+        None
+    }
+
+    /// Whether an empty click may start a two-corner selection box for this
+    /// command instead of being reported as a missed entity pick.
+    fn accepts_drag_selection(&self) -> bool {
+        false
+    }
 
     /// Called on every mouse-move when `needs_entity_pick()` is true.
     /// Return preview wires showing the operation result under the cursor.

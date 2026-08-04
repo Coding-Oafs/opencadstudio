@@ -3085,6 +3085,23 @@ impl TrimCommand {
         }
         CmdResult::ReplaceMany(repl, Vec::new())
     }
+
+    fn stage_replacements(&mut self, replacements: &[(Handle, Vec<EntityType>)]) {
+        for (handle, _) in replacements {
+            if let Some(index) = self
+                .all_entities
+                .iter()
+                .position(|entity| entity.common().handle == *handle)
+            {
+                self.all_entities.remove(index);
+            }
+            self.edge_set.retain(|edge| edge != handle);
+        }
+        for (_, entities) in replacements {
+            self.all_entities.extend(entities.iter().cloned());
+        }
+        self.rebuild_geos();
+    }
 }
 
 impl CadCommand for TrimCommand {
@@ -3247,29 +3264,52 @@ impl CadCommand for TrimCommand {
     }
 
     fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[acadrust::Handle]) {
-        // The last new_handles.len() entries in all_entities are the trimmed pieces
-        // that were appended with NULL handles. Assign their real document handles.
-        let start = self.all_entities.len().saturating_sub(new_handles.len());
-        for (e, &h) in self.all_entities[start..]
+        // Batch gestures stage several NULL-handle replacement groups before
+        // the document assigns real handles. The host applies them in the same
+        // order, so fill the first remaining placeholders on each callback.
+        let mut handles = new_handles.iter().copied();
+        for entity in self
+            .all_entities
             .iter_mut()
-            .zip(new_handles.iter())
+            .filter(|entity| entity.common().handle.is_null())
         {
-            match e {
-                EntityType::Line(l) => l.common.handle = h,
-                EntityType::Arc(a) => a.common.handle = h,
-                EntityType::Ray(r) => r.common.handle = h,
-                EntityType::XLine(x) => x.common.handle = h,
-                EntityType::Ellipse(e) => e.common.handle = h,
-                EntityType::Spline(s) => s.common.handle = h,
-                // A trimmed (closed or open) polyline is re-emitted as an
-                // LwPolyline; without its real handle it can't be found on a
-                // second pick, so the same polyline couldn't be trimmed twice
-                // in one TRIM command.
-                EntityType::LwPolyline(p) => p.common.handle = h,
-                _ => {}
-            }
+            let Some(handle) = handles.next() else {
+                break;
+            };
+            entity.as_entity_mut().set_handle(handle);
         }
         self.rebuild_geos();
+    }
+
+    fn on_drag_selection(
+        &mut self,
+        fence: &[[f64; 2]],
+        window: Option<([f64; 2], [f64; 2])>,
+    ) -> Option<CmdResult> {
+        if !matches!(self.mode, TrimMode::Pick) || fence.len() < 2 {
+            return None;
+        }
+        let window = window.map(|(min, max)| CrossingWindow {
+            min,
+            max,
+            pick: fence[0],
+        });
+        let replacements = fence_pass(
+            &self.all_entities,
+            &self.geos,
+            fence,
+            window,
+            self.shift,
+        );
+        if replacements.is_empty() {
+            return Some(CmdResult::NeedPoint);
+        }
+        self.stage_replacements(&replacements);
+        Some(CmdResult::ReplaceManyContinue(replacements))
+    }
+
+    fn accepts_drag_selection(&self) -> bool {
+        matches!(self.mode, TrimMode::Pick)
     }
 
     fn on_hover_entity(&mut self, handle: Handle, pt: DVec3) -> Vec<WireModel> {

@@ -2525,6 +2525,12 @@ impl OpenCADStudio {
             .as_ref()
             .map(|c| c.is_selection_gathering())
             .unwrap_or(false);
+        let selection_box_active = self.tabs[i]
+            .scene
+            .selection
+            .borrow()
+            .box_anchor
+            .is_some();
         let selection_pick_add = self.pick_add
             || self.tabs[i]
                 .active_cmd
@@ -2538,7 +2544,12 @@ impl OpenCADStudio {
             .map(|c| c.window_corner_pick())
             .unwrap_or(false);
 
-        if is_down && is_click && self.tabs[i].active_cmd.is_some() && !is_gathering {
+        if is_down
+            && is_click
+            && self.tabs[i].active_cmd.is_some()
+            && !is_gathering
+            && !selection_box_active
+        {
             let (vw, vh) = (tile_vw, tile_vh);
             let bounds = iced::Rectangle {
                 x: 0.0,
@@ -2893,8 +2904,21 @@ impl OpenCADStudio {
                         }
                     }
                     result
+                } else if self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .is_some_and(|command| command.accepts_drag_selection())
+                {
+                    let anchor_world = self.cursor_model_point(i, &edit_cam, p, bounds);
+                    let mut selection = self.tabs[i].scene.selection.borrow_mut();
+                    selection.box_anchor = Some(p_full);
+                    selection.box_current = Some(p_full);
+                    selection.box_anchor_world = Some(anchor_world);
+                    selection.box_crossing = false;
+                    None
                 } else {
-                    self.command_line.push_info(crate::t!("Nothing found at that point.").as_ref());
+                    self.command_line
+                        .push_info(crate::t!("Nothing found at that point.").as_ref());
                     None
                 }
             } else if self.tabs[i]
@@ -3023,6 +3047,91 @@ impl OpenCADStudio {
             };
 
             if is_dragging {
+                let drag_geometry = if poly_drag {
+                    let mut points: Vec<iced::Point> = self.tabs[i]
+                        .scene
+                        .selection
+                        .borrow()
+                        .poly_points
+                        .iter()
+                        .map(|point| iced::Point {
+                            x: point.x - tile_off.x,
+                            y: point.y - tile_off.y,
+                        })
+                        .collect();
+                    if points.last().is_none_or(|last| {
+                        (last.x - p.x).abs() > f32::EPSILON
+                            || (last.y - p.y).abs() > f32::EPSILON
+                    }) {
+                        points.push(p);
+                    }
+                    if let Some(first) = points.first().copied() {
+                        points.push(first);
+                    }
+                    let fence = points
+                        .into_iter()
+                        .map(|point| {
+                            let world = self.cursor_model_point(i, &edit_cam, point, bounds);
+                            [world.x, world.y]
+                        })
+                        .collect::<Vec<_>>();
+                    Some((fence, None))
+                } else if let Some(anchor) = box_anchor {
+                    let points = [
+                        anchor,
+                        iced::Point::new(anchor.x, p.y),
+                        p,
+                        iced::Point::new(p.x, anchor.y),
+                        anchor,
+                    ];
+                    let fence = points
+                        .into_iter()
+                        .map(|point| {
+                            let world = self.cursor_model_point(i, &edit_cam, point, bounds);
+                            [world.x, world.y]
+                        })
+                        .collect::<Vec<_>>();
+                    let (min, max) = fence.iter().fold(
+                        (
+                            [f64::INFINITY, f64::INFINITY],
+                            [f64::NEG_INFINITY, f64::NEG_INFINITY],
+                        ),
+                        |(mut min, mut max), point| {
+                            min[0] = min[0].min(point[0]);
+                            min[1] = min[1].min(point[1]);
+                            max[0] = max[0].max(point[0]);
+                            max[1] = max[1].max(point[1]);
+                            (min, max)
+                        },
+                    );
+                    Some((fence, Some((min, max))))
+                } else {
+                    None
+                };
+
+                if let Some((fence, window)) = drag_geometry {
+                    let result = self.tabs[i].active_cmd.as_mut().and_then(|command| {
+                        command.set_shift(self.shift_down);
+                        command.on_drag_selection(&fence, window)
+                    });
+                    if let Some(result) = result {
+                        let mut selection = self.tabs[i].scene.selection.borrow_mut();
+                        selection.left_down = false;
+                        selection.left_press_pos = None;
+                        selection.left_press_time = None;
+                        selection.left_dragging = false;
+                        selection.poly_active = false;
+                        selection.poly_points.clear();
+                        selection.poly_crossing = false;
+                        selection.box_anchor = None;
+                        selection.box_anchor_world = None;
+                        selection.box_current = None;
+                        selection.box_crossing = false;
+                        drop(selection);
+                        return self.apply_cmd_result(result);
+                    }
+                }
+
                 if !poly_drag {
                     // PICKDRAG 1 (#226): the press-drag spanned a
                     // rectangle through the box machinery — complete
@@ -3431,6 +3540,54 @@ impl OpenCADStudio {
                     }
                 } else {
                     let a = box_anchor.unwrap();
+                    let box_points = [
+                        a,
+                        iced::Point::new(a.x, p.y),
+                        p,
+                        iced::Point::new(p.x, a.y),
+                        a,
+                    ];
+                    let command_fence = box_points
+                        .into_iter()
+                        .map(|point| {
+                            let world = self.cursor_model_point(i, &edit_cam, point, bounds);
+                            [world.x, world.y]
+                        })
+                        .collect::<Vec<_>>();
+                    let (command_min, command_max) = command_fence.iter().fold(
+                        (
+                            [f64::INFINITY, f64::INFINITY],
+                            [f64::NEG_INFINITY, f64::NEG_INFINITY],
+                        ),
+                        |(mut min, mut max), point| {
+                            min[0] = min[0].min(point[0]);
+                            min[1] = min[1].min(point[1]);
+                            max[0] = max[0].max(point[0]);
+                            max[1] = max[1].max(point[1]);
+                            (min, max)
+                        },
+                    );
+                    let command_result = self.tabs[i].active_cmd.as_mut().and_then(|command| {
+                        command.set_shift(self.shift_down);
+                        command.on_drag_selection(
+                            &command_fence,
+                            Some((command_min, command_max)),
+                        )
+                    });
+                    if let Some(result) = command_result {
+                        let mut selection = self.tabs[i].scene.selection.borrow_mut();
+                        selection.left_down = false;
+                        selection.left_press_pos = None;
+                        selection.left_press_time = None;
+                        selection.left_dragging = false;
+                        selection.box_anchor = None;
+                        selection.box_anchor_world = None;
+                        selection.box_current = None;
+                        selection.box_crossing = false;
+                        drop(selection);
+                        return self.apply_cmd_result(result);
+                    }
+
                     let crossing = box_crossing;
                     let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                     let world_aabb = [a, iced::Point::new(a.x, p.y), p, iced::Point::new(p.x, a.y)]

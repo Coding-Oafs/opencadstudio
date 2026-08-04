@@ -1169,6 +1169,31 @@ impl OpenCADStudio {
                 }
                 self.refresh_properties();
             }
+            CmdResult::ReplaceManyContinue(replacements) => {
+                let label = self.history_label_from_active_cmd(i, "TRIM");
+                self.push_undo_snapshot(i, label);
+                for (handle, entities) in replacements {
+                    self.tabs[i].scene.erase_entities(&[handle]);
+                    let new_handles: Vec<Handle> = entities
+                        .into_iter()
+                        .map(|entity| self.tabs[i].scene.add_entity(entity))
+                        .collect();
+                    if let Some(command) = self.tabs[i].active_cmd.as_mut() {
+                        command.on_entity_replaced(handle, &new_handles);
+                    }
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].snap_result = None;
+                if let Some(prompt) = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .map(|command| command.prompt())
+                {
+                    self.command_line.push_info(&prompt);
+                }
+                self.refresh_properties();
+            }
             CmdResult::ReplaceEntity(handle, new_entities) => {
                 // Detect SPLINEDIT sentinel: a single XLine with a magic layer name.
                 if new_entities.len() == 1 {
