@@ -225,18 +225,21 @@ impl OpenCADStudio {
         p: iced::Point,
         bounds: iced::Rectangle,
     ) -> glam::DVec3 {
-        // Constrain to the UCS plane only where the UCS applies (model space or
-        // inside a viewport); plain paper space uses the target plane.
-        let plane = self.tabs[i]
-            .active_ucs
-            .as_ref()
-            .filter(|_| self.tabs[i].editing_model_space())
-            .map(|ucs| {
-                (
+        // Model-space input always belongs to a drawing plane. With no active
+        // UCS that plane is world XY; using the camera target plane and only
+        // clearing Z afterwards shifts the picked point on screen in an
+        // oblique view. Plain paper space still uses the camera target plane.
+        let plane = if self.tabs[i].editing_model_space() {
+            Some(match self.tabs[i].active_ucs.as_ref() {
+                Some(ucs) => (
                     ucs_z_axis(ucs),
                     glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z),
-                )
-            });
+                ),
+                None => (glam::DVec3::Z, glam::DVec3::ZERO),
+            })
+        } else {
+            None
+        };
         let pick = |cam: &crate::scene::view::camera::Camera| match plane {
             Some((normal, origin)) => cam.pick_on_plane(p, bounds, normal.as_vec3(), origin),
             None => cam.pick_on_target_plane(p, bounds),
