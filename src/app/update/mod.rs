@@ -1251,7 +1251,11 @@ impl OpenCADStudio {
             }
 
             Message::RibbonToolClick { tool_id, event } => {
-                self.on_ribbon_tool_click(tool_id, event)
+                if self.tabs[self.active_tab].is_start {
+                    Task::none()
+                } else {
+                    self.on_ribbon_tool_click(tool_id, event)
+                }
             }
             Message::PluginFileDialogResult { command, path } => {
                 if let Some(path) = path {
@@ -1310,6 +1314,9 @@ impl OpenCADStudio {
                         self.stamp_header_sysvars(prev);
                     }
                     self.active_tab = idx;
+                    if self.tabs[idx].is_start {
+                        self.ribbon.close_dropdown();
+                    }
                     if self.tabs[idx].is_start
                         && matches!(
                             self.active_modal,
@@ -3430,11 +3437,19 @@ impl OpenCADStudio {
 
             // ── Ribbon dropdowns ──────────────────────────────────────────
             Message::ToggleRibbonDropdown(id) => {
-                self.ribbon.toggle_dropdown(&id);
+                if self.tabs[self.active_tab].is_start {
+                    self.ribbon.close_dropdown();
+                } else {
+                    self.ribbon.toggle_dropdown(&id);
+                }
                 Task::none()
             }
             Message::ToggleRibbonPanel(id) => {
-                self.ribbon.toggle_collapsed_panel(&id);
+                if self.tabs[self.active_tab].is_start {
+                    self.ribbon.close_dropdown();
+                } else {
+                    self.ribbon.toggle_collapsed_panel(&id);
+                }
                 Task::none()
             }
             Message::CloseRibbonDropdown => {
@@ -3442,6 +3457,10 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::DropdownSelectItem { dropdown_id, cmd } => {
+                if self.tabs[self.active_tab].is_start {
+                    self.ribbon.close_dropdown();
+                    return Task::none();
+                }
                 self.ribbon.select_dropdown_item(dropdown_id, cmd);
                 self.ribbon.activate_tool(cmd);
                 self.dispatch_command(cmd)

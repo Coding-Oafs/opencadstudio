@@ -321,7 +321,6 @@ impl Ribbon {
     fn toggle_state(&self) -> widgets::ToggleState {
         use widgets::ToggleState;
         ToggleState {
-            start_mode: false,
             wireframe: self.wireframe,
             ortho_mode: self.ortho_mode,
             show_viewcube: self.show_viewcube,
@@ -403,11 +402,11 @@ impl Ribbon {
     ) -> Element<'_, Message> {
         // ── Quick-access file commands + undo/redo, one merged flow ────────
         let lead = iced::widget::Row::with_children(vec![
-            quick_access_btn(crate::ui::icons::DOC_NEW, "New", "NEW", is_start).into(),
-            quick_access_btn(crate::ui::icons::FOLDER_OPEN, "Open", "OPEN", is_start).into(),
-            quick_access_btn(crate::ui::icons::SAVE, "Save", "SAVE", is_start).into(),
-            quick_access_btn(crate::ui::icons::FILE_EXPORT, "Save As", "SAVEAS", is_start).into(),
-            quick_access_btn(crate::ui::icons::PRINT, "Print", "PRINT", is_start).into(),
+            quick_access_btn(crate::ui::icons::DOC_NEW, "New", "NEW").into(),
+            quick_access_btn(crate::ui::icons::FOLDER_OPEN, "Open", "OPEN").into(),
+            quick_access_btn(crate::ui::icons::SAVE, "Save", "SAVE").into(),
+            quick_access_btn(crate::ui::icons::FILE_EXPORT, "Save As", "SAVEAS").into(),
+            quick_access_btn(crate::ui::icons::PRINT, "Print", "PRINT").into(),
             render_history_control("Undo", UNDO_HISTORY_ID, undo_count, &self.open_dropdown).into(),
             render_history_control("Redo", REDO_HISTORY_ID, redo_count, &self.open_dropdown).into(),
         ])
@@ -580,8 +579,7 @@ impl Ribbon {
                 let panels: Vec<Panel<'_>> = groups
                     .iter()
                     .map(|g| {
-                        let mut ts = self.toggle_state();
-                        ts.start_mode = is_start;
+                        let ts = self.toggle_state();
                         Panel {
                         id: g.title.to_string(),
                         full: render_group(
@@ -680,7 +678,7 @@ impl Ribbon {
                 text("").into()
             };
 
-        let tool_bar = container(tool_area)
+        let tool_bar: Element<'_, Message> = container(tool_area)
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
                     theme.palette().background.weakest.color,
@@ -692,7 +690,44 @@ impl Ribbon {
                 },
                 ..Default::default()
             })
-            .width(Length::Fill);
+            .width(Length::Fill)
+            .into();
+
+        let tool_bar = if is_start {
+            // The Start tab has no drawing context. One theme-aware shield
+            // fades and blocks only the tool area; the tabs and application
+            // controls above it remain available and clearly identifiable.
+            let shield = mouse_area(
+                container(iced::widget::Space::new())
+                    .width(Fill)
+                    .height(Fill)
+                    .style(|theme: &Theme| container::Style {
+                        background: Some(Background::Color(
+                            theme
+                                .palette()
+                                .background
+                                .strongest
+                                .color
+                                .scale_alpha(0.58),
+                        )),
+                        ..Default::default()
+                    }),
+            )
+            .on_press(Message::CloseRibbonDropdown)
+            .interaction(iced::mouse::Interaction::Idle);
+            let shield = iced::widget::tooltip(
+                shield,
+                make_tip(t!("Open or create a drawing to use ribbon commands.").into_owned()),
+                iced::widget::tooltip::Position::Bottom,
+            )
+            .gap(6.0)
+            .delay(std::time::Duration::from_millis(400))
+            .style(tip_style);
+
+            iced::widget::stack![tool_bar, iced::widget::opaque(shield)].into()
+        } else {
+            tool_bar
+        };
 
         column![tab_bar, tool_bar].into()
     }
@@ -704,7 +739,11 @@ impl Ribbon {
         undo_labels: &[String],
         redo_labels: &[String],
         win: (f32, f32),
+        is_start: bool,
     ) -> Option<Element<'_, Message>> {
+        if is_start {
+            return None;
+        }
         let open_id = self.open_dropdown.as_deref()?;
 
         if open_id == UNDO_HISTORY_ID || open_id == REDO_HISTORY_ID {

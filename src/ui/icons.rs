@@ -223,18 +223,6 @@ pub fn semantic<'a, M: 'a>(bytes: &'static [u8], size: f32) -> Element<'a, M> {
     })
 }
 
-/// Render a disabled multi-colour tool icon without flattening its colour roles.
-pub fn semantic_disabled<'a, M: 'a>(
-    bytes: &'static [u8],
-    size: f32,
-) -> Element<'a, M> {
-    Element::new(SemanticIcon {
-        bytes,
-        size,
-        opacity: 0.42,
-    })
-}
-
 fn semantic_handle(bytes: &'static [u8], theme: &Theme) -> svg::Handle {
     let key = SemanticCacheKey {
         address: bytes.as_ptr() as usize,

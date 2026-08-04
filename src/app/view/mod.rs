@@ -1708,6 +1708,7 @@ impl OpenCADStudio {
                 &history_dropdown_labels(&self.tabs[self.active_tab].history.undo_stack),
                 &history_dropdown_labels(&self.tabs[self.active_tab].history.redo_stack),
                 self.win_size,
+                self.tabs[self.active_tab].is_start,
             )
             .unwrap_or_else(|| iced::widget::Space::new().width(0).height(0).into());
 
