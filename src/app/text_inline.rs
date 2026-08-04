@@ -161,7 +161,7 @@ impl super::OpenCADStudio {
 
         if field.is_rich() {
             self.open_mtext_editor(pos, Some(target), &value, height);
-            iced::Task::none()
+            self.unfocus_widgets()
         } else {
             self.open_text_inline(pos, Some(target), &value, height, field);
             iced::widget::operation::focus(iced::widget::Id::new(super::view::TEXT_INLINE_ID))

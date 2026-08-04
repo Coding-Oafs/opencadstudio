@@ -1574,6 +1574,14 @@ pub enum DsField {
     Dimtzin,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ArrowKey {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick(Instant),
@@ -1826,6 +1834,18 @@ pub enum Message {
     CommandHistoryPrev,
     /// Recall next command in history (↓ arrow key).
     CommandHistoryNext,
+    /// An unconsumed arrow key; the active editor gets first choice, otherwise
+    /// the configurable shortcut table handles it.
+    ArrowKeyPressed {
+        direction: ArrowKey,
+        shortcut: String,
+        extend_selection: bool,
+    },
+    /// A widget captured Up/Down; resolve it only if the command input owns
+    /// keyboard focus.
+    CommandLineArrowProbe { direction: ArrowKey },
+    /// Result of the command-input focus query for a captured Up/Down key.
+    CommandLineArrowResolved { direction: ArrowKey, focused: bool },
     /// Toggle the dropdown listing the full command-line history.
     CommandHistoryToggle,
     /// Grab/move/release the expanded history panel's top resize edge.

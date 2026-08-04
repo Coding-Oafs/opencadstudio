@@ -1,7 +1,7 @@
 use super::document::DocumentTab;
 use super::document::DynComponent;
 use super::history::history_dropdown_labels;
-use super::{Message, OpenCADStudio};
+use super::{ArrowKey, Message, OpenCADStudio};
 use crate::scene::pick::grip::{grips_to_screen, grips_to_screen_paper, grips_to_screen_rte};
 use crate::scene::view::viewport_pane::ViewportPane;
 use crate::scene::{VIEWCUBE_PAD, VIEWCUBE_REGION_PX};
@@ -1977,6 +1977,44 @@ impl OpenCADStudio {
                                 }
                             }
                         }
+                        let has_printable_text = text.as_deref().is_some_and(|value| {
+                            !value.is_empty()
+                                && value
+                                    .chars()
+                                    .all(|ch| !ch.is_control() && !ch.is_whitespace())
+                        });
+                        let arrow = match &key {
+                            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                                Some(ArrowKey::Up)
+                            }
+                            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                                Some(ArrowKey::Down)
+                            }
+                            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                                Some(ArrowKey::Left)
+                            }
+                            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                                Some(ArrowKey::Right)
+                            }
+                            _ => None,
+                        };
+                        if !has_printable_text && status == Status::Ignored {
+                            if let Some(direction) = arrow {
+                                return Some(Message::ArrowKeyPressed {
+                                    direction,
+                                    shortcut: shortcut_key_name(&key, modifiers)?,
+                                    extend_selection: modifiers.shift(),
+                                });
+                            }
+                        }
+                        if !has_printable_text
+                            && status == Status::Captured
+                            && matches!(arrow, Some(ArrowKey::Up | ArrowKey::Down))
+                        {
+                            return Some(Message::CommandLineArrowProbe {
+                                direction: arrow?,
+                            });
+                        }
                         // A focused web text field needs the browser clipboard;
                         // drawing shortcuts only run for ignored C/V events.
                         #[cfg(target_arch = "wasm32")]
@@ -2003,6 +2041,12 @@ impl OpenCADStudio {
 
     pub(super) fn focus_cmd_input(&self) -> Task<Message> {
         iced::widget::operation::focus(iced::widget::Id::new(crate::ui::command_line::CMD_INPUT_ID))
+    }
+
+    pub(super) fn unfocus_widgets(&self) -> Task<Message> {
+        iced::advanced::widget::operate(
+            iced::advanced::widget::operation::focusable::unfocus(),
+        )
     }
 }
 

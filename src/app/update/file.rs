@@ -421,7 +421,7 @@ impl OpenCADStudio {
             self.tabs[i].active_cmd = Some(cmd);
             self.apply_cmd_result(res)
         } else {
-            Task::none()
+            self.focus_cmd_input()
         }
     }
 

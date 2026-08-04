@@ -3089,12 +3089,17 @@ impl OpenCADStudio {
                 self.restore_pre_cmd_tangent();
             }
         }
-        // Keep the command-line input focused at all times — every typed
-        // character is meant to route there (the command processor reads
-        // its keystroke stream from this widget). When no command is
-        // running the ribbon tool button still has to visually deactivate.
+        // When no command is running the ribbon tool button still has to
+        // visually deactivate. Keyboard focus is assigned below to whichever
+        // editor currently owns typed input.
         if self.tabs[i].active_cmd.is_none() {
             self.ribbon.deactivate_tool();
+        }
+        // The rich text canvas owns keyboard editing itself. Leaving the
+        // hidden command input focused would make it consume Left/Right before
+        // the editor can handle them.
+        if self.mtext_editor.is_some() {
+            return self.unfocus_widgets();
         }
         // The in-place TEXT editor needs keyboard focus on its own field.
         if self.text_inline.is_some() {

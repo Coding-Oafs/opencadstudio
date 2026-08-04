@@ -67,8 +67,8 @@ pub struct CommandLine {
     /// instead of submitting. Saved in the user config.
     pub literal_spaces: bool,
     pub history: Vec<HistoryEntry>,
-    /// Commands the user has typed (for ↑/↓ recall). Holds the raw typed
-    /// strings so the line can be re-edited; distinct from `recent_commands`.
+    /// Successfully dispatched commands used for ↑/↓ recall, newest last.
+    /// Stored separately because recall also maintains its own cursor and draft.
     pub cmd_recall: Vec<String>,
     /// Commands actually dispatched, from any source (command line, ribbon,
     /// context menu, shortcuts), newest last. Drives the right-click "Repeat"
@@ -83,8 +83,7 @@ pub struct CommandLine {
     /// Persisted height of the full-history editor in logical pixels.
     pub history_height: f32,
     /// Index of the currently-highlighted autocomplete suggestion, or
-    /// `None` when the user hasn't yet started navigating with the
-    /// arrow keys. Reset on every keystroke.
+    /// `None` before keyboard navigation begins. Reset when input changes.
     pub autocomplete_cursor: Option<usize>,
     /// Command names contributed by loaded plugins, refreshed whenever the
     /// enabled-plugin set changes. Merged into autocomplete alongside the
@@ -203,23 +202,15 @@ impl CommandLine {
             Some((verb, rest)) => format!("{} {}", verb.to_uppercase(), rest),
             None => raw.to_uppercase(),
         };
-        // Record in recall list (avoid duplicates at the top).
-        if self.cmd_recall.last().map(|s| s.as_str()) != Some(raw.as_str()) {
-            self.cmd_recall.push(raw);
-            if self.cmd_recall.len() > 50 {
-                self.cmd_recall.remove(0);
-            }
-        }
-        self.recall_cursor = None;
-        self.recall_draft.clear();
         self.push_command(&self.input.clone());
         self.input.clear();
         Some(cmd)
     }
 
-    /// Record a dispatched command for the right-click "Repeat" menu, skipping
-    /// a consecutive duplicate and capping the list. Called from the dispatch
-    /// choke point so commands from every source are captured.
+    /// Record a successfully dispatched command for both the right-click
+    /// "Repeat" menu and ↑/↓ recall. Consecutive duplicates are skipped and
+    /// both lists are capped. Called from the dispatch choke point so commands
+    /// from every source are captured.
     pub fn record_recent(&mut self, cmd: &str) {
         let cmd = cmd.trim();
         if cmd.is_empty() {
@@ -231,6 +222,22 @@ impl CommandLine {
                 self.recent_commands.remove(0);
             }
         }
+        if self.cmd_recall.last().map(String::as_str) != Some(cmd) {
+            self.cmd_recall.push(cmd.to_string());
+            if self.cmd_recall.len() > 50 {
+                self.cmd_recall.remove(0);
+            }
+        }
+        self.cancel_history_navigation();
+    }
+
+    pub fn history_navigation_active(&self) -> bool {
+        self.recall_cursor.is_some()
+    }
+
+    pub fn cancel_history_navigation(&mut self) {
+        self.recall_cursor = None;
+        self.recall_draft.clear();
     }
 
     /// Navigate to the previous command in recall history (↑).
@@ -388,42 +395,41 @@ impl CommandLine {
         self.step_prompt = None;
     }
 
-    /// Move the autocomplete highlight up one entry. Wraps to the last
-    /// match. Returns `true` when there was a list to navigate.
+    /// Move the autocomplete highlight up one entry. Wraps to the last match.
     pub fn autocomplete_prev(&mut self) -> bool {
         let len = self.autocomplete_matches().len();
         if len == 0 {
             return false;
         }
-        // No explicit cursor means the top match (index 0) is highlighted,
-        // so ↑ from there wraps to the last entry.
-        let cur = self.autocomplete_cursor.unwrap_or(0);
-        let next = if cur == 0 { len - 1 } else { cur - 1 };
-        self.autocomplete_cursor = Some(next);
+        let current = self.autocomplete_cursor.unwrap_or(0).min(len - 1);
+        self.autocomplete_cursor = Some(if current == 0 {
+            len - 1
+        } else {
+            current - 1
+        });
         true
     }
 
-    /// Move the autocomplete highlight down one entry. Wraps to the
-    /// first match. Returns `true` when there was a list to navigate.
+    /// Move the autocomplete highlight down one entry. Wraps to the first match.
     pub fn autocomplete_next(&mut self) -> bool {
         let len = self.autocomplete_matches().len();
         if len == 0 {
             return false;
         }
-        // No explicit cursor means the top match (index 0) is highlighted,
-        // so ↓ from there advances to the next entry (wrapping at the end).
-        let cur = self.autocomplete_cursor.unwrap_or(0);
-        let next = if cur + 1 < len { cur + 1 } else { 0 };
-        self.autocomplete_cursor = Some(next);
+        let current = self.autocomplete_cursor.unwrap_or(0).min(len - 1);
+        self.autocomplete_cursor = Some(if current + 1 < len {
+            current + 1
+        } else {
+            0
+        });
         true
     }
 
-    /// The command name the user has currently highlighted in the
-    /// autocomplete popup, if any.
+    /// The command name explicitly highlighted in the autocomplete popup.
     pub fn selected_suggestion(&self) -> Option<String> {
         let matches = self.autocomplete_matches();
         self.autocomplete_cursor
-            .and_then(|i| matches.get(i).cloned())
+            .and_then(|index| matches.get(index).cloned())
     }
 
     /// Autocomplete suggestions for the current input — see
@@ -582,13 +588,10 @@ impl CommandLine {
             if matches.is_empty() {
                 container(column![]).height(0).into()
             } else {
-                // Before any arrow-key navigation, the top match is
-                // highlighted so it's visible that Enter runs it — the
-                // standard DWG command-line behavior.
                 let cursor = self.autocomplete_cursor.unwrap_or(0);
                 let mut col = column![].spacing(0).width(Length::Fill);
                 for (idx, cmd) in matches.iter().enumerate() {
-                    let is_selected = cursor == idx;
+                    let is_selected = idx == cursor;
                     let row = button(text(cmd.clone()).size(11))
                         .on_press(Message::CommandSuggestionPick(cmd.clone()))
                         .width(Length::Fill)
@@ -964,5 +967,41 @@ mod tests {
         line.push_error_once(t!("Unable to save: file is in use.").as_ref());
         line.push_error_once(t!("Unable to save: file is in use.").as_ref());
         assert_eq!(line.history.len(), initial_len + 1);
+    }
+
+    #[test]
+    fn command_recall_walks_both_directions_and_restores_the_draft() {
+        let mut line = CommandLine::new();
+        for command in ["LINE", "LINE", "CIRCLE"] {
+            line.record_recent(command);
+        }
+        line.input = "PARTIAL".to_string();
+
+        line.history_prev();
+        assert_eq!(line.input, "CIRCLE");
+        line.history_prev();
+        assert_eq!(line.input, "LINE");
+        line.history_prev();
+        assert_eq!(line.input, "LINE");
+        line.history_next();
+        assert_eq!(line.input, "CIRCLE");
+        line.history_next();
+        assert_eq!(line.input, "PARTIAL");
+        assert_eq!(line.cmd_recall, vec!["LINE".to_string(), "CIRCLE".to_string()]);
+    }
+
+    #[test]
+    fn recalled_command_can_be_edited_before_submit() {
+        let mut line = CommandLine::new();
+        line.record_recent("MOVE");
+        line.history_prev();
+        line.input.push_str(" 0,0 10,0");
+        let submitted = line.submit().expect("edited command");
+        assert_eq!(submitted, "MOVE 0,0 10,0");
+        line.record_recent(&submitted);
+        assert_eq!(
+            line.cmd_recall.last().map(String::as_str),
+            Some("MOVE 0,0 10,0")
+        );
     }
 }

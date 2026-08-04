@@ -193,6 +193,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     } else {
                         // Command-line entry is shown uppercase.
                         self.command_line.input.push_str(&s.to_uppercase());
+                        self.command_line.cancel_history_navigation();
                     }
                 }
                 self.command_line.autocomplete_cursor = None;
@@ -221,6 +222,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 self.command_line.input.pop();
                 self.command_line.autocomplete_cursor = None;
+                self.command_line.cancel_history_navigation();
                 self.focus_cmd_input()
     }
 
@@ -303,15 +305,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                     return self.dispatch_command(&format!("SETVAR {name} {val}"));
                 }
-                // If the user navigated the autocomplete list with the
-                // arrow keys, Enter dispatches the highlighted command
-                // rather than the partial text actually in the buffer.
                 let i_tab = self.active_tab;
                 if self.tabs[i_tab].active_cmd.is_none() {
-                    if let Some(cmd) = self.command_line.selected_suggestion() {
+                    if let Some(command) = self.command_line.selected_suggestion() {
                         self.command_line.input.clear();
                         self.command_line.autocomplete_cursor = None;
-                        return self.dispatch_command(&cmd);
+                        return self.dispatch_command(&command);
                     }
                 }
                 let i = self.active_tab;

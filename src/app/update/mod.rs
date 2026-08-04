@@ -1,4 +1,4 @@
-use super::{Message, OpenCADStudio};
+use super::{ArrowKey, Message, OpenCADStudio};
 use crate::scene::VIEWCUBE_DRAW_PX;
 use crate::ui::PropertiesPanel;
 use iced::time::Instant;
@@ -19,6 +19,9 @@ fn is_modal_blocked_key_msg(msg: &Message) -> bool {
             | Message::CommandBackspace
             | Message::CommandHistoryPrev
             | Message::CommandHistoryNext
+            | Message::ArrowKeyPressed { .. }
+            | Message::CommandLineArrowProbe { .. }
+            | Message::CommandLineArrowResolved { .. }
             | Message::DynTabNext
             | Message::MTextCaretMove(_)
             | Message::DeleteSelected
@@ -1493,9 +1496,8 @@ impl OpenCADStudio {
                     return self.update(Message::CommandSubmit);
                 }
                 self.command_line.input = s;
-                // Typing invalidates the previous arrow-key cursor —
-                // the matches list has likely changed.
                 self.command_line.autocomplete_cursor = None;
+                self.command_line.cancel_history_navigation();
                 Task::none()
             }
 
@@ -1558,14 +1560,17 @@ impl OpenCADStudio {
                     }
                     return Task::none();
                 }
-                // While autocomplete is showing suggestions, ↑ walks up
-                // that list. Otherwise it falls back to recall history.
                 let i = self.active_tab;
-                if self.tabs[i].active_cmd.is_none() && self.command_line.autocomplete_prev() {
+                if !self.command_line.history_navigation_active()
+                    && self.tabs[i].active_cmd.is_none()
+                    && self.command_line.autocomplete_prev()
+                {
                     return Task::none();
                 }
                 self.command_line.history_prev();
-                Task::none()
+                iced::widget::operation::move_cursor_to_end(iced::widget::Id::new(
+                    crate::ui::command_line::CMD_INPUT_ID,
+                ))
             }
 
             Message::CommandHistoryNext => {
@@ -1582,11 +1587,63 @@ impl OpenCADStudio {
                     return Task::none();
                 }
                 let i = self.active_tab;
-                if self.tabs[i].active_cmd.is_none() && self.command_line.autocomplete_next() {
+                if !self.command_line.history_navigation_active()
+                    && self.tabs[i].active_cmd.is_none()
+                    && self.command_line.autocomplete_next()
+                {
                     return Task::none();
                 }
                 self.command_line.history_next();
-                Task::none()
+                iced::widget::operation::move_cursor_to_end(iced::widget::Id::new(
+                    crate::ui::command_line::CMD_INPUT_ID,
+                ))
+            }
+
+            Message::CommandLineArrowProbe { direction } => {
+                iced::widget::operation::is_focused(iced::widget::Id::new(
+                    crate::ui::command_line::CMD_INPUT_ID,
+                ))
+                .map(move |focused| Message::CommandLineArrowResolved {
+                    direction,
+                    focused,
+                })
+            }
+
+            Message::CommandLineArrowResolved { direction, focused } => {
+                if !focused {
+                    return Task::none();
+                }
+                match direction {
+                    ArrowKey::Up => self.update(Message::CommandHistoryPrev),
+                    ArrowKey::Down => self.update(Message::CommandHistoryNext),
+                    ArrowKey::Left | ArrowKey::Right => Task::none(),
+                }
+            }
+
+            Message::ArrowKeyPressed {
+                direction,
+                shortcut,
+                extend_selection,
+            } => {
+                if self.mtext_editor.is_some() {
+                    match direction {
+                        ArrowKey::Left => self.mtext_caret_move(-1, extend_selection),
+                        ArrowKey::Right => self.mtext_caret_move(1, extend_selection),
+                        ArrowKey::Up => {
+                            self.mtext_caret_move_vertical(1, extend_selection)
+                        }
+                        ArrowKey::Down => {
+                            self.mtext_caret_move_vertical(-1, extend_selection)
+                        }
+                    }
+                    Task::none()
+                } else {
+                    match direction {
+                        ArrowKey::Up => self.update(Message::CommandHistoryPrev),
+                        ArrowKey::Down => self.update(Message::CommandHistoryNext),
+                        ArrowKey::Left | ArrowKey::Right => self.run_shortcut(&shortcut),
+                    }
+                }
             }
 
             Message::CommandLiteralToggle => {
@@ -1699,6 +1756,7 @@ impl OpenCADStudio {
 
             Message::CommandSuggestionPick(cmd) => {
                 self.command_line.input.clear();
+                self.command_line.autocomplete_cursor = None;
                 self.command_line.close_history();
                 self.dispatch_command(&cmd)
             }
@@ -3567,7 +3625,7 @@ impl OpenCADStudio {
                         }
                     }
                 }
-                Task::none()
+                self.unfocus_widgets()
             }
             Message::MTextSelTo(off) => {
                 if let Some(ed) = self.mtext_editor.as_mut() {
@@ -3585,7 +3643,7 @@ impl OpenCADStudio {
                 {
                     return self.update(Message::PropHatchPatternNavigate(d as i8));
                 }
-                self.mtext_caret_move(d);
+                self.mtext_caret_move(d, false);
                 Task::none()
             }
             Message::MTextCaretBlink => {
@@ -3629,6 +3687,7 @@ impl OpenCADStudio {
                         let flat = text.replace(['\r', '\n'], " ").to_uppercase();
                         self.command_line.input.push_str(&flat);
                         self.command_line.autocomplete_cursor = None;
+                        self.command_line.cancel_history_navigation();
                         self.focus_cmd_input()
                     }
                     Text::EmptyOrUnsupported => {

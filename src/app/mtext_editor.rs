@@ -538,6 +538,63 @@ fn cells_delete_range(cells: &mut Vec<Cell>, mut a: usize, mut b: usize) -> usiz
 use crate::scene::convert::tessellate;
 use crate::scene::model::wire_model::WireModel;
 
+fn vertical_caret_target(
+    boxes: &[crate::entities::text_support::GlyphBox],
+    caret: usize,
+    visible_count: usize,
+    direction: i8,
+) -> usize {
+    if boxes.is_empty() || direction == 0 {
+        return caret.min(visible_count);
+    }
+
+    let anchor = boxes
+        .iter()
+        .find(|item| item.vis == caret)
+        .map(|item| (item.xmin, item.ymin, item.ymax))
+        .or_else(|| {
+            caret.checked_sub(1).and_then(|previous| {
+                boxes
+                    .iter()
+                    .find(|item| item.vis == previous)
+                    .map(|item| (item.xmax, item.ymin, item.ymax))
+            })
+        })
+        .or_else(|| boxes.first().map(|item| (item.xmin, item.ymin, item.ymax)));
+    let Some((anchor_x, anchor_y, anchor_top)) = anchor else {
+        return caret.min(visible_count);
+    };
+
+    let sign = f32::from(direction.signum());
+    let line_epsilon = ((anchor_top - anchor_y).abs() * 0.15).max(1e-5);
+    let nearest_line = boxes
+        .iter()
+        .filter_map(|item| {
+            let distance = (item.ymin - anchor_y) * sign;
+            (distance > line_epsilon).then_some(distance)
+        })
+        .fold(f32::INFINITY, f32::min);
+    if !nearest_line.is_finite() {
+        return caret.min(visible_count);
+    }
+
+    let line_tolerance = line_epsilon.max(nearest_line * 0.15);
+    let mut best = (f32::INFINITY, caret.min(visible_count));
+    for item in boxes {
+        let distance = (item.ymin - anchor_y) * sign;
+        if (distance - nearest_line).abs() > line_tolerance {
+            continue;
+        }
+        for (x, offset) in [(item.xmin, item.vis), (item.xmax, item.vis + 1)] {
+            let score = (x - anchor_x).abs();
+            if score < best.0 {
+                best = (score, offset.min(visible_count));
+            }
+        }
+    }
+    best.1
+}
+
 impl super::OpenCADStudio {
     /// Open the in-place editor for a new (`handle = None`) or existing MText.
     /// Open the rich MText editor for a new or existing MText / MultiLeader.
@@ -613,6 +670,7 @@ impl super::OpenCADStudio {
         if let Some(ed) = self.mtext_editor.as_mut() {
             ed.caret = end;
             ed.sel = Some((end, end));
+            ed.sel_anchor = end;
         }
     }
 
@@ -892,6 +950,7 @@ impl super::OpenCADStudio {
                 text_editor::Content::with_text(&cells_to_doc(&para0, &cells).to_mtext_string());
             ed.caret = caret;
             ed.sel = Some((caret, caret));
+            ed.sel_anchor = caret;
             ed.caret_blink_on = true;
         }
         self.rebuild_mtext_preview();
@@ -914,6 +973,7 @@ impl super::OpenCADStudio {
                 text_editor::Content::with_text(&cells_to_doc(&para0, &cells).to_mtext_string());
             ed.caret = caret;
             ed.sel = Some((caret, caret));
+            ed.sel_anchor = caret;
             ed.caret_blink_on = true;
         }
         self.rebuild_mtext_preview();
@@ -936,18 +996,58 @@ impl super::OpenCADStudio {
                 text_editor::Content::with_text(&cells_to_doc(&para0, &cells).to_mtext_string());
             ed.caret = caret;
             ed.sel = Some((caret, caret));
+            ed.sel_anchor = caret;
             ed.caret_blink_on = true;
         }
         self.rebuild_mtext_preview();
     }
 
-    /// Move the caret by `delta` visible characters (clears the selection).
-    pub(super) fn mtext_caret_move(&mut self, delta: i32) {
+    /// Move the caret horizontally by `delta` visible characters.
+    pub(super) fn mtext_caret_move(&mut self, delta: i32, extend_selection: bool) {
         if let Some(ed) = self.mtext_editor.as_mut() {
             let n = doc_to_cells(&ed.doc).len() as i32;
-            let c = (ed.caret as i32 + delta).clamp(0, n) as usize;
+            let c = if extend_selection {
+                (ed.caret as i32 + delta).clamp(0, n) as usize
+            } else {
+                match ed.sel {
+                    Some((start, end)) if start < end && delta < 0 => start.min(n as usize),
+                    Some((start, end)) if start < end && delta > 0 => end.min(n as usize),
+                    _ => (ed.caret as i32 + delta).clamp(0, n) as usize,
+                }
+            };
             ed.caret = c;
-            ed.sel = Some((c, c));
+            if extend_selection {
+                ed.sel = Some((ed.sel_anchor.min(c), ed.sel_anchor.max(c)));
+            } else {
+                ed.sel = Some((c, c));
+                ed.sel_anchor = c;
+            }
+            ed.caret_blink_on = true;
+        }
+    }
+
+    /// Move the caret to the visually adjacent text line while preserving its
+    /// horizontal position as closely as the laid-out glyph boxes allow.
+    pub(super) fn mtext_caret_move_vertical(
+        &mut self,
+        direction: i8,
+        extend_selection: bool,
+    ) {
+        if let Some(ed) = self.mtext_editor.as_mut() {
+            let visible_count = doc_to_cells(&ed.doc).len();
+            let caret = vertical_caret_target(
+                &ed.glyph_boxes,
+                ed.caret,
+                visible_count,
+                direction,
+            );
+            ed.caret = caret;
+            if extend_selection {
+                ed.sel = Some((ed.sel_anchor.min(caret), ed.sel_anchor.max(caret)));
+            } else {
+                ed.sel = Some((caret, caret));
+                ed.sel_anchor = caret;
+            }
             ed.caret_blink_on = true;
         }
     }
