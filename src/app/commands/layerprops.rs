@@ -220,7 +220,7 @@ impl OpenCADStudio {
                             self.command_line.push_error(crate::t!("Usage: UCS SAVE <name>").as_ref());
                         } else {
                             // Save the current active UCS under this name.
-                            let ucs = match &self.tabs[i].active_ucs {
+                            let mut ucs = match &self.tabs[i].active_ucs {
                                 Some(u) => {
                                     let mut saved = u.clone();
                                     saved.name = name.clone();
@@ -228,7 +228,23 @@ impl OpenCADStudio {
                                 }
                                 None => Ucs::new(&name), // save WCS (identity)
                             };
-                            self.tabs[i].scene.document.ucss.add_or_replace(ucs);
+                            ucs.handle = self.tabs[i]
+                                .scene
+                                .document
+                                .ucss
+                                .get(&name)
+                                .map(|existing| existing.handle)
+                                .filter(|handle| !handle.is_null())
+                                .unwrap_or_else(|| {
+                                    self.tabs[i].scene.document.allocate_handle()
+                                });
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .ucss
+                                .add_or_replace(ucs.clone());
+                            self.tabs[i].active_ucs = Some(ucs);
+                            active_changed = true;
                             self.tabs[i].dirty = true;
                             self.command_line
                                 .push_output(crate::tf!("UCS '{}' saved.", name).as_ref());
@@ -238,7 +254,30 @@ impl OpenCADStudio {
                         let name = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
                         if name.is_empty() {
                             self.command_line.push_error(crate::t!("Usage: UCS DELETE <name>").as_ref());
-                        } else if self.tabs[i].scene.document.ucss.remove(&name).is_some() {
+                        } else if let Some(removed) =
+                            self.tabs[i].scene.document.ucss.remove(&name)
+                        {
+                            let removed_handle = removed.handle;
+                            for entity in self.tabs[i].scene.document.entities_mut() {
+                                if let acadrust::EntityType::Viewport(viewport) = entity {
+                                    if viewport.ucs_handle == removed_handle {
+                                        viewport.ucs_handle = acadrust::Handle::NULL;
+                                    }
+                                }
+                            }
+                            let active_matches = self.tabs[i].active_ucs.as_ref().is_some_and(|ucs| {
+                                (!removed_handle.is_null() && ucs.handle == removed_handle)
+                                    || ucs.name.eq_ignore_ascii_case(&name)
+                            });
+                            if active_matches {
+                                if let Some(active) = self.tabs[i].active_ucs.as_mut() {
+                                    active.name = "*ACTIVE*".to_string();
+                                    active.handle = acadrust::Handle::NULL;
+                                    active.named_ucs_handle = acadrust::Handle::NULL;
+                                    active.base_ucs_handle = acadrust::Handle::NULL;
+                                }
+                                active_changed = true;
+                            }
                             self.tabs[i].dirty = true;
                             self.command_line
                                 .push_output(crate::tf!("UCS '{}' deleted.", name).as_ref());
@@ -253,14 +292,73 @@ impl OpenCADStudio {
                         self.command_line
                             .push_output(crate::t!("UCS reset to World Coordinate System.").as_ref());
                     }
+                    "VIEW" | "V" => {
+                        let rotation = self.tabs[i].scene.active_camera_rotation();
+                        let origin = self.tabs[i]
+                            .active_ucs
+                            .as_ref()
+                            .map(|ucs| ucs.origin)
+                            .unwrap_or(Vector3::ZERO);
+                        let x = rotation * glam::Vec3::X;
+                        let y = rotation * glam::Vec3::Y;
+                        let mut ucs = Ucs::new("*VIEW*");
+                        ucs.origin = origin;
+                        ucs.x_axis = Vector3::new(x.x as f64, x.y as f64, x.z as f64);
+                        ucs.y_axis = Vector3::new(y.x as f64, y.y as f64, y.z as f64);
+                        self.tabs[i].active_ucs = Some(ucs);
+                        active_changed = true;
+                        self.command_line
+                            .push_output(crate::t!("UCS aligned to the current view.").as_ref());
+                    }
+                    "3POINTW" => {
+                        let raw = parts.get(2).copied().unwrap_or("");
+                        let points: Vec<glam::DVec3> = raw
+                            .split('|')
+                            .filter_map(|value| {
+                                super::super::helpers::parse_coord(value).map(|(point, _)| point)
+                            })
+                            .collect();
+                        if points.len() == 3 {
+                            let x = (points[1] - points[0]).normalize_or_zero();
+                            let toward_y = points[2] - points[0];
+                            let z = x.cross(toward_y).normalize_or_zero();
+                            let y = z.cross(x).normalize_or_zero();
+                            if x.length_squared() > 1e-12
+                                && y.length_squared() > 1e-12
+                                && z.length_squared() > 1e-12
+                            {
+                                let mut ucs = Ucs::new("*ACTIVE*");
+                                ucs.origin = Vector3::new(points[0].x, points[0].y, points[0].z);
+                                ucs.x_axis = Vector3::new(x.x, x.y, x.z);
+                                ucs.y_axis = Vector3::new(y.x, y.y, y.z);
+                                self.tabs[i].active_ucs = Some(ucs);
+                                active_changed = true;
+                                self.command_line.push_output(
+                                    crate::t!("UCS defined from three points.").as_ref(),
+                                );
+                            } else {
+                                self.command_line.push_error(
+                                    crate::t!("UCS points must define two non-collinear axes.")
+                                        .as_ref(),
+                                );
+                            }
+                        } else {
+                            self.command_line.push_error(
+                                crate::t!("UCS requires origin, X-axis point and XY-plane point.")
+                                    .as_ref(),
+                            );
+                        }
+                    }
                     // UCS ORIGIN x,y,z  — shift the active UCS origin, keep axes
-                    "ORIGIN" | "O" => {
+                    "ORIGIN" | "O" | "ORIGINW" => {
                         let coord_str = parts.get(2).copied().unwrap_or("");
                         if let Some((pt, _)) = super::super::helpers::parse_coord(coord_str) {
                             // `pt` is in current UCS space; convert to WCS.
                             // The @/# relative-coordinate prefix is ignored
                             // here — a UCS origin is always absolute.
-                            let wcs_origin = if let Some(ref ucs) = self.tabs[i].active_ucs {
+                            let wcs_origin = if sub == "ORIGINW" {
+                                pt
+                            } else if let Some(ref ucs) = self.tabs[i].active_ucs {
                                 ucs_to_wcs(pt, ucs)
                             } else {
                                 pt
@@ -401,9 +499,6 @@ impl OpenCADStudio {
             }
 
             // ── Named Views (VIEW command) ────────────────────────────────
-            // PLAN — look straight down at the drawing (top view). The optional
-            // World/Ucs/Current keyword is accepted; all map to the world top
-            // view for now.
             // PLAN — plan view of a UCS (#326). Shows its options right on
             // activation instead of flipping the view like a cube click; the
             // view only changes once an option (or the Current default) runs.

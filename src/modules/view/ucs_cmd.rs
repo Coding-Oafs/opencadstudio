@@ -16,6 +16,7 @@ use crate::t;
 pub struct UcsCommand {
     /// The chosen option keyword (uppercased), once entered; `None` until then.
     option: Option<String>,
+    points: Vec<DVec3>,
 }
 
 impl UcsCommand {
@@ -25,12 +26,12 @@ impl UcsCommand {
 
     /// Options that take no further argument and execute immediately.
     fn is_zero_arg(opt: &str) -> bool {
-        matches!(opt, "W" | "WORLD" | "LIST" | "?")
+        matches!(opt, "W" | "WORLD" | "VIEW" | "V" | "LIST" | "?")
     }
 
     /// Options whose argument is a coordinate (so a click is accepted too).
     fn takes_point(opt: &str) -> bool {
-        matches!(opt, "ORIGIN" | "O")
+        matches!(opt, "ORIGIN" | "O" | "3POINT" | "3P")
     }
 
     /// Options that expect one more typed argument (angle or name).
@@ -49,11 +50,16 @@ impl CadCommand for UcsCommand {
 
     fn prompt(&self) -> String {
         match self.option.as_deref() {
-            None => t!("UCS  option [World/Z/X/Y/Origin/Save/Delete] or name:").into_owned(),
+            None => t!("UCS  option [World/View/3Point/Z/X/Y/Origin/Save/Delete] or name:").into_owned(),
             Some("Z") => t!("UCS  rotation angle about Z (degrees):").into_owned(),
             Some("X") => t!("UCS  rotation angle about X (degrees):").into_owned(),
             Some("Y") => t!("UCS  rotation angle about Y (degrees):").into_owned(),
             Some("ORIGIN") | Some("O") => t!("UCS  new origin point:").into_owned(),
+            Some("3POINT") | Some("3P") => match self.points.len() {
+                0 => t!("UCS  specify new origin:").into_owned(),
+                1 => t!("UCS  specify point on positive X axis:").into_owned(),
+                _ => t!("UCS  specify point in positive XY plane:").into_owned(),
+            },
             Some("SAVE") | Some("S") => t!("UCS  name to save current UCS as:").into_owned(),
             Some("DELETE") | Some("DEL") | Some("D") => {
                 t!("UCS  name of UCS to delete:").into_owned()
@@ -68,6 +74,11 @@ impl CadCommand for UcsCommand {
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         let t = text.trim();
+        if matches!(self.option.as_deref(), Some("3POINT") | Some("3P"))
+            && crate::app::helpers::parse_coord(t).is_some()
+        {
+            return None;
+        }
         match self.option.take() {
             // First token: the option keyword (or a named UCS to restore).
             None => {
@@ -78,7 +89,7 @@ impl CadCommand for UcsCommand {
                 let up = t.to_uppercase();
                 if Self::is_zero_arg(&up) {
                     Some(CmdResult::Dispatch(format!("UCS {up}")))
-                } else if Self::takes_value(&up) {
+                } else if Self::takes_value(&up) || Self::takes_point(&up) {
                     // Needs a value next; keep the command active and re-prompt.
                     self.option = Some(up);
                     Some(CmdResult::NeedPoint)
@@ -93,11 +104,31 @@ impl CadCommand for UcsCommand {
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
+        if matches!(self.option.as_deref(), Some("3POINT") | Some("3P")) {
+            self.points.push(pt);
+            if self.points.len() < 3 {
+                return CmdResult::NeedPoint;
+            }
+            let points = std::mem::take(&mut self.points);
+            self.option = None;
+            return CmdResult::Dispatch(format!(
+                "UCS 3POINTW {},{},{}|{},{},{}|{},{},{}",
+                points[0].x,
+                points[0].y,
+                points[0].z,
+                points[1].x,
+                points[1].y,
+                points[1].z,
+                points[2].x,
+                points[2].y,
+                points[2].z,
+            ));
+        }
         // A clicked point only makes sense for the Origin option; otherwise a
         // stray click is ignored (keep waiting for the typed keyword / value).
         if matches!(self.option.as_deref(), Some(o) if Self::takes_point(o)) {
-            let opt = self.option.take().unwrap_or_default();
-            return CmdResult::Dispatch(format!("UCS {opt} {},{},{}", pt.x, pt.y, pt.z));
+            self.option.take();
+            return CmdResult::Dispatch(format!("UCS ORIGINW {},{},{}", pt.x, pt.y, pt.z));
         }
         CmdResult::NeedPoint
     }

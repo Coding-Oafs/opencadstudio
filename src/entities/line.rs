@@ -145,14 +145,21 @@ fn apply_transform(line: &mut Line, t: &EntityTransform) {
                 d.x as f64, d.y as f64, d.z as f64,
             ));
         }
-        EntityTransform::Rotate { center, angle_rad } => {
-            crate::scene::view::transform::apply_standard_transform(line, *center, *angle_rad);
+        EntityTransform::Rotate { center, axis, angle_rad } => {
+            crate::scene::view::transform::apply_standard_transform(line, *center, *axis, *angle_rad);
         }
         EntityTransform::Scale { center, factor } => {
             crate::scene::view::transform::apply_standard_scale(line, *center, *factor);
         }
-        EntityTransform::Mirror { p1, p2 } => {
-            crate::scene::view::transform::mirror_xy_line(line, *p1, *p2);
+        EntityTransform::Mirror { p1, p2, working_normal } => {
+            acadrust::Entity::apply_transform(
+                line,
+                &crate::scene::view::transform::reflection_about_working_line(
+                    *p1,
+                    *p2,
+                    *working_normal,
+                ),
+            );
         }
         EntityTransform::Affine(transform) => {
             acadrust::Entity::apply_transform(line, transform);

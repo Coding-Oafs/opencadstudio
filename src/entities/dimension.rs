@@ -628,14 +628,34 @@ fn apply_transform(dim: &mut Dimension, t: &EntityTransform) {
         EntityTransform::Translate(d) => dim.translate(acadrust::types::Vector3::new(
             d.x as f64, d.y as f64, d.z as f64,
         )),
-        EntityTransform::Rotate { center, angle_rad } => {
-            transform_dimension_points(dim, |pt| rotate_point(pt, *center, *angle_rad))
+        EntityTransform::Rotate { center, axis, angle_rad } => {
+            if axis.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
+                transform_dimension_points(dim, |pt| rotate_point(pt, *center, *angle_rad))
+            } else {
+                crate::scene::view::transform::apply_standard_transform(
+                    dim,
+                    *center,
+                    *axis,
+                    *angle_rad,
+                );
+            }
         }
         EntityTransform::Scale { center, factor } => {
             transform_dimension_points(dim, |pt| scale_point(pt, *center, *factor))
         }
-        EntityTransform::Mirror { p1, p2 } => {
-            transform_dimension_points(dim, |pt| mirror_point(pt, *p1, *p2))
+        EntityTransform::Mirror { p1, p2, working_normal } => {
+            if working_normal.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
+                transform_dimension_points(dim, |pt| mirror_point(pt, *p1, *p2))
+            } else {
+                acadrust::Entity::apply_transform(
+                    dim,
+                    &crate::scene::view::transform::reflection_about_working_line(
+                        *p1,
+                        *p2,
+                        *working_normal,
+                    ),
+                );
+            }
         }
         EntityTransform::Affine(transform) => {
             let old_normal = dim.base().normal;

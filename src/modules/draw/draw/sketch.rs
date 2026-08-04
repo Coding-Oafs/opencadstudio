@@ -17,7 +17,7 @@ use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
@@ -45,6 +45,7 @@ pub struct SketchCommand {
     strokes: Vec<Vec<DVec3>>,
     /// True while the pen is down and samples accumulate into the current stroke.
     pen_down: bool,
+    plane: WorkingPlane,
 }
 
 impl SketchCommand {
@@ -52,15 +53,20 @@ impl SketchCommand {
         Self {
             strokes: Vec::new(),
             pen_down: false,
+            plane: WorkingPlane::default(),
         }
     }
 
     /// Build one lightweight polyline from a stroke's sampled points, or `None`
     /// when the stroke has too few points to form a segment.
-    fn build_stroke(points: &[DVec3]) -> Option<EntityType> {
+    fn build_stroke(&self, points: &[DVec3]) -> Option<EntityType> {
         if points.len() < 2 {
             return None;
         }
+        let points: Vec<DVec3> = points
+            .iter()
+            .map(|point| self.plane.to_local(*point))
+            .collect();
         let elevation = points[0].z;
         let mut pl = LwPolyline::new();
         pl.is_closed = false;
@@ -70,19 +76,23 @@ impl SketchCommand {
             .map(|p| LwVertex::new(Vector2::new(p.x, p.y)))
             .collect();
         pl.normal = Vector3::UNIT_Z;
-        Some(EntityType::LwPolyline(pl))
+        Some(self.plane.place_entity(EntityType::LwPolyline(pl)))
     }
 
     /// All strokes that have enough points, as committable entities.
     fn build_all(&self) -> Vec<EntityType> {
         self.strokes
             .iter()
-            .filter_map(|s| Self::build_stroke(s))
+            .filter_map(|stroke| self.build_stroke(stroke))
             .collect()
     }
 }
 
 impl CadCommand for SketchCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "SKETCH"
     }

@@ -506,6 +506,59 @@ mod tests {
     }
 
     #[test]
+    fn translated_and_rotated_ucs_resolves_absolute_relative_and_polar_input() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"UCS ORIGIN 100,200,300"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"UCS Z 90"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 2,3 @5<0"}"#);
+
+        let line = app.tabs[app.active_tab]
+            .scene
+            .document
+            .entities()
+            .find_map(|entity| match entity {
+                acadrust::EntityType::Line(line) => Some(line),
+                _ => None,
+            })
+            .expect("LINE should create one segment");
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(line.start.x, 97.0));
+        assert!(close(line.start.y, 202.0));
+        assert!(close(line.start.z, 300.0));
+        assert!(close(line.end.x, 97.0));
+        assert!(close(line.end.y, 207.0));
+        assert!(close(line.end.z, 300.0));
+    }
+
+    #[test]
+    fn tilted_ucs_places_planar_entities_with_the_plane_normal() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(
+            r#"{"op":"run","cmd":"UCS 3POINT 0,0,0 1,0,0 0,0,1"}"#,
+        );
+        app.automation_op(r#"{"op":"run","cmd":"CIRCLE 2,3 1"}"#);
+
+        let circle = app.tabs[app.active_tab]
+            .scene
+            .document
+            .entities()
+            .find_map(|entity| match entity {
+                acadrust::EntityType::Circle(circle) => Some(circle),
+                _ => None,
+            })
+            .expect("CIRCLE should create one entity");
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(circle.center.x, 2.0));
+        assert!(close(circle.center.y, 0.0));
+        assert!(close(circle.center.z, 3.0));
+        assert!(close(circle.normal.x, 0.0));
+        assert!(close(circle.normal.y, -1.0));
+        assert!(close(circle.normal.z, 0.0));
+    }
+
+    #[test]
     fn value_prompt_commands_inline_args() {
         // A single-value setting command entered with its value on one line
         // drives the interactive front-end (start + value step) and applies via

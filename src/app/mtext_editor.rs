@@ -1146,10 +1146,24 @@ impl super::OpenCADStudio {
                 .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             self.tabs[i].dirty = true;
         } else {
-            // Align new MText to the active UCS (text runs along the UCS X axis).
-            mt.rotation = self.tabs[i].ucs_rotation_angle();
+            let plane = if self.tabs[i].editing_model_space() {
+                self.tabs[i].ucs_xform().working_plane()
+            } else {
+                crate::command::WorkingPlane::default()
+            };
+            let position = plane.to_local(glam::DVec3::new(
+                mt.insertion_point.x,
+                mt.insertion_point.y,
+                mt.insertion_point.z,
+            ));
+            mt.insertion_point = acadrust::types::Vector3::new(
+                position.x,
+                position.y,
+                position.z,
+            );
+            mt.rotation = 0.0;
             self.push_undo_snapshot(i, "MTEXT");
-            let handle = self.commit_entity_handle(EntityType::MText(mt));
+            let handle = self.commit_entity_handle(plane.place_entity(EntityType::MText(mt)));
             if annotative {
                 let scale = self.tabs[i].scene.current_annotation_scale_handle();
                 if let (Some(handle), Some(scale)) = (handle, scale) {
@@ -1217,9 +1231,24 @@ impl super::OpenCADStudio {
                 .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             self.tabs[i].dirty = true;
         } else {
-            mt.rotation = self.tabs[i].ucs_rotation_angle();
+            let plane = if self.tabs[i].editing_model_space() {
+                self.tabs[i].ucs_xform().working_plane()
+            } else {
+                crate::command::WorkingPlane::default()
+            };
+            let position = plane.to_local(glam::DVec3::new(
+                mt.insertion_point.x,
+                mt.insertion_point.y,
+                mt.insertion_point.z,
+            ));
+            mt.insertion_point = acadrust::types::Vector3::new(
+                position.x,
+                position.y,
+                position.z,
+            );
+            mt.rotation = 0.0;
             self.push_undo_snapshot(i, "MTEXT");
-            let handle = self.commit_entity_handle(EntityType::MText(mt));
+            let handle = self.commit_entity_handle(plane.place_entity(EntityType::MText(mt)));
             self.tabs[i].dirty = true;
             if annotative {
                 let scale = self.tabs[i].scene.current_annotation_scale_handle();

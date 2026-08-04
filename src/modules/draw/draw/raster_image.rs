@@ -12,7 +12,7 @@ use acadrust::EntityType;
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::scene::model::wire_model::WireModel;
 
 pub struct ImageCommand {
@@ -20,6 +20,7 @@ pub struct ImageCommand {
     pixel_width: u32,
     pixel_height: u32,
     origin: Option<DVec3>,
+    plane: WorkingPlane,
 }
 
 impl ImageCommand {
@@ -29,6 +30,7 @@ impl ImageCommand {
             pixel_width,
             pixel_height,
             origin: None,
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -41,6 +43,8 @@ impl ImageCommand {
     }
 
     fn make_entity(&self, origin: DVec3, width_pt: DVec3) -> EntityType {
+        let origin = self.plane.to_local(origin);
+        let width_pt = self.plane.to_local(width_pt);
         let world_width = (width_pt.x - origin.x).abs().max(0.001);
         let world_height = world_width / self.aspect();
 
@@ -56,11 +60,15 @@ impl ImageCommand {
         );
         img.flags = acadrust::entities::ImageDisplayFlags::SHOW_IMAGE
             | acadrust::entities::ImageDisplayFlags::USE_CLIPPING_BOUNDARY;
-        EntityType::RasterImage(img)
+        self.plane.place_entity(EntityType::RasterImage(img))
     }
 }
 
 impl CadCommand for ImageCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "IMAGE"
     }
@@ -91,7 +99,7 @@ impl CadCommand for ImageCommand {
         // If origin is set, place with a default width of 1 unit * pixel count / 100
         if let Some(origin) = self.origin {
             let default_w = (self.pixel_width as f64 / 100.0).max(1.0);
-            let width_pt = DVec3::new(origin.x + default_w, origin.y, origin.z);
+            let width_pt = origin + self.plane.x * default_w;
             let entity = self.make_entity(origin, width_pt);
             CmdResult::CommitAndExit(entity)
         } else {
@@ -99,15 +107,20 @@ impl CadCommand for ImageCommand {
         }
     }
 
-    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
-        let origin = self.origin?.as_vec3();
-        let world_width = (pt.x - origin.x).abs().max(0.001);
-        let world_height = world_width / self.aspect() as f32;
-
-        let p0 = [origin.x, origin.y, origin.z];
-        let p1 = [origin.x + world_width, origin.y, origin.z];
-        let p2 = [origin.x + world_width, origin.y + world_height, origin.z];
-        let p3 = [origin.x, origin.y + world_height, origin.z];
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
+        let origin = self.origin?;
+        let origin_local = self.plane.to_local(origin);
+        let point_local = self.plane.to_local(pt);
+        let width = (point_local.x - origin_local.x).abs().max(0.001);
+        let height = width / self.aspect();
+        let corners = [
+            origin_local,
+            origin_local + DVec3::X * width,
+            origin_local + DVec3::new(width, height, 0.0),
+            origin_local + DVec3::Y * height,
+        ]
+        .map(|point| self.plane.to_world(point).as_vec3().to_array());
+        let [p0, p1, p2, p3] = corners;
 
         Some(WireModel {
             taper_widths: Vec::new(),

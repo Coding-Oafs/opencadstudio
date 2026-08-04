@@ -1305,9 +1305,12 @@ fn entity_transform(transform: &EntityTransform) -> Transform {
         EntityTransform::Translate(delta) => {
             Transform::from_translation(Vector3::new(delta.x, delta.y, delta.z))
         }
-        EntityTransform::Rotate { center, angle_rad } => {
+        EntityTransform::Rotate { center, axis, angle_rad } => {
             Transform::from_translation(Vector3::new(-center.x, -center.y, -center.z))
-                .then(&Transform::from_rotation(Vector3::UNIT_Z, *angle_rad))
+                .then(&Transform::from_rotation(
+                    Vector3::new(axis.x, axis.y, axis.z),
+                    *angle_rad,
+                ))
                 .then(&Transform::from_translation(Vector3::new(
                     center.x, center.y, center.z,
                 )))
@@ -1316,8 +1319,12 @@ fn entity_transform(transform: &EntityTransform) -> Transform {
             Vector3::new(*factor, *factor, *factor),
             Vector3::new(center.x, center.y, center.z),
         ),
-        EntityTransform::Mirror { p1, p2 } => {
-            crate::scene::view::transform::reflection_about_xy_line(*p1, *p2)
+        EntityTransform::Mirror { p1, p2, working_normal } => {
+            crate::scene::view::transform::reflection_about_working_line(
+                *p1,
+                *p2,
+                *working_normal,
+            )
         }
         EntityTransform::Affine(transform) => *transform,
     }

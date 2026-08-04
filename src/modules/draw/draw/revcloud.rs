@@ -10,7 +10,7 @@ use acadrust::{entities::LwVertex, EntityType};
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 
@@ -30,6 +30,7 @@ const DEFAULT_ARC_LEN: f64 = 1.0; // default arc bump length
 pub struct RevCloudCommand {
     points: Vec<DVec3>,
     arc_length: f64,
+    plane: WorkingPlane,
 }
 
 impl RevCloudCommand {
@@ -37,11 +38,16 @@ impl RevCloudCommand {
         Self {
             points: vec![],
             arc_length: DEFAULT_ARC_LEN,
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for RevCloudCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "REVCLOUD"
     }
@@ -71,8 +77,13 @@ impl CadCommand for RevCloudCommand {
         if self.points.len() < 3 {
             return CmdResult::Cancel;
         }
-        let entity = make_revcloud(&self.points, self.arc_length);
-        CmdResult::CommitAndExit(entity)
+        let local: Vec<DVec3> = self
+            .points
+            .iter()
+            .map(|point| self.plane.to_local(*point))
+            .collect();
+        let entity = make_revcloud(&local, self.arc_length);
+        CmdResult::CommitAndExit(self.plane.place_entity(entity))
     }
 
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
@@ -153,6 +164,7 @@ fn make_revcloud(pts: &[DVec3], arc_len: f64) -> EntityType {
 
     let mut p = LwPolyline::new();
     p.is_closed = true;
+    p.elevation = pts.first().map_or(0.0, |point| point.z);
     p.vertices = vertices;
     EntityType::LwPolyline(p)
 }

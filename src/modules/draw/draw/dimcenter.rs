@@ -41,28 +41,46 @@ impl DimCenterCommand {
     }
 
     /// Extract (center, radius) from a Circle or Arc; `None` for anything else.
-    fn center_radius(entity: &EntityType) -> Option<(Vector3, f64)> {
+    fn center_radius(entity: &EntityType) -> Option<(DVec3, f64, DVec3, DVec3)> {
         match entity {
-            EntityType::Circle(c) => Some((c.center, c.radius)),
-            EntityType::Arc(a) => Some((a.center, a.radius)),
+            EntityType::Circle(circle) => {
+                let normal = (circle.normal.x, circle.normal.y, circle.normal.z);
+                let center = crate::scene::view::transform::ocs_point_to_wcs(
+                    (circle.center.x, circle.center.y, circle.center.z),
+                    normal,
+                );
+                let (x, y) = crate::scene::view::transform::ocs_axes(normal);
+                Some((
+                    DVec3::new(center.0, center.1, center.2),
+                    circle.radius,
+                    DVec3::new(x.0, x.1, x.2),
+                    DVec3::new(y.0, y.1, y.2),
+                ))
+            }
+            EntityType::Arc(arc) => {
+                let normal = (arc.normal.x, arc.normal.y, arc.normal.z);
+                let center = crate::scene::view::transform::ocs_point_to_wcs(
+                    (arc.center.x, arc.center.y, arc.center.z),
+                    normal,
+                );
+                let (x, y) = crate::scene::view::transform::ocs_axes(normal);
+                Some((
+                    DVec3::new(center.0, center.1, center.2),
+                    arc.radius,
+                    DVec3::new(x.0, x.1, x.2),
+                    DVec3::new(y.0, y.1, y.2),
+                ))
+            }
             _ => None,
         }
     }
 
     /// Build the two cross lines from a center and radius.
-    fn build_cross(center: Vector3, radius: f64) -> Vec<EntityType> {
+    fn build_cross(center: DVec3, radius: f64, x: DVec3, y: DVec3) -> Vec<EntityType> {
         let m = radius * 0.2;
-        let cx = center.x;
-        let cy = center.y;
-        let cz = center.z;
-        let horizontal = Line::from_points(
-            Vector3::new(cx - m, cy, cz),
-            Vector3::new(cx + m, cy, cz),
-        );
-        let vertical = Line::from_points(
-            Vector3::new(cx, cy - m, cz),
-            Vector3::new(cx, cy + m, cz),
-        );
+        let to_vector = |point: DVec3| Vector3::new(point.x, point.y, point.z);
+        let horizontal = Line::from_points(to_vector(center - x * m), to_vector(center + x * m));
+        let vertical = Line::from_points(to_vector(center - y * m), to_vector(center + y * m));
         vec![EntityType::Line(horizontal), EntityType::Line(vertical)]
     }
 }
@@ -93,8 +111,8 @@ impl CadCommand for DimCenterCommand {
             return CmdResult::NeedPoint;
         }
         match self.picked.as_ref().and_then(Self::center_radius) {
-            Some((center, radius)) => {
-                let lines = Self::build_cross(center, radius);
+            Some((center, radius, x, y)) => {
+                let lines = Self::build_cross(center, radius, x, y);
                 CmdResult::ReplaceMany(vec![], lines)
             }
             // Picked something that is not a circle or arc — keep prompting.

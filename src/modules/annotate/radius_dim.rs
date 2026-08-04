@@ -2,7 +2,7 @@ use acadrust::entities::{Dimension, DimensionRadius};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::{DVec3, Vec3};
@@ -27,6 +27,7 @@ enum Step {
 
 pub struct RadiusDimensionCommand {
     step: Step,
+    plane: WorkingPlane,
     /// Optional text that replaces the measured value (None = measurement).
     text_override: Option<String>,
     /// True while the next typed line is captured as the text override.
@@ -41,6 +42,7 @@ impl RadiusDimensionCommand {
     pub fn new() -> Self {
         Self {
             step: Step::CenterPoint,
+            plane: WorkingPlane::default(),
             text_override: None,
             awaiting_text: false,
             text_angle: None,
@@ -50,6 +52,10 @@ impl RadiusDimensionCommand {
 }
 
 impl CadCommand for RadiusDimensionCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "DIMRADIUS"
     }
@@ -81,6 +87,9 @@ impl CadCommand for RadiusDimensionCommand {
                 CmdResult::NeedPoint
             }
             Step::TextPoint { center, point } => {
+                let center = self.plane.to_local(center);
+                let point = self.plane.to_local(point);
+                let pt = self.plane.to_local(pt);
                 let mut dim = DimensionRadius::new(v3(center), v3(point));
                 dim.base.definition_point = v3(point);
                 dim.base.text_middle_point = v3(pt);
@@ -92,7 +101,9 @@ impl CadCommand for RadiusDimensionCommand {
                 if let Some(a) = self.text_angle {
                     dim.base.text_rotation = a;
                 }
-                CmdResult::CommitAndExit(EntityType::Dimension(Dimension::Radius(dim)))
+                CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Dimension(
+                    Dimension::Radius(dim),
+                )))
             }
         }
     }

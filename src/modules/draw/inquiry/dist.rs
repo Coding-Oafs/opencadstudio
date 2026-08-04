@@ -3,7 +3,7 @@
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::scene::model::wire_model::WireModel;
 
 pub struct DistCommand {
@@ -11,15 +11,23 @@ pub struct DistCommand {
     // loses ~0.03–0.06 units at survey-scale coordinates (e.g. eastings near
     // 5e5), which made snapped-endpoint measurements read off by that much.
     first: Option<DVec3>,
+    plane: WorkingPlane,
 }
 
 impl DistCommand {
     pub fn new() -> Self {
-        Self { first: None }
+        Self {
+            first: None,
+            plane: WorkingPlane::default(),
+        }
     }
 }
 
 impl CadCommand for DistCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "DIST"
     }
@@ -34,11 +42,11 @@ impl CadCommand for DistCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if let Some(p1) = self.first {
-            let delta = pt - p1;
+            let delta = self.plane.vector_to_local(pt - p1);
             let dist = delta.length();
             let dx = delta.x;
-            let dy = delta.y; // drawing plane is world XY
-            let dz = delta.z; // elevation
+            let dy = delta.y;
+            let dz = delta.z;
 
             // Angle in XY plane — degrees from +X
             let angle_xy = dy.atan2(dx).to_degrees();

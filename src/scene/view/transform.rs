@@ -8,13 +8,12 @@ fn to_v3(v: DVec3) -> Vector3 {
     Vector3::new(v.x, v.y, v.z)
 }
 
-pub fn apply_standard_transform<T>(entity: &mut T, center: DVec3, angle_rad: f64)
+pub fn apply_standard_transform<T>(entity: &mut T, center: DVec3, axis: DVec3, angle_rad: f64)
 where
     T: acadrust::Entity,
 {
-    let z_axis = Vector3::new(0.0, 0.0, 1.0);
     let t = Transform::from_translation(to_v3(-center))
-        .then(&Transform::from_rotation(z_axis, angle_rad))
+        .then(&Transform::from_rotation(to_v3(axis.normalize_or(DVec3::Z)), angle_rad))
         .then(&Transform::from_translation(to_v3(center)));
     entity.apply_transform(&t);
 }
@@ -35,11 +34,25 @@ where
 {
     match t {
         EntityTransform::Translate(d) => entity.translate(to_v3(*d)),
-        EntityTransform::Rotate { center, angle_rad } => {
-            apply_standard_transform(entity, *center, *angle_rad)
+        EntityTransform::Rotate { center, axis, angle_rad } => {
+            apply_standard_transform(entity, *center, *axis, *angle_rad)
         }
         EntityTransform::Scale { center, factor } => apply_standard_scale(entity, *center, *factor),
-        EntityTransform::Mirror { p1, p2 } => mirror(entity, *p1, *p2),
+        EntityTransform::Mirror {
+            p1,
+            p2,
+            working_normal,
+        } => {
+            if working_normal.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
+                mirror(entity, *p1, *p2)
+            } else {
+                entity.apply_transform(&reflection_about_working_line(
+                    *p1,
+                    *p2,
+                    *working_normal,
+                ));
+            }
+        }
         EntityTransform::Affine(transform) => entity.apply_transform(transform),
     }
 }
@@ -49,19 +62,46 @@ where
 /// `apply_transform` paths (which handle direction flags, stored-angle
 /// conventions and bulges themselves). Degenerate line → identity.
 pub fn reflection_about_xy_line(p1: DVec3, p2: DVec3) -> acadrust::types::Transform {
+    reflection_about_working_line(p1, p2, DVec3::Z)
+}
+
+/// Reflection through the plane that contains the picked line and is
+/// perpendicular to the active working plane.
+pub fn reflection_about_working_line(
+    p1: DVec3,
+    p2: DVec3,
+    working_normal: DVec3,
+) -> acadrust::types::Transform {
     use acadrust::types::{Matrix4, Transform};
-    let dx = (p2.x - p1.x) as f64;
-    let dy = (p2.y - p1.y) as f64;
-    if dx * dx + dy * dy < 1e-12 {
+    let line = p2 - p1;
+    let plane_normal = line
+        .cross(working_normal.normalize_or(DVec3::Z))
+        .normalize_or(DVec3::ZERO);
+    if plane_normal.length_squared() < 1e-12 {
         return Transform::identity();
     }
-    let ang = dy.atan2(dx);
-    let m = Matrix4::translation(p1.x as f64, p1.y as f64, 0.0)
-        * Matrix4::rotation_z(ang)
-        * Matrix4::scaling(1.0, -1.0, 1.0)
-        * Matrix4::rotation_z(-ang)
-        * Matrix4::translation(-(p1.x as f64), -(p1.y as f64), 0.0);
-    Transform::from_matrix(m)
+    let n = plane_normal;
+    let d = 2.0 * n.dot(p1);
+    Transform::from_matrix(Matrix4 {
+        m: [
+            [1.0 - 2.0 * n.x * n.x, -2.0 * n.x * n.y, -2.0 * n.x * n.z, d * n.x],
+            [-2.0 * n.y * n.x, 1.0 - 2.0 * n.y * n.y, -2.0 * n.y * n.z, d * n.y],
+            [-2.0 * n.z * n.x, -2.0 * n.z * n.y, 1.0 - 2.0 * n.z * n.z, d * n.z],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    })
+}
+
+pub fn reflected_point(p: DVec3, p1: DVec3, p2: DVec3, working_normal: DVec3) -> DVec3 {
+    let line = p2 - p1;
+    let normal = line
+        .cross(working_normal.normalize_or(DVec3::Z))
+        .normalize_or(DVec3::ZERO);
+    if normal.length_squared() < 1e-12 {
+        p
+    } else {
+        p - 2.0 * normal.dot(p - p1) * normal
+    }
 }
 
 pub fn reflect_xy_point(x: &mut f64, y: &mut f64, p1: DVec3, p2: DVec3) {
@@ -78,11 +118,6 @@ pub fn reflect_xy_point(x: &mut f64, y: &mut f64, p1: DVec3, p2: DVec3) {
     let my = 2.0 * dot * ay / len2 - ry;
     *x = p1.x as f64 + mx;
     *y = p1.y as f64 + my;
-}
-
-pub fn mirror_xy_line(line: &mut acadrust::entities::Line, p1: DVec3, p2: DVec3) {
-    reflect_xy_point(&mut line.start.x, &mut line.start.y, p1, p2);
-    reflect_xy_point(&mut line.end.x, &mut line.end.y, p1, p2);
 }
 
 /// DXF arbitrary-axis algorithm — returns the OCS X and Y basis vectors in WCS
@@ -190,6 +225,7 @@ mod mirror_delegation_tests {
         h.apply_transform(&EntityTransform::Mirror {
             p1: DVec3::new(5.0, 0.0, 0.0),
             p2: DVec3::new(5.0, 1.0, 0.0),
+            working_normal: DVec3::Z,
         });
 
         let edges = &h.paths[0].edges;

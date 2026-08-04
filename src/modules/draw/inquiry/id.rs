@@ -3,17 +3,25 @@
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 
-pub struct IdCommand;
+pub struct IdCommand {
+    plane: WorkingPlane,
+}
 
 impl IdCommand {
     pub fn new() -> Self {
-        Self
+        Self {
+            plane: WorkingPlane::default(),
+        }
     }
 }
 
 impl CadCommand for IdCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "ID"
     }
@@ -23,10 +31,10 @@ impl CadCommand for IdCommand {
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        // Drawing plane is world XY (z = elevation).
-        let x = pt.x;
-        let y = pt.y;
-        let z = pt.z;
+        let local = self.plane.to_local(pt);
+        let x = local.x;
+        let y = local.y;
+        let z = local.z;
         let x_s = format!("{x:.4}");
         let y_s = format!("{y:.4}");
         let z_s = format!("{z:.4}");

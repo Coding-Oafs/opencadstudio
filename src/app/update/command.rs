@@ -417,8 +417,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         // independent of DYN: `@` forces relative, `#` forces
                         // absolute, and a bare value is absolute. (Relative-by-
                         // default lives in the DYN tooltip path — see
-                        // `dyn_resolve_point` — matching AutoCAD, where the
-                        // command line stays absolute regardless of DYN.)
+                        // `dyn_resolve_point`; command-line coordinates stay
+                        // absolute regardless of the DYN setting.)
                         let want_relative = matches!(kind, CoordKind::Relative);
                         let ucs = self.tabs[i].active_ucs.clone();
                         let wcs_pt = match (want_relative, self.last_point) {
@@ -474,7 +474,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
 
                     self.command_line.push_error(crate::tf!(
-                        "Expected coordinates (x,y) or a number, got: \"{text}\""
+                        "Expected Cartesian, polar, cylindrical or spherical coordinates, or a number; got: \"{text}\""
                     ).as_ref());
                     return self.focus_cmd_input();
                 }
@@ -1874,10 +1874,20 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             }
                         }
                     } else {
+                        let plane = if self.tabs[i].editing_model_space() {
+                            self.tabs[i].ucs_xform().working_plane()
+                        } else {
+                            crate::command::WorkingPlane::default()
+                        };
                         for &handle in &handles {
                             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle)
                             {
-                                crate::scene::view::dispatch::apply_geom_prop(entity, field, &value);
+                                crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
+                                    entity,
+                                    field,
+                                    &value,
+                                    plane,
+                                );
                             }
                         }
                     }
@@ -1936,6 +1946,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             crate::scene::view::dispatch::set_prop_current_vertex(
                                 self.tabs[i].properties.prop_vertex,
                             );
+                            let plane = if self.tabs[i].editing_model_space() {
+                                self.tabs[i].ucs_xform().working_plane()
+                            } else {
+                                crate::command::WorkingPlane::default()
+                            };
                             for &handle in &handles {
                                 // Skip objects on a locked layer.
                                 if self.tabs[i].scene.is_layer_locked(handle) {
@@ -2007,8 +2022,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         if let Some(entity) =
                                             self.tabs[i].scene.document.get_entity_mut(handle)
                                         {
-                                            crate::scene::view::dispatch::apply_geom_prop(
-                                                entity, field, &val,
+                                            crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
+                                                entity,
+                                                field,
+                                                &val,
+                                                plane,
                                             );
                                         }
                                     }

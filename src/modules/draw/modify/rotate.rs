@@ -13,7 +13,7 @@ use acadrust::Handle;
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult, DynField, EntityTransform};
+use crate::command::{CadCommand, CmdResult, DynField, EntityTransform, WorkingPlane};
 use crate::modules::draw::defaults;
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
@@ -44,6 +44,7 @@ pub struct RotateCommand {
     wire_models: Vec<WireModel>,
     step: Step,
     default_angle: f64, // degrees
+    plane: WorkingPlane,
 }
 
 impl RotateCommand {
@@ -53,6 +54,7 @@ impl RotateCommand {
             wire_models,
             step: Step::Center,
             default_angle: defaults::get_rotate_angle(),
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -60,12 +62,20 @@ impl RotateCommand {
         defaults::set_rotate_angle(angle_rad.to_degrees());
         CmdResult::TransformSelected(
             self.handles.clone(),
-            EntityTransform::Rotate { center, angle_rad },
+            EntityTransform::Rotate {
+                center,
+                axis: self.plane.z,
+                angle_rad,
+            },
         )
     }
 }
 
 impl CadCommand for RotateCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "ROTATE"
     }
@@ -110,11 +120,9 @@ impl CadCommand for RotateCommand {
             }
             Step::Angle { center } => {
                 let center = *center;
-                let direction = pt - center;
-                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                let Some(angle_rad) = self.plane.angle(center, pt) else {
                     return CmdResult::NeedPoint;
-                }
-                let angle_rad = direction.y.atan2(direction.x);
+                };
                 self.commit(center, angle_rad)
             }
             Step::RefFirst { center } => {
@@ -123,22 +131,18 @@ impl CadCommand for RotateCommand {
                 CmdResult::NeedPoint
             }
             Step::RefSecond { center, first } => {
-                let direction = pt - *first;
-                if direction.x.hypot(direction.y) <= f64::EPSILON {
-                    return CmdResult::NeedPoint;
-                }
                 let center = *center;
-                let ref_angle = direction.y.atan2(direction.x);
+                let Some(ref_angle) = self.plane.angle(*first, pt) else {
+                    return CmdResult::NeedPoint;
+                };
                 self.step = Step::RefNew { center, ref_angle };
                 CmdResult::NeedPoint
             }
             Step::RefNew { center, ref_angle } => {
                 let center = *center;
-                let direction = pt - center;
-                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                let Some(new_angle) = self.plane.angle(center, pt) else {
                     return CmdResult::NeedPoint;
-                }
-                let new_angle = direction.y.atan2(direction.x);
+                };
                 self.commit(center, new_angle - *ref_angle)
             }
         }
@@ -192,11 +196,10 @@ impl CadCommand for RotateCommand {
     fn on_preview_wires(&mut self, pt: DVec3) -> Vec<WireModel> {
         let (center, angle_rad) = match &self.step {
             Step::Angle { center } => {
-                let direction = pt - *center;
-                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                let Some(angle) = self.plane.angle(*center, pt) else {
                     return vec![];
-                }
-                (*center, direction.y.atan2(direction.x))
+                };
+                (*center, angle)
             }
             Step::RefSecond { first, .. } => {
                 return vec![WireModel::solid(
@@ -210,11 +213,10 @@ impl CadCommand for RotateCommand {
                 )];
             }
             Step::RefNew { center, ref_angle } => {
-                let direction = pt - *center;
-                if direction.x.hypot(direction.y) <= f64::EPSILON {
+                let Some(angle) = self.plane.angle(*center, pt) else {
                     return vec![];
-                }
-                (*center, direction.y.atan2(direction.x) - *ref_angle)
+                };
+                (*center, angle - *ref_angle)
             }
             _ => return vec![],
         };
@@ -222,7 +224,13 @@ impl CadCommand for RotateCommand {
         // drawn by the dynamic-input overlay (polar guide), not here.
         self.wire_models
             .iter()
-            .map(|w| w.rotated(center.as_vec3(), angle_rad as f32))
+            .map(|w| {
+                w.rotated_about_axis(
+                    center.as_vec3(),
+                    self.plane.z.as_vec3(),
+                    angle_rad as f32,
+                )
+            })
             .collect()
     }
 

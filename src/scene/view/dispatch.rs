@@ -83,6 +83,39 @@ pub fn properties_sectioned(
     sections
 }
 
+pub fn entity_in_working_plane(
+    entity: &EntityType,
+    plane: crate::command::WorkingPlane,
+) -> EntityType {
+    let mut local = entity.clone();
+    if !plane.is_identity() {
+        apply_transform(
+            &mut local,
+            &EntityTransform::Affine(plane.to_local_transform()),
+        );
+    }
+    local
+}
+
+pub fn apply_geom_prop_in_working_plane(
+    entity: &mut EntityType,
+    field: &str,
+    value: &str,
+    plane: crate::command::WorkingPlane,
+) {
+    if plane.is_identity() {
+        apply_geom_prop(entity, field, value);
+        return;
+    }
+    let mut local = entity_in_working_plane(entity, plane);
+    apply_geom_prop(&mut local, field, value);
+    apply_transform(
+        &mut local,
+        &EntityTransform::Affine(plane.to_world_transform()),
+    );
+    *entity = local;
+}
+
 pub fn apply_common_prop(entity: &mut EntityType, field: &str, value: &str) {
     let e = entity.as_entity_mut();
     match field {

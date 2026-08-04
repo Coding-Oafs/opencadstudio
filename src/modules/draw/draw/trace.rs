@@ -16,7 +16,7 @@ use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
@@ -45,6 +45,7 @@ pub struct TraceCommand {
     /// Every point picked so far, in world space. `points[0]` fixes the band's
     /// elevation (its Z).
     points: Vec<DVec3>,
+    plane: WorkingPlane,
 }
 
 impl TraceCommand {
@@ -53,6 +54,7 @@ impl TraceCommand {
             width: 1.0,
             width_set: false,
             points: Vec::new(),
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -62,13 +64,17 @@ impl TraceCommand {
         if self.points.len() < 2 {
             return None;
         }
-        let elevation = self.points[0].z;
+        let local: Vec<DVec3> = self
+            .points
+            .iter()
+            .map(|point| self.plane.to_local(*point))
+            .collect();
+        let elevation = local[0].z;
         let mut pl = LwPolyline::new();
         pl.is_closed = false;
         pl.constant_width = self.width;
         pl.elevation = elevation;
-        pl.vertices = self
-            .points
+        pl.vertices = local
             .iter()
             .map(|p| {
                 let mut v = LwVertex::new(Vector2::new(p.x, p.y));
@@ -78,11 +84,15 @@ impl TraceCommand {
             })
             .collect();
         pl.normal = Vector3::UNIT_Z;
-        Some(EntityType::LwPolyline(pl))
+        Some(self.plane.place_entity(EntityType::LwPolyline(pl)))
     }
 }
 
 impl CadCommand for TraceCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "TRACE"
     }

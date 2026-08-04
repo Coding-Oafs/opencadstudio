@@ -16,7 +16,7 @@ use glam::DVec3;
 
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::scene::Scene;
@@ -33,17 +33,26 @@ pub fn tool() -> ToolDef {
 pub struct XAttachCommand {
     path: String,
     block_name: String,
+    plane: WorkingPlane,
 }
 
 impl XAttachCommand {
     /// Create an XATTACH command with a path already filled in (from file-picker).
     pub fn with_path(path: String) -> Self {
         let block_name = path_to_block_name(&path);
-        Self { path, block_name }
+        Self {
+            path,
+            block_name,
+            plane: WorkingPlane::default(),
+        }
     }
 }
 
 impl CadCommand for XAttachCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "XATTACH"
     }
@@ -59,10 +68,11 @@ impl CadCommand for XAttachCommand {
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         // We return the INSERT entity; the command handler in commands.rs
         // calls `prepare_xref_block` on the scene before committing.
-        CmdResult::CommitAndExit(EntityType::Insert(Insert::new(
+        let point = self.plane.to_local(pt);
+        CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Insert(Insert::new(
             self.block_name.clone(),
-            Vector3::new(pt.x as f64, pt.y as f64, pt.z as f64),
-        )))
+            Vector3::new(point.x, point.y, point.z),
+        ))))
     }
 
     fn on_enter(&mut self) -> CmdResult {

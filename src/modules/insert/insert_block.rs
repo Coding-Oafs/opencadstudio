@@ -4,7 +4,7 @@ use acadrust::EntityType;
 use glam::{DVec3, Vec3};
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 
@@ -59,6 +59,7 @@ pub struct InsertBlockCommand {
     /// is measured from, so `on_preview_wires` can rubber-band it to the
     /// cursor. Set by paste-as-block; empty for a plain INSERT.
     preview: Option<(Vec<WireModel>, Vec3)>,
+    plane: WorkingPlane,
 }
 
 impl InsertBlockCommand {
@@ -72,6 +73,7 @@ impl InsertBlockCommand {
             awaiting: None,
             pending_insert: None,
             preview: None,
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -89,11 +91,16 @@ impl InsertBlockCommand {
             awaiting: None,
             pending_insert: None,
             preview: Some((preview_wires, base)),
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for InsertBlockCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "INSERT"
     }
@@ -146,10 +153,15 @@ impl CadCommand for InsertBlockCommand {
         match &self.step {
             Step::Name => CmdResult::NeedPoint,
             Step::Point { name } => {
-                let mut ins = Insert::new(name.clone(), Vector3::new(pt.x, pt.y, pt.z));
+                let point = self.plane.to_local(pt);
+                let mut ins = Insert::new(
+                    name.clone(),
+                    Vector3::new(point.x, point.y, point.z),
+                );
                 ins.set_x_scale(self.x_scale);
                 ins.set_y_scale(self.y_scale);
                 ins.rotation = self.rotation_rad;
+                ins.apply_transform(&self.plane.to_world_transform());
                 let block_name = name.clone();
                 self.pending_insert = Some(ins);
                 // Signal the host to check for attdefs.

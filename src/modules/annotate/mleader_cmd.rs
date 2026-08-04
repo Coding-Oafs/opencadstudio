@@ -10,7 +10,7 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::{DVec3, Mat4, Vec3};
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -28,7 +28,7 @@ pub fn tool() -> ToolDef {
 
 pub struct MLeaderCommand {
     verts: Vec<DVec3>,
-    ucs: Mat4,
+    plane: WorkingPlane,
     style: Option<acadrust::objects::MultiLeaderStyle>,
     display_scale: f64,
 }
@@ -37,7 +37,7 @@ impl MLeaderCommand {
     pub fn new() -> Self {
         Self {
             verts: Vec::new(),
-            ucs: Mat4::IDENTITY,
+            plane: WorkingPlane::default(),
             style: None,
             display_scale: 1.0,
         }
@@ -54,7 +54,7 @@ impl MLeaderCommand {
         };
         Self {
             verts: Vec::new(),
-            ucs: Mat4::IDENTITY,
+            plane: WorkingPlane::default(),
             style: Some(style),
             display_scale,
         }
@@ -66,8 +66,8 @@ impl CadCommand for MLeaderCommand {
         "MLEADER"
     }
 
-    fn set_ucs(&mut self, ucs: Mat4) {
-        self.ucs = ucs;
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
     }
 
     fn prompt(&self) -> String {
@@ -93,14 +93,21 @@ impl CadCommand for MLeaderCommand {
         }
         // Place the leader with empty text, then open the in-place MText editor
         // so the user types the annotation into the rich editor.
+        let local: Vec<DVec3> = self
+            .verts
+            .iter()
+            .map(|point| self.plane.to_local(*point))
+            .collect();
         let ml = build_mleader(
             "",
-            &self.verts,
-            self.ucs,
+            &local,
+            Mat4::IDENTITY,
             self.style.as_ref(),
             self.display_scale,
         );
-        CmdResult::CommitAndEditText(EntityType::MultiLeader(ml))
+        CmdResult::CommitAndEditText(
+            self.plane.place_entity(EntityType::MultiLeader(ml)),
+        )
     }
 
     fn on_escape(&mut self) -> CmdResult {
@@ -112,14 +119,33 @@ impl CadCommand for MLeaderCommand {
             return None;
         }
         // Preview / rubber-band is GPU screen-space: downcast to f32 here.
-        let mut pts: Vec<Vec3> = self.verts.iter().map(|p| p.as_vec3()).collect();
-        pts.push(pt.as_vec3());
+        let mut pts: Vec<Vec3> = self
+            .verts
+            .iter()
+            .map(|point| self.plane.to_local(*point).as_vec3())
+            .collect();
+        pts.push(self.plane.to_local(pt).as_vec3());
         let arrow_size = self
             .style
             .as_ref()
             .map_or(2.5, |style| style.arrowhead_size)
             * self.display_scale;
-        Some(preview_wire(&pts, arrow_size as f32))
+        let mut preview = preview_wire(&pts, arrow_size as f32);
+        preview.points = preview
+            .points
+            .iter()
+            .map(|point| {
+                if point[0].is_nan() {
+                    *point
+                } else {
+                    self.plane
+                        .to_world(Vec3::from_array(*point).as_dvec3())
+                        .as_vec3()
+                        .to_array()
+                }
+            })
+            .collect();
+        Some(preview)
     }
 }
 

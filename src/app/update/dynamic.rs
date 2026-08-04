@@ -188,13 +188,15 @@ impl OpenCADStudio {
     /// values. Locked fields use their typed buffer; the rest fall back to
     /// the live cursor-derived value. Returns `None` when the field set
     /// isn't one we know how to turn into a point.
-    /// Hand the active command the current UCS (as a UCS→wire affine) so
-    /// axis-aligned constructions build square to the user's coordinate system.
-    /// No-op for commands that don't override `set_ucs`.
+    /// Hand the active command the current full-precision coordinate frame.
     pub(in crate::app) fn push_ucs_to_cmd(&mut self, i: usize) {
-        let ucs = self.tabs[i].ucs_wire_affine();
+        let plane = if self.tabs[i].editing_model_space() {
+            self.tabs[i].ucs_xform().working_plane()
+        } else {
+            crate::command::WorkingPlane::default()
+        };
         if let Some(c) = self.tabs[i].active_cmd.as_mut() {
-            c.set_ucs(ucs);
+            c.set_working_plane(plane);
         }
     }
 

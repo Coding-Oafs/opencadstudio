@@ -5,7 +5,7 @@ use acadrust::tables::Ucs;
 /// How a typed coordinate should be interpreted relative to the last
 /// input point.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum CoordKind {
+pub(crate) enum CoordKind {
     /// `@x,y` prefix — offset from the last input point.
     Relative,
     /// `#x,y` prefix — world/UCS absolute, overriding DYN.
@@ -14,12 +14,13 @@ pub(super) enum CoordKind {
     Default,
 }
 
-/// Parse a typed coordinate string into a Vec3 plus its interpretation.
-/// Accepts "x,y"   → Vec3(x, y, 0)
-///         "x,y,z" → Vec3(x, y, z)
+/// Parse a typed coordinate string into a local Vec3 plus its interpretation.
+/// Accepts Cartesian, polar, cylindrical and spherical forms:
+/// `x,y`, `x,y,z`, `distance<angle`, `distance<angle,z`, and
+/// `distance<angle<elevation`.
 /// A leading `@` marks the value relative to the last point; a leading
 /// `#` forces absolute. Separators: comma or semicolon.
-pub(super) fn parse_coord(text: &str) -> Option<(glam::DVec3, CoordKind)> {
+pub(crate) fn parse_coord(text: &str) -> Option<(glam::DVec3, CoordKind)> {
     let trimmed = text.trim();
     let (kind, rest) = if let Some(r) = trimmed.strip_prefix('@') {
         (CoordKind::Relative, r)
@@ -28,6 +29,34 @@ pub(super) fn parse_coord(text: &str) -> Option<(glam::DVec3, CoordKind)> {
     } else {
         (CoordKind::Default, trimmed)
     };
+    let number = |value: &str| value.trim().parse::<f64>().ok();
+    if let Some((distance, angles)) = rest.split_once('<') {
+        let distance = number(distance)?;
+        if let Some((azimuth, elevation)) = angles.split_once('<') {
+            let azimuth = number(azimuth)?.to_radians();
+            let elevation = number(elevation)?.to_radians();
+            let horizontal = distance * elevation.cos();
+            return Some((
+                glam::DVec3::new(
+                    horizontal * azimuth.cos(),
+                    horizontal * azimuth.sin(),
+                    distance * elevation.sin(),
+                ),
+                kind,
+            ));
+        }
+        let angle_and_z: Vec<&str> = angles.split(|c| c == ',' || c == ';').collect();
+        let (angle, z) = match angle_and_z.as_slice() {
+            [angle] => (number(angle)?, 0.0),
+            [angle, z] => (number(angle)?, number(z)?),
+            _ => return None,
+        };
+        let angle = angle.to_radians();
+        return Some((
+            glam::DVec3::new(distance * angle.cos(), distance * angle.sin(), z),
+            kind,
+        ));
+    }
     let parts: Vec<f64> = rest
         .split(|c| c == ',' || c == ';')
         .map(|s| s.trim())
@@ -37,6 +66,23 @@ pub(super) fn parse_coord(text: &str) -> Option<(glam::DVec3, CoordKind)> {
         [x, y] => Some((glam::DVec3::new(*x, *y, 0.0), kind)),
         [x, y, z] => Some((glam::DVec3::new(*x, *y, *z), kind)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod coordinate_parsing_tests {
+    use super::*;
+
+    #[test]
+    fn parses_all_coordinate_forms() {
+        let close = |a: glam::DVec3, b: glam::DVec3| (a - b).length() < 1e-9;
+        assert!(close(parse_coord("1,2").unwrap().0, glam::dvec3(1.0, 2.0, 0.0)));
+        assert!(close(parse_coord("1,2,3").unwrap().0, glam::dvec3(1.0, 2.0, 3.0)));
+        assert!(close(parse_coord("10<90").unwrap().0, glam::dvec3(0.0, 10.0, 0.0)));
+        assert!(close(parse_coord("10<90,4").unwrap().0, glam::dvec3(0.0, 10.0, 4.0)));
+        assert!(close(parse_coord("10<0<30").unwrap().0, glam::dvec3(5.0 * 3.0_f64.sqrt(), 0.0, 5.0)));
+        assert_eq!(parse_coord("@10<0").unwrap().1, CoordKind::Relative);
+        assert_eq!(parse_coord("#1,2").unwrap().1, CoordKind::Absolute);
     }
 }
 
@@ -120,6 +166,10 @@ impl UcsXform {
     /// `(origin, x, y, z)` axes in WCS — for drawing the UCS icon.
     pub(super) fn axes(&self) -> (glam::DVec3, glam::DVec3, glam::DVec3, glam::DVec3) {
         (self.origin, self.x, self.y, self.z)
+    }
+
+    pub(super) fn working_plane(&self) -> crate::command::WorkingPlane {
+        crate::command::WorkingPlane::new(self.origin, self.x, self.y)
     }
 
     /// UCS→world rotation matrix (columns = UCS axes). For consumers that take

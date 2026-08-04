@@ -15,12 +15,13 @@ use acadrust::EntityType;
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 
 pub struct DonutCommand {
     state: DonutState,
     inner_r: f64,
     outer_r: f64,
+    plane: WorkingPlane,
 }
 
 enum DonutState {
@@ -35,11 +36,16 @@ impl DonutCommand {
             state: DonutState::AskInner,
             inner_r: 0.0,
             outer_r: 1.0,
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for DonutCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "DONUT"
     }
@@ -97,9 +103,10 @@ impl CadCommand for DonutCommand {
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.state {
             DonutState::PlaceCenter => {
-                let entity = make_donut(pt.x as f64, pt.y as f64, self.inner_r, self.outer_r);
+                let center = self.plane.to_local(pt);
+                let entity = make_donut(center.x, center.y, center.z, self.inner_r, self.outer_r);
                 // Keep command active so user can place more donuts.
-                CmdResult::CommitEntity(entity)
+                CmdResult::CommitEntity(self.plane.place_entity(entity))
             }
             _ => CmdResult::NeedPoint,
         }
@@ -119,7 +126,7 @@ impl CadCommand for DonutCommand {
     }
 }
 
-fn make_donut(cx: f64, cy: f64, inner_r: f64, outer_r: f64) -> EntityType {
+fn make_donut(cx: f64, cy: f64, elevation: f64, inner_r: f64, outer_r: f64) -> EntityType {
     use acadrust::types::Vector2;
     let r_avg = (inner_r + outer_r) / 2.0;
     let width = outer_r - inner_r;
@@ -127,6 +134,7 @@ fn make_donut(cx: f64, cy: f64, inner_r: f64, outer_r: f64) -> EntityType {
     let mut p = LwPolyline::new();
     p.is_closed = true;
     p.constant_width = width;
+    p.elevation = elevation;
 
     // Vertex at (cx - r, cy) with bulge 1.0 (180° CCW arc to next vertex)
     let mut v0 = LwVertex::new(Vector2::new(cx - r_avg, cy));

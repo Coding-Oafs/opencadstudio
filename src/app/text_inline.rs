@@ -211,9 +211,15 @@ impl super::OpenCADStudio {
                 .bump_entities(&[(h, crate::scene::ChangeKind::Modified)]);
             self.tabs[i].dirty = true;
         } else {
+            let plane = if self.tabs[i].editing_model_space() {
+                self.tabs[i].ucs_xform().working_plane()
+            } else {
+                crate::command::WorkingPlane::default()
+            };
+            let position = plane.to_local(ed.pos);
             let mut t = Text::with_value(
                 &ed.value,
-                Vector3::new(ed.pos.x, ed.pos.y, ed.pos.z),
+                Vector3::new(position.x, position.y, position.z),
             )
             .with_height(ed.height);
             // New text inherits the document's current text style (STYLE), not
@@ -231,10 +237,8 @@ impl super::OpenCADStudio {
                 &self.tabs[i].scene.document,
                 &t.style,
             );
-            // Align new text to the active UCS (baseline along the UCS X axis).
-            t.rotation = self.tabs[i].ucs_rotation_angle();
             self.push_undo_snapshot(i, "TEXT");
-            let handle = self.commit_entity_handle(EntityType::Text(t));
+            let handle = self.commit_entity_handle(plane.place_entity(EntityType::Text(t)));
             if annotative {
                 let scale = self.tabs[i].scene.current_annotation_scale_handle();
                 if let (Some(handle), Some(scale)) = (handle, scale) {

@@ -18,7 +18,7 @@ use acadrust::{EntityType, Handle};
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 
@@ -54,6 +54,7 @@ pub struct MeasureGeomCommand {
     points: Vec<DVec3>,
     /// The picked entity for RADIUS, injected before `on_entity_pick`.
     picked: Option<EntityType>,
+    plane: WorkingPlane,
 }
 
 impl MeasureGeomCommand {
@@ -62,6 +63,7 @@ impl MeasureGeomCommand {
             mode: Mode::Choose,
             points: vec![],
             picked: None,
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -107,12 +109,14 @@ impl MeasureGeomCommand {
     }
 
     /// DISTANCE readout for the two collected points.
-    fn distance_msg(p1: DVec3, p2: DVec3) -> String {
+    fn distance_msg(plane: WorkingPlane, p1: DVec3, p2: DVec3) -> String {
+        let p1 = plane.to_local(p1);
+        let p2 = plane.to_local(p2);
         let delta = p2 - p1;
         let dist = delta.length();
         let dx = delta.x;
-        let dy = delta.y; // drawing plane is world XY
-        let dz = delta.z; // elevation
+        let dy = delta.y;
+        let dz = delta.z;
         let angle_xy = dy.atan2(dx).to_degrees();
         let dist_s = format!("{dist:.4}");
         let angle_xy_s = format!("{angle_xy:.4}");
@@ -131,7 +135,8 @@ impl MeasureGeomCommand {
     }
 
     /// AREA readout: shoelace area (f64, relative to first vertex) + perimeter.
-    fn area_msg(points: &[DVec3]) -> String {
+    fn area_msg(plane: WorkingPlane, points: &[DVec3]) -> String {
+        let points = points.iter().map(|point| plane.to_local(*point)).collect::<Vec<_>>();
         let n = points.len();
         let origin = points[0];
         let mut area_sum = 0.0f64;
@@ -207,6 +212,10 @@ impl CadCommand for MeasureGeomCommand {
         }
     }
 
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn wants_text_input(&self) -> bool {
         // Only the opening mode-keyword step reads a typed token.
         self.mode == Mode::Choose
@@ -267,7 +276,11 @@ impl CadCommand for MeasureGeomCommand {
             Mode::Distance => {
                 self.points.push(pt);
                 if self.points.len() == 2 {
-                    CmdResult::Measurement(Self::distance_msg(self.points[0], self.points[1]))
+                    CmdResult::Measurement(Self::distance_msg(
+                        self.plane,
+                        self.points[0],
+                        self.points[1],
+                    ))
                 } else {
                     CmdResult::NeedPoint
                 }
@@ -299,7 +312,7 @@ impl CadCommand for MeasureGeomCommand {
                 if self.points.len() < 3 {
                     CmdResult::Cancel
                 } else {
-                    CmdResult::Measurement(Self::area_msg(&self.points))
+                    CmdResult::Measurement(Self::area_msg(self.plane, &self.points))
                 }
             }
             _ => CmdResult::Cancel,

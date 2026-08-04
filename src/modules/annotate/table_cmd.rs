@@ -12,7 +12,7 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -45,6 +45,7 @@ pub struct TableCommand {
     column_width: f64,
     row_height: f64,
     preview_scale: f64,
+    plane: WorkingPlane,
 }
 
 impl TableCommand {
@@ -55,6 +56,7 @@ impl TableCommand {
             column_width: COL_WIDTH,
             row_height: ROW_HEIGHT,
             preview_scale: 1.0,
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -81,11 +83,16 @@ impl TableCommand {
             } else {
                 1.0
             },
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for TableCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "TABLE"
     }
@@ -163,27 +170,34 @@ impl CadCommand for TableCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if let Step::Insertion { cols, rows } = self.step {
-            let ins = Vector3::new(pt.x, pt.y, pt.z);
+            let point = self.plane.to_local(pt);
+            let ins = Vector3::new(point.x, point.y, point.z);
             let mut table = TableBuilder::new(rows, cols)
                 .at(ins)
                 .row_height(self.row_height)
                 .column_width(self.column_width)
                 .build();
             table.table_style_handle = self.style_handle;
-            CmdResult::CommitAndExit(EntityType::Table(table))
+            CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Table(table)))
         } else {
             CmdResult::NeedPoint
         }
     }
 
-    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
         if let Step::Insertion { cols, rows } = self.step {
             // Preview: outline of the table bounding box.
             let w = (cols as f32) * (self.column_width * self.preview_scale) as f32;
             let h = (rows as f32) * (self.row_height * self.preview_scale) as f32;
-            let x = pt.x;
-            let y = pt.y;
-            let z = pt.z;
+            let point = self.plane.to_local(pt);
+            let corners = [
+                point,
+                point + DVec3::X * w as f64,
+                point + DVec3::new(w as f64, -(h as f64), 0.0),
+                point - DVec3::Y * h as f64,
+            ]
+            .map(|corner| self.plane.to_world(corner).as_vec3().to_array());
+            let [p0, p1, p2, p3] = corners;
             Some(WireModel {
                 taper_widths: Vec::new(),
                 world_width: 0.0,
@@ -197,14 +211,7 @@ impl CadCommand for TableCommand {
             text_verts: Vec::new(),
                 name: "table_preview".into(),
                 points: vec![
-                    [x, y, z],
-                    [x + w, y, z],
-                    [x + w, y, z],
-                    [x + w, y, z - h],
-                    [x + w, y, z - h],
-                    [x, y, z - h],
-                    [x, y, z - h],
-                    [x, y, z],
+                    p0, p1, p1, p2, p2, p3, p3, p0,
                 ],
                 points_low: Vec::new(),
                 color: WireModel::CYAN,

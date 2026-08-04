@@ -9,7 +9,7 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -32,15 +32,23 @@ enum Step {
 
 pub struct ToleranceCommand {
     step: Step,
+    plane: WorkingPlane,
 }
 
 impl ToleranceCommand {
     pub fn new() -> Self {
-        Self { step: Step::Text }
+        Self {
+            step: Step::Text,
+            plane: WorkingPlane::default(),
+        }
     }
 }
 
 impl CadCommand for ToleranceCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "TOLERANCE"
     }
@@ -69,9 +77,10 @@ impl CadCommand for ToleranceCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if let Step::Insertion { text } = &self.step {
-            let ins = Vector3::new(pt.x, pt.y, pt.z);
+            let point = self.plane.to_local(pt);
+            let ins = Vector3::new(point.x, point.y, point.z);
             let tol = Tolerance::with_text(ins, text.clone());
-            CmdResult::CommitAndExit(EntityType::Tolerance(tol))
+            CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Tolerance(tol)))
         } else {
             CmdResult::NeedPoint
         }
@@ -81,11 +90,18 @@ impl CadCommand for ToleranceCommand {
         CmdResult::Cancel
     }
 
-    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
         if !matches!(self.step, Step::Insertion { .. }) {
             return None;
         }
-        let d = 0.15_f32;
+        let d = 0.15;
+        let points = [
+            pt - self.plane.x * d,
+            pt + self.plane.x * d,
+            DVec3::splat(f64::NAN),
+            pt - self.plane.y * d,
+            pt + self.plane.y * d,
+        ];
         Some(WireModel {
             taper_widths: Vec::new(),
             world_width: 0.0,
@@ -98,13 +114,10 @@ impl CadCommand for ToleranceCommand {
             dash_align_end: None,
             text_verts: Vec::new(),
             name: "tolerance_preview".into(),
-            points: vec![
-                [pt.x - d, pt.y, pt.z],
-                [pt.x + d, pt.y, pt.z],
-                [f32::NAN, 0.0, 0.0],
-                [pt.x, pt.y, pt.z - d],
-                [pt.x, pt.y, pt.z + d],
-            ],
+            points: points
+                .iter()
+                .map(|point| point.as_vec3().to_array())
+                .collect(),
             points_low: Vec::new(),
             color: WireModel::CYAN,
             selected: false,

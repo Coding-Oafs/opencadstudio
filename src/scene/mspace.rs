@@ -433,6 +433,15 @@ impl Scene {
         self.camera.borrow().rotation * glam::Vec3::Z
     }
 
+    pub fn active_camera_rotation(&self) -> glam::Quat {
+        if let Some(handle) = self.active_viewport {
+            if let Some(camera) = self.camera_for_viewport(handle) {
+                return camera.rotation;
+            }
+        }
+        self.camera.borrow().rotation
+    }
+
     /// View-rotation matrix for the active viewport (MSPACE), or the
     /// paper-space camera's matrix when not in MSPACE.
     /// Used by ViewCube hit-testing so clicks map to the correct camera.

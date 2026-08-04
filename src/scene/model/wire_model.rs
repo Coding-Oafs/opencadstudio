@@ -245,23 +245,40 @@ impl WireModel {
 
     /// Return a clone with every point rotated around `center` by `angle_rad`.
     pub fn rotated(&self, center: glam::Vec3, angle_rad: f32) -> Self {
+        self.rotated_about_axis(center, glam::Vec3::Z, angle_rad)
+    }
+
+    /// Return a clone rotated about an arbitrary world-space axis.
+    pub fn rotated_about_axis(
+        &self,
+        center: glam::Vec3,
+        axis: glam::Vec3,
+        angle_rad: f32,
+    ) -> Self {
+        let rotation = glam::Quat::from_axis_angle(axis.normalize_or_zero(), angle_rad);
         let (s, c) = angle_rad.sin_cos();
         let mut out = self.clone();
         out.name = format!("preview_{}", self.name);
         out.color = Self::CYAN;
         out.selected = false;
         for p in &mut out.points {
-            let dx = p[0] - center.x;
-            let dy = p[1] - center.y;
-            p[0] = center.x + dx * c - dy * s;
-            p[1] = center.y + dx * s + dy * c;
+            let mapped = center + rotation * (glam::Vec3::from_array(*p) - center);
+            *p = mapped.to_array();
+        }
+        for p in &mut out.points_low {
+            *p = (rotation * glam::Vec3::from_array(*p)).to_array();
         }
         if !out.text_verts.is_empty() {
-            let (cx, cy) = (center.x as f64, center.y as f64);
+            let center = center.as_dvec3();
+            let axis = axis.as_dvec3().normalize_or_zero();
             let (s, c) = (s as f64, c as f64);
             out.text_verts = map_text_verts(&self.text_verts, |x, y, z| {
-                let (dx, dy) = (x - cx, y - cy);
-                (cx + dx * c - dy * s, cy + dx * s + dy * c, z)
+                let v = glam::DVec3::new(x, y, z) - center;
+                let mapped = center
+                    + v * c
+                    + axis.cross(v) * s
+                    + axis * axis.dot(v) * (1.0 - c);
+                (mapped.x, mapped.y, mapped.z)
             });
         }
         out
@@ -322,41 +339,48 @@ impl WireModel {
 
     /// Return a clone mirrored across the line through `p1`→`p2`.
     pub fn mirrored(&self, p1: glam::Vec3, p2: glam::Vec3) -> Self {
-        let ax = p2.x - p1.x;
-        let ay = p2.y - p1.y;
-        let len2 = ax * ax + ay * ay;
+        self.mirrored_in_plane(p1, p2, glam::Vec3::Z)
+    }
+
+    /// Return a clone reflected through the plane containing the picked line
+    /// and the supplied working-plane normal.
+    pub fn mirrored_in_plane(
+        &self,
+        p1: glam::Vec3,
+        p2: glam::Vec3,
+        working_normal: glam::Vec3,
+    ) -> Self {
+        let plane_normal = (p2 - p1)
+            .cross(working_normal.normalize_or_zero())
+            .normalize_or_zero();
         let mut out = self.clone();
         out.name = format!("preview_{}", self.name);
         out.color = Self::CYAN;
         out.selected = false;
-        if len2 < 1e-12 {
+        if plane_normal.length_squared() < 1e-12 {
             return out;
         }
         for p in &mut out.points {
-            let dx = p[0] - p1.x;
-            let dy = p[1] - p1.y;
-            let t = (dx * ax + dy * ay) / len2;
-            p[0] = p1.x + 2.0 * t * ax - dx;
-            p[1] = p1.y + 2.0 * t * ay - dy;
+            let point = glam::Vec3::from_array(*p);
+            *p = (point - 2.0 * plane_normal.dot(point - p1) * plane_normal).to_array();
         }
         // World position is the double-single sum `points + points_low` (text /
         // UTM wires split it), so the residual must reflect too — as a direction
         // (linear reflection about the axis, no `p1` offset).
         for p in &mut out.points_low {
-            let t = (p[0] * ax + p[1] * ay) / len2;
-            p[0] = 2.0 * t * ax - p[0];
-            p[1] = 2.0 * t * ay - p[1];
+            let point = glam::Vec3::from_array(*p);
+            *p = (point - 2.0 * plane_normal.dot(point) * plane_normal).to_array();
         }
         // Glyph quads reflect wholesale (true mirror) — the caller only routes
         // text through here for MIRRTEXT-on; MIRRTEXT-off relocates via
         // `translated` so glyphs stay readable.
         if !out.text_verts.is_empty() {
-            let (ax, ay, len2) = (ax as f64, ay as f64, len2 as f64);
-            let (p1x, p1y) = (p1.x as f64, p1.y as f64);
+            let p1 = p1.as_dvec3();
+            let normal = plane_normal.as_dvec3();
             out.text_verts = map_text_verts(&self.text_verts, |x, y, z| {
-                let (dx, dy) = (x - p1x, y - p1y);
-                let t = (dx * ax + dy * ay) / len2;
-                (p1x + 2.0 * t * ax - dx, p1y + 2.0 * t * ay - dy, z)
+                let point = glam::DVec3::new(x, y, z);
+                let mapped = point - 2.0 * normal.dot(point - p1) * normal;
+                (mapped.x, mapped.y, mapped.z)
             });
         }
         out

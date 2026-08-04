@@ -14,10 +14,10 @@
 //   1. Center point → 2. Item count (text) → 3. Total angle in degrees (text)
 
 use acadrust::Handle;
-use glam::{DVec3, Mat4};
+use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult, EntityTransform};
+use crate::command::{CadCommand, CmdResult, EntityTransform, WorkingPlane};
 use crate::modules::draw::defaults;
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
@@ -63,7 +63,7 @@ pub struct ArrayRectCommand {
     default_cols: u32,
     default_row_sp: f64,
     default_col_sp: f64,
-    ucs: Mat4,
+    plane: WorkingPlane,
 }
 
 impl ArrayRectCommand {
@@ -76,18 +76,17 @@ impl ArrayRectCommand {
             default_cols: defaults::get_array_cols() as u32,
             default_row_sp: defaults::get_array_row_sp(),
             default_col_sp: defaults::get_array_col_sp(),
-            ucs: Mat4::IDENTITY,
+            plane: WorkingPlane::default(),
         }
     }
 
-    /// Row/column offsets run along the active UCS axes (`ucs` rotates the
-    /// world-frame grid step), identity = world.
+    /// Row/column offsets run along the active coordinate axes.
     fn build_transforms(
         rows: u32,
         cols: u32,
         row_sp: f64,
         col_sp: f64,
-        ucs: Mat4,
+        plane: WorkingPlane,
     ) -> Vec<EntityTransform> {
         let mut t = Vec::new();
         for r in 0..rows {
@@ -95,9 +94,11 @@ impl ArrayRectCommand {
                 if r == 0 && c == 0 {
                     continue;
                 }
-                t.push(EntityTransform::Translate(ucs.as_dmat4().transform_vector3(
-                    glam::DVec3::new(col_sp * c as f64, row_sp * r as f64, 0.0),
-                )));
+                t.push(EntityTransform::Translate(plane.vector_to_world(DVec3::new(
+                    col_sp * c as f64,
+                    row_sp * r as f64,
+                    0.0,
+                ))));
             }
         }
         t
@@ -109,8 +110,8 @@ impl CadCommand for ArrayRectCommand {
         "ARRAYRECT"
     }
 
-    fn set_ucs(&mut self, ucs: Mat4) {
-        self.ucs = ucs;
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
     }
 
     fn prompt(&self) -> String {
@@ -194,7 +195,7 @@ impl CadCommand for ArrayRectCommand {
                 };
                 Some(CmdResult::BatchCopy(
                     self.handles.clone(),
-                    Self::build_transforms(rows, cols, row_sp, col_sp, self.ucs),
+                    Self::build_transforms(rows, cols, row_sp, col_sp, self.plane),
                 ))
             }
         }
@@ -219,7 +220,7 @@ impl CadCommand for ArrayRectCommand {
             }
             RectStep::ColSp { rows, cols, row_sp } => (rows, cols, row_sp, self.default_col_sp),
         };
-        Self::build_transforms(rows, cols, row_sp, col_sp, self.ucs)
+        Self::build_transforms(rows, cols, row_sp, col_sp, self.plane)
             .iter()
             .flat_map(|t| {
                 if let EntityTransform::Translate(delta) = t {
@@ -262,6 +263,7 @@ pub struct ArrayPolarCommand {
     step: PolarStep,
     default_count: u32,
     default_angle: f64,
+    plane: WorkingPlane,
 }
 
 impl ArrayPolarCommand {
@@ -272,11 +274,16 @@ impl ArrayPolarCommand {
             step: PolarStep::Center,
             default_count: defaults::get_array_p_count() as u32,
             default_angle: defaults::get_array_p_angle(),
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for ArrayPolarCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "ARRAYPOLAR"
     }
@@ -342,6 +349,7 @@ impl CadCommand for ArrayPolarCommand {
                 let transforms = (1..count)
                     .map(|n| EntityTransform::Rotate {
                         center,
+                        axis: self.plane.z,
                         angle_rad: step_rad * n as f64,
                     })
                     .collect();
@@ -363,12 +371,13 @@ impl CadCommand for ArrayPolarCommand {
             }
         };
         let step_rad = total_deg.to_radians() / count as f64;
+        let axis = self.plane.z.as_vec3();
         let mut out: Vec<WireModel> = (1..count)
             .flat_map(|n| {
                 let angle_rad = (step_rad * n as f64) as f32;
                 self.wire_models
                     .iter()
-                    .map(move |w| w.rotated(center, angle_rad))
+                    .map(move |wire| wire.rotated_about_axis(center, axis, angle_rad))
             })
             .collect();
         // Rubber-band from center to cursor while picking the center point.
@@ -675,6 +684,7 @@ impl ArrayPathCommand {
                     let center = Self::rigid_center(p0, p, dth);
                     EntityTransform::Rotate {
                         center,
+                        axis: DVec3::Z,
                         angle_rad: dth,
                     }
                 }
@@ -814,7 +824,7 @@ impl CadCommand for ArrayPathCommand {
                     .iter()
                     .map(|w| w.translated(delta.as_vec3()))
                     .collect::<Vec<_>>(),
-                EntityTransform::Rotate { center, angle_rad } => self
+                EntityTransform::Rotate { center, angle_rad, .. } => self
                     .wire_models
                     .iter()
                     .map(|w| w.rotated(center.as_vec3(), *angle_rad as f32))

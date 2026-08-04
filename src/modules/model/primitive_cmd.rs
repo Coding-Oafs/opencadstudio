@@ -13,7 +13,7 @@ use glam::DVec3;
 use crate::t;
 use truck_modeling::Solid;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::scene::model::solid_model;
 use crate::scene::model::wire_model::WireModel;
 
@@ -67,6 +67,7 @@ pub struct PrimitiveCommand {
     pts: Vec<DVec3>,
     /// True once the footprint is set and we are collecting the height.
     height_step: bool,
+    plane: WorkingPlane,
 }
 
 impl PrimitiveCommand {
@@ -75,6 +76,7 @@ impl PrimitiveCommand {
             shape: Shape::from_id(id).unwrap_or(Shape::Box),
             pts: Vec::new(),
             height_step: false,
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -110,13 +112,17 @@ impl PrimitiveCommand {
                     return None;
                 }
                 if self.shape == Shape::Box {
-                    let center = [(a.x + b.x) / 2.0, (a.y + b.y) / 2.0, height / 2.0];
+                    let center = [
+                        (a.x + b.x) / 2.0,
+                        (a.y + b.y) / 2.0,
+                        a.z + height / 2.0,
+                    ];
                     (
                         primitives::build_box(center, length, width, height),
                         solid_model::box_solid(center, length, width, height),
                     )
                 } else {
-                    let origin = [a.x.min(b.x), a.y.min(b.y), 0.0];
+                    let origin = [a.x.min(b.x), a.y.min(b.y), a.z];
                     (
                         primitives::build_wedge(origin, length, width, height),
                         solid_model::wedge_solid(origin, length, width, height),
@@ -129,7 +135,7 @@ impl PrimitiveCommand {
                 if r < 1e-6 || height < 1e-6 {
                     return None;
                 }
-                let center = [c.x, c.y, 0.0];
+                let center = [c.x, c.y, c.z];
                 if self.shape == Shape::Cylinder {
                     (
                         primitives::build_cylinder(center, r, height),
@@ -148,7 +154,7 @@ impl PrimitiveCommand {
                 if r < 1e-6 {
                     return None;
                 }
-                let center = [c.x, c.y, 0.0];
+                let center = [c.x, c.y, c.z];
                 (
                     primitives::build_sphere(center, r),
                     solid_model::sphere_solid(center, r),
@@ -161,7 +167,7 @@ impl PrimitiveCommand {
                 if major < 1e-6 || minor < 1e-6 {
                     return None;
                 }
-                let center = [c.x, c.y, 0.0];
+                let center = [c.x, c.y, c.z];
                 (
                     primitives::build_torus(center, major, minor),
                     solid_model::torus_solid(center, major, minor),
@@ -178,16 +184,40 @@ impl PrimitiveCommand {
 
     fn commit(&self, height: f64) -> CmdResult {
         match self.build(height) {
-            Some((entity, solid)) => CmdResult::CommitSolid {
-                entity,
-                solid: Box::new(solid),
-            },
+            Some((entity, solid)) => {
+                let matrix = truck_modeling::Matrix4::new(
+                    self.plane.x.x,
+                    self.plane.x.y,
+                    self.plane.x.z,
+                    0.0,
+                    self.plane.y.x,
+                    self.plane.y.y,
+                    self.plane.y.z,
+                    0.0,
+                    self.plane.z.x,
+                    self.plane.z.y,
+                    self.plane.z.z,
+                    0.0,
+                    self.plane.origin.x,
+                    self.plane.origin.y,
+                    self.plane.origin.z,
+                    1.0,
+                );
+                CmdResult::CommitSolid {
+                    entity: self.plane.place_entity(entity),
+                    solid: Box::new(truck_modeling::builder::transformed(&solid, matrix)),
+                }
+            }
             None => CmdResult::Cancel,
         }
     }
 }
 
 impl CadCommand for PrimitiveCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         self.shape.name()
     }
@@ -210,10 +240,10 @@ impl CadCommand for PrimitiveCommand {
         if self.height_step {
             // A click in the ground plane has no Z; use its distance from the
             // footprint centre as the height magnitude.
-            let h = (pt - self.pts[0]).length();
+            let h = (self.plane.to_local(pt) - self.pts[0]).length();
             return self.commit(h.max(1e-6));
         }
-        self.pts.push(pt);
+        self.pts.push(self.plane.to_local(pt));
         if self.pts.len() < self.footprint_pts() {
             return CmdResult::NeedPoint;
         }
@@ -255,8 +285,23 @@ impl CadCommand for PrimitiveCommand {
             return None;
         }
         let mut foot = self.pts.clone();
-        foot.push(pt);
-        Some(footprint_wire(self.shape, &foot))
+        foot.push(self.plane.to_local(pt));
+        let mut preview = footprint_wire(self.shape, &foot);
+        preview.points = preview
+            .points
+            .iter()
+            .map(|point| {
+                if point[0].is_nan() {
+                    *point
+                } else {
+                    self.plane
+                        .to_world(glam::Vec3::from_array(*point).as_dvec3())
+                        .as_vec3()
+                        .to_array()
+                }
+            })
+            .collect();
+        Some(preview)
     }
 }
 
@@ -277,11 +322,11 @@ fn footprint_wire(shape: Shape, pts: &[DVec3]) -> WireModel {
     } else {
         let (a, b) = (pts[0], pts[1]);
         points.extend_from_slice(&[
-            [a.x as f32, a.y as f32, 0.0],
-            [b.x as f32, a.y as f32, 0.0],
-            [b.x as f32, b.y as f32, 0.0],
-            [a.x as f32, b.y as f32, 0.0],
-            [a.x as f32, a.y as f32, 0.0],
+            [a.x as f32, a.y as f32, a.z as f32],
+            [b.x as f32, a.y as f32, a.z as f32],
+            [b.x as f32, b.y as f32, a.z as f32],
+            [a.x as f32, b.y as f32, a.z as f32],
+            [a.x as f32, a.y as f32, a.z as f32],
         ]);
     }
     wire("primitive_preview", points)
@@ -294,7 +339,7 @@ fn circle_points(out: &mut Vec<[f32; 3]>, c: DVec3, r: f64) {
         out.push([
             (c.x + r * t.cos()) as f32,
             (c.y + r * t.sin()) as f32,
-            0.0,
+            c.z as f32,
         ]);
     }
 }

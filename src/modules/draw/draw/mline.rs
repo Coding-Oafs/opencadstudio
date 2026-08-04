@@ -11,7 +11,7 @@ use acadrust::EntityType;
 use glam::DVec3;
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::scene::model::wire_model::WireModel;
 
 pub struct MlineCommand {
@@ -21,6 +21,7 @@ pub struct MlineCommand {
     style_name: String,
     style_handle: Option<acadrust::Handle>,
     style_element_count: usize,
+    plane: WorkingPlane,
 }
 
 impl MlineCommand {
@@ -33,6 +34,7 @@ impl MlineCommand {
             style_name: "Standard".into(),
             style_handle: None,
             style_element_count: 2,
+            plane: WorkingPlane::default(),
         }
     }
 
@@ -48,11 +50,16 @@ impl MlineCommand {
             style_name: style_name.into(),
             style_handle,
             style_element_count: style_element_count.max(1),
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for MlineCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "MLINE"
     }
@@ -105,14 +112,18 @@ impl CadCommand for MlineCommand {
         // Close command
         if (up == "C" || up == "CLOSE") && self.points.len() >= 3 {
             let entity = build_mline(
-                &self.points,
+                &self
+                    .points
+                    .iter()
+                    .map(|point| self.plane.to_local(*point))
+                    .collect::<Vec<_>>(),
                 self.scale,
                 true,
                 &self.style_name,
                 self.style_handle,
                 self.style_element_count,
             );
-            return Some(CmdResult::CommitAndExit(entity));
+            return Some(CmdResult::CommitAndExit(self.plane.place_entity(entity)));
         }
 
         // Scale: "S" alone → prompt for value
@@ -144,14 +155,18 @@ impl CadCommand for MlineCommand {
             return CmdResult::Cancel;
         }
         let entity = build_mline(
-            &self.points,
+            &self
+                .points
+                .iter()
+                .map(|point| self.plane.to_local(*point))
+                .collect::<Vec<_>>(),
             self.scale,
             false,
             &self.style_name,
             self.style_handle,
             self.style_element_count,
         );
-        CmdResult::CommitAndExit(entity)
+        CmdResult::CommitAndExit(self.plane.place_entity(entity))
     }
 
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {

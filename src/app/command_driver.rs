@@ -1888,6 +1888,7 @@ impl OpenCADStudio {
                             &handles,
                             &crate::command::EntityTransform::Rotate {
                                 center: glam::DVec3::ZERO,
+                                axis: glam::DVec3::Z,
                                 angle_rad,
                             },
                         );

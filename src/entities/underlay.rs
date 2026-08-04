@@ -6,6 +6,7 @@
 
 use acadrust::entities::{Underlay, UnderlayDisplayFlags};
 use crate::t;
+use glam::DVec3;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_angle_prop as edit_angle, edit_prop as edit, ro_prop as ro, square_grip};
@@ -383,7 +384,18 @@ impl Transformable for Underlay {
                 self.insertion_point.y += d.y as f64;
                 self.insertion_point.z += d.z as f64;
             }
-            EntityTransform::Mirror { p1, p2 } => {
+            EntityTransform::Mirror { p1, p2, working_normal } => {
+                if !working_normal.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
+                    acadrust::Entity::apply_transform(
+                        self,
+                        &crate::scene::view::transform::reflection_about_working_line(
+                            *p1,
+                            *p2,
+                            *working_normal,
+                        ),
+                    );
+                    return;
+                }
                 reflect_xy_point(
                     &mut self.insertion_point.x,
                     &mut self.insertion_point.y,
@@ -408,7 +420,16 @@ impl Transformable for Underlay {
                 self.y_scale *= f;
                 self.z_scale *= f;
             }
-            EntityTransform::Rotate { center, angle_rad } => {
+            EntityTransform::Rotate { center, axis, angle_rad } => {
+                if !axis.normalize_or(DVec3::Z).abs_diff_eq(DVec3::Z, 1e-10) {
+                    crate::scene::view::transform::apply_standard_transform(
+                        self,
+                        *center,
+                        *axis,
+                        *angle_rad,
+                    );
+                    return;
+                }
                 let bx = center.x as f64;
                 let by = center.y as f64;
                 let a = *angle_rad as f64;

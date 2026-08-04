@@ -1787,6 +1787,14 @@ impl OpenCADStudio {
                         {
                             self.tabs[i].active_layer = new_name.clone();
                         }
+                        if type_str == "UCS" {
+                            if let Some(active) = self.tabs[i].active_ucs.as_mut() {
+                                if active.name.eq_ignore_ascii_case(&old_name) {
+                                    active.name = new_name.clone();
+                                    self.tabs[i].persist_active_ucs();
+                                }
+                            }
+                        }
                         self.tabs[i].dirty = true;
                         self.command_line
                             .push_output(crate::tf!("RENAME: '{}' → '{}'.", old_name, new_name).as_ref());
@@ -2357,7 +2365,15 @@ fn rename_symbol(doc: &mut acadrust::CadDocument, ty: &str, old: &str, new: &str
             }
             true
         }
-        "UCS" => rekey(&mut doc.ucss, old, new),
+        "UCS" => {
+            if !rekey(&mut doc.ucss, old, new) {
+                return false;
+            }
+            if doc.header.model_space_ucs_name.eq_ignore_ascii_case(old) {
+                doc.header.model_space_ucs_name = new.to_string();
+            }
+            true
+        }
         "VIEW" => rekey(&mut doc.views, old, new),
         _ => false,
     }

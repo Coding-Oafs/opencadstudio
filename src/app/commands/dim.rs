@@ -610,7 +610,12 @@ impl OpenCADStudio {
                 if nums.len() < 3 {
                     return Some(Task::none());
                 }
-                let place = glam::DVec3::new(nums[0], nums[1], nums[2]);
+                let plane = if self.tabs[i].editing_model_space() {
+                    self.tabs[i].ucs_xform().working_plane()
+                } else {
+                    crate::command::WorkingPlane::default()
+                };
+                let place = plane.to_local(glam::DVec3::new(nums[0], nums[1], nums[2]));
                 let handles: Vec<acadrust::Handle> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -622,6 +627,9 @@ impl OpenCADStudio {
                     if let Some(e) = self.tabs[i].scene.document.get_entity(*h) {
                         qdim_collect_points(e, &mut pts);
                     }
+                }
+                for point in &mut pts {
+                    *point = plane.to_local(*point);
                 }
                 if pts.len() < 2 {
                     self.command_line
@@ -671,9 +679,10 @@ impl OpenCADStudio {
                     dim.definition_point = v(def);
                     dim.base.definition_point = v(def);
                     dim.base.actual_measurement = dim.measurement();
-                    self.commit_entity(acadrust::EntityType::Dimension(
+                    let entity = acadrust::EntityType::Dimension(
                         acadrust::entities::Dimension::Linear(dim),
-                    ));
+                    );
+                    self.commit_entity(plane.place_entity(entity));
                     made += 1;
                 }
                 self.tabs[i].dirty = true;
@@ -1325,6 +1334,13 @@ fn find_last_linear_dim(
 fn qdim_collect_points(e: &acadrust::EntityType, out: &mut Vec<glam::DVec3>) {
     use acadrust::EntityType as ET;
     let p = |v: &acadrust::types::Vector3| glam::DVec3::new(v.x, v.y, v.z);
+    let ocs = |point: (f64, f64, f64), normal: acadrust::types::Vector3| {
+        let world = crate::scene::view::transform::ocs_point_to_wcs(
+            point,
+            (normal.x, normal.y, normal.z),
+        );
+        glam::DVec3::new(world.0, world.1, world.2)
+    };
     match e {
         ET::Line(l) => {
             out.push(p(&l.start));
@@ -1332,11 +1348,12 @@ fn qdim_collect_points(e: &acadrust::EntityType, out: &mut Vec<glam::DVec3>) {
         }
         ET::LwPolyline(pl) => {
             for v in &pl.vertices {
-                out.push(glam::DVec3::new(
-                    v.location.x,
-                    v.location.y,
-                    pl.elevation,
-                ));
+                out.push(ocs((v.location.x, v.location.y, pl.elevation), pl.normal));
+            }
+        }
+        ET::Polyline2D(pl) => {
+            for v in &pl.vertices {
+                out.push(ocs((v.location.x, v.location.y, pl.elevation), pl.normal));
             }
         }
         ET::Polyline(pl) => {
@@ -1346,10 +1363,13 @@ fn qdim_collect_points(e: &acadrust::EntityType, out: &mut Vec<glam::DVec3>) {
         }
         ET::Arc(a) => {
             for &ang in &[a.start_angle, a.end_angle] {
-                out.push(glam::DVec3::new(
-                    a.center.x + a.radius * ang.cos(),
-                    a.center.y + a.radius * ang.sin(),
-                    a.center.z,
+                out.push(ocs(
+                    (
+                        a.center.x + a.radius * ang.cos(),
+                        a.center.y + a.radius * ang.sin(),
+                        a.center.z,
+                    ),
+                    a.normal,
                 ));
             }
         }

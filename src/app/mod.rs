@@ -9,7 +9,7 @@ pub(crate) mod commands;
 mod document;
 mod expr_eval;
 mod find_replace;
-mod helpers;
+pub(crate) mod helpers;
 mod history;
 mod layers;
 mod model_ops;

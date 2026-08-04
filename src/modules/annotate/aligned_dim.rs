@@ -5,7 +5,7 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -29,6 +29,7 @@ enum Step {
 
 pub struct AlignedDimensionCommand {
     step: Step,
+    plane: WorkingPlane,
     /// Optional text that replaces the measured value (None = measurement).
     text_override: Option<String>,
     /// True while the next typed line is captured as the text override.
@@ -43,6 +44,7 @@ impl AlignedDimensionCommand {
     pub fn new() -> Self {
         Self {
             step: Step::First,
+            plane: WorkingPlane::default(),
             text_override: None,
             awaiting_text: false,
             text_angle: None,
@@ -52,6 +54,10 @@ impl AlignedDimensionCommand {
 }
 
 impl CadCommand for AlignedDimensionCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "DIMALIGNED"
     }
@@ -85,6 +91,9 @@ impl CadCommand for AlignedDimensionCommand {
                 CmdResult::NeedPoint
             }
             Step::DimLine { p1, p2 } => {
+                let p1 = self.plane.to_local(p1);
+                let p2 = self.plane.to_local(p2);
+                let pt = self.plane.to_local(pt);
                 let mut dim = DimensionAligned::new(v3(p1), v3(p2));
                 // The dimension line runs through the cursor: store it as the
                 // definition point and let the renderer project it onto the
@@ -106,7 +115,9 @@ impl CadCommand for AlignedDimensionCommand {
                 if let Some(a) = self.text_angle {
                     dim.base.text_rotation = a;
                 }
-                CmdResult::CommitAndExit(EntityType::Dimension(Dimension::Aligned(dim)))
+                CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Dimension(
+                    Dimension::Aligned(dim),
+                )))
             }
         }
     }
@@ -180,7 +191,29 @@ impl CadCommand for AlignedDimensionCommand {
             Step::First => return None,
             Step::Second(p1) => (p1, pt),
             Step::DimLine { p1, p2 } => {
-                return Some(preview_aligned(p1, p2, pt));
+                let p1 = self.plane.to_local(p1);
+                let p2 = self.plane.to_local(p2);
+                let pt = self.plane.to_local(pt);
+                let mut preview = preview_aligned(p1, p2, pt);
+                preview.points = preview
+                    .points
+                    .iter()
+                    .map(|point| {
+                        if point[0].is_nan() {
+                            *point
+                        } else {
+                            self.plane
+                                .to_world(DVec3::new(
+                                    point[0] as f64,
+                                    point[1] as f64,
+                                    point[2] as f64,
+                                ))
+                                .as_vec3()
+                                .to_array()
+                        }
+                    })
+                    .collect();
+                return Some(preview);
             }
         };
         // Preview WireModel points are screen/GPU-side: downcast to f32.

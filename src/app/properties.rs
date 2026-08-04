@@ -375,10 +375,31 @@ impl OpenCADStudio {
                         source_entity,
                         annotation_scale_handle,
                     );
-                    let entity = contextual.as_ref();
+                    let plane = if self.tabs[i].editing_model_space() {
+                        self.tabs[i].ucs_xform().working_plane()
+                    } else {
+                        crate::command::WorkingPlane::default()
+                    };
+                    let display_entity = dispatch::entity_in_working_plane(contextual.as_ref(), plane);
+                    let entity = &display_entity;
                     let group_names = self.tabs[i].scene.group_names_for_entity(handle);
                     let mut sections =
                         dispatch::properties_sectioned(handle, entity, &text_style_names);
+                    sections.insert(
+                        0,
+                        crate::scene::model::object::PropSection {
+                            title: t!("Coordinates").into_owned(),
+                            props: vec![crate::entities::common::ro_prop(
+                                t!("Coordinate system").as_ref(),
+                                "coordinate_system",
+                                self.tabs[i]
+                                    .active_ucs
+                                    .as_ref()
+                                    .map(|ucs| ucs.name.clone())
+                                    .unwrap_or_else(|| "WCS".to_string()),
+                            )],
+                        },
+                    );
 
                     // Turn the Material row into an editable picker: the source
                     // options (ByLayer / ByBlock) plus every named material the
@@ -1528,7 +1549,37 @@ impl OpenCADStudio {
                         })
                         .unwrap_or_default();
 
-                    let sections = aggregate_sections(&filtered, &text_style_names);
+                    let plane = if self.tabs[i].editing_model_space() {
+                        self.tabs[i].ucs_xform().working_plane()
+                    } else {
+                        crate::command::WorkingPlane::default()
+                    };
+                    let local_entities: Vec<(Handle, EntityType)> = filtered
+                        .iter()
+                        .map(|(handle, entity)| {
+                            (*handle, dispatch::entity_in_working_plane(entity, plane))
+                        })
+                        .collect();
+                    let local_refs: Vec<(Handle, &EntityType)> = local_entities
+                        .iter()
+                        .map(|(handle, entity)| (*handle, entity))
+                        .collect();
+                    let mut sections = aggregate_sections(&local_refs, &text_style_names);
+                    sections.insert(
+                        0,
+                        crate::scene::model::object::PropSection {
+                            title: t!("Coordinates").into_owned(),
+                            props: vec![crate::entities::common::ro_prop(
+                                t!("Coordinate system").as_ref(),
+                                "coordinate_system",
+                                self.tabs[i]
+                                    .active_ucs
+                                    .as_ref()
+                                    .map(|ucs| ucs.name.clone())
+                                    .unwrap_or_else(|| "WCS".to_string()),
+                            )],
+                        },
+                    );
                     ui::PropertiesPanel {
                         choice_combos: sections
                             .iter()

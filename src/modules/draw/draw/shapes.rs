@@ -15,35 +15,32 @@ use acadrust::types::Vector2;
 use acadrust::{EntityType, LwPolyline};
 use crate::t;
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
-use glam::{DVec3, Mat4};
+use glam::DVec3;
 
 /// Build the four corners of an axis-aligned box between opposite corners `a`
 /// and `b`, axis-aligned in the active UCS (`ucs` = UCS→wire affine, identity =
 /// world). The two given corners stay put; the other two are placed square to
 /// the UCS axes instead of the world axes.
-fn ucs_box_corners(a: DVec3, b: DVec3, ucs: Mat4) -> [DVec3; 4] {
-    let ucs = ucs.as_dmat4();
-    let inv = ucs.inverse();
-    let au = inv.transform_point3(a);
-    let bu = inv.transform_point3(b);
+fn ucs_box_corners(a: DVec3, b: DVec3, plane: WorkingPlane) -> [DVec3; 4] {
+    let au = plane.to_local(a);
+    let bu = plane.to_local(b);
     [
-        ucs.transform_point3(DVec3::new(au.x, au.y, au.z)),
-        ucs.transform_point3(DVec3::new(bu.x, au.y, au.z)),
-        ucs.transform_point3(DVec3::new(bu.x, bu.y, au.z)),
-        ucs.transform_point3(DVec3::new(au.x, bu.y, au.z)),
+        plane.to_world(DVec3::new(au.x, au.y, au.z)),
+        plane.to_world(DVec3::new(bu.x, au.y, au.z)),
+        plane.to_world(DVec3::new(bu.x, bu.y, au.z)),
+        plane.to_world(DVec3::new(au.x, bu.y, au.z)),
     ]
 }
 
 /// Four corners of a box centred at `c` with half-extents taken from `corner`,
 /// axis-aligned in the active UCS (`ucs` = UCS→wire affine, identity = world).
-fn ucs_box_around_center(c: DVec3, corner: DVec3, ucs: Mat4) -> [DVec3; 4] {
-    let ucs = ucs.as_dmat4();
-    let d = ucs.inverse().transform_vector3(corner - c);
-    let rx = ucs.transform_vector3(DVec3::new(d.x.abs(), 0.0, 0.0));
-    let ry = ucs.transform_vector3(DVec3::new(0.0, d.y.abs(), 0.0));
+fn ucs_box_around_center(c: DVec3, corner: DVec3, plane: WorkingPlane) -> [DVec3; 4] {
+    let d = plane.vector_to_local(corner - c);
+    let rx = plane.x * d.x.abs();
+    let ry = plane.y * d.y.abs();
     [c - rx - ry, c + rx - ry, c + rx + ry, c - rx + ry]
 }
 
@@ -84,15 +81,18 @@ pub const ICON: IconKind = ICON_RECT;
 
 // ── Shared geometry helpers ────────────────────────────────────────────────
 
-fn make_pline(xy_pairs: &[[f64; 2]]) -> EntityType {
-    EntityType::LwPolyline(LwPolyline {
-        vertices: xy_pairs
+fn make_pline(points: &[DVec3], plane: WorkingPlane) -> EntityType {
+    let local: Vec<DVec3> = points.iter().map(|point| plane.to_local(*point)).collect();
+    let elevation = local.first().map_or(0.0, |point| point.z);
+    plane.place_entity(EntityType::LwPolyline(LwPolyline {
+        vertices: local
             .iter()
-            .map(|&[x, y]| LwVertex::new(Vector2::new(x, y)))
+            .map(|point| LwVertex::new(Vector2::new(point.x, point.y)))
             .collect(),
+        elevation,
         is_closed: true,
         ..Default::default()
-    })
+    }))
 }
 
 fn wire_loop(pts: Vec<[f64; 3]>) -> WireModel {
@@ -114,46 +114,57 @@ fn wire_seg(a: DVec3, b: DVec3) -> WireModel {
 
 // ── Polygon geometry ───────────────────────────────────────────────────────
 
-fn poly_verts_xy(center: DVec3, vertex_r: f64, sides: u32, start_angle: f64) -> Vec<[f64; 2]> {
+fn poly_verts(
+    center: DVec3,
+    vertex_r: f64,
+    sides: u32,
+    start_angle: f64,
+    plane: WorkingPlane,
+) -> Vec<DVec3> {
     (0..sides)
         .map(|i| {
             let a = start_angle + (i as f64) * TAU / sides as f64;
-            [
-                center.x + vertex_r * a.cos(),
-                center.y + vertex_r * a.sin(),
-            ]
+            center + plane.x * (vertex_r * a.cos()) + plane.y * (vertex_r * a.sin())
         })
         .collect()
 }
 
-fn poly_wire(center: DVec3, vertex_r: f64, sides: u32, start_angle: f64) -> WireModel {
-    let pts: Vec<[f64; 3]> = (0..sides)
-        .map(|i| {
-            let a = start_angle + (i as f64) * TAU / sides as f64;
-            [
-                center.x + vertex_r * a.cos(),
-                center.y + vertex_r * a.sin(),
-                center.z,
-            ]
-        })
+fn poly_wire(
+    center: DVec3,
+    vertex_r: f64,
+    sides: u32,
+    start_angle: f64,
+    plane: WorkingPlane,
+) -> WireModel {
+    let pts: Vec<[f64; 3]> = poly_verts(center, vertex_r, sides, start_angle, plane)
+        .into_iter()
+        .map(|point| [point.x, point.y, point.z])
         .collect();
     wire_loop(pts)
 }
 
-fn angle_xy(from: DVec3, to: DVec3) -> f64 {
-    (to.y - from.y).atan2(to.x - from.x)
+fn angle_xy(from: DVec3, to: DVec3, plane: WorkingPlane) -> f64 {
+    plane.angle(from, to).unwrap_or(0.0)
+}
+
+fn plane_distance(from: DVec3, to: DVec3, plane: WorkingPlane) -> f64 {
+    let delta = plane.vector_to_local(to - from);
+    delta.x.hypot(delta.y)
 }
 
 // ── Command: Rectangle — Two Corners  (RECT) ──────────────────────────────
 
 pub struct RectCommand {
     a: Option<DVec3>,
-    ucs: Mat4,
+    plane: WorkingPlane,
 }
 
 impl RectCommand {
     pub fn new() -> Self {
-        Self { a: None, ucs: Mat4::IDENTITY }
+        Self {
+            a: None,
+            plane: WorkingPlane::default(),
+        }
     }
 }
 
@@ -161,8 +172,8 @@ impl CadCommand for RectCommand {
     fn name(&self) -> &'static str {
         "RECT"
     }
-    fn set_ucs(&mut self, ucs: Mat4) {
-        self.ucs = ucs;
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
     }
     fn prompt(&self) -> String {
         if self.a.is_none() {
@@ -209,13 +220,8 @@ impl CadCommand for RectCommand {
                 CmdResult::NeedPoint
             }
             Some(a) => {
-                let c = ucs_box_corners(a, pt, self.ucs);
-                CmdResult::CommitAndExit(make_pline(&[
-                    [c[0].x, c[0].y],
-                    [c[1].x, c[1].y],
-                    [c[2].x, c[2].y],
-                    [c[3].x, c[3].y],
-                ]))
+                let c = ucs_box_corners(a, pt, self.plane);
+                CmdResult::CommitAndExit(make_pline(&c, self.plane))
             }
         }
     }
@@ -227,7 +233,7 @@ impl CadCommand for RectCommand {
     }
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
         let a = self.a?;
-        let c = ucs_box_corners(a, pt, self.ucs);
+        let c = ucs_box_corners(a, pt, self.plane);
         Some(wire_loop(vec![
             [c[0].x, c[0].y, c[0].z],
             [c[1].x, c[1].y, c[1].z],
@@ -261,6 +267,7 @@ pub struct RectRotCommand {
     step: u8,
     a: DVec3,
     b: DVec3,
+    plane: WorkingPlane,
 }
 
 impl RectRotCommand {
@@ -269,11 +276,16 @@ impl RectRotCommand {
             step: 0,
             a: DVec3::ZERO,
             b: DVec3::ZERO,
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for RectRotCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "RECT_ROT"
     }
@@ -297,18 +309,18 @@ impl CadCommand for RectRotCommand {
                 CmdResult::NeedPoint
             }
             _ => {
-                let (a, b) = (self.a, self.b);
+                let (a, b, pt) = (
+                    self.plane.to_local(self.a),
+                    self.plane.to_local(self.b),
+                    self.plane.to_local(pt),
+                );
                 let dir = (b - a).normalize_or_zero();
                 let perp = DVec3::new(-dir.y, dir.x, 0.0);
                 let h = (pt - b).dot(perp); // signed height
                 let c = b + perp * h;
                 let d = a + perp * h;
-                CmdResult::CommitAndExit(make_pline(&[
-                    [a.x, a.y],
-                    [b.x, b.y],
-                    [c.x, c.y],
-                    [d.x, d.y],
-                ]))
+                let corners = [a, b, c, d].map(|point| self.plane.to_world(point));
+                CmdResult::CommitAndExit(make_pline(&corners, self.plane))
             }
         }
     }
@@ -322,18 +334,20 @@ impl CadCommand for RectRotCommand {
         match self.step {
             1 => Some(wire_seg(self.a, pt)),
             2 => {
-                let (a, b) = (self.a, self.b);
+                let (a, b, pt) = (
+                    self.plane.to_local(self.a),
+                    self.plane.to_local(self.b),
+                    self.plane.to_local(pt),
+                );
                 let dir = (b - a).normalize_or_zero();
                 let perp = DVec3::new(-dir.y, dir.x, 0.0);
                 let h = (pt - b).dot(perp);
                 let c = b + perp * h;
                 let d = a + perp * h;
-                Some(wire_loop(vec![
-                    [a.x, a.y, a.z],
-                    [b.x, b.y, b.z],
-                    [c.x, c.y, c.z],
-                    [d.x, d.y, d.z],
-                ]))
+                let points = [a, b, c, d].map(|point| self.plane.to_world(point));
+                Some(wire_loop(
+                    points.into_iter().map(|p| [p.x, p.y, p.z]).collect(),
+                ))
             }
             _ => None,
         }
@@ -356,9 +370,12 @@ impl CadCommand for RectRotCommand {
     fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
         // Live height = perpendicular distance from the cursor to the base edge.
         (self.step == 2).then(|| {
-            let dir = (self.b - self.a).normalize_or_zero();
+            let dir = self
+                .plane
+                .vector_to_local(self.b - self.a)
+                .normalize_or_zero();
             let perp = DVec3::new(-dir.y, dir.x, 0.0);
-            (cursor - self.b).dot(perp).abs()
+            self.plane.vector_to_local(cursor - self.b).dot(perp).abs()
         })
     }
 }
@@ -369,12 +386,15 @@ impl CadCommand for RectRotCommand {
 
 pub struct RectCenCommand {
     center: Option<DVec3>,
-    ucs: Mat4,
+    plane: WorkingPlane,
 }
 
 impl RectCenCommand {
     pub fn new() -> Self {
-        Self { center: None, ucs: Mat4::IDENTITY }
+        Self {
+            center: None,
+            plane: WorkingPlane::default(),
+        }
     }
 }
 
@@ -382,8 +402,8 @@ impl CadCommand for RectCenCommand {
     fn name(&self) -> &'static str {
         "RECT_CEN"
     }
-    fn set_ucs(&mut self, ucs: Mat4) {
-        self.ucs = ucs;
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
     }
     fn prompt(&self) -> String {
         if self.center.is_none() {
@@ -399,13 +419,8 @@ impl CadCommand for RectCenCommand {
                 CmdResult::NeedPoint
             }
             Some(c) => {
-                let q = ucs_box_around_center(c, pt, self.ucs);
-                CmdResult::CommitAndExit(make_pline(&[
-                    [q[0].x, q[0].y],
-                    [q[1].x, q[1].y],
-                    [q[2].x, q[2].y],
-                    [q[3].x, q[3].y],
-                ]))
+                let q = ucs_box_around_center(c, pt, self.plane);
+                CmdResult::CommitAndExit(make_pline(&q, self.plane))
             }
         }
     }
@@ -417,7 +432,7 @@ impl CadCommand for RectCenCommand {
     }
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
         let c = self.center?;
-        let q = ucs_box_around_center(c, pt, self.ucs);
+        let q = ucs_box_around_center(c, pt, self.plane);
         Some(wire_loop(vec![
             [q[0].x, q[0].y, q[0].z],
             [q[1].x, q[1].y, q[1].z],
@@ -449,6 +464,7 @@ pub struct PolyCommand {
     sides: u32,
     step: u8,
     center: DVec3,
+    plane: WorkingPlane,
 }
 
 impl PolyCommand {
@@ -457,11 +473,16 @@ impl PolyCommand {
             sides: 6,
             step: 0,
             center: DVec3::ZERO,
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for PolyCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "POLY"
     }
@@ -555,9 +576,10 @@ impl CadCommand for PolyCommand {
                 CmdResult::NeedPoint
             }
             _ => {
-                let r = self.center.distance(pt);
-                let sa = angle_xy(self.center, pt);
-                CmdResult::CommitAndExit(make_pline(&poly_verts_xy(self.center, r, self.sides, sa)))
+                let r = plane_distance(self.center, pt, self.plane);
+                let sa = angle_xy(self.center, pt, self.plane);
+                let vertices = poly_verts(self.center, r, self.sides, sa, self.plane);
+                CmdResult::CommitAndExit(make_pline(&vertices, self.plane))
             }
         }
     }
@@ -577,9 +599,9 @@ impl CadCommand for PolyCommand {
         if self.step < 2 {
             return None;
         }
-        let r = self.center.distance(pt);
-        let sa = angle_xy(self.center, pt);
-        Some(poly_wire(self.center, r, self.sides, sa))
+        let r = plane_distance(self.center, pt, self.plane);
+        let sa = angle_xy(self.center, pt, self.plane);
+        Some(poly_wire(self.center, r, self.sides, sa, self.plane))
     }
 }
 
@@ -591,6 +613,7 @@ pub struct PolyCCommand {
     sides: u32,
     step: u8,
     center: DVec3,
+    plane: WorkingPlane,
 }
 
 impl PolyCCommand {
@@ -599,11 +622,16 @@ impl PolyCCommand {
             sides: 6,
             step: 0,
             center: DVec3::ZERO,
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for PolyCCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "POLY_C"
     }
@@ -669,18 +697,20 @@ impl CadCommand for PolyCCommand {
                 CmdResult::NeedPoint
             }
             _ => {
-                let inradius = self.center.distance(pt);
+                let inradius = plane_distance(self.center, pt, self.plane);
                 let vr = inradius / (PI / self.sides as f64).cos();
                 // The picked pt is at the midpoint of an edge; the vertex is
                 // offset by half a sector (π/N) from that direction.
-                let edge_angle = angle_xy(self.center, pt);
+                let edge_angle = angle_xy(self.center, pt, self.plane);
                 let sa = edge_angle + PI / self.sides as f64;
-                CmdResult::CommitAndExit(make_pline(&poly_verts_xy(
+                let vertices = poly_verts(
                     self.center,
                     vr,
                     self.sides,
                     sa,
-                )))
+                    self.plane,
+                );
+                CmdResult::CommitAndExit(make_pline(&vertices, self.plane))
             }
         }
     }
@@ -700,10 +730,10 @@ impl CadCommand for PolyCCommand {
         if self.step < 2 {
             return None;
         }
-        let inradius = self.center.distance(pt);
+        let inradius = plane_distance(self.center, pt, self.plane);
         let vr = inradius / (PI / self.sides as f64).cos();
-        let sa = angle_xy(self.center, pt) + PI / self.sides as f64;
-        Some(poly_wire(self.center, vr, self.sides, sa))
+        let sa = angle_xy(self.center, pt, self.plane) + PI / self.sides as f64;
+        Some(poly_wire(self.center, vr, self.sides, sa, self.plane))
     }
 }
 
@@ -715,6 +745,7 @@ pub struct PolyECommand {
     sides: u32,
     step: u8,
     a: DVec3,
+    plane: WorkingPlane,
 }
 
 impl PolyECommand {
@@ -723,11 +754,16 @@ impl PolyECommand {
             sides: 6,
             step: 0,
             a: DVec3::ZERO,
+            plane: WorkingPlane::default(),
         }
     }
 }
 
 impl CadCommand for PolyECommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "POLY_E"
     }
@@ -792,8 +828,11 @@ impl CadCommand for PolyECommand {
                 CmdResult::NeedPoint
             }
             _ => {
-                if let Some((center, vr, sa)) = edge_poly_params(self.a, pt, self.sides) {
-                    CmdResult::CommitAndExit(make_pline(&poly_verts_xy(center, vr, self.sides, sa)))
+                if let Some((center, vr, sa)) =
+                    edge_poly_params(self.a, pt, self.sides, self.plane)
+                {
+                    let vertices = poly_verts(center, vr, self.sides, sa, self.plane);
+                    CmdResult::CommitAndExit(make_pline(&vertices, self.plane))
                 } else {
                     CmdResult::Cancel
                 }
@@ -816,8 +855,10 @@ impl CadCommand for PolyECommand {
         if self.step < 2 {
             return None;
         }
-        if let Some((center, vr, sa)) = edge_poly_params(self.a, pt, self.sides) {
-            Some(poly_wire(center, vr, self.sides, sa))
+        if let Some((center, vr, sa)) =
+            edge_poly_params(self.a, pt, self.sides, self.plane)
+        {
+            Some(poly_wire(center, vr, self.sides, sa, self.plane))
         } else {
             Some(wire_seg(self.a, pt))
         }
@@ -826,7 +867,13 @@ impl CadCommand for PolyECommand {
 
 /// Compute polygon center, vertex-radius and start-angle from two edge endpoints.
 /// The polygon is placed on the left side of A→B (CCW convention).
-fn edge_poly_params(a: DVec3, b: DVec3, sides: u32) -> Option<(DVec3, f64, f64)> {
+fn edge_poly_params(
+    a: DVec3,
+    b: DVec3,
+    sides: u32,
+    plane: WorkingPlane,
+) -> Option<(DVec3, f64, f64)> {
+    let (a, b) = (plane.to_local(a), plane.to_local(b));
     let edge_len = a.distance(b);
     if edge_len < 1e-6 {
         return None;
@@ -841,8 +888,9 @@ fn edge_poly_params(a: DVec3, b: DVec3, sides: u32) -> Option<(DVec3, f64, f64)>
     let mid = (a + b) * 0.5;
     let center = mid + perp * inradius;
     // First vertex = A
-    let sa = angle_xy(center, a);
-    Some((center, vr, sa))
+    let center_world = plane.to_world(center);
+    let sa = angle_xy(center_world, plane.to_world(a), plane);
+    Some((center_world, vr, sa))
 }
 
 

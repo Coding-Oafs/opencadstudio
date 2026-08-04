@@ -5,7 +5,7 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::{DVec3, Vec3};
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -29,6 +29,7 @@ enum Step {
 
 pub struct DiameterDimensionCommand {
     step: Step,
+    plane: WorkingPlane,
     /// Optional text that replaces the measured value (None = measurement).
     text_override: Option<String>,
     /// True while the next typed line is captured as the text override.
@@ -43,6 +44,7 @@ impl DiameterDimensionCommand {
     pub fn new() -> Self {
         Self {
             step: Step::CenterPoint,
+            plane: WorkingPlane::default(),
             text_override: None,
             awaiting_text: false,
             text_angle: None,
@@ -52,6 +54,10 @@ impl DiameterDimensionCommand {
 }
 
 impl CadCommand for DiameterDimensionCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "DIMDIAMETER"
     }
@@ -83,6 +89,9 @@ impl CadCommand for DiameterDimensionCommand {
                 CmdResult::NeedPoint
             }
             Step::TextPoint { center, arc_pt } => {
+                let center = self.plane.to_local(center);
+                let arc_pt = self.plane.to_local(arc_pt);
+                let pt = self.plane.to_local(pt);
                 let mut dim = DimensionDiameter::new(v3(center), v3(arc_pt));
                 dim.base.definition_point = v3(arc_pt);
                 dim.base.text_middle_point = v3(pt);
@@ -94,7 +103,9 @@ impl CadCommand for DiameterDimensionCommand {
                 if let Some(a) = self.text_angle {
                     dim.base.text_rotation = a;
                 }
-                CmdResult::CommitAndExit(EntityType::Dimension(Dimension::Diameter(dim)))
+                CmdResult::CommitAndExit(self.plane.place_entity(EntityType::Dimension(
+                    Dimension::Diameter(dim),
+                )))
             }
         }
     }

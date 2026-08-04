@@ -15,7 +15,7 @@ use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::{DVec3, Mat4, Vec3};
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use crate::t;
@@ -33,7 +33,7 @@ pub fn tool() -> ToolDef {
 
 pub struct LeaderCommand {
     verts: Vec<DVec3>,
-    ucs: Mat4,
+    plane: WorkingPlane,
     dimension_style: String,
     text_style: String,
     text_height: f64,
@@ -55,7 +55,7 @@ impl LeaderCommand {
         };
         Self {
             verts: Vec::new(),
-            ucs: Mat4::IDENTITY,
+            plane: WorkingPlane::default(),
             dimension_style: defaults.style_name,
             text_style: defaults.text_style_name,
             text_height: defaults.text_height,
@@ -72,8 +72,8 @@ impl CadCommand for LeaderCommand {
         "LEADER"
     }
 
-    fn set_ucs(&mut self, ucs: Mat4) {
-        self.ucs = ucs;
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
     }
 
     fn prompt(&self) -> String {
@@ -99,16 +99,21 @@ impl CadCommand for LeaderCommand {
         }
         // Place the leader plus an empty MText annotation, link them, then open
         // the in-place MText editor so the user types the annotation text.
+        let local: Vec<DVec3> = self
+            .verts
+            .iter()
+            .map(|point| self.plane.to_local(*point))
+            .collect();
         let leader = build_leader(
-            &self.verts,
-            self.ucs,
+            &local,
+            Mat4::IDENTITY,
             &self.dimension_style,
             self.text_height,
             self.gap,
             self.arrow_size,
         );
         let displayed_height = self.text_height * self.display_scale;
-        let (anchor, attach) = annotation_anchor(&self.verts, displayed_height, self.ucs);
+        let (anchor, attach) = annotation_anchor(&local, displayed_height, Mat4::IDENTITY);
         let mtext_height = if self.annotative {
             self.text_height
         } else {
@@ -119,12 +124,15 @@ impl CadCommand for LeaderCommand {
             anchor,
             mtext_height,
             attach,
-            self.ucs,
+            Mat4::IDENTITY,
             &self.text_style,
             self.annotative,
         );
         CmdResult::CommitManyAndEditText {
-            entities: vec![EntityType::Leader(leader), EntityType::MText(mtext)],
+            entities: vec![
+                self.plane.place_entity(EntityType::Leader(leader)),
+                self.plane.place_entity(EntityType::MText(mtext)),
+            ],
             edit_index: 1,
         }
     }
@@ -137,12 +145,31 @@ impl CadCommand for LeaderCommand {
         if self.verts.is_empty() {
             return None;
         }
-        let mut pts: Vec<Vec3> = self.verts.iter().map(|p| p.as_vec3()).collect();
-        pts.push(pt.as_vec3());
-        Some(preview_wire(
+        let mut pts: Vec<Vec3> = self
+            .verts
+            .iter()
+            .map(|point| self.plane.to_local(*point).as_vec3())
+            .collect();
+        pts.push(self.plane.to_local(pt).as_vec3());
+        let mut preview = preview_wire(
             &pts,
             (self.arrow_size * self.display_scale) as f32,
-        ))
+        );
+        preview.points = preview
+            .points
+            .iter()
+            .map(|point| {
+                if point[0].is_nan() {
+                    *point
+                } else {
+                    self.plane
+                        .to_world(Vec3::from_array(*point).as_dvec3())
+                        .as_vec3()
+                        .to_array()
+                }
+            })
+            .collect();
+        Some(preview)
     }
 }
 

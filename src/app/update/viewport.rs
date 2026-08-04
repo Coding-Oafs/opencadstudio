@@ -2086,7 +2086,11 @@ impl OpenCADStudio {
             match (a, b) {
                 (None, None) => true,
                 (Some(a), Some(b)) => {
-                    a.origin == b.origin && a.x_axis == b.x_axis && a.y_axis == b.y_axis
+                    a.origin == b.origin
+                        && a.x_axis == b.x_axis
+                        && a.y_axis == b.y_axis
+                        && a.handle == b.handle
+                        && a.name.eq_ignore_ascii_case(&b.name)
                 }
                 _ => false,
             }
