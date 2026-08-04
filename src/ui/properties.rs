@@ -15,6 +15,7 @@ use acadrust::types::{Color as AcadColor, LineWeight};
 use acadrust::Handle;
 use iced::widget::{
     button, canvas, column, combo_box, container, mouse_area, row, scrollable, text, text_input,
+    tooltip, Space,
 };
 use iced::{
     mouse, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Size, Theme,
@@ -367,9 +368,54 @@ impl PropertiesPanel {
             .unwrap_or_default()
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self, width: f32, auto_collapse: bool) -> Element<'_, Message> {
         // ── Header ──────────────────────────────────────────────────────────
-        let header = container(text(t!("Properties")).size(12))
+        let pin_icon = if auto_collapse {
+            crate::ui::icons::themed_primary_weak_text(crate::ui::icons::PIN, 12.0)
+        } else {
+            crate::ui::icons::themed_secondary(crate::ui::icons::PIN, 12.0)
+        };
+        let pin = button(pin_icon)
+            .on_press(Message::PropertiesAutoCollapseToggle)
+            .style(move |theme: &Theme, status| {
+                let mut style = button::subtle(theme, status);
+                if auto_collapse {
+                    let palette = theme.palette();
+                    style.background = Some(Background::Color(palette.primary.weak.color));
+                    style.text_color = palette.primary.weak.text;
+                    style.border.color = palette.primary.base.color;
+                    style.border.width = 1.0;
+                }
+                style
+            })
+            .padding([3, 5]);
+        let pin = tooltip(pin, text(t!("Auto")).size(10), tooltip::Position::Bottom).gap(4);
+
+        let close = button(crate::ui::icons::themed_secondary(
+            crate::ui::icons::CLOSE,
+            12.0,
+        ))
+        .on_press(Message::PropertiesClose)
+        .style(button::subtle)
+        .padding([3, 5]);
+        let close = tooltip(
+            close,
+            text(t!("Close")).size(10),
+            tooltip::Position::Bottom,
+        )
+        .gap(4);
+
+        let header = mouse_area(
+            container(
+                row![
+                    text(t!("Properties")).size(12),
+                    Space::new().width(Length::Fill),
+                    pin,
+                    close,
+                ]
+                .spacing(3)
+                .align_y(iced::Center),
+            )
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
                     theme.palette().background.weak.color,
@@ -377,7 +423,10 @@ impl PropertiesPanel {
                 ..Default::default()
             })
             .width(Length::Fill)
-            .padding([6, 10]);
+            .padding([3, 6]),
+        )
+        .on_press(Message::PropertiesDockGrab)
+        .interaction(iced::mouse::Interaction::Grab);
 
         // ── Title bar (entity type / "No Selection") ─────────────────────
         let title_content: Element<'_, Message> = if self.selection_groups.is_empty() {
@@ -446,7 +495,7 @@ impl PropertiesPanel {
                 ..Default::default()
                 }
             })
-            .width(250)
+            .width(Length::Fixed(width))
             .height(Length::Fill)
             .into()
     }

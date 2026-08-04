@@ -305,6 +305,16 @@ pub(super) struct OpenCADStudio {
     /// When the window is too narrow the properties panel collapses to a
     /// vertical bar; this is the user's toggle to expand it back out.
     props_expanded: bool,
+    /// Persisted dock width and side of the Properties panel.
+    properties_width: f32,
+    properties_side: config::DockSide,
+    properties_auto_collapse: bool,
+    /// Transient hover/drag state for the docked Properties panel.
+    properties_hovered: bool,
+    properties_dragging: bool,
+    properties_resizing: bool,
+    properties_drag_last: Option<Point>,
+    properties_dock_preview: Option<config::DockSide>,
     /// Read-only editor buffer backing the command-line history dropdown, so
     /// the log can be drag-selected across lines and copied (issue #232).
     /// Rebuilt from the history each time the dropdown is opened.
@@ -1620,6 +1630,21 @@ pub enum Message {
     StartSectionSelect(StartSection),
     /// Expand/collapse the properties panel when it has shrunk to a bar.
     TogglePropertiesBar,
+    /// Close the docked Properties panel; the ribbon command can reopen it.
+    PropertiesClose,
+    /// Pin/unpin the docked Properties panel.
+    PropertiesAutoCollapseToggle,
+    /// Hover state drives expansion while auto-collapse is enabled.
+    PropertiesHover(bool),
+    /// Begin dragging the Properties title bar to the opposite dock edge.
+    PropertiesDockGrab,
+    /// Begin dragging the Properties/viewport divider.
+    PropertiesResizeGrab,
+    /// Reset the dock width to its default value.
+    PropertiesWidthReset,
+    /// Full-workspace pointer tracking shared by dock and resize drags.
+    PropertiesDragMove(Point),
+    PropertiesDragRelease,
     /// Scroll the status-bar layout-tab strip horizontally by `delta` px
     /// (negative = left). Driven by the ‹ › arrows next to the tabs.
     ScrollLayoutTabs(f32),
@@ -2790,6 +2815,14 @@ impl OpenCADStudio {
             start_section: StartSection::default(),
             start_action_w: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             props_expanded: false,
+            properties_width: 250.0,
+            properties_side: config::DockSide::Left,
+            properties_auto_collapse: false,
+            properties_hovered: false,
+            properties_dragging: false,
+            properties_resizing: false,
+            properties_drag_last: None,
+            properties_dock_preview: None,
             history_content: iced::widget::text_editor::Content::new(),
             status_bar: StatusBar::new(),
             cursor_pos: Point::ORIGIN,

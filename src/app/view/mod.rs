@@ -12,7 +12,7 @@ use iced::widget::{
     stack, text, Row, Space,
 };
 use iced::window;
-use iced::{keyboard, Background, Border, Color, Element, Fill, Subscription, Task, Theme};
+use iced::{keyboard, Background, Border, Color, Element, Fill, Length, Subscription, Task, Theme};
 use iced_aw::ContextMenu;
 use crate::t;
 
@@ -1342,26 +1342,42 @@ impl OpenCADStudio {
             }
         }
 
-        // The Start tab shows its own three-panel page (Recent · Welcome ·
-        // Supporters) in place of the viewport, so the left properties slot is
-        // empty there.
-        let properties_el: Element<'_, Message> = if tab.is_start {
-            Space::new().into()
-        } else if self.show_properties && !self.clean_screen {
-            // On a narrow window the panel collapses to a vertical "Properties"
-            // bar to free width for the viewport; clicking the bar expands it.
-            let narrow = self.win_size.0 < 1000.0;
-            let bar = || collapse_bar("Properties", Message::TogglePropertiesBar);
-            if narrow && !self.props_expanded {
-                bar()
-            } else if narrow {
-                row![bar(), tab.properties.view()].into()
+        // Docked Properties panel. It keeps its pixel width when moved between
+        // edges; auto-collapse swaps the full panel for a hoverable rail.
+        let show_properties = !tab.is_start && self.show_properties && !self.clean_screen;
+        let properties_width = self
+            .properties_width
+            .min((self.win_size.0 * 0.45).clamp(220.0, 600.0));
+        let properties_el: Option<Element<'_, Message>> = show_properties.then(|| {
+            let narrow_collapsed = self.win_size.0 < 1000.0
+                && !self.props_expanded
+                && !self.properties_hovered;
+            let auto_collapsed = self.properties_auto_collapse
+                && !self.properties_hovered
+                && !self.properties_dragging
+                && !self.properties_resizing;
+            if narrow_collapsed || auto_collapsed {
+                collapse_bar(
+                    "Properties",
+                    self.properties_side,
+                    Message::TogglePropertiesBar,
+                    Message::PropertiesHover(true),
+                )
             } else {
-                tab.properties.view()
+                let panel = tab
+                    .properties
+                    .view(properties_width, self.properties_auto_collapse);
+                let divider = properties_divider();
+                let group: Element<'_, Message> = match self.properties_side {
+                    crate::app::config::DockSide::Left => row![panel, divider].into(),
+                    crate::app::config::DockSide::Right => row![divider, panel].into(),
+                };
+                mouse_area(group)
+                    .on_enter(Message::PropertiesHover(true))
+                    .on_exit(Message::PropertiesHover(false))
+                    .into()
             }
-        } else {
-            Space::new().into()
-        };
+        });
 
         // Drawing viewports keep the command line as a bottom-centre overlay so
         // the input stays close to the cursor. The Start page gives it a real
@@ -1378,7 +1394,60 @@ impl OpenCADStudio {
             (self.dyn_input && tab.active_cmd.is_some() && !tab.dyn_fields.is_empty())
                 || self.mtext_editor.as_ref().is_some_and(|e| e.show_preview)
                 || self.text_inline.is_some();
-        let workspace = row![properties_el, viewport_stack].width(Fill).height(Fill);
+        let workspace: Element<'_, Message> = match (properties_el, self.properties_side) {
+            (Some(properties), crate::app::config::DockSide::Left) => {
+                row![properties, viewport_stack].width(Fill).height(Fill).into()
+            }
+            (Some(properties), crate::app::config::DockSide::Right) => {
+                row![viewport_stack, properties].width(Fill).height(Fill).into()
+            }
+            (None, _) => container(viewport_stack).width(Fill).height(Fill).into(),
+        };
+        let workspace: Element<'_, Message> = if self.properties_dragging {
+            let preview_side = self.properties_dock_preview.unwrap_or(self.properties_side);
+            let preview = container(Space::new())
+                .width(Length::Fixed(properties_width))
+                .height(Fill)
+                .style(|theme: &Theme| {
+                    let palette = theme.palette();
+                    container::Style {
+                        background: Some(Background::Color(
+                            palette.primary.weak.color.scale_alpha(0.72),
+                        )),
+                        border: Border {
+                            color: palette.primary.base.color,
+                            width: 2.0,
+                            radius: 0.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                });
+            let preview = container(preview)
+                .width(Fill)
+                .height(Fill)
+                .align_x(match preview_side {
+                    crate::app::config::DockSide::Left => iced::alignment::Horizontal::Left,
+                    crate::app::config::DockSide::Right => iced::alignment::Horizontal::Right,
+                });
+            stack![workspace, preview].width(Fill).height(Fill).into()
+        } else {
+            workspace
+        };
+        let workspace: Element<'_, Message> = if self.properties_dragging
+            || self.properties_resizing
+        {
+            mouse_area(workspace)
+                .on_move(Message::PropertiesDragMove)
+                .on_release(Message::PropertiesDragRelease)
+                .interaction(if self.properties_resizing {
+                    iced::mouse::Interaction::ResizingHorizontally
+                } else {
+                    iced::mouse::Interaction::Grabbing
+                })
+                .into()
+        } else {
+            workspace
+        };
         let command_line = self.command_line.view(
             allow_autocomplete,
             dyn_capturing,
@@ -2200,6 +2269,7 @@ fn pane_mouse_area<'a>(idx: usize) -> Element<'a, Message> {
 /// Canvas that draws a label rotated 90° (for a collapsed panel's bar).
 struct VBarLabel {
     text: String,
+    clockwise: bool,
 }
 
 impl canvas::Program<Message> for VBarLabel {
@@ -2216,7 +2286,11 @@ impl canvas::Program<Message> for VBarLabel {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         frame.with_save(|frame| {
             frame.translate(iced::Vector::new(bounds.width / 2.0, bounds.height / 2.0));
-            frame.rotate(iced::Radians(std::f32::consts::FRAC_PI_2));
+            frame.rotate(iced::Radians(if self.clockwise {
+                std::f32::consts::FRAC_PI_2
+            } else {
+                -std::f32::consts::FRAC_PI_2
+            }));
             frame.fill_text(canvas::Text {
                 content: self.text.clone(),
                 position: iced::Point::ORIGIN,
@@ -2233,10 +2307,17 @@ impl canvas::Program<Message> for VBarLabel {
 }
 
 /// A collapsed panel rendered as a tall narrow bar with its name written along
-/// it, rotated 90°. Pressing it emits `on_press`.
-pub(super) fn collapse_bar<'a>(name: &str, on_press: Message) -> Element<'a, Message> {
+/// it. It can be clicked on narrow windows or expanded by hover when auto-hide
+/// is enabled.
+pub(super) fn collapse_bar<'a>(
+    name: &str,
+    side: crate::app::config::DockSide,
+    on_press: Message,
+    on_enter: Message,
+) -> Element<'a, Message> {
     let label = canvas(VBarLabel {
         text: name.to_string(),
+        clockwise: side == crate::app::config::DockSide::Left,
     })
     .width(Fill)
     .height(Fill);
@@ -2259,7 +2340,27 @@ pub(super) fn collapse_bar<'a>(name: &str, on_press: Message) -> Element<'a, Mes
     )
     .interaction(iced::mouse::Interaction::Pointer)
     .on_press(on_press)
+    .on_enter(on_enter)
     .into()
+}
+
+/// Grabbable separator between the docked panel and drawing view. The visible
+/// line is wider than a single pixel so it remains discoverable in every theme.
+fn properties_divider() -> Element<'static, Message> {
+    let line = container(Space::new())
+        .width(Length::Fixed(5.0))
+        .height(Fill)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.palette().background.neutral.color,
+            )),
+            ..Default::default()
+        });
+    mouse_area(line)
+        .on_press(Message::PropertiesResizeGrab)
+        .on_double_click(Message::PropertiesWidthReset)
+        .interaction(iced::mouse::Interaction::ResizingHorizontally)
+        .into()
 }
 
 const START_ACTION_RADIUS: f32 = 6.0;

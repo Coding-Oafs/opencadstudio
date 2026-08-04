@@ -520,6 +520,11 @@ impl OpenCADStudio {
                 section: self.start_section,
             },
             statusbar: self.statusbar_config.clone(),
+            properties: crate::app::config::PropertiesDockConfig {
+                side: self.properties_side,
+                width: self.properties_width,
+                auto_collapse: self.properties_auto_collapse,
+            },
             annotation_auto_scale: self.annotation_auto_scale,
             ribbon: crate::app::config::RibbonConfig {
                 collapse: self.ribbon.collapse_mode(),
@@ -550,6 +555,13 @@ impl OpenCADStudio {
         // (`refresh_recent_thumbs`) — never here on the boot path.
         self.start_section = cfg.start.section;
         self.statusbar_config = cfg.statusbar;
+        self.properties_side = cfg.properties.side;
+        self.properties_width = if cfg.properties.width.is_finite() {
+            cfg.properties.width.clamp(220.0, 600.0)
+        } else {
+            250.0
+        };
+        self.properties_auto_collapse = cfg.properties.auto_collapse;
         self.annotation_auto_scale = cfg.annotation_auto_scale.clamp(-4, 4);
         self.ribbon.set_collapse_mode(cfg.ribbon.collapse);
         self.plot_dialog = cfg.plot;

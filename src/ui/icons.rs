@@ -64,6 +64,7 @@ pub const COPY: &[u8] = include_bytes!("../../assets/icons/ui/copy.svg");
 pub const MENU: &[u8] = include_bytes!("../../assets/icons/ui/menu.svg");
 pub const MOVE: &[u8] = include_bytes!("../../assets/icons/ui/move.svg");
 pub const RESIZE: &[u8] = include_bytes!("../../assets/icons/ui/resize.svg");
+pub const PIN: &[u8] = include_bytes!("../../assets/icons/ui/pin.svg");
 pub const SPLIT_V: &[u8] = include_bytes!("../../assets/icons/ui/split_v.svg");
 pub const SPLIT_H: &[u8] = include_bytes!("../../assets/icons/ui/split_h.svg");
 pub const GRID: &[u8] = include_bytes!("../../assets/icons/ui/grid.svg");
