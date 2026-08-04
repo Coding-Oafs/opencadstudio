@@ -26,6 +26,8 @@ pub struct GripMarker {
     pub shape: GripShape,
     /// True → grip is currently being dragged (drawn filled red).
     pub is_hot: bool,
+    /// True → pointer is over this grip (drawn with the hover fill).
+    pub is_hovered: bool,
     /// World-XY direction vector — only consumed by the `Rectangle`
     /// shape to orient the box along its segment. `None` for grips
     /// that don't need rotation.
@@ -338,6 +340,17 @@ fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme)
 
     if grip.is_hot {
         frame.fill(&path, theme.palette().danger.base.color);
+    } else if grip.is_hovered {
+        let pair = theme.palette().primary.strong;
+        frame.fill(&path, pair.color);
+        frame.stroke(
+            &path,
+            canvas::Stroke {
+                width: 1.5,
+                style: canvas::Style::Solid(pair.text),
+                ..Default::default()
+            },
+        );
     } else {
         let palette = theme.palette();
         let color = palette.primary.base.color;

@@ -11,7 +11,7 @@ use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
 use crate::scene::model::object::GripApply;
 use crate::scene::pick::grip::{
-    find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit, GripTarget,
+    find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit, GripEditMode, GripTarget,
 };
 use crate::scene::{
     self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
@@ -344,6 +344,7 @@ impl OpenCADStudio {
             grip_id,
             origin_world: world,
             last_world: world,
+            mode: GripEditMode::Stretch,
             targets,
         }
     }
@@ -1003,18 +1004,91 @@ impl OpenCADStudio {
             let snap_ms = snap_started.elapsed().as_secs_f64() * 1000.0;
             let apply_started = Instant::now();
             let delta = snapped - grip.last_world;
-            let actions: Vec<_> = grip
-                .targets
-                .iter()
-                .map(|target| {
-                    let apply = if target.is_translate {
-                        GripApply::Translate(delta)
-                    } else {
-                        GripApply::Absolute(target.last_world + delta)
-                    };
-                    (target.handle, target.grip_id, apply)
-                })
-                .collect();
+            let lengthen = grip.mode == GripEditMode::Lengthen;
+            let actions: Vec<_> = if lengthen {
+                Vec::new()
+            } else {
+                grip.targets
+                    .iter()
+                    .map(|target| {
+                        let apply = if target.is_translate {
+                            GripApply::Translate(delta)
+                        } else {
+                            GripApply::Absolute(target.last_world + delta)
+                        };
+                        (target.handle, target.grip_id, apply)
+                    })
+                    .collect()
+            };
+            if lengthen {
+                let original = self
+                    .grip_originals
+                    .iter()
+                    .find(|(handle, _)| *handle == grip.handle)
+                    .map(|(_, entity)| entity.clone());
+                if let Some(original) = original {
+                    let action = crate::scene::model::object::GripMenuAction::Lengthen;
+                    let value = crate::scene::view::dispatch::grip_menu_point_value(
+                        &original,
+                        grip.grip_id,
+                        action,
+                        snapped,
+                    );
+                    if let Some(value) = value {
+                        if let Some(current) =
+                            self.tabs[i].scene.document.get_entity_mut(grip.handle)
+                        {
+                            *current = original;
+                            crate::entities::traits::EntityTypeOps::apply_grip_menu_value(
+                                current,
+                                grip.grip_id,
+                                action,
+                                value,
+                            );
+                        }
+                    }
+                }
+            }
+            // Arc point grips are coupled: moving one point must rebuild the
+            // circle from the drag-start start/middle/end set, otherwise the
+            // supposedly fixed points drift a little on every mouse event.
+            let mut arc_grip_edits: rustc_hash::FxHashMap<
+                Handle,
+                Vec<(usize, glam::DVec3)>,
+            > = rustc_hash::FxHashMap::default();
+            for (handle, grip_id, apply) in &actions {
+                if let GripApply::Absolute(point) = apply {
+                    if (1..=3).contains(grip_id) {
+                        arc_grip_edits
+                            .entry(*handle)
+                            .or_default()
+                            .push((*grip_id, *point));
+                    }
+                }
+            }
+            let mut rebuilt_arcs = rustc_hash::FxHashSet::default();
+            for (handle, edits) in arc_grip_edits {
+                let original = self
+                    .grip_originals
+                    .iter()
+                    .find(|(original_handle, _)| *original_handle == handle)
+                    .map(|(_, entity)| entity.clone());
+                let Some(original) = original else {
+                    continue;
+                };
+                let Some(current) = self.tabs[i].scene.document.get_entity_mut(handle) else {
+                    continue;
+                };
+                if crate::scene::view::dispatch::refit_arc_grips(
+                    current,
+                    &original,
+                    &edits,
+                )
+                .is_some()
+                {
+                    rebuilt_arcs.insert(handle);
+                }
+            }
             let refit_arc_targets: Vec<_> = grip
                 .targets
                 .iter()
@@ -1033,7 +1107,9 @@ impl OpenCADStudio {
                 })
                 .collect();
             for (handle, grip_id, apply) in actions {
-                self.tabs[i].scene.apply_grip(handle, grip_id, apply);
+                if !rebuilt_arcs.contains(&handle) {
+                    self.tabs[i].scene.apply_grip(handle, grip_id, apply);
+                }
             }
             for (handle, vertex_id, original_bulge) in refit_arc_targets {
                 if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
@@ -2333,6 +2409,10 @@ impl OpenCADStudio {
             if is_click && !moved {
                 // Engaging click — stay hot, wait for the placement click.
                 return Task::none();
+            }
+            if grip.mode == GripEditMode::Lengthen {
+                self.grip_pending = None;
+                self.command_line.input.clear();
             }
             let added_vertex_focus = grip.targets.iter().find_map(|target| {
                 let original = self

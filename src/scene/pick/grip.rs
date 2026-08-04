@@ -24,8 +24,16 @@ pub struct GripEdit {
     pub origin_world: DVec3,
     /// Last world-space cursor position (needed for incremental delta on translate drags).
     pub last_world: DVec3,
+    /// How cursor movement modifies the selected grip.
+    pub mode: GripEditMode,
     /// Every hot grip moved by this edit. A normal grip edit contains one target.
     pub targets: Vec<GripTarget>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GripEditMode {
+    Stretch,
+    Lengthen,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +56,7 @@ impl GripEdit {
             grip_id,
             origin_world: world,
             last_world: world,
+            mode: GripEditMode::Stretch,
             targets: vec![GripTarget {
                 handle,
                 grip_id,
@@ -55,6 +64,12 @@ impl GripEdit {
                 last_world: world,
             }],
         }
+    }
+
+    pub fn lengthen(handle: Handle, grip_id: usize, world: DVec3) -> Self {
+        let mut edit = Self::single(handle, grip_id, false, world);
+        edit.mode = GripEditMode::Lengthen;
+        edit
     }
 }
 

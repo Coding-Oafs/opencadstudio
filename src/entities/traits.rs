@@ -57,6 +57,17 @@ pub trait Grippable {
     ) -> Option<&'static str> {
         None
     }
+    /// Convert an interactive cursor point into the numeric value consumed by
+    /// `apply_grip_menu_value`. Actions without a point-driven form return
+    /// `None`.
+    fn grip_menu_point_value(
+        &self,
+        _grip_id: usize,
+        _action: GripMenuAction,
+        _point: glam::DVec3,
+    ) -> Option<f64> {
+        None
+    }
 }
 
 pub trait PropertyEditable {
@@ -163,6 +174,12 @@ pub trait EntityTypeOps {
         grip_id: usize,
         action: GripMenuAction,
     ) -> Option<&'static str>;
+    fn grip_menu_point_value(
+        &self,
+        grip_id: usize,
+        action: GripMenuAction,
+        point: glam::DVec3,
+    ) -> Option<f64>;
     fn apply_grip_menu_value(
         &mut self,
         grip_id: usize,
@@ -391,6 +408,28 @@ impl EntityTypeOps for EntityType {
     ) -> Option<&'static str> {
         dispatch!(self,
             |e| Grippable::grip_menu_value_prompt(e, grip_id, action),
+            [
+                Line, Circle, Arc, Ellipse, LwPolyline, Polyline, Polyline2D,
+                Polyline3D, Ray, XLine, RasterImage, Wipeout,
+                AttributeDefinition, AttributeEntity, MLine, Tolerance,
+                Solid, Solid3D, Region, Body, Surface, Face3D, PolygonMesh,
+                PolyfaceMesh, Mesh, Table, Point, Spline, Text, MText,
+                Viewport, Insert, Leader, MultiLeader, Dimension, Hatch,
+                Underlay, Shape, Ole2Frame, SectionSymbol, ViewBorder,
+                Extended,
+            ],
+            _ => None,
+        )
+    }
+
+    fn grip_menu_point_value(
+        &self,
+        grip_id: usize,
+        action: GripMenuAction,
+        point: glam::DVec3,
+    ) -> Option<f64> {
+        dispatch!(self,
+            |e| Grippable::grip_menu_point_value(e, grip_id, action, point),
             [
                 Line, Circle, Arc, Ellipse, LwPolyline, Polyline, Polyline2D,
                 Polyline3D, Ray, XLine, RasterImage, Wipeout,

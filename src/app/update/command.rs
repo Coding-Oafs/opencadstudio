@@ -9,7 +9,9 @@ use crate::app::helpers::{
 };
 use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
-use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
+use crate::scene::pick::grip::{
+    find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit, GripEditMode,
+};
 use crate::scene::model::object::GripApply;
 use crate::scene::{
     self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
@@ -242,9 +244,21 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             "{}: expected a number, got \"{raw}\"",
                             pending.label
                         ).as_ref());
-                        return Task::none();
+                        self.grip_pending = Some(pending);
+                        return self.focus_cmd_input();
                     };
                     let i = self.active_tab;
+                    let interactive_lengthen = self.tabs[i]
+                        .active_grip
+                        .as_ref()
+                        .is_some_and(|grip| {
+                            grip.mode == GripEditMode::Lengthen
+                                && grip.handle == pending.handle
+                                && grip.grip_id == pending.grip_id
+                        });
+                    if interactive_lengthen {
+                        self.cancel_active_grip_edit();
+                    }
                     use crate::entities::traits::EntityTypeOps;
                     self.push_undo_snapshot(i, pending.label);
                     if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(pending.handle)
@@ -575,6 +589,13 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 if self.visibility_popup.take().is_some() {
                     return Task::none();
+                }
+                if self.tabs[self.active_tab].active_grip.is_some() {
+                    self.grip_pending = None;
+                    self.command_line.input.clear();
+                    if self.cancel_active_grip_edit() {
+                        return Task::none();
+                    }
                 }
                 if self.grip_pending.take().is_some() {
                     self.command_line.input.clear();
@@ -987,7 +1008,26 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         action: item.action,
                         label,
                     });
-                    self.command_line.push_info(crate::tf!("{label}:").as_ref());
+                    if matches!(item.action, GripMenuAction::Lengthen) {
+                        if let Some((_, grip)) = self.tabs[i]
+                            .selected_grip_handles
+                            .iter()
+                            .zip(self.tabs[i].selected_grips.iter())
+                            .find(|(owner, grip)| {
+                                **owner == popup.handle && grip.id == popup.grip_id
+                            })
+                        {
+                            self.tabs[i].active_grip = Some(GripEdit::lengthen(
+                                popup.handle,
+                                popup.grip_id,
+                                grip.world,
+                            ));
+                        }
+                        self.command_line
+                            .push_info(crate::t!("Specify point or enter distance:").as_ref());
+                    } else {
+                        self.command_line.push_info(crate::tf!("{label}:").as_ref());
+                    }
                     return self.focus_cmd_input();
                 }
                 // Break at vertex replaces the entity with the split pieces —

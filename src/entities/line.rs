@@ -210,6 +210,34 @@ impl crate::entities::traits::Grippable for Line {
         }
     }
 
+    fn grip_menu_point_value(
+        &self,
+        grip_id: usize,
+        action: crate::scene::model::object::GripMenuAction,
+        point: glam::DVec3,
+    ) -> Option<f64> {
+        use crate::scene::model::object::GripMenuAction as A;
+        if !matches!(action, A::Lengthen) {
+            return None;
+        }
+        let direction = glam::DVec3::new(
+            self.end.x - self.start.x,
+            self.end.y - self.start.y,
+            self.end.z - self.start.z,
+        );
+        let length = direction.length();
+        if length < 1.0e-12 {
+            return None;
+        }
+        let unit = direction / length;
+        let value = match grip_id {
+            0 => (glam::DVec3::new(self.start.x, self.start.y, self.start.z) - point).dot(unit),
+            1 => (point - glam::DVec3::new(self.end.x, self.end.y, self.end.z)).dot(unit),
+            _ => return None,
+        };
+        (length + value > 1.0e-9).then_some(value)
+    }
+
     fn apply_grip_menu_value(
         &mut self,
         grip_id: usize,

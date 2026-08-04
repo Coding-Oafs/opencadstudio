@@ -451,10 +451,16 @@ impl OpenCADStudio {
                                     || (Some(handle) == sel_h
                                         && Some(grip_id) == current_vertex_grip)
                             });
+                            let is_hovered = owner.is_some_and(|handle| {
+                                self.grip_hover.as_ref().is_some_and(|hover| {
+                                    hover.handle == handle && hover.grip_id == grip_id
+                                })
+                            });
                             crate::ui::overlay::GripMarker {
                                 pos: screen,
                                 shape,
                                 is_hot,
+                                is_hovered,
                                 dir,
                             }
                         })

@@ -85,9 +85,9 @@ pub struct GripPopup {
 }
 
 /// Pending follow-up value for grip-menu actions that need a number
-/// (Lengthen / Radius / Arc Length / Rotate Text). The next number
-/// typed in the command line is parsed and routed into
-/// `apply_grip_menu_value` for `(handle, grip_id, action)`.
+/// (Lengthen / Radius / Arc Length / Rotate Text). Lengthen can also resolve
+/// from a viewport point; otherwise the next typed number is parsed and routed
+/// into `apply_grip_menu_value` for `(handle, grip_id, action)`.
 #[derive(Clone, Debug)]
 pub struct GripPendingValue {
     pub handle: acadrust::Handle,

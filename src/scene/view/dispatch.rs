@@ -245,6 +245,57 @@ pub fn apply_grip(entity: &mut EntityType, grip_id: usize, apply: crate::scene::
     EntityTypeOps::apply_grip(entity, grip_id, apply);
 }
 
+/// Rebuild an arc from its drag-start control points and the point grips moved
+/// in the current frame. Returns `None` for non-arc entities and `Some(false)`
+/// when the requested points are temporarily degenerate.
+pub fn refit_arc_grips(
+    entity: &mut EntityType,
+    original: &EntityType,
+    edits: &[(usize, glam::DVec3)],
+) -> Option<bool> {
+    let EntityType::Arc(arc) = entity else {
+        return None;
+    };
+    let EntityType::Arc(original_arc) = original else {
+        return None;
+    };
+    let edits = match planar_ocs_normal(original) {
+        Some(normal) => edits
+            .iter()
+            .map(|&(grip_id, point)| {
+                let (x, y, z) =
+                    super::transform::wcs_point_to_ocs((point.x, point.y, point.z), normal);
+                (grip_id, glam::DVec3::new(x, y, z))
+            })
+            .collect::<Vec<_>>(),
+        None => edits.to_vec(),
+    };
+    Some(crate::entities::arc::refit_grips(
+        arc,
+        original_arc,
+        &edits,
+    ))
+}
+
+/// Convert a world-space cursor point into the value expected by an
+/// interactive grip-menu action.
+pub fn grip_menu_point_value(
+    entity: &EntityType,
+    grip_id: usize,
+    action: crate::scene::model::object::GripMenuAction,
+    point: glam::DVec3,
+) -> Option<f64> {
+    let point = match planar_ocs_normal(entity) {
+        Some(normal) => {
+            let (x, y, z) =
+                super::transform::wcs_point_to_ocs((point.x, point.y, point.z), normal);
+            glam::DVec3::new(x, y, z)
+        }
+        None => point,
+    };
+    EntityTypeOps::grip_menu_point_value(entity, grip_id, action, point)
+}
+
 pub fn apply_transform(entity: &mut EntityType, t: &EntityTransform) {
     EntityTypeOps::apply_transform(entity, t);
 }
