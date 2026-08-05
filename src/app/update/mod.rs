@@ -2680,6 +2680,8 @@ impl OpenCADStudio {
                 // End of a Shift+MMB orbit — drop the captured pivot so the next
                 // gesture recomputes it against the current selection. (#229)
                 sel.orbit_pivot = None;
+                drop(sel);
+                self.arm_hover_after_navigation(i);
                 Task::none()
             }
 
@@ -2698,6 +2700,7 @@ impl OpenCADStudio {
 
             Message::ViewCubeHome => {
                 let i = self.active_tab;
+                self.clear_navigation_hover(i);
                 let r_ucs = self.tabs[i].scene.viewcube_ucs_mat();
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
@@ -2713,6 +2716,7 @@ impl OpenCADStudio {
 
             Message::ViewCubeRoll(cw) => {
                 let i = self.active_tab;
+                self.clear_navigation_hover(i);
                 let ang = if cw {
                     std::f32::consts::FRAC_PI_2
                 } else {
@@ -2738,6 +2742,7 @@ impl OpenCADStudio {
                     NudgeDir::Right => (true, true),
                 };
                 let i = self.active_tab;
+                self.clear_navigation_hover(i);
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
                         .scene
