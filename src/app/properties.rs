@@ -29,14 +29,19 @@ fn material_map_text(map: &acadrust::objects::MaterialMap) -> String {
             }
         }
         2 => format!(
-            "Procedural {}",
-            map.texture.as_ref().map_or(0, |texture| texture.mode)
+            "Procedural {:#?}",
+            map.texture
         ),
-        _ => "None".to_string(),
+        0 => "Scene".to_string(),
+        value => format!("Source {value}"),
     };
     format!(
-        "{source}; blend {:.3}; projection {}; tiling {}; auto {}",
-        map.blend_factor, map.projection, map.tiling, map.auto_transform
+        "{source}; blend {:.3}; projection {}; tiling {}; auto {}; transform {:?}",
+        map.blend_factor,
+        map.projection,
+        map.tiling,
+        map.auto_transform,
+        map.transform
     )
 }
 
@@ -568,11 +573,31 @@ impl OpenCADStudio {
                                         t!("Advanced").as_ref(),
                                         "mat_advanced",
                                         format!(
-                                            "normal {:.3}; bump {:.3}; reflect {:.3}; transmit {:.3}",
+                                            "normal method {}; strength {:.3}; bump {:.3}; reflect {:.3}; transmit {:.3}; bleed {:.3}",
+                                            material.normal_map_method,
                                             material.normal_map_strength,
                                             material.indirect_bump_scale,
                                             material.reflectance_scale,
-                                            material.transmittance_scale
+                                            material.transmittance_scale,
+                                            material.color_bleed_scale
+                                        ),
+                                    ),
+                                    ro_prop(
+                                        t!("Indirect Lighting").as_ref(),
+                                        "mat_indirect_lighting",
+                                        format!(
+                                            "global {}; final gather {}",
+                                            material.global_illumination,
+                                            material.final_gather
+                                        ),
+                                    ),
+                                    ro_prop(
+                                        t!("Source State").as_ref(),
+                                        "mat_source_state",
+                                        format!(
+                                            "advanced {}; anonymous {}",
+                                            material.advanced_data_present,
+                                            material.is_anonymous
                                         ),
                                     ),
                                 ],

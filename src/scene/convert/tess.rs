@@ -800,58 +800,53 @@ pub(crate) fn tessellate_entity(
     // re-apply the table's scale factor on top of already-baked geometry.
     // When the block exists we render it directly. Same pattern as
     // Dimension's `block_name`.
-    if let EntityType::Table(tab) = e {
-        if let Some(br_h) = tab.block_record_handle {
-            if let Some(br) = document.block_records.iter().find(|br| br.handle == br_h) {
-                if !br.entity_handles.is_empty() {
-                    let mut wires: Vec<WireModel> = Vec::with_capacity(br.entity_handles.len());
-                    // The Table's own layer style — layer-0 inheritance target
-                    // for baked sub-entities on layer "0" (#221).
-                    let tab_l0_color = view::render::adapt_to_bg(
-                        view::render::layer_render_style(document, &e.common().layer).color,
-                        bg_color,
+    if let EntityType::Table(table) = e {
+        if let Some(record) = table.block_record_handle.and_then(|handle| {
+            document
+                .block_records
+                .iter()
+                .find(|record| record.handle == handle)
+        }) {
+            if !record.entity_handles.is_empty() {
+                let mut insert =
+                    acadrust::entities::Insert::new(
+                        record.name.clone(),
+                        table.insertion_point,
                     );
-                    let tab_l0_aci = document
-                        .layers
-                        .get(&e.common().layer)
-                        .map(|l| match &l.color {
-                            acadrust::types::Color::Index(i) => *i,
-                            _ => 0,
-                        })
-                        .unwrap_or(0);
-                    // The *T block is laid out in block-local space (origin at
-                    // the table's top-left corner); the Table entity carries the
-                    // world placement in `insertion_point` + `horizontal_direction`
-                    // (like an INSERT). Place each baked sub-entity there before
-                    // tessellating — without it the whole table renders at the
-                    // origin. Rotating about the local origin then translating
-                    // gives world = insertion + R·local; tessellate_entity then
-                    // handles the UTM-scale relative-to-eye split as usual.
-                    let ins = tab.insertion_point;
-                    let angle = tab.horizontal_direction.y.atan2(tab.horizontal_direction.x);
-                    for &eh in &br.entity_handles {
-                        let Some(sub) = document.get_entity(eh) else {
-                            continue;
-                        };
+                insert.rotation = table
+                    .horizontal_direction
+                    .y
+                    .atan2(table.horizontal_direction.x);
+                insert.common = table.common.clone();
+
+                let depths = rustc_hash::FxHashMap::default();
+                let graph = crate::scene::render_graph::RenderSceneGraph::new(
+                    document,
+                    None,
+                    annotation_scale_handle,
+                    true,
+                    &depths,
+                );
+                let mut wires = Vec::new();
+                graph.walk_insert(
+                    &insert,
+                    h,
+                    |_, _| true,
+                    |sub, context| {
                         let has_book_color =
                             view::render::has_resolved_book_color(document, sub);
-                        let sub_color_is_byblock = !has_book_color
-                            && sub.common().color == acadrust::types::Color::ByBlock;
-                        let sub_is_l0_bylayer =
-                            !has_book_color
-                            && view::render::is_effective_layer_zero(&sub.common().layer)
-                            && sub.common().color == acadrust::types::Color::ByLayer;
+                        let color_byblock = !has_book_color
+                            && sub.common().color
+                                == acadrust::types::Color::ByBlock;
+                        let color_layer0 = !has_book_color
+                            && view::render::is_effective_layer_zero(
+                                &sub.common().layer,
+                            )
+                            && sub.common().color
+                                == acadrust::types::Color::ByLayer;
+                        let style = context.style_for(document, sub);
                         let mut placed = sub.clone();
-                        {
-                            let ent = placed.as_entity_mut();
-                            if angle.abs() > 1e-9 {
-                                ent.apply_rotation(
-                                    acadrust::types::Vector3::new(0.0, 0.0, 1.0),
-                                    angle,
-                                );
-                            }
-                            ent.translate(ins);
-                        }
+                        placed.apply_transform(&context.transform);
                         let sub_wires = tessellate_entity(
                             document,
                             selected,
@@ -865,43 +860,39 @@ pub(crate) fn tessellate_entity(
                             world_per_pixel,
                             paper_space,
                         );
-                        for mut w in sub_wires {
-                            w.name = h.value().to_string();
-                            if sub_color_is_byblock {
-                                w.color = if sel {
+                        for mut wire in sub_wires {
+                            wire.name = h.value().to_string();
+                            if color_byblock {
+                                wire.color = if sel {
                                     WireModel::SELECTED
                                 } else {
-                                    entity_color
+                                    view::render::adapt_to_bg(style.0, bg_color)
                                 };
-                                w.aci = aci;
-                            } else if sub_is_l0_bylayer && !sel {
-                                w.color = tab_l0_color;
-                                w.aci = tab_l0_aci;
+                                wire.aci = style.4;
+                            } else if color_layer0 && !sel {
+                                wire.color =
+                                    view::render::adapt_to_bg(style.0, bg_color);
+                                wire.aci = style.4;
                             }
-                            wires.push(w);
+                            wires.push(wire);
+                        }
+                    },
+                );
+                if !wires.is_empty() {
+                    let aabb = entity_aabb(e);
+                    for wire in &mut wires {
+                        if !wire.points.is_empty() || !wire.fill_tris.is_empty() {
+                            set_wire_aabb(wire, aabb);
                         }
                     }
-                    if !wires.is_empty() {
-                        let aabb = entity_aabb(e);
-                        for w in &mut wires {
-                            // Empty SDF-text cells keep their tight glyph-box
-                            // AABB; only stroke/fill wires take the whole-block
-                            // box as a broad-phase pick hint.
-                            if !w.points.is_empty() || !w.fill_tris.is_empty() {
-                                set_wire_aabb(w, aabb);
-                            }
-                        }
-                        return wires;
-                    }
+                    return wires;
                 }
             }
         }
-        // No baked block (e.g. a table created in-app) — synthesise coloured
-        // geometry from the rows + TableStyle so fills/colours/borders/margins
-        // are honoured instead of the monochrome fallback.
+
         let table_anno = 1.0;
         let mut wires = crate::entities::table::tessellate_table(
-            tab,
+            table,
             document,
             sel,
             entity_color,
@@ -909,7 +900,7 @@ pub(crate) fn tessellate_entity(
             table_anno,
         );
         for insert in
-            crate::entities::table::block_cell_inserts(tab, document, table_anno)
+            crate::entities::table::block_cell_inserts(table, document, table_anno)
         {
             wires.extend(tessellate_entity(
                 document,
@@ -927,13 +918,10 @@ pub(crate) fn tessellate_entity(
         }
         if !wires.is_empty() {
             let aabb = entity_aabb(e);
-            for w in &mut wires {
-                w.aci = aci;
-                // Empty SDF-text cells keep their tight glyph-box AABB; only
-                // stroke/fill wires take the whole-table box as a broad-phase
-                // pick hint (matches the dim / mleader / baked-block paths).
-                if !w.points.is_empty() || !w.fill_tris.is_empty() {
-                    set_wire_aabb(w, aabb);
+            for wire in &mut wires {
+                wire.aci = aci;
+                if !wire.points.is_empty() || !wire.fill_tris.is_empty() {
+                    set_wire_aabb(wire, aabb);
                 }
             }
             return wires;
@@ -986,145 +974,63 @@ pub(crate) fn tessellate_entity(
             fill_tris_low: Vec::new(),
         };
 
-        if let Some(cache) = block_cache {
-            // Xrefs render with the same hue but faded toward `bg_color` so
-            // the user can recognise external-reference geometry at a glance.
-            let is_xref = document
-                .block_records
-                .get(&ins.block_name)
-                .map(|br| br.flags.is_xref || br.flags.is_xref_overlay)
-                .unwrap_or(false);
-            if let Some(mut wires) = cache::block_cache::expand_insert(
-                cache,
-                ins,
-                h,
-                ins_color,
-                ins_pat_len,
-                ins_pat,
-                ins_lw_px,
-                ins_layer,
-                sel,
-                pslt_factor,
-                view_aabb,
-                world_per_pixel,
-                is_xref,
-                bg_color,
-                anno_scale,
-            ) {
-                // XCLIP: if this INSERT carries an enabled spatial filter,
-                // clip the expanded block geometry to the boundary polygon so
-                // only the portion inside the clip is drawn.
-                if let Some(sf) = pick::xclip::insert_spatial_filter(document, ins) {
-                    let poly = pick::xclip::world_clip_polygon_f64(sf, ins);
-                    pick::xclip::clip_wires(&mut wires, &poly);
-                    // XCLIPFRAME 1/2 shows the boundary itself on screen
-                    // (2 = shown but not plotted).
-                    if document.header.xclip_frame != 0 && poly.len() >= 3 {
-                        wires.push(pick::xclip::frame_wire(
-                            &poly,
-                            format!("{}_xclipframe", h.value()),
-                            ins_color,
-                            sel,
-                            ins_lw_px,
-                        ));
-                    }
-                }
-
-                // Per-INSERT attribute values. The block defn carries the
-                // AttributeDefinitions (templates) which expand_insert skips;
-                // the AttributeEntity instances live on the Insert itself in
-                // WCS and need their own tessellation so the user sees the
-                // values they actually filled in. See #20.
-                crate::entities::insert::append_insert_attribute_wires(
-                    &mut wires,
+        let fallback_depths = rustc_hash::FxHashMap::default();
+        let fallback_cache;
+        let cache = match block_cache {
+            Some(cache) if cache.defn(&ins.block_name).is_some() => cache,
+            _ => {
+                fallback_cache = cache::block_cache::BlockCache::build_for_block(
                     document,
-                    ins,
-                    h,
-                    sel,
-                    ins_color,
-                    ins_pat_len,
-                    ins_pat,
-                    ins_lw_px,
-                    ins_layer,
-                    bg_color,
-                    is_xref,
-                    pslt_factor,
+                    &ins.block_name,
                     anno_scale,
+                    annotation_scale_handle,
+                    true,
+                    bg_color,
+                    &fallback_depths,
                 );
-                wires.push(marker);
-                return wires;
+                &fallback_cache
+            }
+        };
+        let is_xref = document
+            .block_records
+            .get(&ins.block_name)
+            .map(|record| record.flags.is_xref || record.flags.is_xref_overlay)
+            .unwrap_or(false);
+        let mut wires = cache::block_cache::expand_insert(
+            cache,
+            ins,
+            h,
+            ins_color,
+            ins_pat_len,
+            ins_pat,
+            ins_lw_px,
+            ins_layer,
+            sel,
+            pslt_factor,
+            view_aabb,
+            world_per_pixel,
+            is_xref,
+            bg_color,
+            anno_scale,
+        )
+        .unwrap_or_default();
+
+        if let Some(filter) = pick::xclip::insert_spatial_filter(document, ins) {
+            let transform = crate::scene::render_graph::insert_transform(document, ins);
+            let polygon =
+                pick::xclip::world_clip_polygon_for_transform(filter, &transform);
+            pick::xclip::clip_wires(&mut wires, &polygon);
+            if document.header.xclip_frame != 0 && polygon.len() >= 3 {
+                wires.push(pick::xclip::frame_wire(
+                    &polygon,
+                    format!("{}_xclipframe", h.value()),
+                    ins_color,
+                    sel,
+                    ins_lw_px,
+                ));
             }
         }
 
-        // Cache miss / unavailable: fall back to the original explode path.
-        // The block_cache primary path covers all typical Inserts; this
-        // branch only fires for pathological cache failures.
-        let br = document.block_records.get(&ins.block_name);
-        let is_xref = br
-            .map(|br| br.flags.is_xref || br.flags.is_xref_overlay)
-            .unwrap_or(false);
-        let mut wires: Vec<WireModel> = ins
-            .explode_from_document(document)
-            .iter()
-            .cloned()
-            .map(crate::modules::draw::modify::explode::normalize_insert_entity)
-            .flat_map(|sub| {
-                let (sub_color, sub_pattern_length, sub_pattern, sub_line_weight_px, sub_aci) =
-                    view::render::render_style_for_block_sub(
-                        document,
-                        &sub,
-                        ins_color,
-                        ins_pat_len,
-                        ins_pat,
-                        ins_lw_px,
-                        ins_layer,
-                    );
-                let sub_color = view::render::adapt_to_bg(sub_color, bg_color);
-                let sub_color = if is_xref && !sel {
-                    cache::block_cache::fade_toward_bg(sub_color, bg_color)
-                } else {
-                    sub_color
-                };
-                let sub_aabb = entity_aabb(&sub);
-                let sub_pattern_length = sub_pattern_length * pslt_factor;
-                let sub_pattern = sub_pattern.map(|v| v * pslt_factor);
-                let mut wires = convert::tessellate::tessellate(
-                    document,
-                    h,
-                    &sub,
-                    sel,
-                    sub_color,
-                    sub_pattern_length,
-                    sub_pattern,
-                    sub_line_weight_px,
-                    anno_scale,
-                    annotation_scale_handle,
-                    world_per_pixel,
-                    bg_color,
-                    false,
-                );
-                for w in &mut wires {
-                    w.name = h.value().to_string();
-                    w.aci = sub_aci;
-                    // Keep the glyph-bounds AABB tessellate set on SDF text wires
-                    // (their geometry is in `text_verts`, not `points`); clobbering
-                    // it here left block text with an UNBOUNDED box. For every
-                    // other wire use the sub-entity box, falling back to the wire's
-                    // own world points when that box is degenerate/unimplemented
-                    // (UNBOUNDED) — otherwise it never culls and stalls snapping on
-                    // block-heavy drawings.
-                    if w.text_verts.is_empty() {
-                        let box_ = if sub_aabb == WireModel::UNBOUNDED_AABB {
-                            wire_points_aabb(w)
-                        } else {
-                            sub_aabb
-                        };
-                        set_wire_aabb(w, box_);
-                    }
-                }
-                wires
-            })
-            .collect();
         crate::entities::insert::append_insert_attribute_wires(
             &mut wires,
             document,

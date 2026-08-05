@@ -84,8 +84,8 @@ pub enum CurvedGen {
         phi_min: f32,
         phi_max: f32,
     },
-    /// Torus: the two extreme circles of the tube (outer/inner), clipped to the
-    /// revolution window the face covers.
+    /// Torus: view-dependent tube silhouette, clipped to both parametric
+    /// windows the face covers.
     Torus {
         center: [f32; 3],
         center_low: [f32; 3],
@@ -97,6 +97,9 @@ pub enum CurvedGen {
         phi_min: f32,
         phi_span: f32,
         full: bool,
+        theta_min: f32,
+        theta_span: f32,
+        theta_full: bool,
     },
 }
 

@@ -2109,7 +2109,7 @@ impl Pipeline {
                     }
                     CurvedGen::Torus {
                         center, center_low, axis, u_dir, v_dir, major, minor,
-                        phi_min, phi_span, full,
+                        phi_min, phi_span, full, theta_min, theta_span, theta_full,
                     } => {
                         let ctr = lo(*center, *center_low);
                         let (axis, u, v) = (d3(*axis), d3(*u_dir), d3(*v_dir));
@@ -2136,12 +2136,17 @@ impl Pipeline {
                             let cur = [th, th + std::f64::consts::PI];
                             for k in 0..2 {
                                 let t = cur[k];
-                                let p = ring + (radial * t.cos() + axis * t.sin()) * minor;
-                                if let Some(pp) = prev[k] {
+                                let theta_offset =
+                                    (t - *theta_min as f64).rem_euclid(std::f64::consts::TAU);
+                                let on_face = *theta_full || theta_offset <= *theta_span as f64;
+                                let p = on_face.then(|| {
+                                    ring + (radial * t.cos() + axis * t.sin()) * minor
+                                });
+                                if let (Some(pp), Some(p)) = (prev[k], p) {
                                     verts.push(mk(pp));
                                     verts.push(mk(p));
                                 }
-                                prev[k] = Some(p);
+                                prev[k] = p;
                             }
                         }
                     }
@@ -2280,7 +2285,7 @@ impl Pipeline {
             WireGpu::from_batch(device, face3d_wires, depth_map, self.wire_const_bgl.as_ref());
         // Fill buffer split: 3D quads + PolyfaceMesh / PolygonMesh face
         // tris go to `chunks_3d` (gated by `keep_3d_mesh_fills`);
-        // 2D fills (text-LOD greek, MultiLeader background) go to
+        // 2D fills (text-LOD greek, MultiLeader background, dimension arrows) go to
         // `chunks_2d`. The 3-D wireframe additionally removes only legacy
         // planar SOLID interiors; HATCH is handled by a separate pass.
         let keep_3d_mesh_fills = !wireframe_only;
@@ -2289,11 +2294,11 @@ impl Pipeline {
         };
         let has_any_2d_fill = all_wires
             .iter()
-            .any(|w| !w.fill_tris.is_empty() && w.points.is_empty() && !solid_fill_hidden(w));
+            .any(|w| !w.fill_tris.is_empty() && !w.fill_is_3d && !solid_fill_hidden(w));
         let has_any_3d_fill = !face3d_wires.is_empty()
             || all_wires
                 .iter()
-                .any(|w| !w.fill_tris.is_empty() && !w.points.is_empty());
+                .any(|w| !w.fill_tris.is_empty() && w.fill_is_3d);
         let has_fills = has_any_2d_fill || (keep_3d_mesh_fills && has_any_3d_fill);
         if !has_fills {
             self.gpu_face3d_fill = None;

@@ -1548,6 +1548,15 @@ pub(crate) fn arrow_from_block(
     handle: acadrust::types::Handle,
     dimasz: f32,
 ) -> ArrowKind {
+    arrow_from_block_with_deferred_hatch(doc, handle, dimasz, false)
+}
+
+pub(crate) fn arrow_from_block_with_deferred_hatch(
+    doc: &CadDocument,
+    handle: acadrust::types::Handle,
+    dimasz: f32,
+    defer_hatch: bool,
+) -> ArrowKind {
     if handle.is_null() {
         return arrow_from_block_name(None, dimasz);
     }
@@ -1557,7 +1566,7 @@ pub(crate) fn arrow_from_block(
     if let Some(arrow) = builtin_arrow_from_block_name(&record.name, dimasz) {
         return arrow;
     }
-    custom_arrow_from_block(doc, record, dimasz)
+    custom_arrow_from_block(doc, record, dimasz, defer_hatch)
         .unwrap_or_else(|| arrow_from_block_name(None, dimasz))
 }
 
@@ -1653,6 +1662,7 @@ fn custom_arrow_from_block(
     doc: &CadDocument,
     record: &acadrust::tables::BlockRecord,
     dimasz: f32,
+    defer_hatch: bool,
 ) -> Option<ArrowKind> {
     if record.is_layout()
         || record.is_model_space()
@@ -1663,17 +1673,42 @@ fn custom_arrow_from_block(
     {
         return None;
     }
-    let base = block_base_point(doc, record);
+
+    let depths = rustc_hash::FxHashMap::default();
+    let graph = crate::scene::render_graph::RenderSceneGraph::new(
+        doc,
+        None,
+        None,
+        true,
+        &depths,
+    );
+    let insert = acadrust::entities::Insert::new(
+        record.name.clone(),
+        acadrust::types::Vector3::ZERO,
+    );
     let mut lines = Vec::new();
     let mut fill = Vec::new();
-    let mut stack = vec![record.name.clone()];
-    for &entity_handle in &record.entity_handles {
-        let Some(entity) = doc.get_entity(entity_handle) else {
-            continue;
-        };
-        collect_custom_arrow_entity(doc, entity, base, &mut lines, &mut fill, &mut stack, 0);
-    }
-    if lines.is_empty() && fill.is_empty() {
+    let mut deferred_hatch = false;
+    graph.walk_insert(
+        &insert,
+        record.handle,
+        |_, _| true,
+        |entity, context| {
+            if defer_hatch && matches!(entity, EntityType::Hatch(_)) {
+                deferred_hatch = true;
+                return;
+            }
+            let mut placed = entity.clone();
+            placed.apply_transform(&context.transform);
+            append_custom_arrow_leaf(
+                doc,
+                &placed,
+                &mut lines,
+                &mut fill,
+            );
+        },
+    );
+    if lines.is_empty() && fill.is_empty() && !deferred_hatch {
         None
     } else {
         Some(ArrowKind::Custom {
@@ -1684,67 +1719,27 @@ fn custom_arrow_from_block(
     }
 }
 
-fn block_base_point(
-    doc: &CadDocument,
-    record: &acadrust::tables::BlockRecord,
-) -> acadrust::types::Vector3 {
-    doc.get_entity(record.block_entity_handle)
-        .and_then(|entity| match entity {
-            EntityType::Block(block) => Some(block.base_point),
-            _ => None,
-        })
-        .unwrap_or(acadrust::types::Vector3::ZERO)
-}
-
-fn collect_custom_arrow_entity(
+fn append_custom_arrow_leaf(
     doc: &CadDocument,
     entity: &EntityType,
-    root_base: acadrust::types::Vector3,
     lines: &mut Vec<[f32; 3]>,
     fill: &mut Vec<[f32; 3]>,
-    stack: &mut Vec<String>,
-    depth: usize,
 ) {
-    if depth >= 32 || entity.common().invisible {
-        return;
-    }
     match entity {
         EntityType::Block(_)
         | EntityType::BlockEnd(_)
         | EntityType::AttributeDefinition(_)
         | EntityType::Dimension(_)
         | EntityType::Leader(_)
-        | EntityType::MultiLeader(_) => return,
-        EntityType::Insert(insert) => {
-            if stack.iter().any(|name| name.eq_ignore_ascii_case(&insert.block_name)) {
-                return;
-            }
-            let Some(record) = doc.block_records.get(&insert.block_name) else {
-                return;
-            };
-            let nested_base = block_base_point(doc, record);
-            let transform = insert.get_transform();
-            let transformed_zero = transform.apply(acadrust::types::Vector3::ZERO);
-            let transformed_base = transform.apply(nested_base);
-            let correction = transformed_zero - transformed_base;
-            stack.push(insert.block_name.clone());
-            for mut child in insert.explode_from_document(doc) {
-                child.as_entity_mut().translate(correction);
-                collect_custom_arrow_entity(
-                    doc,
-                    &child,
-                    root_base,
-                    lines,
-                    fill,
-                    stack,
-                    depth + 1,
-                );
-            }
-            stack.pop();
-            return;
-        }
+        | EntityType::MultiLeader(_)
+        | EntityType::Insert(_) => return,
         EntityType::Hatch(hatch) => {
-            append_custom_hatch_fill(hatch, root_base, fill);
+            append_custom_hatch_geometry(
+                hatch,
+                acadrust::types::Vector3::ZERO,
+                lines,
+                fill,
+            );
             return;
         }
         _ => {}
@@ -1766,15 +1761,26 @@ fn collect_custom_arrow_entity(
         true,
     );
     for wire in wires {
-        append_custom_wire_points(&wire.points, &wire.points_low, root_base, lines);
-        append_custom_fill_points(&wire.fill_tris, &wire.fill_tris_low, root_base, fill);
+        append_custom_wire_points(
+            &wire.points,
+            &wire.points_low,
+            acadrust::types::Vector3::ZERO,
+            lines,
+        );
+        append_custom_fill_points(
+            &wire.fill_tris,
+            &wire.fill_tris_low,
+            acadrust::types::Vector3::ZERO,
+            fill,
+        );
     }
 }
 
-fn append_custom_hatch_fill(
+fn append_custom_hatch_geometry(
     hatch: &acadrust::entities::Hatch,
     base: acadrust::types::Vector3,
-    out: &mut Vec<[f32; 3]>,
+    lines: &mut Vec<[f32; 3]>,
+    fill: &mut Vec<[f32; 3]>,
 ) {
     use lyon_tessellation::math::point;
     use lyon_tessellation::path::Path;
@@ -1785,6 +1791,29 @@ fn append_custom_hatch_fill(
     let Some(model) = crate::scene::Scene::hatch_model_from_dxf(hatch, [1.0; 4]) else {
         return;
     };
+
+    if matches!(
+        &model.pattern,
+        crate::scene::model::hatch_model::HatchPattern::Pattern(_)
+    ) {
+        let z = -base.z as f32;
+        for [start, end] in model.pattern_segments() {
+            if !lines.is_empty() && !lines.last().is_some_and(|point| point[0].is_nan()) {
+                lines.push([f32::NAN; 3]);
+            }
+            lines.push([
+                (start[0] - base.x) as f32,
+                (start[1] - base.y) as f32,
+                z,
+            ]);
+            lines.push([
+                (end[0] - base.x) as f32,
+                (end[1] - base.y) as f32,
+                z,
+            ]);
+        }
+        return;
+    }
 
     let mut builder = Path::builder();
     let mut ring: Vec<[f32; 2]> = Vec::new();
@@ -1825,7 +1854,7 @@ fn append_custom_hatch_fill(
         return;
     }
     let z = -base.z as f32;
-    out.extend(
+    fill.extend(
         geometry
             .indices
             .iter()

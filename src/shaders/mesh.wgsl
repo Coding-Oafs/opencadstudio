@@ -37,6 +37,11 @@ struct MaterialMaps {
     present0: vec4<u32>,
     blends1:  vec4<f32>,
     present1: vec4<u32>,
+    tiling0: vec4<u32>,
+    tiling1: vec4<u32>,
+    render_modes: vec4<u32>,
+    source_state: vec4<u32>,
+    indirect: vec4<f32>,
 };
 
 @group(1) @binding(0) var diffuse_map: texture_2d<f32>;
@@ -186,8 +191,20 @@ fn vs_edge(
     return out;
 }
 
+fn map_weight(uv: vec2<f32>, tiling: u32) -> f32 {
+    if (tiling == 2u) {
+        return select(
+            0.0,
+            1.0,
+            all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0)),
+        );
+    }
+    return 1.0;
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let two_sided = maps.render_modes.x != 0u;
     var n: vec3<f32>;
     if (u.flat_shade > 0.5) {
         // Per-triangle face normal: derivatives of the interpolated
@@ -197,7 +214,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     } else {
         n = normalize(in.normal);
     }
-
     // Build a derivative tangent frame from the generated material UVs. This
     // works for planar/box/cylindrical/spherical AcDbMaterial projections and
     // does not require ACIS to carry explicit texture-coordinate vertices.
@@ -218,7 +234,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let mapped = normalize(
             tangent * sampled.x + bitangent * sampled.y + n * sampled.z
         );
-        let strength = maps.blends1.z * max(in.advanced.x, 0.0);
+        let strength = maps.blends1.z
+            * map_weight(in.uv_normal, maps.tiling1.z)
+            * max(in.advanced.x, 0.0);
         n = normalize(mix(n, mapped, clamp(strength, 0.0, 1.0)));
     } else if (maps.present1.x != 0u) {
         let height = dot(
@@ -226,7 +244,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             vec3<f32>(0.2126, 0.7152, 0.0722),
         );
         let slope = tangent * dpdx(height) + bitangent * dpdy(height);
-        n = normalize(n - slope * maps.blends1.x * max(in.advanced.y, 0.0) * 4.0);
+        n = normalize(
+            n - slope
+                * maps.blends1.x
+                * map_weight(in.uv_bump, maps.tiling1.x)
+                * 4.0
+        );
     }
 
     // Native AcDbLight / Sun lighting. When a drawing has no active lights,
@@ -236,9 +259,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let l1 = normalize(vec3<f32>(-0.7,  0.3,  0.4)); // fill (left)
     let l2 = normalize(vec3<f32>( 0.2, -0.6, -0.8)); // back/under
     var direct_light = vec3<f32>(
-        0.45 * abs(dot(n, l0))
-            + 0.30 * abs(dot(n, l1))
-            + 0.25 * abs(dot(n, l2))
+        0.45 * select(max(dot(n, l0), 0.0), abs(dot(n, l0)), two_sided)
+            + 0.30 * select(max(dot(n, l1), 0.0), abs(dot(n, l1)), two_sided)
+            + 0.25 * select(max(dot(n, l2), 0.0), abs(dot(n, l2)), two_sided)
     );
     var key_light = l0;
     if (u.lighting.x > 0.5) {
@@ -281,9 +304,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 }
             }
             let strength = max(direction_intensity.w, 0.0) * attenuation;
-            direct_light += color_hotspot.rgb
-                * max(dot(n, light_vector), 0.0)
-                * strength;
+            let response = select(
+                max(dot(n, light_vector), 0.0),
+                abs(dot(n, light_vector)),
+                two_sided,
+            );
+            direct_light += color_hotspot.rgb * response * strength;
             if (index == 0u) {
                 key_light = light_vector;
             }
@@ -298,26 +324,36 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     );
     let fresnel = fresnel0
         + (1.0 - fresnel0) * pow(1.0 - abs(dot(n, view)), 5.0);
-    let specular_strength = clamp(0.08 + in.material.y + fresnel, 0.0, 1.5);
-    var specular_color = in.specular.rgb;
+    let specular_strength = clamp(1.0 + in.material.y + fresnel, 0.0, 1.5);
+    var albedo = in.color.rgb;
+    if (maps.present0.x != 0u) {
+        let texel = textureSample(diffuse_map, diffuse_sampler, in.uv_diffuse).rgb;
+        let blend = clamp(
+            maps.blends0.x * map_weight(in.uv_diffuse, maps.tiling0.x),
+            0.0,
+            1.0,
+        );
+        albedo = mix(albedo, texel, blend);
+    }
+    var specular_color = select(in.specular.rgb, albedo, in.flags.x == 1u);
     if (maps.present0.y != 0u) {
         let texel = textureSample(specular_map, specular_sampler, in.uv_specular).rgb;
-        specular_color = mix(specular_color, texel, clamp(maps.blends0.y, 0.0, 1.0));
+        let blend = clamp(
+            maps.blends0.y * map_weight(in.uv_specular, maps.tiling0.y),
+            0.0,
+            1.0,
+        );
+        specular_color = mix(specular_color, texel, blend);
     }
     let half_response = select(
-        abs(dot(n, half_vec)),
         max(dot(n, half_vec), 0.0),
-        u.lighting.x > 0.5,
+        abs(dot(n, half_vec)),
+        two_sided,
     );
     let specular = specular_color
         * pow(half_response, gloss_exp)
         * specular_strength
         * max(in.advanced.z, 0.0);
-    var albedo = in.color.rgb;
-    if (maps.present0.x != 0u) {
-        let texel = textureSample(diffuse_map, diffuse_sampler, in.uv_diffuse).rgb;
-        albedo = mix(albedo, texel, clamp(maps.blends0.x, 0.0, 1.0));
-    }
     let ambient_light = albedo * clamp(in.ambient.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
     var lit = ambient_light + albedo * clamp(direct_light, vec3<f32>(0.0), vec3<f32>(2.0)) + specular;
     if (maps.present0.z != 0u) {
@@ -329,7 +365,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         lit = mix(
             lit,
             reflected,
-            clamp(maps.blends0.z * in.material.y * max(in.advanced.z, 0.0), 0.0, 1.0),
+            clamp(
+                maps.blends0.z
+                    * map_weight(in.uv_reflection, maps.tiling0.z)
+                    * in.material.y
+                    * max(in.advanced.z, 0.0),
+                0.0,
+                1.0,
+            ),
         );
     }
     if (maps.present1.y != 0u) {
@@ -341,15 +384,29 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         lit = mix(
             lit,
             transmitted,
-            clamp(maps.blends1.y * in.ambient.a * max(in.advanced.w, 0.0), 0.0, 1.0),
+            clamp(
+                maps.blends1.y
+                    * map_weight(in.uv_refraction, maps.tiling1.y)
+                    * in.ambient.a
+                    * max(in.advanced.w, 0.0),
+                0.0,
+                1.0,
+            ),
         );
     }
-    let emission = clamp(in.material.z + in.material.w, 0.0, 1.0);
-    let rgb = mix(lit, albedo, emission);
+    var rgb = mix(lit, albedo, clamp(in.material.z, 0.0, 1.0));
+    if (in.flags.w == 1u) {
+        rgb = lit + albedo * max(in.material.w, 0.0);
+    }
     var material_alpha = in.color.a;
     if (maps.present0.w != 0u) {
         let opacity = textureSample(opacity_map, opacity_sampler, in.uv_opacity).r;
-        material_alpha *= mix(1.0, opacity, clamp(maps.blends0.w, 0.0, 1.0));
+        let blend = clamp(
+            maps.blends0.w * map_weight(in.uv_opacity, maps.tiling0.w),
+            0.0,
+            1.0,
+        );
+        material_alpha *= mix(1.0, opacity, blend);
     }
     material_alpha *= 1.0 - clamp(in.ambient.a * max(in.advanced.w, 0.0), 0.0, 0.95);
     let alpha = select(1.0, material_alpha, u.transparency_enable > 0.5);

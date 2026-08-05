@@ -406,6 +406,16 @@ struct MaterialMapParams {
     blends1: [f32; 4],
     /// Presence bits for the same four maps.
     present1: [u32; 4],
+    /// Tiling modes for diffuse, specular, reflection and opacity.
+    tiling0: [u32; 4],
+    /// Tiling modes for bump, refraction, normal and reserved.
+    tiling1: [u32; 4],
+    /// Two-sided, normal-map method, global-illumination and final-gather modes.
+    render_modes: [u32; 4],
+    /// Advanced-data-present, anonymous and two reserved source-state bits.
+    source_state: [u32; 4],
+    /// Color-bleed scale and reserved render values.
+    indirect: [f32; 4],
 }
 
 fn upload_rgba_texture(
@@ -490,7 +500,7 @@ pub fn create_material_bind_group(
     );
     let sampler = |label: &'static str, tiling: u8| {
         let address = match tiling {
-            1 => wgpu::AddressMode::Repeat,
+            0 | 1 => wgpu::AddressMode::Repeat,
             4 => wgpu::AddressMode::MirrorRepeat,
             _ => wgpu::AddressMode::ClampToEdge,
         };
@@ -525,6 +535,21 @@ pub fn create_material_bind_group(
     let bump_sampler = sampler("mesh.material.bump_sampler", tiling(4));
     let refraction_sampler = sampler("mesh.material.refraction_sampler", tiling(5));
     let normal_sampler = sampler("mesh.material.normal_sampler", tiling(6));
+    let channel_flags = material.map_or(0x7f, |material| material.channel_flags as u32);
+    let channel_present = |channel: usize, bit: u32| {
+        material.is_some_and(|material| {
+            let maps = [
+                &material.diffuse_map,
+                &material.specular_map,
+                &material.reflection_map,
+                &material.opacity_map,
+                &material.bump_map,
+                &material.refraction_map,
+                &material.normal_map,
+            ];
+            channel_flags & bit != 0 && maps[channel].image.is_some()
+        }) as u32
+    };
     let params = MaterialMapParams {
         blends0: material.map_or([0.0; 4], |material| {
             [
@@ -534,12 +559,12 @@ pub fn create_material_bind_group(
                 material.opacity_map.blend_factor,
             ]
         }),
-        present0: material.map_or([0; 4], |material| {
+        present0: material.map_or([0; 4], |_material| {
             [
-                material.diffuse_map.image.is_some() as u32,
-                material.specular_map.image.is_some() as u32,
-                material.reflection_map.image.is_some() as u32,
-                material.opacity_map.image.is_some() as u32,
+                channel_present(0, 0x01),
+                channel_present(1, 0x02),
+                channel_present(2, 0x04),
+                channel_present(3, 0x08),
             ]
         }),
         blends1: material.map_or([0.0; 4], |material| {
@@ -552,11 +577,47 @@ pub fn create_material_bind_group(
         }),
         present1: material.map_or([0; 4], |material| {
             [
-                material.bump_map.image.is_some() as u32,
-                material.refraction_map.image.is_some() as u32,
-                material.normal_map.image.is_some() as u32,
+                channel_present(4, 0x10),
+                channel_present(5, 0x20),
+                material.normal_map.image.is_some() as u32
+                    * (material.normal_map_method == 0) as u32,
                 0,
             ]
+        }),
+        tiling0: material.map_or([1; 4], |material| {
+            [
+                material.diffuse_map.tiling as u32,
+                material.specular_map.tiling as u32,
+                material.reflection_map.tiling as u32,
+                material.opacity_map.tiling as u32,
+            ]
+        }),
+        tiling1: material.map_or([1; 4], |material| {
+            [
+                material.bump_map.tiling as u32,
+                material.refraction_map.tiling as u32,
+                material.normal_map.tiling as u32,
+                1,
+            ]
+        }),
+        render_modes: material.map_or([1, 0, 0, 0], |material| {
+            [
+                material.two_sided as u32,
+                material.normal_map_method as u32,
+                material.global_illumination as u32,
+                material.final_gather as u32,
+            ]
+        }),
+        source_state: material.map_or([0; 4], |material| {
+            [
+                material.advanced_data_present as u32,
+                material.is_anonymous as u32,
+                0,
+                0,
+            ]
+        }),
+        indirect: material.map_or([1.0, 0.0, 0.0, 0.0], |material| {
+            [material.color_bleed_scale, 0.0, 0.0, 0.0]
         }),
     };
     let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -656,51 +717,45 @@ pub fn create_material_bind_group(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct MaterialBatchKey([u32; 16]);
+struct MaterialBatchKey([u32; 40]);
 
 fn material_key(
     material: Option<&crate::scene::model::material_model::MeshMaterial>,
     color: [f32; 4],
 ) -> MaterialBatchKey {
+    let mut key = [0u32; 40];
+    key[2..6].copy_from_slice(&color.map(f32::to_bits));
     let Some(material) = material else {
-        return MaterialBatchKey([
-            0,
-            0,
-            color[0].to_bits(),
-            color[1].to_bits(),
-            color[2].to_bits(),
-            color[3].to_bits(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ]);
+        return MaterialBatchKey(key);
     };
     let handle = material.handle.map_or(0, |handle| handle.value());
-    MaterialBatchKey([
-        handle as u32,
-        (handle >> 32) as u32,
-        material.diffuse[0].to_bits(),
-        material.diffuse[1].to_bits(),
-        material.diffuse[2].to_bits(),
-        material.diffuse[3].to_bits(),
-        material.specular[0].to_bits(),
-        material.specular[1].to_bits(),
-        material.specular[2].to_bits(),
-        material.gloss.to_bits(),
-        material.reflectivity.to_bits(),
-        material.self_illumination.to_bits(),
-        material.luminance.to_bits(),
-        material.refraction_index.to_bits(),
-        material.diffuse_map.projection as u32,
-        material.diffuse_map.tiling as u32,
-    ])
+    key[0] = handle as u32;
+    key[1] = (handle >> 32) as u32;
+    key[6..10].copy_from_slice(&material.diffuse.map(f32::to_bits));
+    key[10..13].copy_from_slice(&material.ambient.map(f32::to_bits));
+    key[13..16].copy_from_slice(&material.specular.map(f32::to_bits));
+    key[16] = material.gloss.to_bits();
+    key[17] = material.reflectivity.to_bits();
+    key[18] = material.self_illumination.to_bits();
+    key[19] = material.translucence.to_bits();
+    key[20] = material.refraction_index.to_bits();
+    key[21] = material.luminance.to_bits();
+    key[22] = material.two_sided as u32;
+    key[23] = material.illumination_model as u32;
+    key[24] = material.channel_flags as u32;
+    key[25] = material.mode as u32;
+    key[26] = material.indirect_bump_scale.to_bits();
+    key[27] = material.reflectance_scale.to_bits();
+    key[28] = material.transmittance_scale.to_bits();
+    key[29] = material.luminance_mode as u32;
+    key[30] = material.normal_map_method as u32;
+    key[31] = material.normal_map_strength.to_bits();
+    key[32] = material.is_anonymous as u32;
+    key[33] = material.global_illumination as u32;
+    key[34] = material.final_gather as u32;
+    key[35] = material.color_bleed_scale.to_bits();
+    key[36] = material.advanced_data_present as u32;
+    MaterialBatchKey(key)
 }
 
 fn morton_axis(mut value: u32) -> u64 {
@@ -736,6 +791,7 @@ struct MeshBatchPart<'a> {
     set: &'a MeshLodSet,
     mesh: &'a MeshModel,
     display_mesh: &'a MeshModel,
+    uv_mesh: &'a MeshModel,
     material: Option<&'a crate::scene::model::material_model::MeshMaterial>,
     color: [f32; 4],
     indices: Vec<u32>,
@@ -772,6 +828,7 @@ fn build_instanced_chunk(
     let material = first.material;
     let color = first.color;
     let has_normals = mesh.normals.len() == mesh.verts.len();
+    let bounds = mesh_bounds(mesh);
     let (material_params, specular, ambient, advanced, flags) =
         material_vertex_params(material);
     let vertex = |index: usize, edge: bool| {
@@ -799,7 +856,15 @@ fn build_instanced_chunk(
         let uvs = if edge {
             [[0.0; 2]; 7]
         } else {
-            material_uvs(material, position, normal)
+            material_uvs(
+                material,
+                position,
+                normal,
+                bounds,
+                position,
+                normal,
+                bounds,
+            )
         };
         MeshVertex {
             position,
@@ -856,7 +921,7 @@ fn build_instanced_chunk(
             ]);
         }
     }
-    let transparent = color[3] < 0.999;
+    let transparent = material_is_transparent(material, color);
     let face_indices = first.include_faces.then_some(first.indices.as_slice());
     let opaque_indices = if transparent {
         &[][..]
@@ -932,11 +997,80 @@ fn build_instanced_chunk(
     ))
 }
 
+fn mesh_bounds(mesh: &MeshModel) -> [f32; 6] {
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for (index, high) in mesh.verts.iter().copied().enumerate() {
+        let low = mesh.verts_low.get(index).copied().unwrap_or([0.0; 3]);
+        for axis in 0..3 {
+            let value = high[axis] + low[axis];
+            bounds[axis] = bounds[axis].min(value);
+            bounds[axis + 3] = bounds[axis + 3].max(value);
+        }
+    }
+    bounds
+}
+
+fn material_uses_model_mapper(
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
+) -> bool {
+    material.is_some_and(|material| {
+        [
+            &material.diffuse_map,
+            &material.specular_map,
+            &material.reflection_map,
+            &material.opacity_map,
+            &material.bump_map,
+            &material.refraction_map,
+            &material.normal_map,
+        ]
+        .into_iter()
+        .any(|map| map.image.is_some() && map.auto_transform & 4 != 0)
+    })
+}
+
+fn material_is_transparent(
+    material: Option<&crate::scene::model::material_model::MeshMaterial>,
+    color: [f32; 4],
+) -> bool {
+    color[3] < 0.999
+        || material.is_some_and(|material| {
+            material.translucence > 0.0
+                || (material.channel_flags as u32 & 0x08 != 0
+                    && material.opacity_map.image.is_some())
+        })
+}
+
 fn material_map_uv(
     map: &crate::scene::model::material_model::MeshTextureMap,
-    position: [f32; 3],
-    normal: [f32; 3],
+    local_position: [f32; 3],
+    local_normal: [f32; 3],
+    local_bounds: [f32; 6],
+    model_position: [f32; 3],
+    model_normal: [f32; 3],
+    model_bounds: [f32; 6],
 ) -> [f32; 2] {
+    let (mut position, normal, bounds) = if map.auto_transform & 4 != 0 {
+        (model_position, model_normal, model_bounds)
+    } else {
+        (local_position, local_normal, local_bounds)
+    };
+    if map.auto_transform & 2 != 0 {
+        for axis in 0..3 {
+            let extent = bounds[axis + 3] - bounds[axis];
+            position[axis] = if extent.is_finite() && extent.abs() > f32::EPSILON {
+                (position[axis] - bounds[axis]) / extent
+            } else {
+                0.0
+            };
+        }
+    }
     let m = &map.transform;
     let p = [
         position[0] * m[0] + position[1] * m[1] + position[2] * m[2] + m[3],
@@ -975,20 +1109,24 @@ fn material_map_uv(
 
 fn material_uvs(
     material: Option<&crate::scene::model::material_model::MeshMaterial>,
-    position: [f32; 3],
-    normal: [f32; 3],
+    local_position: [f32; 3],
+    local_normal: [f32; 3],
+    local_bounds: [f32; 6],
+    model_position: [f32; 3],
+    model_normal: [f32; 3],
+    model_bounds: [f32; 6],
 ) -> [[f32; 2]; 7] {
     let Some(material) = material else {
         return [[0.0; 2]; 7];
     };
     [
-        material_map_uv(&material.diffuse_map, position, normal),
-        material_map_uv(&material.specular_map, position, normal),
-        material_map_uv(&material.reflection_map, position, normal),
-        material_map_uv(&material.opacity_map, position, normal),
-        material_map_uv(&material.bump_map, position, normal),
-        material_map_uv(&material.refraction_map, position, normal),
-        material_map_uv(&material.normal_map, position, normal),
+        material_map_uv(&material.diffuse_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
+        material_map_uv(&material.specular_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
+        material_map_uv(&material.reflection_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
+        material_map_uv(&material.opacity_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
+        material_map_uv(&material.bump_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
+        material_map_uv(&material.refraction_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
+        material_map_uv(&material.normal_map, local_position, local_normal, local_bounds, model_position, model_normal, model_bounds),
     ]
 }
 
@@ -998,7 +1136,7 @@ fn material_vertex_params(
     let Some(material) = material else {
         return (
             [0.5, 0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0, 1.0],
+            [0.08, 0.08, 0.08, 1.0],
             [0.3, 0.3, 0.3, 0.0],
             [1.0; 4],
             [0, 127, 0, 0],
@@ -1089,11 +1227,11 @@ pub fn build_mesh_batch_filtered(
         }) {
             continue;
         }
-        let mesh = set
+        let source_mesh = set
             .instance_source
             .as_ref()
-            .and_then(|source| source.lods.iter().find(|mesh| !mesh.indices.is_empty()))
-            .unwrap_or(display_mesh);
+            .and_then(|source| source.lods.iter().find(|mesh| !mesh.indices.is_empty()));
+        let mesh = source_mesh.unwrap_or(display_mesh);
         let triangle_count = display_mesh.indices.len() / 3;
         let has_face_materials =
             display_mesh.triangle_material_handles.len() == triangle_count
@@ -1119,6 +1257,7 @@ pub fn build_mesh_batch_filtered(
                 set,
                 mesh,
                 display_mesh,
+                uv_mesh: mesh,
                 material: set.material.as_ref(),
                 color,
                 indices: display_mesh.indices.clone(),
@@ -1166,6 +1305,7 @@ pub fn build_mesh_batch_filtered(
                 set,
                 mesh,
                 display_mesh,
+                uv_mesh: mesh,
                 material,
                 color,
                 indices,
@@ -1211,6 +1351,7 @@ pub fn build_mesh_batch_filtered(
         let eligible = storage_instancing
             && part.set.instance_transform.is_some()
             && part.set.instance_source.is_some()
+            && !material_uses_model_mapper(part.material)
             && part.mesh.verts.len() <= max_verts
             && part.indices.len() / 3 <= max_tris
             && part
@@ -1336,6 +1477,9 @@ pub fn build_mesh_batch_filtered(
         let has_normals = mesh.normals.len() == mesh.verts.len();
         let (material_params, specular, ambient, advanced, flags) =
             material_vertex_params(material);
+        let uv_mesh = part.uv_mesh;
+        let local_bounds = mesh_bounds(uv_mesh);
+        let model_bounds = mesh_bounds(mesh);
         let edge_color = set
             .visual_style
             .as_ref()
@@ -1346,7 +1490,25 @@ pub fn build_mesh_batch_filtered(
             } else {
                 [0.0, 1.0, 0.0]
             };
-            let uv = material_uvs(material, mesh.verts[vi], normal);
+            let local_position = uv_mesh
+                .verts
+                .get(vi)
+                .copied()
+                .unwrap_or(mesh.verts[vi]);
+            let local_normal = uv_mesh
+                .normals
+                .get(vi)
+                .copied()
+                .unwrap_or(normal);
+            let uv = material_uvs(
+                material,
+                local_position,
+                local_normal,
+                local_bounds,
+                mesh.verts[vi],
+                normal,
+                model_bounds,
+            );
             MeshVertex {
                 position: mesh.verts[vi],
                 normal,
@@ -1368,7 +1530,7 @@ pub fn build_mesh_batch_filtered(
         };
         // A solid whose baked colour is not fully opaque routes into the
         // transparent index stream so it is drawn last, without depth writes.
-        let is_transp = part_color[3] < 0.999;
+        let is_transp = material_is_transparent(material, part_color);
         let mesh_tris = part.indices.len() / 3;
         if part.include_faces {
             total_tris += mesh_tris as u64;

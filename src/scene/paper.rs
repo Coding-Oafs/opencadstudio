@@ -462,16 +462,15 @@ impl Scene {
         }
         // Hatch fills nested inside a block INSERT are owned by the block
         // record, so the loop above — which only keeps hatches owned by
-        // `layout_block` — never sees them. Explode the layout's visible
-        // INSERTs and materialize their fills at world position, exactly as the
-        // viewport does, so the export carries the block's colours instead of
-        // bare outlines. (No selection tint on export.)
+        // `layout_block` — never sees them. Walk the layout's visible block
+        // instances and materialize their fills at world position, so export
+        // carries the block's colours instead of bare outlines.
         let hatch_bg = if self.current_layout != "Model" {
             self.paper_bg_color
         } else {
             self.bg_color
         };
-        let exploded = self.exploded_insert_hatch_models(
+        let instanced = self.instanced_hatch_models(
             layout_block,
             hatch_bg,
             false,
@@ -479,7 +478,7 @@ impl Scene {
             annotation_scale_handle,
             all_visible,
         );
-        models.extend(exploded);
+        models.extend(instanced);
         Arc::new(models)
     }
 
@@ -554,7 +553,7 @@ impl Scene {
             }
             models.push(hatch);
         }
-        models.extend(self.exploded_insert_hatch_models(
+        models.extend(self.instanced_hatch_models(
             block,
             self.paper_bg_color,
             false,
@@ -565,8 +564,8 @@ impl Scene {
         models
     }
 
-    /// Plot-only wipeout masks for a specific block. Nested inserts follow the
-    /// same recursive collector as the on-screen model path.
+    /// Plot-only wipeout masks for a specific block. Nested instances follow
+    /// the same scene graph as the on-screen model path.
     pub(super) fn plot_wipeouts_for_block(
         &self,
         block: Handle,
@@ -575,96 +574,14 @@ impl Scene {
         all_visible: bool,
         highlight_selection: bool,
     ) -> Vec<HatchModel> {
-        let depth_map = self.draw_depth_map();
-        let mut models = Vec::new();
-        for entity in self.document.entities() {
-            let EntityType::Wipeout(wipeout) = entity else {
-                continue;
-            };
-            let common = &wipeout.common;
-            if common.invisible
-                || self.entity_temporarily_hidden(common.handle)
-                || self
-                    .document
-                    .layers
-                    .get(&common.layer)
-                    .map(|layer| layer.flags.off || layer.flags.frozen)
-                    .unwrap_or(false)
-                || self.layer_frozen_in(&common.layer, frozen)
-                || !self.belongs_to_visible_block(common.handle, common.owner_handle, block)
-            {
-                continue;
-            }
-            let (world_origin, boundary) = Self::wipeout_boundary_2d(wipeout);
-            if boundary.len() < 3 {
-                continue;
-            }
-            models.push(HatchModel {
-                boundary: Arc::new(boundary),
-                boundary_wcs: None,
-                pattern: model::hatch_model::HatchPattern::Solid,
-                name: "WIPEOUT_FILL".into(),
-                color: if highlight_selection && self.selected.contains(&common.handle) {
-                    [0.15, 0.55, 1.00, 0.35]
-                } else {
-                    self.paper_bg_color
-                },
-                aci: 0,
-                line_weight_px: 1.0,
-                angle_offset: 0.0,
-                scale: 1.0,
-                world_origin,
-                draw_depth: depth_map
-                    .get(&common.handle.value())
-                    .map_or(0.0, |depth| depth[0]),
-            });
-        }
-        for entity in self.document.entities() {
-            let contextual = crate::scene::annotative::entity_for_annotation_context(
-                &self.document,
-                entity,
-                annotation_scale_handle,
-            );
-            let EntityType::Insert(insert) = contextual.as_ref() else {
-                continue;
-            };
-            let common = &insert.common;
-            if common.invisible
-                || self.entity_temporarily_hidden(common.handle)
-                || self
-                    .document
-                    .layers
-                    .get(&common.layer)
-                    .map(|layer| layer.flags.off || layer.flags.frozen)
-                    .unwrap_or(false)
-                || self.layer_frozen_in(&common.layer, frozen)
-                || crate::scene::annotative::annotative_offscale_for(
-                    &self.document,
-                    common,
-                    annotation_scale_handle,
-                    all_visible,
-                )
-                || !self.belongs_to_visible_block(common.handle, common.owner_handle, block)
-            {
-                continue;
-            }
-            self.collect_block_wipeouts(
-                &insert.get_transform(),
-                &insert.block_name,
-                0,
-                frozen,
-                if highlight_selection && self.selected.contains(&common.handle) {
-                    [0.15, 0.55, 1.00, 0.35]
-                } else {
-                    self.paper_bg_color
-                },
-                &depth_map,
-                &mut models,
-                annotation_scale_handle,
-                all_visible,
-            );
-        }
-        models
+        self.wipeout_models_for_block_graph(
+            block,
+            frozen,
+            annotation_scale_handle,
+            all_visible,
+            self.paper_bg_color,
+            highlight_selection,
+        )
     }
 
     /// Paper-layout wipeout fills (paper hit-testing / export). Same rationale as

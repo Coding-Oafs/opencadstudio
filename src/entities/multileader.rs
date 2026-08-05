@@ -1538,9 +1538,9 @@ impl MultiLeaderTess for MultiLeader {
 
         // ── Block content ───────────────────────────────────────────────────────
         // When content_type == Block, the MultiLeader displays a block reference
-        // at block_content_location with the recorded rotation/scale. Synthesize
-        // an Insert and explode it through the standard tessellator. The block
-        // resolves via block_content_handle (handle → block_record name).
+        // at block_content_location with the recorded rotation/scale. A
+        // synthetic Insert supplies that context to the shared scene graph;
+        // every child then uses its normal tessellator.
         if ml.content_type == LeaderContentType::Block && ml.context.has_block_contents {
             let block_name = match ml.block_content_handle {
                 Some(h) if !h.is_null() => document
@@ -1567,29 +1567,42 @@ impl MultiLeaderTess for MultiLeader {
                 // anchor when *creating* the multileader; at render time the
                 // file's stored leader endpoints already encode that choice.
                 let _ = ml.block_connection_type;
-                for sub in synth_ins.explode_from_document(document) {
-                    let normalized =
-                        crate::modules::draw::modify::explode::normalize_insert_entity(sub);
-                    let mut sub_wires = tessellate(
-                        document,
-                        handle,
-                        &normalized,
-                        selected,
-                        block_color,
-                        leader_pat_len,
-                        leader_pat,
-                        leader_lw_px,
-                        1.0,
-                        None,
-                        None,
-                        bg_color,
-                        false,
-                    );
-                    for w in &mut sub_wires {
-                        w.name = name.clone();
-                    }
-                    wires.extend(sub_wires);
-                }
+                let depths = rustc_hash::FxHashMap::default();
+                let graph = crate::scene::render_graph::RenderSceneGraph::new(
+                    document,
+                    None,
+                    None,
+                    true,
+                    &depths,
+                );
+                graph.walk_insert(
+                    &synth_ins,
+                    handle,
+                    |_, _| true,
+                    |entity, context| {
+                        let mut placed = entity.clone();
+                        placed.apply_transform(&context.transform);
+                        let mut sub_wires = tessellate(
+                            document,
+                            handle,
+                            &placed,
+                            selected,
+                            block_color,
+                            leader_pat_len,
+                            leader_pat,
+                            leader_lw_px,
+                            1.0,
+                            None,
+                            None,
+                            bg_color,
+                            false,
+                        );
+                        for w in &mut sub_wires {
+                            w.name = name.clone();
+                        }
+                        wires.extend(sub_wires);
+                    },
+                );
                 // Block attributes attached to the multileader — render each as
                 // its own attribute entity at WCS location like INSERT does.
                 for ba in &ml.block_attributes {

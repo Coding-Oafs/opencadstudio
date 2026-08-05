@@ -1309,7 +1309,8 @@ use acadrust::{CadDocument, EntityType, Handle};
 
 use crate::scene::convert::tess_util::aci_to_rgba;
 use crate::scene::convert::tessellate::{
-    add_polyline, add_segment, append_arrow, arrow_from_block, normalized_or, ArrowKind, DimGeom,
+    add_polyline, add_segment, append_arrow, arrow_from_block_with_deferred_hatch,
+    normalized_or, ArrowKind, DimGeom,
 };
 use crate::scene::model::wire_model::{SnapHint, WireModel};
 
@@ -1660,6 +1661,16 @@ fn tessellate_dimension_inner(
     //   3. DIMSAH true  → DIMBLK1 (first end), DIMBLK2 (second end).
     // Unknown / NULL block handles fall back to ClosedFilled.
     let dimasz = (dimasz_raw as f32).max(0.001);
+    let defer_arrow_hatches = {
+        let name = dim.base().block_name.trim();
+        let mut memo = std::collections::HashMap::new();
+        !name.is_empty()
+            && crate::scene::render_graph::block_contains_hatch(
+                document,
+                name,
+                &mut memo,
+            )
+    };
     let (arrow1, arrow2) = if dimtsz_raw > 1e-9 {
         let t = ArrowKind::Tick {
             size: (dimtsz_raw as f32).max(0.001),
@@ -1668,11 +1679,26 @@ fn tessellate_dimension_inner(
     } else if let Some(s) = style {
         if dimsah {
             (
-                arrow_from_block(document, s.dimblk1, dimasz),
-                arrow_from_block(document, s.dimblk2, dimasz),
+                arrow_from_block_with_deferred_hatch(
+                    document,
+                    s.dimblk1,
+                    dimasz,
+                    defer_arrow_hatches,
+                ),
+                arrow_from_block_with_deferred_hatch(
+                    document,
+                    s.dimblk2,
+                    dimasz,
+                    defer_arrow_hatches,
+                ),
             )
         } else {
-            let a = arrow_from_block(document, s.dimblk, dimasz);
+            let a = arrow_from_block_with_deferred_hatch(
+                document,
+                s.dimblk,
+                dimasz,
+                defer_arrow_hatches,
+            );
             (a.clone(), a)
         }
     } else {

@@ -853,8 +853,7 @@ impl Scene {
                 }
                 // Reject block-defn-only hatches (entities owned by a
                 // BLOCK record that's neither model nor a paper layout
-                // block) — they're tessellated separately via Insert
-                // explosion and only the laid-out copies should appear.
+                // block) — the scene graph emits only their laid-out copies.
                 self.belongs_to_visible_block(handle, c.owner_handle, target_block)
             })
             .flat_map(|(&handle, model)| {
@@ -976,9 +975,8 @@ impl Scene {
         } else {
             self.bg_color
         };
-        // Block-internal hatch fills: descend INSERTs owned by the requested
-        // target only and materialize their fills at world position.
-        models.extend(self.exploded_insert_hatch_models(
+        // Instanced/owned hatch leaves are produced by the shared scene graph.
+        models.extend(self.instanced_hatch_models(
             target_block,
             hatch_bg,
             true,
@@ -987,31 +985,23 @@ impl Scene {
             all_visible,
         ));
 
-        // Wide LwPolyline / Polyline2D bands are no longer hatch fills at
-        // model level: a flat band is drawn by expanding its centre-line wire
-        // to `world_width` in the shader (depth-tested, linetype-dashed), and a
-        // thickened one is extruded into a 3-D tube by the tessellator. Only
-        // block-internal wide polylines still band via the hatch path (see
-        // `push_block_wide_fills`), where it scales with the insert transform.
+        // Wide polyline bands remain on the wire path, including inside block
+        // instances; the graph does not reclassify them as hatch fills.
 
         models
     }
 
-    /// Materialize the hatch fills that live *inside* the visible INSERTs of
-    /// `layout_block`, baking each INSERT's transform (and nested-INSERT
-    /// transforms) so the fills land in world position with resolved
-    /// ByBlock / layer-0 colours.
+    /// Materialize hatch leaves reached through visible scene containers in
+    /// `layout_block`, with transforms and inherited styles already resolved.
     ///
     /// Shared by the on-screen hatch set (`synced_hatch_models`) and the
     /// paper/export hatch set (`paper_canvas_hatches`) so a plot draws
-    /// block-internal hatches identically to the viewport. Without this the
-    /// export path only saw top-level hatches, so any fill nested in a block
-    /// INSERT printed as bare monochrome outlines.
+    /// block-internal hatches identically to the viewport.
     ///
     /// `hatch_bg` adapts pure black/white leaf colours to the target
     /// background; `tint_selected` re-colours fills of a selected INSERT
     /// (screen highlight) and should be `false` for export.
-    pub(super) fn exploded_insert_hatch_models(
+    pub(super) fn instanced_hatch_models(
         &self,
         layout_block: Handle,
         hatch_bg: [f32; 4],
@@ -1020,7 +1010,7 @@ impl Scene {
         annotation_scale_handle: Option<Handle>,
         all_visible: bool,
     ) -> Vec<HatchModel> {
-        self.exploded_insert_hatch_models_filtered(
+        self.instanced_hatch_models_filtered(
             layout_block,
             hatch_bg,
             tint_selected,
@@ -1058,7 +1048,7 @@ impl Scene {
             .flatten()
             .copied()
             .collect();
-        self.exploded_insert_hatch_models_filtered(
+        self.instanced_hatch_models_filtered(
             self.interaction_block_handle(),
             hatch_bg,
             true,
@@ -1070,7 +1060,7 @@ impl Scene {
         )
     }
 
-    fn exploded_insert_hatch_models_filtered(
+    fn instanced_hatch_models_filtered(
         &self,
         layout_block: Handle,
         hatch_bg: [f32; 4],
@@ -1081,400 +1071,105 @@ impl Scene {
         targets: Option<&rustc_hash::FxHashSet<Handle>>,
         include_preview_hidden: bool,
     ) -> Vec<HatchModel> {
-        let layer_hidden = |layer: &str| {
-            self.document
-                .layers
-                .get(layer)
-                .map(|l| l.flags.off || l.flags.frozen)
-                .unwrap_or(false)
-        };
-        let mut models: Vec<HatchModel> = Vec::new();
-        // Draw-order composition (#408): every fill inherits its INSERT's
-        // draw-depth slot, offset by the child's rank INSIDE its block
-        // (draw_depth_map ranks per owning block), scaled to stay within the
-        // insert's half-gap in the host ordering. Without this every block /
-        // xref fill landed at depth 0 and the stack's LIFO pop reversed the
-        // block's internal stacking.
         let depth_map = self.draw_depth_map();
-        let block_count = |name: &str| -> usize {
-            self.document
-                .block_records
-                .get(name)
-                .map(|br| br.entity_handles.len())
-                .unwrap_or(1)
-                .max(1)
-        };
-        // Exploding an INSERT materializes (clones) every child of its block —
-        // including 3D solids that each carry megabytes of SAB geometry — just
-        // to scan the result for hatch fills. On xref-heavy drawings whose
-        // blocks hold thousands of solids and NO hatches, that cloned ~all block
-        // content on every open for nothing (~20 s on a 5-xref BIM aggregate).
-        // Skip the explode for blocks with no hatch (transitively) via the same
-        // memoised `block_has_hatch` scan the pick path uses. Blocks that DO
-        // contain a hatch still explode exactly as before, so output is unchanged.
-        let mut hatch_block_memo: std::collections::HashMap<String, bool> =
-            std::collections::HashMap::new();
-        // Same gate for wide LwPolyline / Polyline2D fills — a block with a wide
-        // polyline (but no hatch) must still explode so its width band renders
-        // at world position, like a block-internal hatch. (#222)
-        let mut wide_block_memo: std::collections::HashMap<String, bool> =
-            std::collections::HashMap::new();
-        // `explode_from_document` returns a Dimension child verbatim (it carries
-        // no fill of its own), so a filled arrowhead that lives as a nested
-        // Insert(hatch) inside the dimension's baked `*D` block never reaches
-        // this fill explosion. Expand each dimension child's `*D` content into
-        // the owning block's frame — translate by the dimension insertion_point
-        // (WCS → block-local) then apply the insert transform (block-local →
-        // world) — so its arrow inserts / hatches ride the normal walk. Only
-        // fill-bearing children (Insert / Hatch) are lifted; the dimension's
-        // lines and text still render through the wire path.
-        fn explode_including_dims(ins: &DxfInsert, doc: &CadDocument) -> Vec<EntityType> {
-            let mut out = ins.explode_from_document(doc);
-            let Some(br) = doc.block_records.get(&ins.block_name) else {
-                return out;
-            };
-            let xform = ins.get_transform();
-            for &beh in &br.entity_handles {
-                let Some(EntityType::Dimension(dim)) = doc.get_entity(beh) else {
-                    continue;
-                };
-                let bn = dim.base().block_name.clone();
-                if bn.trim().is_empty() {
-                    continue;
+        let graph = crate::scene::render_graph::RenderSceneGraph::new(
+            &self.document,
+            frozen,
+            annotation_scale_handle,
+            all_visible,
+            depth_map.as_ref(),
+        );
+        let mut hatch_block_memo = std::collections::HashMap::new();
+        let mut models = Vec::new();
+        graph.walk_root(
+            self.render_scene_root(layout_block),
+            |entity, context| {
+                if context.is_instanced() {
+                    return true;
                 }
-                let ins_pt = dim.base().insertion_point;
-                let Some(dblk) = doc
-                    .block_records
-                    .iter()
-                    .find(|r| r.name.eq_ignore_ascii_case(&bn))
-                else {
-                    continue;
-                };
-                for &deh in &dblk.entity_handles {
-                    let Some(dsub) = doc.get_entity(deh) else {
-                        continue;
-                    };
-                    if !matches!(dsub, EntityType::Insert(_) | EntityType::Hatch(_)) {
-                        continue;
-                    }
-                    let mut placed = dsub.clone();
-                    placed.as_entity_mut().translate(ins_pt);
-                    placed.apply_transform(&xform);
-                    out.push(placed);
+                let common = entity.common();
+                if self.object_isolation.hides(common.handle)
+                    || (!include_preview_hidden
+                        && self.preview_hidden.contains(&common.handle))
+                {
+                    return false;
                 }
-            }
-            out
-        }
-        for entity in self.document.entities() {
-            let contextual = crate::scene::annotative::entity_for_annotation_context(
-                &self.document,
-                entity,
-                annotation_scale_handle,
-            );
-            let EntityType::Insert(ins) = contextual.as_ref() else {
-                continue;
-            };
-            if targets.is_some_and(|targets| !targets.contains(&ins.common.handle)) {
-                continue;
-            }
-            let temporarily_hidden = self.object_isolation.hides(ins.common.handle)
-                || (!include_preview_hidden && self.preview_hidden.contains(&ins.common.handle));
-            if ins.common.invisible
-                || temporarily_hidden
-                || layer_hidden(&ins.common.layer)
-            {
-                continue;
-            }
-            // Per-viewport freeze: an INSERT on a layer frozen in this content
-            // viewport hides the whole instance, its internal fills included.
-            if self.layer_frozen_in(&ins.common.layer, frozen) {
-                continue;
-            }
-            if !self.belongs_to_visible_block(
-                ins.common.handle,
-                ins.common.owner_handle,
-                layout_block,
-            ) {
-                continue;
-            }
-            // Off-scale annotative representation (model space only — paper
-            // viewports use their per-viewport frozen scale layers). Skips its
-            // whole fill subtree, matching the wire path.
-            if crate::scene::annotative::annotative_offscale_for(
-                &self.document,
-                &ins.common,
-                annotation_scale_handle,
-                all_visible,
-            ) {
-                continue;
-            }
-            if !self.block_has_hatch(&ins.block_name, &mut hatch_block_memo)
-                && !self.block_has_wide_poly(&ins.block_name, &mut wide_block_memo)
-            {
-                continue;
-            }
-            let selected = tint_selected && self.selected.contains(&ins.common.handle);
-            // XCLIP: clip this insert's exploded hatch fills to the boundary,
-            // matching how the line geometry is clipped in expand_insert.
-            let clip_poly = pick::xclip::insert_spatial_filter(&self.document, ins)
-                .map(|sf| pick::xclip::world_clip_polygon(sf, ins));
-            // Walk the full block tree: `explode_from_document` only descends
-            // one level, so nested INSERTs are re-exploded here. Each level
-            // bakes its transform into the children it returns, so nested
-            // hatches land in the correct world position. A depth guard keeps
-            // a malformed cyclic block reference from looping forever.
-            let normalize = crate::modules::draw::modify::explode::normalize_insert_entity;
-            // Block-child style inheritance sources (#221), kept raw and
-            // adapted at the leaf. The INSERT style feeds ByBlock; `l0` (the
-            // INSERT's layer style) feeds the layer-0 rule. Colour, ACI,
-            // linetype, and lineweight all chain through nested inserts.
-            let ins_style =
-                crate::scene::view::render::render_style_for(&self.document, entity);
-            let l0 = crate::scene::view::render::layer_render_style(
-                &self.document,
-                &ins.common.layer,
-            );
-            let layer_aci = |layer: &str| -> u8 {
-                self.document
-                    .layers
-                    .get(layer)
-                    .and_then(|layer| match &layer.color {
-                        acadrust::types::Color::Index(index) => Some(*index),
-                        _ => None,
-                    })
-                    .unwrap_or(0)
-            };
-            let l0_aci = layer_aci(&ins.common.layer);
-            let [base_depth, half_gap] = depth_map
-                .get(&ins.common.handle.value())
-                .copied()
-                .unwrap_or([0.0, 0.0]);
-            // Drop off-scale annotative representations (e.g. a 10× copy on
-            // layer "0 @ 10" when the current scale is 1:1) before `normalize`
-            // strips their handle — otherwise their whole fill subtree stacks
-            // under the current-scale copy. Model space only; paper viewports
-            // use their per-viewport frozen scale layers. `explode` preserves
-            // the child handle, so the membership lookup still resolves here.
-            let offscale = |e: &EntityType| -> bool {
-                matches!(e, EntityType::Insert(ni)
-                    if crate::scene::annotative::annotative_offscale_for(
-                        &self.document,
-                        &ni.common,
-                        annotation_scale_handle,
-                        all_visible,
-                    ))
-            };
-            type ResolvedStyle = ([f32; 4], f32, [f32; 8], f32, u8);
-            let mut stack: Vec<(
-                EntityType,
-                usize,
-                ResolvedStyle,
-                crate::scene::view::render::InheritStyle,
-                u8,
-                (f32, f32),
-            )> = explode_including_dims(ins, &self.document)
-                .into_iter()
-                .filter(|e| !offscale(e))
-                .map(|e| {
-                    crate::scene::annotative::entity_for_annotation_context(
-                        &self.document,
-                        &e,
-                        annotation_scale_handle,
-                    )
-                        .into_owned()
-                })
-                .map(|e| {
-                    (
-                        normalize(e),
-                        0usize,
-                        ins_style,
-                        l0,
-                        l0_aci,
-                        (base_depth, half_gap),
-                    )
-                })
-                .collect();
-            while let Some((
-                sub,
-                depth,
-                sub_ins_style,
-                sub_l0,
-                sub_l0_aci,
-                (d_base, d_half),
-            )) = stack.pop()
-            {
-                match sub {
-                    EntityType::Insert(nins) => {
-                        if depth >= 32 {
-                            continue;
-                        }
-                        use acadrust::types::Color;
-                        // Chain the inheritance sources into the nested insert,
-                        // mirroring expand_insert's nested resolution: ByBlock →
-                        // parent source; layer-0 + ByLayer → parent layer-0
-                        // target; else the nested insert's own resolved style.
-                        let on_l0 = crate::scene::view::render::is_effective_layer_zero(
-                            &nins.common.layer,
-                        );
-                        let nested_entity = EntityType::Insert(nins.clone());
-                        let has_book_color =
-                            crate::scene::view::render::has_resolved_book_color(
-                                &self.document,
-                                &nested_entity,
-                            );
-                        let mut child_ins_style =
-                            crate::scene::view::render::render_style_for_block_sub(
-                                &self.document,
-                                &nested_entity,
-                                sub_ins_style.0,
-                                sub_ins_style.1,
-                                sub_ins_style.2,
-                                sub_ins_style.3,
-                                sub_l0,
-                            );
-                        child_ins_style.4 = if !has_book_color
-                            && nins.common.color == Color::ByBlock
-                        {
-                            sub_ins_style.4
-                        } else if !has_book_color
-                            && on_l0
-                            && nins.common.color == Color::ByLayer
-                        {
-                            sub_l0_aci
-                        } else {
-                            child_ins_style.4
-                        };
-                        let child_l0 = if on_l0 {
-                            sub_l0
-                        } else {
-                            crate::scene::view::render::layer_render_style(
-                                &self.document,
-                                &nins.common.layer,
-                            )
-                        };
-                        let child_l0_aci = if on_l0 {
-                            sub_l0_aci
-                        } else {
-                            layer_aci(&nins.common.layer)
-                        };
-                        // Nested insert: its slot = parent slot + its rank in
-                        // the parent block, subdivided by its own block size.
-                        let nd_base = d_base
-                            + depth_map
-                                .get(&nins.common.handle.value())
-                                .map_or(0.0, |d| d[0])
-                                * d_half;
-                        let nd_half = d_half / (block_count(&nins.block_name) as f32 + 1.0);
-                        for e in explode_including_dims(&nins, &self.document) {
-                            if offscale(&e) {
-                                continue;
-                            }
-                            let e =
-                                crate::scene::annotative::entity_for_annotation_context(
-                                    &self.document,
-                                    &e,
-                                    annotation_scale_handle,
-                                )
-                                .into_owned();
-                            stack.push((
-                                normalize(e),
-                                depth + 1,
-                                child_ins_style,
-                                child_l0,
-                                child_l0_aci,
-                                (nd_base, nd_half),
-                            ));
-                        }
-                    }
-                    EntityType::Hatch(dxf) => {
-                        if dxf.common.invisible || layer_hidden(&dxf.common.layer) {
-                            continue;
-                        }
-                        // Resolve ByBlock / layer-0 inheritance for this block
-                        // child, including the pattern-stroke lineweight and
-                        // effective ACI used by plot style tables.
-                        let hatch_entity = EntityType::Hatch(dxf.clone());
-                        let mut style = crate::scene::view::render::render_style_for_block_sub(
+                if let Some(targets) = targets {
+                    return matches!(entity, EntityType::Insert(_))
+                        && targets.contains(&common.handle);
+                }
+                match entity {
+                    EntityType::Insert(insert) => {
+                        crate::scene::render_graph::block_contains_hatch(
                             &self.document,
-                            &hatch_entity,
-                            sub_ins_style.0,
-                            sub_ins_style.1,
-                            sub_ins_style.2,
-                            sub_ins_style.3,
-                            sub_l0,
-                        );
-                        let has_book_color =
-                            crate::scene::view::render::has_resolved_book_color(
-                                &self.document,
-                                &hatch_entity,
-                            );
-                        let on_l0 = crate::scene::view::render::is_effective_layer_zero(
-                            &dxf.common.layer,
-                        );
-                        style.4 = if !has_book_color
-                            && dxf.common.color == acadrust::types::Color::ByBlock
-                        {
-                            sub_ins_style.4
-                        } else if !has_book_color
-                            && on_l0
-                            && dxf.common.color == acadrust::types::Color::ByLayer
-                        {
-                            sub_l0_aci
-                        } else {
-                            style.4
-                        };
-                        let color = style.0;
-                        // Explicit ACI 7 solid fills inside blocks are often
-                        // white masks. Keep the explicit white on a light
-                        // layout; adapting it to paper turns the mask into a
-                        // black rectangle unlike the viewport (#618).
-                        let preserve_white_mask = dxf.is_solid
-                            && matches!(
-                                dxf.common.color,
-                                acadrust::types::Color::Index(7)
-                            );
-                        let color = if preserve_white_mask {
-                            color
-                        } else {
-                            crate::scene::view::render::adapt_to_bg(color, hatch_bg)
-                        };
-                        if let Some(mut model) =
-                            Self::hatch_model_from_dxf(&dxf, color)
-                        {
-                            model.aci = style.4;
-                            model.line_weight_px = style.3;
-                            // In-block rank → within the insert's depth slot.
-                            model.draw_depth = d_base
-                                + depth_map
-                                    .get(&dxf.common.handle.value())
-                                    .map_or(0.0, |d| d[0])
-                                    * d_half;
-                            if let Some(poly) = &clip_poly {
-                                let clipped = pick::xclip::clip_hatch_boundary(
-                                    &model.boundary,
-                                    model.world_origin,
-                                    poly,
-                                );
-                                if clipped.is_empty() {
-                                    continue;
-                                }
-                                model.boundary = std::sync::Arc::new(clipped);
-                            }
-                            if selected {
-                                model.color = [0.15, 0.55, 1.00, model.color[3]];
-                            }
-                            models.push(model);
-                        }
+                            &insert.block_name,
+                            &mut hatch_block_memo,
+                        )
                     }
-                    // Wide LwPolyline / Polyline2D bands inside a block are drawn
-                    // by the shader wire path — block_cache carries each centre-
-                    // line's `world_width` and scales it by the insert transform
-                    // (`emit_wire`) — not as hatch fills here. Same depth-tested,
-                    // linetype-dashed band as at model level. (#222)
-                    _ => {}
+                    EntityType::Dimension(dimension) => {
+                        let name = dimension.base().block_name.trim();
+                        !name.is_empty()
+                            && crate::scene::render_graph::block_contains_hatch(
+                                &self.document,
+                                name,
+                                &mut hatch_block_memo,
+                            )
+                    }
+                    _ => true,
                 }
-            }
-        }
+            },
+            |entity, context| {
+                if !context.is_instanced() {
+                    return;
+                }
+                let EntityType::Hatch(source_hatch) = entity else {
+                    return;
+                };
+                let style = context.style_for(&self.document, entity);
+                let preserve_white_mask = source_hatch.is_solid
+                    && matches!(
+                        source_hatch.common.color,
+                        acadrust::types::Color::Index(7)
+                    );
+                let color = if preserve_white_mask {
+                    style.0
+                } else {
+                    crate::scene::view::render::adapt_to_bg(style.0, hatch_bg)
+                };
+
+                let mut placed = EntityType::Hatch(source_hatch.clone());
+                placed.apply_transform(&context.transform);
+                let EntityType::Hatch(hatch) = placed else {
+                    return;
+                };
+                let Some(mut model) = Self::hatch_model_from_dxf(&hatch, color) else {
+                    return;
+                };
+                model.aci = style.4;
+                model.line_weight_px = style.3;
+                model.draw_depth =
+                    context.draw_depth(source_hatch.common.handle, depth_map.as_ref());
+                for clip in &context.clips {
+                    let clip: Vec<[f32; 2]> = clip
+                        .iter()
+                        .map(|point| [point[0] as f32, point[1] as f32])
+                        .collect();
+                    let clipped = pick::xclip::clip_hatch_boundary(
+                        &model.boundary,
+                        model.world_origin,
+                        &clip,
+                    );
+                    if clipped.is_empty() {
+                        return;
+                    }
+                    model.boundary = std::sync::Arc::new(clipped);
+                }
+                if tint_selected && self.selected.contains(&context.root_handle) {
+                    model.color = [0.15, 0.55, 1.00, model.color[3]];
+                }
+                models.push(model);
+            },
+        );
         models
     }
 
@@ -1487,245 +1182,107 @@ impl Scene {
         annotation_scale_handle: Option<Handle>,
         all_visible: bool,
     ) -> Vec<HatchModel> {
-        let is_paper = self.current_layout != "Model";
-        let bg_color: [f32; 4] = if is_paper {
+        let bg_color = if self.current_layout != "Model" {
             self.paper_bg_color
         } else {
             self.bg_color
         };
-        // No per-frame view-cull here: GPU wipeout buffer upload is
-        // gated on geometry_epoch only (see render.rs), so any cull at
-        // build time would freeze the visible subset at the geometry
-        // epoch boundary and never re-evaluate as the user pans. The
-        // pipeline's `wipeout_skip_flags` (compute_wipeout_lod) does
-        // the per-frame skip at draw time instead.
+        self.wipeout_models_for_block_graph(
+            target_block,
+            frozen,
+            annotation_scale_handle,
+            all_visible,
+            bg_color,
+            false,
+        )
+    }
+
+    pub(super) fn wipeout_models_for_block_graph(
+        &self,
+        target_block: Handle,
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
+        bg_color: [f32; 4],
+        tint_insert_selection: bool,
+    ) -> Vec<HatchModel> {
         let depth_map = self.draw_depth_map();
+        let graph = crate::scene::render_graph::RenderSceneGraph::new(
+            &self.document,
+            frozen,
+            annotation_scale_handle,
+            all_visible,
+            depth_map.as_ref(),
+        );
         let mut models = Vec::new();
-        for entity in self.document.entities() {
-            let EntityType::Wipeout(wo) = entity else {
-                continue;
-            };
-            if entity.common().invisible
-                || self.entity_temporarily_hidden(wo.common.handle)
-            {
-                continue;
-            }
-            // Reject block-defn-only wipeouts (owned by a BLOCK record that is
-            // neither model nor a paper layout block): those are placed via
-            // insert descent below, in world space. Without this they also draw
-            // once at their raw block-local coordinates. Mirrors the hatch path.
-            if !self.belongs_to_visible_block(
-                wo.common.handle,
-                wo.common.owner_handle,
-                target_block,
-            ) {
-                continue;
-            }
-            if self
-                .document
-                .layers
-                .get(&entity.common().layer)
-                .map(|l| l.flags.off || l.flags.frozen)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            // Per-viewport freeze: a wipeout on a layer frozen in this content
-            // viewport is hidden along with the rest of that layer.
-            if self.layer_frozen_in(&entity.common().layer, frozen) {
-                continue;
-            }
-            // Per-entity world_offset selection so paper-layout content
-            // viewports still see model-block wipeouts at the right local
-            // coordinates (same rationale as hatches).
-            let (fill_origin, boundary) = Self::wipeout_boundary_2d(wo);
-            if boundary.len() >= 3 {
-                let mut fill_color = bg_color;
-                if self.selected.contains(&wo.common.handle) {
-                    fill_color = [0.15, 0.55, 1.00, 0.35];
+        graph.walk_root(
+            self.render_scene_root(target_block),
+            |entity, context| {
+                context.is_instanced()
+                    || !self.entity_temporarily_hidden(entity.common().handle)
+            },
+            |entity, context| {
+                let EntityType::Wipeout(source) = entity else {
+                    return;
+                };
+                let mut wipeout = source.clone();
+                if context.is_instanced() {
+                    wipeout.insertion_point =
+                        context.transform.apply(source.insertion_point);
+                    wipeout.u_vector =
+                        context.transform.apply_rotation(source.u_vector);
+                    wipeout.v_vector =
+                        context.transform.apply_rotation(source.v_vector);
                 }
+                let (world_origin, mut boundary) =
+                    Self::wipeout_boundary_2d(&wipeout);
+                for clip in &context.clips {
+                    let clip: Vec<[f32; 2]> = clip
+                        .iter()
+                        .map(|point| [point[0] as f32, point[1] as f32])
+                        .collect();
+                    boundary = pick::xclip::clip_hatch_boundary(
+                        &boundary,
+                        world_origin,
+                        &clip,
+                    );
+                }
+                if boundary.len() < 3 {
+                    return;
+                }
+                let selection_handle =
+                    if tint_insert_selection && context.is_instanced() {
+                        context.root_handle
+                    } else {
+                        source.common.handle
+                    };
+                let color = if self.selected.contains(&selection_handle) {
+                    [0.15, 0.55, 1.00, 0.35]
+                } else {
+                    bg_color
+                };
                 models.push(HatchModel {
                     boundary: Arc::new(boundary),
                     boundary_wcs: None,
                     pattern: model::hatch_model::HatchPattern::Solid,
                     name: "WIPEOUT_FILL".into(),
-                    color: fill_color,
+                    color,
                     aci: 0,
                     line_weight_px: 1.0,
                     angle_offset: 0.0,
                     scale: 1.0,
-                    world_origin: fill_origin,
-                    // The mask erases what draws below the wipeout and loses
-                    // to what draws above — including its own frame wire,
-                    // which rides a +half-rank override on top of this.
-                    draw_depth: depth_map
-                        .get(&wo.common.handle.value())
-                        .map_or(0.0, |d| d[0]),
+                    world_origin,
+                    draw_depth: context
+                        .draw_depth(source.common.handle, depth_map.as_ref()),
                 });
-            }
-        }
-        // Wipeouts nested inside block inserts: the loop above only sees
-        // top-level wipeouts, so a wipeout defined inside a block never masked
-        // once the block was inserted (it did in block-edit, where it is
-        // top-level). Descend visible inserts and place each block-internal
-        // wipeout in world space. The insert transform is applied here (apply /
-        // apply_rotation) rather than through Insert::explode — the latter
-        // double-scales the u/v basis.
-        for entity in self.document.entities() {
-            let contextual = crate::scene::annotative::entity_for_annotation_context(
-                &self.document,
-                entity,
-                annotation_scale_handle,
-            );
-            let EntityType::Insert(ins) = contextual.as_ref() else {
-                continue;
-            };
-            let c = &ins.common;
-            if c.invisible
-                || self.entity_temporarily_hidden(c.handle)
-                || self
-                    .document
-                    .layers
-                    .get(&c.layer)
-                    .map(|l| l.flags.off || l.flags.frozen)
-                    .unwrap_or(false)
-                || self.layer_frozen_in(&c.layer, frozen)
-            {
-                continue;
-            }
-            if !self.belongs_to_visible_block(c.handle, c.owner_handle, target_block) {
-                continue;
-            }
-            if crate::scene::annotative::annotative_offscale_for(
-                &self.document,
-                c,
-                annotation_scale_handle,
-                all_visible,
-            ) {
-                continue;
-            }
-            self.collect_block_wipeouts(
-                &ins.get_transform(),
-                &ins.block_name,
-                0,
-                frozen,
-                bg_color,
-                &depth_map,
-                &mut models,
-                annotation_scale_handle,
-                all_visible,
-            );
-        }
+            },
+        );
         models
     }
 
-    /// Recursively collect wipeout masks defined inside a block, transformed to
-    /// world space by the accumulated insert transform. See `wipeout_models`.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn collect_block_wipeouts(
-        &self,
-        xform: &acadrust::types::Transform,
-        block_name: &str,
-        depth: usize,
-        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
-        bg_color: [f32; 4],
-        depth_map: &HashMap<u64, [f32; 2]>,
-        models: &mut Vec<HatchModel>,
-        annotation_scale_handle: Option<Handle>,
-        all_visible: bool,
-    ) {
-        if depth > 32 {
-            return;
-        }
-        let Some(br) = self
-            .document
-            .block_records
-            .iter()
-            .find(|b| b.name.eq_ignore_ascii_case(block_name))
-        else {
-            return;
-        };
-        for &eh in &br.entity_handles {
-            let Some(source) = self.document.get_entity(eh) else {
-                continue;
-            };
-            let contextual = crate::scene::annotative::entity_for_annotation_context(
-                &self.document,
-                source,
-                annotation_scale_handle,
-            );
-            let e = contextual.as_ref();
-            let c = e.common();
-            if c.invisible
-                || self
-                    .document
-                    .layers
-                    .get(&c.layer)
-                    .map(|l| l.flags.off || l.flags.frozen)
-                    .unwrap_or(false)
-                || self.layer_frozen_in(&c.layer, frozen)
-                || crate::scene::annotative::annotative_offscale_for(
-                    &self.document,
-                    c,
-                    annotation_scale_handle,
-                    all_visible,
-                )
-            {
-                continue;
-            }
-            match e {
-                EntityType::Wipeout(wo) => {
-                    let mut w = wo.clone();
-                    w.insertion_point = xform.apply(wo.insertion_point);
-                    w.u_vector = xform.apply_rotation(wo.u_vector);
-                    w.v_vector = xform.apply_rotation(wo.v_vector);
-                    let (fill_origin, boundary) = Self::wipeout_boundary_2d(&w);
-                    if boundary.len() >= 3 {
-                        let mut fill_color = bg_color;
-                        if self.selected.contains(&c.handle) {
-                            fill_color = [0.15, 0.55, 1.00, 0.35];
-                        }
-                        models.push(HatchModel {
-                            boundary: Arc::new(boundary),
-                            boundary_wcs: None,
-                            pattern: model::hatch_model::HatchPattern::Solid,
-                            name: "WIPEOUT_FILL".into(),
-                            color: fill_color,
-                            aci: 0,
-                            line_weight_px: 1.0,
-                            angle_offset: 0.0,
-                            scale: 1.0,
-                            world_origin: fill_origin,
-                            draw_depth: depth_map.get(&c.handle.value()).map_or(0.0, |d| d[0]),
-                        });
-                    }
-                }
-                EntityType::Insert(ni) => {
-                    // `compose` applies the nested insert's transform first,
-                    // then the accumulated parent transform.
-                    let child = xform.compose(&ni.get_transform());
-                    self.collect_block_wipeouts(
-                        &child,
-                        &ni.block_name,
-                        depth + 1,
-                        frozen,
-                        bg_color,
-                        depth_map,
-                        models,
-                        annotation_scale_handle,
-                        all_visible,
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-
     /// Compute the 2D (XY) boundary polygon for a Wipeout entity.
-    /// Wipeout fill boundary as small f32 offsets from the returned `world_origin`
-    /// (the insertion point, kept in f64). Building it in absolute WCS f32
-    /// collapsed the boundary into squares at UTM-scale coordinates; the
-    /// relative-to-eye hatch fill reconstructs `world_origin + offset` precisely.
+    /// Wipeout fill boundary as small f32 offsets from the returned world_origin
+    /// (the insertion point, kept in f64).
     pub(super) fn wipeout_boundary_2d(
         wo: &acadrust::entities::Wipeout,
     ) -> ([f64; 2], Vec<[f32; 2]>) {

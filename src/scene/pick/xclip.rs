@@ -12,7 +12,7 @@
 
 use acadrust::entities::Insert;
 use acadrust::objects::{ObjectType, SpatialFilter};
-use acadrust::types::{Handle, Vector3};
+use acadrust::types::{Handle, Transform, Vector3};
 use acadrust::CadDocument;
 
 use crate::scene::model::wire_model::WireModel;
@@ -62,25 +62,23 @@ fn dict_entry(doc: &CadDocument, dict: Handle, key: &str) -> Option<Handle> {
 /// insert was later rescaled the stored `M⁻¹` still places the clip correctly.)
 /// Two points describe a rectangle (opposite corners); three or more an
 /// explicit polygon.
-pub fn world_clip_polygon(
-    sf: &SpatialFilter,
-    ins: &Insert,
-) -> Vec<[f32; 2]> {
-    world_clip_polygon_f64(sf, ins)
-        .into_iter()
-        .map(|[x, y]| [x as f32, y as f32])
-        .collect()
-}
-
-/// f64 variant of [`world_clip_polygon`]. The boundary stays in absolute world
-/// coordinates so clipping at UTM scale (~5.7e6) is precise — the f32 version
-/// quantizes each vertex by ~0.5 m, which warps the clip region and breaks both
-/// the clipped render and ZOOM Extents.
-pub fn world_clip_polygon_f64(
+/// Build the clip boundary in absolute f64 world coordinates so clipping at
+/// large coordinate values remains precise.
+#[cfg(test)]
+fn world_clip_polygon_f64(
     sf: &SpatialFilter,
     ins: &Insert,
 ) -> Vec<[f64; 2]> {
-    let xform = ins.get_transform();
+    world_clip_polygon_for_transform(sf, &ins.get_transform())
+}
+
+/// Build the clip boundary with the exact transform used by the corresponding
+/// block instance. Callers that resolve block base points or parent instances
+/// pass their composed transform here so geometry and clipping share one space.
+pub fn world_clip_polygon_for_transform(
+    sf: &SpatialFilter,
+    xform: &Transform,
+) -> Vec<[f64; 2]> {
     let inv_block = &sf.inverse_block_transform;
     let local: Vec<[f64; 2]> = if sf.boundary_points.len() == 2 {
         let a = sf.boundary_points[0];
@@ -764,13 +762,13 @@ mod tests {
         ins.set_x_scale(0.1);
         ins.set_y_scale(0.1);
 
-        let poly = world_clip_polygon(&sf, &ins);
+        let poly = world_clip_polygon_f64(&sf, &ins);
         // vert (580,4528) → ×1000 → (580000,4528000) → ×0.1 + insert →
         // (639668, 4516955).
-        let xs: Vec<f32> = poly.iter().map(|p| p[0]).collect();
-        let ys: Vec<f32> = poly.iter().map(|p| p[1]).collect();
-        let minx = xs.iter().cloned().fold(f32::MAX, f32::min);
-        let miny = ys.iter().cloned().fold(f32::MAX, f32::min);
+        let xs: Vec<f64> = poly.iter().map(|p| p[0]).collect();
+        let ys: Vec<f64> = poly.iter().map(|p| p[1]).collect();
+        let minx = xs.iter().cloned().fold(f64::MAX, f64::min);
+        let miny = ys.iter().cloned().fold(f64::MAX, f64::min);
         assert!((minx - 639668.0).abs() < 1.0, "minx={minx}");
         assert!((miny - 4516955.0).abs() < 1.0, "miny={miny}");
     }

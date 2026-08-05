@@ -124,7 +124,7 @@ impl MeshMaterial {
             description: String::new(),
             diffuse: color,
             ambient: [color[0], color[1], color[2]],
-            specular: [1.0; 3],
+            specular: [0.08; 3],
             gloss: 0.5,
             reflectivity: 0.0,
             self_illumination: 0.0,
@@ -169,18 +169,11 @@ impl MeshMaterial {
         let bump_map = MeshTextureMap::from_dwg(&material.bump_map, base_dir);
         let refraction_map = MeshTextureMap::from_dwg(&material.refraction_map, base_dir);
         let normal_map = MeshTextureMap::from_dwg(&material.normal_map, base_dir);
-        // A material whose diffuse channel explicitly references an external
-        // texture is incomplete when that file cannot be resolved. Its stored
-        // diffuse RGB is commonly only a red/magenta placeholder (for example
-        // VILLA_COMPLETE's Plaster material), not the intended appearance.
-        // Keep the material's other physical properties, but use the entity's
-        // fully resolved Color/ByLayer/ByBlock value for the missing diffuse
-        // channel.
-        let diffuse = if diffuse_map.has_content() && diffuse_map.image.is_none() {
-            entity_color
-        } else {
-            material_color(&material.diffuse_color, entity_color)
-        };
+        // The stored diffuse component remains authoritative when an external
+        // image is unavailable. Replacing it with the entity colour would lose
+        // a decoded material value and make the result depend on a guess about
+        // the missing asset's intended appearance.
+        let diffuse = material_color(&material.diffuse_color, entity_color);
         let ambient = material_color(&material.ambient_color, entity_color);
         let specular = material_color(&material.specular_color, [1.0; 4]);
         let opacity = material.opacity_percent.clamp(0.0, 1.0) as f32;
