@@ -3845,22 +3845,77 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::QSelectSetType(t) => {
+            Message::QSelectSetScope(scope) => {
+                let i = self.active_tab;
+                let available_types = self.tabs[i].scene.qselect_entity_type_names(scope);
+                let type_filter = self.qselect.as_ref().and_then(|state| {
+                    state
+                        .type_filter
+                        .as_ref()
+                        .filter(|selected| available_types.iter().any(|item| item == *selected))
+                        .cloned()
+                });
+                let available_properties = self.tabs[i]
+                    .scene
+                    .qselect_properties(type_filter.as_deref(), scope);
+                let candidate_count = self.tabs[i].scene.qselect_candidate_count(scope);
                 if let Some(state) = self.qselect.as_mut() {
-                    // Drop the property when it no longer applies to the
-                    // chosen type: type-specific fields like `start_x`
-                    // would otherwise stay selected but never match.
-                    let kept_property = state.property.clone().and_then(|p| {
-                        let i = self.active_tab;
-                        let props = self.tabs[i].scene.qselect_properties(t.as_deref());
-                        if props.iter().any(|(f, _)| f == &p.field) {
-                            Some(p)
-                        } else {
-                            None
-                        }
+                    state.scope = scope;
+                    state.available_types = available_types;
+                    state.available_properties = available_properties;
+                    state.candidate_count = candidate_count;
+                    state.type_filter = type_filter;
+                    state.property = state.property.as_ref().and_then(|selected| {
+                        state
+                            .available_properties
+                            .iter()
+                            .find(|available| available.field == selected.field)
+                            .cloned()
+                    });
+                    state.value.clear();
+                    state.error = None;
+                    if matches!(scope, crate::app::QSelectScope::CurrentSelection) {
+                        state.append = false;
+                    }
+                    if matches!(state.operator, crate::app::QSelectOp::Gt | crate::app::QSelectOp::Lt)
+                        && !state.property.as_ref().is_some_and(|property| {
+                            matches!(property.editor, crate::app::QSelectValueEditor::Number)
+                        })
+                    {
+                        state.operator = crate::app::QSelectOp::Eq;
+                    }
+                }
+                Task::none()
+            }
+
+            Message::QSelectSetType(t) => {
+                let i = self.active_tab;
+                let scope = self
+                    .qselect
+                    .as_ref()
+                    .map_or(crate::app::QSelectScope::CurrentSpace, |state| state.scope);
+                let properties = self.tabs[i]
+                    .scene
+                    .qselect_properties(t.as_deref(), scope);
+                if let Some(state) = self.qselect.as_mut() {
+                    let kept_property = state.property.as_ref().and_then(|selected| {
+                        properties
+                            .iter()
+                            .find(|available| available.field == selected.field)
+                            .cloned()
                     });
                     state.type_filter = t;
+                    state.available_properties = properties;
                     state.property = kept_property;
+                    state.value.clear();
+                    state.error = None;
+                    if matches!(state.operator, crate::app::QSelectOp::Gt | crate::app::QSelectOp::Lt)
+                        && !state.property.as_ref().is_some_and(|property| {
+                            matches!(property.editor, crate::app::QSelectValueEditor::Number)
+                        })
+                    {
+                        state.operator = crate::app::QSelectOp::Eq;
+                    }
                 }
                 Task::none()
             }
@@ -3868,6 +3923,15 @@ impl OpenCADStudio {
             Message::QSelectSetProperty(p) => {
                 if let Some(state) = self.qselect.as_mut() {
                     state.property = p;
+                    state.value.clear();
+                    state.error = None;
+                    if matches!(state.operator, crate::app::QSelectOp::Gt | crate::app::QSelectOp::Lt)
+                        && !state.property.as_ref().is_some_and(|property| {
+                            matches!(property.editor, crate::app::QSelectValueEditor::Number)
+                        })
+                    {
+                        state.operator = crate::app::QSelectOp::Eq;
+                    }
                 }
                 Task::none()
             }
@@ -3875,6 +3939,7 @@ impl OpenCADStudio {
             Message::QSelectSetOperator(op) => {
                 if let Some(state) = self.qselect.as_mut() {
                     state.operator = op;
+                    state.error = None;
                 }
                 Task::none()
             }
@@ -3882,29 +3947,91 @@ impl OpenCADStudio {
             Message::QSelectSetValue(v) => {
                 if let Some(state) = self.qselect.as_mut() {
                     state.value = v;
+                    state.error = None;
+                }
+                Task::none()
+            }
+
+            Message::QSelectSetMode(mode) => {
+                if let Some(state) = self.qselect.as_mut() {
+                    state.mode = mode;
+                    state.error = None;
                 }
                 Task::none()
             }
 
             Message::QSelectSetAppend(b) => {
                 if let Some(state) = self.qselect.as_mut() {
-                    state.append = b;
+                    if matches!(state.scope, crate::app::QSelectScope::CurrentSpace) {
+                        state.append = b;
+                    }
+                    state.error = None;
                 }
                 Task::none()
             }
 
             Message::QSelectApply => {
+                let validation_error = self.qselect.as_ref().and_then(|state| {
+                    let candidate_count = self.tabs[self.active_tab]
+                        .scene
+                        .qselect_candidate_count(state.scope);
+                    if candidate_count == 0 {
+                        Some(crate::t!("No objects are available in this scope.").into_owned())
+                    } else if let Some(property) = state.property.as_ref() {
+                        if matches!(state.operator, crate::app::QSelectOp::Any) {
+                            None
+                        } else if matches!(
+                            state.operator,
+                            crate::app::QSelectOp::Gt | crate::app::QSelectOp::Lt
+                        ) && !matches!(
+                            property.editor,
+                            crate::app::QSelectValueEditor::Number
+                        ) {
+                            Some(
+                                crate::t!("This operator requires a numeric property.")
+                                    .into_owned(),
+                            )
+                        } else {
+                            match &property.editor {
+                                crate::app::QSelectValueEditor::Number
+                                    if crate::entities::common::parse_f64(&state.value).is_none() =>
+                                {
+                                    Some(crate::t!("Enter a valid number.").into_owned())
+                                }
+                                crate::app::QSelectValueEditor::Choice(_)
+                                    if state.value.is_empty() =>
+                                {
+                                    Some(crate::t!("Choose a value.").into_owned())
+                                }
+                                crate::app::QSelectValueEditor::Text
+                                | crate::app::QSelectValueEditor::Number
+                                | crate::app::QSelectValueEditor::Choice(_) => None,
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                });
+                if let Some(error) = validation_error {
+                    if let Some(state) = self.qselect.as_mut() {
+                        state.error = Some(error);
+                    }
+                    return Task::none();
+                }
                 let Some(state) = self.qselect.take() else {
                     return Task::none();
                 };
                 self.reset_modal_geometry();
                 let i = self.active_tab;
                 let matched = self.tabs[i].scene.qselect(
+                    state.scope,
                     state.type_filter.as_deref(),
                     state.property.as_ref().map(|p| p.field.as_str()),
                     state.operator,
                     &state.value,
-                    state.append,
+                    state.mode,
+                    state.append
+                        && matches!(state.scope, crate::app::QSelectScope::CurrentSpace),
                 );
                 self.command_line
                     .push_output(crate::tf!("QSELECT: {} object(s) selected.", matched).as_ref());

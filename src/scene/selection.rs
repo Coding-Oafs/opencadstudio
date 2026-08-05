@@ -56,6 +56,30 @@ impl Scene {
             .unwrap_or_default()
     }
 
+    fn qselect_candidate_handles(&self, scope: crate::app::QSelectScope) -> Vec<Handle> {
+        match scope {
+            crate::app::QSelectScope::CurrentSpace => self.current_layout_entity_handles(),
+            crate::app::QSelectScope::CurrentSelection => {
+                self.selected.iter().copied().collect()
+            }
+        }
+    }
+
+    pub fn qselect_candidate_count(&self, scope: crate::app::QSelectScope) -> usize {
+        self.qselect_candidate_handles(scope).len()
+    }
+
+    pub fn qselect_entity_type_names(&self, scope: crate::app::QSelectScope) -> Vec<String> {
+        use crate::entities::traits::entity_type_name;
+        let mut names = std::collections::BTreeSet::new();
+        for h in self.qselect_candidate_handles(scope) {
+            if let Some(entity) = self.document.get_entity(h) {
+                names.insert(entity_type_name(entity).to_string());
+            }
+        }
+        names.into_iter().collect()
+    }
+
     /// Extends the current selection with every entity in the active
     /// layout that matches one of the selected entities by `(variant,
     /// layer)`. The seed selection stays selected. No-op when nothing is
@@ -112,9 +136,9 @@ impl Scene {
         self.selected.len()
     }
 
-    /// Replaces (or extends, when `append` is true) the current
-    /// selection with every entity in the active layout that matches
-    /// the filter. Returns the number of newly-matching entities.
+    /// Builds a selection from the chosen scope and filter. Exclude mode
+    /// keeps candidates that do not match. Append mode unions the result
+    /// with the selection that existed before the query.
     ///
     /// `type_name` of `None` means "any type". `property_field` of
     /// `None` skips the property test (only the type filter applies).
@@ -123,19 +147,19 @@ impl Scene {
     /// reject anything non-numeric.
     pub fn qselect(
         &mut self,
+        scope: crate::app::QSelectScope,
         type_name: Option<&str>,
         property_field: Option<&str>,
         op: crate::app::QSelectOp,
         value: &str,
+        mode: crate::app::QSelectMode,
         append: bool,
     ) -> usize {
-        use crate::app::QSelectOp;
+        use crate::app::{QSelectMode, QSelectOp};
         use crate::entities::traits::entity_type_name;
-        if !append {
-            self.selected.clear();
-        }
-        let handles = self.current_layout_entity_handles();
-        let mut matched = 0;
+        let previous = self.selected.clone();
+        let handles = self.qselect_candidate_handles(scope);
+        let mut result = HashSet::default();
         for h in handles {
             let Some(e) = self.document.get_entity(h) else {
                 continue;
@@ -150,43 +174,48 @@ impl Scene {
             {
                 continue;
             }
-            if let Some(t) = type_name {
-                if entity_type_name(e) != t {
-                    continue;
-                }
-            }
-            let prop_ok = match (property_field, op) {
-                (None, _) | (_, QSelectOp::Any) => true,
-                (Some(field), op) => {
-                    let Some(actual) = self.entity_property_value(e, field) else {
-                        continue;
-                    };
-                    match op {
-                        QSelectOp::Eq => actual.eq_ignore_ascii_case(value),
-                        QSelectOp::Neq => !actual.eq_ignore_ascii_case(value),
-                        QSelectOp::Gt | QSelectOp::Lt => {
-                            let (Ok(a), Ok(b)) =
-                                (actual.parse::<f64>(), value.parse::<f64>())
-                            else {
-                                continue;
-                            };
-                            if matches!(op, QSelectOp::Gt) {
-                                a > b
-                            } else {
-                                a < b
-                            }
+            let type_ok = type_name.is_none_or(|t| entity_type_name(e) == t);
+            let prop_ok = if !type_ok {
+                true
+            } else {
+                match (property_field, op) {
+                    (None, _) | (_, QSelectOp::Any) => true,
+                    (Some(field), op) => {
+                        match self.entity_property_value(e, field) {
+                            Some(actual) => match op {
+                                QSelectOp::Eq => actual.eq_ignore_ascii_case(value),
+                                QSelectOp::Neq => !actual.eq_ignore_ascii_case(value),
+                                QSelectOp::Gt | QSelectOp::Lt => {
+                                    match (
+                                        crate::entities::common::parse_f64(&actual),
+                                        crate::entities::common::parse_f64(value),
+                                    ) {
+                                        (Some(a), Some(b)) if matches!(op, QSelectOp::Gt) => a > b,
+                                        (Some(a), Some(b)) => a < b,
+                                        _ => false,
+                                    }
+                                }
+                                QSelectOp::Any => true,
+                            },
+                            None => false,
                         }
-                        QSelectOp::Any => true,
                     }
                 }
             };
-            if prop_ok {
-                self.selected.insert(h);
-                matched += 1;
+            let matches_filter = type_ok && prop_ok;
+            let keep = match mode {
+                QSelectMode::Include => matches_filter,
+                QSelectMode::Exclude => !matches_filter,
+            };
+            if keep {
+                result.insert(h);
             }
         }
-        self.bump_selection();
-        matched
+        if append {
+            result.extend(previous);
+        }
+        self.replace_selection(result);
+        self.selected.len()
     }
 
     /// Returns the sorted set of entity-type names present in the active
@@ -223,25 +252,100 @@ impl Scene {
         !self.selection_filter.is_empty()
     }
 
-    /// Returns the list of `(field, label)` pairs the Quick Select
-    /// "Properties" dropdown should show given the current type filter:
-    ///
-    /// * Common properties (Layer, Color, Linetype, Lineweight) are
-    ///   always included.
-    /// * When `type_name` names a specific entity type present in the
-    ///   active layout, the first entity of that type contributes its
-    ///   `geometry_properties()` rows (Start X, Length, Radius, …) so
-    ///   type-specific filtering works.
+    /// Returns common and type-specific filter properties with the editor
+    /// each value needs. Choice editors are enriched from both document
+    /// tables and values present in the selected candidate scope.
     pub fn qselect_properties(
         &self,
         type_name: Option<&str>,
-    ) -> Vec<(String, String)> {
+        scope: crate::app::QSelectScope,
+    ) -> Vec<crate::app::QSelectPropertyChoice> {
         use crate::entities::traits::{entity_type_name, EntityTypeOps};
-        let mut out: Vec<(String, String)> = vec![
-            ("layer".to_string(), "Layer".to_string()),
-            ("color".to_string(), "Color".to_string()),
-            ("linetype".to_string(), "Linetype".to_string()),
-            ("lineweight".to_string(), "Lineweight".to_string()),
+        use crate::scene::model::object::PropValue;
+        use crate::app::{QSelectPropertyChoice, QSelectValueEditor};
+
+        let candidate_handles: Vec<Handle> = self
+            .qselect_candidate_handles(scope)
+            .into_iter()
+            .filter(|h| {
+                self.document.get_entity(*h).is_some_and(|entity| {
+                    type_name.is_none_or(|t| entity_type_name(entity) == t)
+                })
+            })
+            .collect();
+
+        let mut layer_options: Vec<String> = self
+            .document
+            .layers
+            .iter()
+            .map(|layer| layer.name.clone())
+            .collect();
+        layer_options.sort_by_key(|value| value.to_lowercase());
+        let mut linetype_options = vec!["ByLayer".to_string(), "ByBlock".to_string()];
+        linetype_options.extend(
+            self.document
+                .line_types
+                .iter()
+                .map(|linetype| linetype.name.clone()),
+        );
+
+        let choice = |field: &str, label: String, editor: QSelectValueEditor| {
+            QSelectPropertyChoice {
+                field: field.to_string(),
+                label,
+                editor,
+            }
+        };
+        let mut out = vec![
+            choice("handle", crate::t!("Handle").into_owned(), QSelectValueEditor::Text),
+            choice(
+                "color",
+                crate::t!("Color").into_owned(),
+                QSelectValueEditor::Choice(vec!["ByLayer".into(), "ByBlock".into()]),
+            ),
+            choice(
+                "layer",
+                crate::t!("Layer").into_owned(),
+                QSelectValueEditor::Choice(layer_options.clone()),
+            ),
+            choice(
+                "linetype",
+                crate::t!("Linetype").into_owned(),
+                QSelectValueEditor::Choice(linetype_options.clone()),
+            ),
+            choice(
+                "linetype_scale",
+                crate::t!("Linetype scale").into_owned(),
+                QSelectValueEditor::Number,
+            ),
+            choice(
+                "plot_style",
+                crate::t!("Plot style").into_owned(),
+                QSelectValueEditor::Choice(vec![
+                    "ByLayer".into(),
+                    "ByBlock".into(),
+                    "ByColor".into(),
+                ]),
+            ),
+            choice(
+                "lineweight",
+                crate::t!("Lineweight").into_owned(),
+                QSelectValueEditor::Choice(vec![
+                    "ByLayer".into(),
+                    "ByBlock".into(),
+                    "Default".into(),
+                ]),
+            ),
+            choice(
+                "transparency",
+                crate::t!("Transparency").into_owned(),
+                QSelectValueEditor::Choice(vec!["ByLayer".into()]),
+            ),
+            choice(
+                "hyperlink",
+                crate::t!("Hyperlink").into_owned(),
+                QSelectValueEditor::Text,
+            ),
         ];
         if let Some(t) = type_name {
             let text_style_names: Vec<String> = self
@@ -250,21 +354,145 @@ impl Scene {
                 .iter()
                 .map(|s| s.name.clone())
                 .collect();
-            let sample = self
-                .current_layout_entity_handles()
-                .into_iter()
+            let sample = candidate_handles
+                .iter()
+                .copied()
                 .filter_map(|h| self.document.get_entity(h))
                 .find(|e| entity_type_name(e) == t);
             if let Some(sample) = sample {
-                for section in sample.geometry_properties(&text_style_names) {
+                let mut sections = vec![crate::scene::cache::properties::general_section(sample)];
+                if let Some(section) =
+                    crate::scene::cache::properties::visualization_section(sample)
+                {
+                    sections.push(section);
+                }
+                sections.extend(sample.geometry_properties(&text_style_names));
+                for section in sections {
                     for prop in section.props {
-                        // Skip rows that don't sensibly compare via
-                        // `entity_property_value` (read-only labels are
-                        // fine — users can still match against them).
-                        out.push((prop.field.to_string(), prop.label.clone()));
+                        if out.iter().any(|item| item.field == prop.field) {
+                            continue;
+                        }
+                        let editor = if prop.field == "material" {
+                            QSelectValueEditor::Choice(vec![
+                                "ByLayer".into(),
+                                "ByBlock".into(),
+                                "Custom".into(),
+                            ])
+                        } else {
+                            match prop.value {
+                                PropValue::ReadOnly(ref value)
+                                | PropValue::EditText(ref value) => {
+                                    let field = prop.field.to_ascii_lowercase();
+                                    let textual = [
+                                        "name",
+                                        "text",
+                                        "content",
+                                        "style",
+                                        "tag",
+                                        "prompt",
+                                        "value",
+                                        "description",
+                                        "format",
+                                        "font",
+                                        "path",
+                                        "file",
+                                        "url",
+                                    ]
+                                    .iter()
+                                    .any(|part| field.contains(part));
+                                    if !textual
+                                        && crate::entities::common::parse_f64(value).is_some()
+                                    {
+                                        QSelectValueEditor::Number
+                                    } else {
+                                        QSelectValueEditor::Text
+                                    }
+                                }
+                                PropValue::LayerChoice(_) => {
+                                    QSelectValueEditor::Choice(layer_options.clone())
+                                }
+                                PropValue::Choice { ref options, .. } => {
+                                    QSelectValueEditor::Choice(options.clone())
+                                }
+                                PropValue::EditChoice {
+                                    ref value,
+                                    ref options,
+                                } => {
+                                    let mut values = options.clone();
+                                    if !values.iter().any(|item| item == value) {
+                                        values.push(value.clone());
+                                    }
+                                    QSelectValueEditor::Choice(values)
+                                }
+                                PropValue::ColorChoice(_) => QSelectValueEditor::Choice(vec![
+                                    "ByLayer".into(),
+                                    "ByBlock".into(),
+                                ]),
+                                PropValue::LwChoice(_) => QSelectValueEditor::Choice(vec![
+                                    "ByLayer".into(),
+                                    "ByBlock".into(),
+                                    "Default".into(),
+                                ]),
+                                PropValue::LinetypeChoice(_) => {
+                                    QSelectValueEditor::Choice(linetype_options.clone())
+                                }
+                                PropValue::HatchPatternChoice(value) => {
+                                    let mut patterns: Vec<String> =
+                                        crate::scene::model::hatch_patterns::catalog()
+                                            .iter()
+                                            .map(|entry| entry.name.clone())
+                                            .collect();
+                                    if !patterns.iter().any(|item| item == &value) {
+                                        patterns.push(value);
+                                    }
+                                    QSelectValueEditor::Choice(patterns)
+                                }
+                                PropValue::BoolToggle { .. } => {
+                                    QSelectValueEditor::Choice(vec![
+                                        "false".into(),
+                                        "true".into(),
+                                    ])
+                                }
+                                PropValue::AttrText { .. } => QSelectValueEditor::Text,
+                                PropValue::Stepper { .. }
+                                | PropValue::ColorVaries
+                                | PropValue::LwVaries => continue,
+                            }
+                        };
+                        out.push(choice(prop.field, prop.label, editor));
                     }
                 }
             }
+        }
+
+        for property in &mut out {
+            let QSelectValueEditor::Choice(options) = &mut property.editor else {
+                continue;
+            };
+            let common_choice = matches!(
+                property.field.as_str(),
+                "color"
+                    | "layer"
+                    | "linetype"
+                    | "plot_style"
+                    | "lineweight"
+                    | "transparency"
+                    | "material"
+            );
+            if !common_choice && !options.is_empty() {
+                continue;
+            }
+            for handle in &candidate_handles {
+                let Some(entity) = self.document.get_entity(*handle) else {
+                    continue;
+                };
+                if let Some(value) = self.entity_property_value(entity, &property.field) {
+                    if !options.iter().any(|option| option.eq_ignore_ascii_case(&value)) {
+                        options.push(value);
+                    }
+                }
+            }
+            options.sort_by_key(|value| value.to_lowercase());
         }
         out
     }
@@ -283,10 +511,53 @@ impl Scene {
         use crate::entities::traits::EntityTypeOps;
         use crate::scene::model::object::PropValue;
         match field {
+            "handle" => Some(entity.common().handle.value().to_string()),
             "layer" => Some(entity.common().layer.clone()),
             "color" => Some(Self::format_color(entity.common().color)),
-            "linetype" => Some(entity.common().linetype.clone()),
+            "linetype" => Some(if entity.common().linetype.is_empty() {
+                "ByLayer".to_string()
+            } else {
+                entity.common().linetype.clone()
+            }),
+            "linetype_scale" => Some(format!("{:.4}", entity.common().linetype_scale)),
+            "plot_style" => Some(
+                match entity.common().plotstyle_flags {
+                    0 => "ByLayer",
+                    1 => "ByBlock",
+                    _ => "ByColor",
+                }
+                .to_string(),
+            ),
             "lineweight" => Some(Self::format_lineweight(entity.common().line_weight)),
+            "transparency" => Some(if entity.common().transparency.alpha() == 0 {
+                "ByLayer".to_string()
+            } else {
+                ((entity.common().transparency.alpha() as f64 / 255.0 * 100.0).round() as u32)
+                    .to_string()
+            }),
+            "hyperlink" => Some(
+                entity
+                    .common()
+                    .extended_data
+                    .get_record("PE_URL")
+                    .and_then(|record| {
+                        record.values.iter().find_map(|value| match value {
+                            acadrust::xdata::XDataValue::String(text) if !text.is_empty() => {
+                                Some(text.clone())
+                            }
+                            _ => None,
+                        })
+                    })
+                    .unwrap_or_default(),
+            ),
+            "material" => Some(
+                match entity.common().material_flags {
+                    0 => "ByLayer",
+                    1 => "ByBlock",
+                    _ => "Custom",
+                }
+                .to_string(),
+            ),
             _ => {
                 let text_style_names: Vec<String> = self
                     .document
@@ -294,8 +565,14 @@ impl Scene {
                     .iter()
                     .map(|s| s.name.clone())
                     .collect();
-                let prop = entity
-                    .geometry_properties(&text_style_names)
+                let mut sections = vec![crate::scene::cache::properties::general_section(entity)];
+                if let Some(section) =
+                    crate::scene::cache::properties::visualization_section(entity)
+                {
+                    sections.push(section);
+                }
+                sections.extend(entity.geometry_properties(&text_style_names));
+                let prop = sections
                     .into_iter()
                     .flat_map(|s| s.props)
                     .find(|p| p.field == field)?;

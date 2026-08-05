@@ -1313,12 +1313,24 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         type_filter = Some(entity_type_name(e).to_string());
                     }
                 }
+                let scope = crate::app::QSelectScope::CurrentSpace;
+                let available_types = self.tabs[i].scene.qselect_entity_type_names(scope);
+                let available_properties = self.tabs[i]
+                    .scene
+                    .qselect_properties(type_filter.as_deref(), scope);
+                let candidate_count = self.tabs[i].scene.qselect_candidate_count(scope);
                 self.qselect = Some(crate::app::QSelectState {
+                    scope,
+                    available_types,
+                    available_properties,
+                    candidate_count,
                     type_filter,
                     property: None,
                     operator: crate::app::QSelectOp::Eq,
                     value: String::new(),
+                    mode: crate::app::QSelectMode::Include,
                     append: false,
+                    error: None,
                 });
                 self.reset_modal_geometry();
                 Task::none()

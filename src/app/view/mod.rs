@@ -1720,12 +1720,11 @@ impl OpenCADStudio {
             };
 
         let qselect_layer: Element<'_, Message> = if let Some(state) = &self.qselect {
-            let types = tab.scene.entity_type_names_in_layout();
-            let properties = tab.scene.qselect_properties(state.type_filter.as_deref());
             qselect_overlay(
                 state,
-                &types,
-                &properties,
+                &state.available_types,
+                &state.available_properties,
+                state.candidate_count,
                 self.modal_offset,
                 self.modal_resize,
             )

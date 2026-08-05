@@ -1199,16 +1199,14 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
 const QSELECT_ANY_TYPE: &str = "(Any type)";
 const QSELECT_ANY_PROP: &str = "(Any property)";
 
-/// Floating panel for the Quick Select feature. Single-row filter:
-/// object type → property → operator → value, plus an "Append to current
-/// selection" checkbox. The property dropdown is type-aware — Common
-/// properties (Layer, Color, Linetype, Lineweight) are always shown;
-/// picking a specific Object type adds that type's `geometry_properties`
-/// fields (Start X, Length, Radius, …) so type-specific filtering works.
+/// Quick Select uses the application's shared movable modal frame. Its form
+/// groups scope, filter, and result behavior while reusing the same compact
+/// field and button styles as the other workspace dialogs.
 pub(super) fn qselect_overlay<'a>(
     state: &'a crate::app::QSelectState,
     types: &[String],
-    properties: &[(String, String)],
+    properties: &[crate::app::QSelectPropertyChoice],
+    candidate_count: usize,
     modal_offset: iced::Vector,
     modal_resize: iced::Vector,
 ) -> Element<'a, Message> {
@@ -1216,12 +1214,14 @@ pub(super) fn qselect_overlay<'a>(
         state,
         types,
         properties,
+        candidate_count,
         crate::ui::modal::ModalSizing::INTRINSIC,
     );
     let content = qselect_content(
         state,
         types,
         properties,
+        candidate_count,
         crate::ui::modal::ModalSizing::FILL,
     );
     let content = crate::ui::modal::intrinsic(
@@ -1244,10 +1244,11 @@ pub(super) fn qselect_overlay<'a>(
 fn qselect_content<'a>(
     state: &'a crate::app::QSelectState,
     types: &[String],
-    properties: &[(String, String)],
+    properties: &[crate::app::QSelectPropertyChoice],
+    candidate_count: usize,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
-    use iced::widget::{checkbox};
+    use iced::widget::{checkbox, radio, rule};
     let mut type_options: Vec<String> = vec![QSELECT_ANY_TYPE.to_string()];
     type_options.extend(types.iter().cloned());
 
@@ -1255,21 +1256,22 @@ fn qselect_content<'a>(
         vec![crate::app::QSelectPropertyChoice {
             field: String::new(),
             label: QSELECT_ANY_PROP.to_string(),
+            editor: crate::app::QSelectValueEditor::Text,
         }];
-    prop_options.extend(properties.iter().map(|(field, label)| {
-        crate::app::QSelectPropertyChoice {
-            field: field.clone(),
-            label: label.clone(),
-        }
-    }));
+    prop_options.extend(properties.iter().cloned());
 
-    let op_options: Vec<crate::app::QSelectOp> = vec![
+    let number_property = state.property.as_ref().is_some_and(|property| {
+        matches!(property.editor, crate::app::QSelectValueEditor::Number)
+    });
+    let mut op_options: Vec<crate::app::QSelectOp> = vec![
         crate::app::QSelectOp::Eq,
         crate::app::QSelectOp::Neq,
-        crate::app::QSelectOp::Gt,
-        crate::app::QSelectOp::Lt,
-        crate::app::QSelectOp::Any,
     ];
+    if number_property {
+        op_options.push(crate::app::QSelectOp::Gt);
+        op_options.push(crate::app::QSelectOp::Lt);
+    }
+    op_options.push(crate::app::QSelectOp::Any);
 
     let type_sel = state
         .type_filter
@@ -1281,14 +1283,17 @@ fn qselect_content<'a>(
         .unwrap_or(crate::app::QSelectPropertyChoice {
             field: String::new(),
             label: QSELECT_ANY_PROP.to_string(),
+            editor: crate::app::QSelectValueEditor::Text,
         });
 
-    // The value field is disabled (visually de-emphasised; we still
-    // render the same widget) when no property is picked or the
-    // operator is "*Any value" — both of those skip the value test.
     let value_enabled =
         state.property.is_some() && !matches!(state.operator, crate::app::QSelectOp::Any);
     let field_width = if matches!(sizing.width, iced::Length::Fill) {
+        Fill
+    } else {
+        iced::Length::Shrink
+    };
+    let flex_width = if matches!(sizing.width, iced::Length::Fill) {
         Fill
     } else {
         iced::Length::Shrink
@@ -1297,45 +1302,112 @@ fn qselect_content<'a>(
     let label = |s: std::borrow::Cow<'static, str>| {
         text(s)
             .size(12)
-            .width(iced::Length::Fixed(90.0))
+            .width(iced::Length::Fixed(112.0))
+    };
+    let section_label = |s: std::borrow::Cow<'static, str>| {
+        text(s).size(11).style(|theme: &Theme| iced::widget::text::Style {
+            color: Some(theme.palette().background.base.text.scale_alpha(0.65)),
+        })
     };
 
-    let btn = |lbl: std::borrow::Cow<'static, str>, msg: Message, primary: bool| {
-        button(text(lbl).size(12))
-            .on_press(msg)
-            .style(move |theme: &Theme, st| {
-                let palette = theme.palette();
-                let pair = match (
-                    primary,
-                    matches!(st, button::Status::Hovered | button::Status::Pressed),
-                ) {
-                    (true, true) => palette.primary.strong,
-                    (true, false) => palette.primary.base,
-                    (false, true) => palette.background.strong,
-                    (false, false) => palette.background.weak,
-                };
-                button::Style {
-                background: Some(Background::Color(pair.color)),
-                text_color: pair.text,
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                ..Default::default()
+    let value_editor: Element<'a, Message> = match state.property.as_ref() {
+        Some(property) => match &property.editor {
+            crate::app::QSelectValueEditor::Choice(options) => {
+                let selected = (!state.value.is_empty()).then(|| state.value.clone());
+                let picker = iced::widget::pick_list(
+                    selected,
+                    options.clone(),
+                    |value| value.to_string(),
+                )
+                .width(field_width);
+                if value_enabled {
+                    picker.on_select(Message::QSelectSetValue).into()
+                } else {
+                    picker.into()
                 }
-            })
-            .padding([4, 14])
+            }
+            crate::app::QSelectValueEditor::Text
+            | crate::app::QSelectValueEditor::Number => {
+                let mut input = text_input("", &state.value).size(12).width(field_width);
+                if value_enabled {
+                    input = input.on_input(Message::QSelectSetValue);
+                }
+                input.into()
+            }
+        },
+        None => text_input("", "").size(12).width(field_width).into(),
     };
 
-    let mut value_input = text_input("", &state.value)
-        .size(12)
-        .width(field_width);
-    if value_enabled {
-        value_input = value_input.on_input(Message::QSelectSetValue);
+    let derived_error = if candidate_count == 0 {
+        Some(crate::t!("No objects are available in this scope.").into_owned())
+    } else if value_enabled && number_property
+        && crate::entities::common::parse_f64(&state.value).is_none()
+    {
+        Some(crate::t!("Enter a valid number.").into_owned())
+    } else if value_enabled
+        && state.property.as_ref().is_some_and(|property| {
+            matches!(property.editor, crate::app::QSelectValueEditor::Choice(_))
+        })
+        && state.value.is_empty()
+    {
+        Some(crate::t!("Choose a value.").into_owned())
+    } else if matches!(state.operator, crate::app::QSelectOp::Gt | crate::app::QSelectOp::Lt)
+        && !number_property
+    {
+        Some(crate::t!("This operator requires a numeric property.").into_owned())
+    } else {
+        None
+    };
+    let error = state.error.clone().or(derived_error);
+
+    let scope_options = vec![
+        crate::app::QSelectScope::CurrentSpace,
+        crate::app::QSelectScope::CurrentSelection,
+    ];
+    let scope_picker = iced::widget::pick_list(
+        Some(state.scope),
+        scope_options,
+        |value| value.to_string(),
+    )
+    .on_select(Message::QSelectSetScope)
+    .width(field_width);
+
+    let mut append = checkbox(state.append).size(14);
+    if matches!(state.scope, crate::app::QSelectScope::CurrentSpace) {
+        append = append.on_toggle(Message::QSelectSetAppend);
     }
 
+    let cancel = button(text(t!("Cancel")).size(12))
+        .on_press(Message::QSelectClose)
+        .style(button::subtle)
+        .padding([5, 16]);
+    let apply = button(text(t!("Apply")).size(12))
+        .style(button::primary)
+        .padding([5, 18]);
+    let apply = if error.is_none() {
+        apply.on_press(Message::QSelectApply)
+    } else {
+        apply
+    };
+
     let panel_body = column![
+        section_label(t!("Scope")),
+        Space::new().height(5),
+        row![label(t!("Apply to:")), scope_picker]
+            .align_y(iced::Alignment::Center)
+            .spacing(8)
+            .width(sizing.width),
+        Space::new().height(4),
+        text(format!("{} candidate object(s)", candidate_count))
+            .size(11)
+            .style(|theme: &Theme| iced::widget::text::Style {
+                color: Some(theme.palette().background.base.text.scale_alpha(0.65)),
+            }),
+        Space::new().height(10),
+        container(rule::horizontal(1)).width(flex_width),
+        Space::new().height(10),
+        section_label(t!("Filter")),
+        Space::new().height(5),
         row![
             label(t!("Object type:")),
             iced::widget::pick_list(
@@ -1364,12 +1436,12 @@ fn qselect_content<'a>(
                 |value| value.to_string(),
             )
             .on_select(|p: crate::app::QSelectPropertyChoice| {
-                    if p.field.is_empty() {
-                        Message::QSelectSetProperty(None)
-                    } else {
-                        Message::QSelectSetProperty(Some(p))
-                    }
-                })
+                if p.field.is_empty() {
+                    Message::QSelectSetProperty(None)
+                } else {
+                    Message::QSelectSetProperty(Some(p))
+                }
+            })
             .width(field_width),
         ]
         .align_y(iced::Alignment::Center)
@@ -1390,25 +1462,57 @@ fn qselect_content<'a>(
         .spacing(8)
         .width(sizing.width),
         Space::new().height(6),
-        row![label(t!("Value:")), value_input,]
+        row![label(t!("Value:")), value_editor]
             .align_y(iced::Alignment::Center)
             .spacing(8)
             .width(sizing.width),
         Space::new().height(10),
+        container(rule::horizontal(1)).width(flex_width),
+        Space::new().height(10),
+        section_label(t!("Result")),
+        Space::new().height(5),
+        column![
+            radio(
+                t!("Include matching objects"),
+                crate::app::QSelectMode::Include,
+                Some(state.mode),
+                Message::QSelectSetMode,
+            )
+            .size(14)
+            .text_size(12),
+            radio(
+                t!("Exclude matching objects"),
+                crate::app::QSelectMode::Exclude,
+                Some(state.mode),
+                Message::QSelectSetMode,
+            )
+            .size(14)
+            .text_size(12),
+        ]
+        .spacing(5),
+        Space::new().height(8),
         row![
-            checkbox(state.append)
-                .on_toggle(Message::QSelectSetAppend)
-                .size(14),
+            append,
             Space::new().width(6),
-            text(t!("Append to current selection")).size(12),
+            text(t!("Append result to current selection")).size(12),
         ]
         .align_y(iced::Alignment::Center),
-        Space::new().height(14),
+        Space::new().height(10),
+        if let Some(message) = error {
+            text(message)
+                .size(11)
+                .style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(theme.palette().danger.base.color),
+                })
+        } else {
+            text("").size(11)
+        },
+        Space::new().height(8),
         row![
-            Space::new().width(field_width),
-            btn(t!("Cancel"), Message::QSelectClose, false),
+            Space::new().width(flex_width),
+            cancel,
             Space::new().width(8),
-            btn(t!("Apply"), Message::QSelectApply, true),
+            apply,
         ]
         .align_y(iced::Alignment::Center),
     ]
@@ -1423,13 +1527,13 @@ fn qselect_content<'a>(
         .style(|theme: &Theme| {
             let palette = theme.palette();
             container::Style {
-            background: Some(Background::Color(palette.background.weak.color)),
-            border: Border {
-                color: palette.background.neutral.color,
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
+                background: Some(Background::Color(palette.background.weak.color)),
+                border: Border {
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
             }
         });
 

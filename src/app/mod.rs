@@ -109,6 +109,38 @@ pub enum QSelectOp {
     Lt,
 }
 
+/// Candidate set searched by Quick Select.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QSelectScope {
+    CurrentSpace,
+    CurrentSelection,
+}
+
+impl std::fmt::Display for QSelectScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = match self {
+            QSelectScope::CurrentSpace => "Current space",
+            QSelectScope::CurrentSelection => "Current selection",
+        };
+        f.write_str(crate::t!(source).as_ref())
+    }
+}
+
+/// Whether matching candidates are kept or removed from the result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QSelectMode {
+    Include,
+    Exclude,
+}
+
+/// Editor used by the Quick Select value field.
+#[derive(Clone, Debug)]
+pub enum QSelectValueEditor {
+    Text,
+    Number,
+    Choice(Vec<String>),
+}
+
 impl std::fmt::Display for QSelectOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
@@ -131,6 +163,7 @@ impl std::fmt::Display for QSelectOp {
 pub struct QSelectPropertyChoice {
     pub field: String,
     pub label: String,
+    pub editor: QSelectValueEditor,
 }
 
 impl PartialEq for QSelectPropertyChoice {
@@ -148,19 +181,22 @@ impl std::fmt::Display for QSelectPropertyChoice {
 }
 
 /// Open Quick Select panel state. The filter is one
-/// `(type, property, op, value)` row plus an Append-to-current-selection
-/// toggle, mirroring the classic QSELECT dialog: the panel filters
-/// candidate entities (entire layout) by type, then by the chosen
-/// property compared to the typed value using the operator.
+/// `(scope, type, property, op, value)` row plus result behavior.
 #[derive(Clone, Debug)]
 pub struct QSelectState {
+    pub scope: QSelectScope,
+    pub available_types: Vec<String>,
+    pub available_properties: Vec<QSelectPropertyChoice>,
+    pub candidate_count: usize,
     /// `None` = "(Any type)".
     pub type_filter: Option<String>,
     /// `None` = no property filter; the type filter alone applies.
     pub property: Option<QSelectPropertyChoice>,
     pub operator: QSelectOp,
     pub value: String,
+    pub mode: QSelectMode,
     pub append: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2493,6 +2529,8 @@ pub enum Message {
     QSelectOpen,
     /// Close the Quick Select panel without applying.
     QSelectClose,
+    /// Candidate scope: active space or the current selection.
+    QSelectSetScope(QSelectScope),
     /// Type filter — `None` means "any type".
     QSelectSetType(Option<String>),
     /// Property to compare. `None` means "no property filter — just type
@@ -2503,6 +2541,8 @@ pub enum Message {
     QSelectSetOperator(QSelectOp),
     /// Compare-against value (free-text input).
     QSelectSetValue(String),
+    /// Include or exclude objects matching the filter.
+    QSelectSetMode(QSelectMode),
     /// Append-to-current-selection toggle.
     QSelectSetAppend(bool),
     /// Apply the current filter and close the panel.
