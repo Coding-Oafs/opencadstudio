@@ -1227,8 +1227,9 @@ impl OpenCADStudio {
                     Projection::Perspective
                 };
                 let i = self.active_tab;
-                self.tabs[i].scene.camera.borrow_mut().projection = proj;
-                self.tabs[i].scene.camera_generation += 1;
+                self.tabs[i]
+                    .scene
+                    .set_projection_preserving_frame(proj);
                 self.ribbon.set_ortho(ortho);
                 self.command_line.push_output(if ortho {
                     "Projection: Orthographic"

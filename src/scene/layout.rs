@@ -286,6 +286,7 @@ impl Scene {
                 .map(|t| t.camera.clone());
             if let Some(c) = cam {
                 *self.camera.borrow_mut() = c;
+                self.projection_bounds_epoch.set(0);
             }
         }
     }
@@ -362,6 +363,7 @@ impl Scene {
         };
         if let Some(cam) = incoming {
             *self.camera.borrow_mut() = cam;
+            self.projection_bounds_epoch.set(0);
         }
         self.active_model_tile.set(idx);
         true

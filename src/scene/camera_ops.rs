@@ -189,6 +189,53 @@ impl Scene {
         self.camera_generation += 1;
     }
 
+    /// Refresh model bounds without moving the live camera. Reusing `fit_all`
+    /// keeps projection framing on the same visibility and outlier filters as
+    /// Zoom Extents instead of accepting every finite cached AABB.
+    fn refresh_projection_bounds(&mut self) {
+        if self.current_layout != "Model"
+            || self.active_viewport.is_some()
+            || (self.projection_bounds_epoch.get() == self.geometry_epoch
+                && self.camera.borrow().fitted_model_bounds().is_some())
+        {
+            return;
+        }
+
+        let saved_camera = self.camera.borrow().clone();
+        let saved_generation = self.camera_generation;
+        self.camera.borrow_mut().model_bounds = None;
+        self.fit_all();
+        let refreshed = self.camera.borrow().fitted_model_bounds();
+        *self.camera.borrow_mut() = saved_camera;
+        self.camera_generation = saved_generation;
+
+        if let Some((min, max)) = refreshed {
+            self.camera.borrow_mut().fit_depth_to_bounds(min, max);
+            self.projection_bounds_epoch.set(self.geometry_epoch);
+        }
+    }
+
+    /// Switch the live camera projection without changing its target or
+    /// orientation. Model layout bounds are refreshed first so perspective eye
+    /// distance accounts for the current, visible drawing depth.
+    pub fn set_projection_preserving_frame(
+        &mut self,
+        projection: view::camera::Projection,
+    ) -> bool {
+        if self.camera.borrow().projection == projection {
+            return false;
+        }
+
+        self.refresh_projection_bounds();
+
+        let aspect = self.active_camera_aspect();
+        self.camera
+            .borrow_mut()
+            .set_projection_preserving_frame(projection, aspect);
+        self.camera_generation += 1;
+        true
+    }
+
     /// Aspect ratio of the active camera's actual render rectangle. Model
     /// panes are separate shader widgets, so the full-canvas render aspect is
     /// wrong whenever a tiled viewport is active.
@@ -219,6 +266,7 @@ impl Scene {
         self.camera
             .borrow_mut()
             .fit_to_bounds(min, max, aspect);
+        self.projection_bounds_epoch.set(self.geometry_epoch);
         self.camera_generation += 1;
     }
 
@@ -603,6 +651,7 @@ impl Scene {
         *self.model_tiles.borrow_mut() = tiles;
         self.active_model_tile.set(0);
         *self.camera.borrow_mut() = active_cam;
+        self.projection_bounds_epoch.set(0);
         // Rebuild the pane_grid layout from the restored tile rects so the panes
         // match (the renderer / input iterate panes, not tiles).
         self.rebuild_panes_from_tiles();
@@ -1057,19 +1106,31 @@ impl Scene {
             }
             !is_infinite
         });
-        // 3D solids render as meshes, not wires, so collect their (offset-rel)
-        // XY AABBs separately — a drawing of only solids has no wires to fit.
-        let mesh_aabbs: Vec<[f32; 4]> = self
+        // 3D solids render as meshes, not wires, so collect their complete
+        // world boxes separately — a drawing of only solids has no wires to fit.
+        let mesh_aabbs: Vec<([f32; 4], [f32; 2])> = self
             .meshes
             .iter()
             .filter(|(h, _)| {
-                self.document
-                    .get_entity(**h)
-                    .map(|e| e.common().owner_handle == layout_block)
-                    .unwrap_or(false)
+                let handle = **h;
+                self.mesh_entity_visible(handle)
+                    && self.document.get_entity(handle).is_some_and(|entity| {
+                        self.belongs_to_visible_block(
+                            handle,
+                            entity.common().owner_handle,
+                            layout_block,
+                        )
+                    })
             })
-            .map(|(_, set)| set.world_aabb)
-            .filter(|a| a[0].is_finite() && a[2].is_finite())
+            .map(|(_, set)| (set.world_aabb, set.z_aabb))
+            .filter(|(xy, z)| {
+                xy[0].is_finite()
+                    && xy[1].is_finite()
+                    && xy[2].is_finite()
+                    && xy[3].is_finite()
+                    && z[0].is_finite()
+                    && z[1].is_finite()
+            })
             .collect();
         if wires.is_empty() && mesh_aabbs.is_empty() && infinite_base_pts.is_empty() {
             return;
@@ -1174,9 +1235,9 @@ impl Scene {
             }
         }
         // Fold in 3D-solid mesh AABBs (not subject to the wire IQR reject).
-        for [ax, ay, bx, by] in &mesh_aabbs {
-            min = min.min(glam::Vec3::new(*ax, *ay, 0.0));
-            max = max.max(glam::Vec3::new(*bx, *by, 0.0));
+        for ([ax, ay, bx, by], [az, bz]) in &mesh_aabbs {
+            min = min.min(glam::Vec3::new(*ax, *ay, *az));
+            max = max.max(glam::Vec3::new(*bx, *by, *bz));
         }
         // Drawing holds only infinite construction geometry: fit the view to
         // its base points rather than leaving the camera unchanged.
@@ -1195,6 +1256,7 @@ impl Scene {
         }
         let aspect = self.active_camera_aspect();
         self.camera.borrow_mut().fit_to_bounds(min, max, aspect);
+        self.projection_bounds_epoch.set(self.geometry_epoch);
         self.camera_generation += 1;
     }
 

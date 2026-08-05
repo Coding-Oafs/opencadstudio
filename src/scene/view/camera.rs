@@ -107,6 +107,133 @@ impl Camera {
         self.distance * (self.fov_y * 0.5).tan()
     }
 
+    /// Change projection while keeping the fitted model's screen-space frame.
+    ///
+    /// `distance` is both the orthographic zoom scale and the perspective eye
+    /// distance. Reusing it unchanged only preserves scale on the target plane;
+    /// geometry closer to the eye can grow dramatically. Match the maximum
+    /// projected extent of the model box instead, leaving target, rotation and
+    /// field of view untouched.
+    pub fn set_projection_preserving_frame(
+        &mut self,
+        projection: Projection,
+        aspect: f32,
+    ) {
+        if self.projection == projection {
+            return;
+        }
+
+        let Some((min, max)) = self.model_bounds else {
+            self.projection = projection;
+            return;
+        };
+
+        let aspect = aspect.max(0.01);
+        let tan_half_fov = (self.fov_y * 0.5).tan();
+        if !tan_half_fov.is_finite() || tan_half_fov <= 1e-6 {
+            self.projection = projection;
+            return;
+        }
+
+        let corners = self.bounds_in_view(min, max);
+        let radius = |corner: &Vec3| corner.y.abs().max(corner.x.abs() / aspect);
+        let max_radius = corners.iter().map(radius).fold(0.0_f32, f32::max);
+        let min_z = corners
+            .iter()
+            .map(|corner| corner.z)
+            .fold(f32::INFINITY, f32::min);
+        let max_z = corners
+            .iter()
+            .map(|corner| corner.z)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let depth_margin = ((max_z - min_z).abs() * 0.001).max(0.001);
+        let near_safe = if max_z > 0.0 {
+            (max_z / (1.0 - 0.001)) * 1.001
+        } else {
+            0.001
+        };
+        let far_safe = if min_z < 0.0 {
+            (-min_z / (1000.0 - 1.0)) * 1.001
+        } else {
+            0.001
+        };
+        let depth_safe_distance = (max_z + depth_margin)
+            .max(near_safe)
+            .max(far_safe)
+            .max(0.001);
+        if !max_radius.is_finite() || max_radius <= 1e-6 {
+            if projection == Projection::Perspective && depth_safe_distance.is_finite() {
+                self.distance = self.distance.max(depth_safe_distance);
+            }
+            self.projection = projection;
+            return;
+        }
+
+        // Extent is the model box's largest absolute NDC X/Y displacement.
+        // When an existing perspective eye is already inside the box, its
+        // projected envelope is undefined; fall back to its target-plane scale
+        // so switching back to orthographic still recovers a usable view.
+        let old_extent = match self.projection {
+            Projection::Orthographic => max_radius / self.ortho_size().max(1e-6),
+            Projection::Perspective => {
+                let near = (self.distance * 0.001).max(1e-6);
+                let mut extent = 0.0_f32;
+                let mut all_in_front = true;
+                for corner in &corners {
+                    let depth = self.distance - corner.z;
+                    if depth <= near {
+                        all_in_front = false;
+                        break;
+                    }
+                    extent = extent.max(radius(corner) / (depth * tan_half_fov));
+                }
+                if all_in_front {
+                    extent
+                } else {
+                    max_radius / (self.distance.max(0.001) * tan_half_fov)
+                }
+            }
+        };
+
+        if !old_extent.is_finite() || old_extent <= 1e-6 {
+            if projection == Projection::Perspective && depth_safe_distance.is_finite() {
+                self.distance = self.distance.max(depth_safe_distance);
+            }
+            self.projection = projection;
+            return;
+        }
+
+        match projection {
+            Projection::Orthographic => {
+                let distance = max_radius / (old_extent * tan_half_fov);
+                if distance.is_finite() {
+                    self.distance = distance.max(0.001);
+                }
+            }
+            Projection::Perspective => {
+                // For every corner, radius / ((distance - z) * tan(fov/2))
+                // must be no larger than the old screen extent. The maximum
+                // required distance gives the tightest perspective frame with
+                // at least one corner touching the old envelope.
+                let extent_at_depth = old_extent * tan_half_fov;
+                let mut distance = f32::NEG_INFINITY;
+                for corner in &corners {
+                    distance = distance.max(corner.z + radius(corner) / extent_at_depth);
+                }
+
+                // Keep the complete box ahead of the perspective near plane,
+                // and its far plane, including corners whose X/Y radius does
+                // not constrain framing.
+                distance = distance.max(depth_safe_distance);
+                if distance.is_finite() {
+                    self.distance = distance.max(0.001);
+                }
+            }
+        }
+
+        self.projection = projection;
+    }
+
     // ── Projection matrices ────────────────────────────────────────────────
 
     /// Orthographic near/far that CENTRE the target plane at ndc-z ≈ 0.5.
