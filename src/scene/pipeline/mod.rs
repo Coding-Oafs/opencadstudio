@@ -2390,14 +2390,20 @@ impl Pipeline {
                             let a = std::f64::consts::TAU * (i as f64 / N as f64);
                             let dir = e1 * a.cos() + e2 * a.sin();
                             // Keep only the arc that lies on the actual face.
-                            let on_face = *full || {
-                                let phi = dir.dot(pole).clamp(-1.0, 1.0).acos();
+                            // `full` is a *longitude* wrap flag: a dish cap sits
+                            // on the pole and so covers every longitude while
+                            // still ending at its seam, so the colatitude test
+                            // always applies. A whole ball reports phi 0..π and
+                            // passes it regardless.
+                            let phi = dir.dot(pole).clamp(-1.0, 1.0).acos();
+                            let in_phi =
+                                phi >= *phi_min as f64 && phi <= *phi_max as f64;
+                            let in_theta = *full || {
                                 let th = dir.dot(v).atan2(dir.dot(u));
                                 let toff = (th - *theta_min as f64).rem_euclid(std::f64::consts::TAU);
-                                phi >= *phi_min as f64
-                                    && phi <= *phi_max as f64
-                                    && (toff <= *theta_span as f64)
+                                toff <= *theta_span as f64
                             };
+                            let on_face = in_phi && in_theta;
                             let p = if on_face { Some(c + dir * r) } else { None };
                             if let (Some(a), Some(b)) = (prev, p) {
                                 verts.push(mk(a));

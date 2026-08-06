@@ -506,16 +506,16 @@ fn sphere_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Ve
     };
     let (cx, cy, cz) = sphere.center();
     let r = sphere.radius();
-    let pole = norm3([sphere.pole().0, sphere.pole().1, sphere.pole().2]);
-    let u = norm3([
-        sphere.u_direction().0,
-        sphere.u_direction().1,
-        sphere.u_direction().2,
-    ]);
-    let v = cross3(pole, u);
-    let poly = collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
-    let (theta_min, theta_span, full, phi_min, phi_max) =
-        sphere_param_range(&poly, [cx, cy, cz], pole, u, v);
+    let SphereWindow {
+        pole,
+        u,
+        v,
+        theta_min,
+        theta_span,
+        theta_full: full,
+        phi_min,
+        phi_max,
+    } = sphere_window(sat, face, &sphere);
     // Meridian subdivisions from the sphere radius and colatitude span (a great
     // circle of radius `r`) at the shared edge chord tolerance.
     let m = edge_arc_segs(r, phi_max - phi_min);
@@ -622,6 +622,194 @@ fn sphere_param_range(
         (phi_min - 0.05).max(0.0),
         (phi_max + 0.05).min(PI),
     )
+}
+
+/// Frame and parameter window a sphere face is drawn in.
+///
+/// The surface record's pole is only a parametrisation choice, so a dish cap is
+/// commonly bounded by a circle that is no line of latitude in that frame. A
+/// θ/φ bounding box of such a boundary covers nearly the whole ball, drawing the
+/// cap as a complete sphere. When the face's loops are circles lying on the
+/// sphere we re-pole the frame onto their common axis, where the seam *is* a
+/// latitude and the window is exact.
+struct SphereWindow {
+    pole: [f64; 3],
+    u: [f64; 3],
+    v: [f64; 3],
+    theta_min: f64,
+    theta_span: f64,
+    /// Longitude wrap only. A cap centred on the pole covers every longitude
+    /// while still ending at its seam, so this never widens `phi_min/phi_max`.
+    theta_full: bool,
+    phi_min: f64,
+    phi_max: f64,
+}
+
+/// Resolve the frame and trim window for a sphere face, preferring the analytic
+/// cap/zone derivation and falling back to the boundary-polygon bounding box.
+fn sphere_window(sat: &SatDocument, face: &SatFace, sphere: &SatSphereSurface) -> SphereWindow {
+    let (cx, cy, cz) = sphere.center();
+    let center = [cx, cy, cz];
+    let radius = sphere.radius();
+    let acis_pole = norm3([sphere.pole().0, sphere.pole().1, sphere.pole().2]);
+    let acis_u = norm3([
+        sphere.u_direction().0,
+        sphere.u_direction().1,
+        sphere.u_direction().2,
+    ]);
+    let acis_v = cross3(acis_pole, acis_u);
+
+    if let Some((pole, phi_min, phi_max)) = sphere_cap_window(sat, face, center, radius) {
+        let u = perp_axis(pole);
+        return SphereWindow {
+            pole,
+            u,
+            v: cross3(pole, u),
+            // A face closed by full circles of latitude wraps every longitude.
+            theta_min: 0.0,
+            theta_span: TAU,
+            theta_full: true,
+            phi_min,
+            phi_max,
+        };
+    }
+
+    let poly = collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
+    let (theta_min, theta_span, full, phi_min, phi_max) =
+        sphere_param_range(&poly, center, acis_pole, acis_u, acis_v);
+    // `full` reports the *longitude* wrap only. A cap sitting on the pole covers
+    // every longitude while still spanning a narrow colatitude band, so the
+    // derived φ window stands on its own and callers must not widen it back to
+    // the whole 0..π meridian — that grows the cap into a complete ball.
+    SphereWindow {
+        pole: acis_pole,
+        u: acis_u,
+        v: acis_v,
+        theta_min,
+        theta_span,
+        theta_full: full,
+        phi_min,
+        phi_max,
+    }
+}
+
+/// Colatitude window of a sphere face bounded by circles that lie on the sphere,
+/// in a frame poled on those circles' common axis. `None` when the boundary is
+/// not made of such circles, leaving the caller on the polygon fallback.
+///
+/// One boundary circle bounds a cap, two bound a zone. The cut plane of a circle
+/// at distance `d` from the centre meets the sphere at colatitude `acos(d / R)`
+/// measured about the circle's axis, so each seam maps to an exact latitude.
+fn sphere_cap_window(
+    sat: &SatDocument,
+    face: &SatFace,
+    center: [f64; 3],
+    radius: f64,
+) -> Option<([f64; 3], f64, f64)> {
+    use std::f64::consts::PI;
+    const GEOM_EPS: f64 = 1e-6;
+    if !(radius.abs() > GEOM_EPS) {
+        return None;
+    }
+    let r2 = radius * radius;
+
+    // Per boundary circle: its plane's offset from the sphere centre, that
+    // offset's length, and the plane normal.
+    let mut rings: Vec<([f64; 3], f64, [f64; 3])> = Vec::new();
+    let mut first_loop_seen = false;
+    let mut sense_axis: Option<[f64; 3]> = None;
+
+    let first = face.first_loop();
+    let mut current = first;
+    let mut seen: HashSet<i32> = HashSet::default();
+    while !current.is_null() && seen.insert(current.0) {
+        let sat_loop = SatLoop::from_record(sat.resolve(current)?)?;
+        let (cc, normal, ring_radius) = loop_circle_geometry(sat, &sat_loop)?;
+        let offset = [cc[0] - center[0], cc[1] - center[1], cc[2] - center[2]];
+        let dist2 = dot3(offset, offset);
+        // The circle has to be a section of this sphere: d² + r_ring² == R².
+        if (dist2 + ring_radius * ring_radius - r2).abs() > 1e-6 * r2.max(1.0) {
+            return None;
+        }
+        let dist = dist2.sqrt();
+        let axis = if dist > GEOM_EPS {
+            norm3(offset)
+        } else {
+            // A great circle is centred on the sphere, so only its plane gives an
+            // axis; which side of it the face keeps has to come from the winding.
+            normal
+        };
+        if !first_loop_seen {
+            first_loop_seen = true;
+            // The in-surface direction pointing into the face tells us which of
+            // the two caps this plane cuts is the material one.
+            if let Some((_, inward)) = circle_loop_inward_direction(sat, face, &sat_loop) {
+                sense_axis = Some(if dot3(inward, axis) >= 0.0 {
+                    axis
+                } else {
+                    [-axis[0], -axis[1], -axis[2]]
+                });
+            } else if dist > GEOM_EPS {
+                // No usable winding: keep the cap the offset points at, which is
+                // the shallow dish that an offset seam normally bounds.
+                sense_axis = Some(axis);
+            }
+        }
+        rings.push((offset, dist, normal));
+        current = sat_loop.next_loop();
+        if current == first {
+            break;
+        }
+    }
+
+    let pole = sense_axis?;
+    match rings.len() {
+        1 => {
+            let (_, dist, _) = rings[0];
+            let phi_seam = (dist / radius).clamp(-1.0, 1.0).acos();
+            Some((pole, 0.0, phi_seam))
+        }
+        2 => {
+            // Both seams must lie in planes square to the shared axis, otherwise
+            // this is not a zone and the box fallback is the honest answer. An
+            // offset ring proves that by having its offset run along the axis; a
+            // ring centred on the sphere has no offset to test, so its own plane
+            // normal has to line up instead.
+            for (offset, dist, normal) in &rings {
+                let square = if *dist > GEOM_EPS {
+                    (dot3(*offset, pole).abs() - *dist).abs() <= 1e-6 * dist.max(1.0)
+                } else {
+                    (dot3(*normal, pole).abs() - 1.0).abs() <= 1e-6
+                };
+                if !square {
+                    return None;
+                }
+            }
+            // acos maps into [0, π] already, so these are ordered colatitudes.
+            let mut phis = [0.0f64; 2];
+            for (i, (offset, _, _)) in rings.iter().enumerate() {
+                phis[i] = (dot3(*offset, pole) / radius).clamp(-1.0, 1.0).acos();
+            }
+            let (lo, hi) = if phis[0] <= phis[1] {
+                (phis[0], phis[1])
+            } else {
+                (phis[1], phis[0])
+            };
+            debug_assert!((0.0..=PI).contains(&lo) && (0.0..=PI).contains(&hi));
+            Some((pole, lo, hi))
+        }
+        _ => None,
+    }
+}
+
+/// Any unit vector square to `axis`, for completing a frame.
+fn perp_axis(axis: [f64; 3]) -> [f64; 3] {
+    let seed = if axis[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    norm3(cross3(seed, axis))
 }
 
 /// Revolution-angle arc a torus face spans, walking all its boundary loops.
@@ -1004,16 +1192,16 @@ fn collect_curved_gens(
                     continue;
                 };
                 let (cx, cy, cz) = sphere.center();
-                let pole = norm3([sphere.pole().0, sphere.pole().1, sphere.pole().2]);
-                let u = norm3([
-                    sphere.u_direction().0,
-                    sphere.u_direction().1,
-                    sphere.u_direction().2,
-                ]);
-                let v = cross3(pole, u);
-                let poly = collect_face_polygon(sat, &face, BOUNDARY_CHORD_FRAC);
-                let (tmin, tspan, full, pmin, pmax) =
-                    sphere_param_range(&poly, [cx, cy, cz], pole, u, v);
+                let SphereWindow {
+                    pole,
+                    u,
+                    v,
+                    theta_min: tmin,
+                    theta_span: tspan,
+                    theta_full: full,
+                    phi_min: pmin,
+                    phi_max: pmax,
+                } = sphere_window(sat, &face, &sphere);
                 let (center, center_low) = place([cx, cy, cz]);
                 out.push(CurvedGen::Sphere {
                     center,
@@ -1857,8 +2045,15 @@ pub(crate) fn tess_cone_face(
     normals: &mut Vec<[f32; 3]>,
     indices: &mut Vec<u32>,
 ) {
-    // Determine the height range and angular span from the boundary polygon.
-    let poly = collect_face_polygon(sat, face, lod.chord_frac);
+    // Determine the height range and angular span from the boundary. Every loop
+    // counts: a lateral face closed off by one rim and one pierce curve (a pipe
+    // branch meeting its run) carries its two ends on *different* loops, so
+    // reading only the first would size the tube to whichever end came first and
+    // leave the rest of the leg undrawn.
+    let poly: Vec<[f64; 3]> = collect_face_loops(sat, face, lod.chord_frac)
+        .into_iter()
+        .flatten()
+        .collect();
 
     let (cx, cy, cz) = cone.center();
     let (ax, ay, az) = cone.axis(); // axis direction (unit)
@@ -2225,28 +2420,28 @@ pub(crate) fn tess_sphere_face(
 ) {
     let (cx, cy, cz) = sphere.center();
     let r = sphere.radius();
-    let (px, py, pz) = sphere.pole(); // north-pole direction
-    let pole = norm3([px, py, pz]);
-    let (ux, uy, uz) = sphere.u_direction();
-    let u_dir = norm3([ux, uy, uz]);
-    let v_dir = cross3(pole, u_dir);
 
-    // Mesh only the part of the sphere the face covers — its boundary loop's
-    // longitude/colatitude window. A partial sphere (a fillet cap) otherwise
-    // builds as a full ball floating where the solid is open.
-    let poly = collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
-    let (t_min, t_span, full, p_min, p_max) =
-        sphere_param_range(&poly, [cx, cy, cz], pole, u_dir, v_dir);
+    // Mesh only the part of the sphere the face covers — its boundary loops'
+    // longitude/colatitude window. A partial sphere (a dish head, a fillet cap)
+    // otherwise builds as a full ball floating where the solid is open.
+    let SphereWindow {
+        pole,
+        u: u_dir,
+        v: v_dir,
+        theta_min: t_min,
+        theta_span: t_span,
+        theta_full: full,
+        phi_min: p_min,
+        phi_max: p_max,
+    } = sphere_window(sat, face, sphere);
     let (theta_lo, theta_hi) = if full {
         (0.0, TAU)
     } else {
         (t_min, t_min + t_span)
     };
-    let (phi_lo, phi_hi) = if full {
-        (0.0, std::f64::consts::PI)
-    } else {
-        (p_min, p_max)
-    };
+    // φ is trimmed independently: `full` only says the face wraps every
+    // longitude, which a pole-centred cap does while still ending at its seam.
+    let (phi_lo, phi_hi) = (p_min, p_max);
 
     // Longitude / colatitude divisions from the sphere radius and the covered
     // spans at the LOD's chord tolerance — a small cap samples far fewer than a
