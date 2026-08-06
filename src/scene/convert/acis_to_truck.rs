@@ -150,7 +150,8 @@ pub fn tessellate_sat_truck(
             if !faces.is_empty() {
                 let shell: Shell = faces.into();
                 let poly = shell.triangulation(tol).to_polygon();
-                if !poly.tri_faces().is_empty() {
+                if !poly.tri_faces().is_empty() && cone_sweep_covered(sat, &face, surf_rec, &poly)
+                {
                     append_group(&mut verts, &mut normals, &mut indices, &poly, &outward);
                     appended = true;
                 }
@@ -456,6 +457,79 @@ fn cone_faces(
         cos,
     };
     Some((faces, out))
+}
+
+/// Whether a triangulated cone face actually spans the revolution its boundary
+/// claims.
+///
+/// `rsweep` returns a full turn as several segment faces (120° apiece), and a
+/// hole only ever lands on one of them: a window wider than a segment, or a
+/// segment truck degenerates on, silently costs that whole third of the tube.
+/// The face still reports triangles, so nothing downstream notices — the wall is
+/// simply missing there and the solid reads as open. Measuring the meshed
+/// coverage against the boundary catches every such loss, whatever caused it,
+/// and hands the face to the parametric sampler instead.
+///
+/// Non-cone faces and genuinely partial cones pass straight through.
+fn cone_sweep_covered(
+    sat: &SatDocument,
+    face: &SatFace,
+    surf_rec: &acadrust::entities::acis::SatRecord,
+    poly: &PolygonMesh,
+) -> bool {
+    use std::f64::consts::TAU;
+    /// A meshed full revolution may skip at most this much before we call it
+    /// torn — comfortably wider than one chord step, far under a 120° segment.
+    const MAX_GAP: f64 = std::f64::consts::FRAC_PI_4;
+
+    let Some(cone) = SatConeSurface::from_record(surf_rec) else {
+        return true;
+    };
+    let (cx, cy, cz) = cone.center();
+    let (ax, ay, az) = cone.axis();
+    let (ux, uy, uz) = cone.major_axis();
+    let axis = norm(Vector3::new(ax, ay, az));
+    let udir = norm(Vector3::new(ux, uy, uz));
+    let vdir = Vector3::new(
+        axis.y * udir.z - axis.z * udir.y,
+        axis.z * udir.x - axis.x * udir.z,
+        axis.x * udir.y - axis.y * udir.x,
+    );
+
+    // Only a face whose boundary closes the revolution owes us a full sweep.
+    let loops = collect_face_loops(sat, face, BOUNDARY_CHORD_FRAC);
+    let closed = loops
+        .iter()
+        .map(|lp| cone_boundary_arc(lp, [cx, cy, cz], axis, udir, vdir).1)
+        .fold(0.0f64, f64::max)
+        >= TAU;
+    if !closed {
+        return true;
+    }
+
+    let mut angles: Vec<f64> = Vec::new();
+    for p in poly.positions() {
+        let d = vsub([p.x, p.y, p.z], [cx, cy, cz]);
+        let ru = vdot(d, [udir.x, udir.y, udir.z]);
+        let rv = vdot(d, [vdir.x, vdir.y, vdir.z]);
+        if ru.hypot(rv) > 1e-9 {
+            angles.push(rv.atan2(ru).rem_euclid(TAU));
+        }
+    }
+    if angles.len() < 3 {
+        return false;
+    }
+    angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut widest = 0.0f64;
+    for i in 0..angles.len() {
+        let next = if i + 1 < angles.len() {
+            angles[i + 1]
+        } else {
+            angles[0] + TAU
+        };
+        widest = widest.max(next - angles[i]);
+    }
+    widest <= MAX_GAP
 }
 
 /// Smallest angular arc `(theta_start, sweep)` about the cone axis enclosing the

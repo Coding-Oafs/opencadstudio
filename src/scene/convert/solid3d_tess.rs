@@ -40,9 +40,13 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 /// segments per full circle).
 pub(crate) const EDGE_CHORD_FRAC: f64 = 0.002;
 /// Truck's own triangulation chord tolerance for the cone faces still routed
-/// through its kernel, as a fraction of the surface radius.
+/// through its kernel, as a fraction of the surface radius. Matches
+/// [`LodConfig::HIGH`]: truck emits a single mesh rather than an LOD ladder, so
+/// it has to be the detailed one. A coarse fraction here turns a wide pipe into
+/// a hexagonal prism whose flats sink far inside the true radius, tearing the
+/// wall away from the planar faces and caps that meet it.
 #[cfg(feature = "solid3d")]
-pub(crate) const TRUCK_CHORD_FRAC: f64 = 0.1;
+pub(crate) const TRUCK_CHORD_FRAC: f64 = 0.005;
 /// Boundary-loop sampling for parameter-range classification (which arc of a
 /// sphere/torus a face covers): a fine fraction so the classification is
 /// accurate; the points are not rendered.
