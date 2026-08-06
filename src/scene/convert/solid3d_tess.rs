@@ -398,7 +398,7 @@ fn cone_face_geom(sat: &SatDocument, face: &SatFace) -> Option<ConeFaceGeom> {
     let (cx, cy, cz) = cone.center();
     let (ax, ay, az) = cone.axis();
     let (ux, uy, uz) = cone.major_axis();
-    let radius = cone.radius();
+    let radius = cone_radius(&cone);
     let sin_a = cone.sin_half_angle();
     let cos_a = cone.cos_half_angle();
     let axis = norm3([ax, ay, az]);
@@ -799,6 +799,24 @@ fn sphere_cap_window(
             Some((pole, lo, hi))
         }
         _ => None,
+    }
+}
+
+/// Reference cross-section radius of a cone/cylinder surface.
+///
+/// The record's trailing real is a parameter scale, not geometry — it coincides
+/// with the radius on many bodies but diverges on others, which draws the
+/// lateral surface at the wrong size while the rims stay put (a gauge dial
+/// rendering as a ring around its own face). The major axis *is* the radius
+/// vector at the reference cross-section, so its length is the radius; fall back
+/// to the record's field only when that vector is missing.
+pub(crate) fn cone_radius(cone: &SatConeSurface) -> f64 {
+    let (x, y, z) = cone.major_axis();
+    let len = (x * x + y * y + z * z).sqrt();
+    if len > 1e-12 {
+        len
+    } else {
+        cone.radius()
     }
 }
 
@@ -2058,7 +2076,7 @@ pub(crate) fn tess_cone_face(
     let (cx, cy, cz) = cone.center();
     let (ax, ay, az) = cone.axis(); // axis direction (unit)
     let (ux, uy, uz) = cone.major_axis(); // u=0 direction
-    let radius = cone.radius();
+    let radius = cone_radius(cone);
     let sin_a = cone.sin_half_angle();
     let cos_a = cone.cos_half_angle(); // ≈1 for cylinder, <1 for cone
 
@@ -2328,7 +2346,7 @@ pub(crate) fn cone_axis_span(
         let major = e.major_axis();
         let curve_radius = dot3([major.0, major.1, major.2], [major.0, major.1, major.2])
             .sqrt();
-        let expected_radius = (cone.radius() + h * tangent).abs();
+        let expected_radius = (cone_radius(cone) + h * tangent).abs();
         let scale = curve_radius.max(expected_radius).max(1.0);
         if radial_len < scale * 1e-6
             && n_dot > 0.999
@@ -2355,8 +2373,8 @@ pub(crate) fn cone_axis_span(
                 d[2] - h * axis[2],
             ];
             let radial_len = dot3(radial, radial).sqrt();
-            let expected = (cone.radius() + h * tangent).abs();
-            let tolerance = expected.max(cone.radius().abs()).max(1.0) * 1e-5;
+            let expected = (cone_radius(cone) + h * tangent).abs();
+            let tolerance = expected.max(cone_radius(cone).abs()).max(1.0) * 1e-5;
             if (radial_len - expected).abs() <= tolerance {
                 heights.push(h);
             }
@@ -2383,7 +2401,7 @@ pub(crate) fn cone_axis_span(
             return Some((anchor.min(mate), anchor.max(mate)));
         }
         if sin_a.abs() > 1e-6 {
-            let apex = -cone.radius() * cos_a / sin_a;
+            let apex = -cone_radius(cone) * cos_a / sin_a;
             if (apex - anchor).abs() >= 1e-9 {
                 return Some((anchor.min(apex), anchor.max(apex)));
             }
@@ -2396,7 +2414,7 @@ pub(crate) fn cone_axis_span(
 
     // True cone with a single rim: close the surface at its apex (r = 0).
     if sin_a.abs() > 1e-6 && heights.len() <= 1 {
-        let apex = -cone.radius() * cos_a / sin_a;
+        let apex = -cone_radius(cone) * cos_a / sin_a;
         h_min = h_min.min(apex);
         h_max = h_max.max(apex);
     }

@@ -30,9 +30,9 @@ use acadrust::entities::acis::{
 };
 
 use crate::scene::convert::solid3d_tess::{
-    body_transform, collect_face_loops, cone_axis_span, finalize_mesh, tess_cone_face,
-    tess_plane_face, tess_sphere_face, tess_torus_face, LodConfig, BOUNDARY_CHORD_FRAC,
-    TRUCK_CHORD_FRAC,
+    body_transform, collect_face_loops, cone_axis_span, cone_radius, finalize_mesh,
+    tess_cone_face, tess_plane_face, tess_sphere_face, tess_torus_face, LodConfig,
+    BOUNDARY_CHORD_FRAC, TRUCK_CHORD_FRAC,
 };
 use crate::scene::model::mesh_model::MeshLodSet;
 use rustc_hash::FxHashMap;
@@ -268,7 +268,7 @@ fn build_face_group(
         }
         "cone-surface" => {
             let cone = SatConeSurface::from_record(surf_rec)?;
-            let tol = curve_tol(cone.radius());
+            let tol = curve_tol(cone_radius(&cone));
             let (faces, out) = cone_faces(sat, face, &cone)?;
             Some((faces, out, tol))
         }
@@ -385,7 +385,7 @@ fn cone_faces(
     let (cx, cy, cz) = cone.center();
     let (ax, ay, az) = cone.axis();
     let (ux, uy, uz) = cone.major_axis();
-    let radius = cone.radius();
+    let radius = cone_radius(cone);
     let sin = cone.sin_half_angle();
     let cos = cone.cos_half_angle();
 
