@@ -202,6 +202,10 @@ pub struct ViewportData {
     /// into the render signature so the settle frame re-renders hatches once and
     /// the scene-render cache holds it. See [`Scene::navigating_lod`].
     pub(in crate::scene) skip_hatch: bool,
+    /// True when this viewport must not paint a canvas of its own. A floating
+    /// viewport on a paper layout sits ON the sheet: anything it painted first
+    /// would cover the page it is supposed to be a window in.
+    pub(in crate::scene) skip_background: bool,
     pub(in crate::scene) geometry_epoch: u64,
     /// Camera generation captured when this Primitive was assembled. Paired
     /// with `geometry_epoch` so the per-frame scissor / LOD recompute runs.
@@ -434,6 +438,7 @@ impl shader::Primitive for Primitive {
             inner.skip_geometry = skip;
             // Interaction LOD: skip the hatch draw this frame while navigating.
             inner.skip_hatch_frame = vp.skip_hatch;
+            inner.skip_background = vp.skip_background;
             if skip {
                 if vp.show_viewcube {
                     inner.viewcube.upload(
@@ -1250,6 +1255,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     // Interaction-LOD hatch suppression: differs the signature so the settle
     // frame (skip_hatch flips false) re-renders with hatches and re-caches.
     vp.skip_hatch.hash(&mut h);
+    vp.skip_background.hash(&mut h);
     clip_w.hash(&mut h);
     clip_h.hash(&mut h);
     // Live overlay (command preview / interim / grip drag). Small — a handful
@@ -1912,7 +1918,19 @@ impl Scene {
         &self,
         viewport: &ViewportInstance,
     ) -> ViewportDisplaySettings {
+        // What lies behind a viewport depends on what the viewport is. The
+        // full-canvas paper sheet shows the desk, and the page is drawn on top
+        // of it by `paper_sheet_fill` — give the desk the page's own colour and
+        // the edge disappears into a same-coloured surround that no amount of
+        // zooming out reveals. A floating viewport sits ON that sheet, so it
+        // paints no canvas at all; anything else would erase the page beneath
+        // it. Only model space clears to the editor background.
         let canvas_background = if viewport.paper_sheet {
+            crate::scene::PAPER_DESK_COLOR
+        } else if self.current_layout != "Model" {
+            // This viewport paints no canvas of its own (`skip_background`),
+            // but shading and fog still blend toward whatever is behind it —
+            // and behind a floating viewport is the page.
             self.paper_bg_color
         } else {
             self.bg_color
@@ -3594,6 +3612,7 @@ impl Scene {
             // (hatched) frame once it settles. Only applied to the on-screen
             // Model / paper content — the paper *sheet* keeps its fills.
             skip_hatch: self.hatch_lod_enabled() && !inst.paper_sheet && self.navigating_lod(),
+            skip_background: !inst.paper_sheet && self.current_layout != "Model",
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,
             wire_content_id,

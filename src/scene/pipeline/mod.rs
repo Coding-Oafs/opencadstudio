@@ -340,6 +340,9 @@ pub struct Pipeline {
     /// `render` skips the (per-pixel, GPU-dominating) hatch pass this frame. The
     /// scene-render cache holds the full-quality frame once the view settles.
     pub skip_hatch_frame: bool,
+    /// Skip the canvas entirely — no clear colour, no background pass — so
+    /// whatever was drawn underneath this viewport shows through it.
+    pub skip_background: bool,
     /// Stable identity of the viewport that last used this (index-addressed)
     /// pipeline slot. The renderer's viewport list drops off-canvas viewports,
     /// so a slot can be reused by a *different* viewport across frames; when the
@@ -2015,6 +2018,7 @@ impl Pipeline {
             render_sig: u64::MAX,
             skip_geometry: false,
             skip_hatch_frame: false,
+            skip_background: false,
             slot_id: u64::MAX,
         }
     }
@@ -3282,7 +3286,7 @@ impl Pipeline {
         };
         let msaa = &self.msaa_view;
         let [r, g, b, a] = bg_color;
-        let clear_color = if self.clip_boundary.is_some() {
+        let clear_color = if self.clip_boundary.is_some() || self.skip_background {
             wgpu::Color::TRANSPARENT
         } else {
             wgpu::Color {
@@ -3393,10 +3397,15 @@ impl Pipeline {
                 pass.set_vertex_buffer(0, vbuf.slice(..));
                 pass.draw(0..*vcount, 0..1);
             }
-            pass.set_pipeline(&self.background_pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_stencil_reference(stencil_ref);
-            pass.draw(0..3, 0..1);
+            // The background shader returns an opaque colour whatever alpha it
+            // is handed, so a see-through viewport cannot be asked for as a
+            // transparent background — the pass has to not run.
+            if !self.skip_background {
+                pass.set_pipeline(&self.background_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_stencil_reference(stencil_ref);
+                pass.draw(0..3, 0..1);
+            }
             // The capability-selected façade dispatches storage or texture
             // draws before wires so outlines remain on top in either backend.
             // Skipped while navigating because per-pixel hatch work dominates

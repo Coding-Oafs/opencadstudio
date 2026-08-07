@@ -34,11 +34,13 @@ use viewcube::{viewcube_nav_controls, viewcube_ucs_picker, UCS_PICKER_W};
 pub(in crate::app) use overlay::{MTEXT_TEXT_ID, TEXT_INLINE_ID};
 
 const VIEWCUBE_HIT_SIZE: f32 = VIEWCUBE_REGION_PX;
+/// The desk shown around the sheet, as the widget wants it. One definition,
+/// shared with the renderer that clears the sheet viewport to the same thing.
 const PAPER_SPACE_BACKGROUND: Color = Color {
-    r: 138.0 / 255.0,
-    g: 138.0 / 255.0,
-    b: 138.0 / 255.0,
-    a: 1.0,
+    r: crate::scene::PAPER_DESK_COLOR[0],
+    g: crate::scene::PAPER_DESK_COLOR[1],
+    b: crate::scene::PAPER_DESK_COLOR[2],
+    a: crate::scene::PAPER_DESK_COLOR[3],
 };
 
 /// Base surface directly under the crosshair. Paper content viewports render

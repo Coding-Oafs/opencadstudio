@@ -285,6 +285,12 @@ struct GeometryDelta {
     full: bool,
 }
 
+/// The desk a paper layout lays its sheet on — the surface visible around the
+/// page. Distinct from both the page (`paper_bg_color`) and the model canvas
+/// (`bg_color`); if the desk took either of those colours the page edge would
+/// vanish into its own surround.
+pub const PAPER_DESK_COLOR: [f32; 4] = [138.0 / 255.0, 138.0 / 255.0, 138.0 / 255.0, 1.0];
+
 const CACHE_CATEGORY_ANNOTATIVE: u16 = 1 << 0;
 const CACHE_CATEGORY_HATCH: u16 = 1 << 1;
 const CACHE_CATEGORY_WIPEOUT: u16 = 1 << 2;
