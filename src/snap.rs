@@ -74,6 +74,12 @@ pub struct SnapResult {
     /// overlay draws a dashed guide from each base to the crossing so both
     /// contributing extensions stay visible. `None` otherwise. (#247, #259)
     pub extension_base2: Option<Point>,
+    /// World-space twin of `extension_base`: the acquired endpoint the guide is
+    /// drawn from. Typed-distance entry measures along this ray, so taking it
+    /// from the same decision that drew the guide keeps the two from
+    /// disagreeing — the guide showing while typing does nothing, or the
+    /// distance running off along a ray the user cannot see.
+    pub extension_origin: Option<glam::DVec3>,
 }
 
 /// Object-snap-tracking alignment: the cursor projected onto a ray from an
@@ -108,7 +114,8 @@ pub struct Snapper {
     pub osnap_radius_px: f32,
     /// Object Snap Tracking on/off (F11).
     pub otrack_enabled: bool,
-    /// Acquired OST points (world XZ, Y=0 plane).
+    /// Acquired OST points, world space. Tracking is planar: `edge_dirs_at`
+    /// builds every direction from X/Y with Z zeroed, and the rays follow.
     pub tracking_points: Vec<DVec3>,
     /// Edge directions at each acquired point (parallel to `tracking_points`):
     /// the line direction of every wire segment meeting at that corner, so
@@ -743,6 +750,7 @@ impl Snapper {
             tangent_obj: None,
             extension_base: None,
             extension_base2: None,
+            extension_origin: None,
         })
     }
 
@@ -856,6 +864,7 @@ impl Snapper {
                         tangent_obj: None,
                         extension_base: None,
                         extension_base2: None,
+                        extension_origin: None,
                     });
                     best_rank = snap_tier(SnapType::Grid);
                     best_sub = snap_priority(SnapType::Grid);
@@ -954,6 +963,7 @@ impl Snapper {
                     tangent_obj: None,
                     extension_base: None,
                     extension_base2: None,
+                    extension_origin: None,
                 });
             }
         };
@@ -1500,6 +1510,7 @@ impl Snapper {
                             tangent_obj: Some(tangent_obj),
                             extension_base: None,
                             extension_base2: None,
+                            extension_origin: None,
                         });
                     }
                 }
@@ -1548,6 +1559,7 @@ impl Snapper {
                         tangent_obj: None,
                         extension_base: None,
                         extension_base2: None,
+                        extension_origin: None,
                     });
                 }
             };
@@ -1605,7 +1617,7 @@ impl Snapper {
         // intersection yields none, so its guides simply don't draw. (#238, #247, #259)
         if let Some(b) = best.as_mut() {
             if matches!(b.snap_type, SnapType::Extension | SnapType::Intersection) {
-                let (b1, b2) = extension_bases_screen(
+                let (b1, b2, origin) = extension_bases_screen(
                     b.world,
                     &self.tracking_points,
                     &self.tracking_dirs,
@@ -1615,72 +1627,11 @@ impl Snapper {
                 );
                 b.extension_base = b1;
                 b.extension_base2 = b2;
+                b.extension_origin = origin;
             }
         }
 
         best
-    }
-    pub fn extension_input_ray(
-        &self,
-        snapped: glam::DVec3,
-    ) -> Option<(glam::DVec3, glam::DVec3)> {
-        let mut best: Option<(f64, glam::DVec3, glam::DVec3)> = None;
-
-        for (&origin, dirs) in self.tracking_points.iter().zip(&self.tracking_dirs) {
-            for &dir in dirs {
-                let len2 = dir.x * dir.x + dir.y * dir.y;
-                if len2 < 1e-12 {
-                    continue;
-                }
-
-                let dx = snapped.x - origin.x;
-                let dy = snapped.y - origin.y;
-
-                let t = (dx * dir.x + dy * dir.y) / len2;
-
-                // Extension only exists beyond the acquired endpoint.
-                if t < 0.05 {
-                    continue;
-                }
-
-                let projected = glam::DVec3::new(
-                    origin.x + dir.x * t,
-                    origin.y + dir.y * t,
-                    origin.z,
-                );
-
-                let ex = snapped.x - projected.x;
-                let ey = snapped.y - projected.y;
-                let err2 = ex * ex + ey * ey;
-
-                let len = len2.sqrt();
-                let unit_dir =
-                    glam::DVec3::new(dir.x / len, dir.y / len, 0.0);
-
-                // The ray has to actually pass through the snapped point. Only
-                // four acquisitions are kept and the oldest is dropped as new
-                // ones come in, so by the time a typed distance arrives the ray
-                // that produced this snap may be gone — without this the nearest
-                // surviving ray wins by default and the distance flies off along
-                // it. Failing here instead leaves the caller on plain point input.
-                //
-                // `extension_snap` builds the point by exact f64 projection onto
-                // this same ray, so a match sits on it to rounding: the tolerance
-                // only has to clear f64 noise, and scaling it with the coordinate
-                // keeps that true at UTM magnitudes. (`extension_bases_screen`
-                // answers the same question in screen pixels because it also has
-                // to catch a *crossing* base, which is a looser fit than this.)
-                let tol = 1e-9_f64.max(2e-12 * origin.x.abs().max(origin.y.abs()));
-                if err2 > tol * tol {
-                    continue;
-                }
-                if best.as_ref().map_or(true, |(best_err, _, _)| err2 < *best_err) {
-                    best = Some((err2, origin, unit_dir));
-                }
-            }
-        }
-
-        best.map(|(_, origin, dir)| (origin, dir))
     }
 }
 
@@ -2095,7 +2046,7 @@ fn extension_bases_screen(
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
-) -> (Option<Point>, Option<Point>) {
+) -> (Option<Point>, Option<Point>, Option<glam::DVec3>) {
     let snapped_screen = world_to_screen(snapped, view_rot, eye, bounds);
     // Collect qualifying endpoints, off-ray distance measured in screen space so
     // the tolerance stays scale-independent at UTM coordinates (a world² test
@@ -2139,7 +2090,9 @@ fn extension_bases_screen(
             break;
         }
     }
-    (bases[0], bases[1])
+    // `origins` is sorted nearest-fit first, so its head is the endpoint the
+    // primary guide is drawn from — the one a typed distance measures along.
+    (bases[0], bases[1], origins.first().copied())
 }
 
 // ── Projection helpers ────────────────────────────────────────────────────

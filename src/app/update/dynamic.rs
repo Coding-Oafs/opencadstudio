@@ -31,15 +31,20 @@ impl OpenCADStudio {
             return Some((base, dir));
         }
 
-        // Extension stores the snapped point. Recover the acquired endpoint
-        // and outward segment direction that produced that snap.
+        // Extension measures along the ray its guide is drawn on. The snap
+        // carries the acquired endpoint that guide starts from, so read the ray
+        // off that rather than searching the tracking set again — a second
+        // search can disagree with the guide the user is looking at, and the
+        // acquisition it needs may already have aged out of the set.
         let snap = self.tabs[i].snap_result?;
-
-        if snap.snap_type == crate::snap::SnapType::Extension {
-            return self.snapper.extension_input_ray(snap.world);
+        if snap.snap_type != crate::snap::SnapType::Extension {
+            return None;
         }
-
-        None
+        let origin = snap.extension_origin?;
+        // The snap sits beyond its endpoint by construction, so the outward
+        // direction is simply the way from one to the other.
+        let dir = snap.world - origin;
+        Some((origin, dir.try_normalize()?))
     }
     /// Rebuild the active tab's dynamic-input field set to match what the
     /// command is currently asking for. Called on cursor move and after

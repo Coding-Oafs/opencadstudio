@@ -1647,6 +1647,7 @@ impl OpenCADStudio {
                         tangent_obj: None,
                         extension_base: None,
                         extension_base2: None,
+                        extension_origin: None,
                     });
                     if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
                         cmd.set_acquisition_hint(Some(pick.label));
