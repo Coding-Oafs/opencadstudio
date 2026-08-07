@@ -1767,6 +1767,9 @@ pub enum Message {
     OptionsThemeChanged(String),
     /// Edit one of Custom theme's six base colours as #RRGGBB.
     OptionsThemeColorChanged(usize, String),
+    /// Register or unregister as the .dwg/.dxf handler, from Options. Same
+    /// setting the FILEASSOC command carries.
+    FileAssocChanged(bool),
     /// Switch the interface language and redraw localized views.
     LanguageChanged(crate::i18n::Language),
     /// Drop every entity from the active drawing.

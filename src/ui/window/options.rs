@@ -20,6 +20,7 @@ impl<T> fmt::Display for Labelled<T> {
 
 pub fn view_window<'a>(
     default_save_format: &'a str,
+    file_assoc_enabled: bool,
     ui_theme: &'a UiThemeConfig,
     theme_color_inputs: &'a [String; 6],
     language: crate::i18n::Language,
@@ -135,6 +136,22 @@ pub fn view_window<'a>(
         .align_y(iced::Center),
         Space::new().height(8),
         text(crate::tr!("options-default-save-format-help"))
+        .size(11)
+        .width(sizing.width),
+        Space::new().height(14),
+        row![
+            iced::widget::checkbox(file_assoc_enabled)
+                .on_toggle(Message::FileAssocChanged)
+                .size(15),
+            text(crate::t!("Open .dwg and .dxf files with Open CAD Studio"))
+                .size(12),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
+        Space::new().height(6),
+        text(crate::t!(
+            "Also installs the application and file-type icons the desktop shows."
+        ))
         .size(11)
         .width(sizing.width),
         Space::new().height(22),

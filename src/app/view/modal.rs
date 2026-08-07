@@ -91,6 +91,7 @@ impl OpenCADStudio {
                 |flow| {
                     crate::ui::window::options::view_window(
                         &self.default_save_format,
+                        self.file_assoc_enabled,
                         &self.ui_theme,
                         &self.theme_color_inputs,
                         self.language,

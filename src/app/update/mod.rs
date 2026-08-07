@@ -5087,6 +5087,39 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::FileAssocChanged(enabled) => {
+                // The same two calls FILEASSOC makes, so the checkbox and the
+                // command cannot leave the setting and the registration
+                // disagreeing.
+                self.file_assoc_enabled = enabled;
+                self.persist_settings_if_changed();
+                let outcome = if enabled {
+                    crate::io::file_association::register_as_handler()
+                } else {
+                    crate::io::file_association::unregister_handler()
+                };
+                match outcome {
+                    Ok(()) => {
+                        let said = if enabled {
+                            crate::t!("Registered as a .dwg/.dxf handler.")
+                        } else {
+                            crate::t!("No longer registered as a file handler.")
+                        };
+                        self.command_line.push_output(said.as_ref());
+                    }
+                    Err(why) => {
+                        // The setting is what the user asked for; the
+                        // registration is what the system allowed. Put the
+                        // checkbox back rather than showing a state that is not
+                        // true.
+                        self.file_assoc_enabled = !enabled;
+                        self.persist_settings_if_changed();
+                        self.command_line
+                            .push_error(crate::tf!("File association failed: {why}").as_ref());
+                    }
+                }
+                Task::none()
+            }
             Message::LanguageChanged(language) => {
                 if self.language == language {
                     return Task::none();
