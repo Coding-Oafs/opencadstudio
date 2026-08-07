@@ -114,7 +114,7 @@ pub struct Snapper {
     pub osnap_radius_px: f32,
     /// Object Snap Tracking on/off (F11).
     pub otrack_enabled: bool,
-    /// Acquired OST points, world space. Tracking is planar: `edge_dirs_at`
+    /// Acquired OST points, world space. Tracking is planar: `tracking_dirs_at`
     /// builds every direction from X/Y with Z zeroed, and the rays follow.
     pub tracking_points: Vec<DVec3>,
     /// Edge directions at each acquired point (parallel to `tracking_points`):
@@ -387,8 +387,7 @@ impl Snapper {
         // Edge directions double as an endpoint test: a point with no incident
         // segment — a midpoint, centre, intersection or extension foot — has
         // none. Extension-driven acquisition (#262) keeps only endpoints.
-        let dirs = edge_dirs_at(p, wires);
-        let perp_dirs = perpendicular_dirs_at(p, wires);
+        let (dirs, perp_dirs) = tracking_dirs_at(p, wires);
         if endpoints_only && dirs.is_empty() {
             return;
         }
@@ -1736,41 +1735,78 @@ fn snap_priority(t: SnapType) -> u8 {
 
 // ── Geometric helpers ─────────────────────────────────────────────────────
 
-/// Line directions of every wire segment that has an endpoint at `p` (an
-/// acquired corner), deduped by near-parallelism and capped. OTRACK offers an
-/// alignment ray along each so the cursor can track a segment's extension, not
-/// just the ortho/polar axes (#219). Scanned once, at acquisition — not per
-/// move. Empty when `p` is not a segment endpoint (midpoint / centre / node).
-fn edge_dirs_at<W: WireSource + ?Sized>(p: DVec3, wires: &W) -> Vec<DVec3> {
+/// Tracking directions through `p`, in one pass: the alignment ray along each
+/// segment that ENDS at `p`, and the perpendicular of each segment that PASSES
+/// THROUGH it.
+///
+/// The two ask different questions of the same segments, and the scan is the
+/// expensive part — asking separately would walk the whole drawing twice for
+/// every acquisition. Both are deduped by near-parallelism and capped.
+///
+/// Edge rays let the cursor track a segment's extension rather than only the
+/// ortho/polar axes (#219); their sign is kept, because Extension needs to know
+/// which way the segment left the corner, so two opposite collinear edges stay
+/// distinct. Perpendicular rays are OTRACK's alone and describe an infinite
+/// line, so one direction covers both sides (#695).
+///
+/// Scanned once, at acquisition — not per move. The edge list is empty when `p`
+/// is not a segment endpoint (midpoint / centre / node), which is what makes it
+/// double as the endpoint test.
+fn tracking_dirs_at<W: WireSource + ?Sized>(
+    p: DVec3,
+    wires: &W,
+) -> (Vec<DVec3>, Vec<DVec3>) {
     // Acquired points and reconstructed wire vertices are both f64. Keep a
     // small scale-aware window for double-single reconstruction residuals
     // without allowing unrelated UTM-scale vertices to match.
     let tol = 1e-8_f64.max(2e-12 * p.x.abs().max(p.y.abs()));
     let tol2 = tol * tol;
-    let mut dirs: Vec<DVec3> = Vec::new();
+    let mut edges: Vec<DVec3> = Vec::new();
+    let mut perps: Vec<DVec3> = Vec::new();
     let mut consider = |a: DVec3, b: DVec3| {
         if !a.x.is_finite() || !b.x.is_finite() {
             return false;
         }
+        let seg_len = {
+            let seg = b - a;
+            (seg.x * seg.x + seg.y * seg.y).sqrt()
+        };
+        if seg_len < 1e-9 {
+            return false;
+        }
         let at_a = (a - p).length_squared() < tol2;
         let at_b = (b - p).length_squared() < tol2;
-        if !at_a && !at_b {
-            return false;
+
+        if at_a || at_b {
+            // Store the outward ray from the acquired endpoint.
+            let seg = if at_a { a - b } else { b - a };
+            let d = DVec3::new(seg.x / seg_len, seg.y / seg_len, 0.0);
+            if !edges.iter().any(|e| e.x * d.x + e.y * d.y > 0.99996) {
+                edges.push(d);
+            }
         }
-        // Store the outward ray from the acquired endpoint. Unlike OTRACK's
-        // infinite alignment line, Extension needs the sign, so opposite
-        // collinear incident edges remain distinct.
-        let seg = if at_a { a - b } else { b - a };
-        let l = (seg.x * seg.x + seg.y * seg.y).sqrt();
-        if l < 1e-9 {
-            return false;
+
+        // A perpendicular needs only that `p` lie on the segment — the whole
+        // point of #695 is tracking away from a point partway along a line, not
+        // just from its ends.
+        if at_a || at_b || (nearest_on_segment(p, a, b) - p).length_squared() <= tol2 {
+            let seg = b - a;
+            let perp = DVec3::new(-seg.y / seg_len, seg.x / seg_len, 0.0);
+            // Opposite perpendiculars describe the same infinite tracking line.
+            let known = |list: &[DVec3]| {
+                list.iter()
+                    .any(|d| (d.x * perp.x + d.y * perp.y).abs() > 0.99996)
+            };
+            // Also skip a perpendicular that lands on a direction the edge rays
+            // already cover: at a square corner one segment's perpendicular is
+            // the other's own ray, and two rays down the same line are two
+            // things for the cursor to choose between that look identical.
+            if !known(&perps) && !known(&edges) {
+                perps.push(perp);
+            }
         }
-        let d = DVec3::new(seg.x / l, seg.y / l, 0.0);
-        if dirs.iter().any(|e| e.x * d.x + e.y * d.y > 0.99996) {
-            return false;
-        }
-        dirs.push(d);
-        dirs.len() >= 6
+
+        edges.len() >= 6 && perps.len() >= 6
     };
     let is_round = |wire: &WireModel| {
         wire.snap_pts
@@ -1786,7 +1822,7 @@ fn edge_dirs_at<W: WireSource + ?Sized>(p: DVec3, wires: &W) -> Vec<DVec3> {
                 break;
             }
         }
-        return dirs;
+        return (edges, perps);
     }
     'outer: for wire in wires.iter() {
         if is_round(wire) {
@@ -1804,100 +1840,7 @@ fn edge_dirs_at<W: WireSource + ?Sized>(p: DVec3, wires: &W) -> Vec<DVec3> {
             }
         }
     }
-    dirs
-}
-
-/// Perpendicular tracking directions through `p`.
-///
-/// Unlike `edge_dirs_at`, this also accepts a point lying anywhere on a
-/// segment, not only an endpoint. This lets Perpendicular + OTRACK acquire
-/// a point on an existing line and track away from it at exactly 90°. (#695)
-fn perpendicular_dirs_at<W: WireSource + ?Sized>(
-    p: DVec3,
-    wires: &W,
-) -> Vec<DVec3> {
-    let tol = 1e-8_f64.max(2e-12 * p.x.abs().max(p.y.abs()));
-    let tol2 = tol * tol;
-
-    let mut dirs: Vec<DVec3> = Vec::new();
-
-    let mut consider = |a: DVec3, b: DVec3| {
-        // `p` may be an endpoint, midpoint or arbitrary Perpendicular snap
-        // point. Accept the segment when p lies on it within reconstruction
-        // tolerance.
-        let nearest = nearest_on_segment(p, a, b);
-
-        if (nearest - p).length_squared() > tol2 {
-            return false;
-        }
-
-        let seg = b - a;
-        let len = (seg.x * seg.x + seg.y * seg.y).sqrt();
-
-        if len < 1e-9 {
-            return false;
-        }
-
-        // 90-degree rotation in the drawing XY plane.
-        //
-        // OTRACK treats this as an infinite alignment line, so one normalized
-        // direction is enough; the cursor may track either side of the origin.
-        let perp = DVec3::new(-seg.y / len, seg.x / len, 0.0);
-
-        // Opposite perpendiculars describe the same infinite tracking line.
-        if dirs
-            .iter()
-            .any(|d| (d.x * perp.x + d.y * perp.y).abs() > 0.99996)
-        {
-            return false;
-        }
-
-        dirs.push(perp);
-        dirs.len() >= 6
-    };
-
-    let is_round = |wire: &WireModel| {
-        wire.snap_pts
-            .iter()
-            .any(|(_, hint)| matches!(hint, SnapHint::Quadrant | SnapHint::Center))
-    };
-
-    if let Some(segments) = indexed_segments(wires) {
-        for segment in segments {
-            if wires.source_wire(segment.wire).is_some_and(&is_round) {
-                continue;
-            }
-
-            if consider(segment.a, segment.b) {
-                break;
-            }
-        }
-
-        return dirs;
-    }
-
-    'outer: for wire in wires.iter() {
-        if is_round(wire) {
-            continue;
-        }
-
-        let n = wire.points.len();
-
-        if n < 2 {
-            continue;
-        }
-
-        for i in 0..n - 1 {
-            let a = wp_f64(wire, i);
-            let b = wp_f64(wire, i + 1);
-
-            if consider(a, b) {
-                break 'outer;
-            }
-        }
-    }
-
-    dirs
+    (edges, perps)
 }
 
 #[derive(Clone, Copy)]
