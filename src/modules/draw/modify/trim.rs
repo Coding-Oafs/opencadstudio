@@ -10,6 +10,8 @@
 
 use std::f64::consts::TAU;
 
+use crate::modules::draw::fence::{crossing_box_preview, FencePick};
+
 use acadrust::entities::{
     Arc as ArcEnt, Circle as CircleEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline,
     LwVertex, Ray as RayEnt, Spline as SplineEnt, XLine as XLineEnt,
@@ -2100,7 +2102,7 @@ enum TrimMode {
     /// Collecting cutting/boundary edges; Enter returns to Pick.
     SelectEdges,
     /// Collecting fence points; Enter runs the fence pass.
-    Fence(Vec<[f64; 2]>),
+    Fence(FencePick),
     /// Crossing: waiting for the first rectangle corner.
     CrossFirst,
     /// Crossing: first corner picked, waiting for the second.
@@ -2983,32 +2985,6 @@ fn extend_hover_wires(
     out
 }
 
-/// Fence preview polyline (committed points + rubber point), dashed.
-fn fence_preview_wire(pts: &[[f64; 2]], cursor: [f64; 2], name: &str) -> WireModel {
-    let mut wire: Vec<[f32; 3]> = pts.iter().map(|p| [p[0] as f32, p[1] as f32, 0.0]).collect();
-    wire.push([cursor[0] as f32, cursor[1] as f32, 0.0]);
-    let mut w = WireModel::solid(name.into(), wire, WireModel::CYAN, false);
-    w.pattern_length = 0.8;
-    w.pattern = [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    w
-}
-
-/// Crossing preview rectangle — the selection crossing-box look (dashed
-/// green outline) so the option reads like a crossing selection (#336).
-fn crossing_preview_wire(p1: [f64; 2], cursor: [f64; 2], name: &str) -> WireModel {
-    let pts = vec![
-        [p1[0] as f32, p1[1] as f32, 0.0],
-        [p1[0] as f32, cursor[1] as f32, 0.0],
-        [cursor[0] as f32, cursor[1] as f32, 0.0],
-        [cursor[0] as f32, p1[1] as f32, 0.0],
-        [p1[0] as f32, p1[1] as f32, 0.0],
-    ];
-    let mut w = WireModel::solid(name.into(), pts, [0.35, 0.85, 0.35, 0.9], false);
-    w.pattern_length = 0.8;
-    w.pattern = [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    w
-}
-
 pub struct TrimCommand {
     all_entities: Vec<EntityType>,
     entity_index: ModifyEntityIndex,
@@ -3125,9 +3101,9 @@ impl CadCommand for TrimCommand {
                 self.edge_set.len()
             )
             .into_owned(),
-            TrimMode::Fence(pts) => crate::tf!(
+            TrimMode::Fence(pick) => crate::tf!(
                 "TRIM{edge}  Fence: pick points [{} placed, Enter = trim crossed]:",
-                pts.len()
+                pick.len()
             )
             .into_owned(),
             TrimMode::CrossFirst => crate::tf!("TRIM{edge}  Crossing: first corner:").into_owned(),
@@ -3172,7 +3148,7 @@ impl CadCommand for TrimCommand {
                 Some(CmdResult::NeedPoint)
             }
             "F" | "FENCE" => {
-                self.mode = TrimMode::Fence(Vec::new());
+                self.mode = TrimMode::Fence(FencePick::fence());
                 Some(CmdResult::NeedPoint)
             }
             "C" | "CROSSING" => {
@@ -3669,8 +3645,8 @@ impl CadCommand for TrimCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &mut self.mode {
-            TrimMode::Fence(pts) => {
-                pts.push([pt.x, pt.y]);
+            TrimMode::Fence(pick) => {
+                pick.push([pt.x, pt.y]);
                 CmdResult::NeedPoint
             }
             TrimMode::CrossFirst => {
@@ -3698,9 +3674,9 @@ impl CadCommand for TrimCommand {
 
     fn on_preview_wires(&mut self, pt: DVec3) -> Vec<WireModel> {
         match &self.mode {
-            TrimMode::Fence(pts) if !pts.is_empty() => {
-                let mut out = vec![fence_preview_wire(pts, [pt.x, pt.y], "trim_fence")];
-                let mut fpts = pts.clone();
+            TrimMode::Fence(pick) if !pick.is_empty() => {
+                let mut out = vec![pick.preview([pt.x, pt.y], "trim_fence")];
+                let mut fpts = pick.path();
                 fpts.push([pt.x, pt.y]);
                 out.extend(fence_result_preview(
                     &self.all_entities,
@@ -3715,7 +3691,7 @@ impl CadCommand for TrimCommand {
             TrimMode::CrossSecond(p1) => {
                 let p1 = *p1;
                 let p2 = [pt.x, pt.y];
-                let mut out = vec![crossing_preview_wire(p1, p2, "trim_cross")];
+                let mut out = vec![crossing_box_preview(p1, p2, "trim_cross")];
                 let rect = [p1, [p1[0], p2[1]], p2, [p2[0], p1[1]], p1];
                 let window = CrossingWindow {
                     min: [p1[0].min(p2[0]), p1[1].min(p2[1])],
@@ -3742,7 +3718,7 @@ impl CadCommand for TrimCommand {
                 self.rebuild_geos();
                 CmdResult::NeedPoint
             }
-            TrimMode::Fence(pts) if pts.len() >= 2 => self.fence_run(&pts, None),
+            TrimMode::Fence(pick) if pick.is_usable() => self.fence_run(&pick.path(), None),
             TrimMode::Fence(_)
             | TrimMode::CrossFirst
             | TrimMode::CrossSecond(_)
@@ -3845,9 +3821,9 @@ impl CadCommand for ExtendCommand {
                 self.edge_set.len()
             )
             .into_owned(),
-            TrimMode::Fence(pts) => crate::tf!(
+            TrimMode::Fence(pick) => crate::tf!(
                 "EXTEND{edge}  Fence: pick points [{} placed, Enter = extend crossed]:",
-                pts.len()
+                pick.len()
             )
             .into_owned(),
             TrimMode::CrossFirst => {
@@ -3889,7 +3865,7 @@ impl CadCommand for ExtendCommand {
                 Some(CmdResult::NeedPoint)
             }
             "F" | "FENCE" => {
-                self.mode = TrimMode::Fence(Vec::new());
+                self.mode = TrimMode::Fence(FencePick::fence());
                 Some(CmdResult::NeedPoint)
             }
             "C" | "CROSSING" => {
@@ -4131,8 +4107,8 @@ impl CadCommand for ExtendCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &mut self.mode {
-            TrimMode::Fence(pts) => {
-                pts.push([pt.x, pt.y]);
+            TrimMode::Fence(pick) => {
+                pick.push([pt.x, pt.y]);
                 CmdResult::NeedPoint
             }
             TrimMode::CrossFirst => {
@@ -4157,9 +4133,9 @@ impl CadCommand for ExtendCommand {
 
     fn on_preview_wires(&mut self, pt: DVec3) -> Vec<WireModel> {
         match &self.mode {
-            TrimMode::Fence(pts) if !pts.is_empty() => {
-                let mut out = vec![fence_preview_wire(pts, [pt.x, pt.y], "extend_fence")];
-                let mut fpts = pts.clone();
+            TrimMode::Fence(pick) if !pick.is_empty() => {
+                let mut out = vec![pick.preview([pt.x, pt.y], "extend_fence")];
+                let mut fpts = pick.path();
                 fpts.push([pt.x, pt.y]);
                 out.extend(fence_result_preview(
                     &self.all_entities,
@@ -4174,7 +4150,7 @@ impl CadCommand for ExtendCommand {
             TrimMode::CrossSecond(p1) => {
                 let p1 = *p1;
                 let p2 = [pt.x, pt.y];
-                let mut out = vec![crossing_preview_wire(p1, p2, "extend_cross")];
+                let mut out = vec![crossing_box_preview(p1, p2, "extend_cross")];
                 let rect = [p1, [p1[0], p2[1]], p2, [p2[0], p1[1]], p1];
                 let window = CrossingWindow {
                     min: [p1[0].min(p2[0]), p1[1].min(p2[1])],
@@ -4201,7 +4177,7 @@ impl CadCommand for ExtendCommand {
                 self.rebuild_geos();
                 CmdResult::NeedPoint
             }
-            TrimMode::Fence(pts) if pts.len() >= 2 => self.fence_run(&pts, None),
+            TrimMode::Fence(pick) if pick.is_usable() => self.fence_run(&pick.path(), None),
             TrimMode::Fence(_)
             | TrimMode::CrossFirst
             | TrimMode::CrossSecond(_)

@@ -14,6 +14,11 @@ pub struct SelectionState {
     pub box_current: Option<Point>,
     pub box_last: Option<(Point, Point)>,
     pub box_crossing: bool,
+    /// Set when a Window / Crossing selection keyword fixed the sense of the
+    /// box being drawn. Dragging normally decides it from the direction the
+    /// corner travels, which would immediately overwrite what the user just
+    /// asked for, so that derivation stands down while this holds.
+    pub box_crossing_locked: bool,
     pub box_last_crossing: bool,
     /// A preview-only selection marquee `(anchor, current, crossing)` in canvas
     /// pixels, drawn identically to a real box-selection (green crossing fill /

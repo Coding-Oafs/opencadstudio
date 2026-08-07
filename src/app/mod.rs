@@ -397,6 +397,12 @@ pub(super) struct OpenCADStudio {
     /// PICKADD (#226): true (default) = clicks accumulate; false = OS-style
     /// replace-on-click with Shift toggling.
     pick_add: bool,
+    /// The Remove selection keyword: picks take objects out of the set instead
+    /// of putting them in, until Add turns it off or the command ends. This is
+    /// what Shift already does per-click, not PICKADD — PICKADD decides whether
+    /// a pick *replaces* the set, so borrowing it here would wipe everything
+    /// gathered so far rather than subtract one thing. (#596)
+    select_remove_mode: bool,
     /// PICKDRAG (#226): false (default) = press-drag lassoes; true =
     /// press-drag draws a rectangle marquee.
     pick_drag_rect: bool,
@@ -2971,6 +2977,7 @@ impl OpenCADStudio {
             quick_properties_anchor: Point::new(12.0, 12.0),
             selection_cycling: false,
             pick_add: true,
+            select_remove_mode: false,
             pick_drag_rect: false,
             perf_hud: false,
             cycle_candidates: None,

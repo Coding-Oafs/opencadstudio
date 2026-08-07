@@ -391,7 +391,50 @@ impl OpenCADStudio {
             return None;
         }
         let kw = text.trim().to_ascii_uppercase();
+
+        // Modes that arm the next gesture rather than selecting anything now.
+        // Dragging normally decides window-vs-crossing from the direction the
+        // corner travels; asking for one by name has to override that, and hold
+        // the override until the box is finished. (#596)
+        if let "W" | "WINDOW" | "C" | "CROSSING" = kw.as_str() {
+            let crossing = matches!(kw.as_str(), "C" | "CROSSING");
+            {
+                let mut selection = self.tabs[i].scene.selection.borrow_mut();
+                selection.box_crossing = crossing;
+                selection.box_crossing_locked = true;
+            }
+            let hint = if crossing {
+                crate::t!("Crossing: specify first corner.")
+            } else {
+                crate::t!("Window: specify first corner.")
+            };
+            self.command_line.push_info(hint.as_ref());
+            return Some(Task::none());
+        }
+
+        // Whether a pick adds to the set or takes away from it, for the rest of
+        // this selection. Mirrors PICKADD, which the pick paths already read.
+        if let "R" | "REMOVE" | "A" | "ADD" = kw.as_str() {
+            let adding = matches!(kw.as_str(), "A" | "ADD");
+            self.select_remove_mode = !adding;
+            let hint = if adding {
+                crate::t!("Add mode: picks join the selection.")
+            } else {
+                crate::t!("Remove mode: picks leave the selection.")
+            };
+            self.command_line.push_info(hint.as_ref());
+            return Some(Task::none());
+        }
+
         let add: Vec<Handle> = match kw.as_str() {
+            // Every selectable object of the current space.
+            "ALL" => self.tabs[i]
+                .scene
+                .entity_wires()
+                .iter()
+                .filter_map(|w| crate::scene::Scene::handle_from_wire_name(&w.name))
+                .filter(|&h| !self.tabs[i].scene.is_layer_locked(h))
+                .collect(),
             "P" | "PREVIOUS" => self.tabs[i]
                 .prev_selection
                 .iter()
@@ -418,6 +461,7 @@ impl OpenCADStudio {
         if add.is_empty() {
             self.command_line.push_info(match kw.as_str() {
                 "P" | "PREVIOUS" => "No previous selection set.",
+                "ALL" => "Nothing to select.",
                 _ => "No last object.",
             });
             return Some(Task::none());
@@ -1475,6 +1519,69 @@ impl OpenCADStudio {
                 } else {
                     "Command cancelled."
                 });
+            }
+            CmdResult::SelectByPath {
+                path,
+                closed,
+                crossing,
+            } => {
+                // The command picked the path; the hit test lives here, where
+                // the camera and the drawing's geometry are. Everything after
+                // matches what a lasso does, Remove included.
+                let canvas = self.tabs[i].scene.selection.borrow().vp_size;
+                let bounds = iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: canvas.0,
+                    height: canvas.1,
+                };
+                let edit_cam = self.tabs[i]
+                    .scene
+                    .viewport_edit_frame(canvas)
+                    .map(|(cam, _)| cam);
+                let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
+                let screen: Vec<iced::Point> = path
+                    .iter()
+                    .map(|p| {
+                        crate::scene::pick::hit_test::world_to_screen(
+                            glam::DVec3::new(p[0], p[1], 0.0),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                    })
+                    .collect();
+                let handles = self.tabs[i].scene.path_hit_handles(
+                    &screen,
+                    crossing,
+                    !closed,
+                    all_wires,
+                    view_rot,
+                    eye,
+                    bounds,
+                    |point| self.cursor_model_point(i, &edit_cam, point, bounds),
+                );
+                if self.select_remove_mode {
+                    for h in &handles {
+                        self.tabs[i].scene.deselect_entity(*h);
+                    }
+                } else {
+                    for h in &handles {
+                        self.tabs[i].scene.select_entity(*h, false);
+                    }
+                    self.tabs[i].scene.expand_selection_for_groups(&handles);
+                }
+                self.refresh_properties();
+                let selected: Vec<Handle> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .map(|(h, _)| h)
+                    .collect();
+                let count = handles.len();
+                self.command_line
+                    .push_info(crate::tf!("{count} object(s) found.").as_ref());
+                return self.feed_command(StepInput::SelectionComplete(selected));
             }
             CmdResult::Relaunch(cmd, handles) => {
                 self.tabs[i].scene.deselect_all();

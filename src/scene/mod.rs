@@ -7678,6 +7678,127 @@ impl Scene {
     }
 
     /// Top-level solid handles caught by a lasso polygon.
+    /// Everything a picked path takes, gathered from every kind of geometry the
+    /// selection can reach: wires, hatches, hatches inside blocks, meshes and
+    /// block meshes, narrowed first to what the path's own bounds can touch.
+    ///
+    /// `open_fence` distinguishes the two gestures that arrive here. A fence is
+    /// a line drawn through the drawing and takes only what it actually cuts; a
+    /// polygon closes back on itself and can also take what it encloses, or
+    /// merely touches when `crossing`. The lasso and the Fence / WPolygon /
+    /// CPolygon keywords both come through this, so they cannot drift apart on
+    /// which geometry they remember to look at. (#596)
+    #[allow(clippy::too_many_arguments)]
+    pub fn path_hit_handles(
+        &self,
+        poly_pts: &[iced::Point],
+        crossing: bool,
+        open_fence: bool,
+        all_wires: std::sync::Arc<Vec<WireModel>>,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+        to_world: impl Fn(iced::Point) -> glam::DVec3,
+    ) -> Vec<Handle> {
+        let world_aabb = poly_pts.iter().fold(
+            [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ],
+            |mut aabb, &point| {
+                let world = to_world(point);
+                aabb[0] = aabb[0].min(world.x);
+                aabb[1] = aabb[1].min(world.y);
+                aabb[2] = aabb[2].max(world.x);
+                aabb[3] = aabb[3].max(world.y);
+                aabb
+            },
+        );
+        let screen_rect = poly_pts.iter().fold(
+            [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ],
+            |mut rect, point| {
+                rect[0] = rect[0].min(point.x);
+                rect[1] = rect[1].min(point.y);
+                rect[2] = rect[2].max(point.x);
+                rect[3] = rect[3].max(point.y);
+                rect
+            },
+        );
+        let area_candidates =
+            self.interaction_candidates_in_aabb(all_wires, world_aabb, screen_rect, view_rot, eye, bounds);
+        let candidate_handles = self.interaction_candidate_handles(&area_candidates);
+        let wire_hits = if open_fence {
+            crate::scene::pick::hit_test::poly_fence_hit(
+                poly_pts,
+                &area_candidates,
+                view_rot,
+                eye,
+                bounds,
+            )
+        } else {
+            crate::scene::pick::hit_test::poly_hit(
+                poly_pts,
+                crossing,
+                &area_candidates,
+                view_rot,
+                eye,
+                bounds,
+            )
+        };
+        let mut handles: Vec<Handle> = wire_hits
+            .into_iter()
+            .filter_map(Self::handle_from_wire_name)
+            .collect();
+        // An open fence has no interior, so the area-based geometry can only be
+        // reached by the polygon gestures.
+        if !open_fence {
+            handles.extend(crate::scene::pick::hit_test::poly_hit_hatch(
+                poly_pts,
+                crossing,
+                &self.visible_hatches_for_click(candidate_handles.as_ref()),
+                view_rot,
+                eye,
+                bounds,
+                candidate_handles.as_ref(),
+            ));
+            handles.extend(crate::scene::pick::hit_test::poly_hit_insert_hatch(
+                poly_pts,
+                crossing,
+                self.insert_hatches_for_click().as_ref(),
+                view_rot,
+                eye,
+                bounds,
+                candidate_handles.as_ref(),
+            ));
+            handles.extend(self.mesh_poly_hit(
+                poly_pts,
+                crossing,
+                view_rot,
+                eye,
+                bounds,
+                candidate_handles.as_ref(),
+            ));
+            handles.extend(self.block_mesh_poly_hit(
+                poly_pts,
+                crossing,
+                view_rot,
+                eye,
+                bounds,
+                candidate_handles.as_ref(),
+            ));
+        }
+        handles.retain(|&h| self.passes_selection_filter(h));
+        handles.retain(|&h| !self.is_layer_locked(h));
+        handles
+    }
+
     pub fn mesh_poly_hit(
         &self,
         poly: &[iced::Point],

@@ -5,6 +5,7 @@ pub mod clipboard;
 pub mod defaults;
 mod donate;
 pub mod draw;
+pub mod fence;
 pub mod groups;
 pub mod inquiry;
 pub mod layers;

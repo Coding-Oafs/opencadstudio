@@ -68,6 +68,14 @@ impl OpenCADStudio {
         // Starting a command closes any open ribbon dropdown (e.g. a style
         // combo left open) so it does not stay stuck behind the new tool.
         self.ribbon.close_dropdown();
+        // Selection keywords last only for the round that asked for them: a
+        // Remove or a fixed Window sense must not quietly still be in force
+        // when the next command asks for objects. (#596)
+        self.select_remove_mode = false;
+        {
+            let mut selection = self.tabs[i].scene.selection.borrow_mut();
+            selection.box_crossing_locked = false;
+        }
         // Cancel any running command before starting a new one.
         if self.tabs[i].active_cmd.is_some() {
             self.tabs[i].scene.clear_preview_wire();

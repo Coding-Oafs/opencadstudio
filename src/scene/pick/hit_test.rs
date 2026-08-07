@@ -1038,6 +1038,86 @@ fn indexed_box_crossing_hits<'a, W: WireSource + ?Sized>(
     out
 }
 
+/// Wires the open polyline `fence` actually crosses.
+///
+/// The Fence selection mode draws a line through a drawing and takes whatever
+/// it cuts. That is not the polygon test with `crossing` set: the polygon one
+/// closes the point list back to its start and counts anything lying inside the
+/// area that closure encloses, so a fence drawn past a group of objects would
+/// sweep up everything behind it as well. Here the chain stays open and only a
+/// real intersection counts. (#596)
+pub fn poly_fence_hit<'a, W: WireSource + ?Sized>(
+    fence: &[Point],
+    wires: &'a W,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Vec<&'a str> {
+    if fence.len() < 2 {
+        return vec![];
+    }
+    let cuts = |a: Point, b: Point| {
+        fence
+            .windows(2)
+            .any(|leg| segments_intersect(a, b, leg[0], leg[1]))
+    };
+    let mut out = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::default();
+    // Indexed segments when the source has them (the same fast path the
+    // polygon test uses), otherwise walk each wire's own points.
+    if let Some(segments) = wires.segments() {
+        for segment in segments {
+            let Some(wire) = wires.source_wire(segment.wire) else {
+                continue;
+            };
+            let start = segment.start as usize;
+            if start + 1 >= wire.points.len() || seen.contains(wire.name.as_str()) {
+                continue;
+            }
+            let a = world_to_screen(
+                wp64(wire.points[start], &wire.points_low, start),
+                view_rot,
+                eye,
+                bounds,
+            );
+            let b = world_to_screen(
+                wp64(wire.points[start + 1], &wire.points_low, start + 1),
+                view_rot,
+                eye,
+                bounds,
+            );
+            if cuts(a, b) && seen.insert(wire.name.as_str()) {
+                out.push(wire.name.as_str());
+            }
+        }
+        return out;
+    }
+    for wire in wires.iter() {
+        if wire.points.len() < 2 {
+            continue;
+        }
+        let hit = (0..wire.points.len() - 1).any(|k| {
+            let a = world_to_screen(
+                wp64(wire.points[k], &wire.points_low, k),
+                view_rot,
+                eye,
+                bounds,
+            );
+            let b = world_to_screen(
+                wp64(wire.points[k + 1], &wire.points_low, k + 1),
+                view_rot,
+                eye,
+                bounds,
+            );
+            cuts(a, b)
+        });
+        if hit && seen.insert(wire.name.as_str()) {
+            out.push(wire.name.as_str());
+        }
+    }
+    out
+}
+
 fn indexed_polygon_crossing_hits<'a, W: WireSource + ?Sized>(
     wires: &'a W,
     poly: &[Point],
@@ -1431,7 +1511,7 @@ pub fn poly_hit<'a, W: WireSource + ?Sized>(
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-fn world_to_screen(
+pub(crate) fn world_to_screen(
     world: glam::DVec3,
     view_rot: Mat4,
     eye: glam::DVec3,

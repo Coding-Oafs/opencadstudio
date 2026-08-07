@@ -700,7 +700,9 @@ impl OpenCADStudio {
                     // overlay and completion) instead of the lasso.
                     sel.box_anchor = Some(press);
                     sel.box_current = Some(p);
-                    sel.box_crossing = p.x < press.x;
+                    if !sel.box_crossing_locked {
+                        sel.box_crossing = p.x < press.x;
+                    }
                 } else {
                     sel.poly_active = true;
                     sel.poly_crossing = p.x < press.x;
@@ -719,13 +721,17 @@ impl OpenCADStudio {
             } else if sel.left_dragging {
                 if let Some(a) = sel.box_anchor {
                     sel.box_current = Some(p);
-                    sel.box_crossing = p.x < a.x;
+                    if !sel.box_crossing_locked {
+                        sel.box_crossing = p.x < a.x;
+                    }
                 }
             }
         } else if sel.box_anchor.is_some() {
             sel.box_current = Some(p);
             if let Some(a) = sel.box_anchor {
-                sel.box_crossing = p.x < a.x;
+                if !sel.box_crossing_locked {
+                    sel.box_crossing = p.x < a.x;
+                }
             }
         }
 
@@ -1913,6 +1919,7 @@ impl OpenCADStudio {
         sel.box_anchor_world = None;
         sel.box_current = None;
         sel.box_crossing = false;
+        sel.box_crossing_locked = false;
         sel.poly_active = false;
         sel.poly_points.clear();
         sel.poly_crossing = false;
@@ -2986,7 +2993,9 @@ impl OpenCADStudio {
                     selection.box_anchor = Some(p_full);
                     selection.box_current = Some(p_full);
                     selection.box_anchor_world = Some(anchor_world);
-                    selection.box_crossing = false;
+                    if !selection.box_crossing_locked {
+                        selection.box_crossing = false;
+                    }
                     None
                 } else {
                     self.command_line
@@ -3199,6 +3208,7 @@ impl OpenCADStudio {
                         selection.box_anchor_world = None;
                         selection.box_current = None;
                         selection.box_crossing = false;
+                        selection.box_crossing_locked = false;
                         drop(selection);
                         return self.apply_cmd_result(result);
                     }
@@ -3300,7 +3310,7 @@ impl OpenCADStudio {
                         // selection, Shift+box removes the boxed
                         // entities. Esc / empty-space click still clears.
                         // PICKADD 0 (#226): a plain box REPLACES.
-                        if self.shift_down {
+                        if self.shift_down || self.select_remove_mode {
                             for h in &handles {
                                 self.tabs[i].scene.deselect_entity(*h);
                             }
@@ -3332,103 +3342,21 @@ impl OpenCADStudio {
                     };
                     self.tabs[i].scene.selection.borrow_mut().poly_last_crossing = crossing;
                     let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
-                    let world_aabb = poly_pts.iter().fold(
-                        [
-                            f64::INFINITY,
-                            f64::INFINITY,
-                            f64::NEG_INFINITY,
-                            f64::NEG_INFINITY,
-                        ],
-                        |mut aabb, &point| {
-                            let world = self.cursor_model_point(i, &edit_cam, point, bounds);
-                            aabb[0] = aabb[0].min(world.x);
-                            aabb[1] = aabb[1].min(world.y);
-                            aabb[2] = aabb[2].max(world.x);
-                            aabb[3] = aabb[3].max(world.y);
-                            aabb
-                        },
-                    );
-                    let area_candidates = self.tabs[i].scene.interaction_candidates_in_aabb(
+                    let handles = self.tabs[i].scene.path_hit_handles(
+                        &poly_pts,
+                        crossing,
+                        false,
                         all_wires,
-                        world_aabb,
-                        poly_pts.iter().fold(
-                            [
-                                f32::INFINITY,
-                                f32::INFINITY,
-                                f32::NEG_INFINITY,
-                                f32::NEG_INFINITY,
-                            ],
-                            |mut rect, point| {
-                                rect[0] = rect[0].min(point.x);
-                                rect[1] = rect[1].min(point.y);
-                                rect[2] = rect[2].max(point.x);
-                                rect[3] = rect[3].max(point.y);
-                                rect
-                            },
-                        ),
                         view_rot,
                         eye,
                         bounds,
+                        |point| self.cursor_model_point(i, &edit_cam, point, bounds),
                     );
-                    let candidate_handles = self.tabs[i]
-                        .scene
-                        .interaction_candidate_handles(&area_candidates);
-                    let mut handles: Vec<Handle> = scene::pick::hit_test::poly_hit(
-                        &poly_pts,
-                        crossing,
-                        &area_candidates,
-                        view_rot,
-                        eye,
-                        bounds,
-                    )
-                    .into_iter()
-                    .filter_map(|s| Scene::handle_from_wire_name(s))
-                    .collect();
-                    handles.extend(scene::pick::hit_test::poly_hit_hatch(
-                        &poly_pts,
-                        crossing,
-                        &self.tabs[i]
-                            .scene
-                            .visible_hatches_for_click(candidate_handles.as_ref()),
-                        view_rot,
-                        eye,
-                        bounds,
-                        candidate_handles.as_ref(),
-                    ));
-                    handles.extend(scene::pick::hit_test::poly_hit_insert_hatch(
-                        &poly_pts,
-                        crossing,
-                        self.tabs[i].scene.insert_hatches_for_click().as_ref(),
-                        view_rot,
-                        eye,
-                        bounds,
-                        candidate_handles.as_ref(),
-                    ));
-                    handles.extend(self.tabs[i].scene.mesh_poly_hit(
-                        &poly_pts,
-                        crossing,
-                        view_rot,
-                        eye,
-                        bounds,
-                        candidate_handles.as_ref(),
-                    ));
-                    handles.extend(self.tabs[i].scene.block_mesh_poly_hit(
-                        &poly_pts,
-                        crossing,
-                        view_rot,
-                        eye,
-                        bounds,
-                        candidate_handles.as_ref(),
-                    ));
-                    // Selection filter: keep only allowed types.
-                    handles.retain(|&h| self.tabs[i].scene.passes_selection_filter(h));
-                    // Objects on a locked layer aren't selectable.
-                    handles.retain(|&h| !self.tabs[i].scene.is_layer_locked(h));
                     // Accumulate like the box path (issue #83): plain
                     // lasso adds, Shift+lasso removes. An empty lasso
                     // leaves the current selection untouched so a stray
                     // drag never discards hard-won picks.
-                    if self.shift_down {
+                    if self.shift_down || self.select_remove_mode {
                         for h in &handles {
                             self.tabs[i].scene.deselect_entity(*h);
                         }
@@ -3564,8 +3492,12 @@ impl OpenCADStudio {
                                 // PICKADD 0 (#226): a plain click
                                 // REPLACES the selection instead and
                                 // Shift+click toggles membership.
-                                if self.shift_down {
-                                    if !selection_pick_add
+                                if self.shift_down || self.select_remove_mode {
+                                    // Remove was asked for by name, so it only
+                                    // ever takes away — the toggle below is
+                                    // Shift's PICKADD-0 behaviour, not its.
+                                    if !self.select_remove_mode
+                                        && !selection_pick_add
                                         && !self.tabs[i].scene.selected.contains(&handle)
                                     {
                                         self.tabs[i].scene.select_entity(handle, false);
@@ -3607,7 +3539,9 @@ impl OpenCADStudio {
                             sel.box_anchor = Some(p_full);
                             sel.box_current = Some(p_full);
                             sel.box_anchor_world = Some(anchor_world);
-                            sel.box_crossing = false;
+                            if !sel.box_crossing_locked {
+                                sel.box_crossing = false;
+                            }
                         }
                     }
                 } else {
@@ -3656,6 +3590,7 @@ impl OpenCADStudio {
                         selection.box_anchor_world = None;
                         selection.box_current = None;
                         selection.box_crossing = false;
+                        selection.box_crossing_locked = false;
                         drop(selection);
                         return self.apply_cmd_result(result);
                     }
@@ -3752,7 +3687,7 @@ impl OpenCADStudio {
                     // entities. An empty box leaves the selection alone
                     // so an accidental empty drag never discards it.
                     // PICKADD 0 (#226): a plain box REPLACES instead.
-                    if self.shift_down {
+                    if self.shift_down || self.select_remove_mode {
                         for h in &handles {
                             self.tabs[i].scene.deselect_entity(*h);
                         }
@@ -3773,6 +3708,7 @@ impl OpenCADStudio {
                     sel.box_anchor_world = None;
                     sel.box_current = None;
                     sel.box_crossing = false;
+                    sel.box_crossing_locked = false;
                     selection_just_completed = true;
                 }
             }

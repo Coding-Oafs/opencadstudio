@@ -1034,6 +1034,15 @@ pub enum CmdResult {
     CancelForSpaceChange,
     /// End the selection-gather phase and re-dispatch the named command
     /// with the gathered handles installed as the active scene selection.
+    /// Select by a path the user picked point by point. `closed` polygons take
+    /// what they enclose, or merely touch when `crossing`; an open fence takes
+    /// only what it actually cuts. The host owns the hit test, so the command
+    /// hands over the geometry rather than the answer. (#596)
+    SelectByPath {
+        path: Vec<[f64; 2]>,
+        closed: bool,
+        crossing: bool,
+    },
     Relaunch(String, Vec<Handle>),
     /// End the command and dispatch the given command string. Used by an
     /// interactive front-end that gathered its arguments step-by-step and
