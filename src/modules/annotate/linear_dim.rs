@@ -8,7 +8,30 @@ use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
 use crate::t;
 
-fn measure_axis(first: DVec3, second: DVec3) -> DVec3 {
+/// Which axis a linear dimension measures along.
+///
+/// Not the segment's own direction. A linear dimension reports the run or the
+/// rise, and which of the two is wanted is said by where the dimension line is
+/// put: pulled clear of the points above or below, the horizontal distance is
+/// what is left to show; pulled out to the side, the vertical one. Taking the
+/// answer from the two origins alone made every shallow tilt horizontal
+/// forever, whatever the cursor did. (#669)
+///
+/// "Clear of the points" is measured against their extent rather than their
+/// midpoint: a dimension line dragged straight up from near one end of a long
+/// pair is still above them, though it is a long way from the middle.
+fn measure_axis(first: DVec3, second: DVec3, def: DVec3) -> DVec3 {
+    let outside = |value: f64, a: f64, b: f64| {
+        let (low, high) = if a <= b { (a, b) } else { (b, a) };
+        (low - value).max(value - high).max(0.0)
+    };
+    let out_x = outside(def.x, first.x, second.x);
+    let out_y = outside(def.y, first.y, second.y);
+    if out_x > 0.0 || out_y > 0.0 {
+        return if out_y >= out_x { DVec3::X } else { DVec3::Y };
+    }
+    // Still between the origins on both axes — the location has not said
+    // anything yet, so fall back to the longer side of the pair.
     let delta = second - first;
     if delta.x.abs() >= delta.y.abs() {
         DVec3::X
@@ -102,7 +125,7 @@ impl CadCommand for LinearDimensionCommand {
                 let second = self.plane.to_local(second);
                 let pt = self.plane.to_local(pt);
                 let mut dim = DimensionLinear::new(v3(first), v3(second));
-                let axis = measure_axis(first, second);
+                let axis = measure_axis(first, second, pt);
                 dim.rotation = axis.y.atan2(axis.x);
                 dim.definition_point = v3(pt);
                 dim.base.definition_point = v3(pt);
@@ -197,7 +220,7 @@ impl CadCommand for LinearDimensionCommand {
                 let first = self.plane.to_local(first);
                 let second = self.plane.to_local(second);
                 let pt = self.plane.to_local(pt);
-                let axis = measure_axis(first, second);
+                let axis = measure_axis(first, second, pt);
                 let points = linear_dimension_preview(first, second, pt, axis)
                     .into_iter()
                     .map(|point| self.plane.to_world(point))
