@@ -124,6 +124,12 @@ pub struct Snapper {
     /// then locks to that line (#219). Empty for a point that is not a segment
     /// endpoint (e.g. a midpoint or centre acquisition).
     pub tracking_dirs: Vec<Vec<DVec3>>,
+    /// Perpendicular directions through each acquired tracking point.
+    ///
+    /// Kept separate from `tracking_dirs` because those directions are also
+    /// consumed by Extension snap and extended-intersection logic. These rays
+    /// belong only to OTRACK when Perpendicular OSNAP is enabled. (#695)
+    pub tracking_perp_dirs: Vec<Vec<DVec3>>,
     /// Last snap world position (for dwell detection).
     pub last_snap_world: Option<DVec3>,
     /// When the cursor first rested near `last_snap_world`.
@@ -172,6 +178,7 @@ impl Default for Snapper {
             otrack_enabled: false,
             tracking_points: Vec::new(),
             tracking_dirs: Vec::new(),
+            tracking_perp_dirs: Vec::new(),
             last_snap_world: None,
             dwell_since: None,
             dwell_acquired: false,
@@ -335,8 +342,13 @@ impl Snapper {
                         match existing {
                             Some(idx) => {
                                 self.tracking_points.remove(idx);
+
                                 if idx < self.tracking_dirs.len() {
                                     self.tracking_dirs.remove(idx);
+                                }
+
+                                if idx < self.tracking_perp_dirs.len() {
+                                    self.tracking_perp_dirs.remove(idx);
                                 }
                             }
                             None => self.acquire_tracking_point(p, wires, endpoints_only),
@@ -376,17 +388,24 @@ impl Snapper {
         // segment — a midpoint, centre, intersection or extension foot — has
         // none. Extension-driven acquisition (#262) keeps only endpoints.
         let dirs = edge_dirs_at(p, wires);
+        let perp_dirs = perpendicular_dirs_at(p, wires);
         if endpoints_only && dirs.is_empty() {
             return;
         }
         if self.tracking_points.len() >= 4 {
             self.tracking_points.remove(0);
+
             if !self.tracking_dirs.is_empty() {
                 self.tracking_dirs.remove(0);
+            }
+
+            if !self.tracking_perp_dirs.is_empty() {
+                self.tracking_perp_dirs.remove(0);
             }
         }
         self.tracking_points.push(p);
         self.tracking_dirs.push(dirs);
+        self.tracking_perp_dirs.push(perp_dirs);
     }
 
     /// If the cursor dwelt on a snap point long enough but the in-place check
@@ -515,6 +534,22 @@ impl Snapper {
                         dir: d,
                         group: gi,
                     });
+                }
+            }
+            // Perpendicular tracking ray through the acquired point.
+            //
+            // This is intentionally OTRACK-only. `tracking_dirs` continues to contain
+            // only real edge directions so Extension and extended intersections are not
+            // polluted by synthetic perpendicular rays. (#695)
+            if self.is_on(SnapType::Perpendicular) {
+                if let Some(pdirs) = self.tracking_perp_dirs.get(gi) {
+                    for &d in pdirs {
+                        rays.push(Ray {
+                            origin: tp,
+                            dir: d,
+                            group: gi,
+                        });
+                    }
                 }
             }
             // Ray from the command's base point toward this acquired corner:
@@ -647,6 +682,7 @@ impl Snapper {
     pub fn clear_tracking(&mut self) {
         self.tracking_points.clear();
         self.tracking_dirs.clear();
+        self.tracking_perp_dirs.clear();
         self.parallel_ref = None;
         self.parallel_dwell = None;
         self.last_snap_world = None;
@@ -777,6 +813,7 @@ impl Snapper {
             otrack_enabled: false,
             tracking_points: Vec::new(),
             tracking_dirs: Vec::new(),
+            tracking_perp_dirs: Vec::new(),
             last_snap_world: None,
             dwell_since: None,
             dwell_acquired: false,
@@ -1767,6 +1804,99 @@ fn edge_dirs_at<W: WireSource + ?Sized>(p: DVec3, wires: &W) -> Vec<DVec3> {
             }
         }
     }
+    dirs
+}
+
+/// Perpendicular tracking directions through `p`.
+///
+/// Unlike `edge_dirs_at`, this also accepts a point lying anywhere on a
+/// segment, not only an endpoint. This lets Perpendicular + OTRACK acquire
+/// a point on an existing line and track away from it at exactly 90°. (#695)
+fn perpendicular_dirs_at<W: WireSource + ?Sized>(
+    p: DVec3,
+    wires: &W,
+) -> Vec<DVec3> {
+    let tol = 1e-8_f64.max(2e-12 * p.x.abs().max(p.y.abs()));
+    let tol2 = tol * tol;
+
+    let mut dirs: Vec<DVec3> = Vec::new();
+
+    let mut consider = |a: DVec3, b: DVec3| {
+        // `p` may be an endpoint, midpoint or arbitrary Perpendicular snap
+        // point. Accept the segment when p lies on it within reconstruction
+        // tolerance.
+        let nearest = nearest_on_segment(p, a, b);
+
+        if (nearest - p).length_squared() > tol2 {
+            return false;
+        }
+
+        let seg = b - a;
+        let len = (seg.x * seg.x + seg.y * seg.y).sqrt();
+
+        if len < 1e-9 {
+            return false;
+        }
+
+        // 90-degree rotation in the drawing XY plane.
+        //
+        // OTRACK treats this as an infinite alignment line, so one normalized
+        // direction is enough; the cursor may track either side of the origin.
+        let perp = DVec3::new(-seg.y / len, seg.x / len, 0.0);
+
+        // Opposite perpendiculars describe the same infinite tracking line.
+        if dirs
+            .iter()
+            .any(|d| (d.x * perp.x + d.y * perp.y).abs() > 0.99996)
+        {
+            return false;
+        }
+
+        dirs.push(perp);
+        dirs.len() >= 6
+    };
+
+    let is_round = |wire: &WireModel| {
+        wire.snap_pts
+            .iter()
+            .any(|(_, hint)| matches!(hint, SnapHint::Quadrant | SnapHint::Center))
+    };
+
+    if let Some(segments) = indexed_segments(wires) {
+        for segment in segments {
+            if wires.source_wire(segment.wire).is_some_and(&is_round) {
+                continue;
+            }
+
+            if consider(segment.a, segment.b) {
+                break;
+            }
+        }
+
+        return dirs;
+    }
+
+    'outer: for wire in wires.iter() {
+        if is_round(wire) {
+            continue;
+        }
+
+        let n = wire.points.len();
+
+        if n < 2 {
+            continue;
+        }
+
+        for i in 0..n - 1 {
+            let a = wp_f64(wire, i);
+            let b = wp_f64(wire, i + 1);
+
+            if consider(a, b) {
+                break 'outer;
+            }
+        }
+    }
+
     dirs
 }
 
