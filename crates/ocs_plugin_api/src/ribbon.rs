@@ -17,6 +17,15 @@ pub enum ModuleEvent {
     /// Remove all loaded models from the scene.
     #[allow(dead_code)]
     ClearModels,
+    /// Put the active viewport in a named visual style.
+    ///
+    /// The name is one of the render modes the viewport can be drawn in:
+    /// `WIREFRAME2D`, `WIREFRAME3D`, `HIDDENLINE`, `FLATSHADED`,
+    /// `GOURAUDSHADED`, `FLATSHADEDWITHEDGES`, `GOURAUDSHADEDWITHEDGES`
+    /// (case-insensitive). The host resolves it against the same list its own
+    /// ribbon and commands read, so an add-on offers exactly the styles the
+    /// application does. An unknown name is reported and nothing changes.
+    SetVisualStyle(String),
     /// Toggle the layer manager panel.
     ToggleLayers,
     /// Ask the host to open a native file picker. On selection the host

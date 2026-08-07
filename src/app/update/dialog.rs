@@ -158,6 +158,21 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.tabs[i].properties = PropertiesPanel::empty();
                         self.command_line.push_output(crate::t!("Scene cleared.").as_ref());
                     }
+                    ModuleEvent::SetVisualStyle(name) => {
+                        use crate::modules::view::visual_style;
+                        match visual_style::mode_for_keyword(&name) {
+                            Some(mode) => return Task::done(Message::SetRenderMode(mode)),
+                            None => {
+                                // Name the styles that do exist, from the same
+                                // list every other caller reads.
+                                self.command_line.push_error(
+                                    crate::tf!("Unknown visual style \"{name}\".").as_ref(),
+                                );
+                                self.command_line
+                                    .push_info(visual_style::keyword_prompt());
+                            }
+                        }
+                    }
                     ModuleEvent::ToggleLayers => {
                         return Task::done(Message::ToggleLayers);
                     }

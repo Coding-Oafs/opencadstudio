@@ -1122,6 +1122,14 @@ pub fn module_event_to_message(event: ModuleEvent) -> Message {
         ModuleEvent::Command(cmd) => Message::Command(cmd),
         ModuleEvent::OpenFileDialog => Message::OpenFile,
         ModuleEvent::ClearModels => Message::ClearScene,
+        ModuleEvent::SetVisualStyle(name) => {
+            match crate::modules::view::visual_style::mode_for_keyword(&name) {
+                Some(mode) => Message::SetRenderMode(mode),
+                // Report through the command line rather than silently doing
+                // nothing, so a plugin author sees the typo.
+                None => Message::Command(format!("VISUALSTYLES {name}")),
+            }
+        }
         ModuleEvent::ToggleLayers => Message::ToggleLayers,
         // Needs the tool context + async picker — route through the normal
         // ribbon-click handler rather than a direct 1:1 message.
