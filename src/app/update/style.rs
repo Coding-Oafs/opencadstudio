@@ -467,6 +467,29 @@ impl OpenCADStudio {
         ds.dimtofl = self.ds_dimtofl;
         ds.dimalt = self.ds_dimalt;
         ds.dimapost = self.ds_dimapost.clone();
+
+        // Same reason as a per-dimension edit: every dimension on this style is
+        // drawn from a block made under the settings that just changed, so the
+        // pictures are stale. Drop them and let each be drawn again. Without
+        // this an edit here would move the numbers and leave the drawing alone.
+        let edited = self.dimstyle_selected.clone();
+        let stale: Vec<acadrust::Handle> = self.tabs[tab]
+            .scene
+            .document
+            .entities()
+            .filter_map(|entity| match entity {
+                acadrust::EntityType::Dimension(dim)
+                    if dim.base().style_name.eq_ignore_ascii_case(&edited) =>
+                {
+                    Some(entity.common().handle)
+                }
+                _ => None,
+            })
+            .collect();
+        for handle in stale {
+            self.tabs[tab].scene.invalidate_dim_block_recorded(handle);
+        }
+
         self.command_line
             .push_output(crate::tf!("DimStyle '{}' updated.", self.dimstyle_selected).as_ref());
     }

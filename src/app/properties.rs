@@ -1828,6 +1828,16 @@ impl OpenCADStudio {
     pub(super) fn invalidate_property_targets(&mut self, i: usize, handles: &[Handle]) {
         let mut context_object_changed = false;
         for &handle in handles {
+            // A dimension is drawn from the block holding its picture, and that
+            // picture was made under the settings just edited. Drop it so the
+            // dimension is drawn afresh — otherwise the edit changes the stored
+            // variables and nothing on screen.
+            if matches!(
+                self.tabs[i].scene.document.get_entity(handle),
+                Some(acadrust::EntityType::Dimension(_))
+            ) {
+                self.tabs[i].scene.invalidate_dim_block_recorded(handle);
+            }
             context_object_changed |= self.tabs[i]
                 .scene
                 .sync_displayed_annotation_context(handle);
