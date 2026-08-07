@@ -3625,6 +3625,10 @@ impl Scene {
     ///
     /// The scale manager calls this on open and stages the result, so the set
     /// is discarded again unless the user applies an edit.
+    ///
+    /// `scale_handle_ensuring` calls it for real, before it writes the first
+    /// scale a drawing has ever owned: one scale on its own would end the
+    /// substitution and leave the drawing holding a list of one.
     pub fn ensure_real_scale_list(&mut self) -> bool {
         if self.has_own_scales() {
             return false;
@@ -3995,6 +3999,18 @@ impl Scene {
     pub(crate) fn scale_handle_ensuring(&mut self, name: &str) -> Option<Handle> {
         if let Some(h) = self.scale_object_handle(name) {
             return Some(h);
+        }
+        // A drawing that owns no scales is being shown the standard set that
+        // `scale_list` substitutes for an empty one. Writing only the scale
+        // asked for would give it a list of its own — of exactly one entry —
+        // and the substitution would stop, so every other scale would vanish
+        // from the picker the moment anything needed a real one. Bring the
+        // whole set in instead, which is what the drawing was already being
+        // shown. (#666, #683)
+        if self.ensure_real_scale_list() {
+            if let Some(h) = self.scale_object_handle(name) {
+                return Some(h);
+            }
         }
         let fallback = self
             .default_scales()
