@@ -152,7 +152,7 @@ impl CadCommand for TraceCommand {
                 self.width_set = true;
                 return Some(CmdResult::NeedPoint);
             }
-            if let Ok(w) = t.parse::<f64>() {
+            if let Some(w) = crate::entities::common::parse_typed_length(t) {
                 if w > 0.0 {
                     self.width = w;
                     self.width_set = true;

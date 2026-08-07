@@ -177,7 +177,8 @@ impl CadCommand for ArrayRectCommand {
                 let row_sp = if t.is_empty() {
                     self.default_row_sp
                 } else {
-                    let v = t.parse::<f64>().unwrap_or(self.default_row_sp);
+                    let v = crate::entities::common::parse_typed_length(t)
+                        .unwrap_or(self.default_row_sp);
                     defaults::set_array_row_sp(v);
                     self.default_row_sp = v;
                     v
@@ -189,7 +190,8 @@ impl CadCommand for ArrayRectCommand {
                 let col_sp = if t.is_empty() {
                     self.default_col_sp
                 } else {
-                    let v = t.parse::<f64>().unwrap_or(self.default_col_sp);
+                    let v = crate::entities::common::parse_typed_length(t)
+                        .unwrap_or(self.default_col_sp);
                     defaults::set_array_col_sp(v);
                     v
                 };
@@ -341,7 +343,10 @@ impl CadCommand for ArrayPolarCommand {
                 let total_deg = if t.is_empty() {
                     self.default_angle
                 } else {
-                    let v = t.parse::<f64>().unwrap_or(self.default_angle);
+                    // Held in degrees, which is what the stored default is.
+                    let v = crate::entities::common::parse_typed_angle(t)
+                        .map(f64::to_degrees)
+                        .unwrap_or(self.default_angle);
                     defaults::set_array_p_angle(v);
                     v
                 };

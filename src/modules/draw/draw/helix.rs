@@ -108,7 +108,7 @@ impl HelixCommand {
 
     /// Parse a positive distance from typed text; returns `None` on failure.
     fn parse_value(text: &str) -> Option<f64> {
-        text.trim().parse::<f64>().ok()
+        crate::entities::common::parse_typed_length(text)
     }
 }
 

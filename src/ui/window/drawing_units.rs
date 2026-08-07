@@ -311,6 +311,13 @@ fn with_context(state: &State, body: impl FnOnce() -> String) -> String {
         luprec: state.linear_precision,
         aunits: state.angular_format,
         auprec: state.angular_precision,
+        angbase: state
+            .base_angle
+            .trim()
+            .parse::<f64>()
+            .unwrap_or(0.0)
+            .to_radians(),
+        angdir_cw: state.clockwise,
     });
     let out = body();
     set_unit_context(previous);

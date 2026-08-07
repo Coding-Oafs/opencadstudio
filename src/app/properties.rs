@@ -89,12 +89,9 @@ impl OpenCADStudio {
         // lengths/angles per LUNITS / LUPREC / AUNITS / AUPREC.
         {
             let h = &self.tabs[i].scene.document.header;
-            crate::entities::common::set_unit_context(crate::entities::common::UnitContext {
-                lunits: h.linear_unit_format,
-                luprec: h.linear_unit_precision,
-                aunits: h.angular_unit_format,
-                auprec: h.angular_unit_precision,
-            });
+            crate::entities::common::set_unit_context(
+                crate::entities::common::UnitContext::from_header(h),
+            );
         }
 
         let layer_names: Vec<String> = self.tabs[i]

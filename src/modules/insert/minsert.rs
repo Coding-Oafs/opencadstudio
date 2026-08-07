@@ -228,12 +228,12 @@ impl CadCommand for MinsertCommand {
                             }
                         }
                         ParamIdx::RowSpacing => {
-                            if let Ok(v) = typed.parse::<f64>() {
+                            if let Some(v) = crate::entities::common::parse_typed_length(typed) {
                                 self.row_spacing = v;
                             }
                         }
                         ParamIdx::ColumnSpacing => {
-                            if let Ok(v) = typed.parse::<f64>() {
+                            if let Some(v) = crate::entities::common::parse_typed_length(typed) {
                                 self.column_spacing = v;
                             }
                         }

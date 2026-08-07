@@ -1271,7 +1271,7 @@ impl CadCommand for FilletCommand {
                     self.resume_after_radius();
                     return Some(CmdResult::NeedPoint);
                 }
-                if let Ok(v) = t.replace(',', ".").parse::<f64>() {
+                if let Some(v) = crate::entities::common::parse_typed_length(t) {
                     if v >= 0.0 {
                         self.radius = v;
                         defaults::set_fillet_radius(v);
@@ -1293,7 +1293,7 @@ impl CadCommand for FilletCommand {
                 // "R 5.0" inline shorthand
                 if upper.starts_with('R') {
                     let body = t[1..].trim();
-                    if let Ok(v) = body.replace(',', ".").parse::<f64>() {
+                    if let Some(v) = crate::entities::common::parse_typed_length(body) {
                         if v >= 0.0 {
                             self.radius = v;
                             defaults::set_fillet_radius(v);
@@ -1687,7 +1687,7 @@ impl CadCommand for ChamferCommand {
                     self.step = ChamferStep::WaitingForDist2;
                     return Some(CmdResult::NeedPoint);
                 }
-                if let Ok(v) = t.replace(',', ".").parse::<f64>() {
+                if let Some(v) = crate::entities::common::parse_typed_length(t) {
                     self.dist1 = v.max(0.0);
                     defaults::set_chamfer_dist1(self.dist1);
                     self.step = ChamferStep::WaitingForDist2;
@@ -1703,7 +1703,7 @@ impl CadCommand for ChamferCommand {
                     self.resume_after_dist();
                     return Some(CmdResult::NeedPoint);
                 }
-                if let Ok(v) = t.replace(',', ".").parse::<f64>() {
+                if let Some(v) = crate::entities::common::parse_typed_length(t) {
                     self.dist2 = v.max(0.0);
                     defaults::set_chamfer_dist2(self.dist2);
                     self.resume_after_dist();
@@ -1727,7 +1727,7 @@ impl CadCommand for ChamferCommand {
                     let body = t[1..].trim();
                     let parts: Vec<f64> = body
                         .split_whitespace()
-                        .filter_map(|s| s.replace(',', ".").parse::<f64>().ok())
+                        .filter_map(crate::entities::common::parse_typed_length)
                         .collect();
                     if !parts.is_empty() {
                         if let Some(&v) = parts.first() {

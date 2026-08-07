@@ -168,7 +168,7 @@ impl CadCommand for AlignedDimensionCommand {
             self.text_angle = if t.is_empty() {
                 None
             } else {
-                t.parse::<f64>().ok().map(f64::to_radians)
+                crate::entities::common::parse_typed_angle(t)
             };
             self.awaiting_angle = false;
             return Some(CmdResult::NeedPoint);

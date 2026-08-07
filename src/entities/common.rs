@@ -19,6 +19,27 @@ pub struct UnitContext {
     /// AUPREC — decimal places (angular)
     #[allow(dead_code)]
     pub auprec: i16,
+    /// ANGBASE — the world direction that a written angle of zero points in,
+    /// in radians. Applies to directions, never to angular sizes.
+    pub angbase: f64,
+    /// ANGDIR — true when written angles grow clockwise.
+    pub angdir_cw: bool,
+}
+
+impl UnitContext {
+    /// The settings as this drawing holds them. Every place that formats or
+    /// reads a number seeds the context from here, so none of them can be
+    /// working from a different idea of the drawing's conventions.
+    pub fn from_header(header: &acadrust::document::HeaderVariables) -> Self {
+        Self {
+            lunits: header.linear_unit_format,
+            luprec: header.linear_unit_precision,
+            aunits: header.angular_unit_format,
+            auprec: header.angular_unit_precision,
+            angbase: header.angle_base,
+            angdir_cw: header.angle_direction != 0,
+        }
+    }
 }
 
 thread_local! {
@@ -27,6 +48,8 @@ thread_local! {
         luprec: 4,
         aunits: 0,
         auprec: 0,
+        angbase: 0.0,
+        angdir_cw: false,
     }) };
 }
 
@@ -153,6 +176,205 @@ fn surveyor(value_rad: f64, prec: usize) -> String {
         ("S", deg - 270.0, "E")
     };
     format!("{pole} {} {side}", dms(bearing, prec))
+}
+
+// ── Reading numbers back ───────────────────────────────────────────────────
+//
+// The inverses of the formatters above, kept beside them so the pair cannot
+// drift: whatever the drawing writes, it can be handed back. Reading is the
+// looser of the two — it takes the shorthands people type as well as the full
+// forms — but it never accepts a form the drawing could not have produced.
+
+/// Read a length. Accepts plain decimals, feet-and-inches, and fractions.
+///
+/// Feet and inches separate with a dash, a space, or nothing, and the closing
+/// `"` is optional: `5'-9 1/2"`, `5' 9-1/2`, `5'9`, `9 1/2`, `1/2`, `60"` and
+/// `5'` all read. As with the architectural and engineering formats, the
+/// notation itself means one unit is one inch.
+///
+/// A leading `-` is a sign, but the `-` inside `5'-9"` is a separator — after
+/// feet there is nothing left to subtract from.
+pub fn parse_length(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let (sign, rest) = match text.strip_prefix('-') {
+        Some(rest) => (-1.0, rest.trim_start()),
+        None => (1.0, text.strip_prefix('+').unwrap_or(text).trim_start()),
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let magnitude = match rest.split_once('\'') {
+        Some((feet, inches)) => {
+            let feet: f64 = feet.trim().parse().ok()?;
+            let inches = inches.trim().trim_end_matches('"').trim();
+            feet * 12.0 + parse_inches(inches.trim_start_matches('-').trim())?
+        }
+        None => parse_inches(rest.trim_end_matches('"').trim())?,
+    };
+    Some(sign * magnitude)
+}
+
+/// A count of inches: `9`, `9.5`, `1/2`, `9 1/2`, `9-1/2`, or nothing at all.
+fn parse_inches(text: &str) -> Option<f64> {
+    if text.is_empty() {
+        return Some(0.0);
+    }
+    let Some(slash) = text.find('/') else {
+        // No fraction, so any `-` left in here belongs to an exponent
+        // (`3.35E-01`) rather than to a separator.
+        return text.parse().ok();
+    };
+    let denominator: f64 = text[slash + 1..].trim().parse().ok()?;
+    if denominator == 0.0 {
+        return None;
+    }
+    // The numerator is the number nearest the slash; anything before the
+    // separator in front of it is a whole count of inches.
+    let head = text[..slash].trim();
+    let (whole, numerator) = match head.rfind([' ', '-']) {
+        Some(cut) => (head[..cut].trim(), head[cut + 1..].trim()),
+        None => ("", head),
+    };
+    let numerator: f64 = numerator.parse().ok()?;
+    let whole: f64 = if whole.is_empty() {
+        0.0
+    } else {
+        whole.parse().ok()?
+    };
+    Some(whole + numerator / denominator)
+}
+
+/// Read an angle, in radians.
+///
+/// A mark decides the convention — `g` grads, `r` radians, `d`/`'`/`"`
+/// degrees-minutes-seconds, compass letters a surveyor's bearing. A bare
+/// number is read in whatever convention the drawing is set to, so what the
+/// readout shows can be typed straight back.
+pub fn parse_angle(text: &str) -> Option<f64> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let upper = text.to_ascii_uppercase();
+    if upper.starts_with('N') || upper.starts_with('S') {
+        return parse_surveyor(&upper);
+    }
+    if let Some(body) = upper.strip_suffix('G') {
+        return Some((body.trim().parse::<f64>().ok()? * 0.9).to_radians());
+    }
+    if let Some(body) = upper.strip_suffix('R') {
+        return body.trim().parse().ok();
+    }
+    // Bare east/west read as the directions they name.
+    if upper == "E" {
+        return Some(0.0);
+    }
+    if upper == "W" {
+        return Some(std::f64::consts::PI);
+    }
+    if upper.contains('D') || upper.contains('°') || upper.contains('\'') {
+        return Some(parse_dms(&upper)?.to_radians());
+    }
+    let value: f64 = upper.parse().ok()?;
+    Some(match unit_context().aunits {
+        2 => (value * 0.9).to_radians(),
+        3 => value,
+        _ => value.to_radians(),
+    })
+}
+
+/// Degrees, minutes and seconds, each part optional after the first:
+/// `45`, `45d`, `45d20'`, `45d20'6"`.
+fn parse_dms(upper: &str) -> Option<f64> {
+    let (sign, rest) = match upper.strip_prefix('-') {
+        Some(rest) => (-1.0, rest.trim_start()),
+        None => (1.0, upper),
+    };
+    let (degrees, rest) = match rest.find(['D', '°']) {
+        Some(at) => (
+            rest[..at].trim().parse::<f64>().ok()?,
+            rest[at + rest[at..].chars().next()?.len_utf8()..].trim(),
+        ),
+        None => (rest.trim().parse::<f64>().ok()?, ""),
+    };
+    let (minutes, rest) = match rest.split_once('\'') {
+        Some((minutes, rest)) if !minutes.trim().is_empty() => {
+            (minutes.trim().parse::<f64>().ok()?, rest.trim())
+        }
+        Some((_, rest)) => (0.0, rest.trim()),
+        None => (0.0, rest),
+    };
+    let seconds = match rest.trim_end_matches('"').trim() {
+        "" => 0.0,
+        seconds => seconds.parse::<f64>().ok()?,
+    };
+    Some(sign * (degrees + minutes / 60.0 + seconds / 3600.0))
+}
+
+/// A surveyor's bearing — `N45D20'6"E`, or a lone `N` / `S` for due north and
+/// south. The inverse of [`surveyor`].
+fn parse_surveyor(upper: &str) -> Option<f64> {
+    let pole = upper.chars().next()?;
+    let body = upper[1..].trim();
+    if body.is_empty() {
+        return Some(if pole == 'N' {
+            std::f64::consts::FRAC_PI_2
+        } else {
+            3.0 * std::f64::consts::FRAC_PI_2
+        });
+    }
+    let side = body.chars().last()?;
+    if !matches!(side, 'E' | 'W') {
+        return None;
+    }
+    let bearing = parse_dms(body[..body.len() - 1].trim())?;
+    let degrees = match (pole, side) {
+        ('N', 'E') => 90.0 - bearing,
+        ('N', _) => 90.0 + bearing,
+        (_, 'W') => 270.0 - bearing,
+        _ => 270.0 + bearing,
+    };
+    Some(degrees.to_radians())
+}
+
+/// Read a length typed at a command prompt.
+///
+/// Same forms as [`parse_length`], plus the comma some keyboards put where a
+/// decimal point belongs. A prompt asking for one value has no other use for a
+/// comma, so taking it here is safe in a way it would not be inside a
+/// coordinate, where the comma separates the axes.
+pub fn parse_typed_length(text: &str) -> Option<f64> {
+    parse_length(&text.replace(',', "."))
+}
+
+/// Read an angle typed at a command prompt, in radians. Same forms as
+/// [`parse_angle`], with the same tolerance for a decimal comma.
+pub fn parse_typed_angle(text: &str) -> Option<f64> {
+    parse_angle(&text.replace(',', "."))
+}
+
+// ── Directions ─────────────────────────────────────────────────────────────
+//
+// A direction is not an angular size. Which way something points is measured
+// from ANGBASE and runs the way ANGDIR says, while how wide an arc opens is
+// the same number whatever zero the drawing counts from. Only directions go
+// through the pair below; `format_angle` and `parse_angle` stay for sizes.
+
+/// Write a world direction the way this drawing counts directions.
+pub fn format_direction(world_rad: f64) -> String {
+    let ctx = unit_context();
+    let relative = world_rad - ctx.angbase;
+    let shown = if ctx.angdir_cw { -relative } else { relative };
+    format_angle(shown.rem_euclid(std::f64::consts::TAU))
+}
+
+/// Read a direction written the way this drawing counts them, as a world
+/// angle.
+pub fn parse_direction(text: &str) -> Option<f64> {
+    let ctx = unit_context();
+    let typed = parse_angle(text)?;
+    let relative = if ctx.angdir_cw { -typed } else { typed };
+    Some(relative + ctx.angbase)
 }
 
 /// Two interior triangles covering a quad (flat list, 6 vertices) — the

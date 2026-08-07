@@ -220,16 +220,24 @@ impl CadCommand for InsertBlockCommand {
             }
             Step::FillAttr { .. } => Some(self.accept_attr_value(text)),
             Step::Point { .. } => {
-                // Typing the value awaited after a Scale / Rotate keyword.
+                // Typing the value awaited after a Scale / Rotate keyword. The
+                // two read differently: a scale is a plain multiplier with no
+                // unit to write it in, while a rotation is an angle and takes
+                // whichever convention the drawing is set to.
                 if let Some(kind) = self.awaiting {
-                    if let Ok(v) = text.trim().parse::<f64>() {
-                        match kind {
-                            AwaitKind::Scale if v != 0.0 => {
-                                self.x_scale = v;
-                                self.y_scale = v;
+                    match kind {
+                        AwaitKind::Scale => {
+                            if let Ok(v) = text.trim().parse::<f64>() {
+                                if v != 0.0 {
+                                    self.x_scale = v;
+                                    self.y_scale = v;
+                                }
                             }
-                            AwaitKind::Scale => {}
-                            AwaitKind::Rotation => self.rotation_rad = v.to_radians(),
+                        }
+                        AwaitKind::Rotation => {
+                            if let Some(v) = crate::entities::common::parse_typed_angle(text) {
+                                self.rotation_rad = v;
+                            }
                         }
                     }
                     self.awaiting = None;

@@ -1004,7 +1004,7 @@ impl CadCommand for OffsetCommand {
                 if t.eq_ignore_ascii_case("t") || t.eq_ignore_ascii_case("through") {
                     return Some(self.advance_from_distance(None));
                 }
-                if let Ok(d) = t.parse::<f64>() {
+                if let Some(d) = crate::entities::common::parse_typed_length(&t) {
                     let d = d.abs().max(1e-9);
                     defaults::set_offset_dist(d);
                     return Some(self.advance_from_distance(Some(d)));
@@ -1021,7 +1021,7 @@ impl CadCommand for OffsetCommand {
                     return Some(CmdResult::NeedPoint);
                 }
                 if !t.is_empty() {
-                    if let Ok(d) = t.parse::<f64>() {
+                    if let Some(d) = crate::entities::common::parse_typed_length(&t) {
                         let d = d.abs().max(1e-9);
                         defaults::set_offset_dist(d);
                         *locked = Some(d);

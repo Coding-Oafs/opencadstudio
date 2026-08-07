@@ -77,9 +77,7 @@ impl CadCommand for ExtrudeCommand {
         self.step == ExtrudeStep::Height
     }
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        text.trim()
-            .parse::<f64>()
-            .ok()
+        crate::entities::common::parse_typed_length(text)
             .filter(|&h| h.abs() > 1e-6)
             .map(|h| CmdResult::ExtrudeEntity {
                 handle: self.target_handle,

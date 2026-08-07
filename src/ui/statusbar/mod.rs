@@ -574,13 +574,14 @@ fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, pick
             (true, Some(l)) => {
                 let d = cursor - l;
                 let dist = (d.x * d.x + d.y * d.y).sqrt();
-                // Kept in 0..2pi so the readout never shows a negative bearing,
-                // then handed over in radians for AUNITS / AUPREC to format.
-                let ang = d.y.atan2(d.x).rem_euclid(std::f64::consts::TAU);
+                // A bearing, so it is counted from the drawing's zero and runs
+                // the way the drawing says — and comes back out in the same
+                // form the polar input accepts.
+                let ang = d.y.atan2(d.x);
                 format!(
                     "{} < {}",
                     len(dist),
-                    crate::entities::common::format_angle(ang)
+                    crate::entities::common::format_direction(ang)
                 )
             }
             _ => abs(cursor),

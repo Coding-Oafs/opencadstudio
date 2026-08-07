@@ -1664,12 +1664,9 @@ impl OpenCADStudio {
                     // every refresh; the status bar redraws on its own schedule
                     // and cannot rely on that having happened.
                     crate::entities::common::set_unit_context(
-                        crate::entities::common::UnitContext {
-                            lunits: tab.scene.document.header.linear_unit_format,
-                            luprec: tab.scene.document.header.linear_unit_precision,
-                            aunits: tab.scene.document.header.angular_unit_format,
-                            auprec: tab.scene.document.header.angular_unit_precision,
-                        },
+                        crate::entities::common::UnitContext::from_header(
+                            &tab.scene.document.header,
+                        ),
                     );
                     let status_menu_data = crate::ui::statusbar::StatusMenuData {
                         layout_names: layout_names.clone(),
