@@ -103,66 +103,40 @@ impl OpenCADStudio {
                 }
             }
             "CLEAR" | "CLR" => return Some(Task::done(Message::ClearScene)),
-            "WIREFRAME" => return Some(Task::done(Message::SetWireframe(true))),
             // Visual-style commands. OCS renders either a wireframe or a shaded
             // view; the named styles map onto the closest of the two and the
             // chosen style is reported so the mapping is explicit. (`SOLID` is
             // intentionally NOT a visual-style verb — it is the 2D filled-polygon
             // draw command; the shaded ribbon button drives `SetWireframe`.)
-            "VS" | "VSCURRENT" | "SHADEMODE" => {
+            // One interactive picker behind every verb that asks for a style,
+            // offering exactly what the render-mode widget offers. (#621)
+            "VS" | "VSCURRENT" | "SHADEMODE" | "VISUALSTYLES" => {
                 use crate::command::KeywordCommand;
+                use crate::modules::view::visual_style;
                 let c = KeywordCommand::new(
                     "VSCURRENT",
-                    "VSCURRENT  visual style  [Shaded / Wireframe / Hidden / Realistic / Conceptual / X-ray]:",
-                    vec![
-                        ("Shaded", "SHADED", None),
-                        ("Wireframe", "WIREFRAME", None),
-                        ("Hidden", "HIDDEN", None),
-                        ("Realistic", "REALISTIC", None),
-                        ("Conceptual", "CONCEPTUAL", None),
-                        ("X-Ray", "XRAY", None),
-                    ],
+                    visual_style::keyword_prompt(),
+                    visual_style::keyword_choices(),
                 );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
-            // The named visual-style shortcuts still switch directly, and the
-            // `<name> <style>` argument form (also what the picker dispatches).
-            cmd if cmd == "HIDDENLINE"
-                || cmd == "XRAY"
-                || cmd == "REALISTIC"
-                || cmd == "CONCEPTUAL"
-                || cmd == "2DWIREFRAME"
-                || cmd == "3DWIREFRAME"
-                || cmd.starts_with("VSCURRENT ")
+            // A style by name: `VSCURRENT FLAT`, and what the picker dispatches.
+            cmd if cmd.starts_with("VSCURRENT ")
                 || cmd.starts_with("SHADEMODE ")
                 || cmd.starts_with("VS ") =>
             {
-                let style = match cmd {
-                    "VS" | "VSCURRENT" | "SHADEMODE" => String::new(),
-                    s if s.starts_with("VS ")
-                        || s.starts_with("VSCURRENT ")
-                        || s.starts_with("SHADEMODE ") =>
-                    {
-                        cmd.split_whitespace().nth(1).unwrap_or("").to_uppercase()
-                    }
-                    other => other.to_string(),
+                use crate::modules::view::visual_style;
+                let style = cmd.split_whitespace().nth(1).unwrap_or("");
+                let Some(mode) = visual_style::mode_for_keyword(style) else {
+                    self.command_line
+                        .push_error(visual_style::keyword_prompt());
+                    return Some(Task::none());
                 };
-                let (wireframe, label) = match style.as_str() {
-                    "" | "SHADED" | "S" | "REALISTIC" | "CONCEPTUAL" => (false, "Shaded"),
-                    "2DWIREFRAME" | "3DWIREFRAME" | "WIREFRAME" | "W" => (true, "Wireframe"),
-                    "HIDDENLINE" | "HIDDEN" | "H" => (false, "Hidden (shown shaded)"),
-                    "XRAY" | "X" => (true, "X-Ray (shown as wireframe)"),
-                    _ => {
-                        self.command_line.push_error(
-                            "Usage: VSCURRENT <2dwireframe|wireframe|hidden|realistic|conceptual|shaded|xray>",
-                        );
-                        return Some(Task::none());
-                    }
-                };
+                let label = visual_style::label_for(mode);
                 self.command_line
                     .push_output(crate::tf!("Visual style: {label}.").as_ref());
-                return Some(Task::done(Message::SetWireframe(wireframe)));
+                return Some(Task::done(Message::SetRenderMode(mode)));
             }
             // CLOSE — close the active drawing tab (with the unsaved-changes
             // prompt the tab-close handler already runs).

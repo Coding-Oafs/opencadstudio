@@ -1763,11 +1763,10 @@ pub enum Message {
     OptionsThemeColorChanged(usize, String),
     /// Switch the interface language and redraw localized views.
     LanguageChanged(crate::i18n::Language),
+    /// Drop every entity from the active drawing.
     ClearScene,
-    SetWireframe(bool),
-    /// Set the active tab's render mode (one of acadrust's seven visual
-    /// styles). Replaces the binary `SetWireframe` over time; the older
-    /// message stays for ribbon/CLI back-compat and forwards.
+    /// Set the active tab's render mode — one of the seven visual styles, and
+    /// the only way a style is ever set.
     SetRenderMode(acadrust::entities::ViewportRenderMode),
     /// Open or close the active viewport's visual-style flyout.
     ToggleRenderModeMenu(acadrust::entities::ViewportRenderMode),

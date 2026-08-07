@@ -163,16 +163,7 @@ pub(super) struct RenderModeChoice(pub acadrust::entities::ViewportRenderMode);
 
 impl std::fmt::Display for RenderModeChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use acadrust::entities::ViewportRenderMode as M;
-        f.write_str(match self.0 {
-            M::Wireframe2D => "Wireframe 2D",
-            M::Wireframe3D => "Wireframe 3D",
-            M::HiddenLine => "Hidden Line",
-            M::FlatShaded => "Flat Shaded",
-            M::GouraudShaded => "Gouraud Shaded",
-            M::FlatShadedWithEdges => "Flat Shaded + Edges",
-            M::GouraudShadedWithEdges => "Gouraud Shaded + Edges",
-        })
+        f.write_str(crate::modules::view::visual_style::label_for(self.0))
     }
 }
 

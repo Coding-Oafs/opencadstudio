@@ -2,7 +2,6 @@
 
 mod cascade;
 mod file_tabs;
-mod hidden;
 mod layout_tabs;
 pub mod limits;
 mod orbit;
@@ -13,9 +12,9 @@ pub mod plot_window;
 pub mod quick_print;
 mod properties_palette;
 mod sheetset;
-mod solid;
 mod tile_horiz;
 mod tile_vert;
+pub mod visual_style;
 mod tool_palettes;
 pub mod ucs_cmd;
 mod ucs_icon;
@@ -28,8 +27,6 @@ mod vports_config;
 mod vports_join;
 mod vports_named;
 mod vports_restore;
-mod wireframe;
-mod xray;
 mod zoom_ext;
 mod zoom_in;
 mod zoom_out;
@@ -89,14 +86,12 @@ impl CadModule for ViewModule {
                     tools: vec![RibbonItem::LargeDropdown {
                         id: "VISUAL_STYLE",
                         label: "Visual\nStyle",
-                        icon: wireframe::tool().icon,
-                        items: vec![
-                            ("WIREFRAME", "Wireframe", wireframe::tool().icon),
-                            ("SOLID", "Shaded", solid::tool().icon),
-                            ("HIDDEN", "Hidden", hidden::tool().icon),
-                            ("XRAY", "X-Ray", xray::tool().icon),
-                        ],
-                        default: "WIREFRAME",
+                        icon: visual_style::VISUAL_STYLES[0].icon,
+                        items: visual_style::VISUAL_STYLES
+                            .iter()
+                            .map(|style| (style.command, style.label, style.icon))
+                            .collect(),
+                        default: visual_style::VISUAL_STYLES[0].command,
                     }],
                 },
                 // ── Projection ────────────────────────────────────────────────────

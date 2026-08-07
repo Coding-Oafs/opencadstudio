@@ -321,7 +321,6 @@ impl Ribbon {
     fn toggle_state(&self) -> widgets::ToggleState {
         use widgets::ToggleState;
         ToggleState {
-            wireframe: self.wireframe,
             ortho_mode: self.ortho_mode,
             show_viewcube: self.show_viewcube,
             show_ucs_icon: self.show_ucs_icon,

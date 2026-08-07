@@ -158,21 +158,6 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.tabs[i].properties = PropertiesPanel::empty();
                         self.command_line.push_output(crate::t!("Scene cleared.").as_ref());
                     }
-                    ModuleEvent::SetWireframe(w) => {
-                        let i = self.active_tab;
-                        self.tabs[i].wireframe = w;
-                        self.ribbon.set_wireframe(w);
-                        self.tabs[i].visual_style = if w {
-                            "Wireframe".into()
-                        } else {
-                            "Shaded".into()
-                        };
-                        self.command_line.push_output(if w {
-                            "Visual style: Wireframe"
-                        } else {
-                            "Visual style: Shaded"
-                        });
-                    }
                     ModuleEvent::ToggleLayers => {
                         return Task::done(Message::ToggleLayers);
                     }

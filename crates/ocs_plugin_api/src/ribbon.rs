@@ -17,8 +17,6 @@ pub enum ModuleEvent {
     /// Remove all loaded models from the scene.
     #[allow(dead_code)]
     ClearModels,
-    /// Toggle wireframe rendering.
-    SetWireframe(bool),
     /// Toggle the layer manager panel.
     ToggleLayers,
     /// Ask the host to open a native file picker. On selection the host

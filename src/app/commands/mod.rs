@@ -327,12 +327,6 @@ inventory::submit!(crate::command::CommandRegistration {
         // Visual styles (mapped to the wireframe / shaded view).
         "VSCURRENT",
         "SHADEMODE",
-        "HIDDENLINE",
-        "XRAY",
-        "REALISTIC",
-        "CONCEPTUAL",
-        "2DWIREFRAME",
-        "3DWIREFRAME",
         // Raster image brightness / contrast / fade.
         "ADJUST",
         // Block list + block-attribute list (command-line forms).
@@ -607,7 +601,6 @@ inventory::submit!(crate::command::CommandRegistration {
         "WB",
         "WBLOCK",
         "WEBVERSION",
-        "WIREFRAME",
         "XA",
         "XATTACH",
         "XDATA",

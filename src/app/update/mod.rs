@@ -1188,18 +1188,6 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::SetWireframe(w) => {
-                // Back-compat shim: forward to the new render-mode path so
-                // the ribbon button + WIREFRAME / SOLID command line still
-                // work without duplicating the rendering plumbing.
-                let mode = if w {
-                    acadrust::entities::ViewportRenderMode::Wireframe2D
-                } else {
-                    acadrust::entities::ViewportRenderMode::FlatShaded
-                };
-                Task::done(Message::SetRenderMode(mode))
-            }
-
             Message::SetRenderMode(mode) => {
                 self.render_mode_menu_open = false;
                 self.render_mode_preview = None;

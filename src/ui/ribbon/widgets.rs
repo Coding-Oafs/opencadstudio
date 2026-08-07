@@ -33,7 +33,6 @@ use super::LayerInfo;
 /// and call site.
 #[derive(Clone, Copy)]
 pub(super) struct ToggleState {
-    pub wireframe: bool,
     pub ortho_mode: bool,
     pub show_viewcube: bool,
     pub show_ucs_icon: bool,
@@ -355,8 +354,6 @@ pub(super) fn is_active_tool(
     state: &ToggleState,
 ) -> bool {
     match id {
-        "WIREFRAME" => state.wireframe,
-        "SOLID" => !state.wireframe,
         "ORTHO" => state.ortho_mode,
         "PERSP" => !state.ortho_mode,
         "NAVVCUBE" => state.show_viewcube,
@@ -1125,7 +1122,6 @@ pub fn module_event_to_message(event: ModuleEvent) -> Message {
         ModuleEvent::Command(cmd) => Message::Command(cmd),
         ModuleEvent::OpenFileDialog => Message::OpenFile,
         ModuleEvent::ClearModels => Message::ClearScene,
-        ModuleEvent::SetWireframe(w) => Message::SetWireframe(w),
         ModuleEvent::ToggleLayers => Message::ToggleLayers,
         // Needs the tool context + async picker — route through the normal
         // ribbon-click handler rather than a direct 1:1 message.
