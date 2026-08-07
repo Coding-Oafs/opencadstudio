@@ -19,6 +19,7 @@ impl OpenCADStudio {
             Some(K::UpdateNotice) => crate::tr!("modal-update-available"),
             Some(K::Layers) => crate::tr!("modal-layer-manager"),
             Some(K::LayerStateManager) => crate::tr!("modal-layer-state-manager"),
+            Some(K::LayerTranslator) => crate::t!("Layer Translator").into_owned(),
             Some(K::LayerStateEditor) => crate::tr!("modal-edit-layer-state"),
             Some(K::Plot) => crate::tr!("modal-plot"),
             Some(K::PrintAll) => t!("Print All").into_owned(),
@@ -168,6 +169,20 @@ impl OpenCADStudio {
                     360,
                     |flow| tab.layers.view_window(self.layer_name_col_w, flow),
                 )
+            }
+            super::super::ModalKind::LayerTranslator => {
+                use crate::modules::draw::layers::laytrans;
+                let i = self.active_tab;
+                let current = self.tabs[i].active_layer.clone();
+                let sources = laytrans::source_layers(&self.tabs[i].scene, &current);
+                let state = self.layer_translator.as_ref()?;
+                sized_flow(ex, 760, 460, |flow| {
+                    crate::ui::window::layer_translator::view_window(
+                        state,
+                        sources.clone(),
+                        flow,
+                    )
+                })
             }
             super::super::ModalKind::LayerStateManager => {
                 let states = self.tabs[self.active_tab].scene.document.layer_states();

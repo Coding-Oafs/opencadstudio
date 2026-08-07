@@ -297,6 +297,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "DBLIST",
         // Layer management.
         "LAYDEL",
+        "LAYTRANS",
         "LAYMRG",
         "LAYERSTATE",
         "LAS",

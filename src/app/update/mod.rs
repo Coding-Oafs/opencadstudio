@@ -1858,6 +1858,142 @@ impl OpenCADStudio {
                 self.active_modal = Some(super::ModalKind::LayerStateManager);
                 Task::none()
             }
+            // ── Layer Translator (#624) ──────────────────────────────────
+            Message::LayerTranslatorLoad => Task::perform(
+                crate::io::pick_layer_standard_path(),
+                |path| match path {
+                    Some(path) => Message::LayerTranslatorLoaded(path),
+                    None => Message::Noop,
+                },
+            ),
+            Message::LayerTranslatorLoaded(path) => {
+                use crate::modules::draw::layers::laytrans;
+                match laytrans::load_targets(&path) {
+                    Ok(targets) => {
+                        let state = self.layer_translator.get_or_insert_with(Default::default);
+                        state.source_file = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        state.targets = targets;
+                        // A target set that no longer contains a mapped name
+                        // would translate onto nothing.
+                        let names: Vec<String> =
+                            state.targets.iter().map(|t| t.name.clone()).collect();
+                        state
+                            .mappings
+                            .retain(|m| names.iter().any(|n| n.eq_ignore_ascii_case(&m.to)));
+                        state.selected_to = None;
+                    }
+                    Err(why) => self
+                        .command_line
+                        .push_error(crate::tf!("LAYTRANS: {why}.").as_ref()),
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorSelectFrom(name) => {
+                if let Some(state) = self.layer_translator.as_mut() {
+                    state.selected_from = Some(name);
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorSelectTo(name) => {
+                if let Some(state) = self.layer_translator.as_mut() {
+                    state.selected_to = Some(name);
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorMap => {
+                use crate::modules::draw::layers::laytrans::Mapping;
+                if let Some(state) = self.layer_translator.as_mut() {
+                    if let (Some(from), Some(to)) =
+                        (state.selected_from.take(), state.selected_to.clone())
+                    {
+                        state.mappings.retain(|m| !m.from.eq_ignore_ascii_case(&from));
+                        state.mappings.push(Mapping { from, to });
+                    }
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorMapSame => {
+                use crate::modules::draw::layers::laytrans;
+                let i = self.active_tab;
+                let current = self.tabs[i].active_layer.clone();
+                let sources = laytrans::source_layers(&self.tabs[i].scene, &current);
+                if let Some(state) = self.layer_translator.as_mut() {
+                    for mapping in laytrans::map_same(&sources, &state.targets) {
+                        if !state
+                            .mappings
+                            .iter()
+                            .any(|m| m.from.eq_ignore_ascii_case(&mapping.from))
+                        {
+                            state.mappings.push(mapping);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorUnmap(from) => {
+                if let Some(state) = self.layer_translator.as_mut() {
+                    state.mappings.retain(|m| m.from != from);
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorForceByLayer(value) => {
+                if let Some(state) = self.layer_translator.as_mut() {
+                    state.force_bylayer = value;
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorWriteLog(value) => {
+                if let Some(state) = self.layer_translator.as_mut() {
+                    state.write_log = value;
+                }
+                Task::none()
+            }
+            Message::LayerTranslatorSaveMappings => Task::perform(
+                crate::io::pick_layer_mapping_path(true),
+                |path| match path {
+                    Some(path) => Message::LayerTranslatorMappingsPath(path, true),
+                    None => Message::Noop,
+                },
+            ),
+            Message::LayerTranslatorLoadMappings => Task::perform(
+                crate::io::pick_layer_mapping_path(false),
+                |path| match path {
+                    Some(path) => Message::LayerTranslatorMappingsPath(path, false),
+                    None => Message::Noop,
+                },
+            ),
+            Message::LayerTranslatorMappingsPath(path, save) => {
+                self.layer_translator_mappings_file(&path, save);
+                Task::none()
+            }
+            Message::LayerTranslatorTranslate => {
+                use crate::modules::draw::layers::laytrans;
+                let Some(state) = self.layer_translator.take() else {
+                    return Task::none();
+                };
+                self.active_modal = None;
+                let i = self.active_tab;
+                let current = self.tabs[i].active_layer.clone();
+                self.push_undo_snapshot(i, "LAYTRANS");
+                let report = laytrans::translate(
+                    &mut self.tabs[i].scene,
+                    &state.mappings,
+                    &state.targets,
+                    &current,
+                    laytrans::Options {
+                        force_bylayer: state.force_bylayer,
+                    },
+                );
+                let write_log = state.write_log;
+                let task = self.finish_layer_translation(i, report);
+                if write_log {
+                    self.write_layer_translation_log(i);
+                }
+                task
+            }
             Message::LayerStateManagerSelect(name) => {
                 self.load_layer_state_editor(Some(name));
                 Task::none()

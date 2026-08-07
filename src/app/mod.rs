@@ -403,6 +403,11 @@ pub(super) struct OpenCADStudio {
     /// a pick *replaces* the set, so borrowing it here would wipe everything
     /// gathered so far rather than subtract one thing. (#596)
     select_remove_mode: bool,
+    /// What the last layer translation did, kept so the log can be written
+    /// after the fact rather than forcing a path out of the user up front.
+    last_layer_translation: Option<crate::modules::draw::layers::laytrans::Report>,
+    /// The layer-translator dialog's working state while it is open.
+    layer_translator: Option<crate::ui::window::layer_translator::State>,
     /// PICKDRAG (#226): false (default) = press-drag lassoes; true =
     /// press-drag draws a rectangle marquee.
     pick_drag_rect: bool,
@@ -1489,6 +1494,7 @@ pub enum ModalKind {
     UpdateNotice,
     Layers,
     LayerStateManager,
+    LayerTranslator,
     LayerStateEditor,
     Plot,
     PrintAll,
@@ -1765,6 +1771,27 @@ pub enum Message {
     LanguageChanged(crate::i18n::Language),
     /// Drop every entity from the active drawing.
     ClearScene,
+    // ── Layer Translator (#624) ──────────────────────────────────────────
+    /// Pick the drawing whose layers become the translation targets.
+    LayerTranslatorLoad,
+    /// A target set was read from `path`.
+    LayerTranslatorLoaded(std::path::PathBuf),
+    LayerTranslatorSelectFrom(String),
+    LayerTranslatorSelectTo(String),
+    /// Pair the two selected layers.
+    LayerTranslatorMap,
+    /// Pair every layer the two drawings name alike.
+    LayerTranslatorMapSame,
+    /// Drop the mapping that starts at this layer.
+    LayerTranslatorUnmap(String),
+    LayerTranslatorForceByLayer(bool),
+    LayerTranslatorWriteLog(bool),
+    LayerTranslatorSaveMappings,
+    LayerTranslatorLoadMappings,
+    /// Path chosen for saving or loading mappings.
+    LayerTranslatorMappingsPath(std::path::PathBuf, bool),
+    /// Apply every mapping.
+    LayerTranslatorTranslate,
     /// Set the active tab's render mode — one of the seven visual styles, and
     /// the only way a style is ever set.
     SetRenderMode(acadrust::entities::ViewportRenderMode),
@@ -2977,6 +3004,8 @@ impl OpenCADStudio {
             selection_cycling: false,
             pick_add: true,
             select_remove_mode: false,
+            last_layer_translation: None,
+            layer_translator: None,
             pick_drag_rect: false,
             perf_hud: false,
             cycle_candidates: None,

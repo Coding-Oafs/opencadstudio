@@ -175,6 +175,40 @@ pub async fn pick_open_path() -> Option<(PathBuf, u64)> {
     Some((path, size))
 }
 
+/// Pick the drawing whose layers become translation targets. A standards file
+/// is a drawing too, so `.dws` and `.dwt` sit alongside the ordinary formats
+/// rather than needing anything of their own. (#624)
+pub async fn pick_layer_standard_path() -> Option<PathBuf> {
+    let handle = crate::sys::file_dialog()
+        .set_title("Load layer standard")
+        .add_filter(
+            "Drawings and standards",
+            &["dwg", "dws", "dwt", "dxf", "DWG", "DWS", "DWT", "DXF"],
+        )
+        .add_filter("All Files", &["*"])
+        .pick_file()
+        .await?;
+    Some(crate::sys::handle_path(&handle))
+}
+
+/// Pick where a set of layer mappings is written, or read back from.
+pub async fn pick_layer_mapping_path(save: bool) -> Option<PathBuf> {
+    let dialog = crate::sys::file_dialog()
+        .set_title(if save {
+            "Save layer mappings"
+        } else {
+            "Load layer mappings"
+        })
+        .add_filter("Layer mappings", &["ocslmap"])
+        .add_filter("All Files", &["*"]);
+    let handle = if save {
+        dialog.set_file_name("layers.ocslmap").save_file().await?
+    } else {
+        dialog.pick_file().await?
+    };
+    Some(crate::sys::handle_path(&handle))
+}
+
 /// Load a CAD file from a known path. Parsing and cache building run on a
 /// dedicated OS thread so the async executor stays free for rendering during
 /// the load. Writes phase markers into `phase` so the UI can show

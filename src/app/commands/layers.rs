@@ -78,6 +78,18 @@ impl OpenCADStudio {
                 }
             }
 
+            // LAYTRANS — translate this drawing's layers onto a set taken from
+            // another drawing. Bare opens the mapping dialog; with a file it
+            // maps every name the two drawings share and translates at once,
+            // which is what most drawings coming from outside need. (#624)
+            "LAYTRANS" => {
+                return Some(self.open_layer_translator(None));
+            }
+            cmd if cmd.starts_with("LAYTRANS ") => {
+                let path = std::path::PathBuf::from(cmd.trim_start_matches("LAYTRANS").trim());
+                return Some(self.layer_translate_same(&path));
+            }
+
             // LAYDEL <name> — delete a layer and erase the objects on it.
             "LAYDEL" => {
                 use crate::command::ValuePromptCommand;
@@ -192,14 +204,13 @@ impl OpenCADStudio {
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "LAYMRG");
-                let mut moved = 0usize;
-                for e in self.tabs[i].scene.document.entities_mut() {
-                    if e.common().layer == src {
-                        e.common_mut().layer = dst.clone();
-                        moved += 1;
-                    }
-                }
-                self.tabs[i].scene.document.layers.remove(&src);
+                // The same move a translation makes for each of its pairs.
+                let moved = crate::modules::draw::layers::laytrans::merge_layer(
+                    &mut self.tabs[i].scene,
+                    &src,
+                    &dst,
+                    false,
+                );
                 self.tabs[i].scene.invalidate_dependency_index();
                 self.tabs[i]
                     .scene
@@ -664,5 +675,157 @@ impl OpenCADStudio {
             _ => return None,
         }
         Some(self.finish_dispatch(cmd))
+    }
+}
+
+impl OpenCADStudio {
+    /// Translate every layer the two drawings name alike, in one step.
+    ///
+    /// The common case for a drawing arriving from outside: the names already
+    /// line up and only the properties are wrong, so there is nothing to sit in
+    /// a dialog and decide.
+    pub(in crate::app) fn layer_translate_same(&mut self, path: &std::path::Path) -> Task<Message> {
+        use crate::modules::draw::layers::laytrans;
+        let i = self.active_tab;
+        let targets = match laytrans::load_targets(path) {
+            Ok(targets) => targets,
+            Err(why) => {
+                self.command_line
+                    .push_error(crate::tf!("LAYTRANS: {why}.").as_ref());
+                return Task::none();
+            }
+        };
+        let current = self.tabs[i].active_layer.clone();
+        let sources = laytrans::source_layers(&self.tabs[i].scene, &current);
+        let mappings = laytrans::map_same(&sources, &targets);
+        if mappings.is_empty() {
+            self.command_line.push_info(
+                crate::t!("LAYTRANS: no layer names in common — use LAYTRANS with no file to map them.")
+                    .as_ref(),
+            );
+            return Task::none();
+        }
+        self.push_undo_snapshot(i, "LAYTRANS");
+        let report = laytrans::translate(
+            &mut self.tabs[i].scene,
+            &mappings,
+            &targets,
+            &current,
+            laytrans::Options::default(),
+        );
+        self.finish_layer_translation(i, report)
+    }
+
+    /// Open the translator, optionally with a standard already loaded.
+    pub(in crate::app) fn open_layer_translator(
+        &mut self,
+        preload: Option<std::path::PathBuf>,
+    ) -> Task<Message> {
+        self.layer_translator
+            .get_or_insert_with(Default::default);
+        self.active_modal = Some(crate::app::ModalKind::LayerTranslator);
+        match preload {
+            Some(path) => Task::done(Message::LayerTranslatorLoaded(path)),
+            None => Task::none(),
+        }
+    }
+
+    /// Read or write the mapping list as plain `from -> to` lines.
+    ///
+    /// A drawing standards file is where AutoCAD keeps these, but writing them
+    /// there would mean inventing a place inside the DWG for something no other
+    /// application reads back. A small text file beside the drawing carries the
+    /// same information without touching the drawing's own structure.
+    pub(in crate::app) fn layer_translator_mappings_file(&mut self, path: &std::path::Path, save: bool) {
+        use crate::modules::draw::layers::laytrans::Mapping;
+        if save {
+            let Some(state) = self.layer_translator.as_ref() else {
+                return;
+            };
+            let body: String = state
+                .mappings
+                .iter()
+                .map(|m| format!("{} -> {}\n", m.from, m.to))
+                .collect();
+            match std::fs::write(path, body) {
+                Ok(()) => self.command_line.push_output(
+                    crate::tf!("LAYTRANS: saved {n} mapping(s).", n = state.mappings.len())
+                        .as_ref(),
+                ),
+                Err(why) => self
+                    .command_line
+                    .push_error(crate::tf!("LAYTRANS: could not save — {why}.").as_ref()),
+            }
+            return;
+        }
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(why) => {
+                self.command_line
+                    .push_error(crate::tf!("LAYTRANS: could not read — {why}.").as_ref());
+                return;
+            }
+        };
+        let parsed: Vec<Mapping> = text
+            .lines()
+            .filter_map(|line| {
+                let (from, to) = line.split_once("->")?;
+                let (from, to) = (from.trim(), to.trim());
+                (!from.is_empty() && !to.is_empty()).then(|| Mapping {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                })
+            })
+            .collect();
+        let count = parsed.len();
+        if let Some(state) = self.layer_translator.as_mut() {
+            state.mappings = parsed;
+        }
+        self.command_line
+            .push_output(crate::tf!("LAYTRANS: loaded {count} mapping(s).").as_ref());
+    }
+
+    /// Write what the last translation did beside the drawing.
+    pub(in crate::app) fn write_layer_translation_log(&mut self, i: usize) {
+        let Some(report) = self.last_layer_translation.as_ref() else {
+            return;
+        };
+        let base = self.tabs[i]
+            .current_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(&self.tabs[i].tab_title));
+        let path = base.with_extension("laytrans.log");
+        match std::fs::write(&path, report.to_log()) {
+            Ok(()) => self
+                .command_line
+                .push_output(crate::tf!("LAYTRANS: log written to {}.", path.display()).as_ref()),
+            Err(why) => self
+                .command_line
+                .push_error(crate::tf!("LAYTRANS: could not write log — {why}.").as_ref()),
+        }
+    }
+
+    /// Apply a translation's result: mark the drawing, refresh the panel and
+    /// say what moved. Shared by the command and the dialog so both report the
+    /// same way.
+    pub(in crate::app) fn finish_layer_translation(
+        &mut self,
+        i: usize,
+        report: crate::modules::draw::layers::laytrans::Report,
+    ) -> Task<Message> {
+        let layers = report.translated.len();
+        let objects = report.objects();
+        self.tabs[i].dirty = true;
+        self.refresh_layer_panel();
+        self.refresh_properties();
+        for (layer, reason) in &report.skipped {
+            self.command_line
+                .push_info(crate::tf!("LAYTRANS: skipped \"{layer}\" — {reason}.").as_ref());
+        }
+        self.command_line.push_output(
+            crate::tf!("LAYTRANS: translated {layers} layer(s), {objects} object(s).").as_ref(),
+        );
+        self.last_layer_translation = Some(report);
+        Task::none()
     }
 }
