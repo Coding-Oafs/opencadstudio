@@ -53,6 +53,38 @@ thread_local! {
     }) };
 }
 
+thread_local! {
+    /// Text styles that fix their own height, by lowercased name.
+    ///
+    /// A style with a non-zero height fixes the size of everything drawn in it
+    /// — the CAD that writes the file skips the height prompt for such a style,
+    /// and the properties palette shows the height without letting it be
+    /// changed. The panel builders are handed an entity, not the document it
+    /// came from, so the lookup rides here beside the unit context, seeded from
+    /// the same place.
+    static FIXED_TEXT_HEIGHTS: std::cell::RefCell<rustc_hash::FxHashMap<String, f64>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// Record which text styles fix their height, from the drawing's style table.
+pub fn set_fixed_text_heights(document: &acadrust::CadDocument) {
+    FIXED_TEXT_HEIGHTS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        map.clear();
+        for style in document.text_styles.iter() {
+            if style.height > 0.0 {
+                map.insert(style.name.to_ascii_lowercase(), style.height);
+            }
+        }
+    });
+}
+
+/// The height `style` fixes, or `None` when it leaves the height to the entity.
+pub fn style_fixed_height(style: &str) -> Option<f64> {
+    let key = style.trim().to_ascii_lowercase();
+    FIXED_TEXT_HEIGHTS.with(|cell| cell.borrow().get(&key).copied())
+}
+
 /// Set the per-thread unit context. Properties helpers consult it when
 /// they format f64 values into display strings.
 pub fn set_unit_context(ctx: UnitContext) {

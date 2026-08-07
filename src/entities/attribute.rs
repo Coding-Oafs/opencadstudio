@@ -468,7 +468,13 @@ impl PropertyEditable for AttributeDefinition {
                         .collect(),
                 },
             },
-            edit(t!("Height").as_ref(), "att_h", self.height),
+            // Fixed by the style when the style fixes its height.
+            crate::entities::common::num_prop(
+                t!("Height").as_ref(),
+                "att_h",
+                self.height,
+                crate::entities::common::style_fixed_height(&self.text_style).is_none(),
+            ),
             edit_angle(t!("Rotation").as_ref(), "att_rot", self.rotation.to_degrees()),
             edit(t!("Width factor").as_ref(), "att_wf", self.width_factor),
             edit_angle(t!("Obliquing").as_ref(), "att_ob", self.oblique_angle.to_degrees()),
@@ -739,7 +745,13 @@ impl PropertyEditable for AttributeEntity {
                         "atte_annotative",
                         bool_yn(self.flags.annotative),
                     ),
-                    edit(t!("Height").as_ref(), "atte_h", self.height),
+                    // Fixed by the style when the style fixes its height.
+                    crate::entities::common::num_prop(
+                        t!("Height").as_ref(),
+                        "atte_h",
+                        self.height,
+                        crate::entities::common::style_fixed_height(&self.text_style).is_none(),
+                    ),
                     edit_angle(t!("Rotation").as_ref(), "atte_rot", self.rotation.to_degrees()),
                     edit(t!("Width factor").as_ref(), "atte_wf", self.width_factor),
                     edit_angle(t!("Obliquing").as_ref(), "atte_ob", self.oblique_angle.to_degrees()),

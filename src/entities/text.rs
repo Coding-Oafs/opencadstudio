@@ -325,7 +325,14 @@ fn properties(t: &Text, text_style_names: &[String]) -> Vec<PropSection> {
                         .collect(),
                     },
                 },
-                edit(t!("Height").as_ref(), "height", t.height),
+                // A style that fixes its height fixes this text's too, so the
+                // value shows but cannot be changed here.
+                crate::entities::common::num_prop(
+                    t!("Height").as_ref(),
+                    "height",
+                    t.height,
+                    crate::entities::common::style_fixed_height(&t.style).is_none(),
+                ),
                 edit_angle(t!("Rotation").as_ref(), "rotation", t.rotation.to_degrees()),
                 edit(t!("Width factor").as_ref(), "width_factor", t.width_factor),
                 edit_angle(t!("Obliquing").as_ref(), "oblique_angle", t.oblique_angle.to_degrees()),

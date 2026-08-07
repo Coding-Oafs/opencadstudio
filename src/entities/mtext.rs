@@ -311,7 +311,13 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                             .collect(),
                     },
                 },
-                edit(t!("Text height").as_ref(), "height", t.height),
+                // Fixed by the style when the style says so — see Text.
+                crate::entities::common::num_prop(
+                    t!("Text height").as_ref(),
+                    "height",
+                    t.height,
+                    crate::entities::common::style_fixed_height(&t.style).is_none(),
+                ),
                 edit_angle(t!("Rotation").as_ref(), "rotation", t.rotation.to_degrees()),
                 edit(t!("Line space factor").as_ref(), "line_spacing", t.line_spacing_factor),
                 edit(t!("Line space distance").as_ref(), "line_space_distance", line_space_distance),

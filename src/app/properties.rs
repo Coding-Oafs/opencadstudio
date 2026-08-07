@@ -93,6 +93,11 @@ impl OpenCADStudio {
                 crate::entities::common::UnitContext::from_header(h),
             );
         }
+        {
+            // Which text styles fix their own height — the height rows read it
+            // to decide whether they are editable.
+            crate::entities::common::set_fixed_text_heights(&self.tabs[i].scene.document);
+        }
 
         let layer_names: Vec<String> = self.tabs[i]
             .scene
