@@ -2372,16 +2372,33 @@ fn dimension_geometry(
             append_center_mark(&mut g, center, params.dimcen, radius);
         }
         Dimension::Angular2Ln(d) => {
-            append_angular_dimension(
-                &mut g,
-                lv(d.angle_vertex),
-                lv(d.first_point),
-                lv(d.second_point),
-                lv(d.dimension_arc),
-                arrow1,
-                arrow2,
-                None,
-            );
+            // A two-line angular dimension stores two LINES, not two rays:
+            // `first_point`→`second_point` is one, `angle_vertex`→
+            // `definition_point` the other, and the angle is between them at
+            // their intersection. Reading `angle_vertex` as the centre and the
+            // other two as rays measures something else entirely — an angle of
+            // ten degrees came out as two hundred and seventy.
+            let (p1, p2) = (lv(d.first_point), lv(d.second_point));
+            let (p3, p4) = (lv(d.angle_vertex), lv(d.definition_point));
+            let arc_point = lv(d.dimension_arc);
+            match two_line_angle_frame(p1, p2, p3, p4, arc_point) {
+                Some((vertex, start, end)) => append_angular_dimension(
+                    &mut g,
+                    vertex,
+                    vertex + Vec3::new(start.cos(), start.sin(), 0.0) * vertex.distance(arc_point),
+                    vertex + Vec3::new(end.cos(), end.sin(), 0.0) * vertex.distance(arc_point),
+                    arc_point,
+                    arrow1,
+                    arrow2,
+                    Some((start, end)),
+                ),
+                // Parallel lines have no vertex and so no angle to draw; the
+                // extension lines alone say where the dimension was.
+                None => {
+                    add_segment(&mut g.ext_lines, p1, p2);
+                    add_segment(&mut g.ext_lines, p3, p4);
+                }
+            }
         }
         Dimension::Angular3Pt(d) => {
             append_angular_dimension(
@@ -2656,6 +2673,60 @@ fn append_center_mark(g: &mut DimGeom, center: Vec3, dimcen: f32, radius: f32) {
     }
 }
 
+/// Vertex and sweep of the angle between two lines, as a two-line angular
+/// dimension stores them: `a1`→`a2` and `b1`→`b2`, with `arc_point` sitting on
+/// the arc that shows which of the four angles at the crossing is meant.
+///
+/// Returns `None` for parallel lines, which cross nowhere and enclose nothing.
+fn two_line_angle_frame(
+    a1: Vec3,
+    a2: Vec3,
+    b1: Vec3,
+    b2: Vec3,
+    arc_point: Vec3,
+) -> Option<(Vec3, f32, f32)> {
+    let (u, v) = (a2 - a1, b2 - b1);
+    let denominator = u.x * v.y - u.y * v.x;
+    // Near-parallel: the crossing runs away to infinity and the sweep with it.
+    if denominator.abs() <= 1e-9 * u.length().max(v.length()).max(1.0) {
+        return None;
+    }
+    let w = b1 - a1;
+    let t = (w.x * v.y - w.y * v.x) / denominator;
+    let vertex = a1 + u * t;
+
+    // Two lines cross at four angles; the arc point picks one. Each line
+    // contributes its direction and its reverse, so try the four pairs and keep
+    // the one whose sweep both contains the arc point and is the shorter way
+    // round — the dimension marks an angle, never its reflex twin.
+    let angle_of = |d: Vec3| d.y.atan2(d.x);
+    let target = angle_of(arc_point - vertex);
+    let mut best: Option<(f32, f32, f32)> = None;
+    for su in [1.0f32, -1.0] {
+        for sv in [1.0f32, -1.0] {
+            let (from_u, from_v) = (angle_of(u * su), angle_of(v * sv));
+            // Either line can be the one the sweep starts from; taking only
+            // u→v leaves out half the angles at the crossing, and the half left
+            // out is the one wanted whenever the lines are nearly parallel.
+            for (start, end) in [(from_u, from_v), (from_v, from_u)] {
+                let sweep = (end - start).rem_euclid(std::f32::consts::TAU);
+                if sweep <= 1e-6 || sweep > std::f32::consts::PI {
+                    continue;
+                }
+                let into_target = (target - start).rem_euclid(std::f32::consts::TAU);
+                if into_target > sweep {
+                    continue;
+                }
+                if best.is_none_or(|(_, _, known)| sweep < known) {
+                    best = Some((start, start + sweep, sweep));
+                }
+            }
+        }
+    }
+    let (start, end, _) = best?;
+    Some((vertex, start, end))
+}
+
 fn append_angular_dimension(
     g: &mut DimGeom,
     vertex: Vec3,
@@ -2683,8 +2754,14 @@ fn append_angular_dimension(
     add_segment(&mut g.ext_lines, second, vertex + dir2 * radius);
 
     let mut delta = end - start;
-    while delta <= 0.0 {
+    // Wrap a negative sweep forwards, but leave a zero one alone: two rays that
+    // point the same way enclose no angle, and turning that into a full turn
+    // drew a whole circle where there was nothing to draw.
+    while delta < 0.0 {
         delta += std::f32::consts::TAU;
+    }
+    if delta.abs() <= 1e-6 {
+        return;
     }
     if explicit_sweep.is_none() && delta > std::f32::consts::PI {
         end -= std::f32::consts::TAU;
@@ -3823,3 +3900,5 @@ mod arch_format_tests {
         assert_eq!(format_fractional(6.5, 0), "6 1/2");
     }
 }
+
+
