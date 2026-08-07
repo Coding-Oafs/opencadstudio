@@ -1620,6 +1620,51 @@ impl Snapper {
 
         best
     }
+    pub fn extension_input_ray(
+        &self,
+        snapped: glam::DVec3,
+    ) -> Option<(glam::DVec3, glam::DVec3)> {
+        let mut best: Option<(f64, glam::DVec3, glam::DVec3)> = None;
+
+        for (&origin, dirs) in self.tracking_points.iter().zip(&self.tracking_dirs) {
+            for &dir in dirs {
+                let len2 = dir.x * dir.x + dir.y * dir.y;
+                if len2 < 1e-12 {
+                    continue;
+                }
+
+                let dx = snapped.x - origin.x;
+                let dy = snapped.y - origin.y;
+
+                let t = (dx * dir.x + dy * dir.y) / len2;
+
+                // Extension only exists beyond the acquired endpoint.
+                if t < 0.05 {
+                    continue;
+                }
+
+                let projected = glam::DVec3::new(
+                    origin.x + dir.x * t,
+                    origin.y + dir.y * t,
+                    origin.z,
+                );
+
+                let ex = snapped.x - projected.x;
+                let ey = snapped.y - projected.y;
+                let err2 = ex * ex + ey * ey;
+
+                let len = len2.sqrt();
+                let unit_dir =
+                    glam::DVec3::new(dir.x / len, dir.y / len, 0.0);
+
+                if best.as_ref().map_or(true, |(best_err, _, _)| err2 < *best_err) {
+                    best = Some((err2, origin, unit_dir));
+                }
+            }
+        }
+
+        best.map(|(_, origin, dir)| (origin, dir))
+    }
 }
 
 // ── Object-snap priority ───────────────────────────────────────────────────

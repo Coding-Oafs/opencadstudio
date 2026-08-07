@@ -981,8 +981,55 @@ impl OpenCADStudio {
             let snap_hit =
                 self.snapper
                     .snap(raw, p, &snap_candidates, view_rot, eye, bounds, go, gr);
-            let mut snapped = snap_hit.map(|s| s.world).unwrap_or(raw);
+
             self.tabs[i].snap_result = snap_hit;
+
+            // Grip edits use the same tracking-point acquisition and OTRACK
+            // resolution as normal interactive point commands.
+            let otrack_hit = {
+                let snap_world = snap_hit.map(|s| s.world);
+
+                self.snapper.update_otrack_dwell(
+                    snap_world,
+                    &snap_candidates,
+                    view_rot,
+                    eye,
+                    bounds,
+                    Instant::now(),
+                );
+
+                if snap_hit.is_none() {
+                    let polar_step = if self.polar_mode {
+                        Some(self.polar_increment_deg)
+                    } else {
+                        None
+                    };
+
+                    let (_, ucs_x, ucs_y, _) = self.tabs[i].ucs_xform().axes();
+
+                    self.snapper.otrack_snap(
+                        raw,
+                        view_rot,
+                        eye,
+                        bounds,
+                        polar_step,
+                        Some(grip.origin_world),
+                        self.ortho_mode,
+                        ucs_x,
+                        ucs_y,
+                    )
+                } else {
+                    None
+                }
+            };
+
+            self.otrack_active = otrack_hit.map(|hit| (hit.base, hit.dir));
+
+            let mut snapped = if let Some(hit) = otrack_hit {
+                hit.aligned
+            } else {
+                snap_hit.map(|s| s.world).unwrap_or(raw)
+            };
             if let Some(s) = self.tabs[i].snap_result.as_mut() {
                 s.screen.x += tile_b.x;
                 s.screen.y += tile_b.y;
@@ -1007,7 +1054,9 @@ impl OpenCADStudio {
             }
             if let Some(dir) = self.axis_lock_dir {
                 snapped = axis_lock_apply(snapped, grip.origin_world, dir);
-            } else if !snap_hit.is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid) {
+            } else if otrack_hit.is_none()
+                && !snap_hit.is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid)
+            {
                 let base = grip.origin_world;
                 let ucs_xf = self.tabs[i].ucs_xform();
                 if self.ortho_mode {
@@ -1027,6 +1076,11 @@ impl OpenCADStudio {
             }
 
             let snap_ms = snap_started.elapsed().as_secs_f64() * 1000.0;
+            // The overlay builds the active tracking guide from `otrack_active.base`
+            // to `last_cursor_world`. Keep it synchronized with the actual point used
+            // by the grip, otherwise the guide and the edited geometry diverge.
+            self.tabs[i].last_cursor_world = snapped;
+            self.tabs[i].last_cursor_screen = p_full;
             let apply_started = Instant::now();
             let delta = snapped - grip.last_world;
             let lengthen = grip.mode == GripEditMode::Lengthen;
@@ -1988,6 +2042,20 @@ impl OpenCADStudio {
             .snap(raw, p, &snap_candidates, view_rot, eye, bounds, go, gr);
         let world = snap_hit.map(|s| s.world).unwrap_or(raw);
         self.tabs[i].snap_result = snap_hit;
+        if let Some(s) = self.tabs[i].snap_result.as_mut() {
+            s.screen.x += tile_b.x;
+            s.screen.y += tile_b.y;
+
+            if let Some(base) = s.extension_base.as_mut() {
+                base.x += tile_b.x;
+                base.y += tile_b.y;
+            }
+
+            if let Some(base) = s.extension_base2.as_mut() {
+                base.x += tile_b.x;
+                base.y += tile_b.y;
+            }
+        }
         if let Some(s) = self.tabs[i].snap_result.as_mut() {
             // Snap marker is pane-local; lift it to absolute canvas px.
             s.screen.x += tile_b.x;
