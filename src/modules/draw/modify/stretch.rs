@@ -81,6 +81,42 @@ impl StretchCommand {
             step: Step::Base { win_min, win_max },
         }
     }
+
+    /// A window enclosing every vertex of the current selection, or `None`
+    /// when nothing is selected. Padded so a vertex exactly on the boundary
+    /// counts as inside rather than depending on the comparison's edge.
+    fn selection_bounds(&self) -> Option<(DVec3, DVec3)> {
+        let mut min = DVec3::splat(f64::INFINITY);
+        let mut max = DVec3::splat(f64::NEG_INFINITY);
+        let mut any = false;
+        for wire in &self.wire_models {
+            for index in 0..wire.points.len() {
+                let point = wire_point(wire, index);
+                if !point.is_finite() {
+                    continue;
+                }
+                min = min.min(point);
+                max = max.max(point);
+                any = true;
+            }
+        }
+        if !any {
+            return None;
+        }
+        let pad = (max - min).length().max(1.0) * 1e-6;
+        Some((min - DVec3::splat(pad), max + DVec3::splat(pad)))
+    }
+}
+
+/// A wire vertex rebuilt from its double-single halves.
+fn wire_point(wire: &WireModel, index: usize) -> DVec3 {
+    let high = wire.points[index];
+    let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
+    DVec3::new(
+        high[0] as f64 + low[0] as f64,
+        high[1] as f64 + low[1] as f64,
+        high[2] as f64 + low[2] as f64,
+    )
 }
 
 impl CadCommand for StretchCommand {
@@ -96,8 +132,11 @@ impl CadCommand for StretchCommand {
                     // marks which of their points move.
                     t!("STRETCH  Specify first corner of crossing window:").into_owned()
                 } else {
+                    // The window narrows a selection that already exists, so
+                    // it is optional — Enter takes the whole of it, the way a
+                    // selection ends in MOVE or COPY. (#676)
                     t!(
-                        "STRETCH  Specify first corner of crossing window  [%{count} objects]:",
+                        "STRETCH  Specify first corner of crossing window, or press Enter to stretch all  [%{count} objects]:",
                         count = self.handles.len()
                     )
                     .into_owned()
@@ -162,6 +201,17 @@ impl CadCommand for StretchCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
+        // Enter ends the selection stage, as it does in MOVE and COPY. With
+        // objects already picked there is nothing left to choose: a window that
+        // contains all of them stretches every vertex, which is the whole
+        // selection moving — what a pick-selected stretch means. Without a
+        // selection there is nothing to end, so Enter still cancels. (#676)
+        if let Step::WindowCorner1 = self.step {
+            if let Some((win_min, win_max)) = self.selection_bounds() {
+                self.step = Step::Base { win_min, win_max };
+                return CmdResult::NeedPoint;
+            }
+        }
         CmdResult::Cancel
     }
     fn on_escape(&mut self) -> CmdResult {

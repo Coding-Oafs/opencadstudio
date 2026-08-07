@@ -2320,21 +2320,25 @@ impl OpenCADStudio {
                             .filter(|&h| !scene.is_layer_locked(h)),
                     );
                 }
-                if handles.is_empty() {
+                use crate::command::CadCommand;
+                use crate::modules::draw::modify::stretch::StretchCommand;
+                // A window that caught nothing is a missed aim, not a decision
+                // to stop. Ending the command there made the user restart it to
+                // try again; instead say so and ask for the corner afresh, the
+                // way a selection that picks nothing leaves MOVE still asking.
+                // (#676)
+                let cmd = if handles.is_empty() {
                     self.command_line
                         .push_output(crate::t!("STRETCH: nothing crosses the window.").as_ref());
-                    self.tabs[i].active_cmd = None;
-                    self.tabs[i].snap_result = None;
-                    self.tabs[i].scene.clear_preview_wire();
-                    self.restore_pre_cmd_tangent();
+                    StretchCommand::new(Vec::new(), Vec::new())
                 } else {
-                    use crate::command::CadCommand;
-                    use crate::modules::draw::modify::stretch::StretchCommand;
                     let wires = self.tabs[i].scene.wire_models_for(&handles);
-                    let cmd = StretchCommand::with_window(handles, wires, win_min, win_max);
-                    self.command_line.push_info(&CadCommand::prompt(&cmd));
-                    self.tabs[i].active_cmd = Some(Box::new(cmd));
-                }
+                    StretchCommand::with_window(handles, wires, win_min, win_max)
+                };
+                self.tabs[i].snap_result = None;
+                self.tabs[i].scene.clear_preview_wire();
+                self.command_line.push_info(&CadCommand::prompt(&cmd));
+                self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
             CmdResult::StretchEntities {
                 handles,
