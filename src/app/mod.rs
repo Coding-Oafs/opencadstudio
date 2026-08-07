@@ -3405,7 +3405,8 @@ impl OpenCADStudio {
         let state = Self::new();
         let (id, open_task) = window::open(window::Settings {
             maximized: true,
-            icon: window::icon::from_rgba(build_window_icon(), 32, 32).ok(),
+            icon: build_window_icon()
+                .and_then(|rgba| window::icon::from_rgba(rgba, 32, 32).ok()),
             exit_on_close_request: false,
             // A Wayland compositor has no StartupWMClass to go on: it resolves a
             // window's dock icon by matching the window's app_id against the

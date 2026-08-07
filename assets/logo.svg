@@ -4,7 +4,7 @@
    version="1.1"
    id="svg8"
    sodipodi:docname="logo.svg"
-   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns="http://www.w3.org/2000/svg"
@@ -20,9 +20,9 @@
      inkscape:pageopacity="0"
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#505050"
-     inkscape:zoom="15.020833"
-     inkscape:cx="23.966713"
-     inkscape:cy="24"
+     inkscape:zoom="14.27082"
+     inkscape:cx="10.370813"
+     inkscape:cy="24.630681"
      inkscape:window-width="1920"
      inkscape:window-height="939"
      inkscape:window-x="0"
@@ -37,18 +37,114 @@
      fill="#B03020"
      id="rect1" />
   <!-- O -->
-  <line x1="5"  y1="10" x2="13" y2="10" stroke="white" stroke-width="3" stroke-linecap="round" id="o-top" />
-  <line x1="5"  y1="38" x2="13" y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="o-bot" />
-  <line x1="5"  y1="10" x2="5"  y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="o-left" />
-  <line x1="13" y1="10" x2="13" y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="o-right" />
+  <line
+     x1="6.8919725"
+     y1="9.7197075"
+     x2="14.891973"
+     y2="9.7197075"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="o-top" />
+  <line
+     x1="6.8919725"
+     y1="37.719707"
+     x2="14.891973"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="o-bot" />
+  <line
+     x1="6.8919725"
+     y1="9.7197075"
+     x2="6.8919725"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="o-left" />
+  <line
+     x1="14.891973"
+     y1="9.7197075"
+     x2="14.891973"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="o-right" />
   <!-- C -->
-  <line x1="18" y1="10" x2="26" y2="10" stroke="white" stroke-width="3" stroke-linecap="round" id="c-top" />
-  <line x1="18" y1="38" x2="26" y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="c-bot" />
-  <line x1="18" y1="10" x2="18" y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="c-left" />
+  <line
+     x1="19.891972"
+     y1="9.7197075"
+     x2="27.891972"
+     y2="9.7197075"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="c-top" />
+  <line
+     x1="19.891972"
+     y1="37.719707"
+     x2="27.891972"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="c-bot" />
+  <line
+     x1="19.891972"
+     y1="9.7197075"
+     x2="19.891972"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="c-left" />
   <!-- S -->
-  <line x1="31" y1="10" x2="39" y2="10" stroke="white" stroke-width="3" stroke-linecap="round" id="s-top" />
-  <line x1="31" y1="10" x2="31" y2="24" stroke="white" stroke-width="3" stroke-linecap="round" id="s-tl" />
-  <line x1="31" y1="24" x2="39" y2="24" stroke="white" stroke-width="3" stroke-linecap="round" id="s-mid" />
-  <line x1="39" y1="24" x2="39" y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="s-br" />
-  <line x1="31" y1="38" x2="39" y2="38" stroke="white" stroke-width="3" stroke-linecap="round" id="s-bot" />
+  <line
+     x1="32.891972"
+     y1="9.7197075"
+     x2="40.891972"
+     y2="9.7197075"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="s-top" />
+  <line
+     x1="32.891972"
+     y1="9.7197075"
+     x2="32.891972"
+     y2="23.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="s-tl" />
+  <line
+     x1="32.891972"
+     y1="23.719707"
+     x2="40.891972"
+     y2="23.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="s-mid" />
+  <line
+     x1="40.891972"
+     y1="23.719707"
+     x2="40.891972"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="s-br" />
+  <line
+     x1="32.891972"
+     y1="37.719707"
+     x2="40.891972"
+     y2="37.719707"
+     stroke="#ffffff"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="s-bot" />
 </svg>

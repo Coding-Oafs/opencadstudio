@@ -514,6 +514,14 @@ mod linux_impl {
              StartupWMClass=OpenCADStudio\n"
         );
 
+        // The icon is checked first and on its own. It and the .desktop entry
+        // change for different reasons — the entry only when this text does,
+        // the icon whenever the logo is redrawn — so gating the icon on the
+        // entry meant a new logo never reached the theme after the entry had
+        // been written once. `install_icon` compares bytes itself, so this
+        // costs a read when nothing has changed.
+        install_icon()?;
+
         // Nothing changed since last launch → skip the write and the (slow)
         // desktop-database refresh.
         if std::fs::read_to_string(&desktop_path).ok().as_deref() == Some(contents.as_str()) {
@@ -522,8 +530,6 @@ mod linux_impl {
 
         std::fs::create_dir_all(&apps).map_err(|e| e.to_string())?;
         std::fs::write(&desktop_path, &contents).map_err(|e| e.to_string())?;
-
-        install_icon()?;
 
         // Best-effort: refresh the MIME→app cache. Absent on minimal systems.
         let _ = std::process::Command::new("update-desktop-database")

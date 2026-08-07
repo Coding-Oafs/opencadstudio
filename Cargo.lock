@@ -46,6 +46,7 @@ dependencies = [
  "open",
  "printpdf",
  "rayon",
+ "resvg",
  "rfd",
  "rust-embed",
  "rustc-hash 2.1.3",
