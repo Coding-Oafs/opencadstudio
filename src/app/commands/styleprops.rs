@@ -1601,6 +1601,18 @@ impl OpenCADStudio {
                             .scene
                             .invalidate_text_geometry_dependencies();
                     }
+                    // LTSCALE scales the dash pattern baked into every wire, and
+                    // PDMODE / PDSIZE decide the point glyph built at tessellation
+                    // time. Their own commands invalidate for exactly that reason;
+                    // reaching the same variable through SETVAR has to do it too,
+                    // or the drawing keeps rendering the old value until some
+                    // unrelated edit happens to rebuild it.
+                    if name == "LTSCALE" {
+                        self.tabs[i].scene.bump_geometry();
+                    }
+                    if name == "PDMODE" || name == "PDSIZE" {
+                        self.tabs[i].scene.invalidate_point_dependencies();
+                    }
                     // ORTHOMODE / OSMODE set the header directly; mirror them into
                     // the live Ortho / running OSNAP so the constraint + status
                     // bar follow and the save-time stamp doesn't revert them.
