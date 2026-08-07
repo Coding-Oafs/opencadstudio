@@ -554,11 +554,6 @@ fn apply_transform(t: &mut MText, tr: &EntityTransform) {
         let line_angle = dy.atan2(dx);
         entity.rotation = 2.0 * line_angle - entity.rotation;
     });
-    // Keep MTEXT's explicit rotation in sync with ROTATE / ALIGN.
-    if let EntityTransform::Rotate { angle_rad, .. } = tr {
-        t.rotation =
-            (t.rotation + *angle_rad).rem_euclid(std::f64::consts::TAU);
-    }
 }
 
 impl TruckConvertible for MText {

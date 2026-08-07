@@ -62,7 +62,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_Window
 ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "wayland"] }
 
 [patch.crates-io]
-acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "41149d7" }
+acadrust = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "9ecaffc" }
 iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 

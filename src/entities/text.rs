@@ -484,12 +484,6 @@ fn apply_transform(t: &mut Text, tr: &EntityTransform) {
         entity.rotation = 2.0 * line_angle - entity.rotation;
         entity.oblique_angle = -entity.oblique_angle;
     });
-    // The generic entity transform moves the TEXT geometry, but acadrust
-    // does not update the DXF rotation field used by our text renderer.
-    if let EntityTransform::Rotate { angle_rad, .. } = tr {
-        t.rotation =
-            (t.rotation + *angle_rad).rem_euclid(std::f64::consts::TAU);
-    }
 }
 
 impl TruckConvertible for Text {
