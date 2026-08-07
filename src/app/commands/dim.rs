@@ -425,22 +425,44 @@ impl OpenCADStudio {
             // TCOUNT [start] — prefix selected single-line text with sequential
             // numbers in reading order (top-to-bottom, then left-to-right).
             "TCOUNT" => {
-                use crate::command::SelectThenValueCommand;
+                use crate::command::TCountCommand;
+
                 let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
-                let c = SelectThenValueCommand::new(
-                    "TCOUNT",
-                    "TCOUNT  starting number (Enter for 1):",
-                    has_sel,
-                );
+                let c = TCountCommand::new(has_sel);
+
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
             cmd if cmd.starts_with("TCOUNT ") => {
-                let start: i64 = cmd
-                    .split_whitespace()
-                    .nth(1)
+                let mut args = cmd.split_whitespace().skip(1);
+
+                let start: i64 = args
+                    .next()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(1);
+
+                let increment: i64 = args
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+
+                let placement = args
+                    .next()
+                    .unwrap_or("O")
+                    .to_uppercase();
+
+                let placement = match placement.as_str() {
+                    "O" | "OVERWRITE" => "O",
+                    "P" | "PREFIX" => "P",
+                    "S" | "SUFFIX" => "S",
+                    _ => {
+                        self.command_line.push_error(
+                            "TCOUNT: placement must be Overwrite, Prefix, or Suffix.",
+                        );
+                        return Some(Task::none());
+                    }
+                };
+
                 let mut texts: Vec<(acadrust::Handle, f64, f64)> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -452,19 +474,28 @@ impl OpenCADStudio {
                         _ => None,
                     })
                     .collect();
+
                 if texts.is_empty() {
                     self.command_line
-                        .push_error(crate::t!("TCOUNT: select single-line text first.").as_ref());
+                        .push_error("TCOUNT: select single-line text first.");
                     return Some(Task::none());
                 }
-                // Reading order: higher Y first, then smaller X.
+
+                // Keep the existing reading order:
+                // higher Y first, then smaller X.
                 texts.sort_by(|a, b| {
                     b.2.partial_cmp(&a.2)
                         .unwrap_or(std::cmp::Ordering::Equal)
-                        .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                        .then(
+                            a.1.partial_cmp(&b.1)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        )
                 });
+
                 self.push_undo_snapshot(i, "TCOUNT");
+
                 let mut num = start;
+
                 for (h, _, _) in &texts {
                     if let Some(acadrust::EntityType::Text(t)) = self.tabs[i]
                         .scene
@@ -472,20 +503,39 @@ impl OpenCADStudio {
                         .entities_mut()
                         .find(|e| e.common().handle == *h)
                     {
-                        t.value = format!("{num} {}", t.value);
-                        num += 1;
+                        t.value = match placement {
+                            "P" => format!("{num} {}", t.value),
+                            "S" => format!("{} {num}", t.value),
+                            _ => num.to_string(),
+                        };
+
+                        num += increment;
                     }
                 }
+
                 self.tabs[i].dirty = true;
+
                 let changes: Vec<_> = texts
                     .iter()
-                    .map(|(handle, _, _)| (*handle, crate::scene::ChangeKind::Modified))
+                    .map(|(handle, _, _)| {
+                        (*handle, crate::scene::ChangeKind::Modified)
+                    })
                     .collect();
+
                 self.tabs[i].scene.bump_entities(&changes);
-                self.command_line.push_output(crate::tf!(
-                    "TCOUNT: numbered {} text object(s) from {start}.",
-                    texts.len()
-                ).as_ref());
+
+                let placement_name = match placement {
+                    "P" => "Prefix",
+                    "S" => "Suffix",
+                    _ => "Overwrite",
+                };
+
+                self.command_line.push_output(&format!(
+                    "TCOUNT: numbered {} text object(s) from {} by {} ({placement_name}).",
+                    texts.len(),
+                    start,
+                    increment,
+                ));
             }
 
             "MLEADER" => {
