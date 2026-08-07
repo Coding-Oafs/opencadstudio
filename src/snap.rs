@@ -1657,6 +1657,23 @@ impl Snapper {
                 let unit_dir =
                     glam::DVec3::new(dir.x / len, dir.y / len, 0.0);
 
+                // The ray has to actually pass through the snapped point. Only
+                // four acquisitions are kept and the oldest is dropped as new
+                // ones come in, so by the time a typed distance arrives the ray
+                // that produced this snap may be gone — without this the nearest
+                // surviving ray wins by default and the distance flies off along
+                // it. Failing here instead leaves the caller on plain point input.
+                //
+                // `extension_snap` builds the point by exact f64 projection onto
+                // this same ray, so a match sits on it to rounding: the tolerance
+                // only has to clear f64 noise, and scaling it with the coordinate
+                // keeps that true at UTM magnitudes. (`extension_bases_screen`
+                // answers the same question in screen pixels because it also has
+                // to catch a *crossing* base, which is a looser fit than this.)
+                let tol = 1e-9_f64.max(2e-12 * origin.x.abs().max(origin.y.abs()));
+                if err2 > tol * tol {
+                    continue;
+                }
                 if best.as_ref().map_or(true, |(best_err, _, _)| err2 < *best_err) {
                     best = Some((err2, origin, unit_dir));
                 }

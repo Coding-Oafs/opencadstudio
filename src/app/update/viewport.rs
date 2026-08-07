@@ -2043,23 +2043,18 @@ impl OpenCADStudio {
         let world = snap_hit.map(|s| s.world).unwrap_or(raw);
         self.tabs[i].snap_result = snap_hit;
         if let Some(s) = self.tabs[i].snap_result.as_mut() {
+            // Snap marker and its extension anchors are pane-local; lift them to
+            // absolute canvas px.
             s.screen.x += tile_b.x;
             s.screen.y += tile_b.y;
-
             if let Some(base) = s.extension_base.as_mut() {
                 base.x += tile_b.x;
                 base.y += tile_b.y;
             }
-
             if let Some(base) = s.extension_base2.as_mut() {
                 base.x += tile_b.x;
                 base.y += tile_b.y;
             }
-        }
-        if let Some(s) = self.tabs[i].snap_result.as_mut() {
-            // Snap marker is pane-local; lift it to absolute canvas px.
-            s.screen.x += tile_b.x;
-            s.screen.y += tile_b.y;
         }
 
         use acadrust::types::Vector3;
