@@ -833,6 +833,21 @@ impl OpenCADStudio {
         // `transform_viewport` covers the rectangle and the target but not the
         // framing, so the framing is done here for every viewport, and the
         // target only for the ones the scale above did not already reach.
+        // Not every viewport frames the model, though. Each layout's sheet
+        // viewport frames the sheet — its view is the paper, measured in paper
+        // units — so scaling it by the model's factor would leave the drawing
+        // frame the same size as before while the view of it changed by a
+        // thousand, which is the boundary appearing to break.
+        let sheets: std::collections::HashSet<acadrust::Handle> = self.tabs[i]
+            .scene
+            .document
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                acadrust::objects::ObjectType::Layout(layout) => Some(layout.viewport),
+                _ => None,
+            })
+            .collect();
         let scaled: std::collections::HashSet<acadrust::Handle> = handles.iter().copied().collect();
         let mut reframed = 0usize;
         for entity in self.tabs[i].scene.document.entities_mut() {
@@ -840,6 +855,17 @@ impl OpenCADStudio {
             let acadrust::entities::EntityType::Viewport(vp) = entity else {
                 continue;
             };
+            // Only a paper-space viewport can be a sheet — the scale above
+            // reached everything in model space, and what it reached frames the
+            // model by definition. Among the rest, the layout names its sheet
+            // outright, and a file that arrives without that link still gives
+            // itself away by sitting at the paper origin, where only the sheet
+            // sits.
+            let is_sheet = !scaled.contains(&handle)
+                && (sheets.contains(&handle) || !crate::scene::Scene::is_content_viewport(vp));
+            if is_sheet {
+                continue;
+            }
             vp.view_center = vp.view_center * factor;
             vp.view_height *= factor;
             if vp.custom_scale.abs() > 1e-12 {
