@@ -6,6 +6,7 @@ pub mod defaults;
 mod donate;
 pub mod draw;
 pub mod fence;
+pub mod units;
 pub mod groups;
 pub mod inquiry;
 pub mod layers;

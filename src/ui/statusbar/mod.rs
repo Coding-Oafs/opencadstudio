@@ -102,8 +102,8 @@ impl StatusBar {
         picking: bool,
         // True while clean-screen mode hides the ribbon and side panels.
         clean_screen: bool,
-        // Drawing units (INSUNITS) for the units pill.
-        insertion_units: i16,
+        // LUNITS — how lengths are written, for the units pill.
+        linear_format: i16,
         // True when objects are hidden by Isolate / Hide.
         isolation_active: bool,
         // Whether entity transparency is shown (Transparency pill state).
@@ -353,11 +353,13 @@ impl StatusBar {
             pills.push(
                 status_menu::menu_bar(
                     menu_tip(
-                        popup_pill(t!(crate::ui::popup::units_popup::unit_short(insertion_units))),
-                        t!("Drawing Units (INSUNITS)\nClick to change"),
+                        popup_pill(t!(crate::modules::draw::units::linear_format_short(
+                            linear_format
+                        ))),
+                        t!("Units (LUNITS)\nHow lengths are written\nClick to change"),
                         tooltip_hidden,
                     ),
-                    crate::ui::popup::units_popup::menu_entries(insertion_units),
+                    crate::ui::popup::units_popup::menu_entries(linear_format),
                     140.0,
                 )
                 .into(),
@@ -554,8 +556,15 @@ impl StatusBar {
 
 // ── Coordinate readout ────────────────────────────────────────────────────
 
+/// The readout, in the drawing's own linear units.
+///
+/// Lengths went out at four decimal places whatever the drawing asked for, so a
+/// drawing set to architectural units read its coordinates in decimals, and one
+/// asking for two places got four. `format_length` is the same helper the
+/// properties panel formats through, so both now say a length the same way.
 fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, picking: bool) -> String {
-    let abs = |p: glam::DVec3| format!("{:.4}, {:.4}, {:.4}", p.x, p.y, p.z);
+    use crate::entities::common::format_length as len;
+    let abs = |p: glam::DVec3| format!("{}, {}, {}", len(p.x), len(p.y), len(p.z));
     match mode {
         // Static: show the last picked point; the readout freezes between picks.
         0 => abs(last.unwrap_or(cursor)),
@@ -565,11 +574,14 @@ fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, pick
             (true, Some(l)) => {
                 let d = cursor - l;
                 let dist = (d.x * d.x + d.y * d.y).sqrt();
-                let mut ang = d.y.atan2(d.x).to_degrees();
-                if ang < 0.0 {
-                    ang += 360.0;
-                }
-                format!("{dist:.4} < {ang:.2}\u{b0}")
+                // Kept in 0..2pi so the readout never shows a negative bearing,
+                // then handed over in radians for AUNITS / AUPREC to format.
+                let ang = d.y.atan2(d.x).rem_euclid(std::f64::consts::TAU);
+                format!(
+                    "{} < {}",
+                    len(dist),
+                    crate::entities::common::format_angle(ang)
+                )
             }
             _ => abs(cursor),
         },

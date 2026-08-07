@@ -408,6 +408,8 @@ pub(super) struct OpenCADStudio {
     last_layer_translation: Option<crate::modules::draw::layers::laytrans::Report>,
     /// The layer-translator dialog's working state while it is open.
     layer_translator: Option<crate::ui::window::layer_translator::State>,
+    /// Working copy of the Drawing Units dialog; `None` while it is closed.
+    drawing_units: Option<crate::ui::window::drawing_units::State>,
     /// PICKDRAG (#226): false (default) = press-drag lassoes; true =
     /// press-drag draws a rectangle marquee.
     pick_drag_rect: bool,
@@ -1495,6 +1497,7 @@ pub enum ModalKind {
     Layers,
     LayerStateManager,
     LayerTranslator,
+    DrawingUnits,
     LayerStateEditor,
     Plot,
     PrintAll,
@@ -2196,6 +2199,14 @@ pub enum Message {
     CloseUnitsPopup,
     /// Set the drawing units (INSUNITS) for the active drawing.
     SetDrawingUnits(i16),
+    /// LUNITS — how lengths are written, from the status-bar units button.
+    SetLinearFormat(i16),
+    /// Open the Drawing Units dialog, seeded from the active drawing.
+    OpenDrawingUnits,
+    /// One field of the Drawing Units dialog changed.
+    DrawingUnitsField(crate::ui::window::drawing_units::Field),
+    /// Drawing Units OK — write the working copy into the drawing.
+    DrawingUnitsApply,
     /// Toggle the Isolate pill's action menu open/closed.
     ToggleIsolatePopup,
     /// Close the Isolate action menu.
@@ -3009,6 +3020,7 @@ impl OpenCADStudio {
             select_remove_mode: false,
             last_layer_translation: None,
             layer_translator: None,
+            drawing_units: None,
             pick_drag_rect: false,
             perf_hud: false,
             cycle_candidates: None,

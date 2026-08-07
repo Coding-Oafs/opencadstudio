@@ -233,9 +233,11 @@ impl OpenCADStudio {
             "DSETTINGS" | "OSNAP" => {
                 return Some(Task::done(Message::ToggleSnapPopup));
             }
-            // UNITS — open the drawing-units picker (linear / angular format).
+            // UNITS — length and angle formats, plus the insertion unit. The
+            // status-bar button covers the length format alone; everything else
+            // about how this drawing writes numbers is here.
             "UNITS" | "DDUNITS" => {
-                return Some(Task::done(Message::ToggleUnitsPopup));
+                return Some(Task::done(Message::OpenDrawingUnits));
             }
 
             // ── CLEANSCREEN — collapse the surrounding panels for a full canvas ──

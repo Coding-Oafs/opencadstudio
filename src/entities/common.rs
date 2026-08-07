@@ -11,8 +11,8 @@ pub struct UnitContext {
     pub lunits: i16,
     /// LUPREC — decimal places (linear)
     pub luprec: i16,
-    /// AUNITS — 0=Decimal degrees, 1=DMS, 2=Grad, 3=Rad. Surfaced via
-    /// `format_angle`, which is read on demand by code that already
+    /// AUNITS — 0=Decimal degrees, 1=DMS, 2=Grad, 3=Rad, 4=Surveyor. Surfaced
+    /// via `format_angle`, which is read on demand by code that already
     /// formats angular values via radians.
     #[allow(dead_code)]
     pub aunits: i16,
@@ -98,24 +98,61 @@ pub fn format_angle(value_rad: f64) -> String {
     let ctx = unit_context();
     let prec = ctx.auprec.max(0) as usize;
     match ctx.aunits {
-        1 => {
-            // DMS — degrees / minutes / seconds.
-            let deg = value_rad.to_degrees();
-            let sign = if deg < 0.0 { "-" } else { "" };
-            let a = deg.abs();
-            let d = a.floor();
-            let m_full = (a - d) * 60.0;
-            let m = m_full.floor();
-            let s = (m_full - m) * 60.0;
-            format!("{}{:.0}°{:.0}'{:.*}\"", sign, d, m, prec, s)
-        }
+        1 => dms(value_rad.to_degrees(), prec),
         2 => {
             let g = value_rad.to_degrees() / 0.9;
             format!("{:.*}g", prec, g)
         }
         3 => format!("{:.*}r", prec, value_rad),
+        4 => surveyor(value_rad, prec),
         _ => format!("{:.*}°", prec, value_rad.to_degrees()),
     }
+}
+
+/// Degrees / minutes / seconds. Each part carries its own mark — `d`, `'`, `"`
+/// — so the written angle says which convention it is in.
+fn dms(degrees: f64, prec: usize) -> String {
+    let sign = if degrees < 0.0 { "-" } else { "" };
+    let a = degrees.abs();
+    let d = a.floor();
+    let m_full = (a - d) * 60.0;
+    let m = m_full.floor();
+    let s = (m_full - m) * 60.0;
+    format!("{}{:.0}d{:.0}'{:.*}\"", sign, d, m, prec, s)
+}
+
+/// Surveyor's units: a bearing away from north or south, toward east or west,
+/// so the angle is never more than a quarter turn — `N 45d0'0" E`.
+///
+/// Due north, south, east and west have no bearing to quote and are written as
+/// the single letter, which is also what keeps a 90° angle from reading as the
+/// contradictory `N 90d0'0" E`.
+fn surveyor(value_rad: f64, prec: usize) -> String {
+    let deg = value_rad.to_degrees().rem_euclid(360.0);
+    let near = |target: f64| (deg - target).abs() < 1e-9;
+    if near(0.0) {
+        return "E".into();
+    }
+    if near(90.0) {
+        return "N".into();
+    }
+    if near(180.0) {
+        return "W".into();
+    }
+    if near(270.0) {
+        return "S".into();
+    }
+    // Measured from the nearer pole, toward the side the angle falls on.
+    let (pole, bearing, side) = if deg < 90.0 {
+        ("N", 90.0 - deg, "E")
+    } else if deg < 180.0 {
+        ("N", deg - 90.0, "W")
+    } else if deg < 270.0 {
+        ("S", 270.0 - deg, "W")
+    } else {
+        ("S", deg - 270.0, "E")
+    };
+    format!("{pole} {} {side}", dms(bearing, prec))
 }
 
 /// Two interior triangles covering a quad (flat list, 6 vertices) — the

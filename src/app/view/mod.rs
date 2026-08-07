@@ -1658,6 +1658,19 @@ impl OpenCADStudio {
                     let active_block = tab
                         .active_block_edit_session()
                         .map(|session| session.block_name.clone());
+                    // The coordinate readout formats through the same helper
+                    // the properties panel uses, so it has to see the drawing's
+                    // linear-unit settings. Properties happens to set this on
+                    // every refresh; the status bar redraws on its own schedule
+                    // and cannot rely on that having happened.
+                    crate::entities::common::set_unit_context(
+                        crate::entities::common::UnitContext {
+                            lunits: tab.scene.document.header.linear_unit_format,
+                            luprec: tab.scene.document.header.linear_unit_precision,
+                            aunits: tab.scene.document.header.angular_unit_format,
+                            auprec: tab.scene.document.header.angular_unit_precision,
+                        },
+                    );
                     let status_menu_data = crate::ui::statusbar::StatusMenuData {
                         layout_names: layout_names.clone(),
                         polar_custom_input: &self.polar_custom_input,
@@ -1703,7 +1716,7 @@ impl OpenCADStudio {
                         last_coord,
                         picking,
                         self.clean_screen,
-                        tab.scene.document.header.insertion_units,
+                        tab.scene.document.header.linear_unit_format,
                         tab.scene.is_isolation_active(),
                         tab.scene.transparency_display,
                         self.quick_properties,

@@ -20,6 +20,7 @@ impl OpenCADStudio {
             Some(K::Layers) => crate::tr!("modal-layer-manager"),
             Some(K::LayerStateManager) => crate::tr!("modal-layer-state-manager"),
             Some(K::LayerTranslator) => crate::t!("Layer Translator").into_owned(),
+            Some(K::DrawingUnits) => crate::t!("Drawing Units").into_owned(),
             Some(K::LayerStateEditor) => crate::tr!("modal-edit-layer-state"),
             Some(K::Plot) => crate::tr!("modal-plot"),
             Some(K::PrintAll) => t!("Print All").into_owned(),
@@ -183,6 +184,12 @@ impl OpenCADStudio {
                         sources.clone(),
                         flow,
                     )
+                })
+            }
+            super::super::ModalKind::DrawingUnits => {
+                let state = self.drawing_units.as_ref()?;
+                sized_flow(ex, 560, 420, |flow| {
+                    crate::ui::window::drawing_units::view_window(state, flow)
                 })
             }
             super::super::ModalKind::LayerStateManager => {

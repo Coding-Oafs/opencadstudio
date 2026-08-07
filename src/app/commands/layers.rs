@@ -78,6 +78,41 @@ impl OpenCADStudio {
                 }
             }
 
+            // DWGUNITS — change what one drawing unit measures, and convert the
+            // model to match. The units pill only relabels, which is all the
+            // label is for; this is the one place geometry moves. (#668)
+            "DWGUNITS" => {
+                use crate::command::KeywordCommand;
+                use crate::modules::draw::units;
+                // Buttons read as full names; the token behind each is the
+                // abbreviation, since that is what gets typed. Unitless is left
+                // off — there is nothing to convert to.
+                let choices: Vec<(&str, &str, Option<&str>)> = units::all()
+                    .filter(|&(code, _)| code != 0)
+                    .map(|(code, label)| (label, units::short(code), None))
+                    .collect();
+                // Built once: the table it comes from never changes, and
+                // `KeywordCommand` wants a `&'static str`.
+                static PROMPT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                let prompt = PROMPT.get_or_init(|| {
+                    let listed = units::all()
+                        .filter(|&(code, _)| code != 0)
+                        .map(|(code, label)| format!("{label}({})", units::short(code)))
+                        .collect::<Vec<_>>()
+                        .join(" / ");
+                    format!("DWGUNITS  convert to  [{listed}]:")
+                });
+                let current = units::label(self.tabs[i].scene.document.header.insertion_units);
+                self.command_line
+                    .push_info(crate::tf!("DWGUNITS  current unit: {current}").as_ref());
+                let c = KeywordCommand::new("DWGUNITS", prompt.as_str(), choices);
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("DWGUNITS ") => {
+                return Some(self.convert_drawing_units(cmd.trim_start_matches("DWGUNITS").trim()));
+            }
+
             // LAYTRANS — translate this drawing's layers onto a set taken from
             // another drawing. Bare opens the mapping dialog; with a file it
             // maps every name the two drawings share and translates at once,
@@ -714,6 +749,153 @@ impl OpenCADStudio {
             laytrans::Options::default(),
         );
         self.finish_layer_translation(i, report)
+    }
+
+    /// Relabel the drawing's unit and convert the model to suit.
+    ///
+    /// The label always changes — that is what was asked for. The geometry
+    /// changes with it whenever both units measure something, which is what
+    /// makes this different from picking a unit off the status bar. Unitless
+    /// measures nothing, so a drawing coming from or going to it is relabelled
+    /// and left alone.
+    pub(in crate::app) fn convert_drawing_units(&mut self, name: &str) -> Task<Message> {
+        use crate::command::EntityTransform;
+        use crate::modules::draw::units;
+
+        let i = self.active_tab;
+        let Some(to) = units::code_for_keyword(name) else {
+            self.command_line
+                .push_error(crate::t!("DWGUNITS: not a unit this drawing can use.").as_ref());
+            return Task::none();
+        };
+        let from = self.tabs[i].scene.document.header.insertion_units;
+        if from == to {
+            let label = units::label(to);
+            self.command_line
+                .push_output(crate::tf!("DWGUNITS: already in {label}.").as_ref());
+            return Task::none();
+        }
+
+        self.push_undo_snapshot(i, "DWGUNITS");
+        self.tabs[i].scene.document.header.insertion_units = to;
+
+        let factor = units::conversion_factor(from, to).filter(|f| (f - 1.0).abs() > 1e-12);
+        let (from_label, to_label) = (units::label(from), units::label(to));
+        let Some(factor) = factor else {
+            self.tabs[i].dirty = true;
+            self.command_line.push_output(
+                crate::tf!(
+                    "DWGUNITS: now {to_label}. Nothing was converted — {from_label} has no size to convert from."
+                )
+                .as_ref(),
+            );
+            return Task::none();
+        };
+
+        let handles = units::model_space_handles(&self.tabs[i].scene);
+        let moved = handles.len();
+        // A locked layer is protected from editing, not from the drawing
+        // changing what its numbers mean. Converting all but the locked layers
+        // would leave the drawing at two scales at once, so the locks are
+        // lifted for the duration and put back.
+        let relocked: Vec<String> = self.tabs[i]
+            .scene
+            .document
+            .layers
+            .iter()
+            .filter(|layer| layer.is_locked())
+            .map(|layer| layer.name.clone())
+            .collect();
+        for name in &relocked {
+            if let Some(layer) = self.tabs[i].scene.document.layers.get_mut(name) {
+                layer.flags.locked = false;
+            }
+        }
+        self.tabs[i].scene.transform_entities(
+            &handles,
+            &EntityTransform::Scale {
+                center: glam::DVec3::ZERO,
+                factor,
+            },
+        );
+        for name in &relocked {
+            if let Some(layer) = self.tabs[i].scene.document.layers.get_mut(name) {
+                layer.flags.locked = true;
+            }
+        }
+
+        // A viewport frames the model, so its framing is measured in model
+        // units and has to follow them. Left alone, every layout would suddenly
+        // look at a region a thousand times too large. The paper side of the
+        // ratio is untouched — the sheet is still the same sheet — so the ratio
+        // itself moves the other way.
+        //
+        // `transform_viewport` covers the rectangle and the target but not the
+        // framing, so the framing is done here for every viewport, and the
+        // target only for the ones the scale above did not already reach.
+        let scaled: std::collections::HashSet<acadrust::Handle> = handles.iter().copied().collect();
+        let mut reframed = 0usize;
+        for entity in self.tabs[i].scene.document.entities_mut() {
+            let handle = entity.common().handle;
+            let acadrust::entities::EntityType::Viewport(vp) = entity else {
+                continue;
+            };
+            vp.view_center = vp.view_center * factor;
+            vp.view_height *= factor;
+            if vp.custom_scale.abs() > 1e-12 {
+                vp.custom_scale /= factor;
+            }
+            if !scaled.contains(&handle) {
+                vp.view_target = vp.view_target * factor;
+            }
+            reframed += 1;
+        }
+        // Sizes the drawing keeps as settings rather than as geometry: dash
+        // lengths, default heights and widths, the radii the fillet and chamfer
+        // commands start from. They are all lengths in the unit that just
+        // changed, so they change with it or the next line drawn comes out at
+        // the old scale. Angles and screen-relative sizes are left alone —
+        // PDSIZE is a percentage of the screen when negative.
+        let header = &mut self.tabs[i].scene.document.header;
+        for length in [
+            &mut header.linetype_scale,
+            &mut header.current_entity_linetype_scale,
+            &mut header.text_height,
+            &mut header.trace_width,
+            &mut header.sketch_increment,
+            &mut header.thickness,
+            &mut header.polyline_width,
+            &mut header.fillet_radius,
+            &mut header.chamfer_distance_a,
+            &mut header.chamfer_distance_b,
+            &mut header.chamfer_length,
+        ] {
+            *length *= factor;
+        }
+        if header.point_display_size > 0.0 {
+            header.point_display_size *= factor;
+        }
+
+        // A dimension style holds its text height and arrow size in drawing
+        // units and multiplies them by DIMSCALE, so moving that one factor
+        // rescales the whole style. Zero means "take it from the viewport",
+        // which is not a length and stays as it is.
+        for style in self.tabs[i].scene.document.dim_styles.iter_mut() {
+            if style.dimscale.abs() > 1e-12 {
+                style.dimscale *= factor;
+            }
+        }
+
+        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].dirty = true;
+        self.refresh_properties();
+        self.command_line.push_output(
+            crate::tf!(
+                "DWGUNITS: {from_label} to {to_label} — {moved} object(s) scaled by {factor}, {reframed} viewport(s) reframed."
+            )
+            .as_ref(),
+        );
+        Task::none()
     }
 
     /// Open the translator, optionally with a standard already loaded.

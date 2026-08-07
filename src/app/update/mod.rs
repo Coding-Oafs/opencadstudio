@@ -3534,11 +3534,107 @@ impl OpenCADStudio {
                 self.units_popup_open = false;
                 Task::none()
             }
+            Message::OpenDrawingUnits => {
+                self.units_popup_open = false;
+                let header = &self.tabs[self.active_tab].scene.document.header;
+                self.drawing_units = Some(crate::ui::window::drawing_units::State {
+                    linear_format: header.linear_unit_format,
+                    linear_precision: header.linear_unit_precision,
+                    angular_format: header.angular_unit_format,
+                    angular_precision: header.angular_unit_precision,
+                    clockwise: header.angle_direction != 0,
+                    base_angle: format!("{:.6}", header.angle_base.to_degrees())
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string(),
+                    insertion_units: header.insertion_units,
+                });
+                self.active_modal = Some(crate::app::ModalKind::DrawingUnits);
+                Task::none()
+            }
+            Message::DrawingUnitsField(field) => {
+                use crate::ui::window::drawing_units::Field;
+                let Some(state) = self.drawing_units.as_mut() else {
+                    return Task::none();
+                };
+                match field {
+                    Field::LinearFormat(v) => state.linear_format = v,
+                    Field::LinearPrecision(v) => state.linear_precision = v,
+                    Field::AngularFormat(v) => state.angular_format = v,
+                    Field::AngularPrecision(v) => state.angular_precision = v,
+                    Field::Clockwise(v) => state.clockwise = v,
+                    // Kept as typed so a lone "-" or a trailing "." survives
+                    // until the number it is becoming is finished.
+                    Field::BaseAngle(v) => state.base_angle = v,
+                    Field::InsertionUnits(v) => state.insertion_units = v,
+                }
+                Task::none()
+            }
+            Message::DrawingUnitsApply => {
+                let Some(state) = self.drawing_units.take() else {
+                    self.active_modal = None;
+                    return Task::none();
+                };
+                self.active_modal = None;
+                let i = self.active_tab;
+                self.push_undo_snapshot(i, "UNITS");
+                let header = &mut self.tabs[i].scene.document.header;
+                header.linear_unit_format = state.linear_format;
+                header.linear_unit_precision = state.linear_precision;
+                header.angular_unit_format = state.angular_format;
+                header.angular_unit_precision = state.angular_precision;
+                header.angle_direction = i16::from(state.clockwise);
+                // A base angle that will not parse is a half-finished edit, not
+                // an instruction to move zero — leave the drawing's own value.
+                if let Ok(degrees) = state.base_angle.trim().parse::<f64>() {
+                    header.angle_base = degrees.to_radians();
+                }
+                header.insertion_units = state.insertion_units;
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.bump_geometry();
+                self.refresh_properties();
+                Task::none()
+            }
+            Message::SetLinearFormat(code) => {
+                self.units_popup_open = false;
+                let i = self.active_tab;
+                if self.tabs[i].scene.document.header.linear_unit_format == code {
+                    return Task::none();
+                }
+                // Every displayed length is written through this, so the whole
+                // drawing re-reads at once — no geometry moves, only the way it
+                // is written down.
+                self.push_undo_snapshot(i, "LUNITS");
+                self.tabs[i].scene.document.header.linear_unit_format = code;
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.bump_geometry();
+                self.refresh_properties();
+                let label = crate::modules::draw::units::linear_format_label(code);
+                self.command_line
+                    .push_output(crate::tf!("Length format is now {label}.").as_ref());
+                Task::none()
+            }
             Message::SetDrawingUnits(code) => {
                 self.units_popup_open = false;
                 let i = self.active_tab;
+                let current = self.tabs[i].scene.document.header.insertion_units;
+                if current == code {
+                    return Task::none();
+                }
+                // Relabelling only: the geometry keeps every number it had, and
+                // now says they count something else. Say so, because picking a
+                // unit and seeing the drawing sit still otherwise reads as the
+                // menu having done nothing. (#668)
+                self.push_undo_snapshot(i, "UNITS");
                 self.tabs[i].scene.document.header.insertion_units = code;
                 self.tabs[i].dirty = true;
+                let label = crate::modules::draw::units::label(code);
+                self.command_line.push_output(
+                    crate::tf!(
+                        "Drawing unit is now {label}. Geometry unchanged — use DWGUNITS to convert it."
+                    )
+                    .as_ref(),
+                );
                 Task::none()
             }
             Message::ToggleIsolatePopup => {
