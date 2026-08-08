@@ -7,9 +7,7 @@
 //
 //   BREAK @ (at-sign as second point) → Break at a single point (splits without gap).
 
-use crate::modules::draw::modify::spline_ops::{
-    bspline_to_spline, spline_nearest_t, spline_to_bspline,
-};
+use crate::modules::draw::modify::spline_ops::{spline_cut, spline_nearest_t, spline_range};
 use acadrust::entities::{
     Arc as ArcEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline, Spline as SplineEnt,
 };
@@ -17,7 +15,6 @@ use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 use crate::t;
-use truck_modeling::base::{BoundedCurve, Cut};
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -307,37 +304,35 @@ fn break_spline(spl: &SplineEnt, p1: DVec3, p2: DVec3) -> Vec<EntityType> {
         None => return vec![EntityType::Spline(spl.clone())],
     };
 
-    let bs = match spline_to_bspline(spl) {
-        Some(b) => b,
-        None => return vec![EntityType::Spline(spl.clone())],
+    let Some((t0, t_end)) = spline_range(spl) else {
+        return vec![EntityType::Spline(spl.clone())];
     };
-    let (t0, t_end) = bs.range_tuple();
 
     let (ta, tb) = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
 
     // Single-point break (ta ≈ tb): split into two segments at that point.
     if (tb - ta).abs() < 1e-9 {
-        let mut piece = bs.clone();
-        let right = piece.cut(ta);
-        return vec![
-            EntityType::Spline(bspline_to_spline(&piece, spl)),
-            EntityType::Spline(bspline_to_spline(&right, spl)),
-        ];
+        return match spline_cut(spl, ta) {
+            Some((left, right)) => {
+                vec![EntityType::Spline(left), EntityType::Spline(right)]
+            }
+            None => vec![EntityType::Spline(spl.clone())],
+        };
     }
 
     // Two-point break: keep [t0..ta] and [tb..t_end], discard middle.
     let mut result = vec![];
     // Left piece [t0, ta]
     if ta - t0 > 1e-9 {
-        let mut left = bs.clone();
-        let _right = left.cut(ta); // left = [t0, ta]
-        result.push(EntityType::Spline(bspline_to_spline(&left, spl)));
+        if let Some((left, _)) = spline_cut(spl, ta) {
+            result.push(EntityType::Spline(left));
+        }
     }
     // Right piece [tb, t_end]
     if t_end - tb > 1e-9 {
-        let mut full = bs.clone();
-        let right = full.cut(tb); // right = [tb, t_end]
-        result.push(EntityType::Spline(bspline_to_spline(&right, spl)));
+        if let Some((_, right)) = spline_cut(spl, tb) {
+            result.push(EntityType::Spline(right));
+        }
     }
     result
 }

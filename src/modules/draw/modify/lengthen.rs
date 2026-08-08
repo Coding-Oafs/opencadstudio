@@ -7,7 +7,7 @@
 //
 // The entity is modified at whichever end is closest to the pick point.
 
-use crate::modules::draw::modify::spline_ops::{bspline_to_spline, spline_to_bspline};
+use crate::modules::draw::modify::spline_ops::{spline_cut, spline_to_nurbs};
 use acadrust::entities::{
     Arc as ArcEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline, Spline as SplineEnt,
 };
@@ -15,7 +15,6 @@ use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::{DVec3, Vec3};
 use crate::t;
-use truck_modeling::base::{BoundedCurve, Cut};
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -411,23 +410,22 @@ fn lengthen_lwpoly(poly: &LwPolyline, pick_pt: Vec3, mode: &LenMode) -> Option<E
 }
 
 fn lengthen_spline(spl: &SplineEnt, pick_pt: Vec3, mode: &LenMode) -> Option<EntityType> {
-    let bs = spline_to_bspline(spl)?;
-    let (t0, t1) = bs.range_tuple();
+    let curve = spline_to_nurbs(spl)?;
+    let (t0, t1) = curve.domain();
     if (t1 - t0).abs() < 1e-12 {
         return None;
     }
 
     // Approximate arc length via 64-point numerical integration.
-    use truck_modeling::base::ParametricCurve;
     let arc_len = {
         let n = 64usize;
         let mut len = 0.0f64;
         for i in 0..n {
             let ta = t0 + (t1 - t0) * (i as f64 / n as f64);
             let tb = t0 + (t1 - t0) * ((i + 1) as f64 / n as f64);
-            let pa = bs.subs(ta);
-            let pb = bs.subs(tb);
-            len += (pb.x - pa.x).hypot(pb.y - pa.y);
+            let pa = curve.point_at_knot(ta);
+            let pb = curve.point_at_knot(tb);
+            len += (pb[0] - pa[0]).hypot(pb[1] - pa[1]);
         }
         len
     };
@@ -441,10 +439,10 @@ fn lengthen_spline(spl: &SplineEnt, pick_pt: Vec3, mode: &LenMode) -> Option<Ent
     }
 
     // Determine which end (start or end) is closer to pick_pt.
-    let p_start = bs.subs(t0);
-    let p_end = bs.subs(t1);
-    let dist_start = (p_start.x - pick_pt.x as f64).hypot(p_start.y - pick_pt.y as f64);
-    let dist_end = (p_end.x - pick_pt.x as f64).hypot(p_end.y - pick_pt.y as f64);
+    let p_start = curve.point_at_knot(t0);
+    let p_end = curve.point_at_knot(t1);
+    let dist_start = (p_start[0] - pick_pt.x as f64).hypot(p_start[1] - pick_pt.y as f64);
+    let dist_end = (p_end[0] - pick_pt.x as f64).hypot(p_end[1] - pick_pt.y as f64);
     let extend_end = dist_end <= dist_start;
 
     // Find the parameter `t_new` such that the arc length from the fixed end to t_new = new_len.
@@ -467,9 +465,9 @@ fn lengthen_spline(spl: &SplineEnt, pick_pt: Vec3, mode: &LenMode) -> Option<Ent
         for i in 0..n {
             let ta = lo + (hi - lo) * (i as f64 / n as f64);
             let tb = lo + (hi - lo) * ((i + 1) as f64 / n as f64);
-            let pa = bs.subs(ta);
-            let pb = bs.subs(tb);
-            len += (pb.x - pa.x).hypot(pb.y - pa.y);
+            let pa = curve.point_at_knot(ta);
+            let pb = curve.point_at_knot(tb);
+            len += (pb[0] - pa[0]).hypot(pb[1] - pa[1]);
         }
         len
     };
@@ -503,17 +501,10 @@ fn lengthen_spline(spl: &SplineEnt, pick_pt: Vec3, mode: &LenMode) -> Option<Ent
     let t_new = (lo_t + hi_t) * 0.5;
     let _ = fixed_t;
 
-    // Split the spline at t_new.
-    let mut piece = bs.clone();
-    if extend_end {
-        // Keep [t0, t_new]: cut at t_new
-        let _right = piece.cut(t_new.clamp(t0 + 1e-10, t1 * 2.0));
-        Some(EntityType::Spline(bspline_to_spline(&piece, spl)))
-    } else {
-        // Keep [t_new, t1]: cut at t_new, return the right portion
-        let right = piece.cut(t_new.clamp(t0 * 0.5, t1 - 1e-10));
-        Some(EntityType::Spline(bspline_to_spline(&right, spl)))
-    }
+    // Split the spline at t_new and keep the side the pick asked for.
+    let cut = t_new.clamp(t0 + 1e-10, t1 - 1e-10);
+    let (left, right) = spline_cut(spl, cut)?;
+    Some(EntityType::Spline(if extend_end { left } else { right }))
 }
 
 

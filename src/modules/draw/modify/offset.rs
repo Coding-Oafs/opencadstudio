@@ -21,6 +21,7 @@ use acadrust::entities::{
 use acadrust::{EntityType, Handle};
 // Polyline offsetting, and the angle normalisation that goes with it, come
 // from the kernel; only the entity conversion stays here.
+use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
 use acadrust::kernel::geom2d::{
     normalize_angle as norm_rad, offset_polyline, Polyline as KernelPolyline,
     PolylineVertex as KernelVertex,
@@ -297,11 +298,10 @@ fn offset_spline(spl: &SplineEnt, dist: f64, side_pt: Vec3) -> Option<EntityType
     let degree = spl.degree.max(1) as usize;
     let new_ctrl: Vec<acadrust::types::Vector3> = offset_pts;
     let n_ctrl = new_ctrl.len();
-    let kv = truck_modeling::KnotVec::uniform_knot(degree, n_ctrl - 1);
     let mut new_spl = spl.clone();
     new_spl.common.handle = Handle::NULL;
     new_spl.control_points = new_ctrl;
-    new_spl.knots = kv.iter().copied().collect();
+    new_spl.knots = clamped_uniform_knots(degree, n_ctrl);
     new_spl.fit_points.clear();
     new_spl.weights.clear();
     Some(EntityType::Spline(new_spl))

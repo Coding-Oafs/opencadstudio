@@ -28,12 +28,12 @@ use acadrust::entities::{
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
-use truck_modeling::base::{BoundedCurve, Cut, ParametricCurve};
+use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::draw::modify::spline_ops::{
-    bspline_to_spline, spline_nearest_t, spline_pts_wire, spline_sample_xy, spline_to_bspline,
-    t_to_rel,
+    spline_cut, spline_nearest_t, spline_pts_wire, spline_range, spline_sample_xy,
+    spline_to_nurbs, t_to_rel,
 };
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
@@ -943,11 +943,9 @@ fn extend_ellipse(orig: &EllipseEnt, t_click: f64, geos: &[Geo]) -> Option<Entit
 /// Find normalised t-params ∈ [0,1] where a Spline intersects boundary geos.
 /// Uses sampled polyline segments for intersection detection.
 fn spline_seg_ts(spl: &SplineEnt, target: Handle, geos: &[Geo]) -> Vec<f64> {
-    let bs = match spline_to_bspline(spl) {
-        Some(b) => b,
-        None => return vec![],
+    let Some((t0, t1)) = spline_range(spl) else {
+        return vec![];
     };
-    let (t0, t1) = bs.range_tuple();
     let range = t1 - t0;
     if range < 1e-12 {
         return vec![];
@@ -974,11 +972,9 @@ fn spline_seg_ts(spl: &SplineEnt, target: Handle, geos: &[Geo]) -> Vec<f64> {
 
 /// Trim a Spline entity. Returns surviving spline pieces (one or two).
 fn trim_spline(spl: &SplineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
-    let bs = match spline_to_bspline(spl) {
-        Some(b) => b,
-        None => return vec![],
+    let Some((t0, t1)) = spline_range(spl) else {
+        return vec![];
     };
-    let (t0, t1) = bs.range_tuple();
 
     trim_intervals(ts, t_click)
         .into_iter()
@@ -988,11 +984,15 @@ fn trim_spline(spl: &SplineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
             if t_hi - t_lo < 1e-9 {
                 return None;
             }
-            let mut piece = bs.clone();
-            let right = piece.cut(t_lo); // piece = [t0..t_lo] (discarded), right = [t_lo..t1]
-            let mut right = right;
-            let _tail = right.cut(t_hi); // right = [t_lo..t_hi], _tail discarded
-            Some(EntityType::Spline(bspline_to_spline(&right, spl)))
+            // Cut away everything before the interval, then everything after
+            // it, leaving [t_lo, t_hi].
+            let (_, after_low) = spline_cut(spl, t_lo)?;
+            let kept = match spline_cut(&after_low, t_hi) {
+                Some((middle, _)) => middle,
+                // The interval reaches the far end, so nothing is left to cut.
+                None => after_low,
+            };
+            Some(EntityType::Spline(kept))
         })
         .collect()
 }
@@ -1003,22 +1003,22 @@ fn extend_spline(spl: &SplineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityTy
     // the current start (t<0 virtual) or end (t>1 virtual).
     // For splines we simply find whether the start (t=0) or end (t=1) is closer
     // to the click, then walk along that tangent direction to the nearest boundary.
-    let bs = spline_to_bspline(spl)?;
-    let (t0, t1) = bs.range_tuple();
+    let curve = spline_to_nurbs(spl)?;
+    let (t0, t1) = curve.domain();
     let extend_end = t_click >= 0.5;
 
     // Tangent at the endpoint (numerical, Δ = 1e-4 of range)
     let delta = (t1 - t0) * 1e-4;
     let (ep_t, tang_dir) = if extend_end {
-        let p0 = bs.subs(t1 - delta);
-        let p1 = bs.subs(t1);
-        (t1, [p1.x - p0.x, p1.y - p0.y])
+        let p0 = curve.point_at_knot(t1 - delta);
+        let p1 = curve.point_at_knot(t1);
+        (t1, [p1[0] - p0[0], p1[1] - p0[1]])
     } else {
-        let p0 = bs.subs(t0);
-        let p1 = bs.subs(t0 + delta);
-        (t0, [p0.x - p1.x, p0.y - p1.y]) // reverse for "before start"
+        let p0 = curve.point_at_knot(t0);
+        let p1 = curve.point_at_knot(t0 + delta);
+        (t0, [p0[0] - p1[0], p0[1] - p1[1]]) // reverse for "before start"
     };
-    let ep = bs.subs(ep_t);
+    let ep = curve.point_at_knot(ep_t);
     let (dx, dy) = (tang_dir[0], tang_dir[1]);
     let len = (dx * dx + dy * dy).sqrt();
     if len < 1e-12 {
@@ -1027,14 +1027,14 @@ fn extend_spline(spl: &SplineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityTy
     let (dx, dy) = (dx / len, dy / len);
 
     // Shoot a ray from the endpoint along the tangent and find nearest boundary.
-    let ray_end_x = ep.x + dx * TRIM_EXTENT;
-    let ray_end_y = ep.y + dy * TRIM_EXTENT;
-    let seg_ts = line_seg_ts(ep.x, ep.y, ray_end_x, ray_end_y, spl.common.handle, geos);
+    let ray_end_x = ep[0] + dx * TRIM_EXTENT;
+    let ray_end_y = ep[1] + dy * TRIM_EXTENT;
+    let seg_ts = line_seg_ts(ep[0], ep[1], ray_end_x, ray_end_y, spl.common.handle, geos);
 
     let best_t = seg_ts.into_iter().filter(|&t| t > 1e-6).reduce(f64::min)?;
 
-    let hit_x = ep.x + best_t * (ray_end_x - ep.x) * TRIM_EXTENT;
-    let hit_y = ep.y + best_t * (ray_end_y - ep.y) * TRIM_EXTENT;
+    let hit_x = ep[0] + best_t * (ray_end_x - ep[0]) * TRIM_EXTENT;
+    let hit_y = ep[1] + best_t * (ray_end_y - ep[1]) * TRIM_EXTENT;
 
     // Add a new control point at the hit location by appending/prepending.
     let z = spl.control_points.first().map(|v| v.z).unwrap_or(0.0);
@@ -1053,8 +1053,7 @@ fn extend_spline(spl: &SplineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityTy
     // Rebuild knots (uniform) for the extended control polygon.
     let degree = new_spl.degree as usize;
     let n = new_spl.control_points.len();
-    let kv = truck_modeling::KnotVec::uniform_knot(degree, n - 1);
-    new_spl.knots = kv.iter().copied().collect();
+    new_spl.knots = clamped_uniform_knots(degree, n);
     Some(EntityType::Spline(new_spl))
 }
 
@@ -2264,8 +2263,7 @@ fn pick_trim_at(
                 }
                 let t_click = spline_nearest_t(s, px, py)
                     .and_then(|t_actual| {
-                        let bs = spline_to_bspline(s)?;
-                        let (t0, t1) = bs.range_tuple();
+                        let (t0, t1) = spline_range(s)?;
                         Some(t_to_rel(t_actual, t0, t1))
                     })
                     .unwrap_or(0.5);
@@ -2334,8 +2332,7 @@ fn pick_extend_at(
             Some(EntityType::Spline(s)) => {
                 let t_click = spline_nearest_t(s, px, py)
                     .and_then(|t_actual| {
-                        let bs = spline_to_bspline(s)?;
-                        let (t0, t1) = bs.range_tuple();
+                        let (t0, t1) = spline_range(s)?;
                         Some(t_to_rel(t_actual, t0, t1))
                     })
                     .unwrap_or(0.5);
@@ -3423,8 +3420,7 @@ impl CadCommand for TrimCommand {
                 }
                 let t_click = spline_nearest_t(s, pt.x as f64, pt.y as f64)
                     .and_then(|t_actual| {
-                        let bs = spline_to_bspline(s)?;
-                        let (t0, t1) = bs.range_tuple();
+                        let (t0, t1) = spline_range(s)?;
                         Some(t_to_rel(t_actual, t0, t1))
                     })
                     .unwrap_or(0.5);
@@ -3918,8 +3914,7 @@ impl CadCommand for ExtendCommand {
             Some(EntityType::Spline(s)) => {
                 let t_click = spline_nearest_t(s, pt.x as f64, pt.y as f64)
                     .and_then(|t_actual| {
-                        let bs = spline_to_bspline(s)?;
-                        let (t0, t1) = bs.range_tuple();
+                        let (t0, t1) = spline_range(s)?;
                         Some(t_to_rel(t_actual, t0, t1))
                     })
                     .unwrap_or(0.5);
