@@ -1778,7 +1778,7 @@ impl OpenCADStudio {
                     eye,
                     bounds,
                     self.tabs[i].scene.document.header.lineweight_display,
-                    self.pick_box.max(1) as f32,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
                 )
                 .and_then(|s| Scene::handle_from_wire_name(s))
                 .or_else(|| {
@@ -2941,7 +2941,7 @@ impl OpenCADStudio {
                     view_rot2,
                     eye2,
                     bounds,
-                    self.pick_box.max(1) as f32 * 2.0,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
                 );
                 let include_fills = self.tabs[i]
                     .active_cmd
@@ -2962,7 +2962,7 @@ impl OpenCADStudio {
                     eye2,
                     bounds,
                     self.tabs[i].scene.document.header.lineweight_display,
-                    self.pick_box.max(1) as f32,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
                 )
                 .and_then(|s| Scene::handle_from_wire_name(s))
                 .or_else(|| {
@@ -3491,7 +3491,7 @@ impl OpenCADStudio {
                         view_rot,
                         eye,
                         bounds,
-                        self.pick_box.max(1) as f32 * 2.0,
+                        crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
                     );
                     let candidate_handles = self.tabs[i]
                         .scene
@@ -3511,7 +3511,7 @@ impl OpenCADStudio {
                             eye,
                             bounds,
                             self.tabs[i].scene.document.header.lineweight_display,
-                            self.pick_box.max(1) as f32,
+                            crate::ui::overlay::pick_box_aperture_px(self.pick_box),
                         )
                         .into_iter()
                         .filter_map(|s| Scene::handle_from_wire_name(s))
@@ -3533,7 +3533,7 @@ impl OpenCADStudio {
                             eye,
                             bounds,
                             self.tabs[i].scene.document.header.lineweight_display,
-                            self.pick_box.max(1) as f32,
+                            crate::ui::overlay::pick_box_aperture_px(self.pick_box),
                         )
                         .and_then(|s| Scene::handle_from_wire_name(s))
                         .or_else(|| {
@@ -3875,7 +3875,7 @@ impl OpenCADStudio {
                     view_rot,
                     eye,
                     bounds,
-                    self.pick_box.max(1) as f32 * 2.0,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
                 );
                 let candidate_handles = self.tabs[i]
                     .scene
@@ -3890,7 +3890,7 @@ impl OpenCADStudio {
                     eye,
                     bounds,
                     self.tabs[i].scene.document.header.lineweight_display,
-                    self.pick_box.max(1) as f32,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
                 )
                 .and_then(|s| Scene::handle_from_wire_name(s))
                 .or_else(|| {
@@ -3995,7 +3995,7 @@ impl OpenCADStudio {
                         view_rot,
                         eye,
                         bounds,
-                        self.pick_box.max(1) as f32 * 2.0,
+                        crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
                     );
                     scene::pick::hit_test::click_hit(
                         p,
@@ -4004,7 +4004,7 @@ impl OpenCADStudio {
                         eye,
                         bounds,
                         self.tabs[i].scene.document.header.lineweight_display,
-                        self.pick_box.max(1) as f32,
+                        crate::ui::overlay::pick_box_aperture_px(self.pick_box),
                     )
                     .and_then(|s| Scene::handle_from_wire_name(s))
                     .and_then(|h| {
@@ -4410,7 +4410,7 @@ impl OpenCADStudio {
             view_rot,
             eye,
             bounds,
-            self.pick_box.max(1) as f32 * 2.0,
+            crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
         );
         let candidate_ms = candidate_started.elapsed().as_secs_f64() * 1000.0;
         let candidate_count = hover_candidates.len();
@@ -4430,7 +4430,7 @@ impl OpenCADStudio {
             eye,
             bounds,
             self.tabs[i].scene.document.header.lineweight_display,
-            self.pick_box.max(1) as f32,
+            crate::ui::overlay::pick_box_aperture_px(self.pick_box),
         )
         .and_then(Scene::handle_from_wire_name);
         let wire_ms = wire_started.elapsed().as_secs_f64() * 1000.0;

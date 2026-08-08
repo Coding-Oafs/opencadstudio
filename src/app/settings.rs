@@ -156,9 +156,9 @@ pub struct UserSettings {
     pub polar_increment_deg: f32,
     pub zoom_wheel_reversed: bool,
     pub zoom_factor: i32,
-    /// CURSORSIZE: crosshair arm reach as a percentage of the viewport.
+    /// CURSORSIZE: normalized crosshair reach; 5 retains the original 60 px arms.
     pub cursor_size: i32,
-    /// PICKBOX: visible selection-box half-size and click aperture in pixels.
+    /// PICKBOX: normalized visible-box and click-aperture size.
     pub pick_box: i32,
     /// CURSORTYPE: crosshair or the platform pointer over the drawing.
     pub cursor_type: CursorType,

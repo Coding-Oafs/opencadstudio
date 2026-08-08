@@ -448,9 +448,9 @@ pub(super) struct OpenCADStudio {
     zoom_wheel_reversed: bool,
     /// Mouse-wheel zoom sensitivity, clamped to 3..=100 (ZOOMFACTOR).
     zoom_factor: i32,
-    /// Crosshair reach as a viewport percentage (CURSORSIZE, 1..=100).
+    /// Crosshair size setting (CURSORSIZE, 1..=100).
     cursor_size: i32,
-    /// Selection-box half-size and click aperture in pixels (PICKBOX, 0..=50).
+    /// Selection-box size setting (PICKBOX, 0..=50).
     pick_box: i32,
     /// Drawing viewport cursor style (CURSORTYPE).
     cursor_type: settings::CursorType,

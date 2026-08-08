@@ -12,6 +12,51 @@ use crate::scene::SelectionState;
 
 use crate::snap::SnapType;
 
+/// Original crosshair geometry retained at the default setting values.
+pub const CROSSHAIR_SQ: f32 = 7.5;
+pub const CROSSHAIR_ARM: f32 = 60.0;
+const DEFAULT_CURSOR_SIZE: i32 = 5;
+const DEFAULT_PICK_BOX: i32 = 3;
+const DEFAULT_PICK_APERTURE: f32 = 8.0;
+
+/// Convert CURSORSIZE to a screen-space arm length while keeping the original
+/// 60 px cursor at the default value and the full-viewport result at 100.
+pub(crate) fn crosshair_arm_px(bounds: iced::Rectangle, value: i32) -> f32 {
+    let value = value.clamp(1, 100);
+    if value <= DEFAULT_CURSOR_SIZE {
+        return CROSSHAIR_ARM * value as f32 / DEFAULT_CURSOR_SIZE as f32;
+    }
+
+    let full = bounds.width.hypot(bounds.height).max(CROSSHAIR_ARM);
+    let scale = (value - DEFAULT_CURSOR_SIZE) as f32 / (100 - DEFAULT_CURSOR_SIZE) as f32;
+    CROSSHAIR_ARM + (full - CROSSHAIR_ARM) * scale
+}
+
+/// Convert PICKBOX to the visible half-size while retaining the original
+/// 15 x 15 px center box at the default value.
+pub(crate) fn pick_box_half_px(value: i32) -> f32 {
+    let value = value.clamp(0, 50);
+    if value <= DEFAULT_PICK_BOX {
+        return CROSSHAIR_SQ * value as f32 / DEFAULT_PICK_BOX as f32;
+    }
+
+    let scale = (value - DEFAULT_PICK_BOX) as f32 / (50 - DEFAULT_PICK_BOX) as f32;
+    CROSSHAIR_SQ + (50.0 - CROSSHAIR_SQ) * scale
+}
+
+/// Convert PICKBOX to the real click/hover aperture. A zero setting hides the
+/// box but retains the one-pixel minimum needed for direct hits.
+pub(crate) fn pick_box_aperture_px(value: i32) -> f32 {
+    let value = value.clamp(0, 50);
+    let aperture = if value <= DEFAULT_PICK_BOX {
+        DEFAULT_PICK_APERTURE * value as f32 / DEFAULT_PICK_BOX as f32
+    } else {
+        let scale = (value - DEFAULT_PICK_BOX) as f32 / (50 - DEFAULT_PICK_BOX) as f32;
+        DEFAULT_PICK_APERTURE + (50.0 - DEFAULT_PICK_APERTURE) * scale
+    };
+    aperture.max(1.0)
+}
+
 #[derive(Clone, Copy)]
 pub struct CrosshairOptions {
     pub size_percent: i32,
@@ -964,10 +1009,8 @@ impl canvas::Program<Message> for SelectionCanvas {
                     style: canvas::Style::Solid(color),
                     ..Default::default()
                 };
-                let sq = self.crosshair.pick_box.clamp(0, 50) as f32;
-                let arm = bounds.width.hypot(bounds.height)
-                    * self.crosshair.size_percent.clamp(1, 100) as f32
-                    / 100.0;
+                let sq = pick_box_half_px(self.crosshair.pick_box);
+                let arm = crosshair_arm_px(bounds, self.crosshair.size_percent);
                 let base_angles: [f64; 2] = if self.crosshair.isometric {
                     self.crosshair.iso_plane.angles()
                 } else {
