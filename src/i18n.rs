@@ -41,10 +41,18 @@ pub enum Language {
     RuRu,
     #[serde(rename = "zh-CN")]
     ZhCn,
+    #[serde(rename = "es-ES")]
+    EsEs,
+    #[serde(rename = "pt-BR")]
+    PtBr,
+    #[serde(rename = "ar-SA")]
+    ArSa,
+    #[serde(rename = "ja-JP")]
+    JaJp,
 }
 
 impl Language {
-    pub const ALL: [Language; 9] = [
+    pub const ALL: [Language; 13] = [
         Language::System,
         Language::EnUs,
         Language::TrTr,
@@ -54,6 +62,10 @@ impl Language {
         Language::HiIn,
         Language::RuRu,
         Language::ZhCn,
+        Language::EsEs,
+        Language::PtBr,
+        Language::ArSa,
+        Language::JaJp,
     ];
 
     fn requested(self) -> Vec<i18n_embed::unic_langid::LanguageIdentifier> {
@@ -67,6 +79,10 @@ impl Language {
             Language::HiIn => vec!["hi-IN".parse().expect("valid locale")],
             Language::RuRu => vec!["ru-RU".parse().expect("valid locale")],
             Language::ZhCn => vec!["zh-CN".parse().expect("valid locale")],
+            Language::EsEs => vec!["es-ES".parse().expect("valid locale")],
+            Language::PtBr => vec!["pt-BR".parse().expect("valid locale")],
+            Language::ArSa => vec!["ar-SA".parse().expect("valid locale")],
+            Language::JaJp => vec!["ja-JP".parse().expect("valid locale")],
         }
     }
 
@@ -81,6 +97,10 @@ impl Language {
             Language::HiIn => crate::tr!("language-hindi"),
             Language::RuRu => crate::tr!("language-russian"),
             Language::ZhCn => crate::tr!("language-chinese-simplified"),
+            Language::EsEs => crate::tr!("language-spanish"),
+            Language::PtBr => crate::tr!("language-portuguese"),
+            Language::ArSa => crate::tr!("language-arabic"),
+            Language::JaJp => crate::tr!("language-japanese"),
         }
     }
 }
@@ -131,6 +151,12 @@ fn load_language(
             .and_then(|document| document.document_element())
         {
             let _ = root.set_attribute("lang", &language.to_string());
+            let direction = if language.to_string().starts_with("ar") {
+                "rtl"
+            } else {
+                "ltr"
+            };
+            let _ = root.set_attribute("dir", direction);
         }
     }
     Ok(())

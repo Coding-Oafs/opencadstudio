@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = Kapat
 action-options = Seçenekler
@@ -3351,3 +3355,13 @@ style-manager-center-of-text = Metnin merkezi
 style-manager-center-of-text-overline = Üst çizgili metin merkezi
 style-manager-block-extents = Blok sınırları
 style-manager-base-point = Taban noktası
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  Metin nesnelerini seçip Enter'a basın:
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  Başlangıç numarası <__ocs_fmt_0__>:
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  Artış miktarı <__ocs_fmt_0__>:
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  Yerleştirme [Üzerine yaz/Önek/Sonek] <Üzerine yaz>:
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT: Yerleştirme Üzerine yaz, Önek veya Sonek olmalıdır.
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT: __ocs_fmt_0__ metin nesnesi, __ocs_fmt_1__ değerinden başlayıp __ocs_fmt_2__ artışla numaralandırıldı (__ocs_fmt_3__).
+catalog-prefix-90eceb016c = Önek
+catalog-suffix-885db975a3 = Sonek
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = Tarayıcıda dosya yoluyla çizim açılamaz.

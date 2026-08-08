@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = बंद करें
 action-options = विकल्प
@@ -3374,3 +3378,55 @@ style-manager-center-of-text = टेक्स्ट का केंद्र
 style-manager-center-of-text-overline = ऊपरी रेखा सहित टेक्स्ट का केंद्र
 style-manager-block-extents = ब्लॉक परिमिति
 style-manager-base-point = आधार बिंदु
+
+area-option-objects = वस्तुएँ
+area-option-back = वापस
+area-option-add = क्षेत्रफल जोड़ें
+area-option-subtract = क्षेत्रफल घटाएँ
+area-prompt-first = AREA  पहला कोना बिंदु निर्दिष्ट करें या [वस्तुएँ/क्षेत्रफल जोड़ें/क्षेत्रफल घटाएँ] <वस्तुएँ>:
+area-prompt-add = AREA जोड़ें  पहला कोना बिंदु निर्दिष्ट करें या [वस्तुएँ/क्षेत्रफल घटाएँ] <वस्तुएँ>:
+area-prompt-subtract = AREA घटाएँ  पहला कोना बिंदु निर्दिष्ट करें या [वस्तुएँ/क्षेत्रफल जोड़ें] <वस्तुएँ>:
+area-prompt-next = AREA  अगला बिंदु निर्दिष्ट करें ({ $count } चुने गए, गणना के लिए Enter):
+area-prompt-objects = AREA  वस्तुएँ चुनें ({ $count } चयनित, गणना के लिए Enter):
+area-objects-not-measurable = AREA: चुनी गई किसी भी वस्तु का मापने योग्य क्षेत्रफल नहीं है।
+area-result = क्षेत्रफल = { $area },  परिमाप = { $perimeter }
+area-result-area-only = क्षेत्रफल = { $area }
+area-running-result =
+    क्षेत्रफल = { $area },  परिमाप = { $perimeter }
+    कुल क्षेत्रफल = { $total_area },  कुल परिमाप = { $total_perimeter }
+area-running-result-area-only =
+    क्षेत्रफल = { $area }
+    कुल क्षेत्रफल = { $total_area }
+
+modal-recovery-report = ड्रॉइंग पुनर्प्राप्ति रिपोर्ट
+modal-recovery-prompt = ड्रॉइंग पुनर्प्राप्ति
+recovery-opened-with-repairs = ड्रॉइंग पुनर्प्राप्ति रिपोर्ट के साथ खोली गई
+recovery-open-failed = ड्रॉइंग खोली नहीं जा सकी
+recovery-repaired-description = ड्रॉइंग खोलते समय समस्याएँ मिलीं। रिपोर्ट की समीक्षा करें; यदि ड्रॉइंग डेटा सुधारा गया है, तो उसे नई फ़ाइल के रूप में सहेजें।
+recovery-failed-description = पुनर्प्राप्ति उपयोग योग्य ड्रॉइंग डेटा नहीं बना सकी। रिपोर्ट की समीक्षा करें और बैकअप या स्वतः-सहेजी गई प्रति आज़माएँ।
+recovery-entities-checked = जाँची गई एंटिटियाँ
+recovery-issues-found = मिली समस्याएँ
+recovery-entities-removed = हटाई गई एंटिटियाँ
+recovery-references-checked = जाँचे गए संदर्भ
+recovery-referenced-entities-removed = हटाई गई संदर्भित एंटिटियाँ
+recovery-references-unavailable = अनुपलब्ध संदर्भ
+recovery-log-path = पुनर्प्राप्ति लॉग
+recovery-log-write-failed = पुनर्प्राप्ति लॉग लिखा नहीं जा सका
+recovery-log-download-ready = पुनर्प्राप्ति रिपोर्ट डाउनलोड के लिए तैयार है।
+recovery-save-copy = सुधारी गई प्रति सहेजें
+recovery-show-log = पुनर्प्राप्ति लॉग दिखाएँ
+recovery-save-new-file-required = सुधारी गई ड्रॉइंग को नई फ़ाइल में सहेजना आवश्यक है।
+recovery-prompt-heading = सामान्य तरीके से खोलना विफल रहा
+recovery-prompt-description = ड्रॉइंग बदली नहीं गई है। पुनर्प्राप्ति मोड उपयोग योग्य डेटा बचाने का प्रयास कर सकता है, लेकिन क्षतिग्रस्त रिकॉर्ड छोड़े जा सकते हैं। क्या आप जारी रखना चाहते हैं?
+recovery-attempt = पुनर्प्राप्ति आज़माएँ
+recovery-decline = रद्द करें
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  टेक्स्ट वस्तुएँ चुनें, फिर Enter दबाएँ:
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  आरंभिक संख्या <__ocs_fmt_0__>:
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  वृद्धि <__ocs_fmt_0__>:
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  स्थान [अधिलेखित/उपसर्ग/प्रत्यय] <अधिलेखित>:
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT: स्थान अधिलेखित, उपसर्ग या प्रत्यय होना चाहिए।
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT: __ocs_fmt_0__ टेक्स्ट वस्तु(ओं) को __ocs_fmt_1__ से आरंभ करके __ocs_fmt_2__ की वृद्धि से क्रमांकित किया गया (__ocs_fmt_3__)।
+catalog-prefix-90eceb016c = उपसर्ग
+catalog-suffix-885db975a3 = प्रत्यय
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = ब्राउज़र में पथ द्वारा ड्रॉइंग खोलना उपलब्ध नहीं है।

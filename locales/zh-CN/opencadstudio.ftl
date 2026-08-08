@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = 关闭
 action-options = 选项
@@ -3371,3 +3375,55 @@ style-manager-center-of-text = 文字中心
 style-manager-center-of-text-overline = 带上划线的文字中心
 style-manager-block-extents = 块范围
 style-manager-base-point = 基点
+
+area-option-objects = 对象
+area-option-back = 返回
+area-option-add = 添加面积
+area-option-subtract = 减去面积
+area-prompt-first = AREA  指定第一个角点或 [对象/添加面积/减去面积] <对象>：
+area-prompt-add = AREA 添加  指定第一个角点或 [对象/减去面积] <对象>：
+area-prompt-subtract = AREA 减去  指定第一个角点或 [对象/添加面积] <对象>：
+area-prompt-next = AREA  指定下一点（已选 { $count } 个，按 Enter 计算）：
+area-prompt-objects = AREA  选择对象（已选 { $count } 个，按 Enter 计算）：
+area-objects-not-measurable = AREA：所选对象均无可测量面积。
+area-result = 面积 = { $area }，周长 = { $perimeter }
+area-result-area-only = 面积 = { $area }
+area-running-result =
+    面积 = { $area }，周长 = { $perimeter }
+    总面积 = { $total_area }，总周长 = { $total_perimeter }
+area-running-result-area-only =
+    面积 = { $area }
+    总面积 = { $total_area }
+
+modal-recovery-report = 图形修复报告
+modal-recovery-prompt = 图形修复
+recovery-opened-with-repairs = 图形已打开，并生成修复报告
+recovery-open-failed = 无法打开图形
+recovery-repaired-description = 打开图形时检测到问题。请查看报告；如果图形数据已修复，请将其另存为新文件。
+recovery-failed-description = 修复未能生成可用的图形数据。请查看报告并尝试备份或自动保存的副本。
+recovery-entities-checked = 已检查实体
+recovery-issues-found = 发现的问题
+recovery-entities-removed = 已删除实体
+recovery-references-checked = 已检查参照
+recovery-referenced-entities-removed = 已删除被参照实体
+recovery-references-unavailable = 不可用参照
+recovery-log-path = 修复日志
+recovery-log-write-failed = 无法写入修复日志
+recovery-log-download-ready = 修复报告已可下载。
+recovery-save-copy = 保存已修复副本
+recovery-show-log = 显示修复日志
+recovery-save-new-file-required = 修复后的图形必须保存到新文件。
+recovery-prompt-heading = 常规打开失败
+recovery-prompt-description = 图形未被修改。修复模式可以尝试挽救可用数据，但可能跳过损坏的记录。是否继续？
+recovery-attempt = 尝试修复
+recovery-decline = 取消
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  选择文字对象，然后按 Enter：
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  起始编号 <__ocs_fmt_0__>：
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  增量 <__ocs_fmt_0__>：
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  放置方式 [覆盖/前缀/后缀] <覆盖>：
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT：放置方式必须为覆盖、前缀或后缀。
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT：已将 __ocs_fmt_0__ 个文字对象从 __ocs_fmt_1__ 开始按 __ocs_fmt_2__ 的增量编号（__ocs_fmt_3__）。
+catalog-prefix-90eceb016c = 前缀
+catalog-suffix-885db975a3 = 后缀
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = 浏览器不支持通过路径打开图形。

@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = Sluiten
 action-options = Opties
@@ -3386,3 +3390,55 @@ style-manager-center-of-text = Tekstmiddelpunt
 style-manager-center-of-text-overline = Tekstmiddelpunt met bovenstreep
 style-manager-block-extents = Blokgrenzen
 style-manager-base-point = Basispunt
+
+area-option-objects = Objecten
+area-option-back = Terug
+area-option-add = Oppervlakte optellen
+area-option-subtract = Oppervlakte aftrekken
+area-prompt-first = AREA  Geef het eerste hoekpunt op of [Objecten/Oppervlakte optellen/Oppervlakte aftrekken] <Objecten>:
+area-prompt-add = AREA OPTELLEN  Geef het eerste hoekpunt op of [Objecten/Oppervlakte aftrekken] <Objecten>:
+area-prompt-subtract = AREA AFTREKKEN  Geef het eerste hoekpunt op of [Objecten/Oppervlakte optellen] <Objecten>:
+area-prompt-next = AREA  Geef het volgende punt op ({ $count } gekozen, Enter om te berekenen):
+area-prompt-objects = AREA  Selecteer objecten ({ $count } geselecteerd, Enter om te berekenen):
+area-objects-not-measurable = AREA: geen van de geselecteerde objecten heeft een meetbare oppervlakte.
+area-result = Oppervlakte = { $area },  Omtrek = { $perimeter }
+area-result-area-only = Oppervlakte = { $area }
+area-running-result =
+    Oppervlakte = { $area },  Omtrek = { $perimeter }
+    Totale oppervlakte = { $total_area },  Totale omtrek = { $total_perimeter }
+area-running-result-area-only =
+    Oppervlakte = { $area }
+    Totale oppervlakte = { $total_area }
+
+modal-recovery-report = Tekeningherstelrapport
+modal-recovery-prompt = Tekeningherstel
+recovery-opened-with-repairs = Tekening geopend met een herstelrapport
+recovery-open-failed = Tekening kon niet worden geopend
+recovery-repaired-description = Tijdens het openen van de tekening zijn problemen gevonden. Controleer het rapport; sla de tekening als een nieuw bestand op als gegevens zijn hersteld.
+recovery-failed-description = Het herstel kon geen bruikbare tekeninggegevens opleveren. Controleer het rapport en probeer een reservekopie of automatisch opgeslagen kopie.
+recovery-entities-checked = Gecontroleerde objecten
+recovery-issues-found = Gevonden problemen
+recovery-entities-removed = Verwijderde objecten
+recovery-references-checked = Gecontroleerde verwijzingen
+recovery-referenced-entities-removed = Verwijderde objecten waarnaar werd verwezen
+recovery-references-unavailable = Niet-beschikbare verwijzingen
+recovery-log-path = Herstellogboek
+recovery-log-write-failed = Het herstellogboek kon niet worden geschreven
+recovery-log-download-ready = Het herstelrapport kan worden gedownload.
+recovery-save-copy = Herstelde kopie opslaan
+recovery-show-log = Herstellogboek tonen
+recovery-save-new-file-required = Een herstelde tekening moet als een nieuw bestand worden opgeslagen.
+recovery-prompt-heading = Normaal openen is mislukt
+recovery-prompt-description = De tekening is niet gewijzigd. De herstelmodus kan proberen bruikbare gegevens te redden, maar beschadigde records kunnen worden overgeslagen. Wilt u doorgaan?
+recovery-attempt = Herstel proberen
+recovery-decline = Annuleren
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  Selecteer tekstobjecten en druk daarna op Enter:
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  Beginnummer <__ocs_fmt_0__>:
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  Stapgrootte <__ocs_fmt_0__>:
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  Plaatsing [Overschrijven/Voorvoegsel/Achtervoegsel] <Overschrijven>:
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT: plaatsing moet Overschrijven, Voorvoegsel of Achtervoegsel zijn.
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT: __ocs_fmt_0__ tekstobject(en) genummerd vanaf __ocs_fmt_1__ met stappen van __ocs_fmt_2__ (__ocs_fmt_3__).
+catalog-prefix-90eceb016c = Voorvoegsel
+catalog-suffix-885db975a3 = Achtervoegsel
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = Een tekening openen via een pad is niet beschikbaar in de browser.
