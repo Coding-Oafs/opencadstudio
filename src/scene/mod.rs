@@ -18,6 +18,7 @@ pub mod view;
 
 // Topic submodules split out of this root (each contributes `impl Scene`
 // blocks and/or free functions). Pure text-move from the original mod.rs.
+mod boundary;
 mod camera_ops;
 mod entity;
 mod group_layer;
