@@ -604,7 +604,7 @@ impl OpenCADStudio {
 
             "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
-                let outlines = self.tabs[i].scene.closed_outlines();
+                let outlines = self.tabs[i].scene.hatch_boundary_outlines();
                 let new_cmd = HatchCommand::new(outlines);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
