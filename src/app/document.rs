@@ -212,6 +212,9 @@ pub(super) struct DocumentTab {
     /// Interactive 3-D orbit mode. While active, a left-button drag follows
     /// the same camera-orbit path as Shift + middle-button drag.
     pub(super) orbit_mode: bool,
+    /// Interactive ZOOM Dynamic mode. A left drag pans horizontally and zooms
+    /// vertically until Escape or another command ends the mode.
+    pub(super) zoom_dynamic_mode: bool,
     /// Per-plugin document state (`plugin::BuiltinPlugin` manifest id → state).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
@@ -476,6 +479,7 @@ impl DocumentTab {
             is_start: false,
             pan_mode: false,
             orbit_mode: false,
+            zoom_dynamic_mode: false,
             plugin_state: HashMap::new(),
             suspended_cmd: None,
         }

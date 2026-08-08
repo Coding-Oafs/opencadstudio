@@ -680,7 +680,7 @@ impl OpenCADStudio {
                 dividers,
                 pane_move_rect,
                 pane_drop_rect,
-                tab.pan_mode || tab.orbit_mode,
+                tab.pan_mode || tab.orbit_mode || tab.zoom_dynamic_mode,
                 self.ribbon.open_dropdown.is_some(),
                 hover_locked,
                 crosshair_background(tab, is_paper),

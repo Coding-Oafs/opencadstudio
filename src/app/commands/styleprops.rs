@@ -866,6 +866,8 @@ impl OpenCADStudio {
             cmd if matches!(
                 cmd.split_whitespace().next().unwrap_or(""),
                 "MIRRTEXT"
+                    | "ZOOMWHEEL"
+                    | "ZOOMFACTOR"
                     | "TEXTFILL"
                     | "ATTREQ"
                     | "ATTDIA"
@@ -936,7 +938,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ZOOMWHEEL ZOOMFACTOR ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     // Parse a boolean given as 0/1 or ON/OFF.
@@ -1027,6 +1029,37 @@ impl OpenCADStudio {
                                     })
                                     .ok_or_else(|| "SETVAR: 0 or 1 required.".into()),
                                 None => Ok((format!("MIRRTEXT = {}", h.mirror_text as i32), false)),
+                            },
+                            "ZOOMWHEEL" => match &value {
+                                Some(v) => match parse_bool(v) {
+                                    Some(reversed) => {
+                                        self.zoom_wheel_reversed = reversed;
+                                        Ok((
+                                            format!("ZOOMWHEEL = {}", reversed as i32),
+                                            true,
+                                        ))
+                                    }
+                                    None => Err("SETVAR: 0 or 1 required.".into()),
+                                },
+                                None => Ok((
+                                    format!(
+                                        "ZOOMWHEEL = {}",
+                                        self.zoom_wheel_reversed as i32
+                                    ),
+                                    false,
+                                )),
+                            },
+                            "ZOOMFACTOR" => match &value {
+                                Some(v) => match v.parse::<i32>() {
+                                    Ok(factor) if (3..=100).contains(&factor) => {
+                                        self.zoom_factor = factor;
+                                        Ok((format!("ZOOMFACTOR = {factor}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer from 3 to 100 required.".into()),
+                                },
+                                None => {
+                                    Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false))
+                                }
                             },
                             // Global (not stored in the drawing): fill vs. hollow
                             // TrueType text. The active tab re-tessellates below.
@@ -1579,7 +1612,11 @@ impl OpenCADStudio {
                     match outcome {
                         Ok((msg, changed)) => {
                             if changed {
-                                self.tabs[i].dirty = true;
+                                if matches!(name.as_str(), "ZOOMWHEEL" | "ZOOMFACTOR") {
+                                    self.persist_settings_if_changed();
+                                } else {
+                                    self.tabs[i].dirty = true;
+                                }
                                 self.command_line.push_output(&msg);
                             } else {
                                 // Queried with no value (`changed == false`):

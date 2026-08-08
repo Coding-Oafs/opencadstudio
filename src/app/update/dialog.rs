@@ -143,6 +143,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                             && self.active_modal.is_none()
                             && !self.tabs[i].pan_mode
                             && !self.tabs[i].orbit_mode
+                            && !self.tabs[i].zoom_dynamic_mode
                         {
                             self.ribbon.deactivate_tool();
                         }

@@ -1123,6 +1123,20 @@ pub(crate) struct ModelTile {
     pub(crate) snap_on: bool,
 }
 
+#[derive(Clone)]
+enum ViewSnapshot {
+    Main {
+        layout: String,
+        tile: usize,
+        camera: Camera,
+    },
+    Floating {
+        layout: String,
+        handle: Handle,
+        viewport: Box<acadrust::entities::Viewport>,
+    },
+}
+
 /// Gap (pixels) between Model panes — the `pane_grid` spacing and the visible
 /// divider width. The renderer derives tile rects through this same spacing so
 /// the drawn viewports line up exactly with the pane_grid layout.
@@ -1488,6 +1502,10 @@ struct SceneLight {
 
 pub struct Scene {
     pub camera: Rc<RefCell<Camera>>,
+    /// View saved immediately before the latest navigation operation. ZOOM
+    /// Previous swaps with this snapshot, allowing the user to toggle between
+    /// the two most recent views without touching drawing history.
+    previous_view: Option<ViewSnapshot>,
     /// Model-space tiled viewport layout. One full-window tile by default;
     /// the split buttons / VPORTS subdivide the active tile.
     pub(crate) model_tiles: RefCell<Vec<ModelTile>>,
@@ -1932,6 +1950,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             camera: Rc::new(RefCell::new(Camera::default())),
+            previous_view: None,
             model_tiles: RefCell::new(vec![ModelTile {
                 rect: iced::Rectangle {
                     x: 0.0,

@@ -739,6 +739,39 @@ impl OpenCADStudio {
         if mid_down {
             if let Some(last) = mid_last {
                 let (dx, dy) = (p.x - last.x, p.y - last.y);
+                if self.tabs[i].zoom_dynamic_mode {
+                    let bounds = self.tabs[i]
+                        .scene
+                        .active_model_tile_bounds(vp_size.0, vp_size.1);
+                    drop(sel);
+                    let zoom_delta = -dy * 0.03;
+                    if self.tabs[i].scene.active_viewport.is_some() {
+                        self.tabs[i].scene.pan_active_viewport(dx, 0.0, bounds);
+                        self.tabs[i]
+                            .scene
+                            .zoom_active_viewport(zoom_delta, None);
+                    } else {
+                        let local = iced::Point {
+                            x: p.x - bounds.x,
+                            y: p.y - bounds.y,
+                        };
+                        let local_bounds = iced::Rectangle {
+                            x: 0.0,
+                            y: 0.0,
+                            width: bounds.width,
+                            height: bounds.height,
+                        };
+                        let mut camera = self.tabs[i].scene.camera.borrow_mut();
+                        camera.pan_screen(dx, 0.0, bounds.height);
+                        camera.zoom_about_point(local, local_bounds, zoom_delta);
+                    }
+                    self.tabs[i].scene.camera_generation += 1;
+                    self.tabs[i]
+                        .scene
+                        .record_nav_perf(crate::scene::NavPerfOp::Zoom, move_started);
+                    self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
+                    return Task::none();
+                }
                 // Shift+MMB drag orbits the model view instead of panning
                 // — the requested Zoom=wheel / Pan=MMB / Rotate=Shift+MMB
                 // scheme (#229). Floating viewports and paper keep the
@@ -2288,11 +2321,21 @@ impl OpenCADStudio {
 
         // Interactive navigation tools reuse the middle-button movement path,
         // so no selection/pick logic runs while the left button drives them.
-        if self.tabs[i].orbit_mode || self.tabs[i].pan_mode {
+        if self.tabs[i].orbit_mode
+            || self.tabs[i].pan_mode
+            || self.tabs[i].zoom_dynamic_mode
+        {
             self.clear_navigation_hover(i);
+            self.tabs[i].scene.remember_current_view();
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
             sel.middle_down = true;
             sel.middle_last_pos = Some(p);
+            if self.tabs[i].zoom_dynamic_mode {
+                sel.box_anchor = Some(p);
+                sel.box_current = Some(p);
+                sel.box_crossing = false;
+                sel.box_crossing_locked = true;
+            }
             return Task::none();
         }
 
@@ -2460,11 +2503,18 @@ impl OpenCADStudio {
 
         // Navigation mode: end this drag but keep the tool armed for the next
         // left drag (exit is Esc / another command). Mirror of the press.
-        if self.tabs[i].orbit_mode || self.tabs[i].pan_mode {
+        if self.tabs[i].orbit_mode
+            || self.tabs[i].pan_mode
+            || self.tabs[i].zoom_dynamic_mode
+        {
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
             sel.middle_down = false;
             sel.middle_last_pos = None;
             sel.orbit_pivot = None;
+            sel.box_anchor = None;
+            sel.box_anchor_world = None;
+            sel.box_current = None;
+            sel.box_crossing_locked = false;
             drop(sel);
             self.arm_hover_after_navigation(i);
             return Task::none();
@@ -4007,6 +4057,7 @@ impl OpenCADStudio {
         let i = self.active_tab;
         self.clear_navigation_hover(i);
         self.ribbon.close_dropdown();
+        self.tabs[i].scene.remember_current_view();
         let now = Instant::now();
         let is_double = {
             let sel = self.tabs[i].scene.selection.borrow();
@@ -4035,11 +4086,16 @@ impl OpenCADStudio {
 
     pub(super) fn on_viewport_scroll(&mut self, delta: mouse::ScrollDelta) -> Task<Message> {
         let nav_started = Instant::now();
-        let s = match delta {
+        let mut s = match delta {
             mouse::ScrollDelta::Lines { y, .. } => y,
             mouse::ScrollDelta::Pixels { y, .. } => y * 0.01,
         };
+        s *= self.zoom_factor as f32 / 60.0;
+        if self.zoom_wheel_reversed {
+            s = -s;
+        }
         let i = self.active_tab;
+        self.tabs[i].scene.remember_current_view();
         self.clear_navigation_hover(i);
         let cursor = self.tabs[i].scene.selection.borrow().last_move_pos;
         let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
@@ -4204,6 +4260,7 @@ impl OpenCADStudio {
     fn snap_view_region(&mut self, region: CubeRegion, r_ucs: glam::Mat4) -> Task<Message> {
         let i = self.active_tab;
         self.clear_navigation_hover(i);
+        self.tabs[i].scene.remember_current_view();
         let mut region = region;
         // "Already there → flip to opposite" check: compare the
         // current gaze direction with the region's target gaze.

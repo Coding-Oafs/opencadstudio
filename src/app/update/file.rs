@@ -265,6 +265,8 @@ impl OpenCADStudio {
             dyn_input: self.dyn_input,
             polar: self.polar_mode,
             polar_increment_deg: self.polar_increment_deg,
+            zoom_wheel_reversed: self.zoom_wheel_reversed,
+            zoom_factor: self.zoom_factor,
             otrack: self.snapper.otrack_enabled,
             default_assoc_prompted: self.default_assoc_prompted,
             disabled_plugins: {
@@ -299,6 +301,8 @@ impl OpenCADStudio {
         self.dyn_input = s.dyn_input;
         self.polar_mode = s.polar;
         self.polar_increment_deg = s.polar_increment_deg;
+        self.zoom_wheel_reversed = s.zoom_wheel_reversed;
+        self.zoom_factor = s.zoom_factor.clamp(3, 100);
         // Ortho + running OSNAP are per-drawing (adopted from the header on
         // open / tab switch), not app-global, so they are not applied here.
         self.snapper.otrack_enabled = s.otrack;

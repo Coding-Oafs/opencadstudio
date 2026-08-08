@@ -97,6 +97,8 @@ pub struct UserSettings {
     pub dyn_input: bool,
     pub polar: bool,
     pub polar_increment_deg: f32,
+    pub zoom_wheel_reversed: bool,
+    pub zoom_factor: i32,
     pub otrack: bool,
     // Ortho ($ORTHOMODE) and the running OSNAP set ($OSMODE) are per-drawing —
     // stored in the document header, not here (they used to be persisted app-
@@ -166,6 +168,8 @@ impl Default for UserSettings {
             dyn_input: true,
             polar: false,
             polar_increment_deg: 45.0,
+            zoom_wheel_reversed: false,
+            zoom_factor: 60,
             otrack: false,
             default_assoc_prompted: false,
             disabled_plugins: Vec::new(),

@@ -660,16 +660,22 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // drag. Orbit exits silently; PAN keeps its existing message.
                 if self.tabs[self.active_tab].pan_mode
                     || self.tabs[self.active_tab].orbit_mode
+                    || self.tabs[self.active_tab].zoom_dynamic_mode
                 {
                     let i = self.active_tab;
                     let was_pan = self.tabs[i].pan_mode;
                     self.tabs[i].pan_mode = false;
                     self.tabs[i].orbit_mode = false;
+                    self.tabs[i].zoom_dynamic_mode = false;
                     {
                         let mut sel = self.tabs[i].scene.selection.borrow_mut();
                         sel.middle_down = false;
                         sel.middle_last_pos = None;
                         sel.orbit_pivot = None;
+                        sel.box_anchor = None;
+                        sel.box_anchor_world = None;
+                        sel.box_current = None;
+                        sel.box_crossing_locked = false;
                     }
                     if was_pan {
                         self.command_line.push_output(crate::t!("PAN ended.").as_ref());

@@ -805,40 +805,94 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "ZOOM EXTENTS ALL" | "ZOOM EXTENTS ALL VIEWPORTS" | "ZEA" => {
+            "ZOOM EXTENTS ALL" | "ZOOM EXTENTS ALL VIEWPORTS" | "ZOOM EA" | "ZEA" => {
+                self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.fit_all_model_viewports();
                 self.command_line.push_output(crate::t!("Zoom Extents — All Viewports").as_ref());
             }
 
-            "ZOOM EXTENTS" | "ZOOMEXTENTS" | "ZE" => {
+            "ZOOM EXTENTS" | "ZOOM E" | "ZOOMEXTENTS" | "ZE" => {
+                self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.fit_all();
                 self.command_line.push_output(crate::t!("Zoom Extents").as_ref());
             }
 
-            "ZOOM IN" | "ZI" => {
+            "ZOOM IN" | "ZOOM I" | "ZI" => {
+                self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.zoom_camera(1.0 / 1.5);
                 self.command_line.push_output(crate::t!("Zoom In").as_ref());
             }
 
             "ZOOM OUT" | "ZO" => {
+                self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.zoom_camera(1.5);
                 self.command_line.push_output(crate::t!("Zoom Out").as_ref());
             }
 
             // ZOOM ALL — fit the configured drawing limits.
             "ZOOM ALL" | "ZOOM A" | "ZA" => {
+                self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.fit_all_with_limits();
                 self.command_line.push_output(crate::t!("Zoom All").as_ref());
             }
 
+            "ZOOM PREVIOUS" | "ZOOM P" | "ZP" => {
+                if self.tabs[i].scene.restore_previous_view() {
+                    self.command_line.push_output(crate::t!("Zoom Previous").as_ref());
+                } else {
+                    self.command_line
+                        .push_error(crate::t!("ZOOM: no previous view.").as_ref());
+                }
+            }
+
+            "ZOOM OBJECT" | "ZOOM O" | "ZOBJ" => {
+                let handles: Vec<_> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .map(|(handle, _)| handle)
+                    .collect();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let command = SelectObjectsCommand::new("ZOOM OBJECT");
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                } else {
+                    self.tabs[i].scene.remember_current_view();
+                    if self.tabs[i].scene.zoom_to_entities(&handles) {
+                        self.command_line.push_output(crate::t!("Zoom Object").as_ref());
+                    } else {
+                        self.command_line.push_error(
+                            crate::t!("ZOOM: selected objects have no visible bounds.").as_ref(),
+                        );
+                    }
+                }
+            }
+
+            "ZOOM DYNAMIC" | "ZOOM D" | "ZD" => {
+                self.tabs[i].zoom_dynamic_mode = true;
+                self.clear_navigation_hover(i);
+                self.command_line.push_output(
+                    crate::t!(
+                        "ZOOM Dynamic: drag horizontally to pan and vertically to zoom. Press Esc to exit."
+                    )
+                    .as_ref(),
+                );
+            }
+
             // ZOOM SCALE — set zoom factor (e.g. "ZOOM SCALE 2" or "ZS 0.5")
-            cmd if cmd.starts_with("ZOOM SCALE ") || cmd.starts_with("ZS ") => {
+            cmd if cmd.starts_with("ZOOM SCALE ")
+                || cmd.starts_with("ZOOM S ")
+                || cmd.starts_with("ZS ") =>
+            {
                 let rest = cmd
-                    .split_once(' ')
-                    .and_then(|(_, r)| r.split_once(' ').map(|(_, v)| v).or(Some(r)))
+                    .strip_prefix("ZOOM SCALE ")
+                    .or_else(|| cmd.strip_prefix("ZOOM S "))
+                    .or_else(|| cmd.strip_prefix("ZS "))
                     .unwrap_or("1");
                 if let Ok(factor) = rest.trim().parse::<f32>() {
                     if factor > 0.0 {
+                        self.tabs[i].scene.remember_current_view();
                         self.tabs[i].scene.zoom_camera(1.0 / factor);
                         self.command_line
                             .push_output(crate::tf!("Zoom Scale ×{factor:.3}").as_ref());
@@ -866,15 +920,18 @@ impl OpenCADStudio {
                 use crate::command::KeywordCommand;
                 let c = KeywordCommand::new(
                     "ZOOM",
-                    "ZOOM  [Window / Extents / Extents All / All / In / Out / Scale]:",
+                    "ZOOM  [Window / Extents / Previous / Object / All / Dynamic / Extents All / In / Out / Scale]:",
                     vec![
-                        ("Window", "WINDOW", None),
-                        ("Extents", "EXTENTS", None),
-                        ("Extents All", "EXTENTS ALL", None),
-                        ("All", "ALL", None),
-                        ("In", "IN", None),
+                        ("Window", "W", None),
+                        ("Extents", "E", None),
+                        ("Previous", "P", None),
+                        ("Object", "O", None),
+                        ("All", "A", None),
+                        ("Dynamic", "D", None),
+                        ("Extents All", "EA", None),
+                        ("In", "I", None),
                         ("Out", "OUT", None),
-                        ("Scale", "SCALE", Some("ZOOM  scale factor (e.g. 2 or 0.5):")),
+                        ("Scale", "S", Some("ZOOM  scale factor (e.g. 2 or 0.5):")),
                     ],
                 );
                 self.command_line.push_info(&c.prompt());

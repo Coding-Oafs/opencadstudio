@@ -444,6 +444,10 @@ pub(super) struct OpenCADStudio {
     polar_mode: bool,
     /// Polar tracking angle increment in degrees (15 / 30 / 45 / 90).
     polar_increment_deg: f32,
+    /// Reverse the mouse-wheel zoom direction when true (ZOOMWHEEL = 1).
+    zoom_wheel_reversed: bool,
+    /// Mouse-wheel zoom sensitivity, clamped to 3..=100 (ZOOMFACTOR).
+    zoom_factor: i32,
     /// Show grid lines in the viewport (F7).
     show_grid: bool,
     /// Dynamic input overlay (F12): show coordinate tooltip near cursor.
@@ -3030,6 +3034,8 @@ impl OpenCADStudio {
             ortho_mode: false,
             polar_mode: false,
             polar_increment_deg: 45.0,
+            zoom_wheel_reversed: false,
+            zoom_factor: 60,
             show_grid: false,
             dyn_input: true,
             texteditmode: false,

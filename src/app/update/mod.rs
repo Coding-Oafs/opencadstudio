@@ -2831,6 +2831,7 @@ impl OpenCADStudio {
             Message::ViewCubeHome => {
                 let i = self.active_tab;
                 self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
                 let r_ucs = self.tabs[i].scene.viewcube_ucs_mat();
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
@@ -2847,6 +2848,7 @@ impl OpenCADStudio {
             Message::ViewCubeRoll(cw) => {
                 let i = self.active_tab;
                 self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
                 let ang = if cw {
                     std::f32::consts::FRAC_PI_2
                 } else {
@@ -2873,6 +2875,7 @@ impl OpenCADStudio {
                 };
                 let i = self.active_tab;
                 self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
                         .scene
