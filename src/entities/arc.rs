@@ -26,9 +26,6 @@ fn to_truck(arc: &Arc) -> TruckEntity {
     // Compute OCS basis vectors for this entity's normal.
     let (ax, ay) = crate::scene::view::transform::ocs_axes(normal);
 
-    let ccw_end = if ea >= sa { ea } else { ea + TAU };
-    let mid_a = sa + (ccw_end - sa) * 0.5;
-
     // Arc centre in WCS.
     let (cwx, cwy, cwz) = crate::scene::view::transform::ocs_point_to_wcs((cx, cy, cz), normal);
 
@@ -45,7 +42,8 @@ fn to_truck(arc: &Arc) -> TruckEntity {
     // Centre, ends, arc-length midpoint and the quadrants the sweep actually
     // covers, all from the entity's own curve. Circles and ellipses (closed
     // curves) deliberately emit no midpoint; see #34.
-    let snap = crate::entities::curve::snap_from(&crate::entities::curve::arc_curve(arc));
+    let curve = crate::entities::curve::arc_curve(arc);
+    let snap = crate::entities::curve::snap_from(&curve);
     let tangent = TangentGeom::Circle {
         center: [cwx as f32, cwy as f32, cwz as f32],
         radius: r as f32,
@@ -87,9 +85,14 @@ fn to_truck(arc: &Arc) -> TruckEntity {
         };
     }
 
+    // Kept as a truck edge rather than a point list: EXTRUDE, REVOLVE and
+    // SWEEP take their profile and path from `Curve` / `Contour` and have no
+    // arm for `Lines`, so handing them one would quietly stop an arc being
+    // usable as either.
     let p_start = arc_pt(sa);
     let p_end = arc_pt(ea);
-    let p_mid = arc_pt(mid_a);
+    let ccw_end = if ea >= sa { ea } else { ea + TAU };
+    let p_mid = arc_pt(sa + (ccw_end - sa) * 0.5);
     let v_start = builder::vertex(p_start);
     let v_end = builder::vertex(p_end);
     let edge = builder::circle_arc(&v_start, &v_end, p_mid);

@@ -1,6 +1,8 @@
 use acadrust::entities::Ellipse;
-use crate::t;
 use truck_modeling::{builder, BSplineCurve, Curve, Edge, KnotVec, Point3, Wire};
+
+use crate::entities::curve::CurveSnap;
+use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
@@ -10,118 +12,93 @@ use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
 
-const TAU: f64 = std::f64::consts::TAU;
-
 fn to_truck(ell: &Ellipse) -> TruckEntity {
-    let normal = (ell.normal.x, ell.normal.y, ell.normal.z);
-    let (nx, ny, nz) = normal;
-
     // ELLIPSE is one of the few WCS entities in DXF: `center` (code 10) and
     // `major_axis` (code 11) are world coordinates already — unlike ARC /
-    // CIRCLE, whose centers are OCS. (This used to run both through the
-    // arbitrary-axis OCS, which misplaced any ellipse whose normal isn't
-    // Z-up — e.g. the (0,0,-1) result of a mirrored-block explode.)
-    let (cwx, cwy, cwz) = (ell.center.x, ell.center.y, ell.center.z);
-    let wcs_maj = glam::Vec3::new(
-        ell.major_axis.x as f32,
-        ell.major_axis.y as f32,
-        ell.major_axis.z as f32,
-    );
-    let r_major = wcs_maj.length() as f64;
-    let r_minor = r_major * ell.minor_axis_ratio;
-    let t0 = ell.start_parameter;
-    let mut t1 = ell.end_parameter;
-    if t1 <= t0 {
-        t1 += TAU;
-    }
-    let u = if r_major > 1e-9 {
-        wcs_maj / wcs_maj.length()
-    } else {
-        glam::Vec3::X
-    };
-    // Minor axis direction: WCS_normal × u (both unit vectors, always perpendicular).
-    let wcs_normal = glam::Vec3::new(nx as f32, ny as f32, nz as f32);
-    let v_axis = wcs_normal.cross(u);
-    let is_closed = (t1 - t0 - TAU).abs() < 1e-6;
-    // Centre, axis ends and — for an open arc — its own two ends and middle,
-    // all read off the entity's curve rather than rebuilt from these locals.
-    let snap = crate::entities::curve::ellipse_curve(ell)
-        .map(|curve| crate::entities::curve::snap_from(&curve))
+    // CIRCLE, whose centers are OCS. The converter knows that; this used to
+    // run both through the arbitrary-axis OCS, which misplaced any ellipse
+    // whose normal isn't Z-up — e.g. the (0,0,-1) result of a mirrored-block
+    // explode.
+    let curve = crate::entities::curve::ellipse_curve(ell);
+    let snap = curve
+        .as_ref()
+        .map(crate::entities::curve::snap_from)
         .unwrap_or_default();
 
-    if is_closed {
-        let n = 16usize;
-        let pts_upper: Vec<Point3> = (0..=n)
-            .map(|i| {
-                let t = (i as f64 / n as f64) * std::f64::consts::PI;
-                let lx = (r_major * t.cos()) as f32;
-                let lz = (r_minor * t.sin()) as f32;
-                Point3::new(
-                    cwx + (lx * u.x + lz * v_axis.x) as f64,
-                    cwy + (lx * u.y + lz * v_axis.y) as f64,
-                    cwz + (lx * u.z + lz * v_axis.z) as f64,
-                )
-            })
-            .collect();
-        let pts_lower: Vec<Point3> = (0..=n)
-            .map(|i| {
-                let t = std::f64::consts::PI + (i as f64 / n as f64) * std::f64::consts::PI;
-                let lx = (r_major * t.cos()) as f32;
-                let lz = (r_minor * t.sin()) as f32;
-                Point3::new(
-                    cwx + (lx * u.x + lz * v_axis.x) as f64,
-                    cwy + (lx * u.y + lz * v_axis.y) as f64,
-                    cwz + (lx * u.z + lz * v_axis.z) as f64,
-                )
-            })
-            .collect();
-        let v_pos = builder::vertex(*pts_upper.first().unwrap());
-        let v_neg = builder::vertex(*pts_upper.last().unwrap());
-        let kv_u = KnotVec::uniform_knot(1, n);
-        let kv_l = KnotVec::uniform_knot(1, n);
-        let spl_u = BSplineCurve::new(kv_u, pts_upper);
-        let spl_l = BSplineCurve::new(kv_l, pts_lower);
-        let edge_upper = Edge::new(&v_pos, &v_neg, Curve::BSplineCurve(spl_u));
-        let edge_lower = Edge::new(&v_neg, &v_pos, Curve::BSplineCurve(spl_l));
-        let wire: Wire = [edge_upper, edge_lower].into_iter().collect();
-        let snap_pts = snap.snap_pts.clone();
-        TruckEntity {
-            pick_tris: Vec::new(),
-            object: TruckObject::Contour(wire),
-            snap_pts,
-            tangent_geoms: vec![],
-            key_vertices: vec![],
-            fill_tris: vec![],
-        }
-    } else {
-        let n = 32usize;
-        let ctrl_pts: Vec<Point3> = (0..=n)
-            .map(|i| {
-                let t = t0 + (t1 - t0) * (i as f64 / n as f64);
-                let lx = (r_major * t.cos()) as f32;
-                let lz = (r_minor * t.sin()) as f32;
-                Point3::new(
-                    cwx + (lx * u.x + lz * v_axis.x) as f64,
-                    cwy + (lx * u.y + lz * v_axis.y) as f64,
-                    cwz + (lx * u.z + lz * v_axis.z) as f64,
-                )
-            })
-            .collect();
-        let kv = KnotVec::uniform_knot(1, n);
-        let bspline = BSplineCurve::new(kv, ctrl_pts.clone());
-        let v_start = builder::vertex(*ctrl_pts.first().unwrap());
-        let v_end = builder::vertex(*ctrl_pts.last().unwrap());
-        let edge = Edge::new(&v_start, &v_end, Curve::BSplineCurve(bspline));
-
-        TruckEntity {
-            pick_tris: Vec::new(),
-            object: TruckObject::Curve(edge),
-            snap_pts: snap.snap_pts.clone(),
-            tangent_geoms: vec![],
-            key_vertices: vec![],
-            fill_tris: vec![],
-        }
+    // The points come from the entity's own curve, cut to the render pass's
+    // chord tolerance. The two fixed counts this replaced — sixteen per half
+    // for a full ellipse, thirty-two for an arc — faceted visibly on
+    // anything large, and the local coordinates were built in `f32`, which
+    // threw away precision the double-single vertex path exists to keep.
+    //
+    // What does not change is the shape of the object. EXTRUDE, REVOLVE and
+    // SWEEP read their profile out of `Contour` / `Curve` and have no arm for
+    // a bare point list, so an ellipse handed over as `Lines` would stop
+    // being usable as either.
+    let empty = |snap: CurveSnap| TruckEntity {
+        pick_tris: Vec::new(),
+        object: TruckObject::Lines(Vec::new()),
+        snap_pts: snap.snap_pts,
+        tangent_geoms: vec![],
+        key_vertices: vec![],
+        fill_tris: vec![],
+    };
+    let Some(planar) = curve else {
+        return empty(snap);
+    };
+    let points: Vec<Point3> = crate::entities::curve::curve_points(&planar)
+        .into_iter()
+        .map(|p| Point3::new(p[0], p[1], p[2]))
+        .collect();
+    if points.len() < 2 {
+        return empty(snap);
     }
+
+    // Closure decided on the points rather than on the stored parameters. A
+    // file that writes an end parameter a hair short of a full turn still
+    // draws a closed ellipse, and an open edge whose two vertices sit on top
+    // of each other is not something a plane can be attached to.
+    let ends_meet = {
+        let (first, last) = (points[0], *points.last().expect("checked non-empty"));
+        let span = first.x.abs().max(first.y.abs()).max(first.z.abs()).max(1.0);
+        let gap = first - last;
+        (gap.x * gap.x + gap.y * gap.y + gap.z * gap.z).sqrt() <= 1e-9 * span
+    };
+    let object = if planar.is_closed() || ends_meet {
+        // Two half-edges rather than one closed edge: a single edge whose
+        // two vertices coincide is not a wire truck will attach a plane to.
+        let split = points.len() / 2;
+        let upper = points[..=split].to_vec();
+        let lower = points[split..].to_vec();
+        let v_pos = builder::vertex(points[0]);
+        let v_neg = builder::vertex(points[split]);
+        let edge_upper = Edge::new(&v_pos, &v_neg, polyline_curve(upper));
+        let edge_lower = Edge::new(&v_neg, &v_pos, polyline_curve(lower));
+        TruckObject::Contour([edge_upper, edge_lower].into_iter().collect::<Wire>())
+    } else {
+        let v_start = builder::vertex(points[0]);
+        let v_end = builder::vertex(*points.last().expect("checked non-empty"));
+        TruckObject::Curve(Edge::new(&v_start, &v_end, polyline_curve(points)))
+    };
+
+    TruckEntity {
+        pick_tris: Vec::new(),
+        object,
+        snap_pts: snap.snap_pts,
+        tangent_geoms: vec![],
+        key_vertices: vec![],
+        fill_tris: vec![],
+    }
+}
+
+/// A truck curve that passes through every one of `points` in order.
+///
+/// Degree one, so the control polygon *is* the curve — the same thing the
+/// hand-built sampling produced, without restating how a B-spline is put
+/// together at each site.
+fn polyline_curve(points: Vec<Point3>) -> Curve {
+    let spans = points.len().saturating_sub(1);
+    Curve::BSplineCurve(BSplineCurve::new(KnotVec::uniform_knot(1, spans), points))
 }
 
 fn grips(ell: &Ellipse) -> Vec<GripDef> {

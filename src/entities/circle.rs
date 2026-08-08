@@ -23,8 +23,8 @@ fn to_truck(circle: &Circle) -> TruckEntity {
     let rf = r as f32;
     // Centre and quadrants come from the entity's own curve, so the same
     // definition answers here, in the tessellation and in a trim.
-    let snap = crate::entities::curve::snap_from(&crate::entities::curve::circle_curve(circle));
-    let snap_pts = snap.snap_pts;
+    let curve = crate::entities::curve::circle_curve(circle);
+    let snap_pts = crate::entities::curve::snap_from(&curve).snap_pts;
     let tangent = TangentGeom::Circle {
         center: [cwx as f32, cwy as f32, cwz as f32],
         radius: rf,
@@ -74,34 +74,16 @@ fn to_truck(circle: &Circle) -> TruckEntity {
         };
     }
 
-    // Tessellate directly as a cos/sin polyline rather than a truck
+    // Sampled from the entity's own curve rather than as a truck
     // `circle_arc` (arc-through-three-points). At large WCS coordinates
     // (e.g. −1.2M UTM) the three-point fit cancels catastrophically — the
     // circle comes back with a ~3% radius wobble and uneven segment lengths,
     // which then throws off a dashed linetype's dash spacing. Direct
-    // evaluation only adds a small ±r term to the centre, so it stays precise;
-    // the `Lines` path RTE-splits the absolute-f64 points into the
+    // evaluation only adds a small ±r term to the centre, so it stays
+    // precise; the `Lines` path RTE-splits the absolute-f64 points into the
     // double-single the shader reconstructs.
-    let tol = crate::scene::convert::truck_tess::current_curve_tol();
-    // Chord-height tolerance → segment count: sag = r·(1 − cos(π/N)).
-    let n = if r > tol {
-        (std::f64::consts::PI / (1.0 - tol / r).clamp(-1.0, 1.0).acos())
-            .ceil()
-            .clamp(16.0, 4096.0) as usize
-    } else {
-        16
-    };
-    let tau = std::f64::consts::TAU;
-    let mut pts: Vec<[f64; 3]> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let a = i as f64 * tau / n as f64;
-        let (s, c) = a.sin_cos();
-        pts.push([
-            cwx + r * (c * ax.0 + s * ay.0),
-            cwy + r * (c * ax.1 + s * ay.1),
-            cwz + r * (c * ax.2 + s * ay.2),
-        ]);
-    }
+    let pts = crate::entities::curve::curve_points(&curve);
+
     TruckEntity {
         pick_tris: Vec::new(),
         object: TruckObject::Lines(pts),

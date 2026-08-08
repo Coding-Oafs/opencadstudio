@@ -331,6 +331,22 @@ pub fn entity_curve_xy(entity: &EntityType) -> Option<Curve> {
     })
 }
 
+/// World-space wire points for a curve, cut to the render pass's current
+/// chord tolerance.
+///
+/// The density comes from how far a chord may sag from the curve, not from a
+/// segment count: an arc a metre across and one a kilometre across need
+/// different numbers of points to look equally round, and the tolerance the
+/// render pass carries is already zoom-adaptive.
+///
+/// Everything stays `f64` to the end. The narrowing belongs at the GPU
+/// boundary, where the residual is kept as the low half of a double-single
+/// pair; casting local coordinates on the way in throws away precision the
+/// shader was built to reconstruct.
+pub fn curve_points(curve: &PlanarCurve) -> Vec<[f64; 3]> {
+    curve.tessellate_within(crate::scene::convert::truck_tess::current_curve_tol())
+}
+
 /// The snap candidates an entity's curve offers, in the two channels the
 /// wire model carries them in.
 #[derive(Debug, Default, Clone)]
