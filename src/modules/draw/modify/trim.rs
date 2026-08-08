@@ -10,6 +10,15 @@
 
 use std::f64::consts::TAU;
 
+// The plane geometry these commands run on lives in cadkernel; `geom` adapts
+// its call shapes to the loose scalars and f32 render vertices used here.
+use super::geom;
+use super::geom::{
+    angle_within_arc as in_arc, arc_parameter as arc_t, arc_points as arc_pts,
+    circle_circle_angles as cc_angles, ellipse_points as ellipse_pts, lerp as lerp2,
+    line_circle as lc, line_ellipse as le, line_line as ll, normalize_angle as norm,
+};
+
 use crate::modules::draw::fence::{crossing_box_preview, FencePick};
 
 use acadrust::entities::{
@@ -53,163 +62,6 @@ pub const DROPDOWN_ITEMS: &[(&str, &str, IconKind)] = &[
 // ══════════════════════════════════════════════════════════════════════════
 // Geometry helpers
 // ══════════════════════════════════════════════════════════════════════════
-
-/// Normalize angle to [0, 2π).
-fn norm(a: f64) -> f64 {
-    ((a % TAU) + TAU) % TAU
-}
-
-/// Is angle `a` within the arc from `s` to `e` (CCW, radians)?
-fn in_arc(a: f64, s: f64, e: f64) -> bool {
-    let (a, s, e) = (norm(a), norm(s), norm(e));
-    if (e - s).abs() < 1e-9 || (e - s - TAU).abs() < 1e-9 {
-        return true;
-    }
-    if s <= e {
-        a >= s - 1e-9 && a <= e + 1e-9
-    } else {
-        a >= s - 1e-9 || a <= e + 1e-9
-    }
-}
-
-/// Parametric t ∈ [0,1] on arc (a0→a1 CCW) for angle `a`.
-fn arc_t(a: f64, a0: f64, a1: f64) -> f64 {
-    let span = {
-        let s = norm(a1) - norm(a0);
-        if s <= 0.0 {
-            s + TAU
-        } else {
-            s
-        }
-    };
-    let da = {
-        let d = norm(a) - norm(a0);
-        if d < 0.0 {
-            d + TAU
-        } else {
-            d
-        }
-    };
-    (da / span).clamp(0.0, 1.0)
-}
-
-/// Intersect infinite lines (p+t·d) and (q+u·e). Returns (t, u).
-fn ll(
-    px: f64,
-    py: f64,
-    dx: f64,
-    dy: f64,
-    qx: f64,
-    qy: f64,
-    ex: f64,
-    ey: f64,
-) -> Option<(f64, f64)> {
-    let det = dx * ey - dy * ex;
-    if det.abs() < 1e-10 {
-        return None;
-    }
-    let t = ((qx - px) * ey - (qy - py) * ex) / det;
-    let u = ((qx - px) * dy - (qy - py) * dx) / det;
-    Some((t, u))
-}
-
-/// Intersect infinite line (p+t·d) with circle (cx,cy,r). Returns t values.
-fn lc(px: f64, py: f64, dx: f64, dy: f64, cx: f64, cy: f64, r: f64) -> Vec<f64> {
-    let fx = px - cx;
-    let fy = py - cy;
-    let a = dx * dx + dy * dy;
-    let b = 2.0 * (fx * dx + fy * dy);
-    let c = fx * fx + fy * fy - r * r;
-    let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
-        return vec![];
-    }
-    let sq = disc.sqrt();
-    if disc < 1e-14 {
-        vec![(-b) / (2.0 * a)]
-    } else {
-        vec![(-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)]
-    }
-}
-
-/// Circle-circle intersection: angles on circle 1 where they meet.
-fn cc_angles(cx1: f64, cy1: f64, r1: f64, cx2: f64, cy2: f64, r2: f64) -> Vec<f64> {
-    let d = ((cx2 - cx1).powi(2) + (cy2 - cy1).powi(2)).sqrt();
-    if d < 1e-9 || d > r1 + r2 + 1e-9 || d < (r1 - r2).abs() - 1e-9 {
-        return vec![];
-    }
-    let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
-    let h2 = r1 * r1 - a * a;
-    if h2 < 0.0 {
-        return vec![];
-    }
-    let h = h2.sqrt();
-    let mx = cx1 + a * (cx2 - cx1) / d;
-    let my = cy1 + a * (cy2 - cy1) / d;
-    let px = h * (cy2 - cy1) / d;
-    let py = -h * (cx2 - cx1) / d;
-    let a1 = ((my + py) - cy1).atan2((mx + px) - cx1);
-    let a2 = ((my - py) - cy1).atan2((mx - px) - cx1);
-    if h < 1e-9 {
-        vec![a1]
-    } else {
-        vec![a1, a2]
-    }
-}
-
-/// Line (px+s·d) vs ellipse (cx,cy,a,b,nx,ny). Returns (s_on_line, t_on_ellipse) pairs.
-/// nx,ny: unit major-axis; perp = (-ny, nx).  Parametric ellipse: P(t) = center + a·cos(t)·n + b·sin(t)·v.
-fn le(
-    px: f64,
-    py: f64,
-    dpx: f64,
-    dpy: f64,
-    cx: f64,
-    cy: f64,
-    a: f64,
-    b: f64,
-    nx: f64,
-    ny: f64,
-) -> Vec<(f64, f64)> {
-    // Transform line origin to ellipse local frame
-    let rx = px - cx;
-    let ry = py - cy;
-    // Project onto major/minor axes
-    let xl0 = rx * nx + ry * ny;
-    let yl0 = -rx * ny + ry * nx;
-    let dxl = dpx * nx + dpy * ny;
-    let dyl = -dpx * ny + dpy * nx;
-    // Scale by 1/a, 1/b → circle equation
-    let xa = xl0 / a;
-    let xda = dxl / a;
-    let yb = yl0 / b;
-    let ydb = dyl / b;
-    let big_a = xda * xda + ydb * ydb;
-    if big_a < 1e-20 {
-        return vec![];
-    }
-    let big_b = 2.0 * (xa * xda + yb * ydb);
-    let big_c = xa * xa + yb * yb - 1.0;
-    let disc = big_b * big_b - 4.0 * big_a * big_c;
-    if disc < 0.0 {
-        return vec![];
-    }
-    let sq = disc.sqrt();
-    let s_vals: Vec<f64> = if disc < 1e-14 {
-        vec![(-big_b) / (2.0 * big_a)]
-    } else {
-        vec![(-big_b - sq) / (2.0 * big_a), (-big_b + sq) / (2.0 * big_a)]
-    };
-    s_vals
-        .into_iter()
-        .map(|s| {
-            let xl = xl0 + s * dxl;
-            let yl = yl0 + s * dyl;
-            let t = yl.atan2(xl); // ≡ atan2(yl/b, xl/a) but faster since sign is preserved
-            (s, t)
-        })
-        .collect()
-}
 
 // ── Boundary geometry ─────────────────────────────────────────────────────
 
@@ -1051,34 +903,6 @@ fn extend_ellipse(orig: &EllipseEnt, t_click: f64, geos: &[Geo]) -> Option<Entit
     Some(EntityType::Ellipse(e))
 }
 
-/// Generate preview points for an ellipse arc.
-fn ellipse_pts(
-    cx: f64,
-    cy: f64,
-    a: f64,
-    b: f64,
-    nx: f64,
-    ny: f64,
-    t0: f64,
-    t1: f64,
-    z: f64,
-) -> Vec<[f32; 3]> {
-    let span = t1 - t0;
-    let steps = (span.abs() * 20.0).ceil().max(4.0) as usize;
-    (0..=steps)
-        .map(|i| {
-            let t = t0 + span * (i as f64 / steps as f64);
-            let lx = a * t.cos();
-            let ly = b * t.sin();
-            [
-                (cx + lx * nx - ly * ny) as f32,
-                z as f32,
-                (cy + lx * ny + ly * nx) as f32,
-            ]
-        })
-        .collect()
-}
-
 // ── Spline trim / extend ──────────────────────────────────────────────────
 
 /// Find normalised t-params ∈ [0,1] where a Spline intersects boundary geos.
@@ -1219,10 +1043,6 @@ fn trim_intervals(ts: &[f64], t_click: f64) -> Vec<(f64, f64)> {
         .filter(|(_, w)| (w[1] - w[0]) > 1e-6)
         .map(|(_, w)| (w[0], w[1]))
         .collect()
-}
-
-fn lerp2(p1: [f64; 2], p2: [f64; 2], t: f64) -> [f64; 2] {
-    [p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1])]
 }
 
 /// Trim a Line entity. Returns the surviving line segments.
@@ -2004,32 +1824,10 @@ fn trim_xline(orig: &XLineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
 const DIM_RED: [f32; 4] = [1.0, 0.3, 0.3, 0.6];
 
 fn line_pts(l: &LineEnt) -> Vec<[f32; 3]> {
-    vec![
-        [l.start.x as f32, l.start.y as f32, l.start.z as f32],
-        [l.end.x as f32, l.end.y as f32, l.end.z as f32],
-    ]
-}
-
-fn arc_pts(cx: f64, cy: f64, r: f64, a0: f64, a1: f64, z: f64) -> Vec<[f32; 3]> {
-    let span = {
-        let s = norm(a1) - norm(a0);
-        if s <= 0.0 {
-            s + TAU
-        } else {
-            s
-        }
-    };
-    let steps = (span.abs() * 20.0).ceil().max(4.0) as usize;
-    (0..=steps)
-        .map(|i| {
-            let ang = norm(a0) + span * (i as f64 / steps as f64);
-            [
-                (cx + r * ang.cos()) as f32,
-                (cy + r * ang.sin()) as f32,
-                z as f32,
-            ]
-        })
-        .collect()
+    geom::line_points(
+        [l.start.x, l.start.y, l.start.z],
+        [l.end.x, l.end.y, l.end.z],
+    )
 }
 
 fn entity_pts(e: &EntityType) -> Vec<[f32; 3]> {

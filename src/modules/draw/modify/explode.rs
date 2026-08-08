@@ -14,7 +14,7 @@
 //
 //   Unsupported entity types are skipped silently.
 
-use std::f64::consts::TAU;
+use super::geom::normalize_angle as norm_angle;
 
 use acadrust::entities::EntityCommon;
 use acadrust::entities::{
@@ -258,10 +258,6 @@ fn bulge_to_arc(
         ..ArcEnt::new()
     };
     Some(EntityType::Arc(arc))
-}
-
-fn norm_angle(a: f64) -> f64 {
-    ((a % TAU) + TAU) % TAU
 }
 
 fn explode_mline(ml: &MLine) -> Vec<EntityType> {

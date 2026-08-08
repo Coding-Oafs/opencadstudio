@@ -8,6 +8,7 @@ pub mod delete;
 mod entity_index;
 pub mod explode;
 pub mod fillet;
+pub mod geom;
 pub mod join;
 pub mod lengthen;
 pub mod mirror;

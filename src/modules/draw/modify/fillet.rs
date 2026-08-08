@@ -10,6 +10,10 @@
 //   Finds intersection, backs off dist1 along line 1 and dist2 along line 2.
 
 use acadrust::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline};
+
+// Shared plane geometry, from cadkernel via the local adapters.
+use super::geom;
+use super::geom::{arc_points as arc_pts, line_line as ll, normalize_angle as norm_angle};
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
@@ -45,26 +49,6 @@ pub const DROPDOWN_ITEMS: &[(&str, &str, IconKind)] = &[
 // ══════════════════════════════════════════════════════════════════════════
 // Geometry
 // ══════════════════════════════════════════════════════════════════════════
-
-/// Intersect two infinite lines. Returns (t on L1, u on L2).
-fn ll(
-    ax: f64,
-    ay: f64,
-    dx: f64,
-    dy: f64,
-    cx: f64,
-    cy: f64,
-    ex: f64,
-    ey: f64,
-) -> Option<(f64, f64)> {
-    let det = dx * ey - dy * ex;
-    if det.abs() < 1e-10 {
-        return None;
-    }
-    let t = ((cx - ax) * ey - (cy - ay) * ex) / det;
-    let u = ((cx - ax) * dy - (cy - ay) * dx) / det;
-    Some((t, u))
-}
 
 /// Extract coords and unit direction for a Line entity.
 fn line_geom(l: &LineEnt) -> ([f64; 2], [f64; 2], [f64; 2], f64) {
@@ -229,32 +213,10 @@ fn trim_to_xy(
 // ── Point-generation helpers ──────────────────────────────────────────────
 
 fn line_pts(l: &LineEnt) -> Vec<[f32; 3]> {
-    vec![
-        [l.start.x as f32, l.start.y as f32, l.start.z as f32],
-        [l.end.x as f32, l.end.y as f32, l.end.z as f32],
-    ]
-}
-
-fn arc_pts(cx: f64, cy: f64, r: f64, a0: f64, a1: f64, z: f64) -> Vec<[f32; 3]> {
-    let span = {
-        let s = norm_angle(a1) - norm_angle(a0);
-        if s <= 0.0 {
-            s + TAU
-        } else {
-            s
-        }
-    };
-    let steps = (span.abs() * 20.0).ceil().max(4.0) as usize;
-    (0..=steps)
-        .map(|i| {
-            let ang = norm_angle(a0) + span * (i as f64 / steps as f64);
-            [
-                (cx + r * ang.cos()) as f32,
-                (cy + r * ang.sin()) as f32,
-                z as f32,
-            ]
-        })
-        .collect()
+    geom::line_points(
+        [l.start.x, l.start.y, l.start.z],
+        [l.end.x, l.end.y, l.end.z],
+    )
 }
 
 fn entity_pts(e: &EntityType) -> Vec<[f32; 3]> {
@@ -284,11 +246,6 @@ fn arc_geom(a: &ArcEnt) -> ([f64; 2], f64, f64, f64, f64) {
         a.end_angle,
         a.center.z,
     )
-}
-
-/// Normalize angle to [0, 2π).
-fn norm_angle(a: f64) -> f64 {
-    ((a % TAU) + TAU) % TAU
 }
 
 /// Return the CCW angular span from `start` to `end`.
