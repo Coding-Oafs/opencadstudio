@@ -12,6 +12,8 @@
 //   straightens every segment.
 
 use acadrust::entities::LwVertex;
+use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
+use acadrust::kernel::geom2d::NurbsCurve;
 use acadrust::types::Vector2;
 use acadrust::{EntityType, Handle};
 use glam::{DVec2, DVec3};
@@ -535,69 +537,61 @@ fn fit_curve(p: &mut acadrust::LwPolyline) -> bool {
 
 /// PEDIT Spline: replace the shape with a sampled uniform cubic B-spline of
 /// the vertex frame (8 samples per span; a closed frame wraps around).
+/// Replace the polyline's vertices with a sampling of the cubic B-spline its
+/// vertices control.
+///
+/// Evaluated by the kernel rather than from a hand-written basis. The four
+/// blending polynomials that were here are the uniform cubic ones spelled
+/// out, with the open case clamped by repeating end points and then the two
+/// ends pinned back afterwards to undo the drift that leaves — all of which
+/// a clamped knot vector expresses directly and exactly.
 fn spline_smooth(p: &mut acadrust::LwPolyline) -> bool {
-    let n = p.vertices.len();
-    if n < 3 {
+    const DEGREE: usize = 3;
+    const PER_SPAN: usize = 8;
+
+    let control: Vec<[f64; 2]> = p.vertices.iter().map(|v| [v.location.x, v.location.y]).collect();
+    if control.len() < 3 {
         return false;
     }
-    let pts: Vec<DVec2> = p.vertices.iter().map(vert_xy).collect();
-    const S: usize = 8;
-    let bspline = |p0: DVec2, p1: DVec2, p2: DVec2, p3: DVec2, t: f64| -> DVec2 {
-        let t2 = t * t;
-        let t3 = t2 * t;
-        (p0 * (-t3 + 3.0 * t2 - 3.0 * t + 1.0)
-            + p1 * (3.0 * t3 - 6.0 * t2 + 4.0)
-            + p2 * (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0)
-            + p3 * t3)
-            / 6.0
-    };
-    let mut out: Vec<DVec2> = Vec::new();
-    if p.is_closed {
-        for i in 0..n {
-            let p0 = pts[(i + n - 1) % n];
-            let p1 = pts[i];
-            let p2 = pts[(i + 1) % n];
-            let p3 = pts[(i + 2) % n];
-            for s in 0..S {
-                out.push(bspline(p0, p1, p2, p3, s as f64 / S as f64));
-            }
-        }
+    let curve = if p.is_closed {
+        // A periodic curve is written by wrapping the first `degree` control
+        // points onto the end, over a uniform knot vector — which is what
+        // makes the seam as smooth as everywhere else.
+        let mut wrapped = control.clone();
+        wrapped.extend(control.iter().take(DEGREE).copied());
+        let count = wrapped.len();
+        let knots: Vec<f64> = (0..count + DEGREE + 1).map(|i| i as f64).collect();
+        NurbsCurve::new(DEGREE, wrapped, knots, None)
     } else {
-        // Clamp the ends by repeating the end control points so the curve
-        // starts and finishes on them.
-        let at = |i: isize| -> DVec2 { pts[i.clamp(0, n as isize - 1) as usize] };
-        for i in -1..(n as isize - 2) {
-            let (p0, p1, p2, p3) = (at(i), at(i + 1), at(i + 2), at(i + 3));
-            let last_span = i == n as isize - 3;
-            let steps = if last_span { S + 1 } else { S };
-            for s in 0..steps {
-                out.push(bspline(p0, p1, p2, p3, s as f64 / S as f64));
-            }
-        }
-        // Pin the exact endpoints.
-        if let (Some(v), Some(q)) = (out.first_mut(), pts.first()) {
-            *v = *q;
-        }
-        if let (Some(v), Some(q)) = (out.last_mut(), pts.last()) {
-            *v = *q;
-        }
-    }
-    if out.len() < 2 {
+        // Clamped: the curve starts and finishes on its outer control points
+        // without them needing to be repeated.
+        let knots = clamped_uniform_knots(DEGREE, control.len());
+        NurbsCurve::new(DEGREE, control.clone(), knots, None)
+    };
+    let Some(curve) = curve else {
+        return false;
+    };
+
+    let steps = PER_SPAN * control.len();
+    let sampled: Vec<[f64; 2]> = (0..=steps)
+        .map(|step| curve.point_at(step as f64 / steps as f64))
+        .collect();
+    if sampled.len() < 2 {
         return false;
     }
-    let w = p.constant_width;
-    p.vertices = out
+
+    let width = p.constant_width;
+    p.vertices = sampled
         .into_iter()
         .map(|q| {
-            let mut v = LwVertex::new(Vector2::new(q.x, q.y));
-            v.start_width = w;
-            v.end_width = w;
+            let mut v = LwVertex::new(Vector2::new(q[0], q[1]));
+            v.start_width = width;
+            v.end_width = width;
             v
         })
         .collect();
     true
 }
-
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["PEDIT"] });  // PeditCommand

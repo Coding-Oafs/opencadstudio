@@ -9,8 +9,11 @@
 //
 // Control-point dragging is already supported via the grip editing system.
 
+use acadrust::types::Vector3;
 use acadrust::EntityType;
 use glam::DVec3;
+
+use crate::modules::draw::modify::spline_ops::spline_to_nurbs;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -190,12 +193,40 @@ pub fn apply_spline_op(doc: &mut acadrust::CadDocument, handle: acadrust::Handle
             }
         }
         "__SPLINEDIT_REVERSE__" => {
-            spline.control_points.reverse();
             spline.fit_points.reverse();
-            spline.knots = acadrust::entities::Spline::generate_clamped_knots(
-                spline.degree as usize,
-                spline.control_points.len(),
-            );
+            let begin = spline.begin_tangent;
+            spline.begin_tangent = spline.end_tangent;
+            spline.end_tangent = begin;
+            // The knots mirror within the domain rather than being
+            // regenerated. Rebuilding a clamped *uniform* vector here changed
+            // the shape of any spline whose knots were unevenly spaced —
+            // which is most of them once a modeller has been near one.
+            match spline_to_nurbs(spline).map(|curve| curve.reversed()) {
+                Some(reversed) => {
+                    let elevation = spline
+                        .control_points
+                        .first()
+                        .or_else(|| spline.fit_points.first())
+                        .map(|p| p.z)
+                        .unwrap_or(0.0);
+                    spline.degree = reversed.degree() as i32;
+                    spline.knots = reversed.knots().to_vec();
+                    spline.control_points = reversed
+                        .control_points()
+                        .iter()
+                        .map(|p| Vector3::new(p[0], p[1], elevation))
+                        .collect();
+                    spline.weights = if reversed.is_rational() {
+                        reversed.weights().to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                }
+                // Nothing the kernel can read — a spline with too few points
+                // to describe a curve. Reversing its stored points is still
+                // the honest answer.
+                None => spline.control_points.reverse(),
+            }
         }
         _ => {}
     }
