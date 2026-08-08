@@ -20,7 +20,6 @@ dependencies = [
  "ashpd",
  "bincode",
  "bytemuck",
- "cavalier_contours",
  "clap",
  "console_error_panic_hook",
  "cosmic-text 0.15.0",
@@ -86,7 +85,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadifc"
 version = "0.5.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=08a3d71#08a3d71f567cd72ee1ae3e7a8099054646756747"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=0a61cf9#0a61cf98b6736e070e02be3bc7a1818ff7522095"
 dependencies = [
  "acadrust",
  "base64 0.22.1",
@@ -946,7 +945,10 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git#46e76ccb737a3682ffccf5117e89879ebfd1e227"
+source = "git+https://github.com/HakanSeven12/cadkernel.git#9c7b2b75ab76806d086f2e7eca17750771150dba"
+dependencies = [
+ "cavalier_contours",
+]
 
 [[package]]
 name = "calloop"
