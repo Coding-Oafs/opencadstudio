@@ -1,6 +1,6 @@
 use super::*;
 
-use acadrust::kernel::geom2d::{bounded_faces, Line};
+use acadrust::kernel::geom2d::{bounded_faces, Line, Tolerance};
 
 /// How far apart two points may be and still be taken for the same one.
 ///
@@ -65,6 +65,6 @@ impl Scene {
             }
         }
 
-        bounded_faces(&segments, WELD_TOLERANCE)
+        bounded_faces(&segments, Tolerance::new(WELD_TOLERANCE))
     }
 }
