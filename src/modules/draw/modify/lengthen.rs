@@ -11,12 +11,17 @@ use crate::modules::draw::modify::spline_ops::{spline_cut, spline_to_nurbs};
 use acadrust::entities::{
     Arc as ArcEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline, Spline as SplineEnt,
 };
+use acadrust::kernel::geom2d::{
+    Curve, Ellipse as KernelEllipse, EllipseArc as KernelEllipseArc,
+};
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::{DVec3, Vec3};
 use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
+
+const TAU: f64 = std::f64::consts::TAU;
 
 pub struct LengthenCommand {
     state: LenState,
@@ -263,70 +268,63 @@ fn lengthen_ellipse(ell: &EllipseEnt, pick_pt: Vec3, mode: &LenMode) -> Option<E
     let t0 = ell.start_parameter;
     let mut t1 = ell.end_parameter;
     if t1 <= t0 {
-        t1 += std::f64::consts::TAU;
+        t1 += TAU;
     }
-    let span = t1 - t0;
 
-    // Approximate arc length via 128-point Gaussian quadrature estimate.
-    let arc_len_approx = |span: f64| -> f64 {
-        let n = 128usize;
-        let mut len = 0.0;
-        for i in 0..n {
-            let ti = t0 + span * (i as f64 / n as f64);
-            let tip = t0 + span * ((i + 1) as f64 / n as f64);
-            let xi = a * ti.cos() * nx - b * ti.sin() * ny + ell.center.x;
-            let yi = a * ti.cos() * ny + b * ti.sin() * nx + ell.center.y;
-            let xip = a * tip.cos() * nx - b * tip.sin() * ny + ell.center.x;
-            let yip = a * tip.cos() * ny + b * tip.sin() * nx + ell.center.y;
-            len += (xip - xi).hypot(yip - yi);
-        }
-        len
+    // Measured by the kernel rather than by a hundred and twenty-eight
+    // chords: the chord sum reads short, so LENGTHEN's idea of "current" was
+    // already below the true length before a delta was applied to it.
+    let shape = KernelEllipse {
+        centre: [ell.center.x, ell.center.y],
+        major_radius: a,
+        minor_radius: b,
+        major_axis: [nx, ny],
     };
-
-    let current_len = arc_len_approx(span);
+    let arc = |from: f64, to: f64| {
+        Curve::Ellipse(KernelEllipseArc {
+            ellipse: shape,
+            start_parameter: from,
+            end_parameter: to,
+        })
+    };
+    let current_len = arc(t0, t1).length();
     if current_len < 1e-10 {
         return None;
     }
-
     let new_len = apply_mode(current_len, mode)?;
     if new_len < 1e-10 {
         return None;
     }
 
-    // Find the new span via bisection so that arc_len_approx(new_span) ≈ new_len.
-    let max_span = std::f64::consts::TAU;
-    let mut lo = 0.0f64;
-    let mut hi = max_span;
-    for _ in 0..40 {
-        let mid = (lo + hi) * 0.5;
-        if arc_len_approx(mid) < new_len {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let new_span = (lo + hi) * 0.5;
-
-    // Determine which end is closer to pick_pt (use DXF XY plane).
-    let p_x = pick_pt.x as f64;
-    let p_y = pick_pt.y as f64;
-    let pt_start_x = ell.center.x + a * t0.cos() * nx - b * t0.sin() * ny;
-    let pt_start_y = ell.center.y + a * t0.cos() * ny + b * t0.sin() * nx;
-    let pt_end_x = ell.center.x + a * t1.cos() * nx - b * t1.sin() * ny;
-    let pt_end_y = ell.center.y + a * t1.cos() * ny + b * t1.sin() * nx;
-    let dist_start = (p_x - pt_start_x).hypot(p_y - pt_start_y);
-    let dist_end = (p_x - pt_end_x).hypot(p_y - pt_end_y);
+    // Which end is closer to the pick, in the DXF XY plane.
+    let point_at = |t: f64| {
+        (
+            ell.center.x + a * t.cos() * nx - b * t.sin() * ny,
+            ell.center.y + a * t.cos() * ny + b * t.sin() * nx,
+        )
+    };
+    let (p_x, p_y) = (pick_pt.x as f64, pick_pt.y as f64);
+    let (sx, sy) = point_at(t0);
+    let (ex, ey) = point_at(t1);
+    let extend_end = (p_x - ex).hypot(p_y - ey) <= (p_x - sx).hypot(p_y - sy);
 
     let mut result = ell.clone();
     result.common.handle = Handle::NULL;
-
-    if dist_end <= dist_start {
-        result.end_parameter = t0 + new_span;
+    if extend_end {
+        // Walk `new_len` forward from the fixed start. A whole turn is the
+        // most there is to walk, and the kernel clamps to it.
+        let whole = arc(t0, t0 + TAU);
+        result.end_parameter = t0 + whole.parameter_at_distance(new_len) * TAU;
     } else {
-        result.start_parameter = t1 - new_span;
+        // The same measured backwards from the fixed end: the last `new_len`
+        // of a whole turn ending at t1.
+        let whole = arc(t1 - TAU, t1);
+        let from_start = whole.length() - new_len;
+        result.start_parameter = t1 - TAU + whole.parameter_at_distance(from_start) * TAU;
     }
     Some(EntityType::Ellipse(result))
 }
+
 
 fn apply_mode(current: f64, mode: &LenMode) -> Option<f64> {
     match mode {
@@ -337,9 +335,9 @@ fn apply_mode(current: f64, mode: &LenMode) -> Option<f64> {
 }
 
 fn arc_span_rad(start: f64, end: f64) -> f64 {
-    let span = (end - start).rem_euclid(std::f64::consts::TAU);
+    let span = (end - start).rem_euclid(TAU);
     if span < 1e-6 {
-        std::f64::consts::TAU
+        TAU
     } else {
         span
     }
@@ -410,103 +408,44 @@ fn lengthen_lwpoly(poly: &LwPolyline, pick_pt: Vec3, mode: &LenMode) -> Option<E
 }
 
 fn lengthen_spline(spl: &SplineEnt, pick_pt: Vec3, mode: &LenMode) -> Option<EntityType> {
-    let curve = spline_to_nurbs(spl)?;
-    let (t0, t1) = curve.domain();
+    let nurbs = spline_to_nurbs(spl)?;
+    let (t0, t1) = nurbs.domain();
     if (t1 - t0).abs() < 1e-12 {
         return None;
     }
-
-    // Approximate arc length via 64-point numerical integration.
-    let arc_len = {
-        let n = 64usize;
-        let mut len = 0.0f64;
-        for i in 0..n {
-            let ta = t0 + (t1 - t0) * (i as f64 / n as f64);
-            let tb = t0 + (t1 - t0) * ((i + 1) as f64 / n as f64);
-            let pa = curve.point_at_knot(ta);
-            let pb = curve.point_at_knot(tb);
-            len += (pb[0] - pa[0]).hypot(pb[1] - pa[1]);
-        }
-        len
-    };
+    let curve = Curve::Nurbs(nurbs.clone());
+    let arc_len = curve.length();
     if arc_len < 1e-10 {
         return None;
     }
-
     let new_len = apply_mode(arc_len, mode)?;
-    if new_len < 1e-10 {
+    if new_len < 1e-10 || new_len >= arc_len {
+        // A spline is shortened by splitting it, so there is nothing to keep
+        // if the new length is the whole of it or more. Extending would mean
+        // continuing the curve past its own control polygon, which is a
+        // different operation from cutting one.
         return None;
     }
 
-    // Determine which end (start or end) is closer to pick_pt.
-    let p_start = curve.point_at_knot(t0);
-    let p_end = curve.point_at_knot(t1);
-    let dist_start = (p_start[0] - pick_pt.x as f64).hypot(p_start[1] - pick_pt.y as f64);
-    let dist_end = (p_end[0] - pick_pt.x as f64).hypot(p_end[1] - pick_pt.y as f64);
-    let extend_end = dist_end <= dist_start;
+    let p_start = nurbs.point_at_knot(t0);
+    let p_end = nurbs.point_at_knot(t1);
+    let (px, py) = (pick_pt.x as f64, pick_pt.y as f64);
+    let extend_end = (p_end[0] - px).hypot(p_end[1] - py)
+        <= (p_start[0] - px).hypot(p_start[1] - py);
 
-    // Find the parameter `t_new` such that the arc length from the fixed end to t_new = new_len.
-    // Use bisection on cumulative arc length.
-    let fixed_t = if extend_end { t0 } else { t1 };
-    let delta_ratio = new_len / arc_len;
-
-    // Find t_new via bisection: cumulative_len(fixed_t..t_new) = new_len.
-    let cum_len = |t_end_param: f64| -> f64 {
-        let (lo, hi) = if extend_end {
-            (t0, t_end_param)
-        } else {
-            (t_end_param, t1)
-        };
-        if hi <= lo {
-            return 0.0;
-        }
-        let n = 32usize;
-        let mut len = 0.0f64;
-        for i in 0..n {
-            let ta = lo + (hi - lo) * (i as f64 / n as f64);
-            let tb = lo + (hi - lo) * ((i + 1) as f64 / n as f64);
-            let pa = curve.point_at_knot(ta);
-            let pb = curve.point_at_knot(tb);
-            len += (pb[0] - pa[0]).hypot(pb[1] - pa[1]);
-        }
-        len
-    };
-
-    let (mut lo_t, mut hi_t) = if extend_end {
-        (t0, t0 + delta_ratio * (t1 - t0) * 2.0)
+    // Where to cut, by distance along the curve rather than by a bisection
+    // over repeated chord sums. Keeping the head means cutting `new_len` from
+    // the start; keeping the tail means cutting what is left over.
+    let along = if extend_end {
+        new_len
     } else {
-        (t1 - delta_ratio * (t1 - t0) * 2.0, t1)
+        arc_len - new_len
     };
-    // Clamp to valid range with some buffer for extension.
-    let buf = (t1 - t0) * 0.5;
-    lo_t = lo_t.max(t0 - buf);
-    hi_t = hi_t.min(t1 + buf);
-
-    for _ in 0..40 {
-        let mid = (lo_t + hi_t) * 0.5;
-        if cum_len(mid) < new_len {
-            if extend_end {
-                hi_t = mid;
-            } else {
-                lo_t = mid;
-            }
-        } else {
-            if extend_end {
-                lo_t = mid;
-            } else {
-                hi_t = mid;
-            }
-        }
-    }
-    let t_new = (lo_t + hi_t) * 0.5;
-    let _ = fixed_t;
-
-    // Split the spline at t_new and keep the side the pick asked for.
-    let cut = t_new.clamp(t0 + 1e-10, t1 - 1e-10);
+    let at = curve.parameter_at_distance(along);
+    let cut = (t0 + at * (t1 - t0)).clamp(t0 + 1e-10, t1 - 1e-10);
     let (left, right) = spline_cut(spl, cut)?;
     Some(EntityType::Spline(if extend_end { left } else { right }))
 }
-
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["LENGTHEN"] });  // LengthenCommand
