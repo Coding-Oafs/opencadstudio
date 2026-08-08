@@ -33,14 +33,14 @@ use acadrust::kernel::geom2d::{
     intersect as kernel_intersect, Arc as KernelArc, Circle as KernelCircle, Curve,
     Extent as KernelExtent,
     Ellipse as KernelEllipse, EllipseArc as KernelEllipseArc, Line as KernelLine,
-    Polyline as KernelPolyline, PolylineVertex as KernelVertex, Ray as KernelRay,
-    Tolerance as KernelTolerance, XLine as KernelXLine,
+    NurbsCurve, Ray as KernelRay, Tolerance as KernelTolerance, XLine as KernelXLine,
 };
+
+use crate::entities::curve::entity_curve_xy;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::draw::modify::spline_ops::{
-    spline_cut, spline_nearest_t, spline_pts_wire, spline_range, spline_sample_xy,
-    spline_to_nurbs, t_to_rel,
+    spline_cut, spline_nearest_t, spline_pts_wire, spline_range, spline_to_nurbs, t_to_rel,
 };
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
@@ -74,6 +74,11 @@ pub const DROPDOWN_ITEMS: &[(&str, &str, IconKind)] = &[
 
 /// Virtual extent used to represent infinite ends of Ray / XLine.
 const TRIM_EXTENT: f64 = 1_000_000.0;
+
+/// Sampling density for the plan-view point lists the fence and preview
+/// passes walk. The renderer's own figure, so a preview cut lands where the
+/// drawn geometry is rather than a chord away from it.
+const SAMPLE_SEGMENTS_PER_RADIAN: f64 = acadrust::kernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
 /// If a trim interval endpoint is beyond this threshold it is treated as "infinite".
 
 #[derive(Clone)]
@@ -125,9 +130,14 @@ enum Geo {
         t0: f64, // start parameter
         t1: f64, // end parameter (may be > 2π if wrapped)
     },
-    /// Spline represented as sampled polyline segments (DXF XY).
+    /// A NURBS boundary, carried exactly.
+    ///
+    /// `segs` is a sampling of the same curve, kept only for the two
+    /// hand-rolled ray walks in the polyline-extend paths. Every crossing
+    /// that decides a trim uses `curve`.
     Spline {
         handle: Handle,
+        curve: Box<NurbsCurve>,
         segs: Vec<([f64; 2], [f64; 2])>,
     },
 }
@@ -179,78 +189,80 @@ fn build_geos(entities: &[EntityType]) -> Vec<Geo> {
 /// Ellipse / Spline) into a `Geo`, tagged with `h`. Returns `None` for types
 /// that do not act as trim boundaries.
 fn geo_from_entity(h: Handle, e: &EntityType) -> Option<Geo> {
-    match e {
-                EntityType::Line(l) => Some(Geo::Line {
-                    handle: h,
-                    p1: [l.start.x, l.start.y],
-                    p2: [l.end.x, l.end.y],
-                }),
-                EntityType::Arc(a) => Some(Geo::Arc {
-                    handle: h,
-                    cx: a.center.x,
-                    cy: a.center.y,
-                    r: a.radius,
-                    a0: a.start_angle,
-                    a1: a.end_angle,
-                }),
-                EntityType::Circle(c) => Some(Geo::Circle {
-                    handle: h,
-                    cx: c.center.x,
-                    cy: c.center.y,
-                    r: c.radius,
-                }),
-                EntityType::Ray(r) => Some(Geo::Ray {
-                    handle: h,
-                    bx: r.base_point.x,
-                    by: r.base_point.y,
-                    dx: r.direction.x,
-                    dy: r.direction.y,
-                }),
-                EntityType::XLine(x) => Some(Geo::InfLine {
-                    handle: h,
-                    bx: x.base_point.x,
-                    by: x.base_point.y,
-                    dx: x.direction.x,
-                    dy: x.direction.y,
-                }),
-                EntityType::Ellipse(e) => {
-                    let mx = e.major_axis.x;
-                    let my = e.major_axis.y;
-                    let a = (mx * mx + my * my).sqrt();
-                    if a < 1e-9 {
-                        return None;
-                    }
-                    let (nx, ny) = (mx / a, my / a);
-                    let b = a * e.minor_axis_ratio;
-                    let t0 = e.start_parameter;
-                    let mut t1 = e.end_parameter;
-                    if t1 <= t0 {
-                        t1 += TAU;
-                    }
-                    Some(Geo::Ellipse {
-                        handle: h,
-                        cx: e.center.x,
-                        cy: e.center.y,
-                        a,
-                        b,
-                        nx,
-                        ny,
-                        t0,
-                        t1,
-                    })
-                }
-                EntityType::Spline(s) => {
-                    let (_, pts) = spline_sample_xy(s, 64);
-                    if pts.len() < 2 {
-                        return None;
-                    }
-                    let segs = pts
-                        .windows(2)
-                        .map(|w| ([w[0][0], w[0][1]], [w[1][0], w[1][1]]))
-                        .collect();
-                    Some(Geo::Spline { handle: h, segs })
-                }
-        _ => None,
+    // The geometry itself comes from the one converter, in plan-view
+    // coordinates. What is left here is only the shape of the boundary
+    // record, which the edit options need to mutate — `imply_edge_geos` turns
+    // a segment into an infinite line and opens an arc into a full circle,
+    // neither of which a bare curve says.
+    match entity_curve_xy(e)? {
+        Curve::Line(line) => Some(Geo::Line {
+            handle: h,
+            p1: line.start,
+            p2: line.end,
+        }),
+        Curve::Arc(arc) => Some(Geo::Arc {
+            handle: h,
+            cx: arc.centre[0],
+            cy: arc.centre[1],
+            r: arc.radius,
+            a0: arc.start_angle,
+            a1: arc.end_angle,
+        }),
+        Curve::Circle(circle) => Some(Geo::Circle {
+            handle: h,
+            cx: circle.centre[0],
+            cy: circle.centre[1],
+            r: circle.radius,
+        }),
+        Curve::Ray(ray) => Some(Geo::Ray {
+            handle: h,
+            bx: ray.origin[0],
+            by: ray.origin[1],
+            dx: ray.direction[0],
+            dy: ray.direction[1],
+        }),
+        Curve::XLine(line) => Some(Geo::InfLine {
+            handle: h,
+            bx: line.base[0],
+            by: line.base[1],
+            dx: line.direction[0],
+            dy: line.direction[1],
+        }),
+        Curve::Ellipse(arc) => {
+            let ellipse = arc.ellipse;
+            if ellipse.major_radius < 1e-9 {
+                return None;
+            }
+            let t0 = arc.start_parameter;
+            let mut t1 = arc.end_parameter;
+            if t1 <= t0 {
+                t1 += TAU;
+            }
+            Some(Geo::Ellipse {
+                handle: h,
+                cx: ellipse.centre[0],
+                cy: ellipse.centre[1],
+                a: ellipse.major_radius,
+                b: ellipse.minor_radius,
+                nx: ellipse.major_axis[0],
+                ny: ellipse.major_axis[1],
+                t0,
+                t1,
+            })
+        }
+        Curve::Nurbs(curve) => {
+            // Carried exactly. The sampled polyline beside it is only for the
+            // two hand-rolled ray walks in the polyline-extend paths; every
+            // crossing that decides a trim goes through the curve itself.
+            let sampled = curve.tessellate(16);
+            (sampled.len() >= 2).then(|| Geo::Spline {
+                handle: h,
+                curve: Box::new(curve),
+                segs: sampled.windows(2).map(|w| (w[0], w[1])).collect(),
+            })
+        }
+        // A polyline reaches here already taken apart into its segments.
+        Curve::Polyline(_) => None,
     }
 }
 
@@ -313,23 +325,11 @@ fn geo_to_curve(geo: &Geo) -> Option<Curve> {
             start_parameter: *t0,
             end_parameter: *t1,
         }),
-        // Boundary splines arrive already sampled into segments, so they stay
-        // a chain of straight pieces here.
-        Geo::Spline { segs, .. } => {
-            let mut vertices: Vec<KernelVertex> = segs
-                .iter()
-                .map(|(from, _)| KernelVertex::straight(*from))
-                .collect();
-            let last = segs.last()?.1;
-            vertices.push(KernelVertex::straight(last));
-            if vertices.len() < 2 {
-                return None;
-            }
-            Curve::Polyline(KernelPolyline {
-                vertices,
-                closed: false,
-            })
-        }
+        // Exactly, not through its sampling. The kernel intersects a NURBS by
+        // subdivision against a bounding box, so a boundary spline cuts where
+        // it actually runs rather than where a 64-chord approximation of it
+        // does.
+        Geo::Spline { curve, .. } => Curve::Nurbs((**curve).clone()),
     })
 }
 
@@ -1128,7 +1128,7 @@ fn extend_lwpoly(
                     }
                 }
             }
-            Geo::Spline { handle, segs } => {
+            Geo::Spline { handle, segs, .. } => {
                 if *handle == target {
                     continue;
                 }
@@ -1306,7 +1306,7 @@ fn extend_line(orig: &LineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityType>
                     }
                 }
             }
-            Geo::Spline { handle, segs } => {
+            Geo::Spline { handle, segs, .. } => {
                 if *handle == target {
                     continue;
                 }
@@ -1959,15 +1959,8 @@ fn imply_edge_geos(geos: &mut [Geo]) {
 /// supports (adds Circle / Ray / XLine over `sample_entity_xy`).
 fn fence_sample_xy(e: &EntityType) -> Vec<[f64; 2]> {
     match e {
-        EntityType::Circle(c) => {
-            let steps = 64usize;
-            (0..=steps)
-                .map(|i| {
-                    let a = TAU * (i as f64 / steps as f64);
-                    [c.center.x + c.radius * a.cos(), c.center.y + c.radius * a.sin()]
-                })
-                .collect()
-        }
+        // The two unbounded kinds, which `sample_entity_xy` declines to
+        // guess a length for. Here there is one: as far as a trim reaches.
         EntityType::Ray(r) => vec![
             [r.base_point.x, r.base_point.y],
             [
@@ -3846,69 +3839,45 @@ fn extrim_circle(orig: &CircleEnt, ts: &[f64], side: &dyn Fn([f64; 2]) -> bool) 
 }
 
 /// Sample any entity to a dense XY polyline for the sampled trim path.
+/// Plan-view sampling of any entity, at the density the editing previews
+/// have always used.
+///
+/// One tessellation rather than a case per type. The per-type version this
+/// replaced had drifted from the drawing's own: it sampled an arc at 16
+/// segments per radian against the renderer's 20, sampled a spline at a
+/// fixed 96 points however long it was, and read an arc's centre as world
+/// coordinates when the entity stores it in its OCS.
+///
+/// Unbounded curves come back empty — a ray has no finite point list, and
+/// how far to run it is the caller's decision. [`fence_sample_xy`] makes it.
 fn sample_entity_xy(e: &EntityType) -> Vec<[f64; 2]> {
-    match e {
-        EntityType::Line(l) => vec![[l.start.x, l.start.y], [l.end.x, l.end.y]],
-        EntityType::Arc(a) => {
-            let span = {
-                let s = norm(a.end_angle) - norm(a.start_angle);
-                if s <= 0.0 {
-                    s + TAU
-                } else {
-                    s
-                }
-            };
-            let steps = (span.abs() * 16.0).ceil().max(4.0) as usize;
-            (0..=steps)
-                .map(|i| {
-                    let ang = norm(a.start_angle) + span * (i as f64 / steps as f64);
-                    [
-                        a.center.x + a.radius * ang.cos(),
-                        a.center.y + a.radius * ang.sin(),
-                    ]
-                })
-                .collect()
-        }
+    // A polyline is sampled through its exploded segments so that a caller
+    // walking the result sees the same seams the rest of TRIM does.
+    if matches!(
+        e,
         EntityType::LwPolyline(_)
-        | EntityType::Polyline(_)
-        | EntityType::Polyline2D(_)
-        | EntityType::Polyline3D(_) => {
-            let mut pts: Vec<[f64; 2]> = Vec::new();
-            for seg in crate::modules::draw::modify::explode::explode_polyline_segments(e) {
-                let sp = sample_entity_xy(&seg);
-                if pts.last() == sp.first() {
-                    pts.extend_from_slice(&sp[1..]);
-                } else {
-                    pts.extend(sp);
-                }
+            | EntityType::Polyline(_)
+            | EntityType::Polyline2D(_)
+            | EntityType::Polyline3D(_)
+    ) {
+        let mut pts: Vec<[f64; 2]> = Vec::new();
+        for seg in crate::modules::draw::modify::explode::explode_polyline_segments(e) {
+            let sp = sample_entity_xy(&seg);
+            if pts.last() == sp.first() {
+                pts.extend_from_slice(&sp[1..]);
+            } else {
+                pts.extend(sp);
             }
-            pts
         }
-        EntityType::Ellipse(el) => {
-            let mx = el.major_axis.x;
-            let my = el.major_axis.y;
-            let a = (mx * mx + my * my).sqrt();
-            if a < 1e-9 {
-                return vec![];
-            }
-            let (nx, ny) = (mx / a, my / a);
-            let b = a * el.minor_axis_ratio;
-            let t0 = el.start_parameter;
-            let mut t1 = el.end_parameter;
-            if t1 <= t0 {
-                t1 += TAU;
-            }
-            ellipse_pts(el.center.x, el.center.y, a, b, nx, ny, t0, t1, el.center.z)
-                .into_iter()
-                .map(|p| [p[0] as f64, p[1] as f64])
-                .collect()
-        }
-        EntityType::Spline(s) => {
-            let (_, pts) = spline_sample_xy(s, 96);
-            pts.into_iter().map(|p| [p[0], p[1]]).collect()
-        }
-        _ => vec![],
+        return pts;
     }
+    let Some(curve) = entity_curve_xy(e) else {
+        return vec![];
+    };
+    if curve.extent() != KernelExtent::Bounded {
+        return vec![];
+    }
+    curve.tessellate(SAMPLE_SEGMENTS_PER_RADIAN)
 }
 
 /// Dense XY sampling of any entity for the removal preview (lines are
