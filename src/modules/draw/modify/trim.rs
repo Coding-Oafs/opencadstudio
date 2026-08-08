@@ -75,7 +75,6 @@ pub const DROPDOWN_ITEMS: &[(&str, &str, IconKind)] = &[
 /// Virtual extent used to represent infinite ends of Ray / XLine.
 const TRIM_EXTENT: f64 = 1_000_000.0;
 /// If a trim interval endpoint is beyond this threshold it is treated as "infinite".
-const INF_T: f64 = 0.9999;
 
 #[derive(Clone)]
 enum Geo {
@@ -357,6 +356,23 @@ fn cut_params(target: &Curve, handle: Handle, geos: &[Geo]) -> Vec<f64> {
     ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     ts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
     ts
+}
+
+/// A Ray entity as the kernel curve it is, so its parameter is the ray's own
+/// rather than a fraction of some invented length.
+fn ray_curve(r: &RayEnt) -> Curve {
+    Curve::Ray(KernelRay {
+        origin: [r.base_point.x, r.base_point.y],
+        direction: [r.direction.x, r.direction.y],
+    })
+}
+
+/// An XLine entity as the kernel curve it is.
+fn xline_curve(x: &XLineEnt) -> Curve {
+    Curve::XLine(KernelXLine {
+        base: [x.base_point.x, x.base_point.y],
+        direction: [x.direction.x, x.direction.y],
+    })
 }
 
 /// How close two points have to be to count as a crossing.
@@ -641,9 +657,24 @@ fn extend_spline(spl: &SplineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityTy
 
 /// Remove the t-interval containing `t_click` from sorted ts.  Returns surviving pieces.
 fn trim_intervals(ts: &[f64], t_click: f64) -> Vec<(f64, f64)> {
-    let mut bounds = vec![0.0f64];
+    cut_intervals(ts, t_click, KernelExtent::Bounded)
+}
+
+/// The stretches a target keeps after the one holding the click is removed.
+///
+/// The outer bounds come from how far the target's parameter runs, so a ray
+/// keeps an interval that reaches infinity rather than one that stops at an
+/// invented far end. Those infinities are what tell the caller a surviving
+/// piece is still unbounded.
+fn cut_intervals(ts: &[f64], t_click: f64, extent: KernelExtent) -> Vec<(f64, f64)> {
+    let (first, last) = match extent {
+        KernelExtent::Bounded => (0.0, 1.0),
+        KernelExtent::Forward => (0.0, f64::INFINITY),
+        KernelExtent::Infinite => (f64::NEG_INFINITY, f64::INFINITY),
+    };
+    let mut bounds = vec![first];
     bounds.extend_from_slice(ts);
-    bounds.push(1.0);
+    bounds.push(last);
     bounds.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
     let remove = bounds
@@ -1314,8 +1345,10 @@ fn extend_line(orig: &LineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityType>
 }
 
 /// Trim a Ray entity.
-/// Virtual t ∈ [0,1]: t=0 → base_point, t=1 → base + TRIM_EXTENT * dir.
-/// Surviving pieces become Lines (finite) or Rays (still semi-infinite).
+///
+/// The parameter is the ray's own: `t = 0` at the base and advancing by one
+/// `direction` per unit, unbounded above. A surviving piece that reaches
+/// infinity stays a Ray; one with two ends becomes a Line.
 fn trim_ray(orig: &RayEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let bx = orig.base_point.x;
     let by = orig.base_point.y;
@@ -1323,24 +1356,18 @@ fn trim_ray(orig: &RayEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let dx = orig.direction.x;
     let dy = orig.direction.y;
     let dz = orig.direction.z;
-    let pt = |t: f64| {
-        [
-            bx + t * dx * TRIM_EXTENT,
-            by + t * dy * TRIM_EXTENT,
-            bz + t * dz * TRIM_EXTENT,
-        ]
-    };
+    let pt = |t: f64| [bx + t * dx, by + t * dy, bz + t * dz];
 
-    trim_intervals(ts, t_click)
+    cut_intervals(ts, t_click, KernelExtent::Forward)
         .into_iter()
         .filter_map(|(ta, tb)| {
             let pa = pt(ta);
             let pb = pt(tb);
-            if (pb[0] - pa[0]).hypot(pb[1] - pa[1]) < 1e-6 {
+            if tb.is_finite() && (pb[0] - pa[0]).hypot(pb[1] - pa[1]) < 1e-6 {
                 return None;
             }
 
-            if tb > INF_T {
+            if tb.is_infinite() {
                 // Still extends to infinity → remains a Ray with new base
                 let r = RayEnt::new(Vector3::new(pa[0], pa[1], pa[2]), Vector3::new(dx, dy, dz));
                 let mut r = r;
@@ -1363,8 +1390,11 @@ fn trim_ray(orig: &RayEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
 }
 
 /// Trim an XLine entity.
-/// Virtual t ∈ [0,1]: t=0 → base - dir*TRIM_EXTENT, t=0.5 → base, t=1 → base + dir*TRIM_EXTENT.
-/// Surviving pieces become Lines (finite), Rays (one infinite end), or the original XLine (both ends).
+///
+/// The parameter is the line's own: `t = 0` at the base point, advancing by
+/// one `direction` per unit and running both ways without limit. A surviving
+/// piece keeps whichever ends reach infinity — both, and it is still an XLine;
+/// one, and it is a Ray; neither, and it is a Line.
 fn trim_xline(orig: &XLineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let bx = orig.base_point.x;
     let by = orig.base_point.y;
@@ -1372,23 +1402,15 @@ fn trim_xline(orig: &XLineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let dx = orig.direction.x;
     let dy = orig.direction.y;
     let dz = orig.direction.z;
-    // Point at virtual t: scale factor s = 2t - 1 ∈ [-1, +1]
-    let pt = |t: f64| {
-        let s = 2.0 * t - 1.0;
-        [
-            bx + s * dx * TRIM_EXTENT,
-            by + s * dy * TRIM_EXTENT,
-            bz + s * dz * TRIM_EXTENT,
-        ]
-    };
+    let pt = |t: f64| [bx + t * dx, by + t * dy, bz + t * dz];
 
-    trim_intervals(ts, t_click)
+    cut_intervals(ts, t_click, KernelExtent::Infinite)
         .into_iter()
         .filter_map(|(ta, tb)| {
             let pa = pt(ta);
             let pb = pt(tb);
-            let ext_neg = ta < 1.0 - INF_T; // extends toward -infinity
-            let ext_pos = tb > INF_T; // extends toward +infinity
+            let ext_neg = ta.is_infinite();
+            let ext_pos = tb.is_infinite();
 
             match (ext_neg, ext_pos) {
                 (true, true) => {
@@ -1770,43 +1792,21 @@ fn pick_trim_at(
                 Some(survivors)
             }
             Some(EntityType::Ray(r)) => {
-                // Virtual segment: base → base + dir * TRIM_EXTENT (t ∈ [0,1])
-                let bx = r.base_point.x;
-                let by = r.base_point.y;
-                let ex = bx + r.direction.x * TRIM_EXTENT;
-                let ey = by + r.direction.y * TRIM_EXTENT;
-                let ts = line_seg_ts(bx, by, ex, ey, handle, geos);
+                let curve = ray_curve(r);
+                let ts = cut_params(&curve, handle, geos);
                 if ts.is_empty() {
                     return None;
                 }
-                let dx = r.direction.x * TRIM_EXTENT;
-                let dy = r.direction.y * TRIM_EXTENT;
-                let len2 = dx * dx + dy * dy;
-                let t_click = if len2 > 1e-12 {
-                    ((px - bx) * dx + (py - by) * dy) / len2
-                } else {
-                    0.5
-                };
+                let t_click = curve.parameter_at([px, py]);
                 Some(trim_ray(r, &ts, t_click))
             }
             Some(EntityType::XLine(x)) => {
-                // Virtual segment: base - dir*TRIM_EXTENT → base + dir*TRIM_EXTENT
-                let bx = x.base_point.x - x.direction.x * TRIM_EXTENT;
-                let by = x.base_point.y - x.direction.y * TRIM_EXTENT;
-                let ex = x.base_point.x + x.direction.x * TRIM_EXTENT;
-                let ey = x.base_point.y + x.direction.y * TRIM_EXTENT;
-                let ts = line_seg_ts(bx, by, ex, ey, handle, geos);
+                let curve = xline_curve(x);
+                let ts = cut_params(&curve, handle, geos);
                 if ts.is_empty() {
                     return None;
                 }
-                let dx = ex - bx;
-                let dy = ey - by;
-                let len2 = dx * dx + dy * dy;
-                let t_click = if len2 > 1e-12 {
-                    ((px - bx) * dx + (py - by) * dy) / len2
-                } else {
-                    0.5
-                };
+                let t_click = curve.parameter_at([px, py]);
                 Some(trim_xline(x, &ts, t_click))
             }
             Some(EntityType::Ellipse(e)) => {
@@ -1929,13 +1929,21 @@ fn pick_extend_at(
 fn imply_edge_geos(geos: &mut [Geo]) {
     for g in geos.iter_mut() {
         match g {
-            Geo::Line { p1, p2, .. } => {
+            Geo::Line { handle, p1, p2 } => {
                 let (dx, dy) = (p2[0] - p1[0], p2[1] - p1[1]);
-                let len = dx.hypot(dy);
-                if len > 1e-9 {
-                    let (ux, uy) = (dx / len, dy / len);
-                    *p1 = [p1[0] - ux * TRIM_EXTENT, p1[1] - uy * TRIM_EXTENT];
-                    *p2 = [p2[0] + ux * TRIM_EXTENT, p2[1] + uy * TRIM_EXTENT];
+                if dx.hypot(dy) > 1e-9 {
+                    // An implied edge cuts wherever the boundary's line would
+                    // reach, which is what an infinite line is. Stretching the
+                    // segment to a stand-in length instead both invents a
+                    // limit and, at survey coordinates, is no larger than the
+                    // coordinates themselves.
+                    *g = Geo::InfLine {
+                        handle: *handle,
+                        bx: p1[0],
+                        by: p1[1],
+                        dx,
+                        dy,
+                    };
                 }
             }
             Geo::Arc { a0, a1, .. } => {
@@ -2876,20 +2884,12 @@ impl CadCommand for TrimCommand {
             Some(EntityType::Ray(r)) => {
                 let bx = r.base_point.x;
                 let by = r.base_point.y;
-                let ex = bx + r.direction.x * TRIM_EXTENT;
-                let ey = by + r.direction.y * TRIM_EXTENT;
-                let ts = line_seg_ts(bx, by, ex, ey, handle, geos);
+                let curve = ray_curve(r);
+                let ts = cut_params(&curve, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
-                let dx = r.direction.x * TRIM_EXTENT;
-                let dy = r.direction.y * TRIM_EXTENT;
-                let len2 = dx * dx + dy * dy;
-                let t_click = if len2 > 1e-12 {
-                    ((pt.x as f64 - bx) * dx + (pt.y as f64 - by) * dy) / len2
-                } else {
-                    0.5
-                };
+                let t_click = curve.parameter_at([pt.x as f64, pt.y as f64]);
                 let survivors = trim_ray(r, &ts, t_click);
                 // Show a finite preview section (20 units) for the original ray
                 let far = [
@@ -2914,22 +2914,12 @@ impl CadCommand for TrimCommand {
             Some(EntityType::XLine(x)) => {
                 let bx = x.base_point.x;
                 let by = x.base_point.y;
-                let ex_start = bx - x.direction.x * TRIM_EXTENT;
-                let ey_start = by - x.direction.y * TRIM_EXTENT;
-                let ex_end = bx + x.direction.x * TRIM_EXTENT;
-                let ey_end = by + x.direction.y * TRIM_EXTENT;
-                let ts = line_seg_ts(ex_start, ey_start, ex_end, ey_end, handle, geos);
+                let curve = xline_curve(x);
+                let ts = cut_params(&curve, handle, geos);
                 if ts.is_empty() {
                     return vec![];
                 }
-                let dx = ex_end - ex_start;
-                let dy = ey_end - ey_start;
-                let len2 = dx * dx + dy * dy;
-                let t_click = if len2 > 1e-12 {
-                    ((pt.x as f64 - ex_start) * dx + (pt.y as f64 - ey_start) * dy) / len2
-                } else {
-                    0.5
-                };
+                let t_click = curve.parameter_at([pt.x as f64, pt.y as f64]);
                 let survivors = trim_xline(x, &ts, t_click);
                 let neg = [
                     (bx - x.direction.x * 20.0) as f32,
@@ -3727,14 +3717,18 @@ mod tests {
 /// drawing (EXTRIM treats a line boundary as infinite).
 fn extend_line_geos(geos: &mut [Geo]) {
     for g in geos.iter_mut() {
-        if let Geo::Line { p1, p2, .. } = g {
+        if let Geo::Line { handle, p1, p2 } = g {
             let (dx, dy) = (p2[0] - p1[0], p2[1] - p1[1]);
-            let len = dx.hypot(dy);
-            if len > 1e-9 {
-                let (ux, uy) = (dx / len, dy / len);
-                let mid = [(p1[0] + p2[0]) * 0.5, (p1[1] + p2[1]) * 0.5];
-                *p1 = [mid[0] - ux * TRIM_EXTENT, mid[1] - uy * TRIM_EXTENT];
-                *p2 = [mid[0] + ux * TRIM_EXTENT, mid[1] + uy * TRIM_EXTENT];
+            if dx.hypot(dy) > 1e-9 {
+                // Same as `imply_edge_geos`: the boundary reaches as far as its
+                // line does, so say so rather than picking a length.
+                *g = Geo::InfLine {
+                    handle: *handle,
+                    bx: p1[0],
+                    by: p1[1],
+                    dx,
+                    dy,
+                };
             }
         }
     }
