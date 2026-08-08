@@ -4590,11 +4590,27 @@ impl Scene {
     }
 
     /// Collect closed polygon outlines (world XY) from the current layout.
-    pub fn closed_outlines(&self) -> Vec<Vec<[f32; 2]>> {
+    pub fn closed_outlines(&self) -> Vec<Vec<[f64; 2]>> {
         self.entity_wires()
             .iter()
             .filter_map(|wire| {
-                let pts = &wire.points;
+                let pts: Vec<[f64; 2]> = wire
+                    .points
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(|(index, high)| {
+                        if !high[0].is_finite() || !high[1].is_finite() {
+                            return None;
+                        }
+                        let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
+                        let point = [
+                            high[0] as f64 + low[0] as f64,
+                            high[1] as f64 + low[1] as f64,
+                        ];
+                        point.iter().all(|value| value.is_finite()).then_some(point)
+                    })
+                    .collect();
                 if pts.len() < 4 {
                     return None;
                 }
@@ -4612,12 +4628,8 @@ impl Scene {
                 // previous one, so consumers (point-in-polygon, the hatch /
                 // boundary commands) see one vertex per corner — not the doubled
                 // ring that otherwise shows two grips at every corner.
-                let mut ring: Vec<[f32; 2]> = Vec::with_capacity(pts.len());
-                for p in pts {
-                    if !p[0].is_finite() || !p[1].is_finite() {
-                        continue;
-                    }
-                    let q = [p[0], p[1]];
+                let mut ring: Vec<[f64; 2]> = Vec::with_capacity(pts.len());
+                for q in pts {
                     if let Some(&last) = ring.last() {
                         if (last[0] - q[0]).abs() < 1e-4 && (last[1] - q[1]).abs() < 1e-4 {
                             continue;

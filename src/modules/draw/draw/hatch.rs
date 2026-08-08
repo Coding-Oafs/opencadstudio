@@ -50,7 +50,7 @@ enum Mode {
 
 // ── CPU point-in-polygon (ray casting) ────────────────────────────────────
 
-fn point_in_polygon(p: [f32; 2], poly: &[[f32; 2]]) -> bool {
+fn point_in_polygon(p: [f64; 2], poly: &[[f64; 2]]) -> bool {
     let n = poly.len();
     if n < 3 {
         return false;
@@ -73,25 +73,26 @@ fn point_in_polygon(p: [f32; 2], poly: &[[f32; 2]]) -> bool {
 
 /// Shoelace-area magnitude of a polygon. Used to pick the smallest enclosing
 /// outline when a click falls inside several nested boundaries.
-fn polygon_area(poly: &[[f32; 2]]) -> f32 {
+fn polygon_area(poly: &[[f64; 2]]) -> f64 {
     let n = poly.len();
     if n < 3 {
         return 0.0;
     }
-    let mut a = 0.0_f64;
-    let mut j = n - 1;
-    for i in 0..n {
-        a += (poly[j][0] as f64) * (poly[i][1] as f64)
-            - (poly[i][0] as f64) * (poly[j][1] as f64);
-        j = i;
+    let origin = poly[0];
+    let mut a = 0.0;
+    for i in 1..n - 1 {
+        let current = poly[i];
+        let next = poly[i + 1];
+        a += (current[0] - origin[0]) * (next[1] - origin[1])
+            - (next[0] - origin[0]) * (current[1] - origin[1]);
     }
-    (a * 0.5).abs() as f32
+    (a * 0.5).abs()
 }
 
 /// True when every vertex of `inner` lies inside `outer`. Sufficient to
 /// recognise a closed hatch outline as nested inside another for the common
 /// rectangle / closed-polyline case.
-fn polygon_contains_polygon(outer: &[[f32; 2]], inner: &[[f32; 2]]) -> bool {
+fn polygon_contains_polygon(outer: &[[f64; 2]], inner: &[[f64; 2]]) -> bool {
     if inner.len() < 3 {
         return false;
     }
@@ -110,10 +111,10 @@ fn polygon_contains_polygon(outer: &[[f32; 2]], inner: &[[f32; 2]]) -> bool {
 ///   * click inside the innermost shape → hatch just that shape,
 ///   * click in a gap → hatch that ring, with the next level in as holes.
 fn resolve_hatch_rings(
-    outlines: &[Vec<[f32; 2]>],
-    p: [f32; 2],
+    outlines: &[Vec<[f64; 2]>],
+    p: [f64; 2],
 ) -> Option<Vec<Vec<[f64; 2]>>> {
-    let mut containing: Vec<(usize, f32)> = outlines
+    let mut containing: Vec<(usize, f64)> = outlines
         .iter()
         .enumerate()
         .filter(|(_, o)| point_in_polygon(p, o))
@@ -127,8 +128,7 @@ fn resolve_hatch_rings(
     let outer_idx = containing[0].0;
     let outer = &outlines[outer_idx];
 
-    let mut rings: Vec<Vec<[f64; 2]>> =
-        vec![outer.iter().map(|&[x, y]| [x as f64, y as f64]).collect()];
+    let mut rings = vec![outer.clone()];
     for (i, o) in outlines.iter().enumerate() {
         if i == outer_idx {
             continue;
@@ -149,7 +149,7 @@ fn resolve_hatch_rings(
                 && polygon_contains_polygon(x, o)
         });
         if !has_intermediate {
-            rings.push(o.iter().map(|&[x, y]| [x as f64, y as f64]).collect());
+            rings.push(o.clone());
         }
     }
     Some(rings)
@@ -194,14 +194,14 @@ fn rte_boundary(pts: impl Iterator<Item = (f64, f64)>) -> (Vec<[f32; 2]>, [f64; 
 // ── HATCH command ──────────────────────────────────────────────────────────
 
 pub struct HatchCommand {
-    outlines: Vec<Vec<[f32; 2]>>,
+    outlines: Vec<Vec<[f64; 2]>>,
     mode: Mode,
     manual_pts: Vec<DVec3>,
     missed: bool,
 }
 
 impl HatchCommand {
-    pub fn new(outlines: Vec<Vec<[f32; 2]>>) -> Self {
+    pub fn new(outlines: Vec<Vec<[f64; 2]>>) -> Self {
         Self {
             outlines,
             mode: Mode::PickInside,
@@ -294,8 +294,7 @@ impl CadCommand for HatchCommand {
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.mode {
             Mode::PickInside => {
-                // Hit-test against the f32 outline catalog (screen-space).
-                let xy = [pt.x as f32, pt.y as f32];
+                let xy = [pt.x, pt.y];
                 match resolve_hatch_rings(&self.outlines, xy) {
                     Some(rings) => {
                         self.missed = false;
@@ -375,7 +374,7 @@ impl CadCommand for HatchCommand {
 // ── GRADIENT command ───────────────────────────────────────────────────────
 
 pub struct GradientCommand {
-    outlines: Vec<Vec<[f32; 2]>>,
+    outlines: Vec<Vec<[f64; 2]>>,
     mode: Mode,
     manual_pts: Vec<DVec3>,
     missed: bool,
@@ -386,7 +385,7 @@ pub struct GradientCommand {
 }
 
 impl GradientCommand {
-    pub fn new(outlines: Vec<Vec<[f32; 2]>>) -> Self {
+    pub fn new(outlines: Vec<Vec<[f64; 2]>>) -> Self {
         Self {
             outlines,
             mode: Mode::PickInside,
@@ -486,8 +485,7 @@ impl CadCommand for GradientCommand {
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.mode {
             Mode::PickInside => {
-                // Hit-test against the f32 outline catalog (screen-space).
-                let xy = [pt.x as f32, pt.y as f32];
+                let xy = [pt.x, pt.y];
                 match resolve_hatch_rings(&self.outlines, xy) {
                     Some(rings) => {
                         self.missed = false;
@@ -581,12 +579,12 @@ impl CadCommand for GradientCommand {
 // ── BOUNDARY command ───────────────────────────────────────────────────────
 
 pub struct BoundaryCommand {
-    outlines: Vec<Vec<[f32; 2]>>,
+    outlines: Vec<Vec<[f64; 2]>>,
     missed: bool,
 }
 
 impl BoundaryCommand {
-    pub fn new(outlines: Vec<Vec<[f32; 2]>>) -> Self {
+    pub fn new(outlines: Vec<Vec<[f64; 2]>>) -> Self {
         Self {
             outlines,
             missed: false,
@@ -609,8 +607,7 @@ impl CadCommand for BoundaryCommand {
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        // Hit-test against the f32 outline catalog (screen-space).
-        let xy = [pt.x as f32, pt.y as f32];
+        let xy = [pt.x, pt.y];
         match resolve_hatch_rings(&self.outlines, xy) {
             Some(rings) => {
                 self.missed = false;
@@ -656,13 +653,13 @@ inventory::submit!(crate::command::CommandRegistration { names: &["HATCH"] });  
 mod tests {
     use super::*;
 
-    fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<[f32; 2]> {
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<[f64; 2]> {
         vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
     }
 
     // Two nested rectangles, regardless of draw order, the resolution must be
     // deterministic and independent of which was drawn first.
-    fn nested(draw_order: bool) -> Vec<Vec<[f32; 2]>> {
+    fn nested(draw_order: bool) -> Vec<Vec<[f64; 2]>> {
         let big = rect(-10.0, -10.0, 10.0, 10.0);
         let small = rect(-5.0, -5.0, 5.0, 5.0);
         if draw_order {
