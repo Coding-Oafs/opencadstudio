@@ -985,8 +985,13 @@ fn trim_spline(spl: &SplineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
                 return None;
             }
             // Cut away everything before the interval, then everything after
-            // it, leaving [t_lo, t_hi].
-            let (_, after_low) = spline_cut(spl, t_lo)?;
+            // it, leaving [t_lo, t_hi]. Either cut is a no-op when the
+            // interval already reaches that end of the curve — dropping the
+            // piece there would delete the half the user meant to keep.
+            let after_low = match spline_cut(spl, t_lo) {
+                Some((_, right)) => right,
+                None => spl.clone(),
+            };
             let kept = match spline_cut(&after_low, t_hi) {
                 Some((middle, _)) => middle,
                 // The interval reaches the far end, so nothing is left to cut.

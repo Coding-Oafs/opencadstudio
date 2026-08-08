@@ -10,26 +10,64 @@
 // fine until it is measured.
 
 use acadrust::entities::Spline;
-use acadrust::kernel::geom2d::NurbsCurve;
+use acadrust::kernel::geom2d::{NurbsCurve, Parameterization};
 use acadrust::types::Vector3;
 use acadrust::Handle;
+
+/// The drawing plane a spline sits on.
+///
+/// Read from whichever point list the spline actually stores: a fit-point
+/// spline carries no control points, and defaulting its elevation to zero
+/// would drop every such spline to the ground plane on the first edit.
+fn elevation(spl: &Spline) -> f64 {
+    spl.control_points
+        .first()
+        .or_else(|| spl.fit_points.first())
+        .map(|v| v.z)
+        .unwrap_or(0.0)
+}
 
 // ── Conversion ─────────────────────────────────────────────────────────────
 
 /// Convert an acadrust `Spline` to a kernel `NurbsCurve`, weights included.
 ///
-/// Returns `None` when there are too few control points for the degree, which
-/// is the one case that has no curve to evaluate. A knot vector of the wrong
-/// length is repaired by the kernel rather than rejected.
+/// A SPLINE is stored one of two ways and both turn up: a control polygon the
+/// curve approaches, or fit points it must pass through with optional end
+/// tangents. Control points win when they describe a curve; otherwise the fit
+/// points are interpolated into one, so a fit-point spline is as editable as
+/// any other instead of failing every command that touches it.
+///
+/// `None` only when neither form has enough points to describe a curve.
 pub fn spline_to_nurbs(spl: &Spline) -> Option<NurbsCurve> {
+    let degree = (spl.degree.max(1)) as usize;
     let control_points: Vec<[f64; 2]> = spl
         .control_points
         .iter()
         .map(|p| [p.x, p.y])
         .collect();
-    let degree = (spl.degree.max(1)) as usize;
     let weights = (!spl.weights.is_empty()).then(|| spl.weights.clone());
-    NurbsCurve::new(degree, control_points, spl.knots.clone(), weights)
+
+    if let Some(curve) =
+        NurbsCurve::new(degree, control_points, spl.knots.clone(), weights)
+    {
+        return Some(curve);
+    }
+
+    // No usable control polygon, so this is a fit-point spline.
+    let fit: Vec<[f64; 2]> = spl.fit_points.iter().map(|p| [p.x, p.y]).collect();
+    let tangent = |v: &acadrust::types::Vector3| {
+        (v.x * v.x + v.y * v.y > 1e-18).then_some([v.x, v.y])
+    };
+    NurbsCurve::interpolate(
+        &fit,
+        tangent(&spl.begin_tangent),
+        tangent(&spl.end_tangent),
+        match spl.knot_parameterization {
+            2 => Parameterization::Uniform,
+            1 => Parameterization::Centripetal,
+            _ => Parameterization::Chord,
+        },
+    )
 }
 
 /// Rebuild an acadrust `Spline` from a kernel curve.
@@ -37,7 +75,7 @@ pub fn spline_to_nurbs(spl: &Spline) -> Option<NurbsCurve> {
 /// The `template` supplies entity common data and the Z elevation; splines
 /// here are planar, so the kernel's 2D points are lifted back onto it.
 pub fn nurbs_to_spline(curve: &NurbsCurve, template: &Spline) -> Spline {
-    let z = template.control_points.first().map(|v| v.z).unwrap_or(0.0);
+    let z = elevation(template);
     let mut spl = template.clone();
     spl.common.handle = Handle::NULL;
     spl.degree = curve.degree() as i32;
@@ -52,9 +90,12 @@ pub fn nurbs_to_spline(curve: &NurbsCurve, template: &Spline) -> Spline {
     } else {
         Vec::new()
     };
-    // Fit points describe the original interpolation, which a split no longer
-    // satisfies.
+    // Fit points and their tangents describe the original interpolation, which
+    // a piece of it no longer satisfies. What comes back is a control-point
+    // spline.
     spl.fit_points.clear();
+    spl.begin_tangent = Vector3::new(0.0, 0.0, 0.0);
+    spl.end_tangent = Vector3::new(0.0, 0.0, 0.0);
     spl
 }
 
@@ -126,11 +167,7 @@ pub fn spline_pts_wire(spl: &Spline) -> Vec<[f32; 3]> {
     let Some(curve) = spline_to_nurbs(spl) else {
         return vec![];
     };
-    let elev = spl
-        .control_points
-        .first()
-        .map(|v| v.z as f32)
-        .unwrap_or(0.0);
+    let elev = elevation(spl) as f32;
     curve
         .tessellate(16)
         .iter()
