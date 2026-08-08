@@ -16,7 +16,7 @@ dependencies = [
 name = "OpenCADStudio"
 version = "0.9.4"
 dependencies = [
- "acadrust",
+ "acadifc",
  "ashpd",
  "bincode",
  "bytemuck",
@@ -84,9 +84,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
+name = "acadifc"
+version = "0.5.0"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=08a3d71#08a3d71f567cd72ee1ae3e7a8099054646756747"
+dependencies = [
+ "acadrust",
+ "base64 0.22.1",
+ "cadkernel",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "acadrust"
-version = "0.4.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=9ecaffc#9ecaffc3f5c32bad61c9624b6acb03afe97a2863"
+version = "0.4.1"
+source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=f226110#f226110a5b272838f9eeca4e3330ace827817db4"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -928,6 +942,11 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "cadkernel"
+version = "0.1.0"
+source = "git+https://github.com/HakanSeven12/cadkernel.git#53e15eccfb5c476a04c49cbea2809c5c4e13b691"
 
 [[package]]
 name = "calloop"
@@ -3965,7 +3984,7 @@ dependencies = [
 name = "ocs_plugin_api"
 version = "0.1.0"
 dependencies = [
- "acadrust",
+ "acadifc",
  "bincode",
  "getrandom 0.2.17",
  "interprocess",
@@ -3980,7 +3999,7 @@ dependencies = [
 name = "ocs_web_worker"
 version = "0.1.0"
 dependencies = [
- "acadrust",
+ "acadifc",
  "bincode",
  "console_error_panic_hook",
  "getrandom 0.3.4",
