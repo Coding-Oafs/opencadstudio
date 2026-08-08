@@ -1,9 +1,11 @@
+use acadrust::kernel::space::polygon;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
 use crate::command::{
     AreaPreviewRegion, AreaPreviewSource, CadCommand, CmdOption, CmdResult, SelectionEntity,
 };
+use crate::entities::curve::entity_curve;
 use crate::entities::traits::EntityTypeOps;
 use crate::scene::model::wire_model::WireModel;
 
@@ -47,100 +49,50 @@ impl AreaCommand {
         CmdOption { label, keyword: keyword.to_string() }
     }
 
+    /// Area and perimeter of a ring of picked points.
+    ///
+    /// Measured in space rather than in projection — a picked sequence need
+    /// not lie in a coordinate plane, and flattening it to XY first would
+    /// report its shadow.
     fn point_measurement(points: &[DVec3], close_perimeter: bool) -> AreaMeasurement {
         if points.len() < 2 {
             return AreaMeasurement { area: 0.0, perimeter: Some(0.0) };
         }
-
-        let origin = points[0];
-        let mut area_vector = DVec3::ZERO;
-        for index in 0..points.len() {
-            let a = points[index] - origin;
-            let b = points[(index + 1) % points.len()] - origin;
-            area_vector += a.cross(b);
+        let ring: Vec<[f64; 3]> = points.iter().map(|p| [p.x, p.y, p.z]).collect();
+        let perimeter = if close_perimeter {
+            polygon::perimeter(&ring)
+        } else {
+            polygon::chain_length(&ring)
+        };
+        AreaMeasurement {
+            area: polygon::area(&ring),
+            perimeter: Some(perimeter),
         }
-
-        let mut perimeter = points
-            .windows(2)
-            .map(|pair| (pair[1] - pair[0]).length())
-            .sum::<f64>();
-        if close_perimeter {
-            perimeter += (points[0] - points[points.len() - 1]).length();
-        }
-
-        AreaMeasurement { area: area_vector.length() * 0.5, perimeter: Some(perimeter) }
     }
 
-    fn bulged_polyline_measurement(
-        points: &[(f64, f64)],
-        bulges: &[f64],
-        closed: bool,
-    ) -> AreaMeasurement {
-        let count = points.len();
-        if count < 2 {
-            return AreaMeasurement { area: 0.0, perimeter: Some(0.0) };
-        }
-
-        let segment_count = if closed { count } else { count - 1 };
-        let origin = points[0];
-        let mut signed_area = 0.0;
-        let mut perimeter = 0.0;
-        for index in 0..segment_count {
-            let a = points[index];
-            let b = points[(index + 1) % count];
-            let local_a = (a.0 - origin.0, a.1 - origin.1);
-            let local_b = (b.0 - origin.0, b.1 - origin.1);
-            signed_area += 0.5 * (local_a.0 * local_b.1 - local_b.0 * local_a.1);
-
-            let chord = (b.0 - a.0).hypot(b.1 - a.1);
-            let bulge = bulges.get(index).copied().unwrap_or(0.0);
-            if bulge.abs() < 1e-12 || chord <= 1e-12 {
-                perimeter += chord;
-                continue;
-            }
-
-            let angle = 4.0 * bulge.atan();
-            let sine = (angle * 0.5).sin().abs();
-            if sine <= 1e-12 {
-                perimeter += chord;
-                continue;
-            }
-            let radius = chord / (2.0 * sine);
-            signed_area += 0.5 * radius * radius * (angle - angle.sin());
-            perimeter += radius * angle.abs();
-        }
-
-        AreaMeasurement { area: signed_area.abs(), perimeter: Some(perimeter) }
+    /// Area and perimeter of an entity whose geometry is a planar curve.
+    ///
+    /// Both exact: the kernel measures the curve rather than a polygon
+    /// through some of its points, so a bulged polyline counts each arc's own
+    /// bite and length, and a spline is integrated rather than sampled.
+    fn curve_measurement(entity: &EntityType) -> Option<AreaMeasurement> {
+        let curve = entity_curve(entity)?;
+        let perimeter = curve.length();
+        Some(AreaMeasurement {
+            area: curve.curve.enclosed_area().abs(),
+            perimeter: perimeter.is_finite().then_some(perimeter),
+        })
     }
 
     fn entity_measurement(entity: &EntityType) -> Option<AreaMeasurement> {
+        // Anything the converter recognises is measured from its own curve.
+        if let Some(measurement) = Self::curve_measurement(entity) {
+            return Some(measurement);
+        }
         match entity {
-            EntityType::LwPolyline(polyline) => {
-                let points = polyline
-                    .vertices
-                    .iter()
-                    .map(|vertex| (vertex.location.x, vertex.location.y))
-                    .collect::<Vec<_>>();
-                let bulges = polyline.vertices.iter().map(|vertex| vertex.bulge).collect::<Vec<_>>();
-                Some(Self::bulged_polyline_measurement(
-                    &points,
-                    &bulges,
-                    polyline.is_closed,
-                ))
-            }
-            EntityType::Polyline2D(polyline) => {
-                let points = polyline
-                    .vertices
-                    .iter()
-                    .map(|vertex| (vertex.location.x, vertex.location.y))
-                    .collect::<Vec<_>>();
-                let bulges = polyline.vertices.iter().map(|vertex| vertex.bulge).collect::<Vec<_>>();
-                Some(Self::bulged_polyline_measurement(
-                    &points,
-                    &bulges,
-                    polyline.is_closed(),
-                ))
-            }
+            // What is left is the genuinely spatial: a 3D polyline, and a
+            // spline whose points wander off any plane. Both are measured as
+            // rings of points in space.
             EntityType::Polyline(polyline) => {
                 let points = polyline
                     .vertices
