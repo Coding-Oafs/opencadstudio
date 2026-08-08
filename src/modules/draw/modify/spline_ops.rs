@@ -78,7 +78,20 @@ fn spline_to_nurbs_with(
     }
 
     // No usable control polygon, so this is a fit-point spline.
-    let fit: Vec<[f64; 2]> = spl.fit_points.iter().map(&point).collect();
+    let mut fit: Vec<[f64; 2]> = spl.fit_points.iter().map(&point).collect();
+    if spl.flags.closed || spl.flags.periodic {
+        // The interpolation is a clamped solve and does not model a wrap, so
+        // a closed spline came back as an open curve that never returned to
+        // its start — and a TRIM against it then cut nothing along the seam.
+        // Repeating the first point closes it. The seam is C¹ rather than the
+        // C² the rest of the curve has, which is the honest limit of a
+        // clamped solve; the alternative was a curve with a gap in it.
+        if let (Some(&first), Some(&last)) = (fit.first(), fit.last()) {
+            if first != last {
+                fit.push(first);
+            }
+        }
+    }
     let tangent = |v: &Vector3| {
         let flat = vector(v);
         (flat[0] * flat[0] + flat[1] * flat[1] > 1e-18).then_some(flat)

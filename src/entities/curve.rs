@@ -686,6 +686,31 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_fit_point_spline_comes_back_closed() {
+        // The interpolation behind a fit-point spline is a clamped solve and
+        // does not model a wrap, so without closing the point list the curve
+        // ended somewhere else entirely — and a TRIM against it cut nothing
+        // along the seam.
+        let mut spline = SplineEnt::default();
+        spline.degree = 3;
+        spline.flags.closed = true;
+        spline.fit_points = vec![
+            v3(0.0, 0.0, 0.0),
+            v3(10.0, 0.0, 0.0),
+            v3(10.0, 10.0, 0.0),
+            v3(0.0, 10.0, 0.0),
+        ];
+        spline.normal = v3(0.0, 0.0, 1.0);
+        let curve = entity_curve(&EntityType::Spline(spline)).unwrap();
+        let (start, end) = (curve.point_at(0.0), curve.point_at(1.0));
+        assert!(
+            (start[0] - end[0]).abs() < 1e-9 && (start[1] - end[1]).abs() < 1e-9,
+            "{start:?} vs {end:?}"
+        );
+        assert!(curve.is_closed());
+    }
+
+    #[test]
     fn entities_that_are_not_curves_say_so() {
         assert!(entity_curve(&EntityType::Point(Default::default())).is_none());
         assert!(entity_curve(&EntityType::Text(Default::default())).is_none());
