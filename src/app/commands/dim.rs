@@ -457,7 +457,8 @@ impl OpenCADStudio {
                     "S" | "SUFFIX" => "S",
                     _ => {
                         self.command_line.push_error(
-                            "TCOUNT: placement must be Overwrite, Prefix, or Suffix.",
+                            crate::t!("TCOUNT: placement must be Overwrite, Prefix, or Suffix.")
+                                .as_ref(),
                         );
                         return Some(Task::none());
                     }
@@ -477,7 +478,7 @@ impl OpenCADStudio {
 
                 if texts.is_empty() {
                     self.command_line
-                        .push_error("TCOUNT: select single-line text first.");
+                        .push_error(crate::t!("TCOUNT: select single-line text first.").as_ref());
                     return Some(Task::none());
                 }
 
@@ -524,18 +525,18 @@ impl OpenCADStudio {
 
                 self.tabs[i].scene.bump_entities(&changes);
 
-                let placement_name = match placement {
+                let placement_name = crate::t!(match placement {
                     "P" => "Prefix",
                     "S" => "Suffix",
                     _ => "Overwrite",
-                };
-
-                self.command_line.push_output(&format!(
-                    "TCOUNT: numbered {} text object(s) from {} by {} ({placement_name}).",
-                    texts.len(),
-                    start,
-                    increment,
-                ));
+                });
+                let n = texts.len();
+                self.command_line.push_output(
+                    crate::tf!(
+                        "TCOUNT: numbered {n} text object(s) from {start} by {increment} ({placement_name})."
+                    )
+                    .as_ref(),
+                );
             }
 
             "MLEADER" => {

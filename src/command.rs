@@ -922,18 +922,20 @@ impl CadCommand for TCountCommand {
 
     fn prompt(&self) -> String {
         if self.gathering {
-            return "TCOUNT  select text objects, then press Enter:".to_string();
+            return crate::t!("TCOUNT  select text objects, then press Enter:").into_owned();
         }
 
         match self.step {
             TCountStep::Start => {
-                format!("TCOUNT  starting number <{}>:", self.start)
+                let start = self.start;
+                crate::tf!("TCOUNT  starting number <{start}>:").into_owned()
             }
             TCountStep::Increment => {
-                format!("TCOUNT  increment <{}>:", self.increment)
+                let increment = self.increment;
+                crate::tf!("TCOUNT  increment <{increment}>:").into_owned()
             }
             TCountStep::Placement => {
-                "TCOUNT  placement [Overwrite/Prefix/Suffix] <Overwrite>:".to_string()
+                crate::t!("TCOUNT  placement [Overwrite/Prefix/Suffix] <Overwrite>:").into_owned()
             }
         }
     }
