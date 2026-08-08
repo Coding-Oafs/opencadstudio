@@ -28,6 +28,12 @@ use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
 use crate::ui::wrap_bar::WrapBar;
 use crate::t;
 
+/// Height of one status-bar row. Matches the drawing-tab strip above it so the
+/// three horizontal strips — tabs, status bar, command line — line up, and it
+/// is also the reach a status-bar menu keeps around itself (see
+/// `status_menu::menu_bar`).
+pub const ROW_HEIGHT: f32 = 30.0;
+
 const ST_ANNO_VISIBILITY: &[u8] = include_bytes!("../../../assets/icons/scale_list.svg");
 const ST_ANNO_AUTO_ADD: &[u8] = include_bytes!("../../../assets/icons/add_scale.svg");
 const ST_VP_SCALE_SYNC: &[u8] = include_bytes!("../../../assets/icons/sync.svg");
@@ -528,7 +534,7 @@ impl StatusBar {
             .vertical_spacing(0.0);
 
         let wrap = WrapBar::new(left_area.into(), right_status.into())
-            .min_row_h(30.0)
+            .min_row_h(ROW_HEIGHT)
             .justify_end(true);
 
         container(wrap)

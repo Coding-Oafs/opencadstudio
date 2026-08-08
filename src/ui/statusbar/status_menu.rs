@@ -48,7 +48,13 @@ pub fn menu_bar<'a>(
         .close_on_background_click(true);
 
     MenuBar::new(vec![Item::with_menu(root, menu)])
-        .safe_bounds_margin(0.0)
+        // The cursor may leave the menu by this much before it closes. At zero
+        // the safe area was the menu's own rectangle, and these menus hang off
+        // a pill barely wider than its icon: reaching for a row's text meant
+        // moving up and across at once, and the diagonal left the rectangle
+        // between the pill and the menu. One row of the bar the menu belongs to
+        // is enough room for that diagonal, in every direction. (#682)
+        .safe_bounds_margin(super::ROW_HEIGHT)
         .close_on_background_click_global(true)
         .draw_path(DrawPath::Backdrop)
         .style(|theme: &Theme, _| {
