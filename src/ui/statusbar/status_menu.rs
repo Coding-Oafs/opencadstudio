@@ -38,7 +38,19 @@ pub fn menu_bar<'a>(
 ) -> Element<'a, Message> {
     let items = entries
         .into_iter()
-        .map(|entry| Item::new(entry.content).close_on_click(entry.close_on_click))
+        .map(|entry| {
+            // Every row answers for the cursor over it, even one that does
+            // nothing. A disabled button reports no interaction at all, and the
+            // menu is an overlay: when the overlay reports none, the cursor is
+            // decided by what lies beneath, which over the drawing is the
+            // canvas hiding it for the crosshair. Hovering a greyed-out option
+            // therefore made the pointer vanish. `mouse_area` only fills in
+            // where the content stays silent, so an enabled row keeps its own
+            // pointer. (#684)
+            let content = iced::widget::mouse_area(entry.content)
+                .interaction(iced::mouse::Interaction::Idle);
+            Item::new(content).close_on_click(entry.close_on_click)
+        })
         .collect();
     let menu = Menu::new(items)
         .width(Length::Fixed(width))
