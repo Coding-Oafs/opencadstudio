@@ -9,7 +9,6 @@ use crate::entities::common::{
 use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
-use crate::scene::model::wire_model::SnapHint;
 
 const TAU: f64 = std::f64::consts::TAU;
 
@@ -43,8 +42,12 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
     // Minor axis direction: WCS_normal × u (both unit vectors, always perpendicular).
     let wcs_normal = glam::Vec3::new(nx as f32, ny as f32, nz as f32);
     let v_axis = wcs_normal.cross(u);
-    let center_v3 = glam::DVec3::new(cwx, cwy, cwz);
     let is_closed = (t1 - t0 - TAU).abs() < 1e-6;
+    // Centre, axis ends and — for an open arc — its own two ends and middle,
+    // all read off the entity's curve rather than rebuilt from these locals.
+    let snap = crate::entities::curve::ellipse_curve(ell)
+        .map(|curve| crate::entities::curve::snap_from(&curve))
+        .unwrap_or_default();
 
     if is_closed {
         let n = 16usize;
@@ -81,21 +84,7 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
         let edge_upper = Edge::new(&v_pos, &v_neg, Curve::BSplineCurve(spl_u));
         let edge_lower = Edge::new(&v_neg, &v_pos, Curve::BSplineCurve(spl_l));
         let wire: Wire = [edge_upper, edge_lower].into_iter().collect();
-        // Quadrant points at ±major and ±minor axis endpoints in WCS.
-        let q = |lx: f64, lz: f64| {
-            glam::DVec3::new(
-                cwx + lx * u.x as f64 + lz * v_axis.x as f64,
-                cwy + lx * u.y as f64 + lz * v_axis.y as f64,
-                cwz + lx * u.z as f64 + lz * v_axis.z as f64,
-            )
-        };
-        let snap_pts = vec![
-            (center_v3, SnapHint::Center),
-            (q(r_major, 0.0), SnapHint::Quadrant),
-            (q(-r_major, 0.0), SnapHint::Quadrant),
-            (q(0.0, r_minor), SnapHint::Quadrant),
-            (q(0.0, -r_minor), SnapHint::Quadrant),
-        ];
+        let snap_pts = snap.snap_pts.clone();
         TruckEntity {
             pick_tris: Vec::new(),
             object: TruckObject::Contour(wire),
@@ -123,18 +112,13 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
         let v_start = builder::vertex(*ctrl_pts.first().unwrap());
         let v_end = builder::vertex(*ctrl_pts.last().unwrap());
         let edge = Edge::new(&v_start, &v_end, Curve::BSplineCurve(bspline));
-        let pt_start = ctrl_pts.first().unwrap();
-        let pt_end = ctrl_pts.last().unwrap();
-        let key_vertices: Vec<[f64; 3]> = vec![
-            [pt_start.x, pt_start.y, pt_start.z],
-            [pt_end.x, pt_end.y, pt_end.z],
-        ];
+
         TruckEntity {
             pick_tris: Vec::new(),
             object: TruckObject::Curve(edge),
-            snap_pts: vec![(center_v3, SnapHint::Center)],
+            snap_pts: snap.snap_pts.clone(),
             tangent_geoms: vec![],
-            key_vertices,
+            key_vertices: vec![],
             fill_tris: vec![],
         }
     }

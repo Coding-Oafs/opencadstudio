@@ -10,7 +10,7 @@ use crate::entities::common::{
 use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
-use crate::scene::model::wire_model::{SnapHint, TangentGeom};
+use crate::scene::model::wire_model::TangentGeom;
 
 const TAU: f64 = std::f64::consts::TAU;
 
@@ -42,11 +42,10 @@ fn to_truck(arc: &Arc) -> TruckEntity {
         )
     };
 
-    let cv = glam::DVec3::new(cwx, cwy, cwz);
-    // Arc-length centre — one well-defined midpoint snap. Circles and
-    // ellipses (closed curves) deliberately don't emit this; see #34.
-    let mid_pt_3 = arc_pt(mid_a);
-    let mv = glam::DVec3::new(mid_pt_3.x, mid_pt_3.y, mid_pt_3.z);
+    // Centre, ends, arc-length midpoint and the quadrants the sweep actually
+    // covers, all from the entity's own curve. Circles and ellipses (closed
+    // curves) deliberately emit no midpoint; see #34.
+    let snap = crate::entities::curve::snap_from(&crate::entities::curve::arc_curve(arc));
     let tangent = TangentGeom::Circle {
         center: [cwx as f32, cwy as f32, cwz as f32],
         radius: r as f32,
@@ -81,7 +80,7 @@ fn to_truck(arc: &Arc) -> TruckEntity {
         return TruckEntity {
             pick_tris: extrusion_wall_tris(&base, [t * nx, t * ny, t * nz]),
             object: TruckObject::Lines(pts),
-            snap_pts: vec![(cv, SnapHint::Center), (mv, SnapHint::Midpoint)],
+            snap_pts: snap.snap_pts.clone(),
             tangent_geoms: vec![tangent],
             key_vertices: vec![],
             fill_tris: vec![],
@@ -97,7 +96,7 @@ fn to_truck(arc: &Arc) -> TruckEntity {
     TruckEntity {
         pick_tris: Vec::new(),
         object: TruckObject::Curve(edge),
-        snap_pts: vec![(cv, SnapHint::Center), (mv, SnapHint::Midpoint)],
+        snap_pts: snap.snap_pts.clone(),
         tangent_geoms: vec![tangent],
         key_vertices: vec![],
         fill_tris: vec![],

@@ -14,6 +14,14 @@ pub enum SnapHint {
     /// arc-length centre, a spline's `t = 0.5`). Lines / polylines do
     /// not use this — their midpoints are derived from `key_vertices`.
     Midpoint,
+    /// An end of a curve that is not a chain of straight segments — an arc,
+    /// an elliptical arc, a spline.
+    ///
+    /// Such a curve cannot put its ends in `key_vertices`: consecutive
+    /// entries there are taken to be joined by a straight segment, so an
+    /// arc's two ends would also produce a midpoint snap out on the chord,
+    /// which is not on the geometry.
+    Endpoint,
 }
 
 /// Geometric primitive used by the tangent-snap engine.

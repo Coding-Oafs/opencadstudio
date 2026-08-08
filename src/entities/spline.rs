@@ -87,12 +87,42 @@ fn to_truck(spl: &Spline) -> TruckEntity {
         )
     };
 
-    let snap_source = if !spl.fit_points.is_empty() {
-        &spl.fit_points
-    } else {
-        &spl.control_points
+    // Snap sources from the spline's own curve. A spline is not a chain of
+    // straight segments, so nothing goes in `key_vertices`: consecutive
+    // entries there are joined and their midpoints offered, and the chord
+    // between two fit points of a curvy spline does not run along it.
+    //
+    // Fit points are on the curve and stay on offer, as ends in their own
+    // right. Control points are not on the curve and are dropped — snapping
+    // to one put the cursor in empty space beside the geometry.
+    let curve_snap = crate::entities::curve::spline_curve(spl)
+        .map(|curve| crate::entities::curve::snap_from(&curve));
+    let (snap_pts, key_vertices) = match curve_snap {
+        Some(snap) => {
+            let mut points = snap.snap_pts;
+            points.extend(spl.fit_points.iter().map(|p| {
+                (
+                    glam::DVec3::new(p.x, p.y, p.z),
+                    crate::scene::model::wire_model::SnapHint::Endpoint,
+                )
+            }));
+            (points, Vec::new())
+        }
+        // A spline through points in space is not a planar curve, so the
+        // kernel has nothing to say about it. Its stored points remain the
+        // only thing to offer.
+        None => {
+            let source = if spl.fit_points.is_empty() {
+                &spl.control_points
+            } else {
+                &spl.fit_points
+            };
+            (
+                Vec::new(),
+                source.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>(),
+            )
+        }
     };
-    let key_vertices: Vec<[f64; 3]> = snap_source.iter().map(|p| [p.x, p.y, p.z]).collect();
 
     let is_closed = spl.flags.closed || spl.flags.periodic;
     let gap = {
@@ -120,7 +150,7 @@ fn to_truck(spl: &Spline) -> TruckEntity {
     TruckEntity {
         pick_tris: Vec::new(),
         object,
-        snap_pts: vec![],
+        snap_pts,
         tangent_geoms: vec![],
         key_vertices,
         fill_tris: vec![],

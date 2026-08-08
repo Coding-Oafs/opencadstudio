@@ -1026,6 +1026,7 @@ impl Snapper {
                 SnapHint::Quadrant => SnapType::Quadrant,
                 SnapHint::Insertion => SnapType::Insertion,
                 SnapHint::Midpoint => SnapType::Midpoint,
+                SnapHint::Endpoint => SnapType::Endpoint,
             };
             if self.is_on(snap_type) {
                 try_pt(world, snap_type);

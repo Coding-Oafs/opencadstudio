@@ -8,7 +8,7 @@ use crate::entities::common::{
 use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
-use crate::scene::model::wire_model::{SnapHint, TangentGeom};
+use crate::scene::model::wire_model::TangentGeom;
 
 fn to_truck(circle: &Circle) -> TruckEntity {
     let cx = circle.center.x;
@@ -20,18 +20,11 @@ fn to_truck(circle: &Circle) -> TruckEntity {
     let (ax, ay) = crate::scene::view::transform::ocs_axes(normal);
     let (cwx, cwy, cwz) = crate::scene::view::transform::ocs_point_to_wcs((cx, cy, cz), normal);
 
-    let cv = glam::DVec3::new(cwx, cwy, cwz);
     let rf = r as f32;
-    let q = |d: (f64, f64, f64)| {
-        glam::DVec3::new(cwx + r * d.0, cwy + r * d.1, cwz + r * d.2)
-    };
-    let snap_pts = vec![
-        (cv, SnapHint::Center),
-        (q(ax), SnapHint::Quadrant),
-        (q(ay), SnapHint::Quadrant),
-        (q((-ax.0, -ax.1, -ax.2)), SnapHint::Quadrant),
-        (q((-ay.0, -ay.1, -ay.2)), SnapHint::Quadrant),
-    ];
+    // Centre and quadrants come from the entity's own curve, so the same
+    // definition answers here, in the tessellation and in a trim.
+    let snap = crate::entities::curve::snap_from(&crate::entities::curve::circle_curve(circle));
+    let snap_pts = snap.snap_pts;
     let tangent = TangentGeom::Circle {
         center: [cwx as f32, cwy as f32, cwz as f32],
         radius: rf,
