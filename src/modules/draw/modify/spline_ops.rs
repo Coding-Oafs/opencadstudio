@@ -11,6 +11,7 @@
 
 use acadrust::entities::Spline;
 use acadrust::kernel::geom2d::{NurbsCurve, Parameterization};
+use acadrust::kernel::space::Plane;
 use acadrust::types::Vector3;
 use acadrust::Handle;
 
@@ -38,13 +39,36 @@ fn elevation(spl: &Spline) -> f64 {
 /// any other instead of failing every command that touches it.
 ///
 /// `None` only when neither form has enough points to describe a curve.
+///
+/// Reads the stored points as XY directly, which is right for the splines the
+/// editing commands work on — they run in the world frame. A spline on an
+/// extruded plane needs [`spline_to_nurbs_on`] instead.
 pub fn spline_to_nurbs(spl: &Spline) -> Option<NurbsCurve> {
+    spline_to_nurbs_with(spl, |p| [p.x, p.y], |v| [v.x, v.y])
+}
+
+/// [`spline_to_nurbs`] with the points expressed in `plane`'s coordinates.
+///
+/// The two differ only for a spline whose extrusion normal is not +Z. Where
+/// it is, the projection reduces to reading X and Y, so this is the same
+/// conversion with the frame made explicit.
+///
+/// `None` additionally when the plane is degenerate, since there is then no
+/// coordinate to express the points in.
+pub fn spline_to_nurbs_on(spl: &Spline, plane: &Plane) -> Option<NurbsCurve> {
+    let point = |p: &Vector3| plane.project([p.x, p.y, p.z]).unwrap_or([p.x, p.y]);
+    let vector = |v: &Vector3| plane.project_vector([v.x, v.y, v.z]).unwrap_or([v.x, v.y]);
+    plane.normal()?;
+    spline_to_nurbs_with(spl, point, vector)
+}
+
+fn spline_to_nurbs_with(
+    spl: &Spline,
+    point: impl Fn(&Vector3) -> [f64; 2],
+    vector: impl Fn(&Vector3) -> [f64; 2],
+) -> Option<NurbsCurve> {
     let degree = (spl.degree.max(1)) as usize;
-    let control_points: Vec<[f64; 2]> = spl
-        .control_points
-        .iter()
-        .map(|p| [p.x, p.y])
-        .collect();
+    let control_points: Vec<[f64; 2]> = spl.control_points.iter().map(&point).collect();
     let weights = (!spl.weights.is_empty()).then(|| spl.weights.clone());
 
     if let Some(curve) =
@@ -54,9 +78,10 @@ pub fn spline_to_nurbs(spl: &Spline) -> Option<NurbsCurve> {
     }
 
     // No usable control polygon, so this is a fit-point spline.
-    let fit: Vec<[f64; 2]> = spl.fit_points.iter().map(|p| [p.x, p.y]).collect();
-    let tangent = |v: &acadrust::types::Vector3| {
-        (v.x * v.x + v.y * v.y > 1e-18).then_some([v.x, v.y])
+    let fit: Vec<[f64; 2]> = spl.fit_points.iter().map(&point).collect();
+    let tangent = |v: &Vector3| {
+        let flat = vector(v);
+        (flat[0] * flat[0] + flat[1] * flat[1] > 1e-18).then_some(flat)
     };
     NurbsCurve::interpolate(
         &fit,
