@@ -3436,3 +3436,4 @@ catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT: plac
 catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT: numbered __ocs_fmt_0__ text object(s) from __ocs_fmt_1__ by __ocs_fmt_2__ (__ocs_fmt_3__).
 catalog-prefix-90eceb016c = Prefix
 catalog-suffix-885db975a3 = Suffix
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = Opening a drawing by path is not available in the browser.

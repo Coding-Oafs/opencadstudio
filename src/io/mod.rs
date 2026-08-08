@@ -747,6 +747,19 @@ pub fn load_file(path: &Path) -> Result<CadDocument, String> {
     load_file_with_progress(path, None).map(|outcome| outcome.document)
 }
 
+/// Opening a drawing by path is a desktop affair. In the browser a file
+/// arrives through the page rather than from a filesystem the app can reach,
+/// so there is nothing behind a path to open.
+///
+/// The function still exists there so the features that read a *second*
+/// drawing — importing one as a block, taking layer standards from one — go on
+/// compiling and say why they cannot run, instead of each having to know that
+/// the web has no files.
+#[cfg(target_arch = "wasm32")]
+pub fn load_file(_path: &Path) -> Result<CadDocument, String> {
+    Err(crate::t!("Opening a drawing by path is not available in the browser.").into_owned())
+}
+
 pub(crate) fn load_file_with_progress(
     path: &Path,
     _progress: Option<Arc<dyn Fn(u16) + Send + Sync>>,

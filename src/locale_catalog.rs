@@ -53,6 +53,7 @@ pub(super) fn message_id(source: &str) -> Option<&'static str> {
         "  ⚠ No closed boundary found." => Some("catalog-no-closed-boundary-found-7a55b25ecb"),
         " (%{count} objects)" => Some("catalog-count-objects-83518eccc2"),
         " [Edge: Extend]" => Some("catalog-edge-extend-90a0cb9b4f"),
+        "Opening a drawing by path is not available in the browser." => Some("catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4"),
         "Prefix" => Some("catalog-prefix-90eceb016c"),
         "Suffix" => Some("catalog-suffix-885db975a3"),
         "TCOUNT  increment <{increment}>:" => Some("catalog-tcount-increment-increment-79f9ab6108"),
