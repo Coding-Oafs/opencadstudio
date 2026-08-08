@@ -17,6 +17,7 @@ pub(super) fn default_bindings() -> BTreeMap<String, String> {
         ("F1".to_string(), "HELP"),
         ("F2".to_string(), "COMMANDHISTORY"),
         ("F3".to_string(), "TOGGLEOSNAP"),
+        ("F5".to_string(), "ISOPLANE"),
         ("F7".to_string(), "GRID"),
         ("F8".to_string(), "ORTHO"),
         ("F9".to_string(), "SNAP"),

@@ -11,7 +11,7 @@ use iced::{Point, Rectangle};
 use crate::command::TangentObject;
 use crate::scene::model::wire_model::{SnapHint, TangentGeom, WireModel};
 use crate::scene::pick::interaction_index::WireSource;
-use crate::ui::overlay::CROSSHAIR_ARM;
+const DEFAULT_OSNAP_RADIUS_PX: f32 = 15.0;
 
 // ── Snap type ─────────────────────────────────────────────────────────────
 
@@ -174,7 +174,7 @@ impl Default for Snapper {
             enabled,
             grid_snap_on: false,
             grid_spacing: 1.0,
-            osnap_radius_px: CROSSHAIR_ARM * 0.25,
+            osnap_radius_px: DEFAULT_OSNAP_RADIUS_PX,
             otrack_enabled: false,
             tracking_points: Vec::new(),
             tracking_dirs: Vec::new(),
@@ -830,7 +830,7 @@ impl Snapper {
             eye,
             bounds,
             Vec3::ZERO,
-            Mat4::IDENTITY,
+            (Vec3::X, Vec3::Y, Vec3::Z),
         )
     }
 
@@ -843,10 +843,10 @@ impl Snapper {
         view_rot: Mat4,
         eye: glam::DVec3,
         bounds: Rectangle,
-        // Grid origin (render/wire space) and UCS→world rotation, so grid snap
-        // lands on the UCS grid the user sees. `(ZERO, IDENTITY)` = world grid.
+        // Grid origin and live drafting axes, so grid snap lands on the same
+        // rotated or isometric grid the user sees.
         grid_origin: Vec3,
-        grid_rot: Mat4,
+        grid_axes: (Vec3, Vec3, Vec3),
     ) -> Option<SnapResult> {
         // Object-snap selection is priority-then-distance, NOT nearest-wins.
         // "Continuous" snaps (Nearest, Perpendicular, …) sit on the geometry
@@ -881,13 +881,27 @@ impl Snapper {
             let s = self.grid_spacing as f64;
             if s.abs() > 1e-9 {
                 // Round in the UCS grid frame, then map back to world.
-                let ax = grid_rot.transform_vector3(Vec3::X).as_dvec3();
-                let ay = grid_rot.transform_vector3(Vec3::Y).as_dvec3();
-                let az = grid_rot.transform_vector3(Vec3::Z).as_dvec3();
+                let (ax, ay, az) = grid_axes;
+                let ax = ax.normalize_or(Vec3::X).as_dvec3();
+                let ay = ay.normalize_or(Vec3::Y).as_dvec3();
+                let az = az.normalize_or(Vec3::Z).as_dvec3();
                 let origin = grid_origin.as_dvec3();
                 let rel = cursor_world - origin;
-                let ux = (rel.dot(ax) / s).round() * s;
-                let uy = (rel.dot(ay) / s).round() * s;
+                // The isometric pairs are oblique, so dot products alone are
+                // not coordinates. Invert their 2×2 Gram matrix before rounding.
+                let aa = ax.dot(ax);
+                let ab = ax.dot(ay);
+                let bb = ay.dot(ay);
+                let det = aa * bb - ab * ab;
+                let (ux, uy) = if det.abs() > 1e-9 {
+                    let ra = rel.dot(ax);
+                    let rb = rel.dot(ay);
+                    ((ra * bb - rb * ab) / det, (rb * aa - ra * ab) / det)
+                } else {
+                    (rel.dot(ax), rel.dot(ay))
+                };
+                let ux = (ux / s).round() * s;
+                let uy = (uy / s).round() * s;
                 let uz = (rel.dot(az) / s).round() * s;
                 let gp = origin + ax * ux + ay * uy + az * uz;
                 let screen = world_to_screen(gp, view_rot, eye, bounds);

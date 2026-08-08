@@ -15,13 +15,10 @@ use crate::scene::model::mesh_model::MeshModel;
 use crate::scene::model::wire_model::WireModel;
 use crate::scene::pick::interaction_index::WireSource;
 
-/// Pixel radius used for single-click wire detection.
-pub const CLICK_THRESHOLD_PX: f32 = 8.0;
-
 /// Pick radius for one wire, in screen pixels.
 ///
 /// A wire renders as a band `line_weight_px` wide, so testing every wire at the
-/// bare [`CLICK_THRESHOLD_PX`] would leave the outer part of a heavy line
+/// configured base radius would leave the outer part of a heavy line
 /// unselectable — the cursor would sit on solid ink and miss. Widening to the
 /// rendered half-width keeps "looks like I'm on it" and "picks it" the same
 /// thing at any zoom: both quantities are screen-space, so the relation holds
@@ -35,13 +32,13 @@ pub const CLICK_THRESHOLD_PX: f32 = 8.0;
 /// renders 7.97 px half-width), so this only bites for out-of-range weights —
 /// and it keeps the two sides from silently drifting apart if the display boost
 /// in `view::render::lineweight_to_px` ever changes.
-pub fn pick_tolerance_px(wire: &WireModel, lw_display: bool) -> f32 {
+pub fn pick_tolerance_px(wire: &WireModel, lw_display: bool, base_radius_px: f32) -> f32 {
     let half_width = if lw_display {
         wire.line_weight_px * 0.5
     } else {
         0.5
     };
-    CLICK_THRESHOLD_PX.max(half_width)
+    base_radius_px.max(1.0).max(half_width)
 }
 
 /// Is `aabb` — a wire's world-space XY box — further than `tol` pixels from
@@ -199,6 +196,7 @@ pub fn click_hit<'a, W: WireSource + ?Sized>(
     eye: glam::DVec3,
     bounds: Rectangle,
     lw_display: bool,
+    base_radius_px: f32,
 ) -> Option<&'a str> {
     // A click outside the pane rectangle (e.g. on the paper around a floating
     // viewport) must not reach geometry scissored out of the viewport.
@@ -243,7 +241,7 @@ pub fn click_hit<'a, W: WireSource + ?Sized>(
                 bounds,
             );
             let d = dist_point_to_segment(cursor, p0, p1);
-            if d < pick_tolerance_px(wire, lw_display) && d < best_dist {
+            if d < pick_tolerance_px(wire, lw_display, base_radius_px) && d < best_dist {
                 best_dist = d;
                 best = Some(&wire.name);
             }
@@ -251,7 +249,7 @@ pub fn click_hit<'a, W: WireSource + ?Sized>(
     } else {
         // Q: lazy projection — no Vec allocation per wire; NaN resets the segment chain.
         for wire in wires.iter() {
-            let tol = pick_tolerance_px(wire, lw_display);
+            let tol = pick_tolerance_px(wire, lw_display, base_radius_px);
             // Cheap AABB pre-reject (flat view only; never for the unbounded
             // sentinel used by previews / greeked text).
             if z_flat
@@ -446,6 +444,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
     eye: glam::DVec3,
     bounds: Rectangle,
     lw_display: bool,
+    base_radius_px: f32,
 ) -> Vec<&'a str> {
     if cursor.x < 0.0 || cursor.x > bounds.width || cursor.y < 0.0 || cursor.y > bounds.height {
         return Vec::new();
@@ -474,7 +473,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
                 bounds,
             );
             let d = dist_point_to_segment(cursor, p0, p1);
-            if d < pick_tolerance_px(wire, lw_display) {
+            if d < pick_tolerance_px(wire, lw_display, base_radius_px) {
                 best_by_wire
                     .entry(segment.wire)
                     .and_modify(|best| *best = best.min(d))
@@ -488,7 +487,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
         }));
     } else {
         for wire in wires.iter() {
-            let tol = pick_tolerance_px(wire, lw_display);
+            let tol = pick_tolerance_px(wire, lw_display, base_radius_px);
             let mut prev: Option<Point> = None;
             let mut best_for_wire = tol;
             let mut hit = false;
@@ -543,7 +542,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
             )
             .is_some()
             {
-                hits.push((CLICK_THRESHOLD_PX, wire.name.as_str()));
+                hits.push((base_radius_px.max(1.0), wire.name.as_str()));
                 matched.insert(triangle.wire);
             }
         }
@@ -562,7 +561,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
             )
             .is_some()
             {
-                hits.push((CLICK_THRESHOLD_PX, wire.name.as_str()));
+                hits.push((base_radius_px.max(1.0), wire.name.as_str()));
             }
         }
     }
@@ -597,7 +596,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
             )
             .is_some()
             {
-                hits.push((CLICK_THRESHOLD_PX, wire.name.as_str()));
+                hits.push((base_radius_px.max(1.0), wire.name.as_str()));
                 matched.insert(triangle.wire);
             }
         }
@@ -616,7 +615,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
             )
             .is_some()
             {
-                hits.push((CLICK_THRESHOLD_PX, wire.name.as_str()));
+                hits.push((base_radius_px.max(1.0), wire.name.as_str()));
             }
         }
     }
@@ -641,7 +640,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
                 continue;
             };
             if text_quad_hit_area(cursor, vertices, view_rot, eye, bounds).is_some() {
-                hits.push((CLICK_THRESHOLD_PX, wire.name.as_str()));
+                hits.push((base_radius_px.max(1.0), wire.name.as_str()));
                 matched.insert(glyph.wire);
             }
         }
@@ -651,7 +650,7 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
                 continue;
             }
             if text_quad_hit_area(cursor, &wire.text_verts, view_rot, eye, bounds).is_some() {
-                hits.push((CLICK_THRESHOLD_PX, wire.name.as_str()));
+                hits.push((base_radius_px.max(1.0), wire.name.as_str()));
             }
         }
     }
@@ -2038,16 +2037,16 @@ mod aabb_reject_tests {
 
         let eye = glam::DVec3::ZERO;
         assert_eq!(
-            click_hit(cursor, std::slice::from_ref(&near), vp, eye, bounds, true),
+            click_hit(cursor, std::slice::from_ref(&near), vp, eye, bounds, true, 8.0),
             Some("5")
         );
         assert_eq!(
-            click_hit(cursor, std::slice::from_ref(&far), vp, eye, bounds, true),
+            click_hit(cursor, std::slice::from_ref(&far), vp, eye, bounds, true, 8.0),
             None
         );
         // The far wire must be rejected without hiding the near one.
         assert_eq!(
-            click_hit(cursor, &[far, near], vp, eye, bounds, true),
+            click_hit(cursor, &[far, near], vp, eye, bounds, true, 8.0),
             Some("5")
         );
     }

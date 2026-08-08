@@ -71,6 +71,8 @@ impl StatusBar {
         polar_increment_deg: f32,
         dyn_input: bool,
         otrack: bool,
+        isometric_drafting: bool,
+        iso_plane: crate::app::settings::IsoPlane,
         layouts: Vec<String>,
         block_tabs: Vec<String>,
         reorderable_layouts: Vec<String>,
@@ -297,7 +299,11 @@ impl StatusBar {
                     osnap_active,
                     snapper.snap_enabled,
                     tooltip_hidden,
-                    crate::ui::popup::snap_popup::menu_entries(snapper),
+                    crate::ui::popup::snap_popup::menu_entries(
+                        snapper,
+                        isometric_drafting,
+                        iso_plane,
+                    ),
                 )
                 .into(),
             );

@@ -224,6 +224,43 @@ impl OpenCADStudio {
             "SNAP" => {
                 return Some(Task::done(Message::ToggleGridSnap));
             }
+            // ISOPLANE — cycle the isometric drafting axis pair (F5).
+            "ISOPLANE" => {
+                return Some(Task::done(Message::CycleIsoPlane));
+            }
+            cmd if cmd.starts_with("ISOPLANE ") => {
+                let plane = match cmd.trim_start_matches("ISOPLANE").trim() {
+                    "LEFT" | "L" => Some(crate::app::settings::IsoPlane::Left),
+                    "TOP" | "T" => Some(crate::app::settings::IsoPlane::Top),
+                    "RIGHT" | "R" => Some(crate::app::settings::IsoPlane::Right),
+                    _ => None,
+                };
+                if let Some(plane) = plane {
+                    return Some(Task::done(Message::SetIsoPlane(plane)));
+                }
+                self.command_line
+                    .push_error(crate::t!("ISOPLANE: expected Left, Top, or Right.").as_ref());
+            }
+            // ISODRAFT — enable or disable isometric drafting.
+            "ISODRAFT" => {
+                return Some(Task::done(Message::ToggleIsometricDrafting));
+            }
+            cmd if cmd.starts_with("ISODRAFT ") => {
+                let requested = match cmd.trim_start_matches("ISODRAFT").trim() {
+                    "1" | "ON" => Some(true),
+                    "0" | "OFF" => Some(false),
+                    _ => None,
+                };
+                match requested {
+                    Some(value) if value != self.isometric_drafting => {
+                        return Some(Task::done(Message::ToggleIsometricDrafting));
+                    }
+                    Some(_) => {}
+                    None => self
+                        .command_line
+                        .push_error(crate::t!("ISODRAFT: expected On or Off.").as_ref()),
+                }
+            }
             // POLAR — toggle polar tracking.
             "POLAR" => {
                 return Some(Task::done(Message::TogglePolar));

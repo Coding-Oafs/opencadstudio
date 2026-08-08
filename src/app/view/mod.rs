@@ -335,6 +335,14 @@ impl OpenCADStudio {
             let (vw, vh) = tab.scene.selection.borrow().vp_size;
             let model_basis = {
                 let (o, ux, uy, uz) = tab.ucs_xform().axes();
+                let (ux, uy, uz) = super::helpers::drafting_axes(
+                    ux,
+                    uy,
+                    uz,
+                    self.isometric_drafting,
+                    self.iso_plane,
+                    self.snap_angle_deg,
+                );
                 (o, (ux.as_vec3(), uy.as_vec3(), uz.as_vec3()))
             };
             let grid: Vec<crate::ui::overlay::GridParams> = tab
@@ -342,7 +350,7 @@ impl OpenCADStudio {
                 .grid_views(vw, vh)
                 .into_iter()
                 .map(|(bounds, cam, handle)| {
-                    let (origin, axes): (glam::DVec3, _) = if is_paper {
+                    let (origin, mut axes): (glam::DVec3, _) = if is_paper {
                         match tab.ucs_from_viewport(handle) {
                             Some(u) => {
                                 let (o, ux, uy, uz) =
@@ -357,6 +365,17 @@ impl OpenCADStudio {
                     } else {
                         model_basis
                     };
+                    if is_paper {
+                        let (ux, uy, uz) = super::helpers::drafting_axes(
+                            axes.0.as_dvec3(),
+                            axes.1.as_dvec3(),
+                            axes.2.as_dvec3(),
+                            self.isometric_drafting,
+                            self.iso_plane,
+                            self.snap_angle_deg,
+                        );
+                        axes = (ux.as_vec3(), uy.as_vec3(), uz.as_vec3());
+                    }
                     crate::ui::overlay::GridParams {
                         view_rot: cam.view_proj_rte(bounds),
                         eye: cam.eye(),
@@ -684,6 +703,15 @@ impl OpenCADStudio {
                 self.ribbon.open_dropdown.is_some(),
                 hover_locked,
                 crosshair_background(tab, is_paper),
+                crate::ui::overlay::CrosshairOptions {
+                    size_percent: self.cursor_size,
+                    pick_box: self.pick_box,
+                    cursor_type: self.cursor_type,
+                    color: self.crosshair_color,
+                    isometric: self.isometric_drafting,
+                    iso_plane: self.iso_plane,
+                    snap_angle_deg: self.snap_angle_deg,
+                },
             )
         };
 
@@ -1693,6 +1721,8 @@ impl OpenCADStudio {
                         self.polar_increment_deg,
                         self.dyn_input,
                         self.snapper.otrack_enabled,
+                        self.isometric_drafting,
+                        self.iso_plane,
                         layout_names.clone(),
                         block_tabs,
                         layout_names.into_iter().skip(1).collect(),

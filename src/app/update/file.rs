@@ -4,7 +4,7 @@
 use super::util::*;
 use super::{format_size, VIEWCUBE_HIT_SIZE};
 use crate::app::helpers::{
-    ortho_constrain, parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
+    parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
     CoordKind,
 };
 use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
@@ -267,6 +267,13 @@ impl OpenCADStudio {
             polar_increment_deg: self.polar_increment_deg,
             zoom_wheel_reversed: self.zoom_wheel_reversed,
             zoom_factor: self.zoom_factor,
+            cursor_size: self.cursor_size,
+            pick_box: self.pick_box,
+            cursor_type: self.cursor_type,
+            crosshair_color: self.crosshair_color,
+            isometric_drafting: self.isometric_drafting,
+            iso_plane: self.iso_plane,
+            snap_angle_deg: self.snap_angle_deg,
             otrack: self.snapper.otrack_enabled,
             default_assoc_prompted: self.default_assoc_prompted,
             disabled_plugins: {
@@ -303,6 +310,21 @@ impl OpenCADStudio {
         self.polar_increment_deg = s.polar_increment_deg;
         self.zoom_wheel_reversed = s.zoom_wheel_reversed;
         self.zoom_factor = s.zoom_factor.clamp(3, 100);
+        self.cursor_size = s.cursor_size.clamp(1, 100);
+        self.pick_box = s.pick_box.clamp(0, 50);
+        self.cursor_type = s.cursor_type;
+        self.crosshair_color = s.crosshair_color;
+        self.crosshair_color_input = s
+            .crosshair_color
+            .map(crate::app::config::rgb_to_hex)
+            .unwrap_or_default();
+        self.isometric_drafting = s.isometric_drafting;
+        self.iso_plane = s.iso_plane;
+        self.snap_angle_deg = if s.snap_angle_deg.is_finite() {
+            s.snap_angle_deg.rem_euclid(360.0)
+        } else {
+            0.0
+        };
         // Ortho + running OSNAP are per-drawing (adopted from the header on
         // open / tab switch), not app-global, so they are not applied here.
         self.snapper.otrack_enabled = s.otrack;
@@ -588,6 +610,9 @@ impl OpenCADStudio {
         self.ribbon.set_collapse_mode(cfg.ribbon.collapse);
         self.plot_dialog = cfg.plot;
         self.shortcut_bindings = cfg.shortcuts.bindings.into_iter().collect();
+        self.shortcut_bindings
+            .entry("F5".to_string())
+            .or_insert_with(|| "ISOPLANE".to_string());
     }
 
     /// Write the config only when it changed since the last write, so a toggle

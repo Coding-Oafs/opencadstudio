@@ -868,6 +868,10 @@ impl OpenCADStudio {
                 "MIRRTEXT"
                     | "ZOOMWHEEL"
                     | "ZOOMFACTOR"
+                    | "CURSORSIZE"
+                    | "PICKBOX"
+                    | "CURSORTYPE"
+                    | "SNAPANG"
                     | "TEXTFILL"
                     | "ATTREQ"
                     | "ATTDIA"
@@ -938,7 +942,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ZOOMWHEEL ZOOMFACTOR ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     // Parse a boolean given as 0/1 or ON/OFF.
@@ -1060,6 +1064,56 @@ impl OpenCADStudio {
                                 None => {
                                     Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false))
                                 }
+                            },
+                            "CURSORSIZE" => match &value {
+                                Some(v) => match v.parse::<i32>() {
+                                    Ok(size) if (1..=100).contains(&size) => {
+                                        self.cursor_size = size;
+                                        Ok((format!("CURSORSIZE = {size}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer from 1 to 100 required.".into()),
+                                },
+                                None => Ok((format!("CURSORSIZE = {}", self.cursor_size), false)),
+                            },
+                            "PICKBOX" => match &value {
+                                Some(v) => match v.parse::<i32>() {
+                                    Ok(size) if (0..=50).contains(&size) => {
+                                        self.pick_box = size;
+                                        Ok((format!("PICKBOX = {size}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer from 0 to 50 required.".into()),
+                                },
+                                None => Ok((format!("PICKBOX = {}", self.pick_box), false)),
+                            },
+                            "CURSORTYPE" => match &value {
+                                Some(v) => match v.as_str() {
+                                    "0" => {
+                                        self.cursor_type = crate::app::settings::CursorType::Crosshair;
+                                        Ok(("CURSORTYPE = 0".to_string(), true))
+                                    }
+                                    "1" => {
+                                        self.cursor_type = crate::app::settings::CursorType::Pointer;
+                                        Ok(("CURSORTYPE = 1".to_string(), true))
+                                    }
+                                    _ => Err("SETVAR: 0 or 1 required.".into()),
+                                },
+                                None => Ok((
+                                    format!(
+                                        "CURSORTYPE = {}",
+                                        i32::from(self.cursor_type == crate::app::settings::CursorType::Pointer)
+                                    ),
+                                    false,
+                                )),
+                            },
+                            "SNAPANG" => match &value {
+                                Some(v) => match v.parse::<f32>() {
+                                    Ok(angle) if angle.is_finite() => {
+                                        self.snap_angle_deg = angle.rem_euclid(360.0);
+                                        Ok((format!("SNAPANG = {}", self.snap_angle_deg), true))
+                                    }
+                                    _ => Err("SETVAR: finite numeric value required.".into()),
+                                },
+                                None => Ok((format!("SNAPANG = {}", self.snap_angle_deg), false)),
                             },
                             // Global (not stored in the drawing): fill vs. hollow
                             // TrueType text. The active tab re-tessellates below.
@@ -1612,7 +1666,15 @@ impl OpenCADStudio {
                     match outcome {
                         Ok((msg, changed)) => {
                             if changed {
-                                if matches!(name.as_str(), "ZOOMWHEEL" | "ZOOMFACTOR") {
+                                if matches!(
+                                    name.as_str(),
+                                    "ZOOMWHEEL"
+                                        | "ZOOMFACTOR"
+                                        | "CURSORSIZE"
+                                        | "PICKBOX"
+                                        | "CURSORTYPE"
+                                        | "SNAPANG"
+                                ) {
                                     self.persist_settings_if_changed();
                                 } else {
                                     self.tabs[i].dirty = true;

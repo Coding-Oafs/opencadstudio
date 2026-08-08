@@ -11,6 +11,63 @@
 use crate::snap::SnapType;
 use serde::{Deserialize, Serialize};
 
+/// Cursor shown over the drawing viewport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CursorType {
+    #[default]
+    Crosshair,
+    Pointer,
+}
+
+impl CursorType {
+    pub const ALL: [Self; 2] = [Self::Crosshair, Self::Pointer];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Crosshair => "Crosshair",
+            Self::Pointer => "Desktop pointer",
+        }
+    }
+}
+
+/// Active pair of axes while isometric drafting is enabled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IsoPlane {
+    #[default]
+    Left,
+    Top,
+    Right,
+}
+
+impl IsoPlane {
+    pub const ALL: [Self; 3] = [Self::Left, Self::Top, Self::Right];
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Left => Self::Top,
+            Self::Top => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Top => "Top",
+            Self::Right => "Right",
+        }
+    }
+
+    /// The two drafting directions, in degrees in the active UCS plane.
+    pub fn angles(self) -> [f64; 2] {
+        match self {
+            Self::Left => [90.0, 150.0],
+            Self::Top => [30.0, 150.0],
+            Self::Right => [30.0, 90.0],
+        }
+    }
+}
+
 /// Canonical order of the user-toggleable object-snap modes. Drives the
 /// deterministic order when decoding the `$OSMODE` bitmask (see
 /// [`snaps_from_osmode`]).
@@ -99,6 +156,19 @@ pub struct UserSettings {
     pub polar_increment_deg: f32,
     pub zoom_wheel_reversed: bool,
     pub zoom_factor: i32,
+    /// CURSORSIZE: crosshair arm reach as a percentage of the viewport.
+    pub cursor_size: i32,
+    /// PICKBOX: visible selection-box half-size and click aperture in pixels.
+    pub pick_box: i32,
+    /// CURSORTYPE: crosshair or the platform pointer over the drawing.
+    pub cursor_type: CursorType,
+    /// Explicit crosshair RGB. `None` keeps automatic background contrast.
+    pub crosshair_color: Option<[u8; 3]>,
+    /// Isometric drafting changes the grid and crosshair to the active axis pair.
+    pub isometric_drafting: bool,
+    pub iso_plane: IsoPlane,
+    /// SNAPANG in degrees, applied in the active UCS plane.
+    pub snap_angle_deg: f32,
     pub otrack: bool,
     // Ortho ($ORTHOMODE) and the running OSNAP set ($OSMODE) are per-drawing —
     // stored in the document header, not here (they used to be persisted app-
@@ -170,6 +240,13 @@ impl Default for UserSettings {
             polar_increment_deg: 45.0,
             zoom_wheel_reversed: false,
             zoom_factor: 60,
+            cursor_size: 5,
+            pick_box: 3,
+            cursor_type: CursorType::Crosshair,
+            crosshair_color: None,
+            isometric_drafting: false,
+            iso_plane: IsoPlane::Left,
+            snap_angle_deg: 0.0,
             otrack: false,
             default_assoc_prompted: false,
             disabled_plugins: Vec::new(),

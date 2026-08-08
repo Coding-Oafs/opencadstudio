@@ -18,7 +18,7 @@ mod mtext_editor;
 pub mod plugin_host;
 mod properties;
 mod recent;
-mod settings;
+pub(crate) mod settings;
 mod shortcuts;
 mod style_ops;
 mod text_inline;
@@ -448,10 +448,27 @@ pub(super) struct OpenCADStudio {
     zoom_wheel_reversed: bool,
     /// Mouse-wheel zoom sensitivity, clamped to 3..=100 (ZOOMFACTOR).
     zoom_factor: i32,
+    /// Crosshair reach as a viewport percentage (CURSORSIZE, 1..=100).
+    cursor_size: i32,
+    /// Selection-box half-size and click aperture in pixels (PICKBOX, 0..=50).
+    pick_box: i32,
+    /// Drawing viewport cursor style (CURSORTYPE).
+    cursor_type: settings::CursorType,
+    /// Explicit crosshair colour; `None` retains automatic contrast.
+    crosshair_color: Option<[u8; 3]>,
+    /// Editable Options buffer for the crosshair colour.
+    crosshair_color_input: String,
+    /// Isometric drafting state and active axis pair.
+    isometric_drafting: bool,
+    iso_plane: settings::IsoPlane,
+    /// Drafting-grid/crosshair rotation in degrees (SNAPANG).
+    snap_angle_deg: f32,
     /// Show grid lines in the viewport (F7).
     show_grid: bool,
     /// Dynamic input overlay (F12): show coordinate tooltip near cursor.
     dyn_input: bool,
+    /// Currently visible page in the application Options dialog.
+    options_tab: crate::ui::window::options::OptionsTab,
     /// Controls whether the TEXTEDIT command repeats automatically (0 = Multiple, 1 = Single).
     pub texteditmode: bool,
     /// When true (default), saving over an existing file first writes a `.bak`
@@ -1502,6 +1519,7 @@ pub enum ModalKind {
     LayerStateManager,
     LayerTranslator,
     DrawingUnits,
+    DraftingSettings,
     LayerStateEditor,
     Plot,
     PrintAll,
@@ -1768,6 +1786,16 @@ pub enum Message {
     SaveDialogPathPicked(Option<std::path::PathBuf>),
     /// Open the application-wide Options dialog.
     OptionsOpen,
+    /// Switch the visible page in Options.
+    OptionsTabChanged(crate::ui::window::options::OptionsTab),
+    /// Set CURSORSIZE from the Display-page slider.
+    CursorSizeChanged(i32),
+    /// Set PICKBOX from the Selection-page slider.
+    PickBoxChanged(i32),
+    /// Set CURSORTYPE from Options.
+    CursorTypeChanged(settings::CursorType),
+    /// Edit the optional crosshair RGB value; blank restores automatic contrast.
+    CrosshairColorChanged(String),
     /// Set the default type/version used when first saving a new drawing.
     DefaultSaveFormatChanged(String),
     /// Select one of Iced's built-in themes or the editable Custom theme.
@@ -2094,6 +2122,14 @@ pub enum Message {
     ToggleSnapEnabled,
     /// Toggle grid-snap on/off — F9 / SNAP status-bar button.
     ToggleGridSnap,
+    /// Enable or disable isometric drafting.
+    ToggleIsometricDrafting,
+    /// Select one isometric drafting axis pair.
+    SetIsoPlane(settings::IsoPlane),
+    /// Advance Left → Top → Right, enabling isometric drafting if necessary.
+    CycleIsoPlane,
+    /// Reset SNAPANG and return the active drafting coordinate system to World.
+    ResetDraftingRotation,
     /// Toggle the ViewCube 3D gizmo visibility (NAVVCUBE).
     ToggleViewCube,
     /// Toggle the Properties panel visibility (PROPERTIES).
@@ -3036,8 +3072,17 @@ impl OpenCADStudio {
             polar_increment_deg: 45.0,
             zoom_wheel_reversed: false,
             zoom_factor: 60,
+            cursor_size: 5,
+            pick_box: 3,
+            cursor_type: settings::CursorType::Crosshair,
+            crosshair_color: None,
+            crosshair_color_input: String::new(),
+            isometric_drafting: false,
+            iso_plane: settings::IsoPlane::Left,
+            snap_angle_deg: 0.0,
             show_grid: false,
             dyn_input: true,
+            options_tab: crate::ui::window::options::OptionsTab::General,
             texteditmode: false,
             backup_on_save: true,
             file_assoc_enabled: true,

@@ -260,19 +260,56 @@ pub(super) fn ucs_rotated_z(origin: glam::DVec3, angle_z: f32) -> Ucs {
 
 // ── Drawing constraint helpers ─────────────────────────────────────────────
 
-/// Constrain `pt` to the nearest 90° direction from `base`, in the active UCS
-/// plane — ortho follows the user's coordinate system, not world axes. `xf` is
-/// identity for plain WCS, so the world-XY behaviour is unchanged there.
-pub(super) fn ortho_constrain(pt: glam::DVec3, base: glam::DVec3, xf: &UcsXform) -> glam::DVec3 {
+/// The two live drafting directions in degrees inside the active UCS plane.
+pub(super) fn drafting_angles(
+    isometric: bool,
+    iso_plane: super::settings::IsoPlane,
+    snap_angle_deg: f32,
+) -> [f64; 2] {
+    let base = if isometric {
+        iso_plane.angles()
+    } else {
+        [0.0, 90.0]
+    };
+    base.map(|angle| angle + snap_angle_deg as f64)
+}
+
+/// Convert the live drafting directions into world-space axes.
+pub(super) fn drafting_axes(
+    x: glam::DVec3,
+    y: glam::DVec3,
+    z: glam::DVec3,
+    isometric: bool,
+    iso_plane: super::settings::IsoPlane,
+    snap_angle_deg: f32,
+) -> (glam::DVec3, glam::DVec3, glam::DVec3) {
+    let [a, b] = drafting_angles(isometric, iso_plane, snap_angle_deg);
+    let direction = |degrees: f64| {
+        let radians = degrees.to_radians();
+        (x * radians.cos() + y * radians.sin()).normalize_or(x)
+    };
+    (direction(a), direction(b), z.normalize_or(x.cross(y)))
+}
+
+/// Constrain `pt` to the nearest live drafting direction from `base`.
+pub(super) fn drafting_constrain(
+    pt: glam::DVec3,
+    base: glam::DVec3,
+    xf: &UcsXform,
+    isometric: bool,
+    iso_plane: super::settings::IsoPlane,
+    snap_angle_deg: f32,
+) -> glam::DVec3 {
     let p = xf.to_ucs(pt);
     let b = xf.to_ucs(base);
-    let dx = (p.x - b.x).abs();
-    let dy = (p.y - b.y).abs();
-    let c = if dx >= dy {
-        glam::DVec3::new(p.x, b.y, p.z)
-    } else {
-        glam::DVec3::new(b.x, p.y, p.z)
-    };
+    let delta = glam::DVec2::new(p.x - b.x, p.y - b.y);
+    let [a, c] = drafting_angles(isometric, iso_plane, snap_angle_deg).map(|degrees| {
+        let radians = degrees.to_radians();
+        glam::DVec2::new(radians.cos(), radians.sin())
+    });
+    let direction = if delta.dot(a).abs() >= delta.dot(c).abs() { a } else { c };
+    let projected = direction * delta.dot(direction);
+    let c = glam::DVec3::new(b.x + projected.x, b.y + projected.y, p.z);
     xf.to_wcs(c)
 }
 
@@ -341,6 +378,9 @@ pub(super) fn axis_lock_capture(
     polar: bool,
     step_deg: f32,
     xf: &UcsXform,
+    isometric: bool,
+    iso_plane: super::settings::IsoPlane,
+    snap_angle_deg: f32,
 ) -> Option<glam::DVec3> {
     let p = xf.to_ucs(cursor);
     let b = xf.to_ucs(base);
@@ -349,8 +389,20 @@ pub(super) fn axis_lock_capture(
     if dx.hypot(dy) < 1e-9 {
         return None;
     }
-    let step = (if polar { step_deg as f64 } else { 90.0 }).to_radians();
-    let ang = (dy.atan2(dx) / step).round() * step;
+    let ang = if polar {
+        let base = (snap_angle_deg as f64).to_radians();
+        let step = (step_deg as f64).to_radians();
+        ((dy.atan2(dx) - base) / step).round() * step + base
+    } else {
+        let delta = glam::DVec2::new(dx, dy);
+        let [a, b] = drafting_angles(isometric, iso_plane, snap_angle_deg).map(|degrees| {
+            let radians = degrees.to_radians();
+            glam::DVec2::new(radians.cos(), radians.sin())
+        });
+        let direction = if delta.dot(a).abs() >= delta.dot(b).abs() { a } else { b };
+        let direction = if delta.dot(direction) < 0.0 { -direction } else { direction };
+        direction.y.atan2(direction.x)
+    };
     let dir_ucs = glam::DVec3::new(ang.cos(), ang.sin(), 0.0);
     let dir = xf.to_wcs(b + dir_ucs) - xf.to_wcs(b);
     (dir.length_squared() > 1e-12).then(|| dir.normalize())
