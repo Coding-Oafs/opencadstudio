@@ -946,7 +946,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git#0e4b23845de75242e00f016feed9fc2341b4a85a"
+source = "git+https://github.com/HakanSeven12/cadkernel.git#46e76ccb737a3682ffccf5117e89879ebfd1e227"
 
 [[package]]
 name = "calloop"

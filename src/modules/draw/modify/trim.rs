@@ -847,6 +847,41 @@ fn trim_ellipse(orig: &EllipseEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> 
     let span = t1 - t0;
     let angle_at = |t: f64| t0 + span * t;
 
+    // A closed ellipse has no ends for `trim_intervals` to anchor on. Handing
+    // it one makes it invent cuts at the parameter seam, so the survivor comes
+    // back as two arcs either side of the seam instead of one joined across
+    // it — and if the click lands in the wrapping piece, the wrong side goes.
+    // Circles avoid this by treating the cuts cyclically; see `trim_circle`.
+    if (span - TAU).abs() < 1e-9 {
+        if ts.len() < 2 {
+            return vec![];
+        }
+        let click = t_click.rem_euclid(1.0);
+        // The gap holding the click, with the last one wrapping past 1.0 back
+        // to the first cut.
+        let gap = (0..ts.len()).find_map(|i| {
+            let from = ts[i];
+            let to = if i + 1 < ts.len() {
+                ts[i + 1]
+            } else {
+                ts[0] + 1.0
+            };
+            let holds = |t: f64| t >= from - 1e-9 && t <= to + 1e-9;
+            (holds(click) || holds(click + 1.0)).then_some((from, to))
+        });
+        let Some((from, to)) = gap else {
+            return vec![];
+        };
+        // The survivor runs from the far edge of the removed gap all the way
+        // round to its near edge. Leaving the end below the start is what
+        // signals the wrap to everything downstream.
+        let mut e = orig.clone();
+        e.common.handle = Handle::NULL;
+        e.start_parameter = angle_at(to % 1.0);
+        e.end_parameter = angle_at(from % 1.0);
+        return vec![EntityType::Ellipse(e)];
+    }
+
     trim_intervals(ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
