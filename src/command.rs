@@ -873,7 +873,168 @@ impl CadCommand for SelectThenValueCommand {
         CmdResult::Dispatch(format!("{} ", self.name))
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TCountStep {
+    Start,
+    Increment,
+    Placement,
+}
 
+/// Interactive front-end for TCOUNT.
+///
+/// After gathering the text selection it asks for:
+/// 1. starting number,
+/// 2. increment,
+/// 3. placement mode (Overwrite / Prefix / Suffix).
+///
+/// The actual entity modification remains in the inline TCOUNT handler.
+pub struct TCountCommand {
+    gathering: bool,
+    selected: Vec<Handle>,
+    step: TCountStep,
+    start: i64,
+    increment: i64,
+}
+
+impl TCountCommand {
+    pub fn new(has_selection: bool) -> Self {
+        Self {
+            gathering: !has_selection,
+            selected: Vec::new(),
+            step: TCountStep::Start,
+            start: 1,
+            increment: 1,
+        }
+    }
+
+    fn dispatch(&self, placement: &str) -> CmdResult {
+        CmdResult::Dispatch(format!(
+            "TCOUNT {} {} {}",
+            self.start, self.increment, placement
+        ))
+    }
+}
+
+impl CadCommand for TCountCommand {
+    fn name(&self) -> &'static str {
+        "TCOUNT"
+    }
+
+    fn prompt(&self) -> String {
+        if self.gathering {
+            return "TCOUNT  select text objects, then press Enter:".to_string();
+        }
+
+        match self.step {
+            TCountStep::Start => {
+                format!("TCOUNT  starting number <{}>:", self.start)
+            }
+            TCountStep::Increment => {
+                format!("TCOUNT  increment <{}>:", self.increment)
+            }
+            TCountStep::Placement => {
+                "TCOUNT  placement [Overwrite/Prefix/Suffix] <Overwrite>:".to_string()
+            }
+        }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        if self.gathering || self.step != TCountStep::Placement {
+            return Vec::new();
+        }
+
+        vec![
+            CmdOption::new("Overwrite", "O"),
+            CmdOption::new("Prefix", "P"),
+            CmdOption::new("Suffix", "S"),
+        ]
+    }
+
+    fn wants_text_input(&self) -> bool {
+        !self.gathering
+    }
+
+    fn is_selection_gathering(&self) -> bool {
+        self.gathering
+    }
+
+    fn on_selection_complete(&mut self, handles: Vec<Handle>) -> CmdResult {
+        self.selected = handles;
+        CmdResult::NeedPoint
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        if self.gathering {
+            return None;
+        }
+
+        let t = text.trim();
+
+        if t.is_empty() {
+            return None;
+        }
+
+        match self.step {
+            TCountStep::Start => {
+                if let Ok(value) = t.parse::<i64>() {
+                    self.start = value;
+                    self.step = TCountStep::Increment;
+                }
+                Some(CmdResult::NeedPoint)
+            }
+
+            TCountStep::Increment => {
+                if let Ok(value) = t.parse::<i64>() {
+                    self.increment = value;
+                    self.step = TCountStep::Placement;
+                }
+                Some(CmdResult::NeedPoint)
+            }
+
+            TCountStep::Placement => {
+                let placement = match t.to_uppercase().as_str() {
+                    "O" | "OVERWRITE" => "O",
+                    "P" | "PREFIX" => "P",
+                    "S" | "SUFFIX" => "S",
+                    _ => return Some(CmdResult::NeedPoint),
+                };
+
+                Some(self.dispatch(placement))
+            }
+        }
+    }
+
+    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
+        CmdResult::NeedPoint
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        if self.gathering {
+            if self.selected.is_empty() {
+                return CmdResult::Cancel;
+            }
+
+            self.gathering = false;
+            return CmdResult::NeedPoint;
+        }
+
+        match self.step {
+            TCountStep::Start => {
+                self.start = 1;
+                self.step = TCountStep::Increment;
+                CmdResult::NeedPoint
+            }
+
+            TCountStep::Increment => {
+                self.increment = 1;
+                self.step = TCountStep::Placement;
+                CmdResult::NeedPoint
+            }
+
+            TCountStep::Placement => self.dispatch("O"),
+        }
+    }
+}
 /// Generic front-end for a two-value command that operates on the current
 /// selection (POLYSOLID width + height on a selected polyline). Gathers a
 /// selection first when none is set, prompts for two values, and dispatches
