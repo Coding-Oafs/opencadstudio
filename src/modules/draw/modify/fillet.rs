@@ -14,6 +14,9 @@ use acadrust::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline};
 // Shared plane geometry, from cadkernel via the local adapters.
 use super::geom;
 use super::geom::{arc_points as arc_pts, line_line as ll, normalize_angle as norm_angle};
+use acadrust::kernel::geom2d::{
+    circle_circle_points as circle_circle_pts, fillet_between_rays, line_circle,
+};
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
@@ -121,7 +124,6 @@ fn compute_fillet(
         return None;
     }
 
-    let half = angle / 2.0;
     let z = l1.start.z;
 
     if radius < 1e-9 {
@@ -135,47 +137,19 @@ fn compute_fillet(
         return Some((EntityType::Line(new_l1), EntityType::Line(new_l2), None));
     }
 
-    // Distance from P to tangent points
-    let d = radius / half.tan();
+    let rounded = fillet_between_rays([px, py], dir1, dir2, radius)?;
 
-    // Tangent points
-    let t1 = [px + d * dir1[0], py + d * dir1[1]];
-    let t2 = [px + d * dir2[0], py + d * dir2[1]];
+    // Trim each line back to where the arc meets it.
+    let new_l1 = trim_to_xy(l1, rounded.tangent1, dir1, u1)?;
+    let new_l2 = trim_to_xy(l2, rounded.tangent2, dir2, u2)?;
 
-    // Arc center: along bisector of dir1+dir2, distance = r / sin(half)
-    let bx = dir1[0] + dir2[0];
-    let by = dir1[1] + dir2[1];
-    let blen = (bx * bx + by * by).sqrt();
-    if blen < 1e-10 {
-        return None;
-    }
-    let arc_dist = radius / half.sin();
-    let arc_cx = px + arc_dist * bx / blen;
-    let arc_cy = py + arc_dist * by / blen;
-
-    let a_start = (t1[1] - arc_cy).atan2(t1[0] - arc_cx);
-    let a_end = (t2[1] - arc_cy).atan2(t2[0] - arc_cx);
-
-    // Pick CCW direction that fills the concave corner
-    let cross = dir1[0] * dir2[1] - dir1[1] * dir2[0];
-    let (start_angle, end_angle) = if cross <= 0.0 {
-        (a_start, a_end)
-    } else {
-        (a_end, a_start)
-    };
-
-    // Trim l1 to T1 and l2 to T2
-    let new_l1 = trim_to_xy(l1, t1, dir1, u1)?;
-    let new_l2 = trim_to_xy(l2, t2, dir2, u2)?;
-
-    // Build arc entity
     let mut arc = ArcEnt::new();
     arc.common = l1.common.clone();
     arc.common.handle = Handle::NULL;
-    arc.center = Vector3::new(arc_cx, arc_cy, z);
+    arc.center = Vector3::new(rounded.centre[0], rounded.centre[1], z);
     arc.radius = radius;
-    arc.start_angle = norm_angle(start_angle);
-    arc.end_angle = norm_angle(end_angle);
+    arc.start_angle = rounded.start_angle;
+    arc.end_angle = rounded.end_angle;
 
     Some((
         EntityType::Line(new_l1),
@@ -284,52 +258,6 @@ fn trim_arc(orig: &ArcEnt, new_start: f64, new_end: f64) -> ArcEnt {
     a.start_angle = norm_angle(new_start);
     a.end_angle = norm_angle(new_end);
     a
-}
-
-/// Intersect a line (point p + direction d) with a circle (center c, radius r).
-/// Returns up to 2 parameter values t on the line.
-fn line_circle_ts(px: f64, py: f64, dx: f64, dy: f64, cx: f64, cy: f64, r: f64) -> Vec<f64> {
-    let fx = px - cx;
-    let fy = py - cy;
-    let a = dx * dx + dy * dy;
-    let b = 2.0 * (fx * dx + fy * dy);
-    let c = fx * fx + fy * fy - r * r;
-    let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
-        return vec![];
-    }
-    let sq = disc.sqrt();
-    if disc < 1e-14 {
-        vec![(-b) / (2.0 * a)]
-    } else {
-        vec![(-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)]
-    }
-}
-
-/// Intersect two circles. Returns intersection points.
-fn circle_circle_pts(c1: [f64; 2], r1: f64, c2: [f64; 2], r2: f64) -> Vec<[f64; 2]> {
-    let dx = c2[0] - c1[0];
-    let dy = c2[1] - c1[1];
-    let d = (dx * dx + dy * dy).sqrt();
-    if d < 1e-12 || d > r1 + r2 + 1e-9 || d < (r1 - r2).abs() - 1e-9 {
-        return vec![];
-    }
-    let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
-    let h2 = r1 * r1 - a * a;
-    if h2 < 0.0 {
-        return vec![];
-    }
-    let h = h2.sqrt();
-    let mx = c1[0] + a * dx / d;
-    let my = c1[1] + a * dy / d;
-    if h < 1e-9 {
-        vec![[mx, my]]
-    } else {
-        vec![
-            [mx + h * dy / d, my - h * dx / d],
-            [mx - h * dy / d, my + h * dx / d],
-        ]
-    }
 }
 
 // ── LwPolyline helpers ────────────────────────────────────────────────────
@@ -761,7 +689,7 @@ fn fillet_line_arc(
     let (ac, ar, a_start, a_end, _) = arc_geom(arc);
 
     // Intersection of infinite line with the arc's circle
-    let ts = line_circle_ts(p1[0], p1[1], u[0], u[1], ac[0], ac[1], ar);
+    let ts = line_circle(p1, u, ac, ar);
 
     if radius < 1e-9 {
         // r=0: trim to intersection (nearest to each click)
