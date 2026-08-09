@@ -39,9 +39,9 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 /// fraction of the curve radius sets their sampling density (~0.002 ⇒ ~50
 /// segments per full circle).
 pub(crate) const EDGE_CHORD_FRAC: f64 = 0.002;
-/// Truck's own triangulation chord tolerance for the cone faces still routed
+/// The triangulation chord tolerance for the cone faces still routed
 /// through its kernel, as a fraction of the surface radius. Matches
-/// [`LodConfig::HIGH`]: truck emits a single mesh rather than an LOD ladder, so
+/// [`LodConfig::HIGH`]: the kernel emits a single mesh rather than an LOD ladder, so
 /// it has to be the detailed one. A coarse fraction here turns a wide pipe into
 /// a hexagonal prism whose flats sink far inside the true radius, tearing the
 /// wall away from the planar faces and caps that meet it.
@@ -286,22 +286,22 @@ fn tessellate_acis(
     facet_res: f64,
     isolines: usize,
 ) -> Option<MeshLodSet> {
-    let truck = crate::scene::convert::acis_kernel::tessellate_sat(
+    let lifted = crate::scene::convert::acis_kernel::tessellate_sat(
         sat,
         name.clone(),
         color,
         facet_res,
     );
-    let manual = if truck.as_ref().is_some_and(|set| set.complete) {
+    let manual = if lifted.as_ref().is_some_and(|set| set.complete) {
         None
     } else {
         tessellate_sat_lods(sat, name.clone(), color, facet_res)
     };
-    let mut set = match (truck, manual) {
+    let mut set = match (lifted, manual) {
         (Some(set), _) if set.complete => set,
         (_, Some(set)) if set.complete => set,
-        (Some(truck), Some(manual)) => {
-            let truck_tris = truck
+        (Some(lifted), Some(manual)) => {
+            let lifted_tris = lifted
                 .lods
                 .first()
                 .map(|mesh| mesh.indices.len())
@@ -311,10 +311,10 @@ fn tessellate_acis(
                 .first()
                 .map(|mesh| mesh.indices.len())
                 .unwrap_or(0);
-            if manual_tris > truck_tris {
+            if manual_tris > lifted_tris {
                 manual
             } else {
-                truck
+                lifted
             }
         }
         (Some(set), None) | (None, Some(set)) => set,

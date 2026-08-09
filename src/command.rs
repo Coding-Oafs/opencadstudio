@@ -1154,7 +1154,7 @@ pub enum CmdResult {
     /// Commit an acadrust entity to the document and end the command.
     CommitAndExit(EntityType),
     /// Commit a Model-tab 3D solid: the acadrust entity (for selection /
-    /// persistence) plus its truck B-rep (cached for boolean ops + shaded
+    /// persistence) plus its B-rep (cached for boolean ops + shaded
     /// rendering). Ends the command.
     CommitSolid {
         entity: EntityType,

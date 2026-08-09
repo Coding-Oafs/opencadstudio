@@ -1,9 +1,9 @@
-pub mod acad_to_truck;
 #[cfg(feature = "solid3d")]
+pub mod acad_to_render;
 pub mod acis_export;
 pub mod acis_kernel;
 pub mod dgn_linestyle;
-pub mod truck_tess;
+pub mod curve_tol;
 pub mod tessellate;
 pub(crate) mod tess;
 pub mod proxy_graphics;

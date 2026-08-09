@@ -344,7 +344,7 @@ pub fn entity_curve_xy(entity: &EntityType) -> Option<Curve> {
 /// pair; casting local coordinates on the way in throws away precision the
 /// shader was built to reconstruct.
 pub fn curve_points(curve: &PlanarCurve) -> Vec<[f64; 3]> {
-    curve.tessellate_within(crate::scene::convert::truck_tess::current_curve_tol())
+    curve.tessellate_within(crate::scene::convert::curve_tol::current_curve_tol())
 }
 
 /// The snap candidates an entity's curve offers, in the two channels the

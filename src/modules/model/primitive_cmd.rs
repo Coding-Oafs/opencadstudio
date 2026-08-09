@@ -4,7 +4,7 @@
 // `acis::primitives` builders. `Scene::add_entity` tessellates the SAT B-rep
 // into the 3D mesh pipeline, so the solid renders, selects, and saves to DXF.
 //
-// A matching truck `Solid` is cached on the scene (see model/mod.rs) when the
+// A matching the kernel `Solid` is cached on the scene (see model/mod.rs) when the
 // entity is committed, so the Design-group boolean tools can combine it.
 
 use acadrust::entities::Solid3D;

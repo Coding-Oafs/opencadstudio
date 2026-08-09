@@ -17,7 +17,7 @@ winresource = "0.1"
 
 [features]
 default = ["solid3d"]
-solid3d = ["dep:truck-meshalgo", "dep:lzma-sys"]
+solid3d = ["dep:lzma-sys"]
 
 [dependencies]
 serde_json = "1"
@@ -29,9 +29,6 @@ iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aa
 iced_aw = { git = "https://github.com/HakanSeven12/iced_aw.git", branch = "agent/fix-iced-fonts", features = ["menu", "context_menu", "color_picker", "drop_down"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = { version = "0.33", features = ["bytemuck"] }
-truck-modeling = "0.6"
-truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"], optional = true }
-truck-polymesh = "0.6"
 rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"

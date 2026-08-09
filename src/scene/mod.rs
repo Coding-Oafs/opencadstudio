@@ -1,5 +1,5 @@
 // Scene modules grouped by role:
-//   convert — DXF/ACIS entities → truck solids & tessellated geometry
+//   convert — DXF/ACIS entities → solids & tessellated geometry
 //   text    — LFF stroke + TrueType font engines and shaping
 //   model   — per-entity GPU render models (wire, hatch, mesh, image, object)
 //   pick    — hit-testing, selection, grips, spatial index, xclip
@@ -147,11 +147,6 @@ use acadrust::objects::ObjectType;
 use acadrust::types::Vector2;
 use acadrust::{CadDocument, EntityType, Handle, TableEntry};
 use glam;
-use truck_modeling::{
-    base::{BoundedCurve, ParameterDivision1D},
-    BSplineCurve as TruckBSpline, KnotVec, NurbsCurve, Point3, Vector4,
-};
-
 use iced::time::Duration;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
@@ -1767,7 +1762,7 @@ pub struct Scene {
     pub viewcube_ucs: glam::Mat4,
     /// GPU render data for hatch fills, keyed by the DXF entity Handle.
     pub hatches: HashMap<Handle, HatchModel>,
-    /// GPU render data for solid meshes (truck Shell/Solid tessellation).
+    /// GPU render data for solid meshes (the kernel Shell/Solid tessellation).
     /// Top-level (layout-owned) solids only, stored in the offset-relative
     /// render frame and drawn flat.
     pub meshes: HashMap<Handle, MeshLodSet>,
@@ -8334,11 +8329,11 @@ impl Scene {
         struct CurveTolGuard;
         impl Drop for CurveTolGuard {
             fn drop(&mut self) {
-                crate::scene::convert::truck_tess::set_curve_tol_override(None);
+                crate::scene::convert::curve_tol::set_curve_tol_override(None);
             }
         }
         let _tol_guard = wpp.map(|w| {
-            crate::scene::convert::truck_tess::set_curve_tol_override(Some((w * 0.5) as f64));
+            crate::scene::convert::curve_tol::set_curve_tol_override(Some((w * 0.5) as f64));
             CurveTolGuard
         });
         // Per-entity tessellation memo. Same classify/tessellate logic, two

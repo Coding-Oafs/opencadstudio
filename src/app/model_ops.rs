@@ -32,7 +32,7 @@ impl super::OpenCADStudio {
     /// selected solids whose B-reps are in the session cache.
     pub(super) fn solid_boolean(&mut self, op: BoolOp) -> Task<Message> {
         let i = self.active_tab;
-        // Selected entities that have a cached truck B-rep.
+        // Selected entities that have a cached B-rep.
         let handles: Vec<Handle> = self.tabs[i]
             .scene
             .selected
@@ -63,7 +63,7 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         // The result is freshly combined geometry with no ACIS parametrisation,
         // so it lives as a Solid3D whose render/boolean data is the injected
-        // truck mesh + cached B-rep; its edge wires make it pickable.
+        // mesh + cached B-rep; its edge wires make it pickable.
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
         let handle = self.add_solid_model(EntityType::Solid3D(s3d), result);
@@ -79,7 +79,7 @@ impl super::OpenCADStudio {
     /// Slice the one selected solid with an axis-aligned plane (axis 0/1/2 =
     /// X/Y/Z at `value`), keeping the lower side when `keep_low` is true. The
     /// kept half is the intersection of the solid with a half-space box, reusing
-    /// the same truck-shapeops path as the boolean tools.
+    /// the same boolean path the Design-group tools use.
     pub(super) fn solid_slice(&mut self, axis: usize, value: f64, keep_low: bool) -> Task<Message> {
         let i = self.active_tab;
         let handles: Vec<Handle> = self.tabs[i]
@@ -191,7 +191,7 @@ impl super::OpenCADStudio {
 
     /// 3DROTATE — rotate the one selected solid about the X/Y/Z axis (0/1/2)
     /// through its centre by `angle_deg` degrees. Rotation preserves the solid's
-    /// orientation, so it reuses the cached truck B-rep directly.
+    /// orientation, so it reuses the cached B-rep directly.
     pub(super) fn solid_rotate3d(&mut self, axis: usize, angle_deg: f64) -> Task<Message> {
         let i = self.active_tab;
         let handles: Vec<Handle> = self.tabs[i]
