@@ -710,6 +710,21 @@ mod tests {
         assert!(curve.is_closed());
     }
 
+    /// The whole stack resolves from here: OCS reaches the B-rep layer and
+    /// the ACIS bridge through the same alias every other CAD type comes in
+    /// by. A compile-time check, so a chain that stops resolving is caught
+    /// where it happens rather than the next time somebody reaches for it.
+    #[test]
+    fn the_solid_layer_and_the_acis_bridge_are_reachable() {
+        let solid = acadrust::kernel::brep::make::cuboid([0.0; 3], [1.0; 3])
+            .expect("the kernel builds its own primitives");
+        assert!(solid.validate().is_empty());
+        assert_eq!(solid.euler_characteristic(), 2);
+        let document = acadrust::entities::acis::types::SatDocument::new();
+        let (bodies, loss) = acadrust::acis::lift(&document);
+        assert!(bodies.is_empty() && loss.is_empty(), "an empty document lifts to nothing");
+    }
+
     #[test]
     fn entities_that_are_not_curves_say_so() {
         assert!(entity_curve(&EntityType::Point(Default::default())).is_none());

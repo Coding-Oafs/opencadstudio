@@ -88,19 +88,19 @@ impl Language {
 
     pub fn label(self) -> String {
         match self {
-            Language::System => crate::tr!("language-system"),
-            Language::EnUs => crate::tr!("language-english"),
-            Language::TrTr => crate::tr!("language-turkish"),
-            Language::NlNl => crate::tr!("language-dutch"),
-            Language::FrFr => crate::tr!("language-french"),
-            Language::DeDe => crate::tr!("language-german"),
-            Language::HiIn => crate::tr!("language-hindi"),
-            Language::RuRu => crate::tr!("language-russian"),
-            Language::ZhCn => crate::tr!("language-chinese-simplified"),
-            Language::EsEs => crate::tr!("language-spanish"),
-            Language::PtBr => crate::tr!("language-portuguese"),
-            Language::ArSa => crate::tr!("language-arabic"),
-            Language::JaJp => crate::tr!("language-japanese"),
+            Language::System => crate::tr!("language", "system"),
+            Language::EnUs => crate::tr!("language", "english"),
+            Language::TrTr => crate::tr!("language", "turkish"),
+            Language::NlNl => crate::tr!("language", "dutch"),
+            Language::FrFr => crate::tr!("language", "french"),
+            Language::DeDe => crate::tr!("language", "german"),
+            Language::HiIn => crate::tr!("language", "hindi"),
+            Language::RuRu => crate::tr!("language", "russian"),
+            Language::ZhCn => crate::tr!("language", "chinese-simplified"),
+            Language::EsEs => crate::tr!("language", "spanish"),
+            Language::PtBr => crate::tr!("language", "portuguese"),
+            Language::ArSa => crate::tr!("language", "arabic"),
+            Language::JaJp => crate::tr!("language", "japanese"),
         }
     }
 }
@@ -200,8 +200,8 @@ pub fn active_language_tag() -> String {
 /// translatable data.
 pub fn translate(source: impl AsRef<str>) -> Cow<'static, str> {
     let source = source.as_ref();
-    locale_catalog::message_id(source)
-        .map(|message_id| Cow::Owned(loader().get(message_id)))
+    locale_catalog::message_attribute(source)
+        .map(|(message_id, attribute_id)| Cow::Owned(loader().get_attr(message_id, attribute_id)))
         .unwrap_or_else(|| Cow::Owned(source.to_string()))
 }
 
@@ -213,8 +213,8 @@ pub fn translate_args(
     args: &[(&str, String)],
 ) -> Cow<'static, str> {
     let source = source.as_ref();
-    let mut translated = locale_catalog::message_id(source)
-        .map(|message_id| loader().get(message_id))
+    let mut translated = locale_catalog::message_attribute(source)
+        .map(|(message_id, attribute_id)| loader().get_attr(message_id, attribute_id))
         .unwrap_or_else(|| source.to_string());
     for (name, value) in args {
         translated = translated.replace(&format!("__ocs_arg_{name}__"), value);
@@ -229,13 +229,13 @@ pub fn translate_args(
 /// sentence. File names, handles, counts, and command values therefore remain
 /// data instead of being sent through translation.
 pub fn translate_format(template: &str, rendered: String) -> Cow<'static, str> {
-    let Some(message_id) = locale_catalog::message_id(template) else {
+    let Some((message_id, attribute_id)) = locale_catalog::message_attribute(template) else {
         return Cow::Owned(rendered);
     };
     let Some(values) = format_values(template, &rendered) else {
         return Cow::Owned(rendered);
     };
-    let mut translated = loader().get(message_id);
+    let mut translated = loader().get_attr(message_id, attribute_id);
     for (index, value) in values.iter().enumerate() {
         translated = translated.replace(&format!("__ocs_fmt_{index}__"), value);
     }
@@ -297,19 +297,30 @@ fn format_values(template: &str, rendered: &str) -> Option<Vec<String>> {
 /// until they provide their own localization bundle.
 pub fn ribbon_module_title(id: &str, fallback: &str) -> String {
     match id {
-        "draw" => crate::tr!("ribbon-tab-draw"),
-        "annotate" => crate::tr!("ribbon-tab-annotate"),
-        "insert" => crate::tr!("ribbon-tab-insert"),
-        "model" => crate::tr!("ribbon-tab-model"),
-        "layout" => crate::tr!("ribbon-tab-layout"),
-        "manage" => crate::tr!("ribbon-tab-manage"),
-        "view" => crate::tr!("ribbon-tab-view"),
+        "draw" => crate::tr!("ribbon-tab", "draw"),
+        "annotate" => crate::tr!("ribbon-tab", "annotate"),
+        "insert" => crate::tr!("ribbon-tab", "insert"),
+        "model" => crate::tr!("ribbon-tab", "model"),
+        "layout" => crate::tr!("ribbon-tab", "layout"),
+        "manage" => crate::tr!("ribbon-tab", "manage"),
+        "view" => crate::tr!("ribbon-tab", "view"),
         _ => fallback.to_string(),
     }
 }
 
 #[macro_export]
 macro_rules! tr {
+    ($message_id:literal, $attribute_id:literal $(,)?) => {
+        i18n_embed_fl::fl!($crate::i18n::loader(), $message_id, $attribute_id)
+    };
+    ($message_id:literal, $attribute_id:literal, $($name:ident = $value:expr),+ $(,)?) => {
+        i18n_embed_fl::fl!(
+            $crate::i18n::loader(),
+            $message_id,
+            $attribute_id,
+            $($name = $value),+
+        )
+    };
     ($message_id:literal $(,)?) => {
         i18n_embed_fl::fl!($crate::i18n::loader(), $message_id)
     };

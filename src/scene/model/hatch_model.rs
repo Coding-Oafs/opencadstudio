@@ -1,11 +1,23 @@
 // HatchModel — CPU-side hatch fill data; rendered entirely on the GPU.
-use std::sync::Arc;
 //
 // The boundary is a closed polygon in world XY coordinates.
 // The GPU fragment shader performs point-in-polygon and hatch-line tests so
 // no line geometry is ever tessellated on the CPU.
 
+use std::sync::Arc;
+
+use acadrust::kernel::geom2d::{
+    inside_spans, Curve as KernelCurve, Line as KernelLine, Tolerance, XLine as KernelXLine,
+};
+
 pub const MAX_HATCH_BOUNDARY_VERTS: usize = 1024;
+
+/// How near two crossings along a pattern line must be to count as one.
+///
+/// The boundary reaching here is already a chord approximation of the drawn
+/// curves, so this only has to be finer than that sampling and coarser than
+/// the rounding in it.
+const CLIP_TOLERANCE_LINEAR: f64 = 1.0e-6;
 
 /// One line family from a PAT-format hatch pattern.
 ///
@@ -269,6 +281,13 @@ impl HatchModel {
         if edges.is_empty() {
             return Vec::new();
         }
+        // The boundary as kernel curves, built once for every pattern line to
+        // be clipped against.
+        let clip_tolerance = Tolerance::new(CLIP_TOLERANCE_LINEAR);
+        let boundary: Vec<KernelCurve> = edges
+            .iter()
+            .map(|(a, b)| KernelCurve::Line(KernelLine { start: *a, end: *b }))
+            .collect();
 
         // ── AABB of the boundary in world coords.
         let mut min_x = f64::INFINITY;
@@ -363,39 +382,28 @@ impl HatchModel {
                 let lx = origin[0] + kf * step_x;
                 let ly = origin[1] + kf * step_y;
 
-                // Intersect line P(t) = L + t·(cos_a, sin_a) against each
-                // boundary edge; collect t-values where the edge actually
-                // crosses (s ∈ [0,1]).
-                let mut ts: Vec<f64> = Vec::with_capacity(8);
-                for &(a, b) in &edges {
-                    let ex = b[0] - a[0];
-                    let ey = b[1] - a[1];
-                    let det = ex * sin_a - ey * cos_a; // = sin_a·ex − cos_a·ey
-                    if det.abs() < 1e-9 {
-                        continue;
-                    }
-                    let rx = a[0] - lx;
-                    let ry = a[1] - ly;
-                    let t = (ex * ry - ey * rx) / det;
-                    let s = (cos_a * ry - sin_a * rx) / det;
-                    if s >= 0.0 && s <= 1.0 {
-                        ts.push(t);
-                    }
-                }
-                if ts.len() < 2 {
-                    continue;
-                }
-                ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                // De-duplicate near-coincident hits (line clipping a vertex).
-                ts.dedup_by(|a, b| (*a - *b).abs() < 1e-5);
-                if ts.len() < 2 {
-                    continue;
-                }
+                // The stretches of this pattern line that fall inside the
+                // boundary. The direction is a unit vector, so the kernel's
+                // parameter is distance along the line — the same `t` the
+                // dash walk below steps in.
+                //
+                // Each span is tested for containment rather than taken from
+                // alternating crossings. A line that grazes a corner crosses
+                // twice in one place, and an alternating walk inverts from
+                // there on: the fill lands in the holes and the solid comes
+                // out empty.
+                let spans = inside_spans(
+                    &boundary,
+                    &KernelCurve::XLine(KernelXLine {
+                        base: [lx, ly],
+                        direction: [cos_a, sin_a],
+                    }),
+                    clip_tolerance,
+                );
 
-                // Even-odd: emit segments between consecutive pairs.
-                for pair in ts.chunks_exact(2) {
-                    let t0 = pair[0];
-                    let t1 = pair[1];
+                for span in spans {
+                    let t0 = span[0];
+                    let t1 = span[1];
                     if t1 - t0 < 1e-6 {
                         continue;
                     }

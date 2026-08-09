@@ -3137,6 +3137,8 @@ impl OpenCADStudio {
                 self.snapper.otrack_enabled ^= true;
                 if !self.snapper.otrack_enabled {
                     self.snapper.clear_tracking();
+                    self.otrack_active = None;
+                    self.otrack_kind = None;
                 }
                 Task::none()
             }
@@ -3997,23 +3999,23 @@ impl OpenCADStudio {
                     }
                     Text::EmptyOrUnsupported => {
                         self.command_line.push_error(
-                            crate::tr!("clipboard-no-supported-content").as_ref(),
+                            crate::tr!("clipboard", "no-supported-content").as_ref(),
                         );
                         Task::none()
                     }
                     Text::Unavailable => {
                         self.command_line
-                            .push_error(crate::tr!("clipboard-unavailable").as_ref());
+                            .push_error(crate::tr!("clipboard", "unavailable").as_ref());
                         Task::none()
                     }
                     Text::Occupied => {
                         self.command_line
-                            .push_error(crate::tr!("clipboard-occupied").as_ref());
+                            .push_error(crate::tr!("clipboard", "occupied").as_ref());
                         Task::none()
                     }
                     Text::ConversionFailed => {
                         self.command_line
-                            .push_error(crate::tr!("clipboard-conversion-failed").as_ref());
+                            .push_error(crate::tr!("clipboard", "conversion-failed").as_ref());
                         Task::none()
                     }
                 }

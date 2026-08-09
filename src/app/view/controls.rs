@@ -449,7 +449,7 @@ pub(super) fn viewport_controls<'a>(
                 crate::ui::icons::SPLIT_V,
                 false,
                 Message::SplitModelViewport(false),
-                crate::tr!("viewport-split-vertical"),
+                crate::tr!("viewport", "split-vertical"),
                 "VPORTS 2V",
             ))
             .push(sep())
@@ -457,7 +457,7 @@ pub(super) fn viewport_controls<'a>(
                 crate::ui::icons::SPLIT_H,
                 false,
                 Message::SplitModelViewport(true),
-                crate::tr!("viewport-split-horizontal"),
+                crate::tr!("viewport", "split-horizontal"),
                 "VPORTS 2H",
             ));
         // Drag handle + close: only meaningful with more than one model tile.
@@ -478,7 +478,7 @@ pub(super) fn viewport_controls<'a>(
             )
             .interaction(iced::mouse::Interaction::Grab)
             .on_press(Message::PaneMoveStart);
-            let drag = viewport_tooltip(drag, crate::tr!("viewport-move"), "VPORTS");
+            let drag = viewport_tooltip(drag, crate::tr!("viewport", "move"), "VPORTS");
             bar = bar
                 .push(sep())
                 .push(drag)
@@ -486,7 +486,7 @@ pub(super) fn viewport_controls<'a>(
                 .push(danger_btn(
                     crate::ui::icons::CLOSE,
                     Message::CloseModelViewport,
-                    crate::tr!("viewport-close"),
+                    crate::tr!("viewport", "close"),
                     "VPORTS SINGLE",
                 ));
         }

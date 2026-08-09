@@ -49,32 +49,32 @@ pub fn view_window<'a>(
 ) -> Element<'a, Message> {
     let recovered = report.status == RecoveryStatus::Recovered;
     let heading = if recovered {
-        crate::tr!("recovery-opened-with-repairs")
+        crate::tr!("recovery", "opened-with-repairs")
     } else {
-        crate::tr!("recovery-open-failed")
+        crate::tr!("recovery", "open-failed")
     };
     let description = if recovered {
-        crate::tr!("recovery-repaired-description")
+        crate::tr!("recovery", "repaired-description")
     } else {
-        crate::tr!("recovery-failed-description")
+        crate::tr!("recovery", "failed-description")
     };
     let status = report.status;
 
     let metrics = row![
         metric(
-            crate::tr!("recovery-entities-checked"),
+            crate::tr!("recovery", "entities-checked"),
             report.entities_scanned.to_string(),
         ),
         metric(
-            crate::tr!("recovery-issues-found"),
+            crate::tr!("recovery", "issues-found"),
             report.issues_found().to_string(),
         ),
         metric(
-            crate::tr!("recovery-entities-removed"),
+            crate::tr!("recovery", "entities-removed"),
             report.removed_total().to_string(),
         ),
         metric(
-            crate::tr!("recovery-references-checked"),
+            crate::tr!("recovery", "references-checked"),
             report.references_checked.to_string(),
         ),
     ]
@@ -86,7 +86,7 @@ pub fn view_window<'a>(
         details = details.push(
             text(format!(
                 "{}: {}",
-                crate::tr!("recovery-referenced-entities-removed"),
+                crate::tr!("recovery", "referenced-entities-removed"),
                 report.referenced_entities_removed
             ))
             .size(11),
@@ -96,7 +96,7 @@ pub fn view_window<'a>(
         details = details.push(
             text(format!(
                 "{}: {}",
-                crate::tr!("recovery-references-unavailable"),
+                crate::tr!("recovery", "references-unavailable"),
                 report
                     .references_missing
                     .saturating_add(report.references_failed)
@@ -112,7 +112,7 @@ pub fn view_window<'a>(
     }
     if let Some(path) = &report.log_path {
         details = details.push(
-            text(format!("{}: {}", crate::tr!("recovery-log-path"), path.display()))
+            text(format!("{}: {}", crate::tr!("recovery", "log-path"), path.display()))
                 .size(10)
                 .style(muted_style),
         );
@@ -120,14 +120,14 @@ pub fn view_window<'a>(
         details = details.push(
             text(format!(
                 "{}: {error}",
-                crate::tr!("recovery-log-write-failed")
+                crate::tr!("recovery", "log-write-failed")
             ))
             .size(10)
             .style(status_style(RecoveryStatus::Failed)),
         );
     } else if cfg!(target_arch = "wasm32") {
         details = details.push(
-            text(crate::tr!("recovery-log-download-ready"))
+            text(crate::tr!("recovery", "log-download-ready"))
                 .size(10)
                 .style(muted_style),
         );
@@ -142,7 +142,7 @@ pub fn view_window<'a>(
     let mut actions = row![Space::new().width(Fill)].spacing(8);
     if recovered && report.save_as_required && allow_save_copy {
         actions = actions.push(
-            button(text(crate::tr!("recovery-save-copy")).size(12))
+            button(text(crate::tr!("recovery", "save-copy")).size(12))
                 .on_press(Message::RecoverySaveAs)
                 .style(button::primary)
                 .padding([6, 14]),
@@ -150,14 +150,14 @@ pub fn view_window<'a>(
     }
     if report.log_path.is_some() || cfg!(target_arch = "wasm32") {
         actions = actions.push(
-            button(text(crate::tr!("recovery-show-log")).size(12))
+            button(text(crate::tr!("recovery", "show-log")).size(12))
                 .on_press(Message::RecoveryShowLog)
                 .style(button::secondary)
                 .padding([6, 14]),
         );
     }
     actions = actions.push(
-        button(text(crate::tr!("action-close")).size(12))
+        button(text(crate::tr!("action", "close")).size(12))
             .on_press(Message::RecoveryClose)
             .style(button::secondary)
             .padding([6, 14]),
@@ -200,11 +200,11 @@ pub fn view_prompt<'a>(
     };
     let actions = row![
         Space::new().width(content_width),
-        button(text(crate::tr!("recovery-decline")).size(12))
+        button(text(crate::tr!("recovery", "decline")).size(12))
             .on_press(Message::RecoveryDecline)
             .style(button::secondary)
             .padding([6, 14]),
-        button(text(crate::tr!("recovery-attempt")).size(12))
+        button(text(crate::tr!("recovery", "attempt")).size(12))
             .on_press(Message::RecoveryAttempt)
             .style(button::primary)
             .padding([6, 14]),
@@ -213,9 +213,9 @@ pub fn view_prompt<'a>(
 
     container(
         column![
-            text(crate::tr!("recovery-prompt-heading")).size(20),
+            text(crate::tr!("recovery", "prompt-heading")).size(20),
             text(file_name).size(13),
-            text(crate::tr!("recovery-prompt-description"))
+            text(crate::tr!("recovery", "prompt-description"))
                 .size(11)
                 .style(muted_style),
             container(scrollable(text(error).size(10)).height(content_height))

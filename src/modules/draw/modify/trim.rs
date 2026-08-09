@@ -14,9 +14,8 @@ use std::f64::consts::TAU;
 // its call shapes to the loose scalars and f32 render vertices used here.
 use super::geom;
 use super::geom::{
-    angle_within_arc as in_arc, arc_parameter as arc_t, arc_points as arc_pts,
-    ellipse_points as ellipse_pts, lerp as lerp2,
-    line_circle as lc, line_ellipse as le, line_line as ll, normalize_angle as norm,
+    arc_parameter as arc_t, arc_points as arc_pts, ellipse_points as ellipse_pts,
+    lerp as lerp2, normalize_angle as norm,
 };
 
 use crate::modules::draw::fence::{crossing_box_preview, FencePick};
@@ -131,14 +130,9 @@ enum Geo {
         t1: f64, // end parameter (may be > 2π if wrapped)
     },
     /// A NURBS boundary, carried exactly.
-    ///
-    /// `segs` is a sampling of the same curve, kept only for the two
-    /// hand-rolled ray walks in the polyline-extend paths. Every crossing
-    /// that decides a trim uses `curve`.
     Spline {
         handle: Handle,
         curve: Box<NurbsCurve>,
-        segs: Vec<([f64; 2], [f64; 2])>,
     },
 }
 
@@ -250,17 +244,10 @@ fn geo_from_entity(h: Handle, e: &EntityType) -> Option<Geo> {
                 t1,
             })
         }
-        Curve::Nurbs(curve) => {
-            // Carried exactly. The sampled polyline beside it is only for the
-            // two hand-rolled ray walks in the polyline-extend paths; every
-            // crossing that decides a trim goes through the curve itself.
-            let sampled = curve.tessellate(16);
-            (sampled.len() >= 2).then(|| Geo::Spline {
-                handle: h,
-                curve: Box::new(curve),
-                segs: sampled.windows(2).map(|w| (w[0], w[1])).collect(),
-            })
-        }
+        Curve::Nurbs(curve) => Some(Geo::Spline {
+            handle: h,
+            curve: Box::new(curve),
+        }),
         // A polyline reaches here already taken apart into its segments.
         Curve::Polyline(_) => None,
     }
@@ -987,6 +974,47 @@ fn trim_lwpolyline(poly: &LwPolyline, cx: f64, cy: f64, geos: &[Geo]) -> Option<
 
 /// Extend the first or last segment of an LwPolyline to the nearest boundary.
 /// Click point (DXF XY) determines which end to extend.
+/// The nearest boundary crossing past one end of a segment.
+///
+/// `t` runs on the infinite line through `from` → `to`: zero at `from`, one
+/// at `to`. Extending the far end wants the smallest `t` above one; extending
+/// the near end wants the largest `t` below zero. `None` when nothing lies
+/// that way.
+///
+/// The crossings come from `cut_params`, which is the same kernel call every
+/// other cut in this file uses. What was here instead was a match over every
+/// `Geo` variant with its own line-line, line-circle and line-ellipse test —
+/// twice, once for a line and once for a polyline's terminal segment — and a
+/// boundary spline was walked as sixty-four chords rather than intersected.
+fn extension_hit(
+    from: [f64; 2],
+    to: [f64; 2],
+    handle: Handle,
+    geos: &[Geo],
+    beyond_end: bool,
+) -> Option<f64> {
+    let direction = [to[0] - from[0], to[1] - from[1]];
+    if direction[0].hypot(direction[1]) < 1e-9 {
+        return None;
+    }
+    // An infinite line rather than the segment: the crossing being looked for
+    // is by definition off the end of the drawn part.
+    let ray = Curve::XLine(KernelXLine {
+        base: from,
+        direction,
+    });
+    let hits = cut_params(&ray, handle, geos);
+    if beyond_end {
+        hits.into_iter()
+            .filter(|t| *t > 1.0 + 1e-6)
+            .min_by(f64::total_cmp)
+    } else {
+        hits.into_iter()
+            .filter(|t| *t < -1e-6)
+            .max_by(f64::total_cmp)
+    }
+}
+
 fn extend_lwpoly(
     poly: &LwPolyline,
     click_x: f64,
@@ -1030,124 +1058,7 @@ fn extend_lwpoly(
         return None;
     }
 
-    // t_click on the segment: 0 = ax/ay, 1 = bx/by. We're extending beyond t=1.
-    let target = poly.common.handle;
-    let mut best_t = f64::INFINITY;
-
-    for geo in geos {
-        match geo {
-            Geo::Line { handle, p1, p2 } => {
-                if *handle == target {
-                    continue;
-                }
-                let (ex, ey) = (p2[0] - p1[0], p2[1] - p1[1]);
-                if let Some((t, u)) = ll(ax, ay, dx, dy, p1[0], p1[1], ex, ey) {
-                    if (-1e-9..=1.0 + 1e-9).contains(&u) && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Arc {
-                handle,
-                cx,
-                cy,
-                r,
-                a0,
-                a1,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                for t in lc(ax, ay, dx, dy, *cx, *cy, *r) {
-                    let ix = ax + t * dx;
-                    let iy = ay + t * dy;
-                    if in_arc((iy - cy).atan2(ix - cx), *a0, *a1) && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Circle { handle, cx, cy, r } => {
-                if *handle == target {
-                    continue;
-                }
-                for t in lc(ax, ay, dx, dy, *cx, *cy, *r) {
-                    if t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Ray {
-                handle,
-                bx: rbx,
-                by: rby,
-                dx: rdx,
-                dy: rdy,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                if let Some((t, u)) = ll(ax, ay, dx, dy, *rbx, *rby, *rdx, *rdy) {
-                    if u >= -1e-9 && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::InfLine {
-                handle,
-                bx: ibx,
-                by: iby,
-                dx: idx,
-                dy: idy,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                if let Some((t, _)) = ll(ax, ay, dx, dy, *ibx, *iby, *idx, *idy) {
-                    if t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Ellipse {
-                handle,
-                cx,
-                cy,
-                a,
-                b,
-                nx,
-                ny,
-                t0,
-                t1,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                for (t, t_ell) in le(ax, ay, dx, dy, *cx, *cy, *a, *b, *nx, *ny) {
-                    if in_arc(t_ell, *t0, *t1) && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Spline { handle, segs, .. } => {
-                if *handle == target {
-                    continue;
-                }
-                for (p1, p2) in segs {
-                    let ex = p2[0] - p1[0];
-                    let ey = p2[1] - p1[1];
-                    if let Some((t, u)) = ll(ax, ay, dx, dy, p1[0], p1[1], ex, ey) {
-                        if (-1e-9..=1.0 + 1e-9).contains(&u) && t > 1.0 + 1e-6 && t < best_t {
-                            best_t = t;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !best_t.is_finite() {
-        return None;
-    }
+    let best_t = extension_hit([ax, ay], [bx, by], poly.common.handle, geos, true)?;
 
     let new_x = ax + best_t * dx;
     let new_y = ay + best_t * dy;
@@ -1173,165 +1084,9 @@ fn extend_line(orig: &LineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityType>
     let bx = orig.end.x;
     let by = orig.end.y;
     let (dx, dy) = (bx - ax, by - ay);
-    let target = orig.common.handle;
     let extend_end = t_click >= 0.5;
+    let best_t = extension_hit([ax, ay], [bx, by], orig.common.handle, geos, extend_end)?;
 
-    let mut best_t = if extend_end {
-        f64::INFINITY
-    } else {
-        f64::NEG_INFINITY
-    };
-
-    for geo in geos {
-        match geo {
-            Geo::Line { handle, p1, p2 } => {
-                if *handle == target {
-                    continue;
-                }
-                let (ex, ey) = (p2[0] - p1[0], p2[1] - p1[1]);
-                if let Some((t, u)) = ll(ax, ay, dx, dy, p1[0], p1[1], ex, ey) {
-                    if !(-1e-9..=1.0 + 1e-9).contains(&u) {
-                        continue;
-                    }
-                    if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                    if !extend_end && t < -1e-6 && t > best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Arc {
-                handle,
-                cx,
-                cy,
-                r,
-                a0,
-                a1,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                for t in lc(ax, ay, dx, dy, *cx, *cy, *r) {
-                    let ix = ax + t * dx;
-                    let iy = ay + t * dy;
-                    if !in_arc((iy - cy).atan2(ix - cx), *a0, *a1) {
-                        continue;
-                    }
-                    if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                    if !extend_end && t < -1e-6 && t > best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Circle { handle, cx, cy, r } => {
-                if *handle == target {
-                    continue;
-                }
-                for t in lc(ax, ay, dx, dy, *cx, *cy, *r) {
-                    if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                    if !extend_end && t < -1e-6 && t > best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Ray {
-                handle,
-                bx: rbx,
-                by: rby,
-                dx: rdx,
-                dy: rdy,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                if let Some((t, u)) = ll(ax, ay, dx, dy, *rbx, *rby, *rdx, *rdy) {
-                    if u >= -1e-9 {
-                        // only forward along the Ray
-                        if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                            best_t = t;
-                        }
-                        if !extend_end && t < -1e-6 && t > best_t {
-                            best_t = t;
-                        }
-                    }
-                }
-            }
-            Geo::InfLine {
-                handle,
-                bx: ibx,
-                by: iby,
-                dx: idx,
-                dy: idy,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                if let Some((t, _u)) = ll(ax, ay, dx, dy, *ibx, *iby, *idx, *idy) {
-                    if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                    if !extend_end && t < -1e-6 && t > best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Ellipse {
-                handle,
-                cx: ecx,
-                cy: ecy,
-                a,
-                b,
-                nx,
-                ny,
-                t0: et0,
-                t1: et1,
-            } => {
-                if *handle == target {
-                    continue;
-                }
-                for (t, t_ell) in le(ax, ay, dx, dy, *ecx, *ecy, *a, *b, *nx, *ny) {
-                    if !in_arc(t_ell, *et0, *et1) {
-                        continue;
-                    }
-                    if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                        best_t = t;
-                    }
-                    if !extend_end && t < -1e-6 && t > best_t {
-                        best_t = t;
-                    }
-                }
-            }
-            Geo::Spline { handle, segs, .. } => {
-                if *handle == target {
-                    continue;
-                }
-                for (p1, p2) in segs {
-                    let ex = p2[0] - p1[0];
-                    let ey = p2[1] - p1[1];
-                    if let Some((t, u)) = ll(ax, ay, dx, dy, p1[0], p1[1], ex, ey) {
-                        if !(-1e-9..=1.0 + 1e-9).contains(&u) {
-                            continue;
-                        }
-                        if extend_end && t > 1.0 + 1e-6 && t < best_t {
-                            best_t = t;
-                        }
-                        if !extend_end && t < -1e-6 && t > best_t {
-                            best_t = t;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !best_t.is_finite() {
-        return None;
-    }
     let mut line = orig.clone();
     line.common.handle = Handle::NULL;
     let new_x = ax + best_t * dx;

@@ -4,8 +4,9 @@
 use super::util::*;
 use super::{format_size, VIEWCUBE_HIT_SIZE};
 use crate::app::helpers::{
-    axis_lock_apply, axis_lock_capture, drafting_axes, drafting_constrain, parse_coord, polar_constrain_near,
-    ucs_rotate_vec, ucs_to_wcs, ucs_z_axis, CoordKind,
+    axis_lock_apply, axis_lock_capture, drafting_axes, drafting_constrain, parse_coord,
+    polar_constrain_if_near, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
+    CoordKind,
 };
 use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
@@ -117,6 +118,45 @@ fn over_ucs_icon(p: Point, h: &crate::ui::overlay::UcsIconHit) -> bool {
 }
 
 impl OpenCADStudio {
+    fn active_construction_ray(
+        &self,
+        tab: usize,
+        cursor: glam::DVec3,
+        base: glam::DVec3,
+        view_rot: glam::Mat4,
+        eye: glam::DVec3,
+        bounds: iced::Rectangle,
+    ) -> Option<(glam::DVec3, glam::DVec3)> {
+        let ucs = self.tabs[tab].ucs_xform();
+        let mut target = if self.ortho_mode {
+            drafting_constrain(
+                cursor,
+                base,
+                &ucs,
+                self.isometric_drafting,
+                self.iso_plane,
+                self.snap_angle_deg,
+            )
+        } else if self.polar_mode {
+            polar_constrain_if_near(
+                cursor,
+                base,
+                self.polar_increment_deg,
+                view_rot,
+                eye,
+                bounds,
+                self.snapper.osnap_radius_px,
+                &ucs,
+            )?
+        } else {
+            return None;
+        };
+        if self.tabs[tab].active_ucs.is_none() {
+            target.z = base.z;
+        }
+        Some((base, target))
+    }
+
     /// Write PDSIZE from the dialog buffer with the current relative/absolute
     /// sign. A relative size is stored negative; absolute positive. Switching to
     /// absolute with an empty/zero size seeds a positive value from the current
@@ -1034,60 +1074,10 @@ impl OpenCADStudio {
             // snapping must drop its foot from this point, including when a
             // hot-grip set is moved by the same drag vector.
             self.snapper.from_point = Some(grip.origin_world.as_vec3());
-            self.snapper.from_point = Some(grip.origin_world.as_vec3());
-
-            // Keep the updated drafting basis from main so grid/snap follows the
-            // current drafting axes, including isometric drafting and SNAPANG.
             let (go, gr) = self.drafting_grid_basis(i);
-
             let base = grip.origin_world;
-            let ucs_xf = self.tabs[i].ucs_xform();
-
-            let mut construction_cursor = if self.ortho_mode {
-                Some(drafting_constrain(
-                    raw,
-                    base,
-                    &ucs_xf,
-                    self.isometric_drafting,
-                    self.iso_plane,
-                    self.snap_angle_deg,
-                ))
-            } else if self.polar_mode {
-                let pt = polar_constrain_near(
-                    raw,
-                    base,
-                    self.polar_increment_deg,
-                    view_rot,
-                    eye,
-                    bounds,
-                    self.snapper.osnap_radius_px,
-                    &ucs_xf,
-                );
-
-                // POLAR being enabled is not enough: the cursor must actually
-                // be engaged on one of the polar tracking rays.
-                let delta = pt - base;
-                let step = (self.polar_increment_deg as f64).to_radians();
-                let angle = delta.y.atan2(delta.x);
-
-                let polar_engaged = step > 1e-9
-                    && (((angle / step).round() * step - angle).abs() < 1e-3)
-                    && (delta.x * delta.x + delta.y * delta.y).sqrt() > 1e-9;
-
-                if polar_engaged {
-                    Some(pt)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            if let Some(pt) = construction_cursor.as_mut() {
-                if self.tabs[i].active_ucs.is_none() {
-                    pt.z = base.z;
-                }
-            }
+            let construction_ray =
+                self.active_construction_ray(i, raw, base, view_rot, eye, bounds);
             // `raw` is already model space (viewport camera or paper→model),
             // and the wires are model space, so the snap result is model.
             let snap_hit = self.snapper.snap(
@@ -1099,7 +1089,7 @@ impl OpenCADStudio {
                 bounds,
                 go,
                 gr,
-                construction_cursor,
+                construction_ray,
             );
 
             self.tabs[i].snap_result = snap_hit;
@@ -1519,60 +1509,18 @@ impl OpenCADStudio {
                 // the downcast point here.
                 self.snapper.from_point = self.last_point.map(|p| p.as_vec3());
 
-                // Build the temporary construction direction before OSNAP.
-                // Intersection can then test the active rubber-band against
-                // existing geometry (#704).
-                let construction_cursor = if is_window_corner {
+                let construction_ray = if is_window_corner {
                     None
                 } else {
                     self.last_point.and_then(|base| {
-                        let ucs_xf = self.tabs[i].ucs_xform();
-
-                        let mut pt = if self.ortho_mode {
-                            Some(drafting_constrain(
-                                snap_cursor,
-                                base,
-                                &ucs_xf,
-                                self.isometric_drafting,
-                                self.iso_plane,
-                                self.snap_angle_deg,
-                            ))
-                        } else if self.polar_mode {
-                            let pt = polar_constrain_near(
-                                snap_cursor,
-                                base,
-                                self.polar_increment_deg,
-                                view_rot,
-                                eye,
-                                bounds,
-                                self.snapper.osnap_radius_px,
-                                &ucs_xf,
-                            );
-
-                            // POLAR being enabled is not enough: the cursor must actually
-                            // be engaged on one of the polar tracking rays.
-                            let delta = pt - base;
-                            let step = (self.polar_increment_deg as f64).to_radians();
-                            let angle = delta.y.atan2(delta.x);
-
-                            let polar_engaged = step > 1e-9
-                                && (((angle / step).round() * step - angle).abs() < 1e-3)
-                                && (delta.x * delta.x + delta.y * delta.y).sqrt() > 1e-9;
-
-                            if polar_engaged {
-                                Some(pt)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }?;
-
-                        if self.tabs[i].active_ucs.is_none() {
-                            pt.z = base.z;
-                        }
-
-                        Some(pt)
+                        self.active_construction_ray(
+                            i,
+                            snap_cursor,
+                            base,
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
                     })
                 };
 
@@ -1585,7 +1533,7 @@ impl OpenCADStudio {
                     bounds,
                     go,
                     gr,
-                    construction_cursor,
+                    construction_ray,
                 )
             };
 
@@ -2907,57 +2855,18 @@ impl OpenCADStudio {
                     let (go, gr) = self.drafting_grid_basis(i);
                     self.snapper.from_point = self.last_point.map(|p| p.as_vec3());
 
-                    let construction_cursor = if is_window_corner {
+                    let construction_ray = if is_window_corner {
                         None
                     } else {
                         self.last_point.and_then(|base| {
-                            let ucs_xf = self.tabs[i].ucs_xform();
-
-                            let mut pt = if self.ortho_mode {
-                                Some(drafting_constrain(
+                            self.active_construction_ray(
+                                i,
                                 snap_cursor,
                                 base,
-                                &ucs_xf,
-                                self.isometric_drafting,
-                                self.iso_plane,
-                                self.snap_angle_deg,
-                            ))
-                           } else if self.polar_mode {
-                                let pt = polar_constrain_near(
-                                    snap_cursor,
-                                    base,
-                                    self.polar_increment_deg,
-                                    view_rot,
-                                    eye,
-                                    bounds,
-                                    self.snapper.osnap_radius_px,
-                                    &ucs_xf,
-                                );
-
-                                // POLAR being enabled is not enough: the cursor must actually
-                                // be engaged on one of the polar tracking rays.
-                                let delta = pt - base;
-                                let step = (self.polar_increment_deg as f64).to_radians();
-                                let angle = delta.y.atan2(delta.x);
-
-                                let polar_engaged = step > 1e-9
-                                    && (((angle / step).round() * step - angle).abs() < 1e-3)
-                                    && (delta.x * delta.x + delta.y * delta.y).sqrt() > 1e-9;
-
-                                if polar_engaged {
-                                    Some(pt)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }?;
-
-                            if self.tabs[i].active_ucs.is_none() {
-                                pt.z = base.z;
-                            }
-
-                            Some(pt)
+                                view_rot,
+                                eye,
+                                bounds,
+                            )
                         })
                     };
 
@@ -2970,7 +2879,7 @@ impl OpenCADStudio {
                         bounds,
                         go,
                         gr,
-                        construction_cursor,
+                        construction_ray,
                     )
                 };
                 // Snap runs in model space; the result is already model.

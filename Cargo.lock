@@ -16,7 +16,7 @@ dependencies = [
 name = "OpenCADStudio"
 version = "0.9.4"
 dependencies = [
- "acadifc",
+ "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=fe98e42)",
  "ashpd",
  "bincode",
  "bytemuck",
@@ -86,6 +86,20 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 name = "acadifc"
 version = "0.5.0"
 source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=c65d396#c65d396abc3defcf96b1d71a3f812c8ad993e77c"
+dependencies = [
+ "acadrust",
+ "base64 0.22.1",
+ "cadkernel",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "acadifc"
+version = "0.5.0"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=fe98e42#fe98e425578c54facd021d8df74d86052b2f848b"
 dependencies = [
  "acadrust",
  "base64 0.22.1",
@@ -935,7 +949,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git#5499242f1160018e066f78d4e462c9532e665a96"
+source = "git+https://github.com/HakanSeven12/cadkernel.git#c9e104b99e8901c4804e7cece67f038f249a33f5"
 dependencies = [
  "cavalier_contours",
 ]
@@ -3462,7 +3476,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b577e2d69827c4740cba2b52efaad1c4cc7c73042860b199710b3575c68438d"
 dependencies = [
  "bytecount",
- "memchr 2.8.3",
+ "memchr 1.0.2",
  "nom 8.0.0",
 ]
 
@@ -3939,7 +3953,7 @@ dependencies = [
 name = "ocs_plugin_api"
 version = "0.1.0"
 dependencies = [
- "acadifc",
+ "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=c65d396)",
  "bincode",
  "getrandom 0.2.17",
  "interprocess",
@@ -3954,7 +3968,7 @@ dependencies = [
 name = "ocs_web_worker"
 version = "0.1.0"
 dependencies = [
- "acadifc",
+ "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=c65d396)",
  "bincode",
  "console_error_panic_hook",
  "getrandom 0.3.4",

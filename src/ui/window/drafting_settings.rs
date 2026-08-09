@@ -106,7 +106,7 @@ pub fn view_window<'a>(
         );
     }
 
-    let close = button(text(crate::tr!("action-close")).size(12))
+    let close = button(text(crate::tr!("action", "close")).size(12))
         .on_press(Message::CloseModal)
         .padding([6, 18])
         .style(button::secondary);

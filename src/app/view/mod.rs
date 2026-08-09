@@ -812,10 +812,10 @@ impl OpenCADStudio {
 
                 let tracking_hint = match self.otrack_kind {
                     Some(crate::snap::TrackingKind::Perpendicular) => {
-                        Some("Perpendicular".to_string())
+                        Some(crate::tr!("common", "perpendicular"))
                     }
                     Some(crate::snap::TrackingKind::Extension) => {
-                        Some("Extension".to_string())
+                        Some(crate::tr!("common", "extension"))
                     }
                     _ => None,
                 };
@@ -2636,7 +2636,7 @@ fn start_page_content<'a>(
         button(
             row![
                 crate::ui::icons::themed_danger_text(crate::ui::icons::HEART, 14.0),
-                text(crate::tr!("start-donate")).size(14),
+                text(crate::tr!("start", "donate")).size(14),
             ]
             .spacing(5)
             .align_y(iced::Center),
@@ -2650,8 +2650,8 @@ fn start_page_content<'a>(
     };
 
     let primary_row = WrapFlow::new(vec![
-        outline_btn(crate::tr!("start-new-drawing"), Message::TabNew).into(),
-        outline_btn(crate::tr!("start-open-file"), Message::OpenFile).into(),
+        outline_btn(crate::tr!("start", "new-drawing"), Message::TabNew).into(),
+        outline_btn(crate::tr!("start", "open-file"), Message::OpenFile).into(),
         donate_btn.into(),
     ])
     .spacing_x(12.0)
@@ -2661,16 +2661,16 @@ fn start_page_content<'a>(
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut secondary_items: Vec<Element<'a, Message>> = vec![
         outline_btn(
-            crate::tr!("start-send-feedback"),
+            crate::tr!("start", "send-feedback"),
             Message::RibbonToolClick {
                 tool_id: "REPORT".to_string(),
                 event: crate::modules::ModuleEvent::Command("REPORT".to_string()),
             },
         )
         .into(),
-        outline_btn(crate::tr!("action-options"), Message::OptionsOpen).into(),
+        outline_btn(crate::tr!("action", "options"), Message::OptionsOpen).into(),
     ];
-    secondary_items.push(outline_btn(crate::tr!("action-plugins"), Message::PluginManagerOpen).into());
+    secondary_items.push(outline_btn(crate::tr!("action", "plugins"), Message::PluginManagerOpen).into());
     // The web build is already in the browser, so only the desktop offers a
     // link to the web version.
     #[cfg(not(target_arch = "wasm32"))]
@@ -2693,7 +2693,7 @@ fn start_page_content<'a>(
         .report_natural_width(action_width_out.clone());
 
     let sponsors = column![
-        text(crate::tr!("start-sponsors")).size(15),
+        text(crate::tr!("start", "sponsors")).size(15),
         mouse_area(
             container(
                 iced::widget::svg(iced::widget::svg::Handle::from_memory(include_bytes!(
@@ -2795,7 +2795,7 @@ fn start_page_content<'a>(
         // whole thumbnail remains visible when that width changes.
         let thumb_h =
             (panel_w - VIDEO_PANEL_PADDING * 2.0 - VIDEO_SCROLL_GUTTER) * 9.0 / 16.0;
-        let mut list = column![text(crate::tr!("start-tutorials")).size(15)]
+        let mut list = column![text(crate::tr!("start", "tutorials")).size(15)]
             .spacing(10)
             .width(Fill)
             // Keep the scrollbar off the thumbnails.
@@ -2835,14 +2835,14 @@ fn start_page_content<'a>(
         }
         if videos.is_empty() {
             let note = if videos_loading {
-                crate::tr!("start-loading-videos")
+                crate::tr!("start", "loading-videos")
             } else {
-                crate::tr!("start-videos-online")
+                crate::tr!("start", "videos-online")
             };
             list = list.push(text(note).size(12).style(start_muted_style));
         }
         let playlist_btn = mouse_area(
-            container(text(crate::tr!("start-open-playlist")).size(12))
+            container(text(crate::tr!("start", "open-playlist")).size(12))
             .padding([6, 10])
             .width(Fill)
             .center_x(Fill)
@@ -2895,7 +2895,7 @@ fn start_page_content<'a>(
     // web builds read the CI-generated snapshot. Both sources mark pinned
     // discussions and sort them before the rest of the list.
     let discussions_panel: Element<'a, Message> = {
-        let mut list = column![text(crate::tr!("start-discussions")).size(15)]
+        let mut list = column![text(crate::tr!("start", "discussions")).size(15)]
             .spacing(8)
             .width(Fill);
         for discussion in discussions {
@@ -2908,7 +2908,7 @@ fn start_page_content<'a>(
             .align_y(iced::Center);
             if discussion.pinned {
                 meta = meta.push(
-                    text(crate::tr!("start-pinned"))
+                    text(crate::tr!("start", "pinned"))
                         .size(10)
                         .style(start_primary_style),
                 );
@@ -2951,14 +2951,14 @@ fn start_page_content<'a>(
         }
         if discussions.is_empty() {
             let note = if discussions_loading {
-                crate::tr!("start-loading-discussions")
+                crate::tr!("start", "loading-discussions")
             } else {
-                crate::tr!("start-discussions-online")
+                crate::tr!("start", "discussions-online")
             };
             list = list.push(text(note).size(12).style(start_muted_style));
         }
         let open_btn = mouse_area(
-            container(text(crate::tr!("start-open-discussions")).size(12))
+            container(text(crate::tr!("start", "open-discussions")).size(12))
                 .padding([6, 10])
                 .width(Fill)
                 .center_x(Fill)
@@ -3015,7 +3015,7 @@ fn start_page_content<'a>(
     // shows, so the rail always invites support.
     let supporters: Element<'a, Message> = {
         let mut list = column![
-            text(crate::tr!("start-supporters")).size(15),
+            text(crate::tr!("start", "supporters")).size(15),
             Space::new().height(iced::Length::Fixed(12.0)),
         ]
         .spacing(6)
@@ -3040,7 +3040,7 @@ fn start_page_content<'a>(
             container(
                 iced::widget::row![
                     crate::ui::icons::themed_danger_text(crate::ui::icons::HEART, 13.0),
-                    text(crate::tr!("start-support-on-patreon")).size(12),
+                    text(crate::tr!("start", "support-on-patreon")).size(12),
                 ]
                 .spacing(6)
                 .align_y(iced::Center),
@@ -3158,11 +3158,11 @@ fn start_page_content<'a>(
                     })
             };
             let tab_bar = Row::with_children(vec![
-                tab_btn(crate::tr!("start-recent-files"), super::StartSection::Recent).into(),
-                tab_btn(crate::tr!("start-videos"), super::StartSection::Videos).into(),
-                tab_btn(crate::tr!("start-welcome"), super::StartSection::Welcome).into(),
-                tab_btn(crate::tr!("start-discussions"), super::StartSection::Discussions).into(),
-                tab_btn(crate::tr!("start-supporters"), super::StartSection::Supporters).into(),
+                tab_btn(crate::tr!("start", "recent-files"), super::StartSection::Recent).into(),
+                tab_btn(crate::tr!("start", "videos"), super::StartSection::Videos).into(),
+                tab_btn(crate::tr!("start", "welcome"), super::StartSection::Welcome).into(),
+                tab_btn(crate::tr!("start", "discussions"), super::StartSection::Discussions).into(),
+                tab_btn(crate::tr!("start", "supporters"), super::StartSection::Supporters).into(),
             ])
             .spacing(6.0)
             .align_y(iced::Center)
@@ -3238,11 +3238,11 @@ pub(super) fn recent_files_panel<'a>(
 ) -> Element<'a, Message> {
     // Title mirrors the Supporters rail: size 15 in the bright text colour,
     // followed by a 12px gap before the content.
-    let title = text(crate::tr!("start-recent-documents")).size(15);
+    let title = text(crate::tr!("start", "recent-documents")).size(15);
 
     let body: Element<'a, Message> = if recents.is_empty() {
         container(
-            text(crate::tr!("start-no-recent-files"))
+            text(crate::tr!("start", "no-recent-files"))
                 .size(12)
                 .style(start_muted_style)
         )
@@ -3270,7 +3270,7 @@ pub(super) fn recent_files_panel<'a>(
             // directory line.
             #[cfg(target_arch = "wasm32")]
             let dir = if dir.is_empty() {
-                crate::tr!("start-browser-storage")
+                crate::tr!("start", "browser-storage")
             } else {
                 dir
             };
@@ -3381,7 +3381,7 @@ pub(super) fn recent_files_panel<'a>(
         .padding([2, 6])
         .width(iced::Length::Fixed(46.0));
     let limit_row = row![
-        text(crate::tr!("start-keep-recent-files")).size(11).style(start_muted_style).width(Fill),
+        text(crate::tr!("start", "keep-recent-files")).size(11).style(start_muted_style).width(Fill),
         button(crate::ui::icons::themed(crate::ui::icons::MINUS, 11.0))
             .on_press(Message::SetRecentLimit(shown.saturating_sub(STEP)))
             .padding([3, 6])

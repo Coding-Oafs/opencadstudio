@@ -15,7 +15,7 @@ use acadrust::kernel::geom2d::{self, Ellipse};
 
 /// Re-exported unchanged: these already speak in plain `f64`, so there is no
 /// call-shape difference for this module to absorb.
-pub use acadrust::kernel::geom2d::{angle_within_arc, arc_parameter, lerp, normalize_angle};
+pub use acadrust::kernel::geom2d::{arc_parameter, lerp, normalize_angle};
 
 /// Preview geometry keeps the density the commands have always used.
 const SEGMENTS_PER_RADIAN: f64 = geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
@@ -51,35 +51,6 @@ pub fn line_circle(px: f64, py: f64, dx: f64, dy: f64, cx: f64, cy: f64, r: f64)
     geom2d::line_circle([px, py], [dx, dy], [cx, cy], r)
 }
 
-/// `(s_on_line, t_on_ellipse)` pairs where a line meets an ellipse.
-///
-/// `nx, ny` is the unit major axis.
-#[allow(clippy::too_many_arguments)]
-pub fn line_ellipse(
-    px: f64,
-    py: f64,
-    dx: f64,
-    dy: f64,
-    cx: f64,
-    cy: f64,
-    a: f64,
-    b: f64,
-    nx: f64,
-    ny: f64,
-) -> Vec<(f64, f64)> {
-    geom2d::line_ellipse(
-        [px, py],
-        [dx, dy],
-        &Ellipse {
-            centre: [cx, cy],
-            major_radius: a,
-            minor_radius: b,
-            major_axis: [nx, ny],
-        },
-    )
-}
-
-/// The two endpoints of a straight segment, as render vertices.
 pub fn line_points(start: [f64; 3], end: [f64; 3]) -> Vec<[f32; 3]> {
     narrow(vec![start, end])
 }

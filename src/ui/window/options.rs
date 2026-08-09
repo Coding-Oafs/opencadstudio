@@ -91,12 +91,12 @@ pub fn view_window<'a>(
 
     let palette = ui_theme.palette.to_iced();
     let colors = [
-        (crate::tr!("options-color-background"), palette.background),
-        (crate::tr!("options-color-text"), palette.text),
-        (crate::tr!("options-color-primary"), palette.primary),
-        (crate::tr!("options-color-success"), palette.success),
-        (crate::tr!("options-color-warning"), palette.warning),
-        (crate::tr!("options-color-danger"), palette.danger),
+        (crate::tr!("options", "color-background"), palette.background),
+        (crate::tr!("options", "color-text"), palette.text),
+        (crate::tr!("options", "color-primary"), palette.primary),
+        (crate::tr!("options", "color-success"), palette.success),
+        (crate::tr!("options", "color-warning"), palette.warning),
+        (crate::tr!("options", "color-danger"), palette.danger),
     ];
 
     let mut color_controls = column![].spacing(8);
@@ -126,16 +126,16 @@ pub fn view_window<'a>(
         );
     }
 
-    let close = button(text(crate::tr!("action-close")).size(12))
+    let close = button(text(crate::tr!("action", "close")).size(12))
         .on_press(Message::CloseModal)
         .padding([6, 18])
         .style(button::secondary);
 
     let general = column![
-        text(crate::tr!("options-language-section")).size(15),
+        text(crate::tr!("options", "language-section")).size(15),
         Space::new().height(10),
         row![
-            text(crate::tr!("options-language-label")).size(12).width(150),
+            text(crate::tr!("options", "language-label")).size(12).width(150),
             iced::widget::pick_list(
                 selected_language,
                 language_options,
@@ -147,10 +147,10 @@ pub fn view_window<'a>(
         .spacing(12)
         .align_y(iced::Center),
         Space::new().height(22),
-        text(crate::tr!("options-open-save-section")).size(15),
+        text(crate::tr!("options", "open-save-section")).size(15),
         Space::new().height(10),
         row![
-            text(crate::tr!("options-default-save-format-label")).size(12).width(150),
+            text(crate::tr!("options", "default-save-format-label")).size(12).width(150),
             iced::widget::pick_list(
                 selected_format,
                 crate::io::SAVE_FORMAT_OPTIONS,
@@ -162,7 +162,7 @@ pub fn view_window<'a>(
         .spacing(12)
         .align_y(iced::Center),
         Space::new().height(8),
-        text(crate::tr!("options-default-save-format-help"))
+        text(crate::tr!("options", "default-save-format-help"))
         .size(11)
         .width(sizing.width),
         Space::new().height(14),
@@ -204,10 +204,10 @@ pub fn view_window<'a>(
         });
 
     let display = column![
-        text(crate::tr!("options-theme-section")).size(15),
+        text(crate::tr!("options", "theme-section")).size(15),
         Space::new().height(10),
         row![
-            text(crate::tr!("options-theme-label")).size(12).width(150),
+            text(crate::tr!("options", "theme-label")).size(12).width(150),
             iced::widget::pick_list(
                 selected_theme,
                 theme_options,
@@ -219,7 +219,7 @@ pub fn view_window<'a>(
         .spacing(12)
         .align_y(iced::Center),
         Space::new().height(8),
-        text(crate::tr!("options-theme-help"))
+        text(crate::tr!("options", "theme-help"))
         .size(11)
         .width(sizing.width),
         Space::new().height(12),

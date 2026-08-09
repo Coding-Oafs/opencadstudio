@@ -1384,7 +1384,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             && destination_is_current
         {
             self.command_line.push_error_once(
-                crate::tr!("recovery-save-new-file-required").as_ref(),
+                crate::tr!("recovery", "save-new-file-required").as_ref(),
             );
             self.restore_failed_save_continuation(continuation, i);
             self.active_tab = i;

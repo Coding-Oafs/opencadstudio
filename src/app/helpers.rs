@@ -339,10 +339,8 @@ pub(super) fn polar_constrain(
     ))
 }
 
-/// Polar constraint that only engages when the cursor is within `tol_px`
-/// screen pixels of the nearest polar ray; otherwise the cursor is left free
-/// so POLAR behaves as if off when pointing away from every angle (issue #70).
-pub(super) fn polar_constrain_near(
+/// Return the polar-constrained point while its ray is engaged.
+pub(super) fn polar_constrain_if_near(
     pt: glam::DVec3,
     base: glam::DVec3,
     step_deg: f32,
@@ -351,7 +349,7 @@ pub(super) fn polar_constrain_near(
     bounds: iced::Rectangle,
     tol_px: f32,
     xf: &UcsXform,
-) -> glam::DVec3 {
+) -> Option<glam::DVec3> {
     let snapped = polar_constrain(pt, base, step_deg, xf);
     let to_screen = |w: glam::DVec3| {
         let ndc = view_rot.project_point3((w - eye).as_vec3());
@@ -362,11 +360,22 @@ pub(super) fn polar_constrain_near(
     };
     let (cx, cy) = to_screen(pt);
     let (sx, sy) = to_screen(snapped);
-    if ((cx - sx).powi(2) + (cy - sy).powi(2)).sqrt() <= tol_px {
-        snapped
-    } else {
-        pt
-    }
+    (((cx - sx).powi(2) + (cy - sy).powi(2)).sqrt() <= tol_px).then_some(snapped)
+}
+
+/// Constrain near an engaged polar ray; otherwise keep the cursor free.
+pub(super) fn polar_constrain_near(
+    pt: glam::DVec3,
+    base: glam::DVec3,
+    step_deg: f32,
+    view_rot: glam::Mat4,
+    eye: glam::DVec3,
+    bounds: iced::Rectangle,
+    tol_px: f32,
+    xf: &UcsXform,
+) -> glam::DVec3 {
+    polar_constrain_if_near(pt, base, step_deg, view_rot, eye, bounds, tol_px, xf)
+        .unwrap_or(pt)
 }
 
 /// Hard axis lock (#312): the locked ray's direction — the nearest polar
