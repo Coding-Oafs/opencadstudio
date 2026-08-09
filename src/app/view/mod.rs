@@ -809,6 +809,17 @@ impl OpenCADStudio {
                     .as_ref()
                     .map(|c| c.prompt())
                     .unwrap_or_default();
+
+                let tracking_hint = match self.otrack_kind {
+                    Some(crate::snap::TrackingKind::Perpendicular) => {
+                        Some("Perpendicular".to_string())
+                    }
+                    Some(crate::snap::TrackingKind::Extension) => {
+                        Some("Extension".to_string())
+                    }
+                    _ => None,
+                };
+
                 Some(crate::ui::overlay::dynamic_input_overlay(
                     tab.last_cursor_screen,
                     tab.last_point_screen,
@@ -816,6 +827,7 @@ impl OpenCADStudio {
                     tab.dyn_guide,
                     boxes,
                     prompt,
+                    tracking_hint,
                 ))
             } else {
                 None
