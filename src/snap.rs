@@ -285,7 +285,7 @@ impl Snapper {
     /// `snap_world` is the current snap result world point (if any).
     pub fn update_otrack_dwell<W: WireSource + ?Sized>(
         &mut self,
-        snap_world: Option<DVec3>,
+        snap: Option<SnapResult>,
         wires: &W,
         view_rot: glam::Mat4,
         eye: glam::DVec3,
@@ -302,6 +302,24 @@ impl Snapper {
             self.dwell_acquired = false;
             return;
         }
+        // Only stable geometric snap points may be acquired automatically for
+        // OTRACK. Continuous/contextual snaps such as Nearest, Perpendicular,
+        // Tangent and Extension can move along geometry and would otherwise
+        // create arbitrary tracking points while the cursor is hovering. (#716)
+        let snap_world = snap.and_then(|hit| {
+            matches!(
+                hit.snap_type,
+                SnapType::Endpoint
+                    | SnapType::Midpoint
+                    | SnapType::Center
+                    | SnapType::Node
+                    | SnapType::Quadrant
+                    | SnapType::Intersection
+                    | SnapType::Insertion
+                    | SnapType::ApparentIntersection
+            )
+            .then_some(hit.world)
+        });
         // With OTRACK off, acquisition is Extension-driven, and Extension tracks
         // a line only from a real segment endpoint — so acquire endpoints only.
         // This stops a paused cursor on an extension foot (or a midpoint/centre)
@@ -1186,31 +1204,28 @@ impl Snapper {
         }
 
         // ── Perpendicular — foot of perpendicular from the drawing base ──
-        // Drop the foot from the point the command is drawing *from* (so the
-        // new segment is truly perpendicular to the target). Only when there
-        // is no base point — e.g. picking the very first point — does it fall
-        // back to the cursor (a plain nearest-on-line). The candidate is gated
-        // on its screen distance to the cursor like every other snap, so it
-        // offers when the cursor is near the perpendicular foot. (#118)
+        // A perpendicular snap requires a real drawing base. Without one
+        // (for example while picking the first point of LINE) there is no
+        // meaningful perpendicular direction, so do not offer a candidate.
+        // Falling back to the cursor here would make Perpendicular behave
+        // like Nearest. (#716)
         if self.is_on(SnapType::Perpendicular) {
-            let q = self
-                .from_point
-                .map(|v| v.as_dvec3())
-                .unwrap_or(cursor_world);
-            if let Some(segments) = &local_segments {
-                for seg in segments {
-                    if let Some(foot) = perp_foot(q, seg.a, seg.b) {
-                        try_pt(foot, SnapType::Perpendicular);
-                    }
-                }
-            } else {
-                for wire in wires.iter() {
-                    if !wire_in_range(wire) {
-                        continue;
-                    }
-                    for i in 0..wire.points.len().saturating_sub(1) {
-                        if let Some(foot) = perp_foot(q, wp_f64(wire, i), wp_f64(wire, i + 1)) {
+            if let Some(q) = self.from_point.map(|v| v.as_dvec3()) {
+                if let Some(segments) = &local_segments {
+                    for seg in segments {
+                        if let Some(foot) = perp_foot(q, seg.a, seg.b) {
                             try_pt(foot, SnapType::Perpendicular);
+                        }
+                    }
+                } else {
+                    for wire in wires.iter() {
+                        if !wire_in_range(wire) {
+                            continue;
+                        }
+                        for i in 0..wire.points.len().saturating_sub(1) {
+                            if let Some(foot) = perp_foot(q, wp_f64(wire, i), wp_f64(wire, i + 1)) {
+                                try_pt(foot, SnapType::Perpendicular);
+                            }
                         }
                     }
                 }
