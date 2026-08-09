@@ -224,9 +224,8 @@ impl OpenCADStudio {
     /// geometry (EXTRUDE/REVOLVE/SWEEP/LOFT/boolean results) an exact modeler
     /// body derived from its B-rep, so the written DWG/DXF carries real
     /// 3-D geometry other CAD apps can open instead of an empty data stream.
-    /// Curved solids that the exact planar path can't yet express are left
-    /// untouched (handled by the NURBS path).
-    #[cfg(feature = "solid3d")]
+    /// A body holding something the kernel has no ACIS record form for is
+    /// left untouched rather than written out half-complete.
     fn sync_solid_models_to_acis(&mut self, i: usize) {
         use acadrust::EntityType;
         let scene = &mut self.tabs[i].scene;
@@ -255,9 +254,6 @@ impl OpenCADStudio {
             }
         }
     }
-
-    #[cfg(not(feature = "solid3d"))]
-    fn sync_solid_models_to_acis(&mut self, _i: usize) {}
 
     /// Snapshot the persisted UI preferences from live state.
     pub(in crate::app) fn current_settings(&self) -> crate::app::settings::UserSettings {
