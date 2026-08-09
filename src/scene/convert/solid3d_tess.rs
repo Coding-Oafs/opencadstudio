@@ -2017,8 +2017,13 @@ pub(crate) fn tess_plane_face(
     normals: &mut Vec<[f32; 3]>,
     indices: &mut Vec<u32>,
 ) {
-    let mut poly = collect_face_polygon(sat, face, chord_frac);
-    if poly.len() < 3 {
+    // Every loop, not just the first. A face with a hole in it carries the
+    // hole on a second loop, and nothing says the outer one is listed first —
+    // so reading `first_loop` alone drew whichever came first and ignored the
+    // rest. When that was a hole, the hole came out solid and the material
+    // around it came out missing.
+    let rings = collect_face_loops(sat, face, chord_frac);
+    if rings.iter().all(|ring| ring.len() < 3) {
         return;
     }
 
@@ -2031,21 +2036,63 @@ pub(crate) fn tess_plane_face(
     };
     let nf = [nx as f32, ny as f32, nz as f32];
 
-    if dot3(newell_normal(&poly), [nx, ny, nz]) < 0.0 {
-        poly.reverse();
+    // Flattened into the plane's own frame, where "inside" is a question with
+    // an answer. The kernel's ear clipping bridges the holes into the outer
+    // ring; a fan from one vertex cannot express a hole at all.
+    let (px, py, pz) = plane.root_point();
+    let seed = if nx.abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let Some(frame) =
+        acadrust::kernel::space::Plane::orthonormal([px, py, pz], seed, [nx, ny, nz])
+    else {
+        return;
+    };
+    let flat: Vec<Vec<[f64; 2]>> = rings
+        .iter()
+        .filter(|ring| ring.len() >= 3)
+        .map(|ring| ring.iter().filter_map(|p| frame.project(*p)).collect())
+        .collect();
+    let Some(widest) = flat
+        .iter()
+        .enumerate()
+        .max_by(|a, b| {
+            acadrust::kernel::geom2d::signed_area(a.1)
+                .abs()
+                .total_cmp(&acadrust::kernel::geom2d::signed_area(b.1).abs())
+        })
+        .map(|(index, _)| index)
+    else {
+        return;
+    };
+    let holes: Vec<Vec<[f64; 2]>> = flat
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != widest)
+        .map(|(_, ring)| ring.clone())
+        .collect();
+    let (points, triangles) =
+        acadrust::kernel::geom2d::triangulate::polygon(&flat[widest], &holes);
+    if triangles.is_empty() {
+        return;
     }
 
     let base = verts.len() as u32;
-    for &pt in &poly {
-        verts.push(pt);
+    for point in &points {
+        verts.push(frame.point_at(*point));
         normals.push(nf);
     }
-
-    // Fan triangulation from vertex 0 (outer loop only; holes are handled by
-    // the kernel B-rep path in `acis_kernel`).
-    let n = poly.len() as u32;
-    for i in 1..(n - 1) {
-        indices.extend_from_slice(&[base, base + i, base + i + 1]);
+    // Ear clipping hands back counter-clockwise triangles in the frame's own
+    // coordinates; the frame was built around the outward normal, so that is
+    // already the outward winding.
+    for triangle in triangles {
+        indices.extend_from_slice(&[
+            base + triangle[0] as u32,
+            base + triangle[1] as u32,
+            base + triangle[2] as u32,
+        ]);
     }
 }
 
@@ -2632,20 +2679,6 @@ fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-/// Area-weighted polygon normal via Newell's method. Robust for non-planar or
-/// slightly noisy loops; its sign encodes the winding direction.
-fn newell_normal(poly: &[[f64; 3]]) -> [f64; 3] {
-    let mut n = [0.0f64; 3];
-    let len = poly.len();
-    for i in 0..len {
-        let a = poly[i];
-        let b = poly[(i + 1) % len];
-        n[0] += (a[1] - b[1]) * (a[2] + b[2]);
-        n[1] += (a[2] - b[2]) * (a[0] + b[0]);
-        n[2] += (a[0] - b[0]) * (a[1] + b[1]);
-    }
-    n
-}
 
 #[inline]
 fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
