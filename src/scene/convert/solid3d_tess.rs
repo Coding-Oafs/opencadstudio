@@ -46,7 +46,6 @@ pub(crate) const EDGE_CHORD_FRAC: f64 = 0.002;
 /// a hexagonal prism whose flats sink far inside the true radius, tearing the
 /// wall away from the planar faces and caps that meet it.
 #[cfg(feature = "solid3d")]
-pub(crate) const TRUCK_CHORD_FRAC: f64 = 0.005;
 /// Boundary-loop sampling for parameter-range classification (which arc of a
 /// sphere/torus a face covers): a fine fraction so the classification is
 /// accurate; the points are not rendered.
@@ -276,9 +275,10 @@ fn tessellate_sat(
     ))
 }
 
-/// Tessellate an ACIS document, preferring the truck B-rep kernel and falling
-/// back to the bespoke per-surface sampler when truck can't rebuild the shell
-/// (e.g. an unhandled surface type).
+/// Tessellate an ACIS document, preferring the geometry kernel and falling
+/// back to the bespoke per-surface sampler when the kernel cannot rebuild the
+/// whole shell (a surface kind it does not model, a face whose boundary it
+/// cannot express in that surface's own parameters).
 fn tessellate_acis(
     sat: &SatDocument,
     name: String,
@@ -286,7 +286,7 @@ fn tessellate_acis(
     facet_res: f64,
     isolines: usize,
 ) -> Option<MeshLodSet> {
-    let truck = crate::scene::convert::acis_to_truck::tessellate_sat_truck(
+    let truck = crate::scene::convert::acis_kernel::tessellate_sat(
         sat,
         name.clone(),
         color,
@@ -2049,7 +2049,7 @@ pub(crate) fn tess_plane_face(
     }
 
     // Fan triangulation from vertex 0 (outer loop only; holes are handled by
-    // the truck B-rep path in `acis_to_truck`).
+    // the kernel B-rep path in `acis_kernel`).
     let n = poly.len() as u32;
     for i in 1..(n - 1) {
         indices.extend_from_slice(&[base, base + i, base + i + 1]);

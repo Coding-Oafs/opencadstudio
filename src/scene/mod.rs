@@ -1779,11 +1779,12 @@ pub struct Scene {
     /// owning block emits a transformed instance so a block placed at an
     /// INSERT scale renders at the right size. (#123)
     pub block_meshes: HashMap<Handle, MeshLodSet>,
-    /// Live truck B-reps for solids created this session by the Model tab,
-    /// keyed by entity handle. Backs the Design-group boolean tools (a solid
-    /// must be here to be combined). Not persisted — rebuilt only by creating
-    /// or combining primitives in-session.
-    pub solid_models: HashMap<Handle, truck_modeling::Solid>,
+    /// Live B-reps for solids created this session by the Model tab, keyed by
+    /// entity handle. Backs the Design-group boolean tools (a solid must be
+    /// here to be combined) and the exact-geometry save path, which writes
+    /// each one back out as ACIS rather than as facets. Not persisted —
+    /// rebuilt only by creating or combining primitives in-session.
+    pub solid_models: HashMap<Handle, acadrust::kernel::brep::Body>,
     /// GPU render data for raster images (RasterImage entities), keyed by handle.
     pub images: HashMap<Handle, ImageModel>,
     /// The viewport that is currently "entered" (MSPACE mode).
@@ -2719,11 +2720,12 @@ impl Scene {
     }
 
     /// Re-evaluate every cached mesh's color through `render_style` so a
-    /// Register a Model-tab solid: cache its truck B-rep (for boolean ops) and
-    /// tessellate it into the shaded mesh pipeline under `handle`. The solid is
-    /// in the same offset-relative frame the mesh pipeline uses, so the mesh is
-    /// stored as-is (Model-tab geometry is authored at world_offset 0).
-    pub fn register_solid_model(&mut self, handle: Handle, solid: truck_modeling::Solid) {
+    /// Register a Model-tab solid: cache its B-rep (for boolean ops and the
+    /// exact-geometry save path) and tessellate it into the shaded mesh
+    /// pipeline under `handle`. The body is in the same offset-relative frame
+    /// the mesh pipeline uses, so the mesh is stored as-is (Model-tab geometry
+    /// is authored at world_offset 0).
+    pub fn register_solid_model(&mut self, handle: Handle, solid: acadrust::kernel::brep::Body) {
         let entity = self.document.get_entity(handle);
         let color = entity
             .map(|e| self.render_style(e).0)

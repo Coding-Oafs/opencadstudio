@@ -2637,62 +2637,25 @@ impl OpenCADStudio {
                 height,
                 color,
             } => {
-                use crate::entities::traits::EntityTypeOps;
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
-                use crate::scene::convert::acad_to_truck::TruckObject;
-                use crate::scene::convert::truck_tess;
-                use truck_modeling::builder;
-                use truck_modeling::Vector3 as TruckVec3;
+                use crate::scene::model::{solid_model, sweep_model};
 
                 let entity_opt = self.tabs[i].scene.document.get_entity(handle).cloned();
                 if let Some(entity) = entity_opt {
-                    let truck_entity = entity.to_truck_entity(&self.tabs[i].scene.document);
-                    let result = truck_entity.and_then(|te| {
-                        match te.object {
-                            TruckObject::Contour(wire) => {
-                                // Attach a planar face to the wire profile, then sweep.
-                                let face = builder::try_attach_plane(&[wire]).ok()?;
-                                // tsweep(Face) → Solid
-                                let solid =
-                                    builder::tsweep(&face, TruckVec3::new(0.0, 0.0, height as f64));
-                                match truck_tess::tessellate_solid(&solid) {
-                                    truck_tess::TruckTessResult::Mesh {
-                                        verts,
-                                        verts_low,
-                                        normals,
-                                        indices,
-                                    } => Some((
-                                        crate::scene::model::mesh_model::MeshModel {
-                                            name: String::new(),
-                                            verts,
-                                            verts_low,
-                                            normals,
-                                            indices,
-                                            triangle_material_handles: Vec::new(),
-                                            triangle_colors: Vec::new(),
-                                            color,
-                                            selected: false,
-                                        },
-                                        solid,
-                                    )),
-                                    _ => None,
-                                }
-                            }
-                            _ => None,
-                        }
-                    });
-                    if let Some((mut mesh, solid)) = result {
+                    // The kernel sweeps the profile into analytic surfaces —
+                    // a straight run becomes a plane and an arc a cylinder —
+                    // so the solid saves as exact ACIS rather than facets.
+                    let result = sweep_model::extruded(&entity, height as f64)
+                        .and_then(|body| Some((solid_model::mesh_from_solid(&body, color)?, body)));
+                    if let Some((mesh, solid)) = result {
                         let pending = self.begin_undo(i, "EXTRUDE", 1, true);
-                        let new_entity = empty_solid3d();
-                        let new_handle = self.tabs[i].scene.add_entity(new_entity);
-                        mesh.name = format!("{}", new_handle.value());
-                        self.tabs[i]
-                            .scene
-                            .meshes
-                            .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
-                        // Keep the truck B-rep so the save path can export exact
-                        // ACIS geometry (else the solid is dropped by other CAD apps).
-                        self.tabs[i].scene.solid_models.insert(new_handle, solid);
+                        let mut s3d = empty_solid3d();
+                        if let acadrust::EntityType::Solid3D(inner) = &mut s3d {
+                            inner.wires = solid_model::edge_wires(&solid);
+                        }
+                        let new_handle = self.tabs[i].scene.add_entity(s3d);
+                        self.tabs[i].scene.register_solid_model(new_handle, solid);
+                        let _ = mesh;
                         self.tabs[i].dirty = true;
                         self.command_line.push_output(crate::t!("EXTRUDE: solid created.").as_ref());
                         if let Some(pd) = pending {
@@ -2718,65 +2681,34 @@ impl OpenCADStudio {
                 angle_deg,
                 color,
             } => {
-                use crate::entities::traits::EntityTypeOps;
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
-                use crate::scene::convert::acad_to_truck::TruckObject;
-                use crate::scene::convert::truck_tess;
-                use truck_modeling::builder;
-                use truck_modeling::{Point3, Rad, Vector3 as TruckVec3};
+                use crate::scene::model::{solid_model, sweep_model};
 
                 let entity_opt = self.tabs[i].scene.document.get_entity(handle).cloned();
                 if let Some(entity) = entity_opt {
-                    let truck_entity = entity.to_truck_entity(&self.tabs[i].scene.document);
-                    let result = truck_entity.and_then(|te| {
-                        let wire: Option<truck_modeling::Wire> = match te.object {
-                            TruckObject::Contour(w) => Some(w),
-                            TruckObject::Curve(e) => Some(std::iter::once(e).collect()),
-                            _ => None,
-                        };
-                        let wire = wire?;
-                        let origin = Point3::new(
+                    // A line turned about the axis sweeps into a plane, a
+                    // cylinder or a cone, and an arc into a sphere or a
+                    // torus, so a revolved solid keeps exact geometry too.
+                    let result = sweep_model::revolved(
+                        &entity,
+                        [
                             axis_start.x as f64,
                             axis_start.y as f64,
                             axis_start.z as f64,
-                        );
-                        let dir = (axis_end - axis_start).normalize();
-                        let axis = TruckVec3::new(dir.x as f64, dir.y as f64, dir.z as f64);
-                        let shell = builder::rsweep(
-                            &wire,
-                            origin,
-                            axis,
-                            Rad(angle_deg.to_radians() as f64),
-                        );
-                        match truck_tess::tessellate_shell(&shell) {
-                            truck_tess::TruckTessResult::Mesh {
-                                verts,
-                                verts_low,
-                                normals,
-                                indices,
-                            } => Some(crate::scene::model::mesh_model::MeshModel {
-                                name: String::new(),
-                                verts,
-                                verts_low,
-                                normals,
-                                indices,
-                                triangle_material_handles: Vec::new(),
-                                triangle_colors: Vec::new(),
-                                color,
-                                selected: false,
-                            }),
-                            _ => None,
-                        }
-                    });
-                    if let Some(mut mesh) = result {
+                        ],
+                        [axis_end.x as f64, axis_end.y as f64, axis_end.z as f64],
+                        (angle_deg as f64).to_radians(),
+                    )
+                    .and_then(|body| Some((solid_model::mesh_from_solid(&body, color)?, body)));
+                    if let Some((mesh, solid)) = result {
                         let pending = self.begin_undo(i, "REVOLVE", 1, true);
-                        let new_entity = empty_solid3d();
-                        let new_handle = self.tabs[i].scene.add_entity(new_entity);
-                        mesh.name = format!("{}", new_handle.value());
-                        self.tabs[i]
-                            .scene
-                            .meshes
-                            .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
+                        let mut s3d = empty_solid3d();
+                        if let acadrust::EntityType::Solid3D(inner) = &mut s3d {
+                            inner.wires = solid_model::edge_wires(&solid);
+                        }
+                        let new_handle = self.tabs[i].scene.add_entity(s3d);
+                        self.tabs[i].scene.register_solid_model(new_handle, solid);
+                        let _ = mesh;
                         self.tabs[i].dirty = true;
                         self.command_line
                             .push_output(crate::tf!("REVOLVE: solid created ({:.0}°).", angle_deg).as_ref());
@@ -2788,14 +2720,14 @@ impl OpenCADStudio {
                             .push_error(crate::t!("REVOLVE: could not revolve profile.").as_ref());
                     }
                 } else {
-                    self.command_line.push_error(crate::t!("REVOLVE: entity not found.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("REVOLVE: entity not found.").as_ref());
                 }
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
                 self.restore_pre_cmd_tangent();
             }
-
             // ── SWEEP ──────────────────────────────────────────────────────
             CmdResult::SweepEntity {
                 profile_handle,

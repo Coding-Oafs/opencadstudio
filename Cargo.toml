@@ -17,7 +17,7 @@ winresource = "0.1"
 
 [features]
 default = ["solid3d"]
-solid3d = ["dep:truck-meshalgo", "dep:truck-shapeops", "dep:lzma-sys"]
+solid3d = ["dep:truck-meshalgo", "dep:lzma-sys"]
 
 [dependencies]
 serde_json = "1"
@@ -38,7 +38,7 @@ env_logger = "0.11"
 # The CAD stack is reached through acadifc, which re-exports the codec and
 # the geometry kernel. Aliased to `acadrust` so existing `use acadrust::…`
 # paths keep resolving.
-acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "fe98e42", features = ["serde", "offset"] }
+acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "88e3308", features = ["serde", "offset"] }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
@@ -50,7 +50,6 @@ i18n-embed = { version = "0.16", features = ["fluent-system"] }
 i18n-embed-fl = "0.10"
 rust-embed = "8"
 inventory = "0.3"
-truck-shapeops = { version = "0.4", optional = true }
 rustc-hash = "2"
 sha2 = "0.10"
 fontdb = "0.23"
