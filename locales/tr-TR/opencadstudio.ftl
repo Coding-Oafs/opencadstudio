@@ -485,9 +485,9 @@ catalog-attributedefinition-117ad6ffdf = Öznitelik Tanımı
 catalog-attributes-a6652617f2 = Öznitelikler
 catalog-audit-fa1703dd78 = Denetle
 catalog-auto-c614ba7c45 = Otomatik
-catalog-autodesk-recap-777f56f17c =
-    Autodesk
-    ReCap
+insert-point-clouds =
+    Nokta
+    Bulutları
 catalog-automatically-add-scales-da9d358823 = Ölçekleri Otomatik Ekle
 catalog-autosaved-1-drawing-2605935129 = 1 çizim otomatik kaydedildi
 catalog-available-plugins-8d019a58db = Kullanılabilir eklentiler

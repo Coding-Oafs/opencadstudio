@@ -456,9 +456,9 @@ catalog-attributedefinition-117ad6ffdf = Attributedefinition
 catalog-attributes-a6652617f2 = Attribute
 catalog-audit-fa1703dd78 = Prüfen
 catalog-auto-c614ba7c45 = auto
-catalog-autodesk-recap-777f56f17c =
-    Autodesk
-    Recap
+insert-point-clouds =
+    Punkt-
+    wolken
 catalog-automatically-add-scales-da9d358823 = Maßstäbe automatisch hinzufügen
 catalog-autosaved-1-drawing-2605935129 = 1 Zeichnung automatisch gespeichert
 catalog-available-plugins-8d019a58db = Verfügbare Plugins

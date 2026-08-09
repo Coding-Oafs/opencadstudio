@@ -498,9 +498,9 @@ catalog-attributedefinition-117ad6ffdf = AttributeDefinition
 catalog-attributes-a6652617f2 = Attributes
 catalog-audit-fa1703dd78 = Audit
 catalog-auto-c614ba7c45 = Auto
-catalog-autodesk-recap-777f56f17c =
-    Autodesk
-    ReCap
+insert-point-clouds =
+    Point
+    Clouds
 catalog-automatically-add-scales-da9d358823 = Automatically Add Scales
 catalog-autosaved-1-drawing-2605935129 = Autosaved 1 drawing
 catalog-available-plugins-8d019a58db = Available plugins

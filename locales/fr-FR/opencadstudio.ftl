@@ -456,9 +456,9 @@ catalog-attributedefinition-117ad6ffdf = Définition de l'attribut
 catalog-attributes-a6652617f2 = Attributs
 catalog-audit-fa1703dd78 = Vérification des comptes
 catalog-auto-c614ba7c45 = Automatique
-catalog-autodesk-recap-777f56f17c =
-    Bureau automatique
-    Recap
+insert-point-clouds =
+    Nuages de
+    points
 catalog-automatically-add-scales-da9d358823 = Ajouter automatiquement les échelles
 catalog-autosaved-1-drawing-2605935129 = 1 dessin enregistré automatiquement
 catalog-available-plugins-8d019a58db = Greffons disponibles

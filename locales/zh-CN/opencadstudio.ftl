@@ -443,9 +443,7 @@ catalog-attributedefinition-117ad6ffdf = 属性定义
 catalog-attributes-a6652617f2 = 属性
 catalog-audit-fa1703dd78 = 核查
 catalog-auto-c614ba7c45 = 自动
-catalog-autodesk-recap-777f56f17c =
-    Autodesk
-    ReCap
+insert-point-clouds = 点云
 catalog-automatically-add-scales-da9d358823 = 自动添加比例
 catalog-autosaved-1-drawing-2605935129 = 自动保存了 1 个绘图
 catalog-available-plugins-8d019a58db = 可用插件

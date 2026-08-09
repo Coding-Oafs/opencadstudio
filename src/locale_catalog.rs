@@ -338,7 +338,7 @@ pub(super) fn message_id(source: &str) -> Option<&'static str> {
         "Attributes" => Some("catalog-attributes-a6652617f2"),
         "Audit" => Some("catalog-audit-fa1703dd78"),
         "Auto" => Some("catalog-auto-c614ba7c45"),
-        "Autodesk\nReCap" => Some("catalog-autodesk-recap-777f56f17c"),
+        "Point\nClouds" => Some("insert-point-clouds"),
         "Automatically Add Scales" => Some("catalog-automatically-add-scales-da9d358823"),
         "Autosaved 1 drawing" => Some("catalog-autosaved-1-drawing-2605935129"),
         "Available plugins" => Some("catalog-available-plugins-8d019a58db"),

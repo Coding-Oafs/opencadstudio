@@ -459,9 +459,9 @@ catalog-attributedefinition-117ad6ffdf = Определение атрибуто
 catalog-attributes-a6652617f2 = Атрибуты
 catalog-audit-fa1703dd78 = Аудит
 catalog-auto-c614ba7c45 = Автоматический
-catalog-autodesk-recap-777f56f17c =
-    Автозавод
-    ReCap
+insert-point-clouds =
+    Облака
+    точек
 catalog-automatically-add-scales-da9d358823 = Автоматически добавлять масштабы
 catalog-autosaved-1-drawing-2605935129 = Автоматически сохранён 1 чертёж
 catalog-available-plugins-8d019a58db = Доступные плагины

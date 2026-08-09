@@ -444,9 +444,9 @@ catalog-attributedefinition-117ad6ffdf = विशेषता परिभा�
 catalog-attributes-a6652617f2 = गुण
 catalog-audit-fa1703dd78 = लेखा
 catalog-auto-c614ba7c45 = ऑटो
-catalog-autodesk-recap-777f56f17c =
-    ऑटोडेस्क
-    रीकैप
+insert-point-clouds =
+    बिंदु
+    बादल
 catalog-automatically-add-scales-da9d358823 = स्केल अपने-आप जोड़ें
 catalog-autosaved-1-drawing-2605935129 = 1 ड्रॉइंग स्वतः सहेजी गई
 catalog-available-plugins-8d019a58db = उपलब्ध प्लगइन्स
