@@ -6,6 +6,7 @@
 //! geometric curvature (G2).
 
 use acadrust::entities::{EntityCommon, Spline};
+use acadrust::kernel::space::curve as space_curve;
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
@@ -628,49 +629,29 @@ fn curve_frame(
     })
 }
 
+/// The curvature vector at `point` of the circle through the three points.
 fn circumcircle_curvature(point: DVec3, next: DVec3, third: DVec3) -> DVec3 {
-    let u = next - point;
-    let v = third - point;
-    let cross = u.cross(v);
-    let denominator = 2.0 * cross.length_squared();
-    if denominator <= EPS {
-        return DVec3::ZERO;
-    }
-    let center_offset =
-        (u.length_squared() * v.cross(cross) + v.length_squared() * cross.cross(u)) / denominator;
-    let radius_squared = center_offset.length_squared();
-    if radius_squared <= EPS {
-        DVec3::ZERO
-    } else {
-        center_offset / radius_squared
-    }
+    let curvature = space_curve::curvature_through(
+        [point.x, point.y, point.z],
+        [next.x, next.y, next.z],
+        [third.x, third.y, third.z],
+    );
+    DVec3::new(curvature[0], curvature[1], curvature[2])
 }
 
+/// A Bézier control polygon sampled into a polyline.
+///
+/// De Casteljau, from the kernel. What was here summed Bernstein terms with
+/// binomial coefficients out of a lookup table that had entries for degrees
+/// three and five and returned one for everything else — correct only for
+/// the two the blend happens to build today, and quietly wrong the moment a
+/// third was added.
 fn sample_bezier(control_points: &[Vector3], segments: usize) -> Vec<[f64; 3]> {
-    let degree = control_points.len().saturating_sub(1);
-    (0..=segments)
-        .map(|step| {
-            let t = step as f64 / segments as f64;
-            let mut point = DVec3::ZERO;
-            for (index, control) in control_points.iter().enumerate() {
-                let coefficient = binomial(degree, index) as f64
-                    * t.powi(index as i32)
-                    * (1.0 - t).powi((degree - index) as i32);
-                point += coefficient * to_dvec(*control);
-            }
-            [point.x, point.y, point.z]
-        })
-        .collect()
-}
-
-fn binomial(n: usize, k: usize) -> usize {
-    match (n, k) {
-        (3, 0 | 3) | (5, 0 | 5) => 1,
-        (3, 1 | 2) => 3,
-        (5, 1 | 4) => 5,
-        (5, 2 | 3) => 10,
-        _ => 1,
-    }
+    let control: Vec<[f64; 3]> = control_points
+        .iter()
+        .map(|p| [p.x, p.y, p.z])
+        .collect();
+    space_curve::bezier_points(&control, segments)
 }
 
 fn ocs_to_dvec(x: f64, y: f64, z: f64, normal: DVec3) -> DVec3 {

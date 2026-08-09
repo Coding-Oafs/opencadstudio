@@ -10,9 +10,8 @@
 //     3. Pick a point on the side to offset toward, or choose Multiple
 //        to keep offsetting the newly created result at the same distance
 
-use std::f64::consts::TAU;
-
-use crate::modules::draw::modify::spline_ops::{spline_pts_wire, spline_sample_xy};
+use crate::entities::curve::entity_curve;
+use crate::modules::draw::modify::spline_ops::spline_sample_xy;
 use acadrust::entities::LwVertex;
 use acadrust::entities::{
     Arc as ArcEnt, Circle as CircleEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline,
@@ -23,8 +22,7 @@ use acadrust::{EntityType, Handle};
 // from the kernel; only the entity conversion stays here.
 use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
 use acadrust::kernel::geom2d::{
-    normalize_angle as norm_rad, offset_polyline, Polyline as KernelPolyline,
-    PolylineVertex as KernelVertex,
+    offset_polyline, Polyline as KernelPolyline, PolylineVertex as KernelVertex,
 };
 use glam::{DVec3, Vec3};
 use crate::t;
@@ -362,177 +360,54 @@ fn perp_distance(entity: &EntityType, pt: Vec3) -> f64 {
 
 // ── Wire preview points ─────────────────────────────────────────────────────
 
+/// Preview density, matching the figure the drawn wires use.
+const PREVIEW_SEGMENTS_PER_RADIAN: f64 = acadrust::kernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
+
+/// Preview points for an entity, from its own curve.
+///
+/// One tessellation rather than a case per type. What that case-per-type
+/// version had accumulated: an arc and a circle read their `center.x/.y` as
+/// world coordinates when the entity stores them in its OCS, so an extruded
+/// one previewed on the wrong side of the drawing; every curved kind was cut
+/// at a fixed twenty segments per radian whatever its size; and an ellipse
+/// rebuilt its own axis frame from the major axis' X and Y alone, dropping
+/// the Z the entity actually stores.
+///
+/// The narrowing to `f32` stays here rather than in the kernel: a preview
+/// wire leaves `points_low` empty and accepts the loss, while the resident
+/// render path splits the `f64` into a high/low pair instead. Only a caller
+/// knows which of the two it is.
 fn entity_wire_pts(e: &EntityType) -> Vec<[f32; 3]> {
-    match e {
-        EntityType::Line(l) => vec![
-            [l.start.x as f32, l.start.y as f32, l.start.z as f32],
-            [l.end.x as f32, l.end.y as f32, l.end.z as f32],
-        ],
-        EntityType::Circle(c) => {
-            let steps = 64usize;
-            (0..=steps)
-                .map(|i| {
-                    let a = TAU * i as f64 / steps as f64;
-                    [
-                        (c.center.x + c.radius * a.cos()) as f32,
-                        (c.center.y + c.radius * a.sin()) as f32,
-                        c.center.z as f32,
-                    ]
-                })
-                .collect()
-        }
-        EntityType::Arc(a) => {
-            let a0 = norm_rad(a.start_angle);
-            let a1 = norm_rad(a.end_angle);
-            let span = {
-                let s = a1 - a0;
-                if s <= 0.0 {
-                    s + TAU
-                } else {
-                    s
-                }
-            };
-            let steps = ((span.abs() * 20.0).ceil() as usize).max(4);
-            (0..=steps)
-                .map(|i| {
-                    let ang = a0 + span * (i as f64 / steps as f64);
-                    [
-                        (a.center.x + a.radius * ang.cos()) as f32,
-                        (a.center.y + a.radius * ang.sin()) as f32,
-                        a.center.z as f32,
-                    ]
-                })
-                .collect()
-        }
-        EntityType::LwPolyline(p) => lwpolyline_pts(p),
-        EntityType::Ellipse(e) => {
-            let a = (e.major_axis.x.powi(2) + e.major_axis.y.powi(2)).sqrt();
-            if a < 1e-9 {
-                return vec![];
-            }
-            let b = a * e.minor_axis_ratio;
-            let nx = e.major_axis.x / a;
-            let ny = e.major_axis.y / a;
-            let t0 = e.start_parameter;
-            let mut t1 = e.end_parameter;
-            if t1 <= t0 {
-                t1 += TAU;
-            }
-            let span = t1 - t0;
-            let steps = ((span.abs() * 20.0).ceil() as usize).max(4);
-            (0..=steps)
-                .map(|i| {
-                    let t = t0 + span * (i as f64 / steps as f64);
-                    let lx = a * t.cos();
-                    let ly = b * t.sin();
-                    [
-                        (e.center.x + lx * nx - ly * ny) as f32,
-                        (e.center.y + lx * ny + ly * nx) as f32,
-                        e.center.z as f32,
-                    ]
-                })
-                .collect()
-        }
-        EntityType::Spline(s) => spline_pts_wire(s),
-        EntityType::XLine(x) => {
-            // Infinite in both directions — represent it as a very long segment
-            // for hit-testing and the offset preview. Long enough to read as
-            // infinite at any working zoom; the committed XLine renders true.
-            const HL: f64 = 1.0e6;
-            let (bx, by, bz) = (x.base_point.x, x.base_point.y, x.base_point.z);
-            let (dx, dy, dz) = (x.direction.x, x.direction.y, x.direction.z);
-            vec![
-                [(bx - dx * HL) as f32, (by - dy * HL) as f32, (bz - dz * HL) as f32],
-                [(bx + dx * HL) as f32, (by + dy * HL) as f32, (bz + dz * HL) as f32],
+    // The two kinds with no finite point list of their own, so how far to run
+    // them is a decision rather than a measurement. Long enough to read as
+    // infinite at any working zoom; the committed entity renders true. A ray
+    // runs one way only.
+    const HL: f64 = 1.0e6;
+    let unbounded = match e {
+        EntityType::XLine(x) => Some((x.base_point, x.direction, -HL)),
+        EntityType::Ray(r) => Some((r.base_point, r.direction, 0.0)),
+        _ => None,
+    };
+    if let Some((base, direction, back)) = unbounded {
+        let at = |k: f64| {
+            [
+                (base.x + direction.x * k) as f32,
+                (base.y + direction.y * k) as f32,
+                (base.z + direction.z * k) as f32,
             ]
-        }
-        _ => vec![],
+        };
+        return vec![at(back), at(HL)];
     }
-}
-
-/// Tessellate a LwPolyline into wire points (straight segments + arc bulges).
-fn lwpolyline_pts(p: &LwPolyline) -> Vec<[f32; 3]> {
-    let n = p.vertices.len();
-    if n < 2 {
+    let Some(curve) = entity_curve(e) else {
         return vec![];
-    }
-    let z = p.elevation as f32;
-    let n_segs = if p.is_closed { n } else { n - 1 };
-    let mut pts: Vec<[f32; 3]> = Vec::new();
-
-    for i in 0..n_segs {
-        let v0 = &p.vertices[i];
-        let v1 = &p.vertices[(i + 1) % n];
-        let x0 = v0.location.x;
-        let y0 = v0.location.y;
-        let x1 = v1.location.x;
-        let y1 = v1.location.y;
-
-        if pts.is_empty() {
-            pts.push([x0 as f32, y0 as f32, z]);
-        }
-
-        if v0.bulge.abs() < 1e-10 {
-            pts.push([x1 as f32, y1 as f32, z]);
-        } else {
-            // Arc from bulge
-            let b = v0.bulge;
-            let chord_x = x1 - x0;
-            let chord_y = y1 - y0;
-            let chord_len = (chord_x * chord_x + chord_y * chord_y).sqrt();
-            if chord_len < 1e-12 {
-                pts.push([x1 as f32, y1 as f32, z]);
-                continue;
-            }
-
-            let b2 = b * b;
-            let r = chord_len * (1.0 + b2) / (4.0 * b.abs());
-            let d = r * (1.0 - b2) / (1.0 + b2);
-            let mx = (x0 + x1) * 0.5;
-            let my = (y0 + y1) * 0.5;
-            let perp_x = -chord_y / chord_len;
-            let perp_y = chord_x / chord_len;
-            let sign = b.signum();
-            let cx = mx + sign * d * perp_x;
-            let cy = my + sign * d * perp_y;
-
-            let a0 = norm_rad((y0 - cy).atan2(x0 - cx));
-            let a1 = norm_rad((y1 - cy).atan2(x1 - cx));
-            let span = if b > 0.0 {
-                let s = a1 - a0;
-                if s <= 0.0 {
-                    s + TAU
-                } else {
-                    s
-                }
-            } else {
-                let s = a0 - a1;
-                if s <= 0.0 {
-                    s + TAU
-                } else {
-                    s
-                }
-            };
-            let steps = ((span.abs() * 20.0).ceil() as usize).max(4);
-            for j in 1..=steps {
-                let t = j as f64 / steps as f64;
-                let ang = if b > 0.0 {
-                    a0 + span * t
-                } else {
-                    a0 - span * t
-                };
-                pts.push([(cx + r * ang.cos()) as f32, (cy + r * ang.sin()) as f32, z]);
-            }
-        }
-    }
-
-    if p.is_closed {
-        if let Some(&first) = pts.first() {
-            pts.push(first);
-        }
-    }
-    pts
+    };
+    curve
+        .tessellate(PREVIEW_SEGMENTS_PER_RADIAN)
+        .into_iter()
+        .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+        .collect::<Vec<[f32; 3]>>()
 }
+
 
 // ── Command implementation ─────────────────────────────────────────────────
 

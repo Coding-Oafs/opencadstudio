@@ -1,4 +1,9 @@
 use acadrust::entities::{BoundaryEdge, Hatch};
+use acadrust::kernel::geom2d::{
+    Arc as KernelArc, Curve as KernelCurve, Ellipse as KernelEllipse,
+    EllipseArc as KernelEllipseArc, Line as KernelLine, NurbsCurve as KernelNurbs,
+    Parameterization, Polyline as KernelPolyline, PolylineVertex as KernelVertex,
+};
 use glam::Vec3;
 use crate::t;
 
@@ -9,52 +14,126 @@ use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Pr
 use crate::scene::convert::tess_util::{arc_segments, arc_signed_span, wire_chord_tol, FallbackGeometry};
 use crate::scene::model::wire_model::SnapHint;
 
-/// Signed area of every boundary path, summed via the shoelace formula over
-/// the OCS boundary vertices (bulge/curved edges approximated by their end
-/// points). Returns the absolute total area.
+/// The area the hatch's boundary paths enclose.
+///
+/// Summed edge by edge through the kernel, which measures what each edge
+/// actually encloses rather than what a polygon through some of its points
+/// would. The version this replaced pushed an arc's *centre* into the ring
+/// and a spline's control points — neither of which is on the boundary — so
+/// the number it produced was not the area of anything.
+///
+/// Outer paths and their holes both contribute; the sign of a loop says
+/// which it is, so the magnitude of the sum is the region's own area.
 fn boundary_area(h: &Hatch) -> f64 {
     let mut area = 0.0;
     for path in &h.paths {
-        let mut ring: Vec<[f64; 2]> = Vec::new();
+        let mut path_area = 0.0;
+        let mut ends: Vec<[f64; 2]> = Vec::new();
         for edge in &path.edges {
-            match edge {
-                BoundaryEdge::Polyline(poly) => {
-                    for v in &poly.vertices {
-                        ring.push([v.x, v.y]);
-                    }
-                }
-                BoundaryEdge::Line(l) => {
-                    ring.push([l.start.x, l.start.y]);
-                    ring.push([l.end.x, l.end.y]);
-                }
-                BoundaryEdge::CircularArc(a) => ring.push([a.center.x, a.center.y]),
-                BoundaryEdge::EllipticArc(e) => ring.push([e.center.x, e.center.y]),
-                BoundaryEdge::Spline(s) => {
-                    let src = if !s.fit_points.is_empty() {
-                        s.fit_points.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()
-                    } else {
-                        s.control_points
-                            .iter()
-                            .map(|p| [p.x, p.y])
-                            .collect::<Vec<_>>()
-                    };
-                    ring.extend(src);
-                }
-            }
+            let Some(curve) = edge_curve(edge) else {
+                continue;
+            };
+            path_area += curve.enclosed_area();
+            ends.push(curve.point_at(0.0));
+            ends.push(curve.point_at(1.0));
         }
-        let n = ring.len();
-        if n < 3 {
-            continue;
+        // Edges are stored as separate pieces, so the chain has to be closed
+        // by the chord from the last end back to the first — the same closing
+        // an open polyline gets.
+        if let (Some(first), Some(last)) = (ends.first(), ends.last()) {
+            path_area += 0.5 * (last[0] * first[1] - first[0] * last[1]);
         }
-        let mut acc = 0.0;
-        for i in 0..n {
-            let a = ring[i];
-            let b = ring[(i + 1) % n];
-            acc += a[0] * b[1] - b[0] * a[1];
-        }
-        area += acc.abs() * 0.5;
+        area += path_area.abs();
     }
     area
+}
+
+/// A hatch boundary edge as a kernel curve, in the hatch's own OCS.
+fn edge_curve(edge: &BoundaryEdge) -> Option<KernelCurve> {
+    Some(match edge {
+        BoundaryEdge::Line(l) => KernelCurve::Line(KernelLine {
+            start: [l.start.x, l.start.y],
+            end: [l.end.x, l.end.y],
+        }),
+        BoundaryEdge::CircularArc(a) => {
+            // A clockwise edge is the same arc walked the other way, so the
+            // stored angles swap rather than the sweep going negative.
+            let (start, end) = if a.counter_clockwise {
+                (a.start_angle, a.end_angle)
+            } else {
+                (a.end_angle, a.start_angle)
+            };
+            KernelCurve::Arc(KernelArc {
+                centre: [a.center.x, a.center.y],
+                radius: a.radius,
+                start_angle: start,
+                end_angle: end,
+            })
+        }
+        BoundaryEdge::EllipticArc(e) => {
+            let major = (e.major_axis_endpoint.x, e.major_axis_endpoint.y);
+            let radius = major.0.hypot(major.1);
+            if radius < 1e-12 {
+                return None;
+            }
+            let (start, end) = if e.counter_clockwise {
+                (e.start_angle, e.end_angle)
+            } else {
+                (e.end_angle, e.start_angle)
+            };
+            KernelCurve::Ellipse(KernelEllipseArc {
+                ellipse: KernelEllipse {
+                    centre: [e.center.x, e.center.y],
+                    major_radius: radius,
+                    minor_radius: radius * e.minor_axis_ratio,
+                    major_axis: [major.0 / radius, major.1 / radius],
+                },
+                start_parameter: start,
+                end_parameter: end,
+            })
+        }
+        BoundaryEdge::Polyline(poly) => {
+            let vertices: Vec<KernelVertex> = poly
+                .vertices
+                .iter()
+                .map(|v| KernelVertex {
+                    position: [v.x, v.y],
+                    // A boundary polyline stores its bulge in the vertex's
+                    // third component.
+                    bulge: v.z,
+                })
+                .collect();
+            if vertices.len() < 2 {
+                return None;
+            }
+            KernelCurve::Polyline(KernelPolyline {
+                vertices,
+                closed: poly.is_closed,
+            })
+        }
+        BoundaryEdge::Spline(s) => {
+            let control: Vec<[f64; 2]> = s.control_points.iter().map(|p| [p.x, p.y]).collect();
+            // A boundary spline's control points carry their weight in the
+            // third component; for a polynomial one it is unset and the
+            // kernel's own default of all-ones applies.
+            let weights = s
+                .rational
+                .then(|| s.control_points.iter().map(|p| p.z).collect::<Vec<f64>>());
+            let curve = KernelNurbs::new(
+                s.degree.max(1) as usize,
+                control,
+                s.knots.clone(),
+                weights,
+            )
+            .or_else(|| {
+                // A fit-point boundary spline, interpolated the same way a
+                // SPLINE entity's is.
+                let fit: Vec<[f64; 2]> = s.fit_points.iter().map(|p| [p.x, p.y]).collect();
+                KernelNurbs::interpolate(&fit, None, None, Parameterization::Chord)
+            })?;
+            KernelCurve::Nurbs(curve)
+        }
+    })
 }
 
 /// Mean of every boundary edge point (OCS) — the centroid used to place the

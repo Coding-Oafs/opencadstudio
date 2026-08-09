@@ -1,14 +1,19 @@
 //! OpenCADStudio-style OSNAP status menu.
 
-use iced::widget::{button, container, row, text};
+use iced::widget::{button, checkbox, column, container, row, text};
 use iced::{Background, Element, Fill, Length, Theme};
 
 use crate::app::Message;
+use crate::app::settings::IsoPlane;
 use crate::snap::{SnapType, Snapper, ALL_SNAP_MODES};
 use crate::ui::statusbar::status_menu::Entry;
 use crate::t;
 
-pub fn menu_entries<'a>(snapper: &'a Snapper) -> Vec<Entry<'a>> {
+pub fn menu_entries<'a>(
+    snapper: &'a Snapper,
+    isometric: bool,
+    iso_plane: IsoPlane,
+) -> Vec<Entry<'a>> {
     let all_on = snapper.all_on();
     let none_on = snapper.none_on();
 
@@ -30,7 +35,49 @@ pub fn menu_entries<'a>(snapper: &'a Snapper) -> Vec<Entry<'a>> {
         .width(Fill)
         .padding([0, 4]);
 
-    let mut entries = vec![Entry::stay(header), Entry::stay(divider)];
+    let mut iso_planes = row![].spacing(3);
+    for plane in IsoPlane::ALL {
+        iso_planes = iso_planes.push(
+            button(text(t!(plane.label())).size(10))
+                .on_press(Message::SetIsoPlane(plane))
+                .style(if isometric && iso_plane == plane {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .padding([3, 8]),
+        );
+    }
+    let drafting = column![
+        row![
+            checkbox(isometric)
+                .on_toggle(|_| Message::ToggleIsometricDrafting)
+                .size(14),
+            text(t!("Isometric drafting")).size(11),
+        ]
+        .spacing(6)
+        .align_y(iced::Center),
+        iso_planes,
+        text(t!("F5 cycles the active plane.")).size(10),
+    ]
+    .spacing(5)
+    .padding([5, 8]);
+    let drafting_divider = container(iced::widget::Space::new().height(1))
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.palette().background.weak.color,
+            )),
+            ..Default::default()
+        })
+        .width(Fill)
+        .padding([0, 4]);
+
+    let mut entries = vec![
+        Entry::stay(header),
+        Entry::stay(divider),
+        Entry::stay(drafting),
+        Entry::stay(drafting_divider),
+    ];
     for &(snap_type, _glyph, label) in ALL_SNAP_MODES {
         entries.push(Entry::stay(snap_row(
             snap_type,

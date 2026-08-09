@@ -100,6 +100,7 @@ impl OpenCADStudio {
         self.ucs_icon_hover = false;
         self.tabs[i].pan_mode = false;
         self.tabs[i].orbit_mode = false;
+        self.tabs[i].zoom_dynamic_mode = false;
         let _ = self.on_viewport_exit();
     }
 
@@ -1939,6 +1940,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].scene.remember_current_view();
                 self.tabs[i]
                     .scene
                     .zoom_to_window(p1.as_vec3(), p2.as_vec3());

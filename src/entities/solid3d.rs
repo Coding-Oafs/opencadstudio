@@ -7,6 +7,7 @@
 // the MeshModel vertices to match.
 
 use acadrust::entities::{Body, Region, Solid3D, Surface};
+use acadrust::kernel::space::polygon;
 use crate::t;
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_prop as edit, parse_f64, ro_prop as ro};
@@ -203,30 +204,25 @@ fn position_section(prefix: &str, p: &acadrust::types::Vector3) -> PropSection {
 /// holes subtract) and halves its magnitude — exact for a single planar
 /// loop, approximate for multi-loop or curved regions. Returns zeros when
 /// there is nothing to measure.
+/// The area and perimeter of a region's boundary wires.
+///
+/// Measured in space rather than in projection: a region need not lie in a
+/// coordinate plane, and flattening it to XY first would report its shadow.
 fn region_area_perimeter(wires: &[acadrust::entities::Wire]) -> (f64, f64) {
+    let mut area_vector = [0.0f64; 3];
     let mut perimeter = 0.0;
-    let (mut nx, mut ny, mut nz) = (0.0, 0.0, 0.0);
     for wire in wires {
-        let pts = &wire.points;
-        if pts.len() < 2 {
-            continue;
-        }
-        for seg in pts.windows(2) {
-            let dx = seg[1].x - seg[0].x;
-            let dy = seg[1].y - seg[0].y;
-            let dz = seg[1].z - seg[0].z;
-            perimeter += (dx * dx + dy * dy + dz * dz).sqrt();
-        }
-        let n = pts.len();
-        for i in 0..n {
-            let a = &pts[i];
-            let b = &pts[(i + 1) % n];
-            nx += (a.y - b.y) * (a.z + b.z);
-            ny += (a.z - b.z) * (a.x + b.x);
-            nz += (a.x - b.x) * (a.y + b.y);
+        let ring: Vec<[f64; 3]> = wire.points.iter().map(|p| [p.x, p.y, p.z]).collect();
+        // Wires arrive as open chains that the region closes between them, so
+        // the length is the chain's and the area vectors are summed before
+        // being measured — one wire's contribution is not an area on its own.
+        perimeter += polygon::chain_length(&ring);
+        let piece = polygon::area_vector(&ring);
+        for axis in 0..3 {
+            area_vector[axis] += piece[axis];
         }
     }
-    let area = 0.5 * (nx * nx + ny * ny + nz * nz).sqrt();
+    let area = (area_vector[0].powi(2) + area_vector[1].powi(2) + area_vector[2].powi(2)).sqrt();
     (area, perimeter)
 }
 

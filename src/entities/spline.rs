@@ -19,23 +19,48 @@ fn to_truck(spl: &Spline) -> TruckEntity {
         // smooth Catmull-Rom curve through them and hand it back as a dense
         // polyline so it still draws.
         if spl.fit_points.len() >= 2 {
-            let closed = spl.flags.closed || spl.flags.periodic;
-            // A fit spline is a C² cubic through its fit points honouring the
-            // stored end tangents. Catmull-Rom ignores those tangents (its ends
-            // use local slopes), so an open curve peels away from the true shape
-            // at the ends; interpolate properly instead. Closed splines wrap,
-            // which the clamped solve doesn't model, so they keep Catmull-Rom.
-            let pts = if closed {
-                catmull_rom_polyline(&spl.fit_points, true)
-            } else {
-                fit_spline_polyline(spl)
+            // Drawn from the same interpolation TRIM and snap use, so that
+            // what is on screen is the curve those commands cut. The two had
+            // parted: this drew a C² cubic solved here (or a Catmull-Rom for a
+            // closed spline), while the kernel interpolated its own — near
+            // enough to look right and far enough apart that a trim landed
+            // beside the line it was aimed at.
+            let planar = crate::entities::curve::spline_curve(spl);
+            let pts = match &planar {
+                Some(curve) => crate::entities::curve::curve_points(curve),
+                // A fit spline through points in space is not a planar curve,
+                // so the kernel has nothing to say about it and the solve
+                // here remains the only description of its shape.
+                None if spl.flags.closed || spl.flags.periodic => {
+                    catmull_rom_polyline(&spl.fit_points, true)
+                }
+                None => fit_spline_polyline(spl),
             };
-            let key_vertices: Vec<[f64; 3]> =
-                spl.fit_points.iter().map(|p| [p.x, p.y, p.z]).collect();
+            let snap = planar
+                .as_ref()
+                .map(crate::entities::curve::snap_from)
+                .unwrap_or_default();
+            // Fit points are on the curve, so they stay on offer as ends in
+            // their own right — but never through `key_vertices`, whose
+            // consecutive entries the snap engine joins and offers the middle
+            // of. The chord between two fit points of a curvy spline does not
+            // run along it.
+            let mut snap_pts = snap.snap_pts;
+            snap_pts.extend(spl.fit_points.iter().map(|p| {
+                (
+                    glam::DVec3::new(p.x, p.y, p.z),
+                    crate::scene::model::wire_model::SnapHint::Endpoint,
+                )
+            }));
+            let key_vertices = if planar.is_some() {
+                Vec::new()
+            } else {
+                spl.fit_points.iter().map(|p| [p.x, p.y, p.z]).collect()
+            };
             return TruckEntity {
                 pick_tris: Vec::new(),
                 object: TruckObject::Lines(pts),
-                snap_pts: vec![],
+                snap_pts,
                 tangent_geoms: vec![],
                 key_vertices,
                 fill_tris: vec![],
@@ -87,12 +112,42 @@ fn to_truck(spl: &Spline) -> TruckEntity {
         )
     };
 
-    let snap_source = if !spl.fit_points.is_empty() {
-        &spl.fit_points
-    } else {
-        &spl.control_points
+    // Snap sources from the spline's own curve. A spline is not a chain of
+    // straight segments, so nothing goes in `key_vertices`: consecutive
+    // entries there are joined and their midpoints offered, and the chord
+    // between two fit points of a curvy spline does not run along it.
+    //
+    // Fit points are on the curve and stay on offer, as ends in their own
+    // right. Control points are not on the curve and are dropped — snapping
+    // to one put the cursor in empty space beside the geometry.
+    let curve_snap = crate::entities::curve::spline_curve(spl)
+        .map(|curve| crate::entities::curve::snap_from(&curve));
+    let (snap_pts, key_vertices) = match curve_snap {
+        Some(snap) => {
+            let mut points = snap.snap_pts;
+            points.extend(spl.fit_points.iter().map(|p| {
+                (
+                    glam::DVec3::new(p.x, p.y, p.z),
+                    crate::scene::model::wire_model::SnapHint::Endpoint,
+                )
+            }));
+            (points, Vec::new())
+        }
+        // A spline through points in space is not a planar curve, so the
+        // kernel has nothing to say about it. Its stored points remain the
+        // only thing to offer.
+        None => {
+            let source = if spl.fit_points.is_empty() {
+                &spl.control_points
+            } else {
+                &spl.fit_points
+            };
+            (
+                Vec::new(),
+                source.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>(),
+            )
+        }
     };
-    let key_vertices: Vec<[f64; 3]> = snap_source.iter().map(|p| [p.x, p.y, p.z]).collect();
 
     let is_closed = spl.flags.closed || spl.flags.periodic;
     let gap = {
@@ -120,7 +175,7 @@ fn to_truck(spl: &Spline) -> TruckEntity {
     TruckEntity {
         pick_tris: Vec::new(),
         object,
-        snap_pts: vec![],
+        snap_pts,
         tangent_geoms: vec![],
         key_vertices,
         fill_tris: vec![],

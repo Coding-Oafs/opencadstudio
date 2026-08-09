@@ -422,102 +422,13 @@ impl CadCommand for ArrayPolarCommand {
 //   → Returns BatchCopy with Translate transforms derived from path samples.
 
 use acadrust::EntityType;
+use crate::entities::curve::entity_curve;
 use std::f64::consts::PI as FPI;
 use std::f64::consts::TAU as FTAU;
 
 // ── Path geometry helpers ──────────────────────────────────────────────────
 
-/// Tessellate an LwPolyline into dense WCS points, matching the renderer:
-/// bulge arcs use the canonical `BulgeArc` (correct centre side + signed
-/// sweep) and every point is mapped OCS→WCS via the polyline's normal. The
-/// previous ad-hoc bulge math placed the arc centre on the wrong side of the
-/// chord and ignored the extrusion, so arc-segment paths came out mirrored.
-fn lw_dense_pts(p: &acadrust::entities::LwPolyline) -> Vec<DVec3> {
-    use crate::entities::common::BulgeArc;
-    use crate::scene::view::transform::ocs_point_to_wcs;
 
-    let verts = &p.vertices;
-    if verts.is_empty() {
-        return vec![];
-    }
-    let normal = (p.normal.x, p.normal.y, p.normal.z);
-    let elev = p.elevation;
-    let to_wcs = |x: f64, y: f64| -> DVec3 {
-        let (wx, wy, wz) = ocs_point_to_wcs((x, y, elev), normal);
-        DVec3::new(wx, wy, wz)
-    };
-
-    let n = verts.len();
-    let segs = if p.is_closed { n } else { n.saturating_sub(1) };
-    let mut out: Vec<DVec3> = vec![];
-
-    for i in 0..segs {
-        let v0 = &verts[i];
-        let v1 = &verts[(i + 1) % n];
-        let p0 = [v0.location.x, v0.location.y];
-        let p1 = [v1.location.x, v1.location.y];
-
-        if out.is_empty() {
-            out.push(to_wcs(p0[0], p0[1]));
-        }
-
-        let bulge = v0.bulge;
-        match (bulge.abs() >= 1e-9)
-            .then(|| BulgeArc::from_bulge(p0, p1, bulge))
-            .flatten()
-        {
-            Some(arc) => {
-                let steps = ((arc.radius * arc.sweep.abs() / 2.0).ceil() as usize).clamp(4, 64);
-                for j in 1..=steps {
-                    let s = arc.sample(j as f64 / steps as f64);
-                    out.push(to_wcs(s[0], s[1]));
-                }
-            }
-            None => out.push(to_wcs(p1[0], p1[1])),
-        }
-    }
-    out
-}
-
-/// Walk `pts` (ordered) and return `count` points at equal arc-length spacing.
-fn subsample_equidistant(pts: &[DVec3], count: usize) -> Vec<DVec3> {
-    if count == 0 {
-        return vec![];
-    }
-    if pts.len() < 2 {
-        return vec![pts.first().copied().unwrap_or(DVec3::ZERO); count];
-    }
-
-    let mut cum = vec![0.0f64; pts.len()];
-    for i in 1..pts.len() {
-        cum[i] = cum[i - 1] + pts[i].distance(pts[i - 1]);
-    }
-    let total = *cum.last().unwrap();
-    if total < 1e-9 {
-        return vec![pts[0]; count];
-    }
-
-    let mut out = Vec::with_capacity(count);
-    let mut seg = 0usize;
-    for i in 0..count {
-        let target = if count > 1 {
-            total * i as f64 / (count - 1) as f64
-        } else {
-            0.0
-        };
-        while seg + 2 < pts.len() && cum[seg + 1] < target - 1e-9 {
-            seg += 1;
-        }
-        let seg_len = cum[seg + 1] - cum[seg];
-        let t = if seg_len > 1e-9 {
-            (target - cum[seg]) / seg_len
-        } else {
-            0.0
-        };
-        out.push(pts[seg].lerp(pts[seg + 1], t.clamp(0.0, 1.0)));
-    }
-    out
-}
 
 // ── State machine ──────────────────────────────────────────────────────────
 
@@ -570,66 +481,38 @@ impl ArrayPathCommand {
     }
 
     /// Sample `count` evenly-spaced points along `entity`.
+    /// `count` points spaced evenly **by distance** along the path.
+    ///
+    /// By distance, not by parameter. The two agree on a line, a circle and a
+    /// circular arc, which is how a per-type version got away with confusing
+    /// them; on an ellipse or a spline they do not, and copies laid out at
+    /// even parameters bunch up wherever the parameter runs slow. The path's
+    /// own OCS is honoured too, so an arc carrying a mirrored normal is
+    /// walked along the side it is drawn on.
     fn sample_path(entity: &EntityType, count: usize) -> Vec<DVec3> {
         if count == 0 {
             return vec![];
         }
-        match entity {
-            EntityType::Line(l) => {
-                let p0 = DVec3::new(l.start.x, l.start.y, 0.0);
-                let p1 = DVec3::new(l.end.x, l.end.y, 0.0);
-                let d = (count - 1).max(1) as f64;
-                (0..count).map(|i| p0.lerp(p1, i as f64 / d)).collect()
-            }
-            EntityType::Arc(a) => {
-                // Sample in WCS via the arc's OCS basis so flipped-normal arcs
-                // (normal = -Z) are traced on the same side the renderer draws,
-                // matching `entities::arc::to_truck`. Sampling the raw centre +
-                // angle ignores the extrusion and lands on the mirrored arc.
-                use crate::scene::view::transform::{ocs_axes, ocs_point_to_wcs};
-                let normal = (a.normal.x, a.normal.y, a.normal.z);
-                let (ax, ay) = ocs_axes(normal);
-                let (cx, cy, cz) =
-                    ocs_point_to_wcs((a.center.x, a.center.y, a.center.z), normal);
-                let r = a.radius;
-                let (sa, ea) = (a.start_angle, a.end_angle);
-                let end = if ea >= sa { ea } else { ea + std::f64::consts::TAU };
-                let span = end - sa;
-                let d = (count - 1).max(1) as f64;
-                (0..count)
-                    .map(|i| {
-                        let ang = sa + span * (i as f64 / d);
-                        let (c, s) = (ang.cos(), ang.sin());
-                        DVec3::new(
-                            cx + r * c * ax.0 + r * s * ay.0,
-                            cy + r * c * ax.1 + r * s * ay.1,
-                            cz + r * c * ax.2 + r * s * ay.2,
-                        )
-                    })
-                    .collect()
-            }
-            EntityType::Circle(c) => {
-                use crate::scene::view::transform::{ocs_axes, ocs_point_to_wcs};
-                let normal = (c.normal.x, c.normal.y, c.normal.z);
-                let (ax, ay) = ocs_axes(normal);
-                let (cx, cy, cz) =
-                    ocs_point_to_wcs((c.center.x, c.center.y, c.center.z), normal);
-                let r = c.radius;
-                (0..count)
-                    .map(|i| {
-                        let ang = i as f64 / count as f64 * std::f64::consts::TAU;
-                        let (cs, sn) = (ang.cos(), ang.sin());
-                        DVec3::new(
-                            cx + r * cs * ax.0 + r * sn * ay.0,
-                            cy + r * cs * ax.1 + r * sn * ay.1,
-                            cz + r * cs * ax.2 + r * sn * ay.2,
-                        )
-                    })
-                    .collect()
-            }
-            EntityType::LwPolyline(p) => subsample_equidistant(&lw_dense_pts(p), count),
-            _ => vec![DVec3::ZERO; count],
+        let Some(curve) = entity_curve(entity) else {
+            return vec![DVec3::ZERO; count];
+        };
+        let total = curve.length();
+        if !total.is_finite() || total <= 0.0 {
+            return vec![DVec3::ZERO; count];
         }
+        // A closed path has no far end to stop short of, so the last copy
+        // must not land on top of the first.
+        let steps = if curve.is_closed() {
+            count as f64
+        } else {
+            (count - 1).max(1) as f64
+        };
+        (0..count)
+            .map(|i| {
+                let p = curve.point_at_distance(total * (i as f64 / steps));
+                DVec3::new(p[0], p[1], p[2])
+            })
+            .collect()
     }
 
     /// Continuous path-tangent angle (XY) at each sample, via central

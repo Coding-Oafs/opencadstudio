@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = Schließen
 action-options = Optionen
@@ -3384,3 +3388,55 @@ style-manager-center-of-text = Textzentrum
 style-manager-center-of-text-overline = Textzentrum mit Oberstrich
 style-manager-block-extents = Blockgrenzen
 style-manager-base-point = Basispunkt
+
+area-option-objects = Objekte
+area-option-back = Zurück
+area-option-add = Fläche addieren
+area-option-subtract = Fläche subtrahieren
+area-prompt-first = AREA  Ersten Eckpunkt angeben oder [Objekte/Fläche addieren/Fläche subtrahieren] <Objekte>:
+area-prompt-add = AREA ADDIEREN  Ersten Eckpunkt angeben oder [Objekte/Fläche subtrahieren] <Objekte>:
+area-prompt-subtract = AREA SUBTRAHIEREN  Ersten Eckpunkt angeben oder [Objekte/Fläche addieren] <Objekte>:
+area-prompt-next = AREA  Nächsten Punkt angeben ({ $count } gewählt, Eingabetaste zum Berechnen):
+area-prompt-objects = AREA  Objekte auswählen ({ $count } ausgewählt, Eingabetaste zum Berechnen):
+area-objects-not-measurable = AREA: Keines der ausgewählten Objekte hat eine messbare Fläche.
+area-result = Fläche = { $area },  Umfang = { $perimeter }
+area-result-area-only = Fläche = { $area }
+area-running-result =
+    Fläche = { $area },  Umfang = { $perimeter }
+    Gesamtfläche = { $total_area },  Gesamtumfang = { $total_perimeter }
+area-running-result-area-only =
+    Fläche = { $area }
+    Gesamtfläche = { $total_area }
+
+modal-recovery-report = Zeichnungswiederherstellungsbericht
+modal-recovery-prompt = Zeichnungswiederherstellung
+recovery-opened-with-repairs = Zeichnung mit einem Wiederherstellungsbericht geöffnet
+recovery-open-failed = Zeichnung konnte nicht geöffnet werden
+recovery-repaired-description = Beim Öffnen der Zeichnung wurden Probleme erkannt. Prüfen Sie den Bericht; wenn Zeichnungsdaten repariert wurden, speichern Sie die Zeichnung als neue Datei.
+recovery-failed-description = Die Wiederherstellung konnte keine verwendbaren Zeichnungsdaten erzeugen. Prüfen Sie den Bericht und versuchen Sie eine Sicherungskopie oder automatisch gespeicherte Kopie.
+recovery-entities-checked = Geprüfte Objekte
+recovery-issues-found = Gefundene Probleme
+recovery-entities-removed = Entfernte Objekte
+recovery-references-checked = Geprüfte Referenzen
+recovery-referenced-entities-removed = Entfernte referenzierte Objekte
+recovery-references-unavailable = Nicht verfügbare Referenzen
+recovery-log-path = Wiederherstellungsprotokoll
+recovery-log-write-failed = Wiederherstellungsprotokoll konnte nicht geschrieben werden
+recovery-log-download-ready = Der Wiederherstellungsbericht kann heruntergeladen werden.
+recovery-save-copy = Reparierte Kopie speichern
+recovery-show-log = Wiederherstellungsprotokoll anzeigen
+recovery-save-new-file-required = Eine reparierte Zeichnung muss als neue Datei gespeichert werden.
+recovery-prompt-heading = Normales Öffnen ist fehlgeschlagen
+recovery-prompt-description = Die Zeichnung wurde nicht verändert. Der Wiederherstellungsmodus kann versuchen, verwendbare Daten zu retten; beschädigte Datensätze können dabei übersprungen werden. Möchten Sie fortfahren?
+recovery-attempt = Wiederherstellung versuchen
+recovery-decline = Abbrechen
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  Textobjekte auswählen und dann die Eingabetaste drücken:
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  Startnummer <__ocs_fmt_0__>:
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  Schrittweite <__ocs_fmt_0__>:
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  Platzierung [Überschreiben/Präfix/Suffix] <Überschreiben>:
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT: Die Platzierung muss Überschreiben, Präfix oder Suffix sein.
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT: __ocs_fmt_0__ Textobjekt(e) ab __ocs_fmt_1__ in Schritten von __ocs_fmt_2__ nummeriert (__ocs_fmt_3__).
+catalog-prefix-90eceb016c = Präfix
+catalog-suffix-885db975a3 = Suffix
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = Das Öffnen einer Zeichnung über einen Pfad ist im Browser nicht verfügbar.

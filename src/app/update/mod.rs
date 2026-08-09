@@ -149,6 +149,9 @@ impl OpenCADStudio {
         if self.active_modal == Some(ScaleManager) {
             self.scale_stage_discard();
         }
+        if self.active_modal == Some(DraftingSettings) {
+            self.snap_popup_open = false;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_modal == Some(FileInUse) {
             self.pending_save_failure = None;
@@ -2831,6 +2834,7 @@ impl OpenCADStudio {
             Message::ViewCubeHome => {
                 let i = self.active_tab;
                 self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
                 let r_ucs = self.tabs[i].scene.viewcube_ucs_mat();
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
@@ -2847,6 +2851,7 @@ impl OpenCADStudio {
             Message::ViewCubeRoll(cw) => {
                 let i = self.active_tab;
                 self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
                 let ang = if cw {
                     std::f32::consts::FRAC_PI_2
                 } else {
@@ -2873,6 +2878,7 @@ impl OpenCADStudio {
                 };
                 let i = self.active_tab;
                 self.clear_navigation_hover(i);
+                self.tabs[i].scene.remember_current_view();
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
                         .scene
@@ -3009,6 +3015,43 @@ impl OpenCADStudio {
             Message::ToggleGridSnap => {
                 self.snapper.toggle_grid_snap();
                 self.sync_vport_display(self.active_tab);
+                Task::none()
+            }
+            Message::ToggleIsometricDrafting => {
+                self.isometric_drafting = !self.isometric_drafting;
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+            Message::SetIsoPlane(plane) => {
+                self.isometric_drafting = true;
+                self.iso_plane = plane;
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+            Message::CycleIsoPlane => {
+                if self.isometric_drafting {
+                    self.iso_plane = self.iso_plane.next();
+                } else {
+                    self.isometric_drafting = true;
+                }
+                self.command_line.push_output(crate::tf!(
+                    "Isometric plane: {}.",
+                    self.iso_plane.label()
+                ).as_ref());
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+            Message::ResetDraftingRotation => {
+                self.snap_angle_deg = 0.0;
+                let i = self.active_tab;
+                if self.tabs[i].active_ucs.is_some() {
+                    self.tabs[i].active_ucs = None;
+                    self.commit_active_ucs_change(i, "UCS");
+                    self.tabs[i].scene.camera_generation += 1;
+                }
+                self.command_line
+                    .push_output(crate::t!("Drafting rotation reset to World at 0°.").as_ref());
+                self.persist_settings_if_changed();
                 Task::none()
             }
             Message::ToggleGrid => {
@@ -3651,11 +3694,20 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::ToggleSnapPopup => {
-                self.snap_popup_open ^= true;
+                if self.active_modal == Some(super::ModalKind::DraftingSettings) {
+                    self.close_active_modal();
+                    self.snap_popup_open = false;
+                } else {
+                    self.active_modal = Some(super::ModalKind::DraftingSettings);
+                    self.snap_popup_open = true;
+                }
                 Task::none()
             }
             Message::CloseSnapPopup => {
                 self.snap_popup_open = false;
+                if self.active_modal == Some(super::ModalKind::DraftingSettings) {
+                    self.close_active_modal();
+                }
                 Task::none()
             }
             Message::SnapSelectAll => {
@@ -5143,6 +5195,41 @@ impl OpenCADStudio {
             // ── Options / About windows ───────────────────────────────────
             Message::OptionsOpen => {
                 self.active_modal = Some(super::ModalKind::Options);
+                Task::none()
+            }
+
+            Message::OptionsTabChanged(tab) => {
+                self.options_tab = tab;
+                Task::none()
+            }
+
+            Message::CursorSizeChanged(value) => {
+                self.cursor_size = value.clamp(1, 100);
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::PickBoxChanged(value) => {
+                self.pick_box = value.clamp(0, 50);
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::CursorTypeChanged(value) => {
+                self.cursor_type = value;
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::CrosshairColorChanged(value) => {
+                self.crosshair_color_input = value.clone();
+                if value.trim().is_empty() {
+                    self.crosshair_color = None;
+                    self.persist_settings_if_changed();
+                } else if let Some(rgb) = crate::app::config::parse_hex(&value) {
+                    self.crosshair_color = Some(rgb);
+                    self.persist_settings_if_changed();
+                }
                 Task::none()
             }
 

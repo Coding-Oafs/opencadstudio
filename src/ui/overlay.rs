@@ -6,14 +6,67 @@ use iced::widget::canvas;
 use iced::{Color, Element, Length, Point, Size, Theme};
 
 use crate::app::Message;
+use crate::app::settings::{CursorType, IsoPlane};
 use crate::scene::model::object::GripShape;
 use crate::scene::SelectionState;
 
-/// Half-size of the crosshair center square in screen pixels (square = SQ*2 × SQ*2).
-pub const CROSSHAIR_SQ: f32 = 7.5;
-/// Arm length of the crosshair from center — used as the snap aperture radius.
-pub const CROSSHAIR_ARM: f32 = 60.0;
 use crate::snap::SnapType;
+
+/// Original crosshair geometry retained at the default setting values.
+pub const CROSSHAIR_SQ: f32 = 7.5;
+pub const CROSSHAIR_ARM: f32 = 60.0;
+const DEFAULT_CURSOR_SIZE: i32 = 5;
+const DEFAULT_PICK_BOX: i32 = 3;
+const DEFAULT_PICK_APERTURE: f32 = 8.0;
+
+/// Convert CURSORSIZE to a screen-space arm length while keeping the original
+/// 60 px cursor at the default value and the full-viewport result at 100.
+pub(crate) fn crosshair_arm_px(bounds: iced::Rectangle, value: i32) -> f32 {
+    let value = value.clamp(1, 100);
+    if value <= DEFAULT_CURSOR_SIZE {
+        return CROSSHAIR_ARM * value as f32 / DEFAULT_CURSOR_SIZE as f32;
+    }
+
+    let full = bounds.width.hypot(bounds.height).max(CROSSHAIR_ARM);
+    let scale = (value - DEFAULT_CURSOR_SIZE) as f32 / (100 - DEFAULT_CURSOR_SIZE) as f32;
+    CROSSHAIR_ARM + (full - CROSSHAIR_ARM) * scale
+}
+
+/// Convert PICKBOX to the visible half-size while retaining the original
+/// 15 x 15 px center box at the default value.
+pub(crate) fn pick_box_half_px(value: i32) -> f32 {
+    let value = value.clamp(0, 50);
+    if value <= DEFAULT_PICK_BOX {
+        return CROSSHAIR_SQ * value as f32 / DEFAULT_PICK_BOX as f32;
+    }
+
+    let scale = (value - DEFAULT_PICK_BOX) as f32 / (50 - DEFAULT_PICK_BOX) as f32;
+    CROSSHAIR_SQ + (50.0 - CROSSHAIR_SQ) * scale
+}
+
+/// Convert PICKBOX to the real click/hover aperture. A zero setting hides the
+/// box but retains the one-pixel minimum needed for direct hits.
+pub(crate) fn pick_box_aperture_px(value: i32) -> f32 {
+    let value = value.clamp(0, 50);
+    let aperture = if value <= DEFAULT_PICK_BOX {
+        DEFAULT_PICK_APERTURE * value as f32 / DEFAULT_PICK_BOX as f32
+    } else {
+        let scale = (value - DEFAULT_PICK_BOX) as f32 / (50 - DEFAULT_PICK_BOX) as f32;
+        DEFAULT_PICK_APERTURE + (50.0 - DEFAULT_PICK_APERTURE) * scale
+    };
+    aperture.max(1.0)
+}
+
+#[derive(Clone, Copy)]
+pub struct CrosshairOptions {
+    pub size_percent: i32,
+    pub pick_box: i32,
+    pub cursor_type: CursorType,
+    pub color: Option<[u8; 3]>,
+    pub isometric: bool,
+    pub iso_plane: IsoPlane,
+    pub snap_angle_deg: f32,
+}
 
 // ── Grip marker data ──────────────────────────────────────────────────────
 
@@ -223,6 +276,7 @@ pub fn selection_overlay<'a>(
     suppressed: bool,
     hover_locked: bool,
     crosshair_bg: [f32; 4],
+    crosshair: CrosshairOptions,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -243,6 +297,7 @@ pub fn selection_overlay<'a>(
         suppressed,
         hover_locked,
         crosshair_bg,
+        crosshair,
     })
     .width(Length::Fill)
     .height(Length::Fill)
@@ -297,6 +352,7 @@ struct SelectionCanvas {
     /// Background of the active drawing space. Crosshair contrast follows this
     /// rather than the UI theme, which may be light over a dark model viewport.
     crosshair_bg: [f32; 4],
+    crosshair: CrosshairOptions,
 }
 
 fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme) {
@@ -432,7 +488,7 @@ impl canvas::Program<Message> for SelectionCanvas {
         // cursor entirely. `Interaction::None` would let the stack fall
         // through to a sibling — `Hidden` is the explicit "no cursor"
         // signal that actually suppresses the OS arrow.
-        if cursor.is_over(bounds) {
+        if cursor.is_over(bounds) && self.crosshair.cursor_type == CursorType::Crosshair {
             mouse::Interaction::Hidden
         } else {
             mouse::Interaction::default()
@@ -924,11 +980,28 @@ impl canvas::Program<Message> for SelectionCanvas {
         // top of it would double up the visual feedback.
         let over_divider = self.divider_under(cursor, bounds);
         // PAN mode replaces the crosshair with a hand cursor.
-        if !over_viewcube && !over_divider && !self.pan_mode && !self.suppressed {
+        if !over_viewcube
+            && !over_divider
+            && !self.pan_mode
+            && !self.suppressed
+            && self.crosshair.cursor_type == CursorType::Crosshair
+        {
             if let Some(cp) = self.selection.last_move_pos {
-                let [r, g, b, a] = crate::scene::view::render::adapt_to_bg(
-                    [1.0, 1.0, 1.0, 0.90],
-                    self.crosshair_bg,
+                let [r, g, b, a] = self.crosshair.color.map_or_else(
+                    || {
+                        crate::scene::view::render::adapt_to_bg(
+                            [1.0, 1.0, 1.0, 0.90],
+                            self.crosshair_bg,
+                        )
+                    },
+                    |[r, g, b]| {
+                        [
+                            r as f32 / 255.0,
+                            g as f32 / 255.0,
+                            b as f32 / 255.0,
+                            0.90,
+                        ]
+                    },
                 );
                 let color = Color { r, g, b, a };
                 let stroke = canvas::Stroke {
@@ -936,38 +1009,36 @@ impl canvas::Program<Message> for SelectionCanvas {
                     style: canvas::Style::Solid(color),
                     ..Default::default()
                 };
-                let sq = CROSSHAIR_SQ; // square half-size → 15×15
-                let arm = CROSSHAIR_ARM; // crosshair arm length from center
-
-                // Horizontal arms (start at square edge, end at arm length)
-                let h_left = canvas::Path::new(|b| {
-                    b.move_to(Point::new(cp.x - sq, cp.y));
-                    b.line_to(Point::new(cp.x - arm, cp.y));
-                });
-                let h_right = canvas::Path::new(|b| {
-                    b.move_to(Point::new(cp.x + sq, cp.y));
-                    b.line_to(Point::new(cp.x + arm, cp.y));
-                });
-                // Vertical arms
-                let v_top = canvas::Path::new(|b| {
-                    b.move_to(Point::new(cp.x, cp.y - sq));
-                    b.line_to(Point::new(cp.x, cp.y - arm));
-                });
-                let v_bot = canvas::Path::new(|b| {
-                    b.move_to(Point::new(cp.x, cp.y + sq));
-                    b.line_to(Point::new(cp.x, cp.y + arm));
-                });
-                // Center square
-                let square = canvas::Path::rectangle(
-                    Point::new(cp.x - sq, cp.y - sq),
-                    Size::new(sq * 2.0, sq * 2.0),
-                );
-
-                frame.stroke(&h_left, stroke.clone());
-                frame.stroke(&h_right, stroke.clone());
-                frame.stroke(&v_top, stroke.clone());
-                frame.stroke(&v_bot, stroke.clone());
-                frame.stroke(&square, stroke);
+                let sq = pick_box_half_px(self.crosshair.pick_box);
+                let arm = crosshair_arm_px(bounds, self.crosshair.size_percent);
+                let base_angles: [f64; 2] = if self.crosshair.isometric {
+                    self.crosshair.iso_plane.angles()
+                } else {
+                    [0.0, 90.0]
+                };
+                for angle in base_angles {
+                    let rad = (angle + self.crosshair.snap_angle_deg as f64).to_radians();
+                    let dir = Point::new(rad.cos() as f32, -rad.sin() as f32);
+                    let gap = if sq > 0.0 {
+                        sq / dir.x.abs().max(dir.y.abs()).max(1e-6)
+                    } else {
+                        0.0
+                    };
+                    let arms = canvas::Path::new(|path| {
+                        path.move_to(Point::new(cp.x + dir.x * gap, cp.y + dir.y * gap));
+                        path.line_to(Point::new(cp.x + dir.x * arm, cp.y + dir.y * arm));
+                        path.move_to(Point::new(cp.x - dir.x * gap, cp.y - dir.y * gap));
+                        path.line_to(Point::new(cp.x - dir.x * arm, cp.y - dir.y * arm));
+                    });
+                    frame.stroke(&arms, stroke.clone());
+                }
+                if sq > 0.0 {
+                    let square = canvas::Path::rectangle(
+                        Point::new(cp.x - sq, cp.y - sq),
+                        Size::new(sq * 2.0, sq * 2.0),
+                    );
+                    frame.stroke(&square, stroke);
+                }
 
                 // Locked-layer badge: a small padlock beside the crosshair when
                 // the hovered object sits on a locked layer (issue: locked

@@ -98,6 +98,7 @@ impl OpenCADStudio {
         // command arms below re-enable the selected one).
         self.tabs[i].pan_mode = false;
         self.tabs[i].orbit_mode = false;
+        self.tabs[i].zoom_dynamic_mode = false;
         // Reset the last committed point so the first click of the new command
         // is not constrained by ortho/polar relative to a previous command's endpoint.
         self.last_point = None;
@@ -300,6 +301,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "CUI",
         "DSETTINGS",
         "GRID",
+        "ISODRAFT",
+        "ISOPLANE",
         "OSNAP",
         "POLAR",
         "QUICKPROPERTIES",
@@ -445,6 +448,12 @@ inventory::submit!(crate::command::CommandRegistration {
         "FITSPLINE",
         // System variables (typeable directly).
         "MIRRTEXT",
+        "ZOOMWHEEL",
+        "ZOOMFACTOR",
+        "CURSORSIZE",
+        "PICKBOX",
+        "CURSORTYPE",
+        "SNAPANG",
         "ATTREQ",
         "ATTDIA",
         "DIMASSOC",

@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = Замкнуть
 action-options = Параметры
@@ -3389,3 +3393,55 @@ style-manager-center-of-text = Центр текста
 style-manager-center-of-text-overline = Центр текста с надчёркиванием
 style-manager-block-extents = Габариты блока
 style-manager-base-point = Базовая точка
+
+area-option-objects = Объекты
+area-option-back = Назад
+area-option-add = Добавить площадь
+area-option-subtract = Вычесть площадь
+area-prompt-first = AREA  Укажите первую угловую точку или [Объекты/Добавить площадь/Вычесть площадь] <Объекты>:
+area-prompt-add = AREA ДОБАВИТЬ  Укажите первую угловую точку или [Объекты/Вычесть площадь] <Объекты>:
+area-prompt-subtract = AREA ВЫЧЕСТЬ  Укажите первую угловую точку или [Объекты/Добавить площадь] <Объекты>:
+area-prompt-next = AREA  Укажите следующую точку (выбрано: { $count }, Enter для вычисления):
+area-prompt-objects = AREA  Выберите объекты (выбрано: { $count }, Enter для вычисления):
+area-objects-not-measurable = AREA: ни один из выбранных объектов не имеет измеряемой площади.
+area-result = Площадь = { $area },  Периметр = { $perimeter }
+area-result-area-only = Площадь = { $area }
+area-running-result =
+    Площадь = { $area },  Периметр = { $perimeter }
+    Общая площадь = { $total_area },  Общий периметр = { $total_perimeter }
+area-running-result-area-only =
+    Площадь = { $area }
+    Общая площадь = { $total_area }
+
+modal-recovery-report = Отчёт о восстановлении чертежа
+modal-recovery-prompt = Восстановление чертежа
+recovery-opened-with-repairs = Чертёж открыт с отчётом о восстановлении
+recovery-open-failed = Не удалось открыть чертёж
+recovery-repaired-description = При открытии чертежа обнаружены проблемы. Просмотрите отчёт; если данные чертежа были исправлены, сохраните его в новый файл.
+recovery-failed-description = Восстановить пригодные данные чертежа не удалось. Просмотрите отчёт и попробуйте резервную или автоматически сохранённую копию.
+recovery-entities-checked = Проверено объектов
+recovery-issues-found = Обнаружено проблем
+recovery-entities-removed = Удалено объектов
+recovery-references-checked = Проверено ссылок
+recovery-referenced-entities-removed = Удалено ссылочных объектов
+recovery-references-unavailable = Недоступные ссылки
+recovery-log-path = Журнал восстановления
+recovery-log-write-failed = Не удалось записать журнал восстановления
+recovery-log-download-ready = Отчёт о восстановлении готов к загрузке.
+recovery-save-copy = Сохранить исправленную копию
+recovery-show-log = Показать журнал восстановления
+recovery-save-new-file-required = Исправленный чертёж необходимо сохранить в новый файл.
+recovery-prompt-heading = Обычное открытие не удалось
+recovery-prompt-description = Чертёж не был изменён. Режим восстановления может попытаться извлечь пригодные данные, однако повреждённые записи могут быть пропущены. Продолжить?
+recovery-attempt = Попробовать восстановить
+recovery-decline = Отмена
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  Выберите текстовые объекты и нажмите Enter:
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  Начальный номер <__ocs_fmt_0__>:
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  Шаг <__ocs_fmt_0__>:
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  Размещение [Заменить/Префикс/Суффикс] <Заменить>:
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT: размещение должно быть «Заменить», «Префикс» или «Суффикс».
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT: пронумеровано текстовых объектов: __ocs_fmt_0__; начало: __ocs_fmt_1__; шаг: __ocs_fmt_2__ (__ocs_fmt_3__).
+catalog-prefix-90eceb016c = Префикс
+catalog-suffix-885db975a3 = Суффикс
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = Открытие чертежа по пути недоступно в браузере.

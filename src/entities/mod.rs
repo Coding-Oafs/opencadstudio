@@ -2,6 +2,7 @@ pub mod arc;
 pub mod attribute;
 pub mod circle;
 pub mod common;
+pub mod curve;
 pub mod dim_override;
 pub mod dimension;
 pub mod ellipse;

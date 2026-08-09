@@ -1,10 +1,19 @@
 use crate::app::config::UiThemeConfig;
+use crate::app::settings::CursorType;
 use crate::app::Message;
 use iced::widget::{
-    button, column, container, row, scrollable, text, text_input, Space,
+    button, column, container, row, scrollable, slider, text, text_input, Space,
 };
-use iced::{Background, Border, Element, Theme};
+use iced::{Background, Border, Element, Fill, Theme};
 use std::fmt;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OptionsTab {
+    #[default]
+    General,
+    Display,
+    Selection,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Labelled<T> {
@@ -24,6 +33,12 @@ pub fn view_window<'a>(
     ui_theme: &'a UiThemeConfig,
     theme_color_inputs: &'a [String; 6],
     language: crate::i18n::Language,
+    active_tab: OptionsTab,
+    cursor_size: i32,
+    pick_box: i32,
+    cursor_type: CursorType,
+    crosshair_color: Option<[u8; 3]>,
+    crosshair_color_input: &'a str,
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'a, Message> {
     let selected_format = crate::io::SAVE_FORMAT_OPTIONS
@@ -60,6 +75,18 @@ pub fn view_window<'a>(
     let selected_language = language_options
         .iter()
         .find(|choice| choice.value == language)
+        .cloned();
+
+    let cursor_options = CursorType::ALL
+        .into_iter()
+        .map(|value: CursorType| Labelled {
+            label: crate::t!(value.label()).into_owned(),
+            value,
+        })
+        .collect::<Vec<_>>();
+    let selected_cursor = cursor_options
+        .iter()
+        .find(|choice| choice.value == cursor_type)
         .cloned();
 
     let palette = ui_theme.palette.to_iced();
@@ -104,7 +131,7 @@ pub fn view_window<'a>(
         .padding([6, 18])
         .style(button::secondary);
 
-    let content = column![
+    let general = column![
         text(crate::tr!("options-language-section")).size(15),
         Space::new().height(10),
         row![
@@ -154,7 +181,29 @@ pub fn view_window<'a>(
         ))
         .size(11)
         .width(sizing.width),
-        Space::new().height(22),
+    ]
+    .spacing(0)
+    .width(sizing.width);
+
+    let crosshair_rgb = crosshair_color.unwrap_or([255, 255, 255]);
+    let crosshair_swatch = container(Space::new())
+        .width(28)
+        .height(22)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(iced::Color::from_rgb8(
+                crosshair_rgb[0],
+                crosshair_rgb[1],
+                crosshair_rgb[2],
+            ))),
+            border: Border {
+                color: theme.palette().background.strong.color,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        });
+
+    let display = column![
         text(crate::tr!("options-theme-section")).size(15),
         Space::new().height(10),
         row![
@@ -175,11 +224,96 @@ pub fn view_window<'a>(
         .width(sizing.width),
         Space::new().height(12),
         color_controls,
+        Space::new().height(24),
+        text(crate::t!("Crosshair")).size(15),
+        Space::new().height(10),
+        row![
+            text(crate::t!("Crosshair size")).size(12).width(140),
+            slider(1..=100, cursor_size.clamp(1, 100), Message::CursorSizeChanged)
+                .step(1)
+                .width(Fill),
+            text(format!("{}%", cursor_size.clamp(1, 100)))
+                .size(11)
+                .width(44),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        Space::new().height(10),
+        row![
+            text(crate::t!("Cursor type")).size(12).width(140),
+            iced::widget::pick_list(
+                selected_cursor,
+                cursor_options,
+                |choice| choice.label.clone(),
+            )
+            .on_select(|choice| Message::CursorTypeChanged(choice.value))
+            .width(Fill),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        Space::new().height(10),
+        row![
+            text(crate::t!("Crosshair color")).size(12).width(140),
+            crosshair_swatch,
+            text_input(crate::t!("#RRGGBB or blank").as_ref(), crosshair_color_input)
+                .on_input(Message::CrosshairColorChanged)
+                .width(150),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        Space::new().height(6),
+        text(crate::t!("Leave the color blank to keep automatic viewport contrast."))
+            .size(11)
+            .width(sizing.width),
     ]
     .spacing(0)
     .width(sizing.width);
 
+    let selection = column![
+        text(crate::t!("Selection")).size(15),
+        Space::new().height(10),
+        row![
+            text(crate::t!("Pick box size")).size(12).width(140),
+            slider(0..=50, pick_box.clamp(0, 50), Message::PickBoxChanged)
+                .step(1)
+                .width(Fill),
+            text(pick_box.clamp(0, 50).to_string()).size(11).width(44),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        Space::new().height(8),
+        text(crate::t!(
+            "Controls both the visible selection box and the click aperture."
+        ))
+        .size(11)
+        .width(sizing.width),
+    ]
+    .spacing(0)
+    .width(sizing.width);
+
+    let content: Element<'a, Message> = match active_tab {
+        OptionsTab::General => general.into(),
+        OptionsTab::Display => display.into(),
+        OptionsTab::Selection => selection.into(),
+    };
+
+    let tab_button = |label, tab| {
+        let selected = active_tab == tab;
+        button(text(label).size(12))
+            .on_press(Message::OptionsTabChanged(tab))
+            .padding([6, 14])
+            .style(if selected { button::primary } else { button::secondary })
+    };
+    let tabs = row![
+        tab_button(crate::t!("General"), OptionsTab::General),
+        tab_button(crate::t!("Display"), OptionsTab::Display),
+        tab_button(crate::t!("Selection"), OptionsTab::Selection),
+    ]
+    .spacing(6);
+
     let body = column![
+        tabs,
+        Space::new().height(12),
         // Keep the scrollbar in its own lane instead of floating over the
         // controls at the trailing edge of the Options content.
         scrollable(content).spacing(8).height(sizing.height),

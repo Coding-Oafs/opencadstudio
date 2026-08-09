@@ -566,8 +566,9 @@ impl CadCommand for KeywordCommand {
             // `None` would hand the same text to the command a second time.
             None => {
                 let up = t.to_uppercase();
-                let Some((_, keyword, value_prompt)) =
-                    self.options.iter().find(|(_, k, _)| k.eq_ignore_ascii_case(&up))
+                let Some((_, keyword, value_prompt)) = self.options.iter().find(|(label, k, _)| {
+                    k.eq_ignore_ascii_case(&up) || label.eq_ignore_ascii_case(t)
+                })
                 else {
                     // Unknown verb — keep prompting rather than dispatch garbage.
                     return Some(CmdResult::NeedPoint);

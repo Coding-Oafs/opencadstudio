@@ -15,14 +15,22 @@ use acadrust::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline};
 use super::geom;
 use super::geom::{arc_points as arc_pts, line_line as ll, normalize_angle as norm_angle};
 use acadrust::kernel::geom2d::{
-    circle_circle_points as circle_circle_pts, fillet_between_rays, line_circle,
+    circle_circle_points as circle_circle_pts, fillet_between_rays, fillets_between, line_circle,
+    Arc as KernelArc, Curve as KernelCurve, Fillet as KernelFillet,
+    Line as KernelLine, Tolerance,
 };
+use acadrust::entities::EntityCommon;
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 use crate::t;
 
 const TAU: f64 = std::f64::consts::TAU;
+
+/// How close two positions must be to count as one while a fillet is being
+/// placed. Loose enough to survive the rounding in a drawing's stored
+/// coordinates, tight enough not to merge two distinct candidate centres.
+const FILLET_TOLERANCE: f64 = 1.0e-9;
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::draw::defaults;
@@ -677,6 +685,58 @@ fn rebuild_poly_from_trimmed_line(
 }
 
 /// Fillet a Line and an Arc.
+/// Fillets of `radius` tangent to both curves, nearest pick first.
+///
+/// The candidates come from the kernel, which finds them by crossing the two
+/// curves' offsets — the construction that works whether or not the curves
+/// meet. What is left here is the choice between them, which needs the two
+/// pick points and so cannot be made anywhere else.
+fn ranked_fillets(
+    a: &KernelCurve,
+    click_a: [f64; 2],
+    b: &KernelCurve,
+    click_b: [f64; 2],
+    radius: f64,
+) -> Vec<KernelFillet> {
+    let reach = |from: [f64; 2], to: [f64; 2]| (to[0] - from[0]).hypot(to[1] - from[1]);
+    let mut found = fillets_between(a, b, radius, Tolerance::new(FILLET_TOLERANCE));
+    found.sort_by(|first, second| {
+        let one = reach(click_a, first.tangent1) + reach(click_b, first.tangent2);
+        let other = reach(click_a, second.tangent1) + reach(click_b, second.tangent2);
+        one.total_cmp(&other)
+    });
+    found
+}
+
+/// The entity's shape as a kernel curve.
+fn line_curve(l: &LineEnt) -> KernelCurve {
+    KernelCurve::Line(KernelLine {
+        start: [l.start.x, l.start.y],
+        end: [l.end.x, l.end.y],
+    })
+}
+
+fn arc_curve(a: &ArcEnt) -> KernelCurve {
+    KernelCurve::Arc(KernelArc {
+        centre: [a.center.x, a.center.y],
+        radius: a.radius,
+        start_angle: a.start_angle,
+        end_angle: a.end_angle,
+    })
+}
+
+/// An arc entity built from a kernel fillet.
+fn fillet_entity(fillet: &KernelFillet, radius: f64, z: f64, common: &EntityCommon) -> ArcEnt {
+    let mut arc = ArcEnt::new();
+    arc.common = common.clone();
+    arc.common.handle = Handle::NULL;
+    arc.center = Vector3::new(fillet.centre[0], fillet.centre[1], z);
+    arc.radius = radius;
+    arc.start_angle = fillet.start_angle;
+    arc.end_angle = fillet.end_angle;
+    arc
+}
+
 fn fillet_line_arc(
     line: &LineEnt,
     click_line: [f64; 2],
@@ -723,116 +783,47 @@ fn fillet_line_arc(
         return Some((EntityType::Line(new_line), EntityType::Arc(new_arc), None));
     }
 
-    // For r>0: find the fillet arc center — tangent to both the line and the circle.
-    // The fillet circle center lies at distance (radius) from the line
-    // and at distance |ar ± radius| from the arc center.
-    // Sign: outside=ar+radius (external), inside=ar-radius (internal).
-    let perp_x = -u[1];
-    let perp_y = u[0];
-
-    let mut best: Option<(EntityType, EntityType, EntityType)> = None;
-    let mut best_dist = f64::MAX;
-
-    for sign_perp in &[-1.0_f64, 1.0_f64] {
-        for sign_circle in &[-1.0_f64, 1.0_f64] {
-            // Candidate fillet center offset from line by ±radius in perp direction.
-            // Find point on offset line closest to arc center at distance |ar + sign*radius|.
-            let off_dist = ar + sign_circle * radius;
-            if off_dist < 1e-9 {
-                continue;
-            }
-
-            // The fillet center is at distance `off_dist` from the arc center
-            // and also at distance `radius` from the line (perpendicular).
-            // Parametrize: fc = p1 + t*u + sign_perp*radius*perp
-            // |fc - ac|^2 = off_dist^2
-            // (p1[0] + t*u[0] + sign_perp*radius*perp_x - ac[0])^2 + ...= off_dist^2
-            let qx = p1[0] + sign_perp * radius * perp_x - ac[0];
-            let qy = p1[1] + sign_perp * radius * perp_y - ac[1];
-            // (qx + t*u[0])^2 + (qy + t*u[1])^2 = off_dist^2
-            let qa = u[0] * u[0] + u[1] * u[1]; // = 1.0
-            let qb = 2.0 * (qx * u[0] + qy * u[1]);
-            let qc = qx * qx + qy * qy - off_dist * off_dist;
-            let disc = qb * qb - 4.0 * qa * qc;
-            if disc < 0.0 {
-                continue;
-            }
-            let sq = disc.sqrt();
-            for &sign_t in &[-1.0_f64, 1.0_f64] {
-                let t_fc = (-qb + sign_t * sq) / (2.0 * qa);
-                let fc = [
-                    p1[0] + t_fc * u[0] + sign_perp * radius * perp_x,
-                    p1[1] + t_fc * u[1] + sign_perp * radius * perp_y,
-                ];
-
-                // Tangent point on the line
-                let tp_line = [p1[0] + t_fc * u[0], p1[1] + t_fc * u[1]];
-                // Tangent point on the arc circle
-                let fd = [(ac[0] - fc[0]), (ac[1] - fc[1])];
-                let fdl = (fd[0] * fd[0] + fd[1] * fd[1]).sqrt().max(1e-12);
-                let tp_arc = [ac[0] + fd[0] / fdl * ar, ac[1] + fd[1] / fdl * ar];
-
-                // The tangent point on the arc must be within the arc's angular range
-                let tp_arc_angle = arc_angle_at(ac, tp_arc);
-                let tp_arc_clamped = clamp_angle_to_arc(tp_arc_angle, a_start, a_end);
-                if (norm_angle(tp_arc_angle) - norm_angle(tp_arc_clamped)).abs() > 0.01 {
-                    continue;
-                }
-
-                // The tangent point on the line must be on the correct side of the click
-                // (prefer the intersection closest to the click)
-                let dist_to_click_line =
-                    (tp_line[0] - click_line[0]).hypot(tp_line[1] - click_line[1]);
-                let dist_to_click_arc = (tp_arc[0] - click_arc[0]).hypot(tp_arc[1] - click_arc[1]);
-                let dist_total = dist_to_click_line + dist_to_click_arc;
-                if dist_total >= best_dist {
-                    continue;
-                }
-
-                // Build trimmed line
-                let Some(new_line) = trim_line_to_point(line, tp_line, click_line) else {
-                    continue;
-                };
-
-                // Build trimmed arc
-                let arc_click_angle = arc_angle_at(ac, click_arc);
-                let arc_click_rel = (arc_click_angle - a_start).rem_euclid(TAU);
-                let tp_arc_rel = (tp_arc_clamped - a_start).rem_euclid(TAU);
-                let new_arc = if tp_arc_rel <= arc_click_rel {
-                    trim_arc(arc, tp_arc_clamped, a_end)
-                } else {
-                    trim_arc(arc, a_start, tp_arc_clamped)
-                };
-
-                // Build fillet arc angles
-                let fa_line = arc_angle_at(fc, tp_line);
-                let fa_arc = arc_angle_at(fc, tp_arc);
-                let cross = (tp_line[0] - fc[0]) * (tp_arc[1] - fc[1])
-                    - (tp_line[1] - fc[1]) * (tp_arc[0] - fc[0]);
-                let (fstart, fend) = if cross >= 0.0 {
-                    (fa_line, fa_arc)
-                } else {
-                    (fa_arc, fa_line)
-                };
-                let mut fillet_arc = ArcEnt::new();
-                fillet_arc.common = line.common.clone();
-                fillet_arc.common.handle = Handle::NULL;
-                fillet_arc.center = Vector3::new(fc[0], fc[1], z);
-                fillet_arc.radius = radius;
-                fillet_arc.start_angle = norm_angle(fstart);
-                fillet_arc.end_angle = norm_angle(fend);
-
-                best_dist = dist_total;
-                best = Some((
-                    EntityType::Line(new_line),
-                    EntityType::Arc(new_arc),
-                    EntityType::Arc(fillet_arc),
-                ));
-            }
+    // The candidates come from the kernel: a circle of `radius` tangent to
+    // both has its centre where an offset of the line crosses an offset of
+    // the arc's circle. What was here enumerated the same four combinations
+    // by hand, with its own quadratic and its own sign conventions.
+    for fillet in ranked_fillets(
+        &line_curve(line),
+        click_line,
+        &arc_curve(arc),
+        click_arc,
+        radius,
+    ) {
+        // The touch on the arc has to be on the drawn part of it, not on the
+        // rest of the circle it belongs to.
+        let tp_arc_angle = arc_angle_at(ac, fillet.tangent2);
+        let tp_arc_clamped = clamp_angle_to_arc(tp_arc_angle, a_start, a_end);
+        if (norm_angle(tp_arc_angle) - norm_angle(tp_arc_clamped)).abs() > 0.01 {
+            continue;
         }
+        let Some(new_line) = trim_line_to_point(line, fillet.tangent1, click_line) else {
+            continue;
+        };
+        // Keep the side of the arc the click is on.
+        let arc_click_rel = (arc_angle_at(ac, click_arc) - a_start).rem_euclid(TAU);
+        let tp_arc_rel = (tp_arc_clamped - a_start).rem_euclid(TAU);
+        let new_arc = if tp_arc_rel <= arc_click_rel {
+            trim_arc(arc, tp_arc_clamped, a_end)
+        } else {
+            trim_arc(arc, a_start, tp_arc_clamped)
+        };
+        return Some((
+            EntityType::Line(new_line),
+            EntityType::Arc(new_arc),
+            Some(EntityType::Arc(fillet_entity(
+                &fillet,
+                radius,
+                z,
+                &line.common,
+            ))),
+        ));
     }
-
-    best.map(|(l, a, f)| (l, a, Some(f)))
+    None
 }
 
 /// Fillet two arcs.
@@ -884,87 +875,39 @@ fn fillet_arc_arc(
         return Some((EntityType::Arc(new_a1), EntityType::Arc(new_a2), None));
     }
 
-    // For r>0: find a circle of `radius` tangent to both arc circles.
-    // Center lies at |r1 ± radius| from c1 and |r2 ± radius| from c2.
-    let mut best: Option<(EntityType, EntityType, EntityType)> = None;
-    let mut best_dist = f64::MAX;
-
-    for sign1 in &[-1.0_f64, 1.0_f64] {
-        let d1 = r1 + sign1 * radius;
-        if d1 < 1e-9 {
+    // Same construction as the line-and-arc case, from the same place: the
+    // centre is where an offset of one circle crosses an offset of the other.
+    for fillet in ranked_fillets(&arc_curve(a1), click1, &arc_curve(a2), click2, radius) {
+        // Both touches have to be on the drawn parts of their arcs.
+        let tp1_angle = arc_angle_at(c1, fillet.tangent1);
+        let tp2_angle = arc_angle_at(c2, fillet.tangent2);
+        let tc1 = clamp_angle_to_arc(tp1_angle, s1, e1);
+        let tc2 = clamp_angle_to_arc(tp2_angle, s2, e2);
+        if (norm_angle(tp1_angle) - norm_angle(tc1)).abs() > 0.01
+            || (norm_angle(tp2_angle) - norm_angle(tc2)).abs() > 0.01
+        {
             continue;
         }
-        for sign2 in &[-1.0_f64, 1.0_f64] {
-            let d2 = r2 + sign2 * radius;
-            if d2 < 1e-9 {
-                continue;
-            }
-            for fc in circle_circle_pts(c1, d1, c2, d2) {
-                // Tangent points on each arc
-                let fd1 = [(c1[0] - fc[0]), (c1[1] - fc[1])];
-                let fdl1 = (fd1[0] * fd1[0] + fd1[1] * fd1[1]).sqrt().max(1e-12);
-                let tp1 = [c1[0] + fd1[0] / fdl1 * r1, c1[1] + fd1[1] / fdl1 * r1];
 
-                let fd2 = [(c2[0] - fc[0]), (c2[1] - fc[1])];
-                let fdl2 = (fd2[0] * fd2[0] + fd2[1] * fd2[1]).sqrt().max(1e-12);
-                let tp2 = [c2[0] + fd2[0] / fdl2 * r2, c2[1] + fd2[1] / fdl2 * r2];
-
-                // Tangent points must lie within respective arc ranges
-                let tp1a = arc_angle_at(c1, tp1);
-                let tp2a = arc_angle_at(c2, tp2);
-                let tc1 = clamp_angle_to_arc(tp1a, s1, e1);
-                let tc2 = clamp_angle_to_arc(tp2a, s2, e2);
-                if (norm_angle(tp1a) - norm_angle(tc1)).abs() > 0.01 {
-                    continue;
-                }
-                if (norm_angle(tp2a) - norm_angle(tc2)).abs() > 0.01 {
-                    continue;
-                }
-
-                let dist_total = (tp1[0] - click1[0]).hypot(tp1[1] - click1[1])
-                    + (tp2[0] - click2[0]).hypot(tp2[1] - click2[1]);
-                if dist_total >= best_dist {
-                    continue;
-                }
-
-                let ca1 = clamp_angle_to_arc(arc_angle_at(c1, click1), s1, e1);
-                let ca2 = clamp_angle_to_arc(arc_angle_at(c2, click2), s2, e2);
-
-                let new_a1 = if (tc1 - s1).rem_euclid(TAU) <= (ca1 - s1).rem_euclid(TAU) {
-                    trim_arc(a1, tc1, e1)
-                } else {
-                    trim_arc(a1, s1, tc1)
-                };
-                let new_a2 = if (tc2 - s2).rem_euclid(TAU) <= (ca2 - s2).rem_euclid(TAU) {
-                    trim_arc(a2, tc2, e2)
-                } else {
-                    trim_arc(a2, s2, tc2)
-                };
-
-                let fa1 = arc_angle_at(fc, tp1);
-                let fa2 = arc_angle_at(fc, tp2);
-                let cross =
-                    (tp1[0] - fc[0]) * (tp2[1] - fc[1]) - (tp1[1] - fc[1]) * (tp2[0] - fc[0]);
-                let (fstart, fend) = if cross >= 0.0 { (fa1, fa2) } else { (fa2, fa1) };
-                let mut fillet_arc = ArcEnt::new();
-                fillet_arc.common = a1.common.clone();
-                fillet_arc.common.handle = Handle::NULL;
-                fillet_arc.center = Vector3::new(fc[0], fc[1], z);
-                fillet_arc.radius = radius;
-                fillet_arc.start_angle = norm_angle(fstart);
-                fillet_arc.end_angle = norm_angle(fend);
-
-                best_dist = dist_total;
-                best = Some((
-                    EntityType::Arc(new_a1),
-                    EntityType::Arc(new_a2),
-                    EntityType::Arc(fillet_arc),
-                ));
-            }
-        }
+        let ca1 = clamp_angle_to_arc(arc_angle_at(c1, click1), s1, e1);
+        let ca2 = clamp_angle_to_arc(arc_angle_at(c2, click2), s2, e2);
+        let new_a1 = if (tc1 - s1).rem_euclid(TAU) <= (ca1 - s1).rem_euclid(TAU) {
+            trim_arc(a1, tc1, e1)
+        } else {
+            trim_arc(a1, s1, tc1)
+        };
+        let new_a2 = if (tc2 - s2).rem_euclid(TAU) <= (ca2 - s2).rem_euclid(TAU) {
+            trim_arc(a2, tc2, e2)
+        } else {
+            trim_arc(a2, s2, tc2)
+        };
+        return Some((
+            EntityType::Arc(new_a1),
+            EntityType::Arc(new_a2),
+            Some(EntityType::Arc(fillet_entity(&fillet, radius, z, &a1.common))),
+        ));
     }
-
-    best.map(|(a1, a2, f)| (a1, a2, Some(f)))
+    None
 }
 
 /// Trim a line endpoint nearest to the intersection point, keeping the click side.

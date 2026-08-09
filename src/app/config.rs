@@ -209,11 +209,11 @@ fn rgb_to_color(rgb: [u8; 3]) -> iced::Color {
     iced::Color::from_rgb8(rgb[0], rgb[1], rgb[2])
 }
 
-fn rgb_to_hex(rgb: [u8; 3]) -> String {
+pub(crate) fn rgb_to_hex(rgb: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
 }
 
-fn parse_hex(value: &str) -> Option<[u8; 3]> {
+pub(crate) fn parse_hex(value: &str) -> Option<[u8; 3]> {
     let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
     if value.len() != 6 {
         return None;

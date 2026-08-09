@@ -51,11 +51,6 @@ pub fn line_circle(px: f64, py: f64, dx: f64, dy: f64, cx: f64, cy: f64, r: f64)
     geom2d::line_circle([px, py], [dx, dy], [cx, cy], r)
 }
 
-/// Angles **on the first circle** where two circles meet.
-pub fn circle_circle_angles(cx1: f64, cy1: f64, r1: f64, cx2: f64, cy2: f64, r2: f64) -> Vec<f64> {
-    geom2d::circle_circle_angles([cx1, cy1], r1, [cx2, cy2], r2)
-}
-
 /// `(s_on_line, t_on_ellipse)` pairs where a line meets an ellipse.
 ///
 /// `nx, ny` is the unit major axis.

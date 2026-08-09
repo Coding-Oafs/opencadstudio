@@ -1,12 +1,12 @@
 // DIVIDE command — place Point entities at N equal intervals along an entity.
 // MEASURE command — place Point entities at fixed-distance intervals along an entity.
 
-use std::f64::consts::PI;
-
 use acadrust::entities::Point as PointEnt;
+use acadrust::kernel::space::PlanarCurve;
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
+use crate::entities::curve::entity_curve;
 use crate::t;
 
 use crate::command::{CadCommand, CmdResult};
@@ -164,16 +164,12 @@ pub fn divide_entity(entity: &EntityType, n: usize) -> Vec<EntityType> {
     if n < 2 {
         return vec![];
     }
-    let total = entity_length(entity);
-    if total < 1e-10 {
+    let Some((curve, total)) = measurable(entity) else {
         return vec![];
-    }
+    };
     let step = total / n as f64;
     (1..n)
-        .filter_map(|k| {
-            let t = step * k as f64;
-            point_at_distance(entity, t).map(make_point)
-        })
+        .map(|k| make_point(curve.point_at_distance(step * k as f64)))
         .collect()
 }
 
@@ -182,135 +178,30 @@ pub fn measure_entity(entity: &EntityType, segment_length: f64) -> Vec<EntityTyp
     if segment_length <= 0.0 {
         return vec![];
     }
-    let total = entity_length(entity);
-    if total < 1e-10 {
+    let Some((curve, total)) = measurable(entity) else {
         return vec![];
-    }
+    };
     let mut pts = Vec::new();
-    let mut t = segment_length;
-    while t < total - 1e-6 {
-        if let Some(p) = point_at_distance(entity, t) {
-            pts.push(make_point(p));
-        }
-        t += segment_length;
+    let mut walked = segment_length;
+    while walked < total - 1e-6 {
+        pts.push(make_point(curve.point_at_distance(walked)));
+        walked += segment_length;
     }
     pts
 }
 
-fn make_point(pos: Vector3) -> EntityType {
+fn make_point(pos: [f64; 3]) -> EntityType {
     let mut p = PointEnt::new();
-    p.location = pos;
+    p.location = Vector3::new(pos[0], pos[1], pos[2]);
     EntityType::Point(p)
 }
 
-fn entity_length(entity: &EntityType) -> f64 {
-    match entity {
-        EntityType::Line(l) => {
-            let dx = l.end.x - l.start.x;
-            let dy = l.end.y - l.start.y;
-            let dz = l.end.z - l.start.z;
-            (dx * dx + dy * dy + dz * dz).sqrt()
-        }
-        EntityType::Arc(a) => {
-            let span = arc_span_rad(a.start_angle, a.end_angle);
-            a.radius * span
-        }
-        EntityType::Circle(c) => 2.0 * PI * c.radius,
-        EntityType::LwPolyline(p) => {
-            let n = p.vertices.len();
-            if n < 2 {
-                return 0.0;
-            }
-            let segs = if p.is_closed { n } else { n - 1 };
-            (0..segs)
-                .map(|i| {
-                    let v0 = &p.vertices[i];
-                    let v1 = &p.vertices[(i + 1) % n];
-                    let dx = v1.location.x - v0.location.x;
-                    let dy = v1.location.y - v0.location.y;
-                    (dx * dx + dy * dy).sqrt()
-                })
-                .sum()
-        }
-        _ => 0.0,
-    }
-}
-
-fn point_at_distance(entity: &EntityType, d: f64) -> Option<Vector3> {
-    match entity {
-        EntityType::Line(l) => {
-            let total = entity_length(entity);
-            if total < 1e-10 {
-                return None;
-            }
-            let t = (d / total).clamp(0.0, 1.0);
-            Some(Vector3::new(
-                l.start.x + t * (l.end.x - l.start.x),
-                l.start.y + t * (l.end.y - l.start.y),
-                l.start.z + t * (l.end.z - l.start.z),
-            ))
-        }
-        EntityType::Arc(a) => {
-            let span = arc_span_rad(a.start_angle, a.end_angle);
-            let t = d / a.radius; // arc_length = r * theta
-            if t > span {
-                return None;
-            }
-            let angle = a.start_angle + t;
-            Some(Vector3::new(
-                a.center.x + a.radius * angle.cos(),
-                a.center.y + a.radius * angle.sin(),
-                a.center.z,
-            ))
-        }
-        EntityType::Circle(c) => {
-            let circumference = 2.0 * PI * c.radius;
-            if circumference < 1e-10 {
-                return None;
-            }
-            let angle = 2.0 * PI * (d / circumference);
-            Some(Vector3::new(
-                c.center.x + c.radius * angle.cos(),
-                c.center.y + c.radius * angle.sin(),
-                c.center.z,
-            ))
-        }
-        EntityType::LwPolyline(p) => {
-            let n = p.vertices.len();
-            if n < 2 {
-                return None;
-            }
-            let segs = if p.is_closed { n } else { n - 1 };
-            let mut acc = 0.0f64;
-            for i in 0..segs {
-                let v0 = &p.vertices[i];
-                let v1 = &p.vertices[(i + 1) % n];
-                let dx = v1.location.x - v0.location.x;
-                let dy = v1.location.y - v0.location.y;
-                let seg_len = (dx * dx + dy * dy).sqrt();
-                if acc + seg_len >= d - 1e-10 {
-                    let t = (d - acc) / seg_len.max(1e-10);
-                    return Some(Vector3::new(
-                        v0.location.x + t * dx,
-                        v0.location.y + t * dy,
-                        p.elevation,
-                    ));
-                }
-                acc += seg_len;
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn arc_span_rad(start: f64, end: f64) -> f64 {
-    let span = (end - start).rem_euclid(2.0 * PI);
-    if span < 1e-6 {
-        2.0 * PI
-    } else {
-        span
-    }
+/// The entity's curve and its length, or `None` for anything that cannot be
+/// walked along — a hatch, a block, an unbounded ray.
+fn measurable(entity: &EntityType) -> Option<(PlanarCurve, f64)> {
+    let curve = entity_curve(entity)?;
+    let total = curve.curve.length();
+    (total.is_finite() && total > 1e-10).then_some((curve, total))
 }
 
 

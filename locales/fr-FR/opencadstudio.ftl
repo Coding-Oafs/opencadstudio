@@ -7,6 +7,10 @@ language-german = Deutsch
 language-hindi = हिन्दी
 language-russian = Русский
 language-chinese-simplified = 简体中文
+language-spanish = Español
+language-portuguese = Português (Brasil)
+language-arabic = العربية
+language-japanese = 日本語
 
 action-close = Fermer
 action-options = Options
@@ -3385,3 +3389,55 @@ style-manager-center-of-text = Centre du texte
 style-manager-center-of-text-overline = Centre du texte avec surlignement
 style-manager-block-extents = Limites du bloc
 style-manager-base-point = Point de base
+
+area-option-objects = Objets
+area-option-back = Retour
+area-option-add = Ajouter une aire
+area-option-subtract = Soustraire une aire
+area-prompt-first = AREA  Indiquez le premier sommet ou [Objets/Ajouter une aire/Soustraire une aire] <Objets> :
+area-prompt-add = AREA AJOUTER  Indiquez le premier sommet ou [Objets/Soustraire une aire] <Objets> :
+area-prompt-subtract = AREA SOUSTRAIRE  Indiquez le premier sommet ou [Objets/Ajouter une aire] <Objets> :
+area-prompt-next = AREA  Indiquez le point suivant ({ $count } sélectionné(s), Entrée pour calculer) :
+area-prompt-objects = AREA  Sélectionnez les objets ({ $count } sélectionné(s), Entrée pour calculer) :
+area-objects-not-measurable = AREA : aucun des objets sélectionnés ne possède d'aire mesurable.
+area-result = Aire = { $area },  Périmètre = { $perimeter }
+area-result-area-only = Aire = { $area }
+area-running-result =
+    Aire = { $area },  Périmètre = { $perimeter }
+    Aire totale = { $total_area },  Périmètre total = { $total_perimeter }
+area-running-result-area-only =
+    Aire = { $area }
+    Aire totale = { $total_area }
+
+modal-recovery-report = Rapport de récupération du dessin
+modal-recovery-prompt = Récupération du dessin
+recovery-opened-with-repairs = Dessin ouvert avec un rapport de récupération
+recovery-open-failed = Impossible d'ouvrir le dessin
+recovery-repaired-description = Des problèmes ont été détectés pendant l'ouverture du dessin. Consultez le rapport ; si des données ont été réparées, enregistrez le dessin dans un nouveau fichier.
+recovery-failed-description = La récupération n'a pas produit de données de dessin utilisables. Consultez le rapport et essayez une sauvegarde ou une copie d'enregistrement automatique.
+recovery-entities-checked = Entités vérifiées
+recovery-issues-found = Problèmes détectés
+recovery-entities-removed = Entités supprimées
+recovery-references-checked = Références vérifiées
+recovery-referenced-entities-removed = Entités référencées supprimées
+recovery-references-unavailable = Références indisponibles
+recovery-log-path = Journal de récupération
+recovery-log-write-failed = Impossible d'écrire le journal de récupération
+recovery-log-download-ready = Le rapport de récupération est prêt à être téléchargé.
+recovery-save-copy = Enregistrer la copie réparée
+recovery-show-log = Afficher le journal de récupération
+recovery-save-new-file-required = Un dessin réparé doit être enregistré dans un nouveau fichier.
+recovery-prompt-heading = L'ouverture normale a échoué
+recovery-prompt-description = Le dessin n'a pas été modifié. Le mode de récupération peut tenter de sauver les données utilisables, mais les enregistrements endommagés peuvent être ignorés. Voulez-vous continuer ?
+recovery-attempt = Tenter la récupération
+recovery-decline = Annuler
+
+catalog-tcount-select-text-objects-then-press-enter-9b1ee71b4d = TCOUNT  Sélectionnez les objets texte, puis appuyez sur Entrée :
+catalog-tcount-starting-number-start-7471e47711 = TCOUNT  Numéro de départ <__ocs_fmt_0__> :
+catalog-tcount-increment-increment-79f9ab6108 = TCOUNT  Incrément <__ocs_fmt_0__> :
+catalog-tcount-placement-overwrite-prefix-suffix-overw-9214874a72 = TCOUNT  Position [Remplacer/Préfixe/Suffixe] <Remplacer> :
+catalog-tcount-placement-must-be-overwrite-prefix-or-s-84211d2b75 = TCOUNT : la position doit être Remplacer, Préfixe ou Suffixe.
+catalog-tcount-numbered-n-text-object-s-from-start-by-30588884cc = TCOUNT : __ocs_fmt_0__ objet(s) texte numéroté(s) à partir de __ocs_fmt_1__ par pas de __ocs_fmt_2__ (__ocs_fmt_3__).
+catalog-prefix-90eceb016c = Préfixe
+catalog-suffix-885db975a3 = Suffixe
+catalog-opening-a-drawing-by-path-is-not-available-in-be27bd71d4 = L'ouverture d'un dessin par son chemin n'est pas disponible dans le navigateur.

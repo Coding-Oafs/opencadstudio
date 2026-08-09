@@ -8,7 +8,7 @@ use crate::entities::common::{
 use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
-use crate::scene::model::wire_model::{SnapHint, TangentGeom};
+use crate::scene::model::wire_model::TangentGeom;
 
 fn to_truck(circle: &Circle) -> TruckEntity {
     let cx = circle.center.x;
@@ -20,18 +20,11 @@ fn to_truck(circle: &Circle) -> TruckEntity {
     let (ax, ay) = crate::scene::view::transform::ocs_axes(normal);
     let (cwx, cwy, cwz) = crate::scene::view::transform::ocs_point_to_wcs((cx, cy, cz), normal);
 
-    let cv = glam::DVec3::new(cwx, cwy, cwz);
     let rf = r as f32;
-    let q = |d: (f64, f64, f64)| {
-        glam::DVec3::new(cwx + r * d.0, cwy + r * d.1, cwz + r * d.2)
-    };
-    let snap_pts = vec![
-        (cv, SnapHint::Center),
-        (q(ax), SnapHint::Quadrant),
-        (q(ay), SnapHint::Quadrant),
-        (q((-ax.0, -ax.1, -ax.2)), SnapHint::Quadrant),
-        (q((-ay.0, -ay.1, -ay.2)), SnapHint::Quadrant),
-    ];
+    // Centre and quadrants come from the entity's own curve, so the same
+    // definition answers here, in the tessellation and in a trim.
+    let curve = crate::entities::curve::circle_curve(circle);
+    let snap_pts = crate::entities::curve::snap_from(&curve).snap_pts;
     let tangent = TangentGeom::Circle {
         center: [cwx as f32, cwy as f32, cwz as f32],
         radius: rf,
@@ -81,34 +74,16 @@ fn to_truck(circle: &Circle) -> TruckEntity {
         };
     }
 
-    // Tessellate directly as a cos/sin polyline rather than a truck
+    // Sampled from the entity's own curve rather than as a truck
     // `circle_arc` (arc-through-three-points). At large WCS coordinates
     // (e.g. −1.2M UTM) the three-point fit cancels catastrophically — the
     // circle comes back with a ~3% radius wobble and uneven segment lengths,
     // which then throws off a dashed linetype's dash spacing. Direct
-    // evaluation only adds a small ±r term to the centre, so it stays precise;
-    // the `Lines` path RTE-splits the absolute-f64 points into the
+    // evaluation only adds a small ±r term to the centre, so it stays
+    // precise; the `Lines` path RTE-splits the absolute-f64 points into the
     // double-single the shader reconstructs.
-    let tol = crate::scene::convert::truck_tess::current_curve_tol();
-    // Chord-height tolerance → segment count: sag = r·(1 − cos(π/N)).
-    let n = if r > tol {
-        (std::f64::consts::PI / (1.0 - tol / r).clamp(-1.0, 1.0).acos())
-            .ceil()
-            .clamp(16.0, 4096.0) as usize
-    } else {
-        16
-    };
-    let tau = std::f64::consts::TAU;
-    let mut pts: Vec<[f64; 3]> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let a = i as f64 * tau / n as f64;
-        let (s, c) = a.sin_cos();
-        pts.push([
-            cwx + r * (c * ax.0 + s * ay.0),
-            cwy + r * (c * ax.1 + s * ay.1),
-            cwz + r * (c * ax.2 + s * ay.2),
-        ]);
-    }
+    let pts = crate::entities::curve::curve_points(&curve);
+
     TruckEntity {
         pick_tris: Vec::new(),
         object: TruckObject::Lines(pts),
