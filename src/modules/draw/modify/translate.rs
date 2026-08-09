@@ -54,11 +54,11 @@ impl CadCommand for MoveCommand {
     fn prompt(&self) -> String {
         match &self.step {
             Step::Base => crate::tr!(
-                "command-move-base",
+                "command-move", "base",
                 count = (self.handles.len() as i64),
             ),
             Step::Target(base) => crate::tr!(
-                "command-move-target",
+                "command-move", "target",
                 x = format!("{:.3}", base.x),
                 y = format!("{:.3}", base.y),
             ),

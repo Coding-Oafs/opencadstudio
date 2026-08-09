@@ -165,25 +165,25 @@ impl AreaCommand {
     fn result_message(measurement: AreaMeasurement) -> String {
         match measurement.perimeter {
             Some(perimeter) => crate::tr!(
-                "area-result",
+                "area", "result",
                 area = format!("{:.4}", measurement.area),
                 perimeter = format!("{perimeter:.4}"),
             ),
-            None => crate::tr!("area-result-area-only", area = format!("{:.4}", measurement.area)),
+            None => crate::tr!("area", "result-area-only", area = format!("{:.4}", measurement.area)),
         }
     }
 
     fn running_result_message(&self, measurement: AreaMeasurement) -> String {
         match measurement.perimeter {
             Some(perimeter) => crate::tr!(
-                "area-running-result",
+                "area", "running-result",
                 area = format!("{:.4}", measurement.area),
                 perimeter = format!("{perimeter:.4}"),
                 total_area = format!("{:.4}", self.total_area),
                 total_perimeter = format!("{:.4}", self.total_perimeter),
             ),
             None => crate::tr!(
-                "area-running-result-area-only",
+                "area", "running-result-area-only",
                 area = format!("{:.4}", measurement.area),
                 total_area = format!("{:.4}", self.total_area),
             ),
@@ -224,30 +224,30 @@ impl CadCommand for AreaCommand {
     fn prompt(&self) -> String {
         if self.objects_gathering {
             return crate::tr!(
-                "area-prompt-objects",
+                "area", "prompt-objects",
                 count = self.selected_entities.len()
             );
         }
         if !self.points.is_empty() {
-            return crate::tr!("area-prompt-next", count = self.points.len());
+            return crate::tr!("area", "prompt-next", count = self.points.len());
         }
         match self.mode {
-            AreaMode::Single => crate::tr!("area-prompt-first"),
-            AreaMode::Add => crate::tr!("area-prompt-add"),
-            AreaMode::Subtract => crate::tr!("area-prompt-subtract"),
+            AreaMode::Single => crate::tr!("area", "prompt-first"),
+            AreaMode::Add => crate::tr!("area", "prompt-add"),
+            AreaMode::Subtract => crate::tr!("area", "prompt-subtract"),
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         if self.objects_gathering {
-            return vec![Self::option(crate::tr!("area-option-back"), "BACK")];
+            return vec![Self::option(crate::tr!("area", "option-back"), "BACK")];
         }
         if !self.points.is_empty() {
             return Vec::new();
         }
-        let objects = || Self::option(crate::tr!("area-option-objects"), "OBJECTS");
-        let add = || Self::option(crate::tr!("area-option-add"), "ADD");
-        let subtract = || Self::option(crate::tr!("area-option-subtract"), "SUBTRACT");
+        let objects = || Self::option(crate::tr!("area", "option-objects"), "OBJECTS");
+        let add = || Self::option(crate::tr!("area", "option-add"), "ADD");
+        let subtract = || Self::option(crate::tr!("area", "option-subtract"), "SUBTRACT");
         match self.mode {
             AreaMode::Single => vec![objects(), add(), subtract()],
             AreaMode::Add => vec![objects(), subtract()],
@@ -323,7 +323,7 @@ impl CadCommand for AreaCommand {
             let Some((measurement, handles)) = self.selection_measurement() else {
                 self.selected_entities.clear();
                 return CmdResult::ReportMeasurementAndDeselect(crate::tr!(
-                    "area-objects-not-measurable"
+                    "area", "objects-not-measurable"
                 ));
             };
             if self.mode != AreaMode::Single {
