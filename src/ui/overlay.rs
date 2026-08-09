@@ -2166,6 +2166,7 @@ pub fn dynamic_input_overlay<'a>(
     guide: DynGuide,
     boxes: Vec<DynBox>,
     prompt: String,
+    tracking_hint: Option<String>,
 ) -> Element<'a, Message> {
     canvas(DynInputCanvas {
         cursor_screen,
@@ -2174,6 +2175,7 @@ pub fn dynamic_input_overlay<'a>(
         guide,
         boxes,
         prompt,
+        tracking_hint,
     })
     .width(Length::Fill)
     .height(Length::Fill)
@@ -2191,6 +2193,8 @@ struct DynInputCanvas {
     boxes: Vec<DynBox>,
     /// The active command's current prompt, drawn just above the boxes.
     prompt: String,
+    /// Informational tracking/reference mode currently engaged.
+    tracking_hint: Option<String>,
 }
 
 impl DynInputCanvas {
@@ -2289,6 +2293,49 @@ impl DynInputCanvas {
         frame.fill_text(canvas::Text {
             content: self.prompt.clone(),
             position: Point { x: pos.x + DYN_PAD, y: pos.y + DYN_PAD },
+            color: palette.background.strong.text,
+            size: iced::Pixels(DYN_FONT),
+            shaping: iced::advanced::text::Shaping::Advanced,
+            ..Default::default()
+        });
+    }
+
+    fn draw_tracking_hint(
+        &self,
+        frame: &mut canvas::Frame,
+        pos: Point,
+        theme: &Theme,
+    ) {
+        let Some(text) = self.tracking_hint.as_deref() else {
+            return;
+        };
+
+        let palette = theme.palette();
+        let pw = (text.len() as f32 * DYN_CHAR_W) + DYN_PAD * 2.0;
+
+        let rect = canvas::Path::rectangle(
+            pos,
+            Size {
+                width: pw,
+                height: DYN_BOX_H,
+            },
+        );
+
+        frame.fill(&rect, palette.background.strong.color);
+
+        frame.stroke(
+            &rect,
+            canvas::Stroke::default()
+                .with_color(palette.primary.base.color.scale_alpha(0.9))
+                .with_width(1.0),
+        );
+
+        frame.fill_text(canvas::Text {
+            content: text.to_string(),
+            position: Point {
+                x: pos.x + DYN_PAD,
+                y: pos.y + DYN_PAD,
+            },
             color: palette.background.strong.text,
             size: iced::Pixels(DYN_FONT),
             shaping: iced::advanced::text::Shaping::Advanced,
@@ -2496,6 +2543,32 @@ impl DynInputCanvas {
             };
             Self::draw_box(frame, b, center, bounds, theme);
         }
+        // Guided dynamic-input layouts place their editable boxes on the
+        // construction geometry, so keep the tracking-reference pill near
+        // the crosshair instead.
+        if let Some(text) = self.tracking_hint.as_deref() {
+            let hw = (text.len() as f32 * DYN_CHAR_W) + DYN_PAD * 2.0;
+
+            let mut hx = self.cursor_screen.x + DYN_OFFSET_X;
+            let mut hy = self.cursor_screen.y + DYN_OFFSET_X;
+
+            if hx + hw > bounds.width {
+                hx = (self.cursor_screen.x - hw - 4.0).max(0.0);
+            }
+
+            if hy + DYN_BOX_H > bounds.height {
+                hy = (self.cursor_screen.y - DYN_BOX_H - 4.0).max(0.0);
+            }
+
+            self.draw_tracking_hint(
+                frame,
+                Point {
+                    x: hx,
+                    y: hy,
+                },
+                theme,
+            );
+        }
     }
 
     /// Fallback row layout near the cursor (no anchor / `None` guide).
@@ -2563,6 +2636,25 @@ impl DynInputCanvas {
             });
             x += w + DYN_GAP;
         }
+        // Informational tracking reference, using the same pill style as
+        // the command prompt. Keep it below the editable value row.
+        if self.tracking_hint.is_some() {
+            let mut hy = by + DYN_BOX_H + 3.0;
+
+            // If there is no room below, place it above the prompt/value block.
+            if hy + DYN_BOX_H > bounds.height {
+                hy = (py - DYN_BOX_H - 3.0).max(0.0);
+            }
+
+            self.draw_tracking_hint(
+                frame,
+                Point {
+                    x: bx,
+                    y: hy,
+                },
+                theme,
+            );
+        }
     }
 }
 
@@ -2601,6 +2693,19 @@ impl canvas::Program<Message> for DynInputCanvas {
                     py = (self.cursor_screen.y - DYN_BOX_H - 4.0).max(0.0);
                 }
                 self.draw_prompt(&mut frame, Point { x: px, y: py }, theme);
+
+                if self.tracking_hint.is_some() {
+                    let hint_y = py + DYN_BOX_H + 3.0;
+
+                    self.draw_tracking_hint(
+                        &mut frame,
+                        Point {
+                            x: px,
+                            y: hint_y,
+                        },
+                        theme,
+                    );
+                }
             }
             return vec![frame.into_geometry()];
         }

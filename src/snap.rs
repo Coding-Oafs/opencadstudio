@@ -15,6 +15,12 @@ const DEFAULT_OSNAP_RADIUS_PX: f32 = 15.0;
 
 // ── Snap type ─────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrackingKind {
+    Generic,
+    Extension,
+    Perpendicular,
+}
 /// Every OSNAP mode — mirrors the OpenCADStudio list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SnapType {
@@ -92,6 +98,8 @@ pub struct OtrackHit {
     pub dir: DVec3,
     /// The tracking point the ray emanates from.
     pub base: DVec3,
+
+    pub kind: TrackingKind,
 }
 
 // ── Snapper ───────────────────────────────────────────────────────────────
@@ -511,6 +519,7 @@ impl Snapper {
             origin: DVec3,
             dir: DVec3,
             group: usize,
+            kind: TrackingKind,
         }
         let mut rays: Vec<Ray> = Vec::new();
         for (gi, &tp) in self.tracking_points.iter().enumerate() {
@@ -520,6 +529,7 @@ impl Snapper {
                     origin: tp,
                     dir: ucs_x * ar.cos() + ucs_y * ar.sin(),
                     group: gi,
+                    kind: TrackingKind::Generic,
                 });
             }
             // Extension rays along the corner's own edges (world-space geometry
@@ -532,6 +542,7 @@ impl Snapper {
                         origin: tp,
                         dir: d,
                         group: gi,
+                        kind: TrackingKind::Extension,
                     });
                 }
             }
@@ -547,6 +558,7 @@ impl Snapper {
                             origin: tp,
                             dir: d,
                             group: gi,
+                            kind: TrackingKind::Perpendicular,
                         });
                     }
                 }
@@ -566,6 +578,7 @@ impl Snapper {
                         origin: bp,
                         dir: DVec3::new(d.x * inv, d.y * inv, 0.0),
                         group: gi,
+                        kind: TrackingKind::Generic,
                     });
                 }
             }
@@ -583,6 +596,7 @@ impl Snapper {
                     origin: lp,
                     dir: ucs_x * ar.cos() + ucs_y * ar.sin(),
                     group: POLAR_GROUP,
+                    kind: TrackingKind::Generic,
                 });
             }
         }
@@ -596,6 +610,7 @@ impl Snapper {
                     origin: lp,
                     dir: ucs_x * ar.cos() + ucs_y * ar.sin(),
                     group: ORTHO_GROUP,
+                    kind: TrackingKind::Generic,
                 });
             }
         }
@@ -634,7 +649,8 @@ impl Snapper {
                             aligned: x,
                             dir: dir_out,
                             base: ot.origin,
-                        },
+                            kind: ot.kind,
+                        }
                     ));
                 }
             }
@@ -670,6 +686,7 @@ impl Snapper {
                         aligned,
                         dir: dir_out,
                         base: ray.origin,
+                        kind: ray.kind,
                     },
                 ));
             }

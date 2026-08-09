@@ -1144,6 +1144,7 @@ impl OpenCADStudio {
             };
 
             self.otrack_active = otrack_hit.map(|hit| (hit.base, hit.dir));
+            self.otrack_kind = otrack_hit.map(|hit| hit.kind);
 
             let mut snapped = if let Some(hit) = otrack_hit {
                 hit.aligned
@@ -1639,6 +1640,7 @@ impl OpenCADStudio {
                 }
             };
             self.otrack_active = otrack_hit.map(|h| (h.base, h.dir));
+            self.otrack_kind = otrack_hit.map(|h| h.kind);
 
             // Parallel snap: with nothing else snapped or tracked, lock
             // the point onto the line through last_point parallel to the
