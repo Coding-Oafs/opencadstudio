@@ -30,7 +30,7 @@ env_logger = "0.11"
 # The CAD stack is reached through acadifc, which re-exports the codec and
 # the geometry kernel. Aliased to `acadrust` so existing `use acadrust::…`
 # paths keep resolving.
-acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "88e3308", features = ["serde", "offset"] }
+acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "1ffe44e", features = ["serde", "offset"] }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }

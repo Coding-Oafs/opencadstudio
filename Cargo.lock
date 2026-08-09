@@ -6,7 +6,7 @@ version = 4
 name = "OpenCADStudio"
 version = "0.9.4"
 dependencies = [
- "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=88e3308)",
+ "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=1ffe44e)",
  "ashpd",
  "bincode",
  "bytemuck",
@@ -70,7 +70,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadifc"
 version = "0.5.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=88e3308#88e3308d0f14508346692705e6142de3f3d6a169"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=1ffe44e#1ffe44ea986628a9915f3e4f0e0b1c433a131c3d"
 dependencies = [
  "acadrust",
  "base64",
@@ -904,7 +904,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git#9fc5bf5149e4cb3f75a3774b9a1db5c7ed6f19fc"
+source = "git+https://github.com/HakanSeven12/cadkernel.git#962ffc3eda748a7d675ddc868be628c334e20a3b"
 dependencies = [
  "cavalier_contours",
 ]
