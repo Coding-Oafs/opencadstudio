@@ -21,7 +21,8 @@ use acadrust::acis::lift;
 use acadrust::entities::acis::SatDocument;
 use acadrust::kernel::brep;
 
-use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
+use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
+use crate::scene::model::mesh_model::MeshLodSet;
 
 /// How far a triangle may sit from the surface it lies on.
 const SAG: f64 = 0.05;
@@ -46,6 +47,8 @@ pub fn tessellate_sat(
     }
     let sag = if sag > 0.0 { sag } else { SAG };
 
+    // Positions stay f64 until `finalize_mesh` splits them into the coarse
+    // and fine pair, so a solid at survey coordinates keeps its millimetres.
     let mut positions: Vec<[f64; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
@@ -77,32 +80,20 @@ pub fn tessellate_sat(
         return None;
     }
 
-    // The renderer holds each position as a coarse float plus a fine
-    // correction, so a solid at survey coordinates keeps its last millimetres
-    // instead of losing them to f32.
-    let mut verts = Vec::with_capacity(positions.len());
-    let mut verts_low = Vec::with_capacity(positions.len());
-    for point in &positions {
-        let high = [point[0] as f32, point[1] as f32, point[2] as f32];
-        verts.push(high);
-        verts_low.push([
-            (point[0] - high[0] as f64) as f32,
-            (point[1] - high[1] as f64) as f32,
-            (point[2] - high[2] as f64) as f32,
-        ]);
-    }
-
-    let mut set = MeshLodSet::from_single(MeshModel {
+    // ACIS keeps a body's geometry in its own local frame and records where it
+    // sits in a separate `transform` record. Skipping that leaves every solid
+    // stacked at the origin — which is what a BIM file looks like when each
+    // component is placed rather than authored in world coordinates.
+    let mut set = MeshLodSet::from_single(finalize_mesh(
         name,
-        verts,
-        verts_low,
+        positions,
         normals,
         indices,
-        triangle_material_handles: Vec::new(),
-        triangle_colors: Vec::new(),
+        Vec::new(),
+        Vec::new(),
         color,
-        selected: false,
-    });
+        body_transform(document),
+    ));
     set.complete = loss.is_empty() && undrawn == 0;
     Some(set)
 }
@@ -121,8 +112,75 @@ pub fn tessellate_sat(
 pub fn edge_polylines(document: &SatDocument, sag: f64) -> Vec<Vec<[f64; 3]>> {
     let (bodies, _) = lift(document);
     let sag = if sag > 0.0 { sag } else { SAG };
+    let placement = body_transform(document);
     bodies
         .iter()
         .flat_map(|body| brep::edge_polylines(body, sag))
+        .map(|polyline| {
+            polyline
+                .into_iter()
+                .map(|point| placed(point, placement))
+                .collect()
+        })
         .collect()
+}
+
+/// A body-local point moved to where the body sits.
+///
+/// ACIS treats points as row vectors — `p' = scale·(p·M) + T` — so the stored
+/// 3×3 is indexed transposed from a column-vector multiply. Getting that the
+/// wrong way round mirrors a placed solid rather than moving it.
+fn placed(point: [f64; 3], xform: Option<([f64; 9], [f64; 3], f64)>) -> [f64; 3] {
+    let Some((m, translation, scale)) = xform else {
+        return point;
+    };
+    let [x, y, z] = point;
+    [
+        scale * (x * m[0] + y * m[3] + z * m[6]) + translation[0],
+        scale * (x * m[1] + y * m[4] + z * m[7]) + translation[1],
+        scale * (x * m[2] + y * m[5] + z * m[8]) + translation[2],
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A quarter turn about z, written the way ACIS writes it: row-major, and
+    /// applied to points as row vectors.
+    fn quarter_turn() -> Option<([f64; 9], [f64; 3], f64)> {
+        Some((
+            [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            [10.0, 20.0, 30.0],
+            2.0,
+        ))
+    }
+
+    #[test]
+    fn a_placement_turns_the_way_acis_means_it_to() {
+        // Deliberately asymmetric: a transposed multiply turns the other way,
+        // so this catches the one mistake the convention invites.
+        let moved = placed([1.0, 0.0, 0.0], quarter_turn());
+        assert!((moved[0] - 10.0).abs() < 1e-12, "{moved:?}");
+        assert!((moved[1] - 22.0).abs() < 1e-12, "{moved:?}");
+        assert!((moved[2] - 30.0).abs() < 1e-12, "{moved:?}");
+    }
+
+    #[test]
+    fn a_body_with_no_transform_stays_where_it_is() {
+        // Many solids store absolute geometry and carry no transform record.
+        // Treating that as anything but identity moves them off their own
+        // coordinates.
+        let point = [3.0, -4.0, 5.0];
+        assert_eq!(placed(point, None), point);
+    }
+
+    #[test]
+    fn the_scale_reaches_the_translation_only_once() {
+        // `p' = scale·(p·M) + T`: the translation is not scaled. Folding the
+        // scale into it as well puts a placed solid at twice its offset,
+        // which reads as a plausible position and is the wrong one.
+        let moved = placed([0.0, 0.0, 0.0], quarter_turn());
+        assert_eq!(moved, [10.0, 20.0, 30.0]);
+    }
 }
