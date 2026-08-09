@@ -3137,6 +3137,8 @@ impl OpenCADStudio {
                 self.snapper.otrack_enabled ^= true;
                 if !self.snapper.otrack_enabled {
                     self.snapper.clear_tracking();
+                    self.otrack_active = None;
+                    self.otrack_kind = None;
                 }
                 Task::none()
             }

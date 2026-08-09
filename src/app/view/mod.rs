@@ -812,10 +812,10 @@ impl OpenCADStudio {
 
                 let tracking_hint = match self.otrack_kind {
                     Some(crate::snap::TrackingKind::Perpendicular) => {
-                        Some("Perpendicular".to_string())
+                        Some(crate::tr!("common", "perpendicular"))
                     }
                     Some(crate::snap::TrackingKind::Extension) => {
-                        Some("Extension".to_string())
+                        Some(crate::tr!("common", "extension"))
                     }
                     _ => None,
                 };

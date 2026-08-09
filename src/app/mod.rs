@@ -430,8 +430,7 @@ pub(super) struct OpenCADStudio {
     /// cursor is on a tracking ray. Lets a typed distance place a point along
     /// the ray from the tracking point (issue #69). `None` when not aligned.
     otrack_active: Option<(glam::DVec3, glam::DVec3)>,
-    /// Kind of the currently active tracking reference, kept separately from
-    /// `otrack_active` so typed-distance behavior remains unchanged.
+    /// Active OTRACK ray kind, separate from typed-distance geometry.
     otrack_kind: Option<crate::snap::TrackingKind>,
     /// Whether Tangent snap was enabled before a tangent-pick command started.
     pre_cmd_tangent: Option<bool>,

@@ -2193,7 +2193,7 @@ struct DynInputCanvas {
     boxes: Vec<DynBox>,
     /// The active command's current prompt, drawn just above the boxes.
     prompt: String,
-    /// Informational tracking/reference mode currently engaged.
+    /// Active tracking-reference label.
     tracking_hint: Option<String>,
 }
 
@@ -2543,9 +2543,7 @@ impl DynInputCanvas {
             };
             Self::draw_box(frame, b, center, bounds, theme);
         }
-        // Guided dynamic-input layouts place their editable boxes on the
-        // construction geometry, so keep the tracking-reference pill near
-        // the crosshair instead.
+        // Keep the tracking hint near the crosshair in guided layouts.
         if let Some(text) = self.tracking_hint.as_deref() {
             let hw = (text.len() as f32 * DYN_CHAR_W) + DYN_PAD * 2.0;
 
@@ -2636,12 +2634,11 @@ impl DynInputCanvas {
             });
             x += w + DYN_GAP;
         }
-        // Informational tracking reference, using the same pill style as
-        // the command prompt. Keep it below the editable value row.
+        // Place the tracking hint below the value row.
         if self.tracking_hint.is_some() {
             let mut hy = by + DYN_BOX_H + 3.0;
 
-            // If there is no room below, place it above the prompt/value block.
+            // Move above when bottom space is insufficient.
             if hy + DYN_BOX_H > bounds.height {
                 hy = (py - DYN_BOX_H - 3.0).max(0.0);
             }
