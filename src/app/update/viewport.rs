@@ -1097,10 +1097,8 @@ impl OpenCADStudio {
             // Grip edits use the same tracking-point acquisition and OTRACK
             // resolution as normal interactive point commands.
             let otrack_hit = {
-                let snap_world = snap_hit.map(|s| s.world);
-
                 self.snapper.update_otrack_dwell(
-                    snap_world,
+                    snap_hit,
                     &snap_candidates,
                     view_rot,
                     eye,
@@ -1543,9 +1541,8 @@ impl OpenCADStudio {
             // to a tracking ray (and store the alignment so a typed
             // distance can place a point along it — issue #69).
             let otrack_hit = {
-                let snap_world = self.tabs[i].snap_result.map(|s| s.world);
                 self.snapper.update_otrack_dwell(
-                    snap_world,
+                    self.tabs[i].snap_result,
                     &snap_candidates,
                     view_rot,
                     eye,
@@ -1562,7 +1559,11 @@ impl OpenCADStudio {
                     bounds,
                     Instant::now(),
                 );
-                if self.tabs[i].snap_result.is_none() {
+                if self.tabs[i].snap_result.is_none()
+                    || self.tabs[i]
+                        .snap_result
+                        .is_some_and(|s| s.snap_type == crate::snap::SnapType::Extension)
+                {
                     // A window corner is a free point, so neither the
                     // Polar increment nor the Ortho lock may pull the
                     // OTRACK alignment onto an axis (#291).
@@ -2901,7 +2902,10 @@ impl OpenCADStudio {
                 }
                 // OTRACK alignment wins over ortho/polar; otherwise apply
                 // ortho/polar relative to the last point.
-                let otrack = if !world_pt_locked && snap_hit.is_none() {
+                let otrack = if !world_pt_locked
+                    && (snap_hit.is_none()
+                        || snap_hit.is_some_and(|s| s.snap_type == crate::snap::SnapType::Extension))
+                {
                     let step = if self.polar_mode && !is_window_corner {
                         Some(self.polar_increment_deg)
                     } else {
