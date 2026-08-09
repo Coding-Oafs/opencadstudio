@@ -28,7 +28,18 @@ use crate::scene::model::mesh_model::MeshLodSet;
 const SAG: f64 = 0.05;
 
 /// What counts as the same point when the kernel reads a body over.
-const TOL: f64 = 1e-9;
+///
+/// A micrometre, in a drawing measured in metres. Not slackness: an edge is
+/// shared by two faces, and in a real file it cannot sit exactly on both,
+/// because the two surfaces were fitted separately and written to finite
+/// precision. Asked for exactness the kernel decides the edge is not on its
+/// own plane, declines to project it, and the face is dropped — twenty-six
+/// walls of one building went missing at a nanometre that no drawing means.
+///
+/// Loosening further buys almost nothing: a hundredth of this recovers one
+/// more face in sixty thousand, and past that the tolerance would start
+/// accepting geometry that really is wrong.
+const TOL: f64 = 1e-6;
 
 /// Tessellate an ACIS document by lifting it into the kernel.
 ///
