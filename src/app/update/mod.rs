@@ -255,6 +255,7 @@ impl OpenCADStudio {
         {
             self.snapper.clear_tracking();
             self.otrack_active = None;
+            self.otrack_kind = None;
         }
         if let Some(started) = perf_started {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -280,6 +281,7 @@ impl OpenCADStudio {
     pub(in crate::app) fn reset_tracking_after_point(&mut self) {
         self.snapper.clear_tracking();
         self.otrack_active = None;
+        self.otrack_kind = None;
     }
 
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
