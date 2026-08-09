@@ -831,6 +831,7 @@ impl Snapper {
             bounds,
             Vec3::ZERO,
             Mat4::IDENTITY,
+             None,
         )
     }
 
@@ -847,6 +848,7 @@ impl Snapper {
         // lands on the UCS grid the user sees. `(ZERO, IDENTITY)` = world grid.
         grid_origin: Vec3,
         grid_rot: Mat4,
+        construction_cursor: Option<glam::DVec3>,
     ) -> Option<SnapResult> {
         // Object-snap selection is priority-then-distance, NOT nearest-wins.
         // "Continuous" snaps (Nearest, Perpendicular, …) sit on the geometry
@@ -1177,6 +1179,97 @@ impl Snapper {
                     for i in 0..wire.points.len().saturating_sub(1) {
                         if let Some(foot) = perp_foot(q, wp_f64(wire, i), wp_f64(wire, i + 1)) {
                             try_pt(foot, SnapType::Perpendicular);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Intersection with active construction segment (#704) ──────────
+        //
+        // The existing Intersection pass below only compares document
+        // entities with each other. Also compare the rubber-band currently
+        // being drawn against existing geometry.
+        if self.is_on(SnapType::Intersection) {
+            if let (Some(from), Some(to)) = (self.from_point, construction_cursor) {
+                let from = from.as_dvec3();
+                if (to - from).length_squared() > 1e-18 {
+                    // Active/deferred Intersection uses the actual nearby wires directly.
+                    // The interaction candidate set may contain wires while its optional
+                    // segment index is empty.
+                    for wire in wires.iter() {
+                        if !wire_in_range(wire) {
+                            continue;
+                        }
+
+                        for index in 0..wire.points.len().saturating_sub(1) {
+                            let b0 = wp_f64(wire, index);
+                            let b1 = wp_f64(wire, index + 1);
+
+                            if let Some(pt) = ray_segment_intersect_3d(from, to, b0, b1) {
+                                if (pt - from).length_squared() > 1e-18 {
+                                    try_pt(pt, SnapType::Intersection);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // ── Intersection with active perpendicular OTRACK ray (#704) ──────
+        //
+        // A perpendicular tracking ray is not part of the command's ordinary
+        // ORTHO/POLAR construction cursor. When the cursor is actually tracking
+        // one of those rays, allow Intersection to stop it on nearby geometry.
+        if self.is_on(SnapType::Intersection)
+            && self.otrack_enabled
+            && self.is_on(SnapType::Perpendicular)
+        {
+            for (gi, &origin) in self.tracking_points.iter().enumerate() {
+                let Some(perp_dirs) = self.tracking_perp_dirs.get(gi) else {
+                    continue;
+                };
+
+                for &dir in perp_dirs {
+                    // Project the cursor onto this perpendicular tracking line.
+                    let rel = cursor_world - origin;
+                    let t = rel.x * dir.x + rel.y * dir.y;
+
+                    let aligned = glam::DVec3::new(
+                        origin.x + dir.x * t,
+                        origin.y + dir.y * t,
+                        origin.z,
+                    );
+
+                    // Only consider the ray when the cursor is genuinely tracking it.
+                    // This prevents Intersection from behaving like Nearest.
+                    let aligned_screen = world_to_screen(aligned, view_rot, eye, bounds);
+                    if dist2(aligned_screen, cursor_screen) > radius2 {
+                        continue;
+                    }
+
+                    // Perpendicular tracking is an infinite line, but once the cursor
+                    // chooses a side we only want intersections forward on that side.
+                    let dir_to_cursor = if t >= 0.0 { dir } else { -dir };
+                    let through = origin + dir_to_cursor;
+
+                    for wire in wires.iter() {
+                        if !wire_in_range(wire) {
+                            continue;
+                        }
+
+                        for index in 0..wire.points.len().saturating_sub(1) {
+                            let b0 = wp_f64(wire, index);
+                            let b1 = wp_f64(wire, index + 1);
+
+                            if let Some(pt) =
+                                ray_segment_intersect_3d(origin, through, b0, b1)
+                            {
+                                // Do not re-offer the tracking origin itself.
+                                if (pt - origin).length_squared() > 1e-18 {
+                                    try_pt(pt, SnapType::Intersection);
+                                }
+                            }
                         }
                     }
                 }
@@ -1975,6 +2068,56 @@ fn perp_foot(query: glam::DVec3, p0: glam::DVec3, p1: glam::DVec3) -> Option<gla
         p0.x + t * d.x,
         p0.y + t * d.y,
         p0.z + t * d.z,
+    ))
+}
+
+/// Intersection between a forward construction ray and an existing segment.
+///
+/// The ray starts at `ray_origin` and points toward `ray_through`, but extends
+/// indefinitely forward. The existing geometry remains a finite segment.
+///
+/// Like `seg_intersect_3d`, this is a true 3D intersection: the XY projections
+/// must cross and both geometries must have the same Z at the crossing.
+fn ray_segment_intersect_3d(
+    ray_origin: glam::DVec3,
+    ray_through: glam::DVec3,
+    b0: glam::DVec3,
+    b1: glam::DVec3,
+) -> Option<glam::DVec3> {
+    let d1x = ray_through.x - ray_origin.x;
+    let d1y = ray_through.y - ray_origin.y;
+    let d2x = b1.x - b0.x;
+    let d2y = b1.y - b0.y;
+
+    let cross = d1x * d2y - d1y * d2x;
+    if cross.abs() < 1e-9 {
+        return None;
+    }
+
+    let ex = b0.x - ray_origin.x;
+    let ey = b0.y - ray_origin.y;
+
+    let t = (ex * d2y - ey * d2x) / cross;
+    let s = (ex * d1y - ey * d1x) / cross;
+
+    // `t >= 0`: only forward along the construction ray.
+    // `s` must remain inside the existing finite segment.
+    if t < 0.0 || s < 0.0 || s > 1.0 {
+        return None;
+    }
+
+    let za = ray_origin.z + t * (ray_through.z - ray_origin.z);
+    let zb = b0.z + s * (b1.z - b0.z);
+    let tol = 1e-6_f64.max(1e-9 * za.abs().max(zb.abs()));
+
+    if (za - zb).abs() > tol {
+        return None;
+    }
+
+    Some(glam::DVec3::new(
+        ray_origin.x + t * d1x,
+        ray_origin.y + t * d1y,
+        0.5 * (za + zb),
     ))
 }
 
