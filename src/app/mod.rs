@@ -591,6 +591,8 @@ pub(super) struct OpenCADStudio {
     show_properties: bool,
     /// Docked Insert Block panel visibility.
     pub(crate) show_block_palette: bool,
+    /// General edge-stack dock layout for the side panels.
+    pub(crate) dock: crate::ui::dock::DockState,
     /// Docked Insert Block panel state (search, preview size, cached thumbnails).
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
     /// Whether the narrow-window block-palette bar is expanded.
@@ -3159,6 +3161,7 @@ impl OpenCADStudio {
             show_block_palette: false,
             block_palette: Default::default(),
             block_palette_expanded: false,
+            dock: Default::default(),
             show_file_tabs: true,
             show_layout_tabs: true,
             last_point: None,

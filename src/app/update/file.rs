@@ -558,6 +558,11 @@ impl OpenCADStudio {
                 width: self.properties_width,
                 auto_collapse: self.properties_auto_collapse,
             },
+            dock: {
+                let mut dock = self.dock.clone();
+                dock.ensure_settings();
+                dock
+            },
             annotation_auto_scale: self.annotation_auto_scale,
             ribbon: crate::app::config::RibbonConfig {
                 collapse: self.ribbon.collapse_mode(),
@@ -602,6 +607,9 @@ impl OpenCADStudio {
             250.0
         };
         self.properties_auto_collapse = cfg.properties.auto_collapse;
+        let mut dock = cfg.dock;
+        dock.ensure_settings();
+        self.dock = dock;
         self.annotation_auto_scale = cfg.annotation_auto_scale.clamp(-4, 4);
         self.ribbon.set_collapse_mode(cfg.ribbon.collapse);
         self.plot_dialog = cfg.plot;

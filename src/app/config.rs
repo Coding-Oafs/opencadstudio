@@ -29,6 +29,10 @@ pub struct AppConfig {
     pub statusbar: StatusBarConfig,
     /// Dock position, width and auto-collapse behavior of the Properties panel.
     pub properties: PropertiesDockConfig,
+    /// General edge-stack dock layout (which panels are docked, side, order,
+    /// width and auto-collapse). Newer dock state; the Properties dock is
+    /// folded into this when its panel is migrated.
+    pub dock: crate::ui::dock::DockState,
     /// Add a newly selected annotation scale to existing annotative objects.
     pub annotation_auto_scale: i8,
     /// Ribbon collapse density.
@@ -49,6 +53,7 @@ impl Default for AppConfig {
             start: StartConfig::default(),
             statusbar: StatusBarConfig::default(),
             properties: PropertiesDockConfig::default(),
+            dock: crate::ui::dock::DockState::default(),
             annotation_auto_scale: -4,
             ribbon: RibbonConfig::default(),
             plot: PlotDialogState::default(),
