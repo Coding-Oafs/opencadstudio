@@ -151,6 +151,7 @@ impl OpenCADStudio {
             self.tabs[i].dirty = dirty_before;
         }
 
+        self.grip_snap_wires.clear();
         self.grip_text_verts.clear();
         self.grip_text_slide = false;
         self.tabs[i].scene.clear_preview_wire();

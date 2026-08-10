@@ -282,47 +282,95 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     return Task::none();
                 }
 
-                // Direct-distance entry while a normal grip stretch is active.
+                // Numeric entry while a normal grip stretch is active.
                 //
-                // The live grip-drag path has already resolved OSNAP / OTRACK /
-                // Extension / Polar / Ortho into `last_cursor_world`. A typed scalar
-                // therefore means: move from the grip's original position by that
-                // distance along the currently indicated direction.
+                // With Dynamic Input enabled, typed values live in the shared
+                // Distance / Angle fields. Resolve those fields into an exact
+                // world point. Without DYN input, preserve the existing direct-
+                // distance command-line behaviour.
                 {
                     let i = self.active_tab;
 
                     if let Some(grip) = self.tabs[i].active_grip.clone() {
                         if grip.mode == GripEditMode::Stretch {
-                            let text =
-                                crate::app::expr_eval::eval_to_string(self.command_line.input.trim());
+                            let dyn_locked = self.tabs[i]
+                                .dyn_fields
+                                .iter()
+                                .any(|field| field.buffer.is_some());
 
-                            if let Some(dist) = crate::app::expr_eval::eval_number(text.trim()) {
-                                let cursor = self.tabs[i].last_cursor_world;
+                            let target = if dyn_locked {
+                                // Distance only:
+                                //   keep the cursor's current direction.
+                                //
+                                // Distance + Angle:
+                                //   resolve both typed values from the grip's
+                                //   original position (`dyn_anchor`).
+                                self.dyn_resolve_point()
+                            } else {
+                                // Legacy command-line direct-distance entry.
+                                let text = crate::app::expr_eval::eval_to_string(
+                                    self.command_line.input.trim(),
+                                );
 
-                                // If the cursor is following OTRACK or Extension, use the actual
-                                // reference ray that is currently driving the cursor. Otherwise
-                                // fall back to the direction from the original grip position,
-                                // which covers Polar / Ortho / free direct-distance entry.
-                                let target = if let Some((base, dir)) = self.active_distance_ray(i) {
-                                    base + dir * dist
-                                } else {
-                                    let direction = cursor - grip.origin_world;
-                                    let len = direction.length();
+                                crate::app::expr_eval::eval_number(text.trim()).map(|dist| {
+                                    let cursor = self.tabs[i].last_cursor_world;
 
-                                    if len <= 1e-12 {
-                                        self.command_line.push_error(
-                                            "Move the cursor in a direction before entering a distance.",
-                                        );
-                                        return self.focus_cmd_input();
+                                    // If the cursor is following OTRACK or Extension,
+                                    // preserve the existing reference-ray behaviour.
+                                    if let Some((base, dir)) = self.active_distance_ray(i) {
+                                        base + dir * dist
+                                    } else {
+                                        let direction = cursor - grip.origin_world;
+                                        let len = direction.length();
+
+                                        if len <= 1e-12 {
+                                            grip.origin_world
+                                        } else {
+                                            grip.origin_world + direction / len * dist
+                                        }
+                                    }
+                                })
+                            };
+
+                            if let Some(target) = target {
+                                // Typed Dynamic Input can commit a grip before the mouse has moved.
+                                //
+                                // Normally the first ViewportMove initializes the grip preview handles and
+                                // snapshots the original entities. Without that move the document changes,
+                                // so the refreshed grips move, but the resident wire tessellation is never
+                                // invalidated by the normal grip-finalization path.
+                                //
+                                // Seed the same bookkeeping here before modifying the entities.
+                                if self.grip_preview_handles.is_empty() {
+                                    let mut seen_handles = rustc_hash::FxHashSet::default();
+
+                                    let edited_handles: Vec<_> = grip
+                                        .targets
+                                        .iter()
+                                        .map(|target| target.handle)
+                                        .filter(|handle| seen_handles.insert(*handle))
+                                        .collect();
+
+                                    if self.grip_dirty_before.is_none() {
+                                        self.grip_dirty_before = Some(self.tabs[i].dirty);
                                     }
 
-                                    let dir = direction / len;
-                                    grip.origin_world + dir * dist
-                                };
+                                    if self.grip_originals.is_empty() {
+                                        self.grip_originals = edited_handles
+                                            .iter()
+                                            .filter_map(|&handle| {
+                                                self.tabs[i]
+                                                    .scene
+                                                    .document
+                                                    .get_entity(handle)
+                                                    .cloned()
+                                                    .map(|entity| (handle, entity))
+                                            })
+                                            .collect();
+                                    }
 
-                                // The entity is already being edited live. Apply only the
-                                // incremental movement from its current grip position to the
-                                // exact typed-distance position.
+                                    self.grip_preview_handles = edited_handles;
+                                }
                                 let delta = target - grip.last_world;
 
                                 let actions: Vec<_> = grip
@@ -332,7 +380,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         let apply = if target_grip.is_translate {
                                             GripApply::Translate(delta)
                                         } else {
-                                            GripApply::Absolute(target_grip.last_world + delta)
+                                            GripApply::Absolute(
+                                                target_grip.last_world + delta,
+                                            )
                                         };
 
                                         (
@@ -349,8 +399,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         .apply_grip(handle, grip_id, apply);
                                 }
 
-                                // Keep the live GripEdit state synchronized so the normal
-                                // grip commit path sees the exact final position.
+                                // Keep GripEdit synchronized so the normal commit
+                                // path records the exact final position.
                                 if let Some(active) = self.tabs[i].active_grip.as_mut() {
                                     active.last_world = target;
 
@@ -361,11 +411,26 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
 
                                 self.tabs[i].last_cursor_world = target;
                                 self.command_line.input.clear();
+
+                                // Consume the typed Dynamic Input values.
+                                for field in &mut self.tabs[i].dyn_fields {
+                                    field.buffer = None;
+                                }
+                                self.tabs[i].dyn_active = 0;
+                                self.dyn_user_reshaped = false;
+                                self.dyn_coord_absolute = false;
+
                                 self.tabs[i].dirty = true;
 
-                                // Reuse the existing click-move-click grip finalization:
-                                // undo grouping, preview restoration, grip cleanup, etc.
-                                return self.on_viewport_left_release();
+                                // Reuse the existing grip finalization path:
+                                // undo grouping, preview restoration, cleanup, etc.
+                                let task = self.on_viewport_left_release();
+
+                                // active_grip is now gone, so remove the temporary
+                                // Distance / Angle fields as well.
+                                self.sync_dyn_fields();
+
+                                return task;
                             }
                         }
                     }
@@ -600,11 +665,26 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 if !self.command_line.input.trim().is_empty() {
                     return self.update(Message::CommandSubmit);
                 }
-                // A typed dynamic-input value commits as a point pick
-                // before the plain-Enter (on_enter) path runs.
+                // A grip edit is not an active CAD command, but its Dynamic Input
+                // fields use the same keyboard path. Route Enter through CommandSubmit,
+                // whose grip branch resolves Distance / Angle and finalizes the edit.
+                let i = self.active_tab;
+                let grip_dyn_locked = self.tabs[i].active_grip.is_some()
+                    && self.dyn_input
+                    && self.tabs[i]
+                        .dyn_fields
+                        .iter()
+                        .any(|field| field.locked());
+
+                if grip_dyn_locked {
+                    return self.update(Message::CommandSubmit);
+                }
+
+                // Normal command Dynamic Input commit.
                 if let Some(task) = self.try_dyn_commit() {
                     return task;
                 }
+
                 let i = self.active_tab;
                 if self.tabs[i].active_cmd.is_some() {
                     self.feed_command(crate::command::StepInput::Enter)

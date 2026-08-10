@@ -1087,7 +1087,12 @@ impl OpenCADStudio {
                 // dimension re-tessellates) and a Square insertion grip (so
                 // an MTEXT width handle, a Triangle, still re-tessellates so
                 // the re-wrap is exact).
-                let snap = self.tabs[i].scene.wire_models_for(&edited_handles);
+               let snap = self.tabs[i].scene.wire_models_for(&edited_handles);
+
+                // Keep the entity's original geometry available for self-OSNAP,
+                // Extension and OTRACK while the live grip preview is being deformed.
+                self.grip_snap_wires = snap.clone();
+
                 self.grip_text_verts = snap
                     .iter()
                     .flat_map(|w| w.text_verts.iter().copied())
@@ -1132,6 +1137,19 @@ impl OpenCADStudio {
                 bounds,
                 self.snapper.osnap_radius_px,
             );
+            // `snap_candidates` contains only the spatially-local wires from the rest of
+            // the drawing. Add the frozen pre-drag geometry of the edited entity so its
+            // own vertices and segments remain valid snap references.
+            //
+            // This intentionally uses a plain Vec<WireModel>: Snapper will use its normal
+            // unindexed fallback over this already-small local candidate set rather than
+            // cloning/scanning the whole drawing.
+            let mut grip_snap_candidates: Vec<_> =
+                snap_candidates.iter().cloned().collect();
+
+            grip_snap_candidates.extend(
+                self.grip_snap_wires.iter().cloned()
+            );
             // The engaged grip is the rubber-band origin. Perpendicular
             // snapping must drop its foot from this point, including when a
             // hot-grip set is moved by the same drag vector.
@@ -1145,7 +1163,7 @@ impl OpenCADStudio {
             let snap_hit = self.snapper.snap(
                 raw,
                 p,
-                &snap_candidates,
+                &grip_snap_candidates,
                 view_rot,
                 eye,
                 bounds,
@@ -1158,7 +1176,7 @@ impl OpenCADStudio {
 
             self.snapper.update_otrack_dwell(
                 snap_hit,
-                &snap_candidates,
+                &grip_snap_candidates,
                 view_rot,
                 eye,
                 bounds,
@@ -1230,6 +1248,17 @@ impl OpenCADStudio {
             // by the grip, otherwise the guide and the edited geometry diverge.
             self.tabs[i].last_cursor_world = snapped;
             self.tabs[i].last_cursor_screen = p_full;
+
+            // Project the grip's original position into full-canvas coordinates.
+            // Dynamic Input uses this as the polar Distance/Angle anchor.
+            let anchor_ndc =
+                view_rot.project_point3((grip.origin_world - eye).as_vec3());
+
+            self.tabs[i].last_point_screen = Some(Point::new(
+                (anchor_ndc.x + 1.0) * 0.5 * bounds.width + tile_b.x,
+                (1.0 - anchor_ndc.y) * 0.5 * bounds.height + tile_b.y,
+            ));
+
             let apply_started = Instant::now();
             let delta = snapped - grip.last_world;
             let lengthen = grip.mode == GripEditMode::Lengthen;
@@ -2587,6 +2616,11 @@ impl OpenCADStudio {
                     ));
                     self.grip_hover = None;
                     self.grip_popup = None;
+
+                    // A grip edit is not a CAD command, so explicitly seed the shared
+                    // dynamic-input fields for the newly engaged grip.
+                    self.sync_dyn_fields();
+
                     return Task::none();
                 }
             }
@@ -2705,6 +2739,7 @@ impl OpenCADStudio {
                     );
                     self.tabs[i].dirty = true;
                 }
+                self.grip_snap_wires.clear();
                 self.grip_text_verts = Vec::new();
                 self.grip_text_slide = false;
                 for &handle in &handles {

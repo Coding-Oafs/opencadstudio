@@ -757,11 +757,11 @@ impl OpenCADStudio {
             .unwrap_or(false);
         let dyn_input_overlay: Option<Element<'_, Message>> =
             if self.dyn_input
-                && tab.active_cmd.is_some()
+                && (tab.active_cmd.is_some() || tab.active_grip.is_some())
                 && (!tab.dyn_fields.is_empty() || dyn_picks_object)
             {
                 let w = tab.last_cursor_world;
-                let base = self.last_point;
+                let base = tab.dyn_anchor.or(self.last_point);
                 // A command may drive a typed scalar by mouse (e.g. a
                 // perpendicular distance to a picked object); show that live
                 // value in the box until the user types over it.
@@ -1536,7 +1536,9 @@ impl OpenCADStudio {
         // The MText preview also captures keystrokes (typing edits it), so the
         // command line must likewise release its on_input there.
         let dyn_capturing =
-            (self.dyn_input && tab.active_cmd.is_some() && !tab.dyn_fields.is_empty())
+            (self.dyn_input
+                && (tab.active_cmd.is_some() || tab.active_grip.is_some())
+                && !tab.dyn_fields.is_empty())
                 || self.mtext_editor.as_ref().is_some_and(|e| e.show_preview)
                 || self.text_inline.is_some();
         let workspace: Element<'_, Message> = match (properties_el, self.properties_side) {
