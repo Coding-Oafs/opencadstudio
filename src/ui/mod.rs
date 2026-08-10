@@ -4,6 +4,7 @@ pub const ROW_H: f32 = 26.0;
 
 pub mod color_select;
 pub mod command_line;
+pub mod dock;
 pub mod icons;
 pub mod modal;
 pub mod overlay;

@@ -1,0 +1,307 @@
+//! General edge-stack docking for side panels.
+//!
+//! Any number of dockable panels (Properties, the block palette, future
+//! palettes) live in an ordered vertical stack on the left or right edge of
+//! the drawing view. This module owns the persisted layout (which panels are
+//! docked, on which side, in what vertical order, at what width, and whether
+//! each auto-collapses) plus the pure geometry used to render and hover an
+//! edge's stacked panels.
+
+use crate::app::config::DockSide;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// The dockable panels the application knows about. New palettes add a variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelId {
+    Properties,
+    BlockPalette,
+}
+
+impl PanelId {
+    /// Localized-friendly display name used by the collapsed/edge chrome.
+    pub fn title(self) -> &'static str {
+        match self {
+            PanelId::Properties => "Properties",
+            PanelId::BlockPalette => "Block Palette",
+        }
+    }
+
+    /// Default dock width for a freshly-created panel instance.
+    fn default_width(self) -> f32 {
+        match self {
+            PanelId::Properties => 250.0,
+            PanelId::BlockPalette => 260.0,
+        }
+    }
+}
+
+/// The persistent, per-panel dock settings that survive a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockPanel {
+    pub width: f32,
+    pub auto_collapse: bool,
+}
+
+impl Default for DockPanel {
+    fn default() -> Self {
+        Self {
+            width: 250.0,
+            auto_collapse: false,
+        }
+    }
+}
+
+impl DockPanel {
+    fn for_id(id: PanelId) -> Self {
+        Self {
+            width: id.default_width(),
+            auto_collapse: false,
+        }
+    }
+}
+
+/// The whole dock layout: two ordered per-side stacks plus per-panel settings.
+/// Only the persisted layout lives here; transient drag/hover state is app
+/// state (see `update::mod`) so it is skipped by serialization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockState {
+    /// Panels anchored to the left edge, top → bottom.
+    pub left: Vec<PanelId>,
+    /// Panels anchored to the right edge, top → bottom.
+    pub right: Vec<PanelId>,
+    /// Per-panel width / auto-collapse settings, keyed by `PanelId`.
+    pub panels: BTreeMap<PanelId, DockPanel>,
+}
+
+impl Default for DockState {
+    fn default() -> Self {
+        Self {
+            left: vec![PanelId::Properties],
+            right: vec![PanelId::BlockPalette],
+            panels: BTreeMap::new(),
+        }
+    }
+}
+
+impl DockState {
+    /// Edge-collection of the panels ordered for rendering on `side`.
+    fn stack(&self, side: DockSide) -> &[PanelId] {
+        match side {
+            DockSide::Left => &self.left,
+            DockSide::Right => &self.right,
+        }
+    }
+
+    fn stack_mut(&mut self, side: DockSide) -> &mut Vec<PanelId> {
+        match side {
+            DockSide::Left => &mut self.left,
+            DockSide::Right => &mut self.right,
+        }
+    }
+
+    /// Guarantee every known `PanelId` has a settings entry, so rendering and
+    /// resize never hit a missing configuration. Also a cheap heal for configs
+    /// written by an older version.
+    pub fn ensure_settings(&mut self) {
+        for id in [PanelId::Properties, PanelId::BlockPalette] {
+            self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
+        }
+    }
+
+    /// Where (if anywhere) a panel is currently docked.
+    pub fn location(&self, id: PanelId) -> Option<(DockSide, usize)> {
+        for side in [DockSide::Left, DockSide::Right] {
+            if let Some(i) = self.stack(side).iter().position(|p| *p == id) {
+                return Some((side, i));
+            }
+        }
+        None
+    }
+
+    pub fn settings(&self, id: PanelId) -> DockPanel {
+        self.panels
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| DockPanel::for_id(id))
+    }
+
+    /// Docked width for `id`, clamped to sane bounds.
+    pub fn width(&self, id: PanelId, win_w: f32) -> f32 {
+        self.settings(id)
+            .width
+            .clamp(DOCK_MIN_W, DOCK_MAX_W.min(win_w * 0.45))
+    }
+
+    pub fn auto_collapse(&self, id: PanelId) -> bool {
+        self.settings(id).auto_collapse
+    }
+
+    /// Set the persisted width, clamped.
+    pub fn set_width(&mut self, id: PanelId, width: f32) {
+        let entry = self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
+        entry.width = width.clamp(DOCK_MIN_W, DOCK_MAX_W);
+    }
+
+    /// Reset width to the panel's default.
+    pub fn reset_width(&mut self, id: PanelId) {
+        let entry = self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
+        entry.width = id.default_width();
+    }
+
+    pub fn set_auto_collapse(&mut self, id: PanelId, on: bool) {
+        let entry = self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
+        entry.auto_collapse = on;
+    }
+
+    /// Dock `id` to `side` at `index` (clamped), removing it from any other
+    /// stack first. Returns whether the layout actually changed.
+    pub fn dock(&mut self, id: PanelId, side: DockSide, index: usize) -> bool {
+        if let Some((old_side, old_i)) = self.location(id) {
+            if old_side == side && old_i == index {
+                return false;
+            }
+            self.stack_mut(old_side).remove(old_i);
+        }
+        let stack = self.stack_mut(side);
+        let index = index.min(stack.len());
+        stack.insert(index, id);
+        true
+    }
+
+    /// True when the panel is in a non-empty reduced state on `side`, i.e. the
+    /// number of reduced panels that share the side's column height.
+    pub fn reduced_count(&self, side: DockSide, expanded: Option<PanelId>) -> usize {
+        self.stack(side)
+            .iter()
+            .filter(|id| Some(**id) != expanded)
+            .count()
+    }
+}
+
+/// Smallest docked width a panel may be dragged or sized to.
+pub const DOCK_MIN_W: f32 = 200.0;
+/// Largest docked width a panel may be dragged or sized to.
+pub const DOCK_MAX_W: f32 = 600.0;
+
+/// Height allocated to one reduced panel sharing an edge with `count` others.
+pub fn slice_height(count: usize, avail: f32) -> f32 {
+    if count == 0 {
+        0.0
+    } else {
+        avail / count as f32
+    }
+}
+
+/// Index (top → bottom) of the reduced slice whose bounds contain screen-local
+/// `y` measured from the top of the edge column. Returns `None` for a y outside
+/// the column or when there are no reduced panels. Even when an expanded panel
+/// overlays the column, this computed index lets a reduced sibling be raised.
+pub fn slice_index_at_y(y: f32, count: usize, avail: f32) -> Option<usize> {
+    if count == 0 || avail <= 0.0 || y < 0.0 {
+        return None;
+    }
+    let h = avail / count as f32;
+    let i = (y / h) as usize;
+    (i < count).then_some(i)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slice_height_divides_equally() {
+        assert_eq!(slice_height(3, 300.0), 100.0);
+        assert_eq!(slice_height(1, 300.0), 300.0);
+        assert_eq!(slice_height(0, 300.0), 0.0);
+    }
+
+    #[test]
+    fn slice_index_maps_y_to_panel() {
+        assert_eq!(slice_index_at_y(50.0, 3, 300.0), Some(0));
+        assert_eq!(slice_index_at_y(110.0, 3, 300.0), Some(1));
+        assert_eq!(slice_index_at_y(299.0, 3, 300.0), Some(2));
+        assert_eq!(slice_index_at_y(300.0, 3, 300.0), None);
+        assert_eq!(slice_index_at_y(-1.0, 3, 300.0), None);
+        assert_eq!(slice_index_at_y(50.0, 0, 300.0), None);
+    }
+
+    #[test]
+    fn default_docks_each_known_panel_on_an_edge() {
+        let state = DockState::default();
+        assert_eq!(state.location(PanelId::Properties), Some((DockSide::Left, 0)));
+        assert_eq!(
+            state.location(PanelId::BlockPalette),
+            Some((DockSide::Right, 0))
+        );
+    }
+
+    #[test]
+    fn ensure_settings_seeds_missing_entries_with_defaults() {
+        let mut state = DockState::default();
+        state.ensure_settings();
+        assert_eq!(state.width(PanelId::Properties, 1600.0), 250.0);
+        assert_eq!(state.width(PanelId::BlockPalette, 1600.0), 260.0);
+        assert!(!state.auto_collapse(PanelId::Properties));
+    }
+
+    #[test]
+    fn dock_moves_between_sides() {
+        let mut state = DockState::default();
+        assert!(state.dock(PanelId::Properties, DockSide::Right, 0));
+        assert_eq!(
+            state.location(PanelId::Properties),
+            Some((DockSide::Right, 0))
+        );
+        // It no longer occupies the left edge.
+        assert!(state.left.is_empty());
+        assert_eq!(state.right.len(), 2);
+    }
+
+    #[test]
+    fn dock_clamps_index() {
+        let mut state = DockState::default();
+        assert!(state.dock(PanelId::Properties, DockSide::Right, 99));
+        assert_eq!(
+            state.location(PanelId::Properties),
+            Some((DockSide::Right, 1))
+        );
+    }
+
+    #[test]
+    fn dock_noop_when_same_spot() {
+        let mut state = DockState::default();
+        assert!(!state.dock(PanelId::Properties, DockSide::Left, 0));
+    }
+
+    #[test]
+    fn set_width_clamps() {
+        let mut state = DockState::default();
+        state.set_width(PanelId::BlockPalette, 10.0);
+        assert_eq!(state.width(PanelId::BlockPalette, 1600.0), DOCK_MIN_W);
+        state.set_width(PanelId::BlockPalette, 5000.0);
+        assert_eq!(state.width(PanelId::BlockPalette, 1600.0), DOCK_MAX_W);
+    }
+
+    #[test]
+    fn width_respects_maximum_window_fraction() {
+        let mut state = DockState::default();
+        state.set_width(PanelId::BlockPalette, 500.0);
+        // Window too narrow -> capped by the 0.45 fraction, not DOCK_MAX_W.
+        assert_eq!(state.width(PanelId::BlockPalette, 800.0), DOCK_MAX_W.min(360.0));
+    }
+
+    #[test]
+    fn reduced_count_excludes_expanded() {
+        let state = DockState::default(); // right: [BlockPalette]
+        assert_eq!(state.reduced_count(DockSide::Right, None), 1);
+        assert_eq!(
+            state.reduced_count(DockSide::Right, Some(PanelId::BlockPalette)),
+            0
+        );
+    }
+}
