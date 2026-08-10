@@ -54,9 +54,55 @@ impl OpenCADStudio {
     pub(in crate::app) fn sync_dyn_fields(&mut self) {
         use crate::app::document::{DynComponent, DynFieldEntry};
         let i = self.active_tab;
-        if !self.dyn_input || self.tabs[i].active_cmd.is_none() {
+
+        if !self.dyn_input {
             self.tabs[i].dyn_fields.clear();
             self.tabs[i].dyn_active = 0;
+            self.tabs[i].dyn_anchor = None;
+            self.tabs[i].dyn_ref = None;
+            return;
+        }
+
+        // A normal 2D grip stretch behaves like a point-placement step:
+        // distance and angle are measured from the grip's original position.
+        //
+        // Grip editing is not an `active_cmd`, so handle it before the normal
+        // command-only path below.
+        let grip_origin = self.tabs[i]
+            .active_grip
+            .as_ref()
+            .filter(|grip| {
+                grip.mode == crate::scene::pick::grip::GripEditMode::Stretch
+            })
+            .map(|grip| grip.origin_world);
+
+        if let Some(origin) = grip_origin {
+            let wanted = [DynComponent::Distance, DynComponent::Angle];
+            let current: Vec<DynComponent> = self.tabs[i]
+                .dyn_fields
+                .iter()
+                .map(|field| field.component)
+                .collect();
+
+            if current.as_slice() != wanted {
+                self.tabs[i].dyn_fields = wanted
+                    .into_iter()
+                    .map(DynFieldEntry::new)
+                    .collect();
+                self.tabs[i].dyn_active = 0;
+            }
+
+            self.tabs[i].dyn_guide = crate::command::DynGuide::Polar;
+            self.tabs[i].dyn_anchor = Some(origin);
+            self.tabs[i].dyn_ref = None;
+            return;
+        }
+
+        if self.tabs[i].active_cmd.is_none() {
+            self.tabs[i].dyn_fields.clear();
+            self.tabs[i].dyn_active = 0;
+            self.tabs[i].dyn_anchor = None;
+            self.tabs[i].dyn_ref = None;
             return;
         }
         // A command may describe its step explicitly via `dyn_spec()` — that
