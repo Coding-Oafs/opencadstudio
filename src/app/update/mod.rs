@@ -125,6 +125,22 @@ impl OpenCADStudio {
     /// changes, and the ribbon tool that launched the dialog is de-highlighted.
     fn close_active_modal(&mut self) {
         use super::ModalKind::*;
+        // Plot Style opened from PLOT behaves as a child modal.
+        // Closing it restores the parent Plot dialog instead of returning
+        // to the drawing.
+        if self.active_modal == Some(Plotstyle) {
+            if let Some((plot_offset, plot_resize)) =
+                self.plotstyle_parent_plot_geometry.take()
+            {
+                self.active_modal = Some(Plot);
+
+                self.reset_modal_geometry();
+                self.modal_offset = plot_offset;
+                self.modal_resize = plot_resize;
+
+                return;
+            }
+        }
         if self.active_modal == Some(Plot) && self.print_all_options {
             if let Some(previous) = self.print_all_options_prev.take() {
                 self.plot_dialog = previous;
@@ -6529,6 +6545,19 @@ impl OpenCADStudio {
                 self.ps_screening_buf = entry
                     .map(|e| e.screening.to_string())
                     .unwrap_or("100".into());
+                // When launched from PLOT, preserve the parent dialog so the Plot Style
+                // editor can appear above it instead of replacing it.
+                if self.active_modal == Some(super::ModalKind::Plot) {
+                    self.plotstyle_parent_plot_geometry =
+                        Some((self.modal_offset, self.modal_resize));
+
+                    // The child editor starts with its own centred geometry.
+                    self.reset_modal_geometry();
+                } else {
+                    // Direct command launch: Plotstyle is a normal standalone modal.
+                    self.plotstyle_parent_plot_geometry = None;
+                }
+
                 self.active_modal = Some(super::ModalKind::Plotstyle);
                 Task::none()
             }
@@ -6558,15 +6587,21 @@ impl OpenCADStudio {
             }
             Message::PlotStylePanelColorBuf(s) => {
                 self.ps_color_buf = s;
-                Task::none()
+                self.on_plot_style_panel_apply()
             }
+
             Message::PlotStylePanelLwBuf(s) => {
                 self.ps_lineweight_buf = s;
-                Task::none()
+                self.on_plot_style_panel_apply()
             }
+            Message::PlotStylePanelLwSet(index) => {
+                self.ps_lineweight_buf = index.to_string();
+                self.on_plot_style_panel_apply()
+            }
+
             Message::PlotStylePanelScreenBuf(s) => {
                 self.ps_screening_buf = s;
-                Task::none()
+                self.on_plot_style_panel_apply()
             }
 
             Message::PlotStylePanelApply => self.on_plot_style_panel_apply(),

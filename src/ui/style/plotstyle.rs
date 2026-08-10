@@ -5,6 +5,38 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input,
 use iced::{Background, Border, Element, Theme};
 use crate::t;
 use std::borrow::Cow;
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq)]
+struct PlotLineweightItem {
+    index: u8,
+    label: String,
+}
+
+impl fmt::Display for PlotLineweightItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.label)
+    }
+}
+
+fn plot_lineweight_options() -> Vec<PlotLineweightItem> {
+    let mut options = vec![PlotLineweightItem {
+        index: 255,
+        label: t!("Use object lineweight").into_owned(),
+    }];
+
+    options.extend(
+        crate::io::plot_style::LW_TABLE
+            .iter()
+            .enumerate()
+            .map(|(index, lw)| PlotLineweightItem {
+                index: index as u8,
+                label: format!("{lw:.2} mm"),
+            }),
+    );
+
+    options
+}
 
 fn btn_s(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, st| {
@@ -128,6 +160,9 @@ pub fn view_window<'a>(
     let aci_items: Vec<Element<'_, Message>> = (1u8..=255)
         .map(|aci| {
             let is_sel = aci == selected_aci;
+            let (aci_color, _) = crate::ui::properties::acad_color_display(
+                acadrust::types::Color::Index(aci),
+            );
             let has_override = table
                 .and_then(|t| t.aci_entries.get(aci as usize))
                 .map(|e| e.color.is_some() || e.lineweight != 255 || e.screening != 100)
@@ -153,8 +188,15 @@ pub fn view_window<'a>(
             } else {
                 format!("{aci:>3}  {}", t!("(default)"))
             };
-            button(text(label).size(10).font(iced::Font::MONOSPACE))
-                .on_press(Message::PlotStylePanelSelectAci(aci))
+            button(
+                row![
+                    crate::ui::color_select::swatch(aci_color),
+                    text(label).size(10).font(iced::Font::MONOSPACE),
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
+            )
+            .on_press(Message::PlotStylePanelSelectAci(aci))
                 .style(move |theme: &Theme, st| {
                     let palette = theme.palette();
                     let pair = match (is_sel, st) {
@@ -232,43 +274,134 @@ pub fn view_window<'a>(
         .unwrap_or_else(|| "—".into());
 
     let lbl = |s: Cow<'static, str>| text(s).size(11).style(muted_style);
+    let lw_items = plot_lineweight_options();
+
+    let current_lw_index = lw_buf
+        .trim()
+        .parse::<u8>()
+        .unwrap_or(255);
+
+    let current_lw = lw_items
+        .iter()
+        .find(|item| item.index == current_lw_index)
+        .cloned()
+        .unwrap_or_else(|| lw_items[0].clone());
 
     let edit_panel = container(
         column![
             row![
-                text(t!("ACI:")).size(11).style(muted_style).width(100),
+                text(t!("ACI:"))
+                    .size(11)
+                    .style(muted_style)
+                    .width(100),
                 text(format!("{selected_aci}")).size(11),
             ]
             .spacing(8)
             .align_y(iced::Center),
-            lbl(t!("Color override (#RRGGBB):")),
-            text_input(t!("#RRGGBB or blank").as_ref(), color_buf)
-                .on_input(Message::PlotStylePanelColorBuf)
-                .style(field_style)
-                .size(11)
-                .padding([4, 8]),
-            lbl(t!("Lineweight index (0-24, 255=obj):")),
-            text_input("255", lw_buf)
-                .on_input(Message::PlotStylePanelLwBuf)
-                .style(field_style)
-                .size(11)
-                .padding([4, 8]),
+
+            // ── Plot color ───────────────────────────────────────────────────
+            lbl(t!("Plot color:")),
+            {
+                let selected_color = color_buf
+                    .strip_prefix('#')
+                    .filter(|hex| hex.len() == 6)
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .map(|rgb| acadrust::types::Color::Rgb {
+                        r: ((rgb >> 16) & 0xFF) as u8,
+                        g: ((rgb >> 8) & 0xFF) as u8,
+                        b: (rgb & 0xFF) as u8,
+                    });
+
+                let display_color = selected_color
+                    .unwrap_or(acadrust::types::Color::Index(selected_aci));
+
+                let (swatch_color, _) =
+                    crate::ui::properties::acad_color_display(display_color);
+
+                let display_text = if color_buf.is_empty() {
+                    t!("Use object color").into_owned()
+                } else {
+                    crate::ui::color_select::color_display_name(display_color)
+                };
+
+                row![
+                    container(
+                        row![
+                            crate::ui::color_select::swatch(swatch_color),
+                            text(display_text).size(11),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Center)
+                    )
+                    .padding([4, 8])
+                    .width(iced::Length::Fill),
+
+                    button(text(t!("Choose color…")).size(11))
+                        .on_press(Message::OpenColorWindow(
+                            crate::app::ColorPickTarget::PlotStyle,
+                            display_color,
+                        ))
+                        .style(btn_s(false))
+                        .padding([4, 10]),
+
+                    button(text(t!("Reset")).size(11))
+                        .on_press(Message::PlotStylePanelColorBuf(String::new()))
+                        .style(btn_s(false))
+                        .padding([4, 10]),
+                ]
+                .spacing(6)
+                .align_y(iced::Center)
+            },
+
+            // ── Lineweight ───────────────────────────────────────────────────
+            lbl(t!("Lineweight:")),
+                iced::widget::pick_list(
+                    Some(current_lw),
+                    lw_items,
+                    |item| item.to_string(),
+                )
+                .on_select(|item: PlotLineweightItem| {
+                    Message::PlotStylePanelLwSet(item.index)
+                })
+                .text_size(11)
+                .padding([3, 5])
+                .width(iced::Length::Fill),
+
+            // ── Screening ────────────────────────────────────────────────────
             lbl(t!("Screening (0-100):")),
             text_input("100", screen_buf)
                 .on_input(Message::PlotStylePanelScreenBuf)
                 .style(field_style)
                 .size(11)
                 .padding([4, 8]),
+
             Space::new().height(8),
-            text(t!("Current values:")).size(10).style(muted_style),
-            text(t!("  Color: %{cur_color}", cur_color = cur_color)).size(10),
-            text(t!("  Lineweight: %{cur_lw}", cur_lw = cur_lw)).size(10),
-            text(t!("  Screening: %{cur_scr}", cur_scr = cur_scr)).size(10),
+
+            // ── Current values ───────────────────────────────────────────────
+            text(t!("Current values:"))
+                .size(10)
+                .style(muted_style),
+
+            text(t!(
+                "  Color: %{cur_color}",
+                cur_color = cur_color
+            ))
+            .size(10),
+
+            text(t!(
+                "  Lineweight: %{cur_lw}",
+                cur_lw = cur_lw
+            ))
+            .size(10),
+
+            text(t!(
+                "  Screening: %{cur_scr}",
+                cur_scr = cur_scr
+            ))
+            .size(10),
+
             Space::new().height(sizing.height),
-            button(text(t!("Apply to ACI")).size(11))
-                .on_press(Message::PlotStylePanelApply)
-                .style(btn_s(true))
-                .padding([5, 10]),
+
         ]
         .spacing(8)
         .height(sizing.height),

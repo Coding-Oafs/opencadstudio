@@ -614,6 +614,9 @@ pub(super) struct OpenCADStudio {
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
+    /// Plot modal geometry preserved while the Plot Style editor is open as
+    /// a child dialog. None means Plotstyle was opened directly (e.g. command).
+    plotstyle_parent_plot_geometry: Option<(iced::Vector, iced::Vector)>,
     /// FIND dialog inputs and current result cursor.
     find_replace: FindReplaceState,
     /// Set once the user acknowledges the AEC-drop warning, so re-entering the
@@ -1187,6 +1190,8 @@ pub enum ColorPickTarget {
     DimStyle(DsField),
     MLeader(&'static str),
     Table(u8, &'static str),
+    /// Plot-style colour override for the currently selected ACI entry.
+    PlotStyle,
     /// Selected entities' colour (left properties panel).
     Properties,
     /// Selected entities' background colour (hatch / MTEXT background row).
@@ -2741,6 +2746,7 @@ pub enum Message {
     /// Edit buffers changed.
     PlotStylePanelColorBuf(String),
     PlotStylePanelLwBuf(String),
+    PlotStylePanelLwSet(u8),
     PlotStylePanelScreenBuf(String),
     /// Apply current edit buffers to the selected ACI entry.
     PlotStylePanelApply,
@@ -3153,6 +3159,7 @@ impl OpenCADStudio {
             color_picker_tab: ColorPickerTab::Index,
             recent_colors: Vec::new(),
             active_modal: None,
+            plotstyle_parent_plot_geometry: None,
             find_replace: FindReplaceState::default(),
             aec_drop_acknowledged: false,
             aec_drop_count: 0,
