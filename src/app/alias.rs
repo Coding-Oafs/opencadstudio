@@ -38,8 +38,84 @@ fn alias_file_path() -> Option<PathBuf> {
     Some(crate::config::config_dir()?.join("ocad.pgp"))
 }
 
+/// Path to the marker recording which default-alias version this profile has
+/// seen, `<config>/ocad.pgp.version`. Kept alongside the alias file; its absence
+/// means "predates versioning" (treated as version 1).
+#[cfg(not(target_arch = "wasm32"))]
+fn alias_version_file_path() -> Option<PathBuf> {
+    Some(crate::config::config_dir()?.join("ocad.pgp.version"))
+}
+
+/// Read the default-version a profile has seen. `0` when no marker exists —
+/// indistinguishable from a first-run of an already-seeded file, so migrate only
+/// neutral additions (never removals) in that case.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_alias_version(path: &PathBuf) -> u32 {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+/// Read the default-version a profile has seen from web `localStorage`.
+#[cfg(target_arch = "wasm32")]
+fn read_alias_version_web() -> u32 {
+    web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .and_then(|storage| storage.get_item(WEB_ALIAS_VERSION_KEY).ok().flatten())
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
 #[cfg(target_arch = "wasm32")]
 const WEB_ALIAS_KEY: &str = "opencadstudio.aliases";
+
+/// Version of the shipped default alias table. Bump this whenever the embedded
+/// defaults add aliases or change a default target, so existing profiles can be
+/// migrated forward (see `introduced_at` / `migrate_aliases`). Version 1 shipped
+/// the pre-REDRAW table; version 2 introduced the REDRAW-family aliases.
+const DEFAULT_ALIASES_VERSION: u32 = 2;
+
+#[cfg(target_arch = "wasm32")]
+const WEB_ALIAS_VERSION_KEY: &str = "opencadstudio.aliases.version";
+
+/// The aliases introduced by a given version of the default table (1-indexed).
+/// A profile that last saw version `V` receives each alias in versions `V+1..`
+/// that it does not already define. Aliases introduced before `V`, even if the
+/// user later removed them, are left alone so deliberate deletions survive.
+fn introduced_at(version: u32) -> &'static [(&'static str, &'static str)] {
+    match version {
+        2 => &[
+            ("R", "REDRAW"),
+            ("RA", "REDRAWALL"),
+            ("RE", "REGEN"),
+            ("REA", "REGENALL"),
+        ],
+        _ => &[],
+    }
+}
+
+/// Fold the defaults introduced after `from_version` into `stored`, adding only
+/// aliases the user does not already define (so overrides and custom targets
+/// are preserved, and nothing already present is overwritten). Returns whether
+/// any alias was added.
+fn migrate_aliases(stored: &mut FxHashMap<String, String>, from_version: u32) -> bool {
+    if from_version >= DEFAULT_ALIASES_VERSION {
+        return false;
+    }
+    let mut changed = false;
+    for version in from_version + 1..=DEFAULT_ALIASES_VERSION {
+        for (alias, cmd) in introduced_at(version) {
+            let key = alias.to_uppercase();
+            if stored.contains_key(&key) {
+                continue;
+            }
+            stored.insert(key, cmd.to_uppercase());
+            changed = true;
+        }
+    }
+    changed
+}
 
 /// Parse `.pgp` text into an `alias → command` map, both uppercased. Skips blank
 /// lines and `;` comments; tolerates a leading `*` on the command and arbitrary
@@ -90,31 +166,76 @@ fn default_map() -> FxHashMap<String, String> {
 /// text from `localStorage`. Missing or unavailable storage falls back to the
 /// embedded defaults.
 pub(super) fn load_aliases() -> FxHashMap<String, String> {
+    // After any migration the caller's key differs; we shadow `path` here so
+    // the version marker maps one-to-one with the alias file that produced it.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        match alias_file_path() {
-            Some(path) => match std::fs::read_to_string(&path) {
-                Ok(body) => parse_pgp(&body),
-                Err(_) => {
-                    // No file yet — copy the shipped default file, best-effort.
+        let Some(path) = alias_file_path() else {
+            return default_map();
+        };
+        return match std::fs::read_to_string(&path) {
+            Ok(body) => {
+                let mut map = parse_pgp(&body);
+                let seen = alias_version_file_path()
+                    .map(|vp| read_alias_version(&vp))
+                    .unwrap_or(0);
+                if migrate_aliases(&mut map, seen) {
+                    // Persist the merged table and advance the marker so the
+                    // next boot skips the already-delivered aliases.
                     if let Some(dir) = path.parent() {
                         let _ = std::fs::create_dir_all(dir);
                     }
-                    let _ = std::fs::write(&path, DEFAULT_ALIASES_PGP);
-                    default_map()
+                    let _ = std::fs::write(&path, to_pgp(&map));
+                    if let Some(vp) = alias_version_file_path() {
+                        let _ = std::fs::write(&vp, DEFAULT_ALIASES_VERSION.to_string());
+                    }
                 }
-            },
-            None => default_map(),
-        }
+                map
+            }
+            Err(_) => {
+                // No file yet — copy the shipped default file, best-effort, and
+                // mark it as current so a later upgrade merges only new aliases.
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(&path, DEFAULT_ALIASES_PGP);
+                if let Some(vp) = alias_version_file_path() {
+                    let _ = std::fs::write(&vp, DEFAULT_ALIASES_VERSION.to_string());
+                }
+                default_map()
+            }
+        };
     }
 
     #[cfg(target_arch = "wasm32")]
     {
-        web_sys::window()
-            .and_then(|window| window.local_storage().ok().flatten())
-            .and_then(|storage| storage.get_item(WEB_ALIAS_KEY).ok().flatten())
-            .map(|body| parse_pgp(&body))
-            .unwrap_or_else(default_map)
+        let Some(storage) =
+            web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+        else {
+            return default_map();
+        };
+        let stored = storage.get_item(WEB_ALIAS_KEY).ok().flatten();
+        return match stored {
+            Some(body) => {
+                let mut map = parse_pgp(&body);
+                let seen = read_alias_version_web();
+                if migrate_aliases(&mut map, seen) {
+                    let _ = storage.set_item(WEB_ALIAS_KEY, &to_pgp(&map));
+                    let _ = storage.set_item(
+                        WEB_ALIAS_VERSION_KEY,
+                        &DEFAULT_ALIASES_VERSION.to_string(),
+                    );
+                }
+                map
+            }
+            None => {
+                let _ = storage.set_item(
+                    WEB_ALIAS_VERSION_KEY,
+                    &DEFAULT_ALIASES_VERSION.to_string(),
+                );
+                default_map()
+            }
+        };
     }
 }
 
@@ -185,5 +306,75 @@ impl OpenCADStudio {
             .map(|(a, c)| (a.trim().to_string(), c.trim().to_string()))
             .collect();
         self.set_command_aliases(map);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(pairs: &[(&str, &str)]) -> FxHashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(a, c)| (a.to_string(), c.to_string()))
+            .collect()
+    }
+
+    /// An existing profile that predates the REDRAW aliases gains exactly the
+    /// new defaults, with every pre-existing mapping kept.
+    #[test]
+    fn migration_adds_new_defaults_preserving_existing() {
+        let mut stored = map(&[("L", "LINE"), ("Z", "ZOOM"), ("HI", "HIDE")]);
+        let changed = migrate_aliases(&mut stored, 0);
+        assert!(changed, "migrating from v0 to v2 must add defaults");
+        assert_eq!(stored.get("R").map(String::as_str), Some("REDRAW"));
+        assert_eq!(stored.get("RA").map(String::as_str), Some("REDRAWALL"));
+        assert_eq!(stored.get("RE").map(String::as_str), Some("REGEN"));
+        assert_eq!(stored.get("REA").map(String::as_str), Some("REGENALL"));
+        // Existing entries must survive untouched.
+        assert_eq!(stored.get("L").map(String::as_str), Some("LINE"));
+        assert_eq!(stored.get("Z").map(String::as_str), Some("ZOOM"));
+        assert_eq!(stored.get("HI").map(String::as_str), Some("HIDE"));
+    }
+
+    /// A user-defined mapping for an alias that collides with a new default is
+    /// never overwritten by the migration.
+    #[test]
+    fn migration_preserves_user_override_of_new_alias() {
+        let mut stored = map(&[("R", "REGEN")]);
+        let changed = migrate_aliases(&mut stored, 0);
+        assert!(changed);
+        assert_eq!(
+            stored.get("R").map(String::as_str),
+            Some("REGEN"),
+            "user's R=REGEN override must win over default R=REDRAW"
+        );
+    }
+
+    /// A profile already at the current version is left untouched — deliberate
+    /// removals are not resurrected on later launches.
+    #[test]
+    fn migration_is_noop_at_current_version() {
+        let mut stored = map(&[("L", "LINE")]);
+        let changed = migrate_aliases(&mut stored, DEFAULT_ALIASES_VERSION);
+        assert!(
+            !changed,
+            "a current profile must not be re-migrated (preserves deletions)"
+        );
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored.get("L").map(String::as_str), Some("LINE"));
+    }
+
+    /// Migrating a mid-range profile (one that saw v1) only pulls in v2's
+    /// additions, not hypothetical earlier ones.
+    #[test]
+    fn migration_from_version_one_adds_v2_aliases() {
+        let mut stored = map(&[("L", "LINE")]);
+        let changed = migrate_aliases(&mut stored, 1);
+        assert!(changed);
+        assert_eq!(stored.get("R").map(String::as_str), Some("REDRAW"));
+        assert_eq!(stored.get("RA").map(String::as_str), Some("REDRAWALL"));
+        assert_eq!(stored.get("RE").map(String::as_str), Some("REGEN"));
+        assert_eq!(stored.get("REA").map(String::as_str), Some("REGENALL"));
     }
 }
