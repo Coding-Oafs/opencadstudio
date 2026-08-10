@@ -599,6 +599,11 @@ pub(super) struct OpenCADStudio {
     // ── Floating panel windows ────────────────────────────────────────────
     /// Active `iced_aw` colour picker: destination plus its initial colour.
     color_pick_target: Option<(ColorPickTarget, AcadColor)>,
+    /// Visible page in the shared CAD colour picker.
+    color_picker_tab: ColorPickerTab,
+    /// Recently committed real colours, newest first.
+    /// ACI and True Color remain semantically distinct even when their RGB matches.
+    recent_colors: Vec<AcadColor>,
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
@@ -1162,7 +1167,13 @@ pub struct SaveOutcome {
     refreshed_preview: Option<Option<acadrust::Preview>>,
     result: Result<(), crate::io::SaveFailure>,
 }
-
+/// Active page in the shared CAD colour picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorPickerTab {
+    #[default]
+    Index,
+    TrueColor,
+}
 /// Where a colour chosen in the standalone palette window should be applied.
 #[derive(Debug, Clone)]
 pub enum ColorPickTarget {
@@ -2904,11 +2915,15 @@ pub enum Message {
     DsCenterMarkMode(String),
     /// Toggle the expanded colour palette for a DimStyle colour field.
     DsColorMore(DsField),
-    /// Open the `iced_aw` colour picker for a field and its current colour.
+    /// Open the shared CAD colour picker for a field and its current colour.
     OpenColorWindow(ColorPickTarget, AcadColor),
+    /// Switch between Index Color and True Color.
+    ColorPickerTabChanged(ColorPickerTab),
+    /// Change the pending colour without committing it yet.
+    ColorPickerColorChanged(AcadColor),
     /// Close the colour picker without choosing.
     CloseColorPicker,
-    /// A colour was chosen in the `iced_aw` picker.
+    /// Commit the colour chosen in the shared picker.
     ColorWindowPick(acadrust::types::Color),
     /// Set a block/linetype Handle field on the selected dim style from a
     /// dropdown of available block-records / linetypes (by name).
@@ -3127,6 +3142,8 @@ impl OpenCADStudio {
             last_point: None,
             main_window: None,
             color_pick_target: None,
+            color_picker_tab: ColorPickerTab::Index,
+            recent_colors: Vec::new(),
             active_modal: None,
             find_replace: FindReplaceState::default(),
             aec_drop_acknowledged: false,
