@@ -4125,8 +4125,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
                             entry.screening = sc.min(100);
                         }
-                        self.command_line
-                            .push_output(crate::tf!("Plot style ACI {aci} updated.").as_ref());
+
                     }
                 } else {
                     // No table loaded: create an identity table and apply.

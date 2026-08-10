@@ -50,7 +50,23 @@ impl OpenCADStudio {
             None => String::new(),
         }
     }
-
+    pub(super) fn plot_modal_content<'s>(
+        &'s self,
+        extra: iced::Vector,
+    ) -> Element<'s, Message> {
+        sized_flow(
+            extra,
+            760,
+            540,
+            |flow| {
+                crate::ui::window::plot::view_window(
+                    &self.plot_dialog,
+                    self.print_all_options,
+                    flow,
+                )
+            },
+        )
+    }
     /// Build the currently-open modal dialog's content (Plan B), or `None`.
     /// Iced 0.15 measures the content first, so dialogs start at their natural
     /// size and overflowing regions become scrollable where a cap is supplied.
@@ -280,20 +296,7 @@ impl OpenCADStudio {
                     })
                 }
             }
-            super::super::ModalKind::Plot => {
-                sized_flow(
-                    ex,
-                    760,
-                    540,
-                    |flow| {
-                        crate::ui::window::plot::view_window(
-                            &self.plot_dialog,
-                            self.print_all_options,
-                            flow,
-                        )
-                    },
-                )
-            }
+            super::super::ModalKind::Plot => self.plot_modal_content(ex),
             super::super::ModalKind::PrintAll => sized_flow(
                 ex,
                 520,

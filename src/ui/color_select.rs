@@ -92,7 +92,7 @@ pub fn color_display_name(c: AcadColor) -> String {
 }
 
 /// A small colour square.
-fn swatch<'a>(bg: Color) -> Element<'a, Message> {
+pub fn swatch<'a>(bg: Color) -> Element<'a, Message> {
     container(text("").width(13).height(13))
         .style(move |theme: &Theme| container::Style {
             background: Some(Background::Color(bg)),

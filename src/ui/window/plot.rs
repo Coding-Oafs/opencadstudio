@@ -784,8 +784,9 @@ pub fn view_window(
                 .on_press(Message::PlotDlg(PlotDlgMsg::LoadStyle))
                 .style(btn(false))
                 .padding([4, 10]),
-            button(text(t!("Save…")).size(11))
-                .on_press(Message::PlotDlg(PlotDlgMsg::SaveStyle))
+
+            button(text(t!("Edit…")).size(11))
+                .on_press(Message::PlotStylePanelOpen)
                 .style(btn(false))
                 .padding([4, 10]),
         ]

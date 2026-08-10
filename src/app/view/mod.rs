@@ -1829,6 +1829,30 @@ impl OpenCADStudio {
             open_progress_layer,
         ];
 
+        // If the Plot Style editor was launched from PLOT, keep the Plot dialog
+        // rendered underneath as its blocked parent.
+        let modal_underlay: Element<'_, Message> =
+            if self.active_modal == Some(super::ModalKind::Plotstyle) {
+                if let Some((plot_offset, plot_resize)) =
+                    self.plotstyle_parent_plot_geometry.as_ref()
+                {
+                    let plot_content = self.plot_modal_content(*plot_resize);
+
+                    crate::ui::modal::modal(
+                        composed,
+                        crate::tr!("modal", "plot"),
+                        plot_content,
+                        Message::CloseModal,
+                        *plot_offset,
+                        crate::ui::modal::ModalOptions::STANDARD,
+                    )
+                } else {
+                    composed.into()
+                }
+            } else {
+                composed.into()
+            };
+
         // ── In-canvas modal dialogs (Plan B) ───────────────────────────────
         // Former pop-up windows render as overlays here, so they work on both
         // the native (single main window) and web builds.
@@ -1842,7 +1866,7 @@ impl OpenCADStudio {
                     crate::ui::modal::ModalOptions::STANDARD
                 };
                 crate::ui::modal::modal(
-                    composed,
+                    modal_underlay,
                     self.modal_title(),
                     content,
                     Message::CloseModal,
@@ -1850,7 +1874,7 @@ impl OpenCADStudio {
                     modal_options,
                 )
             }
-            None => composed.into(),
+            None => modal_underlay,
         };
         // Shared CAD colour picker. Indexed ACI colours use OpenCADStudio's own
         // dialog; True Color keeps the existing iced_aw gradient picker.
