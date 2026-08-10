@@ -180,14 +180,17 @@ pub(super) fn load_aliases() -> FxHashMap<String, String> {
                     .map(|vp| read_alias_version(&vp))
                     .unwrap_or(0);
                 if migrate_aliases(&mut map, seen) {
-                    // Persist the merged table and advance the marker so the
-                    // next boot skips the already-delivered aliases.
+                    // Persist the merged table, and only if that succeeds advance
+                    // the version marker so a later launch retries the merge
+                    // (otherwise the new aliases would be lost for good while the
+                    // marker claimed they were delivered).
                     if let Some(dir) = path.parent() {
                         let _ = std::fs::create_dir_all(dir);
                     }
-                    let _ = std::fs::write(&path, to_pgp(&map));
-                    if let Some(vp) = alias_version_file_path() {
-                        let _ = std::fs::write(&vp, DEFAULT_ALIASES_VERSION.to_string());
+                    if std::fs::write(&path, to_pgp(&map)).is_ok() {
+                        if let Some(vp) = alias_version_file_path() {
+                            let _ = std::fs::write(&vp, DEFAULT_ALIASES_VERSION.to_string());
+                        }
                     }
                 }
                 map
@@ -220,11 +223,18 @@ pub(super) fn load_aliases() -> FxHashMap<String, String> {
                 let mut map = parse_pgp(&body);
                 let seen = read_alias_version_web();
                 if migrate_aliases(&mut map, seen) {
-                    let _ = storage.set_item(WEB_ALIAS_KEY, &to_pgp(&map));
-                    let _ = storage.set_item(
-                        WEB_ALIAS_VERSION_KEY,
-                        &DEFAULT_ALIASES_VERSION.to_string(),
-                    );
+                    // Only advance the version marker once the migrated table is
+                    // actually stored, so a failed set_item leaves the marker
+                    // behind and the merge is retried next launch.
+                    if storage
+                        .set_item(WEB_ALIAS_KEY, &to_pgp(&map))
+                        .is_ok()
+                    {
+                        let _ = storage.set_item(
+                            WEB_ALIAS_VERSION_KEY,
+                            &DEFAULT_ALIASES_VERSION.to_string(),
+                        );
+                    }
                 }
                 map
             }
