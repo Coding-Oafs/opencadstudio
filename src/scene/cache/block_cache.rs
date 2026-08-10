@@ -864,11 +864,13 @@ pub fn expand_insert(
     ins: &acadrust::entities::Insert,
     ins_handle: Handle,
     ins_resolved_color: [f32; 4],
+    ins_aci: u8,
     ins_pat_len: f32,
     ins_pat: [f32; 8],
     ins_lw_px: f32,
     // The INSERT's own layer style — layer-0 inheritance target for children.
     ins_layer: crate::scene::view::render::InheritStyle,
+    ins_layer_aci: u8,
     selected: bool,
     pslt_factor: f32,
     // World-space XY view AABB (with world_offset already subtracted, so the
@@ -1004,10 +1006,12 @@ pub fn expand_insert(
         let ctx = ExpandCtx {
             cache,
             ins_color: ins_resolved_color,
+            ins_aci,
             ins_pat_len,
             ins_pat,
             ins_lw_px,
             l0: ins_layer,
+            l0_aci: ins_layer_aci,
             selected,
             pslt_factor,
             view_aabb,
@@ -1157,12 +1161,14 @@ fn aabb_pixel_size(local_aabb: [f32; 4], world_per_pixel: f32) -> f32 {
 struct ExpandCtx<'a> {
     cache: &'a BlockCache,
     ins_color: [f32; 4],
+    ins_aci: u8,
     ins_pat_len: f32,
     ins_pat: [f32; 8],
     ins_lw_px: f32,
     /// Layer-0 inheritance target — the current INSERT's *layer* style, used
     /// for child wires on layer "0" whose properties are ByLayer.
     l0: crate::scene::view::render::InheritStyle,
+    l0_aci: u8,
     selected: bool,
     pslt_factor: f32,
     // World-space XY view AABB (post world_offset). `None` = no culling.
@@ -1494,19 +1500,21 @@ fn expand_defn(
                         ctx.ins_pat_len,
                         ctx.ins_pat,
                         ctx.ins_lw_px,
-                        0,
+                        ctx.ins_aci,
                     ),
                     layer0: ctx.l0,
-                    layer0_aci: 0,
+                    layer0_aci: ctx.l0_aci,
                 };
                 let nested_style = nref.style.resolve(parent_style);
                 let inner_ctx = ExpandCtx {
                     cache: ctx.cache,
                     ins_color: nested_style.insert.0,
+                    ins_aci: nested_style.insert.4,
                     ins_pat_len: nested_style.insert.1,
                     ins_pat: nested_style.insert.2,
                     ins_lw_px: nested_style.insert.3,
                     l0: nested_style.layer0,
+                    l0_aci: nested_style.layer0_aci,
                     selected: ctx.selected,
                     pslt_factor: ctx.pslt_factor,
                     view_aabb: ctx.view_aabb,
@@ -1664,6 +1672,13 @@ fn emit_wire(
     // Resolve final style for this LocalWire against the outer Insert ctx
     // before we hash it into a batch.
     let final_color = resolve_wire_color(lw, ctx);
+    let final_aci = if lw.color_is_byblock {
+            ctx.ins_aci
+        } else if lw.color_l0 {
+            ctx.l0_aci
+        } else {
+            lw.aci
+        };
     let (final_pat_len, final_pat) = if lw.lt_is_byblock {
         (ctx.ins_pat_len, ctx.ins_pat)
     } else if lw.lt_l0 {
@@ -1718,7 +1733,7 @@ fn emit_wire(
         final_pat,
         final_lw_px,
         final_world_width,
-        lw.aci,
+        final_aci,
         lw.plinegen,
         lw.is_fill_only,
         lw.fill_is_2d_solid,
@@ -1741,7 +1756,7 @@ fn emit_wire(
             final_pat,
             final_lw_px,
             final_world_width,
-            lw.aci,
+            final_aci,
             lw.plinegen,
             lw.is_fill_only,
             lw.fill_is_2d_solid,

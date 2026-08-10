@@ -1038,7 +1038,7 @@ pub(crate) fn tessellate_entity(
 
     if let EntityType::Insert(ins) = e {
         // Resolve the INSERT's own style so ByBlock sub-entities can inherit it.
-        let (ins_color, ins_pat_len, ins_pat, ins_lw_px, _) =
+        let (ins_color, ins_pat_len, ins_pat, ins_lw_px, ins_aci) =
             view::render::render_style_for_viewport(document, e, active_viewport);
         let ins_color = view::render::adapt_to_bg(ins_color, bg_color);
         // Resolve the INSERT's *layer* style — the layer-0 inheritance target
@@ -1052,6 +1052,14 @@ pub(crate) fn tessellate_entity(
             s.color = view::render::adapt_to_bg(s.color, bg_color);
             s
         };
+        let ins_layer_aci = document
+            .layers
+            .get(&ins.common.layer)
+            .and_then(|layer| match &layer.color {
+                acadrust::types::Color::Index(index) => Some(*index),
+                _ => None,
+            })
+            .unwrap_or(0);
         let ip = glam::Vec3::new(
             (ins.insert_point.x) as f32,
             (ins.insert_point.y) as f32,
@@ -1114,10 +1122,12 @@ pub(crate) fn tessellate_entity(
             ins,
             h,
             ins_color,
+            ins_aci,
             ins_pat_len,
             ins_pat,
             ins_lw_px,
             ins_layer,
+            ins_layer_aci,
             sel,
             pslt_factor,
             view_aabb,
