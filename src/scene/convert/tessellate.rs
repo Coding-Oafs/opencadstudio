@@ -1134,7 +1134,7 @@ pub fn tessellate(
                     };
                     out.push(WireModel {
                         taper_widths: Vec::new(),
-                        world_width: 0.0,
+                        world_width: polyline_band_width(entity),
                         depth_override: None,
                         fill_is_3d: false,
                         fill_is_2d_solid: false,

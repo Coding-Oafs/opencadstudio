@@ -116,7 +116,7 @@ fn to_render(spl: &Spline) -> RenderEntity {
     let is_closed = spl.flags.closed || spl.flags.periodic;
     let mut points = crate::entities::curve::spline_curve(spl)
         .map(|planar| crate::entities::curve::curve_points(&planar))
-        .unwrap_or_default();
+        .unwrap_or_else(|| measurement_polyline(spl));
     if is_closed {
         if let (Some(first), Some(last)) = (points.first().copied(), points.last().copied()) {
             let gap = ((last[0] - first[0]).powi(2)
