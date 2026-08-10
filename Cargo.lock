@@ -70,7 +70,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadifc"
 version = "0.5.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=56f1596#56f159696c3f39fe119b96f23f922be154a15f8f"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=6767b22#6767b22f17ac760f789edb82ec1e32760a8b6cca"
 dependencies = [
  "acadrust",
  "base64",
@@ -890,9 +890,10 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=435f7f1#435f7f12895460956dfaf0434495454187c4d2de"
+source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=ba7292c#ba7292c152ef5069b0bcf8c86730db75339fc383"
 dependencies = [
  "cavalier_contours",
+ "spade",
 ]
 
 [[package]]
@@ -4659,6 +4660,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "robust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5200,6 +5207,18 @@ dependencies = [
  "web-sys",
  "windows-sys 0.61.2",
  "x11rb",
+]
+
+[[package]]
+name = "spade"
+version = "2.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
+dependencies = [
+ "hashbrown 0.16.1",
+ "num-traits",
+ "robust",
+ "smallvec",
 ]
 
 [[package]]

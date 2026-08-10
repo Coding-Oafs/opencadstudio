@@ -9,7 +9,7 @@ license = "GPL-3.0-only"
 # Pulled in only by the `host` feature, which adds the `acadrust`-typed
 # `HostApi` runtime surface. The default crate stays dependency-free so engine
 # crates and external tooling can depend on the manifest/ribbon contract cheaply.
-acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "56f1596", optional = true, features = ["serde"] }
+acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "6767b22", optional = true, features = ["serde"] }
 
 # Runtime IPC and serialization (host feature only).
 interprocess = { version = "2", optional = true }
