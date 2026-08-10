@@ -7321,21 +7321,56 @@ impl OpenCADStudio {
             }
             Message::OpenColorWindow(target, color) => {
                 self.color_pick_target = Some((target, color));
+
+                // Always open the shared CAD colour picker on the indexed ACI page.
+                self.color_picker_tab = crate::app::ColorPickerTab::Index;
+                self.modal_offset = iced::Vector::ZERO;
                 self.ds_color_open = None;
                 self.mls_color_open = None;
                 self.ts_color_open = None;
                 self.ribbon.close_dropdown();
+
                 let i = self.active_tab;
                 self.tabs[i].properties.color_picker_open = false;
                 self.tabs[i].layers.color_picker_row = None;
-                // `color_pick_target.is_some()` drives the iced_aw overlay.
+
+                Task::none()
+            }
+
+            Message::ColorPickerTabChanged(tab) => {
+                self.color_picker_tab = tab;
+                Task::none()
+            }
+            Message::ColorPickerColorChanged(color) => {
+                if let Some((_, current)) = self.color_pick_target.as_mut() {
+                    *current = color;
+                }
                 Task::none()
             }
             Message::CloseColorPicker => {
                 self.color_pick_target = None;
                 Task::none()
             }
-            Message::ColorWindowPick(color) => self.on_color_window_pick(color),
+
+            Message::ColorWindowPick(color) => {
+                // Keep only real colours in the recent list. ByLayer / ByBlock / None
+                // are logical CAD states rather than reusable colours.
+                if matches!(
+                    &color,
+                    acadrust::types::Color::Index(_)
+                        | acadrust::types::Color::Rgb { .. }
+                ) {
+                    // No duplicates: selecting an existing colour moves it to the front.
+                    if let Some(pos) = self.recent_colors.iter().position(|c| c == &color) {
+                        self.recent_colors.remove(pos);
+                    }
+
+                    self.recent_colors.insert(0, color.clone());
+                    self.recent_colors.truncate(12);
+                }
+
+                self.on_color_window_pick(color)
+            }
             Message::DsSetHandle { field, value } => self.on_ds_set_handle(field, value),
         }
     }
