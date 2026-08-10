@@ -890,7 +890,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=117091d#117091d95a6af5c0bf3b7b4377e9e1dd864e7464"
+source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=c5b900f#c5b900f8493d482b64a4a08515697f662cbcaa64"
 dependencies = [
  "acadrust",
  "cavalier_contours",
