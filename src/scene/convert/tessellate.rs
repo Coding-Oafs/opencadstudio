@@ -1113,10 +1113,16 @@ pub fn tessellate(
                 } else {
                     color
                 };
-                // Circles use the Lines path for large-coordinate precision, but they
-                // must still preserve the entity's resolved linetype pattern.
+                // Basic curve entities use the Lines path for large-coordinate precision,
+                // but they must still preserve the entity's resolved linetype pattern.
                 let (edge_pattern_length, edge_pattern) =
-                    if matches!(entity, EntityType::Circle(_)) {
+                    if matches!(
+                        entity,
+                        EntityType::Line(_)
+                            | EntityType::Circle(_)
+                            | EntityType::Arc(_)
+                            | EntityType::Ellipse(_)
+                    ) {
                         (pattern_length, pattern)
                     } else {
                         (0.0, [0.0; 8])
