@@ -1231,7 +1231,7 @@ fn transform_block_mesh_lod_set(
         xform.apply_rotation(Vector3::UNIT_Z),
     ];
     out.curved_gens.retain_mut(|generator| {
-        let transformed = acadrust::kernel::brep::mesh::transform_silhouette_affine(
+        let transformed = cadkernel::brep::mesh::transform_silhouette_affine(
             &generator.source,
             vectors.map(|vector| [vector.x, vector.y, vector.z]),
             [origin.x, origin.y, origin.z],
@@ -1665,7 +1665,7 @@ pub struct Scene {
     /// here to be combined) and the exact-geometry save path, which writes
     /// each one back out as ACIS rather than as facets. Not persisted —
     /// rebuilt only by creating or combining primitives in-session.
-    pub solid_models: HashMap<Handle, acadrust::kernel::brep::Body>,
+    pub solid_models: HashMap<Handle, cadkernel::brep::Body>,
     /// GPU render data for raster images (RasterImage entities), keyed by handle.
     pub images: HashMap<Handle, ImageModel>,
     /// The viewport that is currently "entered" (MSPACE mode).
@@ -2606,7 +2606,7 @@ impl Scene {
     /// pipeline under `handle`. The body is in the same offset-relative frame
     /// the mesh pipeline uses, so the mesh is stored as-is (Model-tab geometry
     /// is authored at world_offset 0).
-    pub fn register_solid_model(&mut self, handle: Handle, solid: acadrust::kernel::brep::Body) {
+    pub fn register_solid_model(&mut self, handle: Handle, solid: cadkernel::brep::Body) {
         let entity = self.document.get_entity(handle);
         let color = entity
             .map(|e| self.render_style(e).0)

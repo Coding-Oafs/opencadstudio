@@ -14,7 +14,7 @@ use acadrust::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline};
 // Shared plane geometry, from cadkernel via the local adapters.
 use super::geom;
 use super::geom::{arc_points as arc_pts, line_line as ll, normalize_angle as norm_angle};
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::{
     circle_circle_points as circle_circle_pts, fillet_between_rays, fillets_between, line_circle,
     Arc as KernelArc, Curve as KernelCurve, Fillet as KernelFillet,
     Line as KernelLine, Tolerance,

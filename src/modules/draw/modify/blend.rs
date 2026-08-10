@@ -6,12 +6,12 @@
 //! geometric curvature (G2).
 
 use acadrust::entities::{EntityCommon, Spline};
-use acadrust::kernel::space::curve as space_curve;
+use cadkernel::space::curve as space_curve;
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 use crate::t;
-use acadrust::kernel::space::NurbsCurve3;
+use cadkernel::space::NurbsCurve3;
 
 use crate::command::{CadCommand, CmdOption, CmdResult};
 use crate::entities::common::BulgeArc;

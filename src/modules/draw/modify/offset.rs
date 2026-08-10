@@ -20,8 +20,8 @@ use acadrust::entities::{
 use acadrust::{EntityType, Handle};
 // Polyline offsetting, and the angle normalisation that goes with it, come
 // from the kernel; only the entity conversion stays here.
-use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::nurbs::clamped_uniform_knots;
+use cadkernel::geom2d::{
     offset_polyline, Polyline as KernelPolyline, PolylineVertex as KernelVertex,
 };
 use glam::{DVec3, Vec3};
@@ -361,7 +361,7 @@ fn perp_distance(entity: &EntityType, pt: Vec3) -> f64 {
 // ── Wire preview points ─────────────────────────────────────────────────────
 
 /// Preview density, matching the figure the drawn wires use.
-const PREVIEW_SEGMENTS_PER_RADIAN: f64 = acadrust::kernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
+const PREVIEW_SEGMENTS_PER_RADIAN: f64 = cadkernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
 
 /// Preview points for an entity, from its own curve.
 ///

@@ -2,7 +2,7 @@
 // MEASURE command — place Point entities at fixed-distance intervals along an entity.
 
 use acadrust::entities::Point as PointEnt;
-use acadrust::kernel::space::PlanarCurve;
+use cadkernel::space::PlanarCurve;
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;

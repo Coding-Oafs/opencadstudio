@@ -698,8 +698,8 @@ impl Scene {
                         translate_split(high, low);
                     }
                     for generator in &mut set.curved_gens {
-                        let placement = acadrust::kernel::brep::Placement::at(delta);
-                        if let Some(source) = acadrust::kernel::brep::mesh::transform_silhouette(
+                        let placement = cadkernel::brep::Placement::at(delta);
+                        if let Some(source) = cadkernel::brep::mesh::transform_silhouette(
                             &generator.source,
                             &placement,
                         ) {

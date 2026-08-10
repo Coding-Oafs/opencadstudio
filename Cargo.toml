@@ -12,6 +12,10 @@ members = [
     "crates/dwg-thumbnailer-win",
 ]
 
+[features]
+default = []
+ifc = ["dep:acadifc"]
+
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
@@ -27,10 +31,9 @@ glam = { version = "0.33", features = ["bytemuck"] }
 rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
-# The CAD stack is reached through acadifc, which re-exports the codec and
-# the geometry kernel. Aliased to `acadrust` so existing `use acadrust::…`
-# paths keep resolving.
-acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "6767b22", features = ["serde", "offset"] }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "7e2fa8c", features = ["serde"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "6b6a995", features = ["acis", "offset"] }
+acadifc = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "47b5603", optional = true }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }

@@ -1401,7 +1401,7 @@ impl Scene {
                 if let Some(curve) = crate::entities::hatch::edge_curve(edge) {
                     edge_polys.push(
                         curve
-                            .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+                            .tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
                             .into_iter()
                             .map(|point| to_xy(point[0], point[1]))
                             .collect(),

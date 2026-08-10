@@ -7,9 +7,11 @@ name = "OpenCADStudio"
 version = "0.9.4"
 dependencies = [
  "acadifc",
+ "acadrust",
  "ashpd",
  "bincode",
  "bytemuck",
+ "cadkernel",
  "clap",
  "console_error_panic_hook",
  "cosmic-text 0.15.0",
@@ -70,11 +72,9 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadifc"
 version = "0.5.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=6767b22#6767b22f17ac760f789edb82ec1e32760a8b6cca"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=47b5603#47b5603a06303dd9935af041d45c8bc4c37545a6"
 dependencies = [
- "acadrust",
  "base64",
- "cadkernel",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -890,8 +890,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=ba7292c#ba7292c152ef5069b0bcf8c86730db75339fc383"
+source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=6b6a995#6b6a99546b1a871007a8e3da73530b3aa4502dea"
 dependencies = [
+ "acadrust",
  "cavalier_contours",
  "spade",
 ]
@@ -3747,7 +3748,7 @@ dependencies = [
 name = "ocs_plugin_api"
 version = "0.1.0"
 dependencies = [
- "acadifc",
+ "acadrust",
  "bincode",
  "getrandom 0.2.17",
  "interprocess",
@@ -3762,7 +3763,7 @@ dependencies = [
 name = "ocs_web_worker"
 version = "0.1.0"
 dependencies = [
- "acadifc",
+ "acadrust",
  "bincode",
  "console_error_panic_hook",
  "getrandom 0.3.4",

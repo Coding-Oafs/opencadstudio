@@ -259,7 +259,7 @@ fn tessellate_polyline2d(pl: &Polyline2D) -> RenderEntity {
                     radius: arc.radius as f32,
                 });
                 for s in arc
-                    .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+                    .tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
                     .into_iter()
                     .skip(1)
                 {

@@ -27,8 +27,8 @@ use acadrust::entities::{
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
-use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::nurbs::clamped_uniform_knots;
+use cadkernel::geom2d::{
     intersect as kernel_intersect, Arc as KernelArc, Circle as KernelCircle, Curve,
     Extent as KernelExtent,
     Ellipse as KernelEllipse, EllipseArc as KernelEllipseArc, Line as KernelLine,
@@ -77,7 +77,7 @@ const TRIM_EXTENT: f64 = 1_000_000.0;
 /// Sampling density for the plan-view point lists the fence and preview
 /// passes walk. The renderer's own figure, so a preview cut lands where the
 /// drawn geometry is rather than a chord away from it.
-const SAMPLE_SEGMENTS_PER_RADIAN: f64 = acadrust::kernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
+const SAMPLE_SEGMENTS_PER_RADIAN: f64 = cadkernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
 /// If a trim interval endpoint is beyond this threshold it is treated as "infinite".
 
 #[derive(Clone)]

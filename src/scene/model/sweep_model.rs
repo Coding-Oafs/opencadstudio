@@ -12,9 +12,9 @@
 // approximated into a surface nobody asked for. That is the kernel's answer
 // and this module passes it on.
 
-use acadrust::kernel::brep::{self, Body};
-use acadrust::kernel::geom2d::Curve;
-use acadrust::kernel::space::{PlanarCurve, Plane};
+use cadkernel::brep::{self, Body};
+use cadkernel::geom2d::Curve;
+use cadkernel::space::{PlanarCurve, Plane};
 use acadrust::EntityType;
 
 use crate::entities::curve::entity_curve;
@@ -57,7 +57,7 @@ pub fn profile_of(entity: &EntityType) -> Option<Profile> {
 
 /// A circle as four arcs.
 fn quarters(centre: [f64; 2], radius: f64) -> Vec<Curve> {
-    use acadrust::kernel::geom2d::Arc;
+    use cadkernel::geom2d::Arc;
     use std::f64::consts::FRAC_PI_2;
     (0..4)
         .map(|quarter| {
@@ -112,7 +112,7 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
 /// SWEEP through the kernel's tolerance-driven mesh API.
 pub fn swept(profile: &EntityType, path: &EntityType, color: [f32; 4]) -> Option<MeshLodSet> {
-    let max_angle = acadrust::kernel::tessellation::DEFAULT_ANGLE;
+    let max_angle = cadkernel::tessellation::DEFAULT_ANGLE;
     let surface = brep::mesh::sweep_surface(
         &entity_curve(profile)?,
         &entity_curve(path)?,
@@ -124,7 +124,7 @@ pub fn swept(profile: &EntityType, path: &EntityType, color: [f32; 4]) -> Option
 /// LOFT through the kernel's tolerance-driven mesh API.
 pub fn lofted(profiles: &[EntityType], color: [f32; 4]) -> Option<MeshLodSet> {
     let curves: Vec<PlanarCurve> = profiles.iter().filter_map(entity_curve).collect();
-    let max_angle = acadrust::kernel::tessellation::DEFAULT_ANGLE;
+    let max_angle = cadkernel::tessellation::DEFAULT_ANGLE;
     mesh_set(brep::mesh::loft_surface(&curves, max_angle)?, color, 1e-9)
 }
 

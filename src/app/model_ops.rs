@@ -7,7 +7,7 @@
 // cylinder afterwards, and saves as one.
 
 use acadrust::entities::Solid3D;
-use acadrust::kernel::brep::Body;
+use cadkernel::brep::Body;
 use acadrust::{EntityType, Handle};
 use iced::Task;
 

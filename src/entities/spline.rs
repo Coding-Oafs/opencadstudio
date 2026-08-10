@@ -1,6 +1,6 @@
 use acadrust::entities::Spline;
 use crate::t;
-use acadrust::kernel::space::NurbsCurve3;
+use cadkernel::space::NurbsCurve3;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
@@ -171,7 +171,7 @@ pub(crate) fn measurement_polyline(spl: &Spline) -> Vec<[f64; 3]> {
     });
     match NurbsCurve3::new(degree, controls, spl.knots.clone(), weights) {
         Some(curve) => {
-            curve.tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+            curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
         }
         None => spl.control_points.iter().map(|p| [p.x, p.y, p.z]).collect(),
     }
@@ -240,10 +240,10 @@ fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[
             }
             q
         };
-        let sampled = acadrust::kernel::tessellation::sample_curve3_angle(
+        let sampled = cadkernel::tessellation::sample_curve3_angle(
             point_at,
             tangent_at,
-            acadrust::kernel::tessellation::DEFAULT_ANGLE,
+            cadkernel::tessellation::DEFAULT_ANGLE,
         );
         out.extend(sampled.into_iter().skip(usize::from(seg > 0)));
     }
@@ -363,10 +363,10 @@ fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
             }
             q
         };
-        let sampled = acadrust::kernel::tessellation::sample_curve3_angle(
+        let sampled = cadkernel::tessellation::sample_curve3_angle(
             point_at,
             tangent_at,
-            acadrust::kernel::tessellation::DEFAULT_ANGLE,
+            cadkernel::tessellation::DEFAULT_ANGLE,
         );
         out.extend(sampled.into_iter().skip(usize::from(i > 0)));
     }

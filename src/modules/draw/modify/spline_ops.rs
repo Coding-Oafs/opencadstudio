@@ -10,8 +10,8 @@
 // fine until it is measured.
 
 use acadrust::entities::Spline;
-use acadrust::kernel::geom2d::{NurbsCurve, Parameterization};
-use acadrust::kernel::space::Plane;
+use cadkernel::geom2d::{NurbsCurve, Parameterization};
+use cadkernel::space::Plane;
 use acadrust::types::Vector3;
 use acadrust::Handle;
 

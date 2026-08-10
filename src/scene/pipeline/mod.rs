@@ -2327,7 +2327,7 @@ impl Pipeline {
                 }
             };
             for generator in &set.curved_gens {
-                for point in acadrust::kernel::brep::mesh::silhouette(
+                for point in cadkernel::brep::mesh::silhouette(
                     &generator.source,
                     [view.x, view.y, view.z],
                 ) {

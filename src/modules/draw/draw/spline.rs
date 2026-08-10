@@ -11,7 +11,7 @@ use crate::command::{CadCommand, CmdResult};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
-use acadrust::kernel::space::NurbsCurve3;
+use cadkernel::space::NurbsCurve3;
 
 #[allow(dead_code)]
 pub fn tool() -> ToolDef {

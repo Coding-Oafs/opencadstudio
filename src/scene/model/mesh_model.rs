@@ -45,7 +45,7 @@ pub struct MeshModel {
 /// Kernel-owned source for a view-dependent silhouette.
 #[derive(Clone, Debug)]
 pub struct CurvedGen {
-    pub source: acadrust::kernel::brep::mesh::SilhouetteSource,
+    pub source: cadkernel::brep::mesh::SilhouetteSource,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

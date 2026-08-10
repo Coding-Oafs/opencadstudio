@@ -8,9 +8,9 @@
 //!
 //! Lift and tessellation failures are reported as an incomplete result.
 
-use acadrust::acis::lift;
+use cadkernel::acis::lift;
 use acadrust::entities::acis::SatDocument;
-use acadrust::kernel::brep;
+use cadkernel::brep;
 
 use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
 use crate::scene::model::mesh_model::{CurvedGen, MeshLodSet};
@@ -53,7 +53,7 @@ pub fn tessellate_sat(
     } else {
         1.0
     };
-    let max_angle = acadrust::kernel::tessellation::DEFAULT_ANGLE / resolution;
+    let max_angle = cadkernel::tessellation::DEFAULT_ANGLE / resolution;
 
     // Positions stay f64 until `finalize_mesh` splits them into the coarse
     // and fine pair, so a solid at survey coordinates keeps its millimetres.
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn a_round_surface_gets_the_same_sides_whatever_its_size() {
-        let angle = acadrust::kernel::tessellation::DEFAULT_ANGLE;
+        let angle = cadkernel::tessellation::DEFAULT_ANGLE;
         assert!(sides(angle) > 24.0, "{}", sides(angle));
         assert!(sides(angle) < 96.0, "{}", sides(angle));
     }

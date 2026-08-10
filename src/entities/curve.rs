@@ -32,11 +32,11 @@ use acadrust::entities::{
     Arc as ArcEnt, Circle as CircleEnt, Ellipse as EllipseEnt, LwPolyline as LwPolylineEnt,
     Polyline2D, Spline as SplineEnt,
 };
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::{
     characteristic_points, Arc, Circle, Curve, Ellipse, EllipseArc, Line, Polyline, PolylineVertex,
     Ray, SnapKind, Transform, XLine,
 };
-use acadrust::kernel::space::{PlanarCurve, Plane, Vec3};
+use cadkernel::space::{PlanarCurve, Plane, Vec3};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
 
@@ -333,7 +333,7 @@ pub fn entity_curve_xy(entity: &EntityType) -> Option<Curve> {
 
 /// World-space wire points sampled by the kernel's angular policy.
 pub fn curve_points(curve: &PlanarCurve) -> Vec<[f64; 3]> {
-    curve.tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+    curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
 }
 
 /// The snap candidates an entity's curve offers, in the two channels the
@@ -705,12 +705,12 @@ mod tests {
     /// where it happens rather than the next time somebody reaches for it.
     #[test]
     fn the_solid_layer_and_the_acis_bridge_are_reachable() {
-        let solid = acadrust::kernel::brep::make::cuboid([0.0; 3], [1.0; 3])
+        let solid = cadkernel::brep::make::cuboid([0.0; 3], [1.0; 3])
             .expect("the kernel builds its own primitives");
         assert!(solid.validate().is_empty());
         assert_eq!(solid.euler_characteristic(), 2);
         let document = acadrust::entities::acis::types::SatDocument::new();
-        let (bodies, loss) = acadrust::acis::lift(&document);
+        let (bodies, loss) = cadkernel::acis::lift(&document);
         assert!(bodies.is_empty() && loss.is_empty(), "an empty document lifts to nothing");
     }
 
@@ -742,14 +742,14 @@ mod tests {
         ray.base_point = v3(1.0, 1.0, 0.0);
         ray.direction = v3(2.0, 0.0, 0.0);
         let curve = entity_curve(&EntityType::Ray(ray)).unwrap();
-        assert_eq!(curve.extent(), acadrust::kernel::geom2d::Extent::Forward);
+        assert_eq!(curve.extent(), cadkernel::geom2d::Extent::Forward);
         assert_eq!(curve.point_at(1.0), [3.0, 1.0, 0.0]);
 
         let mut line = XLineEnt::default();
         line.base_point = v3(0.0, 0.0, 0.0);
         line.direction = v3(0.0, 3.0, 0.0);
         let curve = entity_curve(&EntityType::XLine(line)).unwrap();
-        assert_eq!(curve.extent(), acadrust::kernel::geom2d::Extent::Infinite);
+        assert_eq!(curve.extent(), cadkernel::geom2d::Extent::Infinite);
         assert_eq!(curve.point_at(-1.0), [0.0, -3.0, 0.0]);
     }
 }

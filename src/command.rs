@@ -1158,7 +1158,7 @@ pub enum CmdResult {
     /// rendering). Ends the command.
     CommitSolid {
         entity: EntityType,
-        solid: Box<acadrust::kernel::brep::Body>,
+        solid: Box<cadkernel::brep::Body>,
     },
     /// Commit an acadrust entity, end the command, and open the in-place text
     /// editor on it (used by MLEADER to type the annotation after placement).

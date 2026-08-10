@@ -1,5 +1,5 @@
 use acadrust::entities::{BoundaryEdge, Hatch};
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::{
     Arc as KernelArc, Curve as KernelCurve, Ellipse as KernelEllipse,
     EllipseArc as KernelEllipseArc, Line as KernelLine, NurbsCurve as KernelNurbs,
     Parameterization, Polyline as KernelPolyline, PolylineVertex as KernelVertex,
@@ -999,7 +999,7 @@ impl FallbackTess for Hatch {
                     continue;
                 };
                 let local = curve
-                    .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE);
+                    .tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE);
                 if local.len() < 2 {
                     continue;
                 }

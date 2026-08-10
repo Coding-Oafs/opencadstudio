@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::{
     inside_spans, Curve as KernelCurve, Line as KernelLine, Tolerance, XLine as KernelXLine,
 };
 

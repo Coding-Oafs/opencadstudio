@@ -11,7 +11,7 @@ use acadrust::entities::Solid3D;
 use acadrust::{primitives, EntityType};
 use glam::DVec3;
 use crate::t;
-use acadrust::kernel::brep::Body;
+use cadkernel::brep::Body;
 
 use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::scene::model::solid_model;

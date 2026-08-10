@@ -11,7 +11,7 @@ use crate::modules::draw::modify::spline_ops::{spline_cut, spline_to_nurbs};
 use acadrust::entities::{
     Arc as ArcEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline, Spline as SplineEnt,
 };
-use acadrust::kernel::geom2d::{
+use cadkernel::geom2d::{
     Curve, Ellipse as KernelEllipse, EllipseArc as KernelEllipseArc,
 };
 use acadrust::types::Vector3;

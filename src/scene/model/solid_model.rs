@@ -13,7 +13,7 @@
 // The resulting `Body` is cached per entity handle on the Scene so the
 // Design-group boolean tools can run on it.
 
-use acadrust::kernel::brep::{self, Body};
+use cadkernel::brep::{self, Body};
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
@@ -24,7 +24,7 @@ fn tessellation(body: &Body) -> brep::mesh::BodyMesh {
     brep::mesh::tessellate(
         body,
         brep::mesh::TessellationTolerance::new(
-            acadrust::kernel::tessellation::DEFAULT_ANGLE,
+            cadkernel::tessellation::DEFAULT_ANGLE,
             TOL,
         ),
     )
@@ -346,7 +346,7 @@ pub fn centre(body: &Body) -> Option<[f64; 3]> {
 /// exists to test with.
 #[cfg(test)]
 pub fn volume(body: &Body) -> f64 {
-    use acadrust::kernel::space::Vec3;
+    use cadkernel::space::Vec3;
     let mesh = tessellation(body).mesh;
     let Some(middle) = centre(body) else {
         return 0.0;

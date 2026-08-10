@@ -1,6 +1,6 @@
 use super::*;
 
-use acadrust::kernel::geom2d::{bounded_faces, Line, Tolerance};
+use cadkernel::geom2d::{bounded_faces, Line, Tolerance};
 
 /// How far apart two points may be and still be taken for the same one.
 ///

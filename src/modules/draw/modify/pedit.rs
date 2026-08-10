@@ -12,8 +12,8 @@
 //   straightens every segment.
 
 use acadrust::entities::LwVertex;
-use acadrust::kernel::geom2d::nurbs::clamped_uniform_knots;
-use acadrust::kernel::geom2d::NurbsCurve;
+use cadkernel::geom2d::nurbs::clamped_uniform_knots;
+use cadkernel::geom2d::NurbsCurve;
 use acadrust::types::Vector2;
 use acadrust::{EntityType, Handle};
 use glam::{DVec2, DVec3};

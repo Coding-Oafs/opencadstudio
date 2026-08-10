@@ -6,7 +6,7 @@
 // caller translates the mesh vertices to match.
 
 use acadrust::entities::{Body, Region, Solid3D, Surface};
-use acadrust::kernel::space::polygon;
+use cadkernel::space::polygon;
 use crate::t;
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_prop as edit, parse_f64, ro_prop as ro};

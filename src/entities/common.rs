@@ -587,7 +587,7 @@ pub fn parse_angle_deg(value: &str) -> Option<f64> {
 /// Re-exported rather than imported at each call site so the twelve modules
 /// that already reach for `entities::common::BulgeArc` keep working, and so
 /// there is one obvious place to see that the maths moved out.
-pub use acadrust::kernel::geom2d::BulgeArc;
+pub use cadkernel::geom2d::BulgeArc;
 
 /// Triangulate the solid bands a `wide_fills` returns into the flat WCS f64
 /// triangle list `RenderEntity::pick_tris` carries, so a wide polyline is
@@ -694,7 +694,7 @@ pub(crate) fn tapered_band_points(
         if bulge.abs() < 1e-9 {
             push(p1[0], p1[1], ew0 as f32);
         } else if let Some(arc) = BulgeArc::from_bulge(p0, p1, bulge) {
-            let samples = arc.tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE);
+            let samples = arc.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE);
             let segments = samples.len().saturating_sub(1).max(1);
             for (index, s) in samples.into_iter().enumerate().skip(1) {
                 let t = index as f64 / segments as f64;

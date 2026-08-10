@@ -309,7 +309,7 @@ fn to_render(pline: &LwPolyline) -> RenderEntity {
                     radius: arc.radius as f32,
                 });
                 for s in arc
-                    .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+                    .tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
                     .into_iter()
                     .skip(1)
                 {
@@ -410,7 +410,7 @@ fn to_render(pline: &LwPolyline) -> RenderEntity {
                 crate::entities::common::BulgeArc::from_bulge([ox0, oy0], [ox1, oy1], bulge)
             {
                 for s in arc
-                    .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+                    .tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
                     .into_iter()
                     .skip(1)
                 {
