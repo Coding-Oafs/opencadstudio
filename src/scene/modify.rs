@@ -698,38 +698,12 @@ impl Scene {
                         translate_split(high, low);
                     }
                     for generator in &mut set.curved_gens {
-                        match generator {
-                            crate::scene::model::mesh_model::CurvedGen::Cone {
-                                base,
-                                base_low,
-                                ..
-                            } => translate_split(base, base_low),
-                            crate::scene::model::mesh_model::CurvedGen::Sphere {
-                                center,
-                                center_low,
-                                ..
-                            }
-                            | crate::scene::model::mesh_model::CurvedGen::Torus {
-                                center,
-                                center_low,
-                                ..
-                            } => translate_split(center, center_low),
-                        }
-                    }
-                    for silhouette in &mut set.stored_silhouettes {
-                        silhouette.target[0] += delta[0] as f32;
-                        silhouette.target[1] += delta[1] as f32;
-                        silhouette.target[2] += delta[2] as f32;
-                        if silhouette.edge_verts_low.len() != silhouette.edge_verts.len() {
-                            silhouette.edge_verts_low =
-                                vec![[0.0; 3]; silhouette.edge_verts.len()];
-                        }
-                        for (high, low) in silhouette
-                            .edge_verts
-                            .iter_mut()
-                            .zip(silhouette.edge_verts_low.iter_mut())
-                        {
-                            translate_split(high, low);
+                        let placement = acadrust::kernel::brep::Placement::at(delta);
+                        if let Some(source) = acadrust::kernel::brep::mesh::transform_silhouette(
+                            &generator.source,
+                            &placement,
+                        ) {
+                            generator.source = source;
                         }
                     }
                     set.metrics.centroid[0] += delta[0];

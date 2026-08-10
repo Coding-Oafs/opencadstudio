@@ -1922,7 +1922,6 @@ fn fallback_geometry(entity: &EntityType) -> Geometry {
         | EntityType::Region(_)
         | EntityType::Body(_)
         | EntityType::Surface(_) => {
-            let pts = solid_wire_fallback(entity);
             let mut snap = vec![];
             if let Some(p) = crate::entities::solid3d::point_of_reference(entity) {
                 snap.push((
@@ -1930,46 +1929,13 @@ fn fallback_geometry(entity: &EntityType) -> Geometry {
                     SnapHint::Insertion,
                 ));
             }
-            (pts, snap, vec![], vec![])
+            (vec![], snap, vec![], vec![])
         }
         _ => {
             let s = 0.5_f64;
             (vec![[-s, 0.0, 0.0], [s, 0.0, 0.0]], vec![], vec![], vec![])
         }
     }
-}
-
-/// Extract pre-computed edge-wire points from Solid3D / Region / Body entities.
-///
-/// Some drawings store explicit wire geometry alongside the
-/// ACIS data.  We use this as a visible fallback when the SAT tessellator
-/// produces no mesh (e.g. binary SAB data or unsupported geometry).
-fn solid_wire_fallback(entity: &EntityType) -> Vec<[f64; 3]> {
-    let Some(wires) = crate::entities::solid3d::fallback_wires(entity) else {
-        return vec![];
-    };
-    if wires.is_empty() {
-        return vec![];
-    }
-    // Fully supported ACIS → mesh pipeline draws body. Parseable-but-partial
-    // ACIS keeps source display wires so unsupported faces never disappear.
-    if crate::entities::solid3d::acis_has_complete_surface_support(entity) {
-        return vec![];
-    }
-
-    let mut pts: Vec<[f64; 3]> = Vec::new();
-    for wire in wires {
-        if wire.points.len() < 2 {
-            continue;
-        }
-        for v in &wire.points {
-            let transformed = crate::entities::solid3d::wire_point(wire, v);
-            pts.push([transformed.x, transformed.y, transformed.z]);
-        }
-        // NaN sentinel separates distinct wire segments.
-        pts.push([f64::NAN, f64::NAN, f64::NAN]);
-    }
-    pts
 }
 
 pub(crate) fn push_tri(out: &mut Vec<[f32; 3]>, a: Vec3, b: Vec3, c: Vec3) {

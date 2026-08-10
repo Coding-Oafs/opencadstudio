@@ -1224,104 +1224,25 @@ fn transform_block_mesh_lod_set(
     use acadrust::types::Vector3;
     let mut out = set.clone();
     out.instance_transform = Some(*xform);
-    let transform_direction = |direction: [f32; 3]| {
-        let transformed = xform.apply_rotation(Vector3::new(
-            direction[0] as f64,
-            direction[1] as f64,
-            direction[2] as f64,
-        ));
-        let length = transformed.length();
-        if length > 1e-12 {
-            [
-                (transformed.x / length) as f32,
-                (transformed.y / length) as f32,
-                (transformed.z / length) as f32,
-            ]
+    let origin = xform.apply(Vector3::ZERO);
+    let vectors = [
+        xform.apply_rotation(Vector3::UNIT_X),
+        xform.apply_rotation(Vector3::UNIT_Y),
+        xform.apply_rotation(Vector3::UNIT_Z),
+    ];
+    out.curved_gens.retain_mut(|generator| {
+        let transformed = acadrust::kernel::brep::mesh::transform_silhouette_affine(
+            &generator.source,
+            vectors.map(|vector| [vector.x, vector.y, vector.z]),
+            [origin.x, origin.y, origin.z],
+        );
+        if let Some(source) = transformed {
+            generator.source = source;
+            true
         } else {
-            direction
+            false
         }
-    };
-    let scale_x = xform.apply_rotation(Vector3::UNIT_X).length();
-    let scale_y = xform.apply_rotation(Vector3::UNIT_Y).length();
-    let scale_z = xform.apply_rotation(Vector3::UNIT_Z).length();
-    let uniform_scale = (scale_x + scale_y + scale_z) / 3.0;
-    let is_uniform = (scale_x - uniform_scale).abs() <= uniform_scale.abs().max(1.0) * 1e-8
-        && (scale_y - uniform_scale).abs() <= uniform_scale.abs().max(1.0) * 1e-8
-        && (scale_z - uniform_scale).abs() <= uniform_scale.abs().max(1.0) * 1e-8;
-    if is_uniform {
-        let transform_split = |high: &mut [f32; 3], low: &mut [f32; 3]| {
-            let transformed = xform.apply(Vector3::new(
-                high[0] as f64 + low[0] as f64,
-                high[1] as f64 + low[1] as f64,
-                high[2] as f64 + low[2] as f64,
-            ));
-            *high = [
-                transformed.x as f32,
-                transformed.y as f32,
-                transformed.z as f32,
-            ];
-            *low = [
-                (transformed.x - high[0] as f64) as f32,
-                (transformed.y - high[1] as f64) as f32,
-                (transformed.z - high[2] as f64) as f32,
-            ];
-        };
-        for generator in &mut out.curved_gens {
-            match generator {
-                crate::scene::model::mesh_model::CurvedGen::Cone {
-                    base,
-                    base_low,
-                    axis,
-                    u_dir,
-                    v_dir,
-                    radius,
-                    h_max,
-                    ..
-                } => {
-                    transform_split(base, base_low);
-                    *axis = transform_direction(*axis);
-                    *u_dir = transform_direction(*u_dir);
-                    *v_dir = transform_direction(*v_dir);
-                    *radius *= uniform_scale as f32;
-                    *h_max *= uniform_scale as f32;
-                }
-                crate::scene::model::mesh_model::CurvedGen::Sphere {
-                    center,
-                    center_low,
-                    pole,
-                    u_dir,
-                    v_dir,
-                    radius,
-                    ..
-                } => {
-                    transform_split(center, center_low);
-                    *pole = transform_direction(*pole);
-                    *u_dir = transform_direction(*u_dir);
-                    *v_dir = transform_direction(*v_dir);
-                    *radius *= uniform_scale as f32;
-                }
-                crate::scene::model::mesh_model::CurvedGen::Torus {
-                    center,
-                    center_low,
-                    axis,
-                    u_dir,
-                    v_dir,
-                    major,
-                    minor,
-                    ..
-                } => {
-                    transform_split(center, center_low);
-                    *axis = transform_direction(*axis);
-                    *u_dir = transform_direction(*u_dir);
-                    *v_dir = transform_direction(*v_dir);
-                    *major *= uniform_scale as f32;
-                    *minor *= uniform_scale as f32;
-                }
-            }
-        }
-    } else {
-        out.curved_gens.clear();
-    }
+    });
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -1392,41 +1313,6 @@ fn transform_block_mesh_lod_set(
                 (w.x - hx as f64) as f32,
                 (w.y - hy as f64) as f32,
                 (w.z - hz as f64) as f32,
-            ];
-        }
-    }
-    for silhouette in &mut out.stored_silhouettes {
-        silhouette.view_direction = transform_direction(silhouette.view_direction);
-        silhouette.up_vector = transform_direction(silhouette.up_vector);
-        let target = xform.apply(Vector3::new(
-            silhouette.target[0] as f64,
-            silhouette.target[1] as f64,
-            silhouette.target[2] as f64,
-        ));
-        silhouette.target = [target.x as f32, target.y as f32, target.z as f32];
-        let count = silhouette.edge_verts.len();
-        if silhouette.edge_verts_low.len() != count {
-            silhouette.edge_verts_low = vec![[0.0; 3]; count];
-        }
-        for (high, low) in silhouette
-            .edge_verts
-            .iter_mut()
-            .zip(silhouette.edge_verts_low.iter_mut())
-        {
-            let transformed = xform.apply(Vector3::new(
-                high[0] as f64 + low[0] as f64,
-                high[1] as f64 + low[1] as f64,
-                high[2] as f64 + low[2] as f64,
-            ));
-            *high = [
-                transformed.x as f32,
-                transformed.y as f32,
-                transformed.z as f32,
-            ];
-            *low = [
-                (transformed.x - high[0] as f64) as f32,
-                (transformed.y - high[1] as f64) as f32,
-                (transformed.z - high[2] as f64) as f32,
             ];
         }
     }

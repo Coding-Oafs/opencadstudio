@@ -6,112 +6,143 @@
 //! the kernel for triangles, rather than to re-derive each surface's extent by
 //! sampling it.
 //!
-//! # Why it can still fall short
-//!
-//! A face on a surface the kernel does not model, a curve it has no form for,
-//! a pointer graph that does not hold together: [`lift`] reports each as a
-//! [`Loss`] rather than quietly dropping it. What comes back then is a body
-//! with faces missing, and the mesh it makes has holes — which is why the
-//! result is marked incomplete and the caller keeps its own sampler for those.
-//!
-//! Saying so is the point. A partial mesh that claimed to be whole would show
-//! a solid with a wall missing and nothing to suggest anything was wrong.
+//! Lift and tessellation failures are reported as an incomplete result.
 
 use acadrust::acis::lift;
 use acadrust::entities::acis::SatDocument;
 use acadrust::kernel::brep;
 
 use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
-use crate::scene::model::mesh_model::MeshLodSet;
+use crate::scene::model::mesh_model::{CurvedGen, MeshLodSet};
 
-/// How far a triangle may sit from the surface it lies on, as a fraction of
-/// that surface's own radius.
-///
-/// A fraction rather than a length, because a length carries an assumption
-/// about the drawing's units: a centimetre of sag is nothing on a pipeline
-/// and is the whole of a bolt.
-///
-/// The *same* fraction the feature edges use, and deliberately so. Those edges
-/// are drawn over these faces, so sampling the two differently leaves the wire
-/// cutting across a facet instead of running along its corners — the rim of a
-/// cylinder standing proud of the wall it bounds. Sharing the constant is what
-/// keeps them from drifting apart when one is tuned.
-use crate::scene::convert::solid3d_tess::EDGE_CHORD_FRAC as CHORD_FRAC;
+/// Relative chord tolerance, resolved once per body.
+const CHORD_FRAC: f64 = 0.002;
 
-/// What counts as the same point when the kernel reads a body over.
-///
-/// A micrometre, in a drawing measured in metres. Not slackness: an edge is
-/// shared by two faces, and in a real file it cannot sit exactly on both,
-/// because the two surfaces were fitted separately and written to finite
-/// precision. Asked for exactness the kernel decides the edge is not on its
-/// own plane, declines to project it, and the face is dropped — twenty-six
-/// walls of one building went missing at a nanometre that no drawing means.
-///
-/// Loosening further buys almost nothing: a hundredth of this recovers one
-/// more face in sixty thousand, and past that the tolerance would start
-/// accepting geometry that really is wrong.
+/// ACIS topology fit tolerance.
 const TOL: f64 = 1e-6;
 
-/// Tessellate an ACIS document by lifting it into the kernel.
-///
-/// `None` when nothing in the document lifts at all. The result's `complete`
-/// flag says whether every face made it; a caller with a fallback sampler
-/// uses it to decide whether to run one.
+/// Tessellate an ACIS document through the kernel.
 pub fn tessellate_sat(
     document: &SatDocument,
     name: String,
     color: [f32; 4],
     facet_res: f64,
+    isolines: usize,
 ) -> Option<MeshLodSet> {
     let (bodies, loss) = lift(document);
     if bodies.is_empty() {
         return None;
     }
-    // `facet_res` is a resolution multiplier, not a length — the same one
-    // `scale_lod` divides the fallback sampler's chord fraction by. Using it
-    // as a sag made every solid as coarse as its own boundary: at the default
-    // it asked for a whole world unit of departure, which on anything smaller
-    // than that means no subdivision at all, and a pipe came out with as many
-    // sides as its rim had points.
-    //
-    // It is not applied here at all. The feature edges these faces are drawn
-    // under are built once at highest detail and never scaled, so scaling the
-    // faces would pull the two apart again at any setting but one.
-    let _ = facet_res;
-    let frac = CHORD_FRAC;
+    let mut placed_bodies = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let source = body.provenance.source()?;
+        let transform = body_transform(document, source.index() as usize).ok()?;
+        let placed = if let Some((matrix, translation, scale)) = transform {
+            let placement = brep::Placement {
+                x_axis: [scale * matrix[0], scale * matrix[1], scale * matrix[2]],
+                y_axis: [scale * matrix[3], scale * matrix[4], scale * matrix[5]],
+                z_axis: [scale * matrix[6], scale * matrix[7], scale * matrix[8]],
+                origin: translation,
+            };
+            brep::transform(&body, &placement)?
+        } else {
+            body
+        };
+        placed_bodies.push(placed);
+    }
+    let bodies = placed_bodies;
+    let resolution = if facet_res.is_finite() && facet_res > 0.0 {
+        facet_res.clamp(0.01, 10.0)
+    } else {
+        1.0
+    };
+    let frac = CHORD_FRAC / resolution;
 
     // Positions stay f64 until `finalize_mesh` splits them into the coarse
     // and fine pair, so a solid at survey coordinates keeps its millimetres.
     let mut positions: Vec<[f64; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let mut edges: Vec<[f64; 3]> = Vec::new();
+    let mut triangle_materials = Vec::new();
+    let mut triangle_colors = Vec::new();
+    let mut curved_gens = Vec::new();
+    let face_materials: std::collections::HashMap<i32, acadrust::Handle> = document
+        .records
+        .iter()
+        .filter(|record| record.entity_type == "material-adesk-attrib")
+        .filter_map(|record| {
+            let owner = record.token_pointer(2)?.0;
+            let handle = record.token(3)?.as_integer()?;
+            (owner >= 0 && handle > 0)
+                .then(|| (owner, acadrust::Handle::new(handle as u64)))
+        })
+        .collect();
+    let face_colors: std::collections::HashMap<i32, [f32; 4]> = document
+        .records
+        .iter()
+        .filter(|record| record.entity_type == "color-adesk-attrib")
+        .filter_map(|record| {
+            let owner = record.token_pointer(2)?.0;
+            let value = record.token(3)?.as_integer()?;
+            let source = if (1..=255).contains(&value) {
+                acadrust::Color::from_index(value as i16)
+            } else if value > 257 {
+                acadrust::Color::from_true_color_value(value as i32)
+            } else {
+                return None;
+            };
+            let mut rgba = crate::scene::convert::tess_util::aci_to_rgba(&source);
+            rgba[3] = color[3];
+            Some((owner, rgba))
+        })
+        .collect();
     // A face the kernel holds but cannot express in its surface's own
     // parameters leaves a hole, the same as one that never lifted — so both
     // are counted before calling the mesh whole.
     let mut undrawn = 0usize;
+    let tolerance = brep::mesh::TessellationTolerance::relative(frac, TOL)
+        .with_isolines(isolines);
     for body in &bodies {
-        // What a flat face is sampled against: it never departs from its own
-        // plane, so only its boundary arcs care, and the body's own size is
-        // the nearest thing to a radius they have.
-        let span = body_span(body);
-        for face in body.face_keys() {
-            let sag = frac * face_radius(body, face).unwrap_or(span);
-            let Some(mesh) = brep::mesh::face(body, face, sag, TOL) else {
-                undrawn += 1;
-                continue;
-            };
-            let base = positions.len() as u32;
-            positions.extend_from_slice(&mesh.positions);
-            normals.extend(
-                mesh.normals
-                    .iter()
-                    .map(|n| [n[0] as f32, n[1] as f32, n[2] as f32]),
-            );
-            indices.extend(
-                mesh.triangles
-                    .iter()
-                    .flat_map(|t| [base + t[0] as u32, base + t[1] as u32, base + t[2] as u32]),
-            );
+        let tessellation = brep::mesh::tessellate(body, tolerance);
+        undrawn += tessellation.missing_faces.len();
+        for face in &tessellation.triangle_faces {
+            let record = body
+                .faces
+                .get(*face)
+                .and_then(|face| face.provenance.source())
+                .map(|source| source.index() as i32);
+            triangle_materials.push(record.and_then(|record| face_materials.get(&record).copied()));
+            triangle_colors.push(record.and_then(|record| face_colors.get(&record).copied()));
+        }
+        curved_gens.push(CurvedGen {
+            source: tessellation.silhouette_source(),
+        });
+        let base = positions.len() as u32;
+        positions.extend_from_slice(&tessellation.mesh.positions);
+        normals.extend(
+            tessellation
+                .mesh
+                .normals
+                .iter()
+                .map(|n| [n[0] as f32, n[1] as f32, n[2] as f32]),
+        );
+        indices.extend(tessellation.mesh.triangles.iter().flat_map(|triangle| {
+            [
+                base + triangle[0] as u32,
+                base + triangle[1] as u32,
+                base + triangle[2] as u32,
+            ]
+        }));
+        for edge in tessellation.edges {
+            for segment in edge.positions.windows(2) {
+                edges.extend_from_slice(segment);
+            }
+        }
+        for isoline in tessellation.isolines {
+            for segment in isoline.positions.windows(2) {
+                edges.extend_from_slice(segment);
+            }
         }
     }
     if indices.is_empty() {
@@ -127,74 +158,23 @@ pub fn tessellate_sat(
         positions,
         normals,
         indices,
-        Vec::new(),
-        Vec::new(),
+        triangle_materials,
+        triangle_colors,
         color,
-        body_transform(document),
+        None,
     ));
+    set.curved_gens = curved_gens;
+    for point in edges {
+        let high = [point[0] as f32, point[1] as f32, point[2] as f32];
+        set.edge_verts.push(high);
+        set.edge_verts_low.push([
+            (point[0] - high[0] as f64) as f32,
+            (point[1] - high[1] as f64) as f32,
+            (point[2] - high[2] as f64) as f32,
+        ]);
+    }
     set.complete = loss.is_empty() && undrawn == 0;
     Some(set)
-}
-
-/// The radius of the surface a face lies on, where it has one.
-///
-/// A torus is measured by its tube rather than its ring: the tube is the
-/// tighter bend, and sampling to the ring would leave the section a hexagon.
-fn face_radius(body: &brep::Body, face: brep::FaceKey) -> Option<f64> {
-    let surface = body.surfaces.get(body.faces.get(face)?.surface)?;
-    match surface {
-        brep::Surface::Plane(_) => None,
-        brep::Surface::Cylinder(cylinder) => Some(cylinder.radius),
-        brep::Surface::Cone(cone) => Some(cone.radius),
-        brep::Surface::Sphere(sphere) => Some(sphere.radius),
-        brep::Surface::Torus(torus) => Some(torus.minor_radius),
-    }
-}
-
-/// How big a body is, from the corners it is built on.
-fn body_span(body: &brep::Body) -> f64 {
-    let mut low = [f64::INFINITY; 3];
-    let mut high = [f64::NEG_INFINITY; 3];
-    for (_, vertex) in body.vertices.iter() {
-        for axis in 0..3 {
-            low[axis] = low[axis].min(vertex.point[axis]);
-            high[axis] = high[axis].max(vertex.point[axis]);
-        }
-    }
-    if low[0] > high[0] {
-        return 1.0;
-    }
-    (0..3)
-        .map(|axis| high[axis] - low[axis])
-        .fold(0.0_f64, f64::max)
-        .max(1e-9)
-}
-
-/// The edges of every body in an ACIS document, as polylines.
-///
-/// What draws a solid's wireframe and what a click hit-tests against. Taken
-/// from the kernel's own curves rather than from the mesh, so a rim is a
-/// circle sampled to tolerance instead of whatever the triangulation left
-/// along it.
-///
-/// Not called yet: the solid tessellator keeps its own feature-edge pass,
-/// which also carries isolines. Here because it is the kernel's answer to the
-/// same question, and the two should converge on it.
-#[allow(dead_code)]
-pub fn edge_polylines(document: &SatDocument, sag: f64) -> Vec<Vec<[f64; 3]>> {
-    let (bodies, _) = lift(document);
-    let sag = if sag > 0.0 { sag } else { CHORD_FRAC };
-    let placement = body_transform(document);
-    bodies
-        .iter()
-        .flat_map(|body| brep::edge_polylines(body, sag))
-        .map(|polyline| {
-            polyline
-                .into_iter()
-                .map(|point| placed(point, placement))
-                .collect()
-        })
-        .collect()
 }
 
 /// A body-local point moved to where the body sits.
@@ -202,6 +182,7 @@ pub fn edge_polylines(document: &SatDocument, sag: f64) -> Vec<Vec<[f64; 3]>> {
 /// ACIS treats points as row vectors — `p' = scale·(p·M) + T` — so the stored
 /// 3×3 is indexed transposed from a column-vector multiply. Getting that the
 /// wrong way round mirrors a placed solid rather than moving it.
+#[cfg(test)]
 fn placed(point: [f64; 3], xform: Option<([f64; 9], [f64; 3], f64)>) -> [f64; 3] {
     let Some((m, translation, scale)) = xform else {
         return point;
@@ -274,18 +255,5 @@ mod tests {
         assert!(sides(CHORD_FRAC) > 24.0, "{}", sides(CHORD_FRAC));
         assert!(sides(CHORD_FRAC) < 96.0, "{}", sides(CHORD_FRAC));
     }
-
-    /// And it is the edges' own density, so the wire drawn over a face lands
-    /// on the facet corners rather than cutting across them.
-    #[test]
-    fn a_face_is_sampled_as_finely_as_the_edges_over_it() {
-        let rim = crate::scene::convert::solid3d_tess::edge_arc_segs(
-            5.0,
-            std::f64::consts::TAU,
-        ) as f64;
-        let wall = sides(CHORD_FRAC);
-        assert!((rim - wall).abs() <= 1.0, "rim {rim} vs wall {wall}");
-    }
-
 
 }

@@ -2,9 +2,8 @@
 //
 // Geometry lives in ACIS data — we cannot edit it via the properties panel.
 // We expose the point_of_reference as a translate grip and show ACIS size
-// as read-only info.  Grip translate also updates wire points so the wire
-// fallback stays in sync; the caller (scene/mod.rs apply_grip) translates
-// the MeshModel vertices to match.
+// as read-only info. Grip translate also updates stored wire points; the
+// caller translates the mesh vertices to match.
 
 use acadrust::entities::{Body, Region, Solid3D, Surface};
 use acadrust::kernel::space::polygon;
@@ -745,11 +744,7 @@ impl PropertyEditable for Surface {
 
 // ── Accessors for the Solid3D / Region / Body trio ─────────────────────────
 //
-// These three entity types share a common subset of fields (ACIS data
-// + point_of_reference + wires fallback). Code that needs to treat them
-// uniformly (mesh tess dispatch, fallback wires, grip translate) used
-// to repeat a three-arm `match entity` block at every callsite — the
-// helpers below collapse those to a single call.
+// These entity types share ACIS data and a point of reference.
 
 use crate::scene::model::mesh_model::MeshLodSet;
 use crate::scene::convert::solid3d_tess;
@@ -764,77 +759,6 @@ pub fn point_of_reference(e: &EntityType) -> Option<&Vector3> {
         EntityType::Surface(s) => Some(&s.point_of_reference),
         _ => None,
     }
-}
-
-/// Pre-stored edge-wire fallback list (used when the SAT/SAB kernel
-/// can't produce a mesh — drawings authored by SOLVIEW / 3DPLOT carry
-/// these explicitly).
-pub fn fallback_wires(e: &EntityType) -> Option<&[acadrust::entities::Wire]> {
-    match e {
-        EntityType::Solid3D(s) => Some(&s.wires),
-        EntityType::Region(r) => Some(&r.wires),
-        EntityType::Body(b) => Some(&b.wires),
-        EntityType::Surface(s) => Some(&s.wires),
-        _ => None,
-    }
-}
-
-pub fn wire_point(
-    wire: &acadrust::entities::Wire,
-    point: &acadrust::types::Vector3,
-) -> acadrust::types::Vector3 {
-    if !wire.has_transform {
-        return *point;
-    }
-    let x = point.x * wire.scale.x;
-    let y = point.y * wire.scale.y;
-    let z = point.z * wire.scale.z;
-    acadrust::types::Vector3::new(
-        wire.translation.x
-            + wire.x_axis.x * x
-            + wire.y_axis.x * y
-            + wire.z_axis.x * z,
-        wire.translation.y
-            + wire.x_axis.y * x
-            + wire.y_axis.y * y
-            + wire.z_axis.y * z,
-        wire.translation.z
-            + wire.x_axis.z * x
-            + wire.y_axis.z * y
-            + wire.z_axis.z * z,
-    )
-}
-
-/// Whether every ACIS face uses a surface family the mesh pipeline can decode.
-/// Unsupported or unresolved faces must keep their display-cache wires visible;
-/// otherwise a parseable but incomplete shell looks like a valid solid.
-pub fn acis_has_complete_surface_support(e: &EntityType) -> bool {
-    let sat = match e {
-        EntityType::Solid3D(s) => s.acis_data.parse(),
-        EntityType::Region(r) => r.acis_data.parse(),
-        EntityType::Body(b) => b.acis_data.parse(),
-        EntityType::Surface(s) => s.acis_data.parse(),
-        _ => None,
-    };
-    let Some(sat) = sat else {
-        return false;
-    };
-    let faces = sat.faces();
-    !faces.is_empty()
-        && faces.iter().all(|face| {
-            sat.resolve(face.surface()).is_some_and(|surface| {
-                matches!(
-                    surface.entity_type.as_str(),
-                    "plane-surface"
-                        | "cone-surface"
-                        | "sphere-surface"
-                        | "torus-surface"
-                        | "spline-surface"
-                        | "meshsurf-surface"
-                        | "bs3-surface"
-                )
-            })
-        })
 }
 
 /// Build material-aware shaded geometry for every standard 3-D solid/surface

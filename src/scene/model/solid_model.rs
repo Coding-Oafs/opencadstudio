@@ -25,6 +25,10 @@ const SAG: f64 = 0.05;
 /// What counts as the same point when the kernel checks a body over.
 const TOL: f64 = 1e-9;
 
+fn tessellation(body: &Body) -> brep::mesh::BodyMesh {
+    brep::mesh::tessellate(body, brep::mesh::TessellationTolerance::new(SAG, TOL))
+}
+
 /// Axis-aligned box from its center and full extents.
 pub fn box_solid(center: [f64; 3], length: f64, width: f64, height: f64) -> Option<Body> {
     brep::make::cuboid(
@@ -143,7 +147,7 @@ fn about_origin(x: [f64; 3], y: [f64; 3], z: [f64; 3], about: [f64; 3]) -> [f64;
 
 /// The box a body occupies, from its mesh.
 pub fn extent(body: &Body) -> Option<([f64; 3], [f64; 3])> {
-    let mesh = brep::mesh::body(body, SAG, TOL);
+    let mesh = tessellation(body).mesh;
     if mesh.positions.is_empty() {
         return None;
     }
@@ -165,7 +169,7 @@ pub fn extent(body: &Body) -> Option<([f64; 3], [f64; 3])> {
 /// is a set of Line entities either way. Each triangle the plane crosses
 /// contributes the one segment where it does.
 pub fn section(body: &Body, axis: usize, value: f64) -> Vec<([f64; 3], [f64; 3])> {
-    let mesh = brep::mesh::body(body, SAG, TOL);
+    let mesh = tessellation(body).mesh;
     let mut out = Vec::new();
     for triangle in &mesh.triangles {
         let corners: Vec<[f64; 3]> = triangle.iter().map(|i| mesh.positions[*i]).collect();
@@ -201,16 +205,15 @@ pub fn section(body: &Body, axis: usize, value: f64) -> Vec<([f64; 3], [f64; 3])
 // ── Edge extraction (pick geometry + wireframe overlay) ─────────────────────
 
 /// Tessellate the solid's B-rep edges into acadrust `Wire`s. Stored on the
-/// `Solid3D`/result entity so it is click-pickable (the renderer's wire
-/// fallback draws these as a wireframe over the shaded mesh, and hit-testing
-/// uses their points).
+/// `Solid3D`/result entity for picking.
 pub fn edge_wires(body: &Body) -> Vec<acadrust::entities::Wire> {
     use acadrust::types::Vector3;
-    brep::edge_polylines(body, SAG)
+    tessellation(body)
+        .edges
         .into_iter()
-        .map(|points| {
+        .map(|edge| {
             acadrust::entities::Wire::from_points(
-                points
+                edge.positions
                     .into_iter()
                     .map(|p| Vector3::new(p[0], p[1], p[2]))
                     .collect(),
@@ -250,7 +253,9 @@ pub fn boolean(op: Bool, a: &Body, b: &Body) -> Option<Body> {
 /// Tessellate a `Body` into a single-LOD `MeshLodSet` (world-space, before
 /// world_offset is applied by the caller).
 pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
-    let mesh = brep::mesh::body(body, SAG, TOL);
+    let tessellation = tessellation(body);
+    let silhouette = tessellation.silhouette_source();
+    let mesh = tessellation.mesh;
     if mesh.is_empty() {
         return None;
     }
@@ -278,7 +283,7 @@ pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
         .iter()
         .flat_map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
         .collect();
-    Some(MeshLodSet::from_single(MeshModel {
+    let mut set = MeshLodSet::from_single(MeshModel {
         name: String::new(),
         verts,
         verts_low,
@@ -288,7 +293,23 @@ pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
         triangle_colors: Vec::new(),
         color,
         selected: false,
-    }))
+    });
+    for edge in tessellation.edges {
+        for segment in edge.positions.windows(2) {
+            for point in segment {
+                let high = [point[0] as f32, point[1] as f32, point[2] as f32];
+                set.edge_verts.push(high);
+                set.edge_verts_low.push([
+                    (point[0] - high[0] as f64) as f32,
+                    (point[1] - high[1] as f64) as f32,
+                    (point[2] - high[2] as f64) as f32,
+                ]);
+            }
+        }
+    }
+    set.complete = tessellation.missing_faces.is_empty();
+    set.curved_gens.push(super::mesh_model::CurvedGen { source: silhouette });
+    Some(set)
 }
 
 /// The middle of a body, for a caller needing a point to turn or scale about.
@@ -296,7 +317,7 @@ pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
 /// Read off the mesh rather than `body_bounds`, which refuses a face that
 /// wraps a closed surface — a sphere is one such face and has no box at all.
 pub fn centre(body: &Body) -> Option<[f64; 3]> {
-    let mesh = brep::mesh::body(body, SAG, TOL);
+    let mesh = tessellation(body).mesh;
     if mesh.positions.is_empty() {
         return None;
     }
@@ -325,7 +346,7 @@ pub fn centre(body: &Body) -> Option<[f64; 3]> {
 #[cfg(test)]
 pub fn volume(body: &Body) -> f64 {
     use acadrust::kernel::space::Vec3;
-    let mesh = brep::mesh::body(body, SAG, TOL);
+    let mesh = tessellation(body).mesh;
     let Some(middle) = centre(body) else {
         return 0.0;
     };
