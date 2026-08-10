@@ -24,8 +24,19 @@ use acadrust::kernel::brep;
 use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
 use crate::scene::model::mesh_model::MeshLodSet;
 
-/// How far a triangle may sit from the surface it lies on.
-const SAG: f64 = 0.05;
+/// How far a triangle may sit from the surface it lies on, as a fraction of
+/// that surface's own radius.
+///
+/// A fraction rather than a length, because a length carries an assumption
+/// about the drawing's units: a centimetre of sag is nothing on a pipeline
+/// and is the whole of a bolt.
+///
+/// The *same* fraction the feature edges use, and deliberately so. Those edges
+/// are drawn over these faces, so sampling the two differently leaves the wire
+/// cutting across a facet instead of running along its corners — the rim of a
+/// cylinder standing proud of the wall it bounds. Sharing the constant is what
+/// keeps them from drifting apart when one is tuned.
+use crate::scene::convert::solid3d_tess::EDGE_CHORD_FRAC as CHORD_FRAC;
 
 /// What counts as the same point when the kernel reads a body over.
 ///
@@ -50,13 +61,24 @@ pub fn tessellate_sat(
     document: &SatDocument,
     name: String,
     color: [f32; 4],
-    sag: f64,
+    facet_res: f64,
 ) -> Option<MeshLodSet> {
     let (bodies, loss) = lift(document);
     if bodies.is_empty() {
         return None;
     }
-    let sag = if sag > 0.0 { sag } else { SAG };
+    // `facet_res` is a resolution multiplier, not a length — the same one
+    // `scale_lod` divides the fallback sampler's chord fraction by. Using it
+    // as a sag made every solid as coarse as its own boundary: at the default
+    // it asked for a whole world unit of departure, which on anything smaller
+    // than that means no subdivision at all, and a pipe came out with as many
+    // sides as its rim had points.
+    //
+    // It is not applied here at all. The feature edges these faces are drawn
+    // under are built once at highest detail and never scaled, so scaling the
+    // faces would pull the two apart again at any setting but one.
+    let _ = facet_res;
+    let frac = CHORD_FRAC;
 
     // Positions stay f64 until `finalize_mesh` splits them into the coarse
     // and fine pair, so a solid at survey coordinates keeps its millimetres.
@@ -68,7 +90,12 @@ pub fn tessellate_sat(
     // are counted before calling the mesh whole.
     let mut undrawn = 0usize;
     for body in &bodies {
+        // What a flat face is sampled against: it never departs from its own
+        // plane, so only its boundary arcs care, and the body's own size is
+        // the nearest thing to a radius they have.
+        let span = body_span(body);
         for face in body.face_keys() {
+            let sag = frac * face_radius(body, face).unwrap_or(span);
             let Some(mesh) = brep::mesh::face(body, face, sag, TOL) else {
                 undrawn += 1;
                 continue;
@@ -109,6 +136,40 @@ pub fn tessellate_sat(
     Some(set)
 }
 
+/// The radius of the surface a face lies on, where it has one.
+///
+/// A torus is measured by its tube rather than its ring: the tube is the
+/// tighter bend, and sampling to the ring would leave the section a hexagon.
+fn face_radius(body: &brep::Body, face: brep::FaceKey) -> Option<f64> {
+    let surface = body.surfaces.get(body.faces.get(face)?.surface)?;
+    match surface {
+        brep::Surface::Plane(_) => None,
+        brep::Surface::Cylinder(cylinder) => Some(cylinder.radius),
+        brep::Surface::Cone(cone) => Some(cone.radius),
+        brep::Surface::Sphere(sphere) => Some(sphere.radius),
+        brep::Surface::Torus(torus) => Some(torus.minor_radius),
+    }
+}
+
+/// How big a body is, from the corners it is built on.
+fn body_span(body: &brep::Body) -> f64 {
+    let mut low = [f64::INFINITY; 3];
+    let mut high = [f64::NEG_INFINITY; 3];
+    for (_, vertex) in body.vertices.iter() {
+        for axis in 0..3 {
+            low[axis] = low[axis].min(vertex.point[axis]);
+            high[axis] = high[axis].max(vertex.point[axis]);
+        }
+    }
+    if low[0] > high[0] {
+        return 1.0;
+    }
+    (0..3)
+        .map(|axis| high[axis] - low[axis])
+        .fold(0.0_f64, f64::max)
+        .max(1e-9)
+}
+
 /// The edges of every body in an ACIS document, as polylines.
 ///
 /// What draws a solid's wireframe and what a click hit-tests against. Taken
@@ -122,7 +183,7 @@ pub fn tessellate_sat(
 #[allow(dead_code)]
 pub fn edge_polylines(document: &SatDocument, sag: f64) -> Vec<Vec<[f64; 3]>> {
     let (bodies, _) = lift(document);
-    let sag = if sag > 0.0 { sag } else { SAG };
+    let sag = if sag > 0.0 { sag } else { CHORD_FRAC };
     let placement = body_transform(document);
     bodies
         .iter()
@@ -194,4 +255,37 @@ mod tests {
         let moved = placed([0.0, 0.0, 0.0], quarter_turn());
         assert_eq!(moved, [10.0, 20.0, 30.0]);
     }
+
+    /// How many sides a circle of `radius` gets at a sag of `frac × radius`.
+    fn sides(frac: f64) -> f64 {
+        let step = 2.0 * (1.0 - frac).clamp(-1.0, 1.0).acos();
+        std::f64::consts::TAU / step
+    }
+
+    #[test]
+    fn a_round_surface_gets_the_same_sides_whatever_its_size() {
+        // The fault: `facet_res` is a resolution multiplier and was used as a
+        // sag in world units. At the default that asked for a whole unit of
+        // departure, so nothing smaller than a metre subdivided at all and a
+        // pipe came out as coarse as its own rim.
+        //
+        // A fraction of the radius carries no unit, so a bolt and a pipeline
+        // are sampled alike.
+        assert!(sides(CHORD_FRAC) > 24.0, "{}", sides(CHORD_FRAC));
+        assert!(sides(CHORD_FRAC) < 96.0, "{}", sides(CHORD_FRAC));
+    }
+
+    /// And it is the edges' own density, so the wire drawn over a face lands
+    /// on the facet corners rather than cutting across them.
+    #[test]
+    fn a_face_is_sampled_as_finely_as_the_edges_over_it() {
+        let rim = crate::scene::convert::solid3d_tess::edge_arc_segs(
+            5.0,
+            std::f64::consts::TAU,
+        ) as f64;
+        let wall = sides(CHORD_FRAC);
+        assert!((rim - wall).abs() <= 1.0, "rim {rim} vs wall {wall}");
+    }
+
+
 }

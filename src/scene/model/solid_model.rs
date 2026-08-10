@@ -382,10 +382,16 @@ mod tests {
         for (body, expected) in cases {
             let got = volume(&body);
             assert!(got > 0.0, "wound inwards: {got}");
-            // Facets are chords and lie inside, so a mesh reads short and
-            // never over.
-            assert!(got > 0.94 * expected, "{got} vs {expected}");
-            assert!(got <= expected * 1.000_001, "{got} vs {expected}");
+            // Close either way, rather than short and never over. A chord does
+            // lie inside the surface it spans, so a convex solid can only read
+            // short — but a torus is not convex, and across the inside of its
+            // tube the chords fall outside the material and add a little. What
+            // is being checked is that the mesh is the shape asked for, and a
+            // per cent covers both.
+            assert!(
+                (got - expected).abs() < 0.01 * expected,
+                "{got} vs {expected}"
+            );
         }
     }
 
