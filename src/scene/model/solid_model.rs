@@ -17,16 +17,17 @@ use acadrust::kernel::brep::{self, Body};
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
-/// How far a triangle may sit from the surface it lies on. A drawing is
-/// measured in millimetres, and a twentieth of one is past what a screen
-/// resolves at any sane zoom.
-const SAG: f64 = 0.05;
-
 /// What counts as the same point when the kernel checks a body over.
 const TOL: f64 = 1e-9;
 
 fn tessellation(body: &Body) -> brep::mesh::BodyMesh {
-    brep::mesh::tessellate(body, brep::mesh::TessellationTolerance::new(SAG, TOL))
+    brep::mesh::tessellate(
+        body,
+        brep::mesh::TessellationTolerance::new(
+            acadrust::kernel::tessellation::DEFAULT_ANGLE,
+            TOL,
+        ),
+    )
 }
 
 /// Axis-aligned box from its center and full extents.

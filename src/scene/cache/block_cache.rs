@@ -1961,17 +1961,11 @@ fn transform_tangent(
     }
 }
 
-/// Radius / coordinate cap above which adaptive curve tessellation will
-/// allocate hundreds of millions of points. `parameter_division` samples
-/// to a fixed chord tolerance, so a Circle of radius 1e10 already produces
-/// tens of millions of points.
+/// Coordinate cap for invalid or impractical extents.
 const SANE_EXTENT: f64 = 1.0e8;
 
 fn is_unreasonable_extent(e: &EntityType) -> bool {
-    // Adaptive curve tessellation also explodes on degenerate primitives
-    // (radius = 0, axes of length 0): `parameter_division` allocates
-    // proportional to range/tolerance, which underflows when the curve
-    // collapses to a point. Drop both ends of the spectrum.
+    // Drop degenerate primitives and impractical coordinate ranges.
     match e {
         EntityType::Circle(c) => c.radius.abs() < 1.0e-9 || c.radius.abs() > SANE_EXTENT,
         EntityType::Arc(a) => a.radius.abs() < 1.0e-9 || a.radius.abs() > SANE_EXTENT,

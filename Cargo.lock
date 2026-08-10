@@ -6,7 +6,7 @@ version = 4
 name = "OpenCADStudio"
 version = "0.9.4"
 dependencies = [
- "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=6059bae)",
+ "acadifc",
  "ashpd",
  "bincode",
  "bytemuck",
@@ -70,25 +70,11 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadifc"
 version = "0.5.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=6059bae#6059baed781c6399d8259aa85c19be803ba95205"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=c15cbf0#c15cbf0ac5c61202f1d9b1a5d344a03bb1e65871"
 dependencies = [
- "acadrust 0.4.1 (git+https://github.com/HakanSeven12/cadcodec.git?rev=36e841f)",
+ "acadrust",
  "base64",
- "cadkernel 0.1.0 (git+https://github.com/HakanSeven12/cadkernel.git?rev=6f34deb)",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "acadifc"
-version = "0.5.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=c65d396#c65d396abc3defcf96b1d71a3f812c8ad993e77c"
-dependencies = [
- "acadrust 0.4.1 (git+https://github.com/HakanSeven12/cadcodec.git?rev=d645c7f)",
- "base64",
- "cadkernel 0.1.0 (git+https://github.com/HakanSeven12/cadkernel.git)",
+ "cadkernel",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -99,29 +85,6 @@ dependencies = [
 name = "acadrust"
 version = "0.4.1"
 source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=36e841f#36e841feeebe706b7f8dd604d273e34032fda764"
-dependencies = [
- "ahash 0.8.12",
- "anyhow",
- "bitflags 2.13.1",
- "byteorder",
- "encoding_rs",
- "flate2",
- "indexmap",
- "itoa",
- "memmap2",
- "nom 7.1.3",
- "once_cell",
- "rayon",
- "ryu",
- "serde",
- "thiserror 1.0.69",
- "web-time",
-]
-
-[[package]]
-name = "acadrust"
-version = "0.4.1"
-source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=d645c7f#d645c7f526c199c02fcab7272d6b6f2d1c6b91ae"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -927,15 +890,10 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=6f34deb#6f34deb57eedf0dc5908bf225917f19c9707682d"
+source = "git+https://github.com/HakanSeven12/cadkernel.git?rev=691c477#691c47756f30bb32fad2342afeec14d5985783ac"
 dependencies = [
  "cavalier_contours",
 ]
-
-[[package]]
-name = "cadkernel"
-version = "0.1.0"
-source = "git+https://github.com/HakanSeven12/cadkernel.git#860b9df7e5fc4a495334a6329560a4cde33659db"
 
 [[package]]
 name = "calloop"
@@ -3788,7 +3746,7 @@ dependencies = [
 name = "ocs_plugin_api"
 version = "0.1.0"
 dependencies = [
- "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=6059bae)",
+ "acadifc",
  "bincode",
  "getrandom 0.2.17",
  "interprocess",
@@ -3803,7 +3761,7 @@ dependencies = [
 name = "ocs_web_worker"
 version = "0.1.0"
 dependencies = [
- "acadifc 0.5.0 (git+https://github.com/OpenAEC-Foundation/acadifc.git?rev=c65d396)",
+ "acadifc",
  "bincode",
  "console_error_panic_hook",
  "getrandom 0.3.4",

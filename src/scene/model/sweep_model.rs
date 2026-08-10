@@ -112,26 +112,26 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
 /// SWEEP through the kernel's tolerance-driven mesh API.
 pub fn swept(profile: &EntityType, path: &EntityType, color: [f32; 4]) -> Option<MeshLodSet> {
-    let tolerance = crate::scene::convert::curve_tol::current_curve_tol();
+    let max_angle = acadrust::kernel::tessellation::DEFAULT_ANGLE;
     let surface = brep::mesh::sweep_surface(
         &entity_curve(profile)?,
         &entity_curve(path)?,
-        tolerance,
+        max_angle,
     )?;
-    mesh_set(surface, color, tolerance)
+    mesh_set(surface, color, 1e-9)
 }
 
 /// LOFT through the kernel's tolerance-driven mesh API.
 pub fn lofted(profiles: &[EntityType], color: [f32; 4]) -> Option<MeshLodSet> {
     let curves: Vec<PlanarCurve> = profiles.iter().filter_map(entity_curve).collect();
-    let tolerance = crate::scene::convert::curve_tol::current_curve_tol();
-    mesh_set(brep::mesh::loft_surface(&curves, tolerance)?, color, tolerance)
+    let max_angle = acadrust::kernel::tessellation::DEFAULT_ANGLE;
+    mesh_set(brep::mesh::loft_surface(&curves, max_angle)?, color, 1e-9)
 }
 
 fn mesh_set(
     surface: brep::mesh::SurfaceMesh,
     color: [f32; 4],
-    tolerance: f64,
+    precision: f64,
 ) -> Option<MeshLodSet> {
     if surface.mesh.is_empty() {
         return None;
@@ -141,7 +141,7 @@ fn mesh_set(
     for point in &surface.mesh.positions {
         push_point(&mut verts, &mut verts_low, *point);
     }
-    let silhouette = surface.silhouette_source(tolerance);
+    let silhouette = surface.silhouette_source(precision);
     let mut set = MeshLodSet::from_single(MeshModel {
         name: String::new(),
         verts,

@@ -670,14 +670,7 @@ pub(crate) fn thick_band_tube(
     (fill_tris, lines)
 }
 
-/// Build a continuous WCS point list + a per-point FULL band width for a
-/// tapered wide polyline, so the wire shader can interpolate each segment's two
-/// endpoint widths. Each `verts` entry is `(location_xy, bulge_to_next,
-/// start_width, end_width)` — the effective full widths at that vertex's segment
-/// start and end (already resolved against the polyline's constant width). Arcs
-/// are sampled in 16 steps with the width interpolated linearly along the arc.
-/// A shared vertex is emitted once (carrying the previous segment's end width),
-/// which is exact for the usual continuous taper.
+/// Build a continuous WCS point list and full width for a tapered polyline.
 pub(crate) fn tapered_band_points(
     verts: &[([f64; 2], f64, f64, f64)],
     is_closed: bool,
@@ -701,9 +694,10 @@ pub(crate) fn tapered_band_points(
         if bulge.abs() < 1e-9 {
             push(p1[0], p1[1], ew0 as f32);
         } else if let Some(arc) = BulgeArc::from_bulge(p0, p1, bulge) {
-            for j in 1..=16usize {
-                let t = j as f64 / 16.0;
-                let s = arc.sample(t);
+            let samples = arc.tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE);
+            let segments = samples.len().saturating_sub(1).max(1);
+            for (index, s) in samples.into_iter().enumerate().skip(1) {
+                let t = index as f64 / segments as f64;
                 push(s[0], s[1], (sw0 + (ew0 - sw0) * t) as f32);
             }
         }
@@ -792,4 +786,3 @@ pub(crate) fn polyline_segment_fill(
         Some(boundary)
     }
 }
-

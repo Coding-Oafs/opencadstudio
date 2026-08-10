@@ -8207,21 +8207,6 @@ impl Scene {
         let paper = anno_scale_override.is_some();
         let blk_cache = self.block_cache_arc_for(annotation_scale_handle, all_visible, style_viewport);
         let blk_ref: &cache::block_cache::BlockCache = &blk_cache;
-        // Zoom-adaptive curve sampling for top-level Edge tessellation. Target
-        // ~0.5 px chord height — far-out arcs that used to emit hundreds of
-        // segments now collapse to a handful. The guard clears the override
-        // when this scope exits so off-render tessellation (snap previews,
-        // hit-test, block_cache rebuild) sees the default.
-        struct CurveTolGuard;
-        impl Drop for CurveTolGuard {
-            fn drop(&mut self) {
-                crate::scene::convert::curve_tol::set_curve_tol_override(None);
-            }
-        }
-        let _tol_guard = wpp.map(|w| {
-            crate::scene::convert::curve_tol::set_curve_tol_override(Some((w * 0.5) as f64));
-            CurveTolGuard
-        });
         // Per-entity tessellation memo. Same classify/tessellate logic, two
         // SEPARATE stores so they can't thrash each other:
         //   * culled path (`view_aabb == Some`) → `tess_memo`, guard keyed on the

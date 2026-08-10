@@ -24,11 +24,7 @@ fn to_render(ell: &Ellipse) -> RenderEntity {
         .map(crate::entities::curve::snap_from)
         .unwrap_or_default();
 
-    // The points come from the entity's own curve, cut to the render pass's
-    // chord tolerance. The two fixed counts this replaced — sixteen per half
-    // for a full ellipse, thirty-two for an arc — faceted visibly on
-    // anything large, and the local coordinates were built in `f32`, which
-    // threw away precision the double-single vertex path exists to keep.
+    // The points come from the entity's own kernel curve and angular policy.
     //
     // What does not change is the shape of the object. EXTRUDE, REVOLVE and
     // SWEEP read their profile out of `Contour` / `Curve` and have no arm for

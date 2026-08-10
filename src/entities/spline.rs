@@ -157,25 +157,7 @@ pub(crate) fn measurement_polyline(spl: &Spline) -> Vec<[f64; 3]> {
     if degree == 0 || degree >= count {
         return spl.control_points.iter().map(|p| [p.x, p.y, p.z]).collect();
     }
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    for point in &spl.control_points {
-        min[0] = min[0].min(point.x);
-        min[1] = min[1].min(point.y);
-        min[2] = min[2].min(point.z);
-        max[0] = max[0].max(point.x);
-        max[1] = max[1].max(point.y);
-        max[2] = max[2].max(point.z);
-    }
-    let diagonal = ((max[0] - min[0]).powi(2)
-        + (max[1] - min[1]).powi(2)
-        + (max[2] - min[2]).powi(2))
-    .sqrt();
-    let tolerance = crate::scene::convert::tess_util::fill_chord_tol(diagonal.max(1.0));
-
-    // The kernel's space curve holds the rational and the polynomial case
-    // alike — weights absent means polynomial — and samples to a chord
-    // tolerance, refined where the curve bends rather than evenly.
+    // The kernel's space curve holds rational and polynomial curves alike.
     let controls: Vec<[f64; 3]> = spl
         .control_points
         .iter()
@@ -188,7 +170,9 @@ pub(crate) fn measurement_polyline(spl: &Spline) -> Vec<[f64; 3]> {
             .collect()
     });
     match NurbsCurve3::new(degree, controls, spl.knots.clone(), weights) {
-        Some(curve) => curve.tessellate_within(tolerance),
+        Some(curve) => {
+            curve.tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+        }
         None => spl.control_points.iter().map(|p| [p.x, p.y, p.z]).collect(),
     }
 }
@@ -197,7 +181,6 @@ pub(crate) fn measurement_polyline(spl: &Spline) -> Vec<[f64; 3]> {
 /// passes through every input point; open ends use reflected phantom points so
 /// they don't kink, closed curves wrap around.
 fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[f64; 3]> {
-    const STEPS: usize = 16;
     let n = pts.len();
     if n < 2 {
         return pts.iter().map(|p| [p.x, p.y, p.z]).collect();
@@ -212,7 +195,7 @@ fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[
         [pts[j].x, pts[j].y, pts[j].z]
     };
     let seg_count = if closed { n } else { n - 1 };
-    let mut out: Vec<[f64; 3]> = Vec::with_capacity(seg_count * STEPS + 1);
+    let mut out = Vec::new();
     for seg in 0..seg_count {
         let p1 = get(seg as isize);
         let p2 = get(seg as isize + 1);
@@ -235,15 +218,7 @@ fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[
         } else {
             get(seg as isize + 2)
         };
-        // Emit t in [0, 1); the final segment also emits t = 1 so the curve
-        // closes onto the last point (no duplicate shared vertices otherwise).
-        let last = if seg == seg_count - 1 {
-            STEPS
-        } else {
-            STEPS - 1
-        };
-        for s in 0..=last {
-            let t = s as f64 / STEPS as f64;
+        let point_at = |t: f64| {
             let (t2, t3) = (t * t, t * t * t);
             let mut q = [0.0f64; 3];
             for k in 0..3 {
@@ -253,8 +228,24 @@ fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[
                         + (2.0 * p0[k] - 5.0 * p1[k] + 4.0 * p2[k] - p3[k]) * t2
                         + (-p0[k] + 3.0 * p1[k] - 3.0 * p2[k] + p3[k]) * t3);
             }
-            out.push(q);
-        }
+            q
+        };
+        let tangent_at = |t: f64| {
+            let mut q = [0.0; 3];
+            for k in 0..3 {
+                let a = -p0[k] + p2[k];
+                let b = 2.0 * p0[k] - 5.0 * p1[k] + 4.0 * p2[k] - p3[k];
+                let c = -p0[k] + 3.0 * p1[k] - 3.0 * p2[k] + p3[k];
+                q[k] = 0.5 * (a + 2.0 * b * t + 3.0 * c * t * t);
+            }
+            q
+        };
+        let sampled = acadrust::kernel::tessellation::sample_curve3_angle(
+            point_at,
+            tangent_at,
+            acadrust::kernel::tessellation::DEFAULT_ANGLE,
+        );
+        out.extend(sampled.into_iter().skip(usize::from(seg > 0)));
     }
     out
 }
@@ -340,12 +331,9 @@ fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
     }
 
     // Evaluate each segment as a cubic Hermite (dP/du = slope · h_i).
-    const STEPS: usize = 32;
-    let mut out = Vec::with_capacity((n - 1) * STEPS + 1);
+    let mut out = Vec::new();
     for i in 0..n - 1 {
-        let last = if i == n - 2 { STEPS } else { STEPS - 1 };
-        for s in 0..=last {
-            let u = s as f64 / STEPS as f64;
+        let point_at = |u: f64| {
             let (u2, u3) = (u * u, u * u * u);
             let h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
             let h10 = u3 - 2.0 * u2 + u;
@@ -357,8 +345,30 @@ fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
                 let m1 = slopes[k][i + 1] * h[i];
                 q[k] = h00 * p[i][k] + h10 * m0 + h01 * p[i + 1][k] + h11 * m1;
             }
-            out.push(q);
-        }
+            q
+        };
+        let tangent_at = |u: f64| {
+            let u2 = u * u;
+            let (h00, h10, h01, h11) = (
+                6.0 * u2 - 6.0 * u,
+                3.0 * u2 - 4.0 * u + 1.0,
+                -6.0 * u2 + 6.0 * u,
+                3.0 * u2 - 2.0 * u,
+            );
+            let mut q = [0.0; 3];
+            for k in 0..3 {
+                let m0 = slopes[k][i] * h[i];
+                let m1 = slopes[k][i + 1] * h[i];
+                q[k] = h00 * p[i][k] + h10 * m0 + h01 * p[i + 1][k] + h11 * m1;
+            }
+            q
+        };
+        let sampled = acadrust::kernel::tessellation::sample_curve3_angle(
+            point_at,
+            tangent_at,
+            acadrust::kernel::tessellation::DEFAULT_ANGLE,
+        );
+        out.extend(sampled.into_iter().skip(usize::from(i > 0)));
     }
     out
 }

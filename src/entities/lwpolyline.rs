@@ -308,8 +308,11 @@ fn to_render(pline: &LwPolyline) -> RenderEntity {
                     center: [wcx as f32, wcy as f32, wcz as f32],
                     radius: arc.radius as f32,
                 });
-                for j in 1..=16usize {
-                    let s = arc.sample(j as f64 / 16.0);
+                for s in arc
+                    .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+                    .into_iter()
+                    .skip(1)
+                {
                     let (wx, wy, wz) = to_wcs(s[0], s[1]);
                     path.push([wx, wy, wz]);
                 }
@@ -406,8 +409,11 @@ fn to_render(pline: &LwPolyline) -> RenderEntity {
             } else if let Some(arc) =
                 crate::entities::common::BulgeArc::from_bulge([ox0, oy0], [ox1, oy1], bulge)
             {
-                for j in 1..=16usize {
-                    let s = arc.sample(j as f64 / 16.0);
+                for s in arc
+                    .tessellate_angle(acadrust::kernel::tessellation::DEFAULT_ANGLE)
+                    .into_iter()
+                    .skip(1)
+                {
                     let (wx, wy, wz) = to_wcs(s[0], s[1]);
                     pts.push([wx, wy, wz]);
                 }

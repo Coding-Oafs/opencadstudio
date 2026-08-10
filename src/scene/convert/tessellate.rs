@@ -4,7 +4,7 @@
 //   EntityType
 //     ↓  acad_to_render::convert()
 //   RenderEntity  { object: RenderObject, snap_pts, tangent_geoms, key_vertices }
-//     ↓  curve_tol::tessellate_*()
+//     ↓
 //   RenderObject::Lines → WireModel
 //   RenderObject::Dot   → WireModel (a dot sized in pixels)
 //   RenderObject::Text  → WireModel (glyph strokes) + SDF quads

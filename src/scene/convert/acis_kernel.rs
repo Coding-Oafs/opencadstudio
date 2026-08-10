@@ -15,9 +15,6 @@ use acadrust::kernel::brep;
 use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
 use crate::scene::model::mesh_model::{CurvedGen, MeshLodSet};
 
-/// Relative chord tolerance, resolved once per body.
-const CHORD_FRAC: f64 = 0.002;
-
 /// ACIS topology fit tolerance.
 const TOL: f64 = 1e-6;
 
@@ -56,7 +53,7 @@ pub fn tessellate_sat(
     } else {
         1.0
     };
-    let frac = CHORD_FRAC / resolution;
+    let max_angle = acadrust::kernel::tessellation::DEFAULT_ANGLE / resolution;
 
     // Positions stay f64 until `finalize_mesh` splits them into the coarse
     // and fine pair, so a solid at survey coordinates keeps its millimetres.
@@ -101,7 +98,7 @@ pub fn tessellate_sat(
     // parameters leaves a hole, the same as one that never lifted — so both
     // are counted before calling the mesh whole.
     let mut undrawn = 0usize;
-    let tolerance = brep::mesh::TessellationTolerance::relative(frac, TOL)
+    let tolerance = brep::mesh::TessellationTolerance::new(max_angle, TOL)
         .with_isolines(isolines);
     for body in &bodies {
         let tessellation = brep::mesh::tessellate(body, tolerance);
@@ -237,23 +234,15 @@ mod tests {
         assert_eq!(moved, [10.0, 20.0, 30.0]);
     }
 
-    /// How many sides a circle of `radius` gets at a sag of `frac × radius`.
-    fn sides(frac: f64) -> f64 {
-        let step = 2.0 * (1.0 - frac).clamp(-1.0, 1.0).acos();
-        std::f64::consts::TAU / step
+    fn sides(max_angle: f64) -> f64 {
+        std::f64::consts::TAU / max_angle
     }
 
     #[test]
     fn a_round_surface_gets_the_same_sides_whatever_its_size() {
-        // The fault: `facet_res` is a resolution multiplier and was used as a
-        // sag in world units. At the default that asked for a whole unit of
-        // departure, so nothing smaller than a metre subdivided at all and a
-        // pipe came out as coarse as its own rim.
-        //
-        // A fraction of the radius carries no unit, so a bolt and a pipeline
-        // are sampled alike.
-        assert!(sides(CHORD_FRAC) > 24.0, "{}", sides(CHORD_FRAC));
-        assert!(sides(CHORD_FRAC) < 96.0, "{}", sides(CHORD_FRAC));
+        let angle = acadrust::kernel::tessellation::DEFAULT_ANGLE;
+        assert!(sides(angle) > 24.0, "{}", sides(angle));
+        assert!(sides(angle) < 96.0, "{}", sides(angle));
     }
 
 }

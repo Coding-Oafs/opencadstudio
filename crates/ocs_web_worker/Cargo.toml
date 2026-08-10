@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "c65d396", features = ["serde"] }
+acadrust = { package = "acadifc", git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "c15cbf0", features = ["serde"] }
 bincode = "1.3"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.3", features = ["wasm_js"] }
