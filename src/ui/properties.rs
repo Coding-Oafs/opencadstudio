@@ -369,6 +369,7 @@ impl PropertiesPanel {
     }
 
     pub fn view(&self, width: f32, auto_collapse: bool) -> Element<'_, Message> {
+        use crate::ui::dock::{DockMsg, PanelId};
         // ── Header ──────────────────────────────────────────────────────────
         let pin_icon = if auto_collapse {
             crate::ui::icons::themed_primary_weak_text(crate::ui::icons::PIN, 12.0)
@@ -376,7 +377,7 @@ impl PropertiesPanel {
             crate::ui::icons::themed_secondary(crate::ui::icons::PIN, 12.0)
         };
         let pin = button(pin_icon)
-            .on_press(Message::PropertiesAutoCollapseToggle)
+            .on_press(Message::Dock(DockMsg::AutoCollapseToggle(PanelId::Properties)))
             .style(move |theme: &Theme, status| {
                 let mut style = button::subtle(theme, status);
                 if auto_collapse {
@@ -395,7 +396,7 @@ impl PropertiesPanel {
             crate::ui::icons::CLOSE,
             12.0,
         ))
-        .on_press(Message::PropertiesClose)
+        .on_press(Message::Dock(DockMsg::Close(PanelId::Properties)))
         .style(button::subtle)
         .padding([3, 5]);
         let close = tooltip(
@@ -425,7 +426,7 @@ impl PropertiesPanel {
             .width(Length::Fill)
             .padding([3, 6]),
         )
-        .on_press(Message::PropertiesDockGrab)
+        .on_press(Message::Dock(DockMsg::DockGrab(PanelId::Properties)))
         .interaction(iced::mouse::Interaction::Grab);
 
         // ── Title bar (entity type / "No Selection") ─────────────────────

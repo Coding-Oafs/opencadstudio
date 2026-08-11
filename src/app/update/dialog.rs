@@ -599,7 +599,10 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.show_block_palette = false;
                         self.block_palette.placing = None;
                     }
-                    PanelId::Properties => self.show_properties = false,
+                    PanelId::Properties => {
+                        self.show_properties = false;
+                        self.ribbon.set_properties(false);
+                    }
                 }
                 if self.dock_expanded == Some(id) {
                     self.dock_expanded = None;
@@ -613,13 +616,20 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 iced::Task::none()
             }
             DockMsg::Hover(id) => {
-                self.dock_expanded = Some(id);
+                // Ignored while dragging/resizing: the pointer is over the
+                // drag preview, not a rail, so a hover must not collapse the
+                // panel being dragged or repoint the resize target.
+                if self.dock_dragging.is_none() && self.dock_resizing.is_none() {
+                    self.dock_expanded = Some(id);
+                }
                 iced::Task::none()
             }
             DockMsg::HoverExit => {
-                if let Some(id) = self.dock_expanded {
-                    if self.dock.auto_collapse(id) {
-                        self.dock_expanded = None;
+                if self.dock_dragging.is_none() && self.dock_resizing.is_none() {
+                    if let Some(id) = self.dock_expanded {
+                        if self.dock.auto_collapse(id) {
+                            self.dock_expanded = None;
+                        }
                     }
                 }
                 iced::Task::none()

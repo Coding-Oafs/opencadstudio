@@ -196,15 +196,6 @@ impl DockState {
         true
     }
 
-    /// True when the panel is in a non-empty reduced state on `side`, i.e. the
-    /// number of reduced panels that share the side's column height.
-    pub fn reduced_count(&self, side: DockSide, expanded: Option<PanelId>) -> usize {
-        self.stack(side)
-            .iter()
-            .filter(|id| Some(**id) != expanded)
-            .count()
-    }
-
     /// Number of panels currently docked on `side`.
     pub fn len(&self, side: DockSide) -> usize {
         self.stack(side).len()
@@ -228,48 +219,9 @@ pub const DOCK_MIN_W: f32 = 200.0;
 /// Largest docked width a panel may be dragged or sized to.
 pub const DOCK_MAX_W: f32 = 600.0;
 
-/// Height allocated to one reduced panel sharing an edge with `count` others.
-pub fn slice_height(count: usize, avail: f32) -> f32 {
-    if count == 0 {
-        0.0
-    } else {
-        avail / count as f32
-    }
-}
-
-/// Index (top → bottom) of the reduced slice whose bounds contain screen-local
-/// `y` measured from the top of the edge column. Returns `None` for a y outside
-/// the column or when there are no reduced panels. Even when an expanded panel
-/// overlays the column, this computed index lets a reduced sibling be raised.
-pub fn slice_index_at_y(y: f32, count: usize, avail: f32) -> Option<usize> {
-    if count == 0 || avail <= 0.0 || y < 0.0 {
-        return None;
-    }
-    let h = avail / count as f32;
-    let i = (y / h) as usize;
-    (i < count).then_some(i)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn slice_height_divides_equally() {
-        assert_eq!(slice_height(3, 300.0), 100.0);
-        assert_eq!(slice_height(1, 300.0), 300.0);
-        assert_eq!(slice_height(0, 300.0), 0.0);
-    }
-
-    #[test]
-    fn slice_index_maps_y_to_panel() {
-        assert_eq!(slice_index_at_y(50.0, 3, 300.0), Some(0));
-        assert_eq!(slice_index_at_y(110.0, 3, 300.0), Some(1));
-        assert_eq!(slice_index_at_y(299.0, 3, 300.0), Some(2));
-        assert_eq!(slice_index_at_y(300.0, 3, 300.0), None);
-        assert_eq!(slice_index_at_y(-1.0, 3, 300.0), None);
-        assert_eq!(slice_index_at_y(50.0, 0, 300.0), None);
-    }
 
     #[test]
     fn default_docks_each_known_panel_on_an_edge() {
@@ -334,16 +286,6 @@ mod tests {
         state.set_width(PanelId::BlockPalette, 500.0);
         // Window too narrow -> capped by the 0.45 fraction, not DOCK_MAX_W.
         assert_eq!(state.width(PanelId::BlockPalette, 800.0), DOCK_MAX_W.min(360.0));
-    }
-
-    #[test]
-    fn reduced_count_excludes_expanded() {
-        let state = DockState::default(); // right: [BlockPalette]
-        assert_eq!(state.reduced_count(DockSide::Right, None), 1);
-        assert_eq!(
-            state.reduced_count(DockSide::Right, Some(PanelId::BlockPalette)),
-            0
-        );
     }
 
     #[test]

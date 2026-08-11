@@ -1458,92 +1458,36 @@ impl OpenCADStudio {
             }
         }
 
-        // Docked Properties panel. It keeps its pixel width when moved between
-        // edges; auto-collapse swaps the full panel for a hoverable rail.
-        let show_properties = !tab.is_start && self.show_properties && !self.clean_screen;
-        let properties_width = self
-            .properties_width
-            .min((self.win_size.0 * 0.45).clamp(220.0, 600.0));
-        let properties_el: Option<Element<'_, Message>> = show_properties.then(|| {
-            let narrow_collapsed = self.win_size.0 < 1000.0
-                && !self.props_expanded
-                && !self.properties_hovered;
-            let auto_collapsed = self.properties_auto_collapse
-                && !self.properties_hovered
-                && !self.properties_dragging
-                && !self.properties_resizing;
-            if narrow_collapsed || auto_collapsed {
-                collapse_bar(
-                    "Properties",
-                    self.properties_side,
-                    Message::TogglePropertiesBar,
-                    Message::PropertiesHover(true),
-                    26.0,
-                )
-            } else {
-                let panel = tab
-                    .properties
-                    .view(properties_width, self.properties_auto_collapse);
-                let divider = properties_divider();
-                let group: Element<'_, Message> = match self.properties_side {
-                    crate::app::config::DockSide::Left => row![panel, divider].into(),
-                    crate::app::config::DockSide::Right => row![divider, panel].into(),
-                };
-                mouse_area(group)
-                    .on_enter(Message::PropertiesHover(true))
-                    .on_exit(Message::PropertiesHover(false))
-                    .into()
+        // Docked side panels (Properties, block palette, future palettes) live
+        // in an ordered vertical stack on the left/right edge of the drawing
+        // view. Auto-collapsing (pinned) panels that aren't being hovered
+        // reduce to a rail sharing 1/N of the edge column's height; the
+        // hovered or unpinned panel expands to the full column height on top.
+        let visible_panel = |id: crate::ui::dock::PanelId| -> bool {
+            if tab.is_start || self.clean_screen {
+                return false;
             }
-        });
-
-        // The Block Palette docks through the general edge-stack dock (side,
-        // width, auto-collapse are persisted on `self.dock`). When auto-collapsing
-        // and not hovered it reduces to a rail; otherwise it renders full-height
-        // with themed pin/close chrome and a grabbable, resizable header.
-        let block_palette_el: Option<Element<'_, Message>> = if !tab.is_start
-            && self.show_block_palette
-            && !self.clean_screen
-        {
-            let id = crate::ui::dock::PanelId::BlockPalette;
-            let side = self
-                .dock
-                .location(id)
-                .map(|(s, _)| s)
-                .unwrap_or(crate::app::config::DockSide::Right);
-            let width = self.dock.width(id, self.win_size.0);
-            let auto_collapse = self.dock.auto_collapse(id);
-            let expanded = self.dock_expanded == Some(id);
-            if auto_collapse && !expanded {
-                Some(collapse_bar(
-                    "Block Palette",
-                    side,
-                    Message::Dock(crate::ui::dock::DockMsg::Hover(id)),
-                    Message::Dock(crate::ui::dock::DockMsg::Hover(id)),
-                    26.0,
-                ))
-            } else {
-                let panel =
-                    crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse);
-                let divider = dock_divider(id);
-                let group: Element<'_, Message> = match side {
-                    crate::app::config::DockSide::Left => row![panel, divider].into(),
-                    crate::app::config::DockSide::Right => row![divider, panel].into(),
-                };
-                Some(
-                    mouse_area(group)
-                        .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
-                        .on_exit(Message::Dock(crate::ui::dock::DockMsg::HoverExit))
-                        .into(),
-                )
+            match id {
+                crate::ui::dock::PanelId::Properties => self.show_properties,
+                crate::ui::dock::PanelId::BlockPalette => self.show_block_palette,
             }
-        } else {
-            None
         };
-        let bp_side = self
-            .dock
-            .location(crate::ui::dock::PanelId::BlockPalette)
-            .map(|(s, _)| s)
-            .unwrap_or(crate::app::config::DockSide::Right);
+        let edge_stack =
+            |side: crate::app::config::DockSide| -> Option<Element<'_, Message>> {
+                let ids: Vec<crate::ui::dock::PanelId> = match side {
+                    crate::app::config::DockSide::Left => self.dock.left.clone(),
+                    crate::app::config::DockSide::Right => self.dock.right.clone(),
+                }
+                .into_iter()
+                .filter(|id| visible_panel(*id))
+                .collect();
+                if ids.is_empty() {
+                    return None;
+                }
+                Some(self.build_edge_stack(side, &ids, tab))
+            };
+        let left_edge = edge_stack(crate::app::config::DockSide::Left);
+        let right_edge = edge_stack(crate::app::config::DockSide::Right);
 
         // Command-line sits as a bottom-centre overlay on top of the
         // viewport stack rather than as a separate row in the main
@@ -1562,52 +1506,93 @@ impl OpenCADStudio {
                 && !tab.dyn_fields.is_empty())
                 || self.mtext_editor.as_ref().is_some_and(|e| e.show_preview)
                 || self.text_inline.is_some();
-        let properties_side = self.properties_side;
-        // Combine the Properties panel and Block Palette into one row with the
-        // viewport, each placed on its own dock side. Ordering is stable so two
-        // panels sharing an edge never swap unpredictably.
-        let mut left_items: Vec<Element<'_, Message>> = Vec::new();
-        let mut right_items: Vec<Element<'_, Message>> = Vec::new();
-        if let Some(p) = properties_el {
-            match properties_side {
-                crate::app::config::DockSide::Left => left_items.push(p),
-                crate::app::config::DockSide::Right => right_items.push(p),
-            }
+        // The workspace row is: left edge stack, viewport, right edge stack.
+        let mut parts: Vec<Element<'_, Message>> = Vec::new();
+        if let Some(e) = left_edge {
+            parts.push(e);
         }
-        if let Some(p) = block_palette_el {
-            match bp_side {
-                crate::app::config::DockSide::Left => left_items.push(p),
-                crate::app::config::DockSide::Right => right_items.push(p),
-            }
-        }
-        let mut parts = left_items;
         parts.push(viewport_stack.into());
-        parts.extend(right_items);
+        if let Some(e) = right_edge {
+            parts.push(e);
+        }
         let workspace: Element<'_, Message> = row(parts).width(Fill).height(Fill).into();
 
-        let any_dragging = self.properties_dragging || self.dock_dragging.is_some();
-        let any_resizing = self.properties_resizing || self.dock_resizing.is_some();
+        let any_dragging = self.dock_dragging.is_some();
+        let any_resizing = self.dock_resizing.is_some();
         let workspace = if any_dragging {
-            let (preview_side, preview_width) = if let Some(id) = self.dock_dragging {
-                let side = self.dock_drag_target.map(|(s, _)| s).unwrap_or(
-                    self.dock
-                        .location(id)
-                        .map(|(s, _)| s)
-                        .unwrap_or(crate::app::config::DockSide::Right),
-                );
-                (side, self.dock.width(id, self.win_size.0))
-            } else {
-                let side = self.properties_dock_preview.unwrap_or(self.properties_side);
-                (side, properties_width)
+            let id = self.dock_dragging.expect("guarded by any_dragging");
+            let side = self.dock_drag_target.map(|(s, _)| s).unwrap_or(
+                self.dock
+                    .location(id)
+                    .map(|(s, _)| s)
+                    .unwrap_or(crate::app::config::DockSide::Right),
+            );
+            // Dropping onto an edge joins that edge's stack, whose column is as
+            // wide as its widest panel (the dragged panel included).
+            let preview_width = {
+                let mut widths: Vec<f32> = match side {
+                    crate::app::config::DockSide::Left => self.dock.left.clone(),
+                    crate::app::config::DockSide::Right => self.dock.right.clone(),
+                }
+                .into_iter()
+                .map(|pid| self.dock.width(pid, self.win_size.0))
+                .collect();
+                widths.push(self.dock.width(id, self.win_size.0));
+                widths.into_iter().fold(0.0, f32::max)
             };
-            let preview = container(Space::new())
+            // Faint tint over the whole edge column so the target edge reads
+            // even before the panel-sized ghost snaps to a slot.
+            let edge_tint = container(Space::new())
                 .width(Length::Fixed(preview_width))
                 .height(Fill)
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
                     container::Style {
                         background: Some(Background::Color(
-                            palette.primary.weak.color.scale_alpha(0.72),
+                            palette.primary.weak.color.scale_alpha(0.35),
+                        )),
+                        ..Default::default()
+                    }
+                });
+            // The ghost is the dragged panel at its real size: its own saved
+            // width and its 1/N share of the edge (N = stack size after the
+            // drop), with a header naming which panel is being moved.
+            let was_here = self.dock.location(id).map(|(s, _)| s) == Some(side);
+            let final_count = if was_here {
+                std::cmp::max(self.dock.len(side), 1)
+            } else {
+                self.dock.len(side) + 1
+            };
+            let slot_h = self.win_size.1 / final_count as f32;
+            let index = self.dock_drag_target.map(|(_, i)| i).unwrap_or(0);
+            let slot = index.min(final_count.saturating_sub(1));
+            let ghost_top = slot as f32 * slot_h;
+            let ghost_header = container(text(id.title()).size(12))
+                .width(Fill)
+                .padding(iced::Padding {
+                    top: 5.0,
+                    right: 8.0,
+                    bottom: 5.0,
+                    left: 8.0,
+                })
+                .style(|theme: &Theme| {
+                    let palette = theme.palette();
+                    container::Style {
+                        background: Some(Background::Color(
+                            palette.primary.base.color,
+                        )),
+                        text_color: Some(palette.primary.base.text),
+                        ..Default::default()
+                    }
+                });
+            let ghost_panel = container(column![ghost_header, Space::new()])
+                .width(Length::Fixed(self.dock.width(id, self.win_size.0)))
+                .height(Length::Fixed(slot_h))
+                .style(|theme: &Theme| {
+                    let palette = theme.palette();
+                    container::Style {
+                        background: Some(Background::Color(
+                            palette.background.base.color,
                         )),
                         border: Border {
                             color: palette.primary.base.color,
@@ -1617,39 +1602,74 @@ impl OpenCADStudio {
                         ..Default::default()
                     }
                 });
+            // Position the ghost at its drop slot, flush against the edge.
+            let ghost = container(ghost_panel)
+                .width(Fill)
+                .height(Fill)
+                .align_x(match side {
+                    crate::app::config::DockSide::Left => {
+                        iced::alignment::Horizontal::Left
+                    }
+                    crate::app::config::DockSide::Right => {
+                        iced::alignment::Horizontal::Right
+                    }
+                })
+                .align_y(iced::alignment::Vertical::Top)
+                .padding(iced::Padding {
+                    top: ghost_top,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                });
+            // Thin line across the column at the drop slot's top boundary.
+            let drop_line = container(
+                container(Space::new())
+                    .width(Fill)
+                    .height(Length::Fixed(3.0))
+                    .style(|theme: &Theme| container::Style {
+                        background: Some(Background::Color(
+                            theme.palette().primary.base.color,
+                        )),
+                        ..Default::default()
+                    }),
+            )
+            .width(Fill)
+            .height(Fill)
+            .align_y(iced::alignment::Vertical::Top)
+            .padding(iced::Padding {
+                top: ghost_top,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+            });
+            let preview = iced::widget::stack![edge_tint, ghost, drop_line]
+                .width(Length::Fixed(preview_width))
+                .height(Fill);
             let preview = container(preview)
                 .width(Fill)
                 .height(Fill)
-                .align_x(match preview_side {
-                    crate::app::config::DockSide::Left => iced::alignment::Horizontal::Left,
-                    crate::app::config::DockSide::Right => iced::alignment::Horizontal::Right,
+                .align_x(match side {
+                    crate::app::config::DockSide::Left => {
+                        iced::alignment::Horizontal::Left
+                    }
+                    crate::app::config::DockSide::Right => {
+                        iced::alignment::Horizontal::Right
+                    }
                 });
             stack![workspace, preview].width(Fill).height(Fill).into()
         } else {
             workspace
         };
         let workspace: Element<'_, Message> = if any_dragging || any_resizing {
-            if self.properties_dragging || self.properties_resizing {
-                mouse_area(workspace)
-                    .on_move(Message::PropertiesDragMove)
-                    .on_release(Message::PropertiesDragRelease)
-                    .interaction(if self.properties_resizing {
-                        iced::mouse::Interaction::ResizingHorizontally
-                    } else {
-                        iced::mouse::Interaction::Grabbing
-                    })
-                    .into()
-            } else {
-                mouse_area(workspace)
-                    .on_move(move |p| Message::Dock(crate::ui::dock::DockMsg::DragMove(p)))
-                    .on_release(Message::Dock(crate::ui::dock::DockMsg::DragRelease))
-                    .interaction(if self.dock_resizing.is_some() {
-                        iced::mouse::Interaction::ResizingHorizontally
-                    } else {
-                        iced::mouse::Interaction::Grabbing
-                    })
-                    .into()
-            }
+            mouse_area(workspace)
+                .on_move(move |p| Message::Dock(crate::ui::dock::DockMsg::DragMove(p)))
+                .on_release(Message::Dock(crate::ui::dock::DockMsg::DragRelease))
+                .interaction(if any_resizing {
+                    iced::mouse::Interaction::ResizingHorizontally
+                } else {
+                    iced::mouse::Interaction::Grabbing
+                })
+                .into()
         } else {
             workspace
         };
@@ -2231,6 +2251,148 @@ impl OpenCADStudio {
             iced::advanced::widget::operation::focusable::unfocus(),
         )
     }
+
+    /// Build one edge: a narrow tab strip at the very edge plus the expanded
+    /// panels sliding out beside it. Auto-collapsing (pinned) panels are always
+    /// visible as equal-height 1/N tabs in the strip (via `Fill` distribution);
+    /// hovering a tab raises its panel to full column height beside the strip,
+    /// so switching between stacked panels is a direct tab-to-tab hover with no
+    /// width-jumping collapse dance. Unpinned panels are always expanded. The
+    /// whole edge is one hover region: leaving it collapses any auto-collapsing
+    /// panel, but moving between the tabs and the expanded panel does not.
+    fn build_edge_stack<'a>(
+        &'a self,
+        side: crate::app::config::DockSide,
+        ids: &[crate::ui::dock::PanelId],
+        tab: &'a DocumentTab,
+    ) -> Element<'a, Message> {
+        let pinned: Vec<crate::ui::dock::PanelId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.dock.auto_collapse(*id))
+            .collect();
+        // Expanded = unpinned panels (always open) in stack order, then the
+        // hovered auto-collapsing one last so it floats on top.
+        let mut expanded: Vec<crate::ui::dock::PanelId> = ids
+            .iter()
+            .copied()
+            .filter(|id| !self.dock.auto_collapse(*id))
+            .collect();
+        if let Some(id) = self.dock_expanded {
+            if ids.contains(&id) && self.dock.auto_collapse(id) {
+                expanded.push(id);
+            }
+        }
+        // Each expanded panel renders at its own saved width; the column is as
+        // wide as the widest one currently showing.
+        let col_w = expanded
+            .iter()
+            .map(|id| self.dock.width(*id, self.win_size.0))
+            .fold(0.0, f32::max);
+
+        let tab_strip = (!pinned.is_empty()).then(|| {
+            let tabs: Vec<Element<'_, Message>> = pinned
+                .iter()
+                .map(|id| self.rail_slice(*id, side))
+                .collect();
+            column(tabs).width(DOCK_RAIL_W).height(Fill).into()
+        });
+        let expanded_stack = (!expanded.is_empty()).then(|| {
+            // Multiple simultaneously-expanded panels (e.g. two unpinned panels
+            // on the same edge) stack one below the other, each taking 1/N of
+            // the column height via equal `Fill` shares — never overlapping.
+            let layers: Vec<Element<'_, Message>> = expanded
+                .iter()
+                .map(|id| self.expanded_panel(*id, side, col_w, tab))
+                .collect();
+            column(layers).height(Fill).into()
+        });
+
+        let mut children: Vec<Element<'_, Message>> = Vec::new();
+        match side {
+            crate::app::config::DockSide::Left => {
+                if let Some(t) = tab_strip {
+                    children.push(t);
+                }
+                if let Some(e) = expanded_stack {
+                    children.push(e);
+                }
+            }
+            crate::app::config::DockSide::Right => {
+                if let Some(e) = expanded_stack {
+                    children.push(e);
+                }
+                if let Some(t) = tab_strip {
+                    children.push(t);
+                }
+            }
+        }
+        mouse_area(row(children).height(Fill))
+            .on_exit(Message::Dock(crate::ui::dock::DockMsg::HoverExit))
+            .into()
+    }
+
+    /// One narrow tab in the edge strip. Equal `Fill` heights across the tabs
+    /// give each 1/N of the strip; hovering or clicking it raises its panel.
+    fn rail_slice(
+        &self,
+        id: crate::ui::dock::PanelId,
+        side: crate::app::config::DockSide,
+    ) -> Element<'_, Message> {
+        let label = canvas(VBarLabel {
+            text: id.title().to_string(),
+            clockwise: side == crate::app::config::DockSide::Left,
+        })
+        .width(Fill)
+        .height(Fill);
+        mouse_area(
+            container(label)
+                .width(Length::Fixed(DOCK_RAIL_W))
+                .height(Fill)
+                .style(|theme: &Theme| container::Style {
+                    background: Some(Background::Color(
+                        theme.palette().background.base.color,
+                    )),
+                    border: Border {
+                        color: theme.palette().background.neutral.color,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
+                }),
+        )
+        .interaction(iced::mouse::Interaction::Pointer)
+        .on_press(Message::Dock(crate::ui::dock::DockMsg::DockGrab(id)))
+        .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
+        .into()
+    }
+
+    /// A panel expanded to the full edge column: the panel body plus a
+    /// grabbable divider against the viewport. Hovering is handled by the
+    /// enclosing edge region (see `build_edge_stack`), so the body stays fully
+    /// interactive without fighting the region's hover tracking.
+    fn expanded_panel<'a>(
+        &'a self,
+        id: crate::ui::dock::PanelId,
+        side: crate::app::config::DockSide,
+        width: f32,
+        tab: &'a DocumentTab,
+    ) -> Element<'a, Message> {
+        let auto_collapse = self.dock.auto_collapse(id);
+        let panel: Element<'_, Message> = match id {
+            crate::ui::dock::PanelId::Properties => {
+                tab.properties.view(width, auto_collapse)
+            }
+            crate::ui::dock::PanelId::BlockPalette => {
+                crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse)
+            }
+        };
+        let divider = dock_divider(id);
+        match side {
+            crate::app::config::DockSide::Left => row![panel, divider].height(Fill).into(),
+            crate::app::config::DockSide::Right => row![divider, panel].height(Fill).into(),
+        }
+    }
 }
 
 // ── Document tab bar ───────────────────────────────────────────────────────
@@ -2591,66 +2753,11 @@ impl canvas::Program<Message> for VBarLabel {
     }
 }
 
-/// A collapsed panel rendered as a tall narrow bar with its name written along
-/// it. It can be clicked on narrow windows or expanded by hover when auto-hide
-/// is enabled.
-pub(super) fn collapse_bar<'a>(
-    name: &str,
-    side: crate::app::config::DockSide,
-    on_press: Message,
-    on_enter: Message,
-    width: f32,
-) -> Element<'a, Message> {
-    let label = canvas(VBarLabel {
-        text: name.to_string(),
-        clockwise: side == crate::app::config::DockSide::Left,
-    })
-    .width(Fill)
-    .height(Fill);
-
-    mouse_area(
-        container(label)
-            .width(iced::Length::Fixed(width))
-            .height(Fill)
-            .style(|theme: &Theme| container::Style {
-                background: Some(Background::Color(
-                    theme.palette().background.base.color,
-                )),
-                border: Border {
-                    color: theme.palette().background.neutral.color,
-                    width: 1.0,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            }),
-    )
-    .interaction(iced::mouse::Interaction::Pointer)
-    .on_press(on_press)
-    .on_enter(on_enter)
-    .into()
-}
-
-/// Grabbable separator between the docked panel and drawing view. The visible
-/// line is wider than a single pixel so it remains discoverable in every theme.
-fn properties_divider() -> Element<'static, Message> {
-    let line = container(Space::new())
-        .width(Length::Fixed(5.0))
-        .height(Fill)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.neutral.color,
-            )),
-            ..Default::default()
-        });
-    mouse_area(line)
-        .on_press(Message::PropertiesResizeGrab)
-        .on_double_click(Message::PropertiesWidthReset)
-        .interaction(iced::mouse::Interaction::ResizingHorizontally)
-        .into()
-}
+/// Width of a collapsed (auto-collapsing) panel's tab in the edge strip.
+const DOCK_RAIL_W: f32 = 28.0;
 
 /// Grabbable separator for a docked panel managed by the general dock. Same
-/// visual as `properties_divider` but emits generic dock messages for `id`.
+/// visual as the previous per-panel divider but emits generic dock messages.
 fn dock_divider(id: crate::ui::dock::PanelId) -> Element<'static, Message> {
     let line = container(Space::new())
         .width(Length::Fixed(5.0))
