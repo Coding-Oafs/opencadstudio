@@ -633,6 +633,9 @@ impl PropertiesPanel {
             PropValue::BoolToggle { field, value } => render_bool_row(label, *field, *value),
             PropValue::Stepper { display, .. } => render_stepper_row(label, display),
             PropValue::EditText(val) => self.render_edit_row(label, prop.field, val),
+            PropValue::ReadOnly(val) if prop.field == "annotative_scale" => {
+                render_annotative_scale_row(label, val)
+            }
             PropValue::ReadOnly(val) => render_ro_row(label, val),
             PropValue::HatchPatternChoice(current) => {
                 self.render_hatch_pattern_row(label, current)
@@ -1633,7 +1636,33 @@ fn render_group_row(
         })
         .into()
 }
+fn render_annotative_scale_row<'a>(
+    label: &'a str,
+    value: &'a str,
+) -> Element<'a, Message> {
+    let field = text_input("", value)
+        .on_input(|_| Message::Noop)
+        .size(FONT_SZ)
+        .style(ro_input_style)
+        .padding([3, 6])
+        .width(Length::Fill);
 
+    let manage = button(text("...").size(FONT_SZ))
+        .on_press(Message::AnnoObjectScaleOpen)
+        .style(button::secondary)
+        .padding([2, 7]);
+
+    let controls = row![
+        field,
+        manage,
+        iced::widget::space().width(10)
+    ]
+    .spacing(2)
+    .align_y(iced::Center)
+    .width(Length::Fill);
+
+    prop_row_widget(label, controls.into())
+}
 fn render_ro_row<'a>(label: &'a str, value: &'a str) -> Element<'a, Message> {
     // A read-only value is shown as a non-editable but selectable text field:
     // the user can select the text (which carries the full, un-truncated
