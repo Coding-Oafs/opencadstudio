@@ -358,15 +358,7 @@ impl OpenCADStudio {
 
     pub(in crate::app) fn apply_dimstyle_bufs(&mut self, tab: usize) {
         let doc = &mut self.tabs[tab].scene.document;
-        let read_only = doc
-            .dim_styles
-            .get(&self.dimstyle_selected)
-            .is_some_and(|style| {
-                style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
-            });
-        if read_only {
-            return;
-        }
+
         let text_style_handle = doc
             .text_styles
             .get(&self.ds_dimtxsty)
@@ -1185,11 +1177,6 @@ pub(super) fn on_text_style_dialog_open(&mut self) -> Task<Message> {
                     "dimltex_handle" | "dimltex1_handle" | "dimltex2_handle"
                 );
                 let doc = &self.tabs[i].scene.document;
-                if doc.dim_styles.get(&name).is_some_and(|style| {
-                    style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
-                }) {
-                    return Task::none();
-                }
                 let handle = if value == "Default" || value == "ByBlock" {
                     acadrust::types::Handle::NULL
                 } else if is_lt {

@@ -1030,9 +1030,7 @@ impl OpenCADStudio {
                 }
             };
             let ds_sel = doc.dim_styles.get(&self.dimstyle_selected);
-            let read_only = ds_sel.is_some_and(|style| {
-                style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
-            });
+            let read_only = false;
             let in_use = doc.entities().any(|entity| {
                 matches!(entity, acadrust::EntityType::Dimension(dimension)
                     if dimension.base().style_name.eq_ignore_ascii_case(&self.dimstyle_selected))

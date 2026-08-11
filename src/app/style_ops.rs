@@ -612,21 +612,7 @@ impl OpenCADStudio {
     }
 
     pub(super) fn style_delete(&mut self, kind: StyleKind) {
-        let name = self.style_selected(kind);
-        if matches!(kind, StyleKind::Dim)
-            && self.tabs[self.active_tab]
-                .scene
-                .document
-                .dim_styles
-                .get(&name)
-                .is_some_and(|style| {
-                    style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
-                })
-        {
-            self.command_line
-                .push_error(crate::t!("Referenced styles are read only.").as_ref());
-            return;
-        }
+        let name = self.style_selected(kind);        
         if name.eq_ignore_ascii_case("Standard") {
             self.command_line
                 .push_error(crate::t!("Cannot delete the Standard style.").as_ref());
@@ -671,20 +657,7 @@ impl OpenCADStudio {
         if new.is_empty() || new.eq_ignore_ascii_case(&old) {
             return;
         }
-        if matches!(kind, StyleKind::Dim)
-            && self.tabs[self.active_tab]
-                .scene
-                .document
-                .dim_styles
-                .get(&old)
-                .is_some_and(|style| {
-                    style.xref_reference || style.xref_dependent || !style.xref_handle.is_null()
-                })
-        {
-            self.command_line
-                .push_error(crate::t!("Referenced styles are read only.").as_ref());
-            return;
-        }
+
         if old.eq_ignore_ascii_case("Standard") {
             self.command_line
                 .push_error(crate::t!("Cannot rename the Standard style.").as_ref());
