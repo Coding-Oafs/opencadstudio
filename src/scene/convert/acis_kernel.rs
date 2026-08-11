@@ -15,8 +15,7 @@ use cadkernel::brep;
 use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
 use crate::scene::model::mesh_model::{CurvedGen, MeshLodSet};
 
-/// ACIS topology fit tolerance.
-const TOL: f64 = 1e-6;
+const DEFAULT_FIT_TOLERANCE: f64 = 1e-6;
 
 /// Tessellate an ACIS document through the kernel.
 pub fn tessellate_sat(
@@ -34,6 +33,7 @@ pub fn tessellate_sat(
     for body in bodies {
         let source = body.provenance.source()?;
         let transform = body_transform(document, source.index() as usize).ok()?;
+        let placement_scale = transform.map_or(1.0, |(_, _, scale)| scale.abs());
         let placed = if let Some((matrix, translation, scale)) = transform {
             let placement = brep::Placement {
                 x_axis: [scale * matrix[0], scale * matrix[1], scale * matrix[2]],
@@ -45,7 +45,7 @@ pub fn tessellate_sat(
         } else {
             body
         };
-        placed_bodies.push(placed);
+        placed_bodies.push((placed, placement_scale));
     }
     let bodies = placed_bodies;
     let resolution = if facet_res.is_finite() && facet_res > 0.0 {
@@ -98,9 +98,19 @@ pub fn tessellate_sat(
     // parameters leaves a hole, the same as one that never lifted — so both
     // are counted before calling the mesh whole.
     let mut undrawn = 0usize;
-    let tolerance = brep::mesh::TessellationTolerance::new(max_angle, TOL)
+    let source_fit = if document.header.spatial_resolution.is_finite()
+        && document.header.spatial_resolution > 0.0
+    {
+        document.header.spatial_resolution
+    } else {
+        DEFAULT_FIT_TOLERANCE
+    };
+    for (body, placement_scale) in &bodies {
+        let tolerance = brep::mesh::TessellationTolerance::new(
+            max_angle,
+            source_fit * placement_scale,
+        )
         .with_isolines(isolines);
-    for body in &bodies {
         let tessellation = brep::mesh::tessellate(body, tolerance);
         undrawn += tessellation.missing_faces.len();
         for face in &tessellation.triangle_faces {
