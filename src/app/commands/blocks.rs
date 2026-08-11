@@ -461,8 +461,8 @@ impl OpenCADStudio {
                 self.show_block_palette ^= true;
                 if self.show_block_palette {
                     // Always open expanded so the panel is immediately usable;
-                    // the user can still collapse it via the title-bar button.
-                    self.block_palette_expanded = true;
+                    // the user can still collapse it via the pin (Auto) button.
+                    self.dock_expanded = Some(crate::ui::dock::PanelId::BlockPalette);
                     self.refresh_block_palette();
                 }
             }
@@ -708,7 +708,7 @@ mod tests {
         let _ = app.run_command_line("BLOCKPALETTE");
         assert!(app.show_block_palette);
         assert!(
-            app.block_palette_expanded,
+            app.dock_expanded == Some(crate::ui::dock::PanelId::BlockPalette),
             "palette must open expanded, not as the collapsed bar"
         );
         let _ = app.run_command_line("BLOCKSPALETTE");

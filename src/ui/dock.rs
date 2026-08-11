@@ -11,6 +11,30 @@ use crate::app::config::DockSide;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Dock chrome interactions. These are panel-agnostic so any dockable panel
+/// (Properties, the block palette, future palettes) shares one code path.
+#[derive(Debug, Clone)]
+pub enum DockMsg {
+    /// Begin dragging `panel` to another side / position.
+    DockGrab(PanelId),
+    /// Begin resizing `panel`'s width.
+    ResizeGrab(PanelId),
+    /// Reset `panel`'s width to its default.
+    WidthReset(PanelId),
+    /// Toggle `panel`'s auto-collapse (pin) behavior.
+    AutoCollapseToggle(PanelId),
+    /// Close / hide `panel`.
+    Close(PanelId),
+    /// The pointer is over `panel`, raising it to full height.
+    Hover(PanelId),
+    /// Pointer moved while a panel is dragging or resizing.
+    DragMove(iced::Point),
+    /// Pointer released after a drag / resize.
+    DragRelease,
+    /// The pointer left the edge column; collapse any auto-collapsing panel.
+    HoverExit,
+}
+
 /// The dockable panels the application knows about. New palettes add a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,6 +204,23 @@ impl DockState {
             .filter(|id| Some(**id) != expanded)
             .count()
     }
+
+    /// Number of panels currently docked on `side`.
+    pub fn len(&self, side: DockSide) -> usize {
+        self.stack(side).len()
+    }
+}
+
+/// Insertion index (0..=total) for dropping a panel whose pointer is at
+/// screen-local `y` within an edge column of `avail` height holding `total`
+/// slots. Used to compute the live drag target index while reordering.
+pub fn drop_index(y: f32, total: usize, avail: f32) -> usize {
+    if total == 0 || avail <= 0.0 {
+        return 0;
+    }
+    let h = avail / total as f32;
+    let idx = (y / h).round() as usize;
+    idx.min(total)
 }
 
 /// Smallest docked width a panel may be dragged or sized to.
@@ -303,5 +344,21 @@ mod tests {
             state.reduced_count(DockSide::Right, Some(PanelId::BlockPalette)),
             0
         );
+    }
+
+    #[test]
+    fn drop_index_maps_between_zero_and_total() {
+        assert_eq!(drop_index(0.0, 3, 300.0), 0);
+        assert_eq!(drop_index(100.0, 3, 300.0), 1);
+        assert_eq!(drop_index(299.0, 3, 300.0), 3);
+        assert_eq!(drop_index(300.0, 3, 300.0), 3);
+        assert_eq!(drop_index(50.0, 0, 300.0), 0);
+    }
+
+    #[test]
+    fn len_reports_stack_size() {
+        let state = DockState::default();
+        assert_eq!(state.len(DockSide::Left), 1);
+        assert_eq!(state.len(DockSide::Right), 1);
     }
 }

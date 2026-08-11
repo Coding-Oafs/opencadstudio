@@ -593,10 +593,19 @@ pub(super) struct OpenCADStudio {
     pub(crate) show_block_palette: bool,
     /// General edge-stack dock layout for the side panels.
     pub(crate) dock: crate::ui::dock::DockState,
+    /// Which panel is currently floated at full height (hovered, or a pinned
+    /// panel on top).
+    pub(crate) dock_expanded: Option<crate::ui::dock::PanelId>,
+    /// Panel currently being dragged between sides / reordered.
+    pub(crate) dock_dragging: Option<crate::ui::dock::PanelId>,
+    /// Panel currently being width-resized.
+    pub(crate) dock_resizing: Option<crate::ui::dock::PanelId>,
+    /// Last pointer position during a drag / resize.
+    pub(crate) dock_drag_last: Option<iced::Point>,
+    /// Live drag target (side + index), shown as a highlight while dragging.
+    pub(crate) dock_drag_target: Option<(crate::app::config::DockSide, usize)>,
     /// Docked Insert Block panel state (search, preview size, cached thumbnails).
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
-    /// Whether the narrow-window block-palette bar is expanded.
-    block_palette_expanded: bool,
     /// Whether the document file tabs are shown at the top (FILETAB).
     show_file_tabs: bool,
     /// Whether the layout/paper-space tabs are shown at the bottom (LAYOUTTAB).
@@ -2720,6 +2729,9 @@ pub enum Message {
     PlotDlg(crate::ui::window::plot::PlotDlgMsg),
     /// An edit inside the docked Insert Block panel.
     BlockPalette(crate::ui::window::block_palette::BlockPaletteMsg),
+    /// A dock chrome interaction (grab/resize/pin/hover/dock move) on a side
+    /// panel.
+    Dock(crate::ui::dock::DockMsg),
     /// Open the paper-layout batch output dialog.
     PrintAllOpen,
     /// Toggle one paper layout in the batch.
@@ -3160,8 +3172,12 @@ impl OpenCADStudio {
             show_properties: true,
             show_block_palette: false,
             block_palette: Default::default(),
-            block_palette_expanded: false,
             dock: Default::default(),
+            dock_expanded: None,
+            dock_dragging: None,
+            dock_resizing: None,
+            dock_drag_last: None,
+            dock_drag_target: None,
             show_file_tabs: true,
             show_layout_tabs: true,
             last_point: None,

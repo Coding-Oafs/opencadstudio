@@ -517,18 +517,6 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 self.refresh_block_palette();
                 iced::Task::none()
             }
-            BlockPaletteMsg::ToggleBar => {
-                // Collapse bar (mirrors the Properties panel).
-                self.block_palette_expanded ^= true;
-                if self.block_palette_expanded {
-                    self.refresh_block_palette();
-                }
-                iced::Task::none()
-            }
-            BlockPaletteMsg::Close => {
-                self.show_block_palette = false;
-                iced::Task::none()
-            }
             BlockPaletteMsg::PickFile => iced::Task::perform(
                 async {
                     let handle = rfd::AsyncFileDialog::new()
@@ -566,6 +554,117 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             }
             BlockPaletteMsg::Insert(name) => {
                 self.start_block_placement(&name);
+                iced::Task::none()
+            }
+        }
+    }
+
+    /// Dock chrome interaction (grab / pin / resize / hover / move) applied to
+    /// whichever panel the message names.
+    pub(super) fn on_dock(&mut self, m: crate::ui::dock::DockMsg) -> iced::Task<Message> {
+        use crate::app::config::DockSide;
+        use crate::ui::dock::{DockMsg, PanelId};
+        match m {
+            DockMsg::DockGrab(id) => {
+                self.dock_dragging = Some(id);
+                self.dock_resizing = None;
+                self.dock_drag_last = None;
+                self.dock_drag_target = self.dock.location(id);
+                self.dock_expanded = Some(id);
+                iced::Task::none()
+            }
+            DockMsg::ResizeGrab(id) => {
+                self.dock_resizing = Some(id);
+                self.dock_dragging = None;
+                self.dock_drag_last = None;
+                self.dock_drag_target = None;
+                self.dock_expanded = Some(id);
+                iced::Task::none()
+            }
+            DockMsg::WidthReset(id) => {
+                self.dock.reset_width(id);
+                self.save_config();
+                iced::Task::none()
+            }
+            DockMsg::AutoCollapseToggle(id) => {
+                let on = !self.dock.auto_collapse(id);
+                self.dock.set_auto_collapse(id, on);
+                self.dock_expanded = if on { None } else { Some(id) };
+                self.save_config();
+                iced::Task::none()
+            }
+            DockMsg::Close(id) => {
+                match id {
+                    PanelId::BlockPalette => {
+                        self.show_block_palette = false;
+                        self.block_palette.placing = None;
+                    }
+                    PanelId::Properties => self.show_properties = false,
+                }
+                if self.dock_expanded == Some(id) {
+                    self.dock_expanded = None;
+                }
+                if self.dock_dragging == Some(id) {
+                    self.dock_dragging = None;
+                }
+                if self.dock_resizing == Some(id) {
+                    self.dock_resizing = None;
+                }
+                iced::Task::none()
+            }
+            DockMsg::Hover(id) => {
+                self.dock_expanded = Some(id);
+                iced::Task::none()
+            }
+            DockMsg::HoverExit => {
+                if let Some(id) = self.dock_expanded {
+                    if self.dock.auto_collapse(id) {
+                        self.dock_expanded = None;
+                    }
+                }
+                iced::Task::none()
+            }
+            DockMsg::DragMove(point) => {
+                if self.dock_dragging.is_some() {
+                    let side = if point.x < self.win_size.0 * 0.5 {
+                        DockSide::Left
+                    } else {
+                        DockSide::Right
+                    };
+                    let index = crate::ui::dock::drop_index(
+                        point.y,
+                        std::cmp::max(self.dock.len(side), 1),
+                        self.win_size.1,
+                    );
+                    self.dock_drag_target = Some((side, index));
+                } else if let Some(id) = self.dock_resizing {
+                    if let Some(last) = self.dock_drag_last {
+                        let dx = point.x - last.x;
+                        let delta = match self.dock.location(id) {
+                            Some((DockSide::Left, _)) => dx,
+                            _ => -dx,
+                        };
+                        let cur = self.dock.settings(id).width + delta;
+                        self.dock.set_width(id, cur);
+                    }
+                }
+                if self.dock_dragging.is_some() || self.dock_resizing.is_some() {
+                    self.dock_drag_last = Some(point);
+                }
+                iced::Task::none()
+            }
+            DockMsg::DragRelease => {
+                if let Some(id) = self.dock_dragging {
+                    if let Some((side, index)) = self.dock_drag_target {
+                        if self.dock.dock(id, side, index) {
+                            self.save_config();
+                        }
+                    }
+                }
+                self.dock_dragging = None;
+                self.dock_resizing = None;
+                self.dock_drag_last = None;
+                self.dock_drag_target = None;
                 iced::Task::none()
             }
         }
@@ -931,16 +1030,50 @@ mod tests {
     }
 
     #[test]
-    fn blockpalette_collapse_and_close_toggle_state() {
+    fn blockpalette_pin_toggles_autocollapse_and_close_hides() {
         let mut app = fresh();
         app.show_block_palette = true;
-        app.block_palette_expanded = true;
-        let _ = app.on_block_palette(BlockPaletteMsg::ToggleBar);
-        assert!(!app.block_palette_expanded, "collapse hides the panel body");
-        let _ = app.on_block_palette(BlockPaletteMsg::ToggleBar);
-        assert!(app.block_palette_expanded, "bar click re-expands the panel");
-        let _ = app.on_block_palette(BlockPaletteMsg::Close);
+        let id = crate::ui::dock::PanelId::BlockPalette;
+        let _ = app.on_dock(crate::ui::dock::DockMsg::AutoCollapseToggle(id));
+        assert!(app.dock.auto_collapse(id), "pin enables auto-collapse");
+        let _ = app.on_dock(crate::ui::dock::DockMsg::AutoCollapseToggle(id));
+        assert!(!app.dock.auto_collapse(id), "second pin disables auto-collapse");
+        let _ = app.on_dock(crate::ui::dock::DockMsg::Close(id));
         assert!(!app.show_block_palette, "close dismisses the sidebar");
+    }
+
+    #[test]
+    fn blockpalette_dock_moves_to_other_side_and_persists() {
+        let mut app = fresh();
+        // Tests load the user's persisted config; reset the dock to a known
+        // state so this stays hermetic.
+        app.dock = Default::default();
+        let id = crate::ui::dock::PanelId::BlockPalette;
+        assert_eq!(
+            app.dock.location(id),
+            Some((crate::app::config::DockSide::Right, 0))
+        );
+        let _ = app.on_dock(crate::ui::dock::DockMsg::DockGrab(id));
+        app.win_size = (1600.0, 900.0).into();
+        let _ = app.on_dock(crate::ui::dock::DockMsg::DragMove(iced::Point::new(100.0, 100.0)));
+        assert_eq!(
+            app.dock_drag_target,
+            Some((crate::app::config::DockSide::Left, 0))
+        );
+        let _ = app.on_dock(crate::ui::dock::DockMsg::DragRelease);
+        assert_eq!(
+            app.dock.location(id),
+            Some((crate::app::config::DockSide::Left, 0))
+        );
+    }
+
+    #[test]
+    fn blockpalette_width_reset() {
+        let mut app = fresh();
+        let id = crate::ui::dock::PanelId::BlockPalette;
+        app.dock.set_width(id, 500.0);
+        let _ = app.on_dock(crate::ui::dock::DockMsg::WidthReset(id));
+        assert_eq!(app.dock.settings(id).width, 260.0);
     }
 
     #[test]

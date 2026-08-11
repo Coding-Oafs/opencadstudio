@@ -5,7 +5,6 @@ use super::{ArrowKey, Message, OpenCADStudio};
 use crate::scene::pick::grip::{grips_to_screen, grips_to_screen_paper, grips_to_screen_rte};
 use crate::scene::view::viewport_pane::ViewportPane;
 use crate::scene::{VIEWCUBE_PAD, VIEWCUBE_REGION_PX};
-use crate::ui::window::block_palette::BlockPaletteMsg;
 use crate::ui::wrap_bar::DensitySwap;
 use crate::ui::wrap_bar::WrapFlow;
 use iced::widget::{
@@ -1497,32 +1496,54 @@ impl OpenCADStudio {
             }
         });
 
-        // Drawing viewports keep the command line as a bottom-centre overlay so
-        // the input stays close to the cursor. The Start page gives it a real
-        // layout row instead: its panels and action buttons must end above the
-        // command line rather than rendering behind it (#546).
-        // The block palette docks on the right, mirroring the Properties panel on the
-        // left. The collapse button reduces it to a vertical bar whose width equals
-        // the title height, with the title rotated 90° (see `collapse_bar`).
-        let block_palette_el: Element<'_, Message> = if tab.is_start {
-            Space::new().into()
-        } else if self.show_block_palette && !self.clean_screen {
-            if self.block_palette_expanded {
-                crate::ui::window::block_palette::view(&self.block_palette)
-            } else {
-                // Collapsed bar width matches the title bar height (icon button
-                // 30px + 5px top/bottom padding) so expand/collapse is seamless.
-                collapse_bar(
+        // The Block Palette docks through the general edge-stack dock (side,
+        // width, auto-collapse are persisted on `self.dock`). When auto-collapsing
+        // and not hovered it reduces to a rail; otherwise it renders full-height
+        // with themed pin/close chrome and a grabbable, resizable header.
+        let block_palette_el: Option<Element<'_, Message>> = if !tab.is_start
+            && self.show_block_palette
+            && !self.clean_screen
+        {
+            let id = crate::ui::dock::PanelId::BlockPalette;
+            let side = self
+                .dock
+                .location(id)
+                .map(|(s, _)| s)
+                .unwrap_or(crate::app::config::DockSide::Right);
+            let width = self.dock.width(id, self.win_size.0);
+            let auto_collapse = self.dock.auto_collapse(id);
+            let expanded = self.dock_expanded == Some(id);
+            if auto_collapse && !expanded {
+                Some(collapse_bar(
                     "Block Palette",
-                    crate::app::config::DockSide::Right,
-                    Message::BlockPalette(BlockPaletteMsg::ToggleBar),
-                    Message::Noop,
-                    40.0,
+                    side,
+                    Message::Dock(crate::ui::dock::DockMsg::Hover(id)),
+                    Message::Dock(crate::ui::dock::DockMsg::Hover(id)),
+                    26.0,
+                ))
+            } else {
+                let panel =
+                    crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse);
+                let divider = dock_divider(id);
+                let group: Element<'_, Message> = match side {
+                    crate::app::config::DockSide::Left => row![panel, divider].into(),
+                    crate::app::config::DockSide::Right => row![divider, panel].into(),
+                };
+                Some(
+                    mouse_area(group)
+                        .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
+                        .on_exit(Message::Dock(crate::ui::dock::DockMsg::HoverExit))
+                        .into(),
                 )
             }
         } else {
-            Space::new().into()
+            None
         };
+        let bp_side = self
+            .dock
+            .location(crate::ui::dock::PanelId::BlockPalette)
+            .map(|(s, _)| s)
+            .unwrap_or(crate::app::config::DockSide::Right);
 
         // Command-line sits as a bottom-centre overlay on top of the
         // viewport stack rather than as a separate row in the main
@@ -1541,19 +1562,46 @@ impl OpenCADStudio {
                 && !tab.dyn_fields.is_empty())
                 || self.mtext_editor.as_ref().is_some_and(|e| e.show_preview)
                 || self.text_inline.is_some();
-        let workspace: Element<'_, Message> = match (properties_el, self.properties_side) {
-            (Some(properties), crate::app::config::DockSide::Left) => {
-                row![properties, viewport_stack].width(Fill).height(Fill).into()
+        let properties_side = self.properties_side;
+        // Combine the Properties panel and Block Palette into one row with the
+        // viewport, each placed on its own dock side. Ordering is stable so two
+        // panels sharing an edge never swap unpredictably.
+        let mut left_items: Vec<Element<'_, Message>> = Vec::new();
+        let mut right_items: Vec<Element<'_, Message>> = Vec::new();
+        if let Some(p) = properties_el {
+            match properties_side {
+                crate::app::config::DockSide::Left => left_items.push(p),
+                crate::app::config::DockSide::Right => right_items.push(p),
             }
-            (Some(properties), crate::app::config::DockSide::Right) => {
-                row![viewport_stack, properties].width(Fill).height(Fill).into()
+        }
+        if let Some(p) = block_palette_el {
+            match bp_side {
+                crate::app::config::DockSide::Left => left_items.push(p),
+                crate::app::config::DockSide::Right => right_items.push(p),
             }
-            (None, _) => container(viewport_stack).width(Fill).height(Fill).into(),
-        };
-        let workspace: Element<'_, Message> = if self.properties_dragging {
-            let preview_side = self.properties_dock_preview.unwrap_or(self.properties_side);
+        }
+        let mut parts = left_items;
+        parts.push(viewport_stack.into());
+        parts.extend(right_items);
+        let workspace: Element<'_, Message> = row(parts).width(Fill).height(Fill).into();
+
+        let any_dragging = self.properties_dragging || self.dock_dragging.is_some();
+        let any_resizing = self.properties_resizing || self.dock_resizing.is_some();
+        let workspace = if any_dragging {
+            let (preview_side, preview_width) = if let Some(id) = self.dock_dragging {
+                let side = self.dock_drag_target.map(|(s, _)| s).unwrap_or(
+                    self.dock
+                        .location(id)
+                        .map(|(s, _)| s)
+                        .unwrap_or(crate::app::config::DockSide::Right),
+                );
+                (side, self.dock.width(id, self.win_size.0))
+            } else {
+                let side = self.properties_dock_preview.unwrap_or(self.properties_side);
+                (side, properties_width)
+            };
             let preview = container(Space::new())
-                .width(Length::Fixed(properties_width))
+                .width(Length::Fixed(preview_width))
                 .height(Fill)
                 .style(|theme: &Theme| {
                     let palette = theme.palette();
@@ -1580,24 +1628,31 @@ impl OpenCADStudio {
         } else {
             workspace
         };
-        let workspace: Element<'_, Message> = if self.properties_dragging
-            || self.properties_resizing
-        {
-            mouse_area(workspace)
-                .on_move(Message::PropertiesDragMove)
-                .on_release(Message::PropertiesDragRelease)
-                .interaction(if self.properties_resizing {
-                    iced::mouse::Interaction::ResizingHorizontally
-                } else {
-                    iced::mouse::Interaction::Grabbing
-                })
-                .into()
+        let workspace: Element<'_, Message> = if any_dragging || any_resizing {
+            if self.properties_dragging || self.properties_resizing {
+                mouse_area(workspace)
+                    .on_move(Message::PropertiesDragMove)
+                    .on_release(Message::PropertiesDragRelease)
+                    .interaction(if self.properties_resizing {
+                        iced::mouse::Interaction::ResizingHorizontally
+                    } else {
+                        iced::mouse::Interaction::Grabbing
+                    })
+                    .into()
+            } else {
+                mouse_area(workspace)
+                    .on_move(move |p| Message::Dock(crate::ui::dock::DockMsg::DragMove(p)))
+                    .on_release(Message::Dock(crate::ui::dock::DockMsg::DragRelease))
+                    .interaction(if self.dock_resizing.is_some() {
+                        iced::mouse::Interaction::ResizingHorizontally
+                    } else {
+                        iced::mouse::Interaction::Grabbing
+                    })
+                    .into()
+            }
         } else {
             workspace
         };
-        let workspace = row![workspace, block_palette_el]
-            .width(Fill)
-            .height(Fill);
         let command_line = self.command_line.view(
             allow_autocomplete,
             dyn_capturing,
@@ -2590,6 +2645,27 @@ fn properties_divider() -> Element<'static, Message> {
     mouse_area(line)
         .on_press(Message::PropertiesResizeGrab)
         .on_double_click(Message::PropertiesWidthReset)
+        .interaction(iced::mouse::Interaction::ResizingHorizontally)
+        .into()
+}
+
+/// Grabbable separator for a docked panel managed by the general dock. Same
+/// visual as `properties_divider` but emits generic dock messages for `id`.
+fn dock_divider(id: crate::ui::dock::PanelId) -> Element<'static, Message> {
+    let line = container(Space::new())
+        .width(Length::Fixed(5.0))
+        .height(Fill)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.palette().background.neutral.color,
+            )),
+            ..Default::default()
+        });
+    let grab = Message::Dock(crate::ui::dock::DockMsg::ResizeGrab(id));
+    let reset = Message::Dock(crate::ui::dock::DockMsg::WidthReset(id));
+    mouse_area(line)
+        .on_press(grab)
+        .on_double_click(reset)
         .interaction(iced::mouse::Interaction::ResizingHorizontally)
         .into()
 }
