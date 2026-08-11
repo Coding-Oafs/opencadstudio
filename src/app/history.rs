@@ -189,6 +189,7 @@ impl OpenCADStudio {
         i: usize,
         label: impl Into<String>,
         before: Vec<(Handle, Arc<EntityType>)>,
+        object_before: Vec<(Handle, acadrust::objects::ObjectType)>,
         dirty_before: bool,
     ) {
         self.finish_pending_history(i);
@@ -199,7 +200,18 @@ impl OpenCADStudio {
                 Some((handle, Some(original), Some(after)))
             })
             .collect();
-        if entities.is_empty() {
+        let objects: Vec<_> = object_before
+            .into_iter()
+            .filter_map(|(handle, before)| {
+                let after = self.tabs[i].scene.document.objects.get(&handle).cloned();
+                (Some(before.clone()) != after).then_some(ObjectEntryDelta {
+                    handle,
+                    before: Some(before),
+                    after,
+                })
+            })
+            .collect();
+        if entities.is_empty() && objects.is_empty() {
             return;
         }
         let selected: Vec<Handle> = self.tabs[i].scene.selected.iter().copied().collect();
@@ -211,7 +223,7 @@ impl OpenCADStudio {
             selected_after: selected,
             dirty_before,
             dirty_after: true,
-            structure: None,
+            structure: (!objects.is_empty()).then_some(StructureSnapshot::Objects(objects)),
             label: label.into(),
         };
         self.push_undo_entry(i, HistorySnapshot::Delta(delta));

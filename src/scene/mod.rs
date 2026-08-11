@@ -7626,24 +7626,6 @@ impl Scene {
         handles
     }
 
-    /// True when any handle resolves to an ACIS volume entity (3D solid /
-    /// region / body / surface) — i.e. one whose render geometry is a cached
-    /// mesh that must be re-tessellated after an edit.
-    pub fn any_solid(&self, handles: &[Handle]) -> bool {
-        handles.iter().any(|&h| {
-            matches!(
-                self.document.get_entity(h),
-                Some(EntityType::Solid3D(_))
-                    | Some(EntityType::Region(_))
-                    | Some(EntityType::Body(_))
-                    | Some(EntityType::Surface(_))
-                    | Some(EntityType::Mesh(_))
-                    | Some(EntityType::PolygonMesh(_))
-                    | Some(EntityType::PolyfaceMesh(_))
-            )
-        })
-    }
-
     /// Top-level solid handles caught by a rectangular selection box.
     pub fn mesh_box_hit(
         &self,

@@ -1070,6 +1070,7 @@ impl OpenCADStudio {
                         })
                         .collect();
                 }
+                self.capture_grip_history_originals(i, &edited_handles);
                 for &handle in &edited_handles {
                     if !self.tabs[i].scene.meshes.contains_key(&handle) {
                         self.tabs[i].scene.preview_hidden.insert(handle);
@@ -2733,6 +2734,7 @@ impl OpenCADStudio {
             // edited entity back into the resident tessellation.
             let handles = std::mem::take(&mut self.grip_preview_handles);
             let originals = std::mem::take(&mut self.grip_originals);
+            let history_originals = std::mem::take(&mut self.grip_history_originals);
             let dirty_before = self.grip_dirty_before.take().unwrap_or(self.tabs[i].dirty);
             if !handles.is_empty() {
                 if !originals.is_empty() {
@@ -2742,6 +2744,10 @@ impl OpenCADStudio {
                         originals
                             .into_iter()
                             .map(|(handle, entity)| (handle, std::sync::Arc::new(entity)))
+                            .collect(),
+                        history_originals
+                            .into_iter()
+                            .flat_map(|(_, objects)| objects)
                             .collect(),
                         dirty_before,
                     );

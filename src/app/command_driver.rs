@@ -107,11 +107,25 @@ impl OpenCADStudio {
 
     /// Roll a hot grip back to its pre-drag image and remove every grip-owned
     /// overlay. Shared by Escape and drawing-space transitions.
+    pub(super) fn capture_grip_history_originals(&mut self, i: usize, handles: &[Handle]) {
+        if !self.grip_history_originals.is_empty() {
+            return;
+        }
+        self.grip_history_originals = handles
+            .iter()
+            .filter_map(|&handle| {
+                let objects = self.tabs[i].scene.solid_history_objects(handle);
+                (!objects.is_empty()).then_some((handle, objects))
+            })
+            .collect();
+    }
+
     pub(super) fn cancel_active_grip_edit(&mut self) -> bool {
         let i = self.active_tab;
         let had_grip = self.tabs[i].active_grip.take().is_some()
             || self.grip_add_provisional.is_some()
-            || !self.grip_preview_handles.is_empty();
+            || !self.grip_preview_handles.is_empty()
+            || !self.grip_history_originals.is_empty();
         if !had_grip {
             return false;
         }
@@ -132,29 +146,60 @@ impl OpenCADStudio {
 
         let handles = std::mem::take(&mut self.grip_preview_handles);
         let originals = std::mem::take(&mut self.grip_originals);
+        let history_originals = std::mem::take(&mut self.grip_history_originals);
+        let history_handles: rustc_hash::FxHashSet<_> = history_originals
+            .iter()
+            .map(|(handle, _)| *handle)
+            .collect();
+        for (_, objects) in history_originals {
+            for (object_handle, object) in objects {
+                self.tabs[i]
+                    .scene
+                    .document
+                    .objects
+                    .insert(object_handle, object);
+            }
+        }
         let mut changed_handles: rustc_hash::FxHashSet<_> = handles.iter().copied().collect();
         for (handle, original) in originals {
             changed_handles.insert(handle);
-            let current = self.tabs[i]
-                .scene
-                .document
-                .get_entity(handle)
-                .and_then(crate::entities::solid3d::point_of_reference)
-                .map(|point| [point.x, point.y, point.z]);
-            let target = crate::entities::solid3d::point_of_reference(&original)
-                .map(|point| [point.x, point.y, point.z]);
-            if let (Some(current), Some(target)) = (current, target) {
-                self.tabs[i].scene.translate_solid_geometry(
-                    handle,
-                    [
-                        target[0] - current[0],
-                        target[1] - current[1],
-                        target[2] - current[2],
-                    ],
-                );
+            if !history_handles.contains(&handle) {
+                let current = self.tabs[i]
+                    .scene
+                    .document
+                    .get_entity(handle)
+                    .and_then(crate::entities::solid3d::point_of_reference)
+                    .map(|point| [point.x, point.y, point.z]);
+                let target = crate::entities::solid3d::point_of_reference(&original)
+                    .map(|point| [point.x, point.y, point.z]);
+                if let (Some(current), Some(target)) = (current, target) {
+                    self.tabs[i].scene.translate_solid_geometry(
+                        handle,
+                        [
+                            target[0] - current[0],
+                            target[1] - current[1],
+                            target[2] - current[2],
+                        ],
+                    );
+                }
             }
             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
                 *entity = original;
+            }
+        }
+        for handle in history_handles {
+            let restored = self.tabs[i]
+                .scene
+                .document
+                .solid_history_operation(handle)
+                .cloned()
+                .is_some_and(|operation| {
+                    self.tabs[i]
+                        .scene
+                        .rebuild_solid_history(handle, operation)
+                });
+            if !restored {
+                self.tabs[i].scene.reseed_derived_caches(handle);
             }
         }
         for &handle in &handles {
@@ -962,13 +1007,6 @@ impl OpenCADStudio {
                 // transform_entities — always delta-safe.
                 let pending = self.begin_undo(i, label, handles.len(), true);
                 self.tabs[i].scene.transform_entities(&handles, &transform);
-                // ACIS solids render from a cached mesh, so a move/rotate/
-                // scale/mirror needs the mesh re-tessellated from the now-moved
-                // body — wire re-tessellation alone leaves the solid drawn at
-                // its old spot. (#135)
-                if self.tabs[i].scene.any_solid(&handles) {
-                    self.tabs[i].scene.refresh_meshes_for_handles(&handles);
-                }
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
@@ -986,9 +1024,6 @@ impl OpenCADStudio {
                 let delta_safe = self.delta_copy_safe(i, &handles);
                 let pending = self.begin_undo(i, label, handles.len(), delta_safe);
                 let new_handles = self.tabs[i].scene.copy_entities(&handles, &transform);
-                if self.tabs[i].scene.any_solid(&new_handles) {
-                    self.tabs[i].scene.refresh_meshes_for_handles(&new_handles);
-                }
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.deselect_all();
                 for h in new_handles {
@@ -2689,7 +2724,6 @@ impl OpenCADStudio {
                         let new_handle = self.tabs[i].scene.add_entity(s3d);
                         self.tabs[i]
                             .scene
-                            .document
                             .create_solid_history(new_handle, history);
                         self.tabs[i].scene.register_solid_model(new_handle, solid);
                         let _ = mesh;
@@ -2752,7 +2786,6 @@ impl OpenCADStudio {
                         let new_handle = self.tabs[i].scene.add_entity(s3d);
                         self.tabs[i]
                             .scene
-                            .document
                             .create_solid_history(new_handle, history);
                         self.tabs[i].scene.register_solid_model(new_handle, solid);
                         let _ = mesh;
@@ -2813,7 +2846,6 @@ impl OpenCADStudio {
                     if let Some(history) = history {
                         self.tabs[i]
                             .scene
-                            .document
                             .create_solid_history(new_handle, history);
                     }
                     for mesh in &mut set.lods {
@@ -2856,7 +2888,6 @@ impl OpenCADStudio {
                     let new_handle = self.tabs[i].scene.add_entity(entity);
                     self.tabs[i]
                         .scene
-                        .document
                         .create_solid_history(new_handle, history);
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());

@@ -543,6 +543,11 @@ pub(super) struct OpenCADStudio {
     /// Snapshots of edited entities taken at the start of a grip drag. The drag
     /// mutates the document live, so Escape restores this group atomically.
     grip_originals: Vec<(acadrust::Handle, acadrust::EntityType)>,
+    /// Solid-history objects paired with their owning entity before a grip drag.
+    grip_history_originals: Vec<(
+        acadrust::Handle,
+        Vec<(acadrust::Handle, acadrust::objects::ObjectType)>,
+    )>,
     /// Document dirty state before the live grip mutation began.
     grip_dirty_before: Option<bool>,
     /// Frozen wire geometry of the entities being grip-edited.
@@ -3136,6 +3141,7 @@ impl OpenCADStudio {
             grip_preview_handles: Vec::new(),
             hover_dwell: None,
             grip_originals: Vec::new(),
+            grip_history_originals: Vec::new(),
             grip_dirty_before: None,
             grip_snap_wires: Vec::new(),
             grip_text_verts: Vec::new(),

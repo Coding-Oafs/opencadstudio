@@ -631,6 +631,7 @@ impl Scene {
                 let before = self.document.get_entity_arc(h);
                 self.record_undo_before(h, before);
             }
+            self.delete_solid_history(h);
             self.remember_removed_cache_categories(h);
             self.document.remove_entity_arc(h);
             highlight_changed |= self.selected.remove(&h);

@@ -475,6 +475,11 @@ impl Scene {
             self.images.insert(handle, model);
         }
         self.refresh_meshes_for_handles(&[handle]);
+        if let Some(operation) = self.document.solid_history_operation(handle).cloned() {
+            if let Ok(body) = cadkernel::acis::rebuild_body(&operation) {
+                self.solid_models.insert(handle, body);
+            }
+        }
     }
 
     /// Re-tessellate only the named ACIS entities. The former edit path

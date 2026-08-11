@@ -214,6 +214,7 @@ impl Scene {
             })
             .flatten()
             .collect();
+        let mut refresh_solid_handles = Vec::new();
         for &h in handles {
             // Delta-undo: capture the pre-transform image before mutating.
             if self.is_recording_undo() {
@@ -225,6 +226,20 @@ impl Scene {
                 if mirror_true {
                     mirror_true_text_flags(entity);
                 }
+            }
+            let rebuilt_history = self.transform_solid_history(h, t);
+            if !rebuilt_history
+                && self.document.get_entity(h).is_some_and(|entity| {
+                    matches!(
+                        entity,
+                        EntityType::Solid3D(_)
+                            | EntityType::Region(_)
+                            | EntityType::Body(_)
+                            | EntityType::Surface(_)
+                    )
+                })
+            {
+                refresh_solid_handles.push(h);
             }
             if self.hatches.contains_key(&h) {
                 let existing_color = self.hatches[&h].color;
@@ -271,6 +286,7 @@ impl Scene {
         let changes: Vec<(Handle, ChangeKind)> =
             handles.iter().map(|&h| (h, ChangeKind::Modified)).collect();
         self.bump_entities(&changes);
+        self.refresh_meshes_for_handles(&refresh_solid_handles);
     }
 
     /// Entities in anonymous dimension blocks that visually belong to
@@ -550,6 +566,7 @@ impl Scene {
             matches!(t, EntityTransform::Mirror { .. }) && self.document.header.mirror_text;
         let mut new_handles = Vec::with_capacity(clones.len());
         let mut handle_map = rustc_hash::FxHashMap::default();
+        let mut refresh_solid_handles = Vec::new();
         for (src_handle, mut entity) in clones {
             let text_orient = if preserve_text_orientation {
                 capture_text_orient(&entity)
@@ -602,6 +619,21 @@ impl Scene {
                 if let Some(model) = new_model {
                     self.hatches.insert(h, model);
                 }
+                let rebuilt_history = self.copy_solid_history(src_handle, h)
+                    && self.transform_solid_history(h, t);
+                if !rebuilt_history
+                    && self.document.get_entity(h).is_some_and(|entity| {
+                        matches!(
+                            entity,
+                            EntityType::Solid3D(_)
+                                | EntityType::Region(_)
+                                | EntityType::Body(_)
+                                | EntityType::Surface(_)
+                        )
+                    })
+                {
+                    refresh_solid_handles.push(h);
+                }
             }
             new_handles.push(h);
             if !h.is_null() {
@@ -620,10 +652,70 @@ impl Scene {
             .map(|&h| (h, ChangeKind::Added))
             .collect();
         self.bump_entities(&changes);
+        self.refresh_meshes_for_handles(&refresh_solid_handles);
         new_handles
     }
 
     // ── Grip editing ──────────────────────────────────────────────────────
+
+    pub(crate) fn solid_history_objects(
+        &self,
+        handle: Handle,
+    ) -> Vec<(Handle, acadrust::objects::ObjectType)> {
+        let Some(graph) = self.document.solid_history_graph(handle) else {
+            return Vec::new();
+        };
+        std::iter::once(graph.root)
+            .chain(graph.nodes)
+            .filter_map(|object_handle| {
+                self.document
+                    .objects
+                    .get(&object_handle)
+                    .cloned()
+                    .map(|object| (object_handle, object))
+            })
+            .collect()
+    }
+
+    fn record_solid_history_before(&mut self, handle: Handle) {
+        if !self.is_recording_undo() {
+            return;
+        }
+        for (object_handle, object) in self.solid_history_objects(handle) {
+            self.record_undo_object_before(object_handle, Some(object));
+        }
+    }
+
+    pub fn create_solid_history(
+        &mut self,
+        handle: Handle,
+        operation: acadrust::objects::SolidHistoryOperation,
+    ) -> bool {
+        let Some(graph) = self.document.create_solid_history(handle, operation) else {
+            return false;
+        };
+        self.record_undo_object_before(graph.root, None);
+        for node in graph.nodes {
+            self.record_undo_object_before(node, None);
+        }
+        true
+    }
+
+    fn copy_solid_history(&mut self, source: Handle, target: Handle) -> bool {
+        let Some(graph) = self.document.copy_solid_history(source, target) else {
+            return false;
+        };
+        self.record_undo_object_before(graph.root, None);
+        for node in graph.nodes {
+            self.record_undo_object_before(node, None);
+        }
+        true
+    }
+
+    pub(crate) fn delete_solid_history(&mut self, handle: Handle) {
+        self.record_solid_history_before(handle);
+        self.document.delete_solid_history(handle);
+    }
 
     pub fn rebuild_solid_history(
         &mut self,
@@ -637,6 +729,7 @@ impl Scene {
             return false;
         };
         let wires = crate::scene::model::solid_model::edge_wires(&body);
+        self.record_solid_history_before(handle);
         if self
             .document
             .update_solid_history(handle, operation)
@@ -652,6 +745,28 @@ impl Scene {
         entity.silhouettes.clear();
         self.register_solid_model(handle, body);
         true
+    }
+
+    fn transform_solid_history(
+        &mut self,
+        handle: Handle,
+        transform: &EntityTransform,
+    ) -> bool {
+        let Some(mut operation) = self.document.solid_history_operation(handle).cloned() else {
+            return false;
+        };
+        if !crate::scene::model::solid_history::transform_operation(
+            &mut operation,
+            transform,
+        ) {
+            return false;
+        }
+        if self.rebuild_solid_history(handle, operation.clone()) {
+            return true;
+        }
+        self.record_solid_history_before(handle);
+        let _ = self.document.update_solid_history(handle, operation);
+        false
     }
 
     fn apply_solid_history_grip(
@@ -764,7 +879,13 @@ impl Scene {
                 .map(|p| [p.x, p.y, p.z]);
             if let Some(new) = new_por {
                 let delta = [new[0] - old[0], new[1] - old[1], new[2] - old[2]];
-                self.translate_solid_geometry(handle, delta);
+                let moved_history = self.transform_solid_history(
+                    handle,
+                    &EntityTransform::Translate(glam::DVec3::from_array(delta)),
+                );
+                if !moved_history {
+                    self.translate_solid_geometry(handle, delta);
+                }
             }
         }
 

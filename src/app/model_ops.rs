@@ -31,10 +31,7 @@ impl super::OpenCADStudio {
         let Some(handle) = self.commit_entity_handle(entity) else {
             return Handle::NULL;
         };
-        self.tabs[i]
-            .scene
-            .document
-            .create_solid_history(handle, history);
+        self.tabs[i].scene.create_solid_history(handle, history);
         self.tabs[i].scene.register_solid_model(handle, solid);
         handle
     }

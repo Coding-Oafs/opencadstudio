@@ -9,6 +9,7 @@ use acadrust::EntityType;
 use cadkernel::brep::Body;
 
 use crate::scene::model::object::{GripApply, GripDef, GripShape};
+use crate::command::EntityTransform;
 
 pub const GRIP_LENGTH: usize = 10_001;
 pub const GRIP_WIDTH: usize = 10_002;
@@ -21,6 +22,71 @@ pub const GRIP_SIDES: usize = 10_007;
 fn matrix(transform: [f64; 16]) -> Option<glam::DMat4> {
     let matrix = glam::DMat4::from_cols_array(&transform);
     (matrix.is_finite() && matrix.determinant().abs() > 1e-12).then_some(matrix)
+}
+
+fn codec_matrix(transform: &acadrust::types::Transform) -> glam::DMat4 {
+    let matrix = transform.matrix.m;
+    glam::DMat4::from_cols_array(&[
+        matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0],
+        matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1],
+        matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2],
+        matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3],
+    ])
+}
+
+fn transform_matrix(transform: &EntityTransform) -> Option<glam::DMat4> {
+    Some(match transform {
+        EntityTransform::Translate(delta) => glam::DMat4::from_translation(*delta),
+        EntityTransform::Rotate {
+            center,
+            axis,
+            angle_rad,
+        } => {
+            let axis = axis.normalize_or_zero();
+            if axis.length_squared() <= 1e-12 {
+                return None;
+            }
+            glam::DMat4::from_translation(*center)
+                * glam::DMat4::from_axis_angle(axis, *angle_rad)
+                * glam::DMat4::from_translation(-*center)
+        }
+        EntityTransform::Scale { center, factor } => {
+            glam::DMat4::from_translation(*center)
+                * glam::DMat4::from_scale(glam::DVec3::splat(*factor))
+                * glam::DMat4::from_translation(-*center)
+        }
+        EntityTransform::Mirror {
+            p1,
+            p2,
+            working_normal,
+        } => codec_matrix(&crate::scene::view::transform::reflection_about_working_line(
+            *p1,
+            *p2,
+            *working_normal,
+        )),
+        EntityTransform::Affine(value) => codec_matrix(value),
+    })
+}
+
+pub fn transform_operation(
+    operation: &mut SolidHistoryOperation,
+    transform: &EntityTransform,
+) -> bool {
+    let Some(base) = operation.base_mut() else {
+        return false;
+    };
+    let Some(current) = matrix(base.transform) else {
+        return false;
+    };
+    let Some(by) = transform_matrix(transform) else {
+        return false;
+    };
+    let transformed = by * current;
+    if !transformed.is_finite() || transformed.determinant().abs() <= 1e-12 {
+        return false;
+    }
+    base.transform = transformed.to_cols_array();
+    true
 }
 
 fn world_point(transform: [f64; 16], point: [f64; 3]) -> Option<glam::DVec3> {

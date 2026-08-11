@@ -369,6 +369,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                             .collect();
                                     }
 
+                                    self.capture_grip_history_originals(i, &edited_handles);
+
                                     self.grip_preview_handles = edited_handles;
                                 }
                                 let delta = target - grip.last_world;
