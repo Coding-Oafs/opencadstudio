@@ -663,6 +663,7 @@ async fn load_web_bytes(
         merge_read_diagnostics(&mut outcome.stats, initial_stats);
     }
     let mut doc = outcome.document;
+    normalize_block_origins(&mut doc);
     if name.to_ascii_lowercase().ends_with(".dxf") {
         fix_dxf_dimension_rotations(&mut doc);
         fix_dxf_layout_plot_settings(&mut doc);

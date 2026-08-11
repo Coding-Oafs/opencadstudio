@@ -7,8 +7,24 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
 const HASH_MARKER: &str = "\nreport-source-sha256:";
-const PROTOCOL_VERSION: u16 = 3;
-const WORKER_URL: &str = "ocs-parse-worker.js?v=3";
+const PROTOCOL_VERSION: u16 = 4;
+const WORKER_URL: &str = "ocs-parse-worker.js?v=4";
+
+#[derive(serde::Deserialize)]
+struct EntityRuntimeFields {
+    handle: u64,
+    linetype_handle: Option<u64>,
+    color_book_handle: Option<u64>,
+    face_visual_style_handle: Option<u64>,
+    edge_visual_style_handle: Option<u64>,
+    material_flags: u8,
+    material_handle: Option<u64>,
+    shadow_flags: u8,
+    plotstyle_flags: u8,
+    plotstyle_handle: Option<u64>,
+    entity_mode: Option<u8>,
+    has_ds_data: bool,
+}
 
 pub(super) async fn parse_document(
     name: &str,
@@ -45,6 +61,7 @@ pub(super) async fn parse_document(
                         >,
                         Option<String>,
                         bool,
+                        Vec<EntityRuntimeFields>,
                     ) = bincode::deserialize(&bytes)
                         .map_err(|error| super::OpenLoadError::from(error.to_string()))?;
                     if payload.0 != PROTOCOL_VERSION {
@@ -54,7 +71,13 @@ pub(super) async fn parse_document(
                         )));
                     }
                     match payload.1 {
-                        Ok(outcome) => Ok((outcome, payload.2)),
+                        Ok(mut outcome) => {
+                            restore_entity_runtime_fields(
+                                &mut outcome.document,
+                                payload.4,
+                            );
+                            Ok((outcome, payload.2))
+                        }
                         Err((message, read_stats)) => Err(super::OpenLoadError {
                             message,
                             source_sha256: payload.2,
@@ -117,6 +140,30 @@ pub(super) async fn parse_document(
         .map_err(|_| super::OpenLoadError::from("CAD parser worker closed without a result"))?;
     worker.terminate();
     result
+}
+
+fn restore_entity_runtime_fields(
+    document: &mut acadrust::CadDocument,
+    fields: Vec<EntityRuntimeFields>,
+) {
+    let handle = |value: Option<u64>| value.map(acadrust::Handle::new);
+    for fields in fields {
+        let Some(entity) = document.get_entity_mut(acadrust::Handle::new(fields.handle)) else {
+            continue;
+        };
+        let common = entity.common_mut();
+        common.linetype_handle = handle(fields.linetype_handle);
+        common.color_book_handle = handle(fields.color_book_handle);
+        common.face_visual_style_handle = handle(fields.face_visual_style_handle);
+        common.edge_visual_style_handle = handle(fields.edge_visual_style_handle);
+        common.material_flags = fields.material_flags;
+        common.material_handle = handle(fields.material_handle);
+        common.shadow_flags = fields.shadow_flags;
+        common.plotstyle_flags = fields.plotstyle_flags;
+        common.plotstyle_handle = handle(fields.plotstyle_handle);
+        common.entity_mode = fields.entity_mode;
+        common.has_ds_data = fields.has_ds_data;
+    }
 }
 
 pub(super) async fn sha256_document(bytes: &[u8]) -> Result<String, super::OpenLoadError> {
