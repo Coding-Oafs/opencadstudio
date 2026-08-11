@@ -1,9 +1,6 @@
 // Grippable + PropertyEditable for Solid3D, Region, Body.
 //
-// Geometry lives in ACIS data — we cannot edit it via the properties panel.
-// We expose the point_of_reference as a translate grip and show ACIS size
-// as read-only info. Grip translate also updates stored wire points; the
-// caller translates the mesh vertices to match.
+// Shared grips and properties for modeler entities.
 
 use acadrust::entities::{Body, Region, Solid3D, Surface};
 use cadkernel::space::polygon;

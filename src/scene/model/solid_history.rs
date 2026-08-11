@@ -8,8 +8,11 @@ use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
 use cadkernel::brep::Body;
 
-use crate::scene::model::object::{GripApply, GripDef, GripShape};
 use crate::command::EntityTransform;
+use crate::scene::model::object::{
+    GripApply, GripDef, GripShape, PropSection, PropValue, Property,
+};
+use crate::t;
 
 pub const GRIP_LENGTH: usize = 10_001;
 pub const GRIP_WIDTH: usize = 10_002;
@@ -18,6 +21,142 @@ pub const GRIP_RADIUS: usize = 10_004;
 pub const GRIP_MAJOR_RADIUS: usize = 10_005;
 pub const GRIP_MINOR_RADIUS: usize = 10_006;
 pub const GRIP_SIDES: usize = 10_007;
+
+pub const PROP_LENGTH: &str = "solid_history_length";
+pub const PROP_WIDTH: &str = "solid_history_width";
+pub const PROP_HEIGHT: &str = "solid_history_height";
+pub const PROP_RADIUS: &str = "solid_history_radius";
+pub const PROP_MAJOR_RADIUS: &str = "solid_history_major_radius";
+pub const PROP_MINOR_RADIUS: &str = "solid_history_minor_radius";
+pub const PROP_SIDES: &str = "solid_history_sides";
+
+fn history_prop(label: &str, field: &'static str, value: impl ToString) -> Property {
+    Property {
+        label: label.to_string(),
+        field,
+        value: PropValue::EditText(value.to_string()),
+    }
+}
+
+pub fn primitive_properties(
+    document: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Vec<PropSection> {
+    let Some(operation) = document.solid_history_operation(handle) else {
+        return Vec::new();
+    };
+    let props = match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => vec![
+            history_prop(t!("Length").as_ref(), PROP_LENGTH, value.length),
+            history_prop(t!("Width").as_ref(), PROP_WIDTH, value.width),
+            history_prop(t!("Height").as_ref(), PROP_HEIGHT, value.height),
+        ],
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => vec![
+            history_prop(t!("Radius").as_ref(), PROP_RADIUS, value.major_radius),
+            history_prop(t!("Height").as_ref(), PROP_HEIGHT, value.height),
+        ],
+        SolidHistoryOperation::Sphere(value) => vec![history_prop(
+            t!("Radius").as_ref(),
+            PROP_RADIUS,
+            value.radius,
+        )],
+        SolidHistoryOperation::Torus(value) => vec![
+            history_prop(
+                t!("Major Radius").as_ref(),
+                PROP_MAJOR_RADIUS,
+                value.major_radius,
+            ),
+            history_prop(
+                t!("Minor Radius").as_ref(),
+                PROP_MINOR_RADIUS,
+                value.minor_radius,
+            ),
+        ],
+        SolidHistoryOperation::Pyramid(value) => vec![
+            history_prop(t!("Radius").as_ref(), PROP_RADIUS, value.radius),
+            history_prop(t!("Height").as_ref(), PROP_HEIGHT, value.height),
+            history_prop(t!("Sides").as_ref(), PROP_SIDES, value.sides),
+        ],
+        _ => return Vec::new(),
+    };
+    vec![PropSection {
+        title: t!("Primitive").into_owned(),
+        props,
+    }]
+}
+
+pub fn is_primitive_property(field: &str) -> bool {
+    matches!(
+        field,
+        PROP_LENGTH
+            | PROP_WIDTH
+            | PROP_HEIGHT
+            | PROP_RADIUS
+            | PROP_MAJOR_RADIUS
+            | PROP_MINOR_RADIUS
+            | PROP_SIDES
+    )
+}
+
+pub fn apply_primitive_property(
+    operation: &mut SolidHistoryOperation,
+    field: &str,
+    value: &str,
+) -> bool {
+    let Ok(number) = value.trim().parse::<f64>() else {
+        return false;
+    };
+    if !number.is_finite() {
+        return false;
+    }
+    let positive = || (number > 0.0).then_some(number);
+    match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => match field {
+            PROP_LENGTH => value.length = positive().unwrap_or(value.length),
+            PROP_WIDTH => value.width = positive().unwrap_or(value.width),
+            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+            _ => return false,
+        },
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => match field {
+            PROP_RADIUS => {
+                let Some(radius) = positive() else {
+                    return false;
+                };
+                value.major_radius = radius;
+                value.minor_radius = radius;
+                value.x_radius = radius;
+            }
+            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+            _ => return false,
+        },
+        SolidHistoryOperation::Sphere(value) if field == PROP_RADIUS => {
+            value.radius = positive().unwrap_or(value.radius);
+        }
+        SolidHistoryOperation::Torus(value) => match field {
+            PROP_MAJOR_RADIUS => value.major_radius = positive().unwrap_or(value.major_radius),
+            PROP_MINOR_RADIUS => value.minor_radius = positive().unwrap_or(value.minor_radius),
+            _ => return false,
+        },
+        SolidHistoryOperation::Pyramid(value) => match field {
+            PROP_RADIUS => value.radius = positive().unwrap_or(value.radius),
+            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+            PROP_SIDES => {
+                let rounded = number.round();
+                if (number - rounded).abs() > 1e-9 {
+                    return false;
+                }
+                let sides = rounded as i32;
+                if !(3..=71).contains(&sides) {
+                    return false;
+                }
+                value.sides = sides;
+            }
+            _ => return false,
+        },
+        _ => return false,
+    }
+    positive().is_some() || field == PROP_SIDES
+}
 
 fn matrix(transform: [f64; 16]) -> Option<glam::DMat4> {
     let matrix = glam::DMat4::from_cols_array(&transform);

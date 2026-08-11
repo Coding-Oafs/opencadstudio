@@ -2206,15 +2206,36 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         }
                                     }
                                     _ => {
-                                        if let Some(entity) =
-                                            self.tabs[i].scene.document.get_entity_mut(handle)
-                                        {
-                                            crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
-                                                entity,
+                                        if crate::scene::model::solid_history::is_primitive_property(
+                                            field,
+                                        ) {
+                                            self.tabs[i].scene.apply_solid_history_property(
+                                                handle,
+                                                field,
+                                                &val,
+                                            );
+                                        } else if self.tabs[i]
+                                            .scene
+                                            .apply_solid_position_property(
+                                                handle,
                                                 field,
                                                 &val,
                                                 plane,
-                                            );
+                                            )
+                                            .is_none()
+                                        {
+                                            if let Some(entity) = self.tabs[i]
+                                                .scene
+                                                .document
+                                                .get_entity_mut(handle)
+                                            {
+                                                crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
+                                                    entity,
+                                                    field,
+                                                    &val,
+                                                    plane,
+                                                );
+                                            }
                                         }
                                     }
                                 }

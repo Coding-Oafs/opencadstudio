@@ -358,6 +358,12 @@ impl OpenCADStudio {
                     let group_names = self.tabs[i].scene.group_names_for_entity(handle);
                     let mut sections =
                         dispatch::properties_sectioned(handle, entity, &text_style_names);
+                    sections.extend(
+                        crate::scene::model::solid_history::primitive_properties(
+                            &self.tabs[i].scene.document,
+                            handle,
+                        ),
+                    );
 
                     // Turn the Material row into an editable picker: the source
                     // options (ByLayer / ByBlock) plus every named material the
@@ -1387,7 +1393,11 @@ impl OpenCADStudio {
                         .iter()
                         .map(|(handle, entity)| (*handle, entity))
                         .collect();
-                    let sections = aggregate_sections(&local_refs, &text_style_names);
+                    let mut sections = aggregate_sections(&local_refs, &text_style_names);
+                    sections.extend(aggregate_solid_history_sections(
+                        &self.tabs[i].scene.document,
+                        &local_refs.iter().map(|(handle, _)| *handle).collect::<Vec<_>>(),
+                    ));
                     ui::PropertiesPanel {
                         choice_combos: sections
                             .iter()
@@ -1901,6 +1911,28 @@ pub(super) fn aggregate_sections(
         result = merge_sections(&result, &sections);
     }
     result
+}
+
+fn aggregate_solid_history_sections(
+    document: &acadrust::CadDocument,
+    handles: &[Handle],
+) -> Vec<crate::scene::model::object::PropSection> {
+    let mut sections = handles.iter().map(|handle| {
+        crate::scene::model::solid_history::primitive_properties(document, *handle)
+    });
+    let Some(mut merged) = sections.next() else {
+        return Vec::new();
+    };
+    if merged.is_empty() {
+        return Vec::new();
+    }
+    for next in sections {
+        if next.is_empty() {
+            return Vec::new();
+        }
+        merged = merge_sections(&merged, &next);
+    }
+    merged
 }
 
 fn merge_sections(

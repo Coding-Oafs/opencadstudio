@@ -788,6 +788,62 @@ impl Scene {
         self.rebuild_solid_history(handle, operation)
     }
 
+    pub fn apply_solid_history_property(
+        &mut self,
+        handle: Handle,
+        field: &str,
+        value: &str,
+    ) -> bool {
+        let Some(mut operation) = self.document.solid_history_operation(handle).cloned() else {
+            return false;
+        };
+        if !crate::scene::model::solid_history::apply_primitive_property(
+            &mut operation,
+            field,
+            value,
+        ) {
+            return false;
+        }
+        self.rebuild_solid_history(handle, operation)
+    }
+
+    pub fn apply_solid_position_property(
+        &mut self,
+        handle: Handle,
+        field: &str,
+        value: &str,
+        plane: crate::command::WorkingPlane,
+    ) -> Option<bool> {
+        let axis = match field {
+            "s3d_px" | "rgn_px" | "bdy_px" | "srf_px" => 0,
+            "s3d_py" | "rgn_py" | "bdy_py" | "srf_py" => 1,
+            "s3d_pz" | "rgn_pz" | "bdy_pz" | "srf_pz" => 2,
+            _ => return None,
+        };
+        let Ok(target) = value.trim().parse::<f64>() else {
+            return Some(false);
+        };
+        if !target.is_finite() {
+            return Some(false);
+        }
+        let Some(point) = self
+            .document
+            .get_entity(handle)
+            .and_then(crate::entities::solid3d::point_of_reference)
+        else {
+            return Some(false);
+        };
+        let world = glam::DVec3::new(point.x, point.y, point.z);
+        let mut local = plane.to_local(world);
+        local[axis] = target;
+        let delta = plane.to_world(local) - world;
+        if delta.length_squared() <= f64::EPSILON {
+            return Some(true);
+        }
+        self.transform_entities(&[handle], &EntityTransform::Translate(delta));
+        Some(true)
+    }
+
     pub(crate) fn translate_solid_geometry(&mut self, handle: Handle, delta: [f64; 3]) {
         if delta.iter().all(|value| value.abs() <= f64::EPSILON) {
             return;
