@@ -1,11 +1,4 @@
-// Mesh GPU buffers — TriangleList rendering for solid objects.
-//
-// Vertex layout (40 bytes):
-//   position   [f32; 3]   offset  0   12 B
-//   normal     [f32; 3]   offset 12   12 B
-//   color      [f32; 4]   offset 24   16 B
-//                                ------
-//                                 40 B / vertex
+// GPU buffers for triangle meshes.
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 use iced::wgpu;
@@ -95,32 +88,17 @@ impl MeshVertex {
             wgpu::VertexAttribute {
                 offset: std::mem::offset_of!(MeshVertex, uv_specular) as u64,
                 shader_location: 10,
-                format: wgpu::VertexFormat::Float32x2,
-            },
-            wgpu::VertexAttribute {
-                offset: std::mem::offset_of!(MeshVertex, uv_reflection) as u64,
-                shader_location: 11,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
                 offset: std::mem::offset_of!(MeshVertex, uv_opacity) as u64,
-                shader_location: 12,
-                format: wgpu::VertexFormat::Float32x2,
-            },
-            wgpu::VertexAttribute {
-                offset: std::mem::offset_of!(MeshVertex, uv_bump) as u64,
-                shader_location: 13,
-                format: wgpu::VertexFormat::Float32x2,
+                shader_location: 11,
+                format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
                 offset: std::mem::offset_of!(MeshVertex, uv_refraction) as u64,
-                shader_location: 14,
-                format: wgpu::VertexFormat::Float32x2,
-            },
-            wgpu::VertexAttribute {
-                offset: std::mem::offset_of!(MeshVertex, uv_normal) as u64,
-                shader_location: 15,
-                format: wgpu::VertexFormat::Float32x2,
+                shader_location: 12,
+                format: wgpu::VertexFormat::Float32x4,
             },
         ];
         wgpu::VertexBufferLayout {
@@ -130,12 +108,7 @@ impl MeshVertex {
         }
     }
 
-    /// Minimal layout shared by native and WebGL mesh edge pipelines.
-    ///
-    /// Edge fragments only need position and entity color. Advertising the
-    /// material/normal/UV attributes here would keep the full surface-shader
-    /// interface alive on WebGL even though the edge entry point never reads
-    /// those values.
+    /// Surface-independent layout for mesh edge pipelines.
     pub fn edge_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         const ATTRS: &[wgpu::VertexAttribute] = &[
             wgpu::VertexAttribute {

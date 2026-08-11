@@ -1,14 +1,4 @@
-// Mesh shader — renders triangle meshes (truck Shell/Solid tessellation).
-//
-// Vertex layout: position [f32;3], normal [f32;3], color [f32;4]  (40 bytes)
-//
-// Lighting: viewport default lights or drawing light entities supplied by the
-// frame uniform. Two shading paths share this shader, picked per-frame via
-// `u.flat_shade`:
-//   - 0.0 → per-vertex normals interpolated to the fragment (Gouraud).
-//   - 1.0 → per-triangle face normal from screen-space derivatives
-//     `cross(dpdx(pos), dpdy(pos))`, so each triangle reads as a single
-//     flat shade (FlatShaded).
+// Triangle-mesh surfaces and feature edges.
 
 struct Uniforms {
     viewport_size:       vec2<f32>,
@@ -116,12 +106,9 @@ struct VertexIn {
     @location(8) advanced:     vec4<f32>,
     // illumination model, channel flags, material mode, luminance mode
     @location(9) flags:        vec4<u32>,
-    @location(10) uv_specular:   vec2<f32>,
-    @location(11) uv_reflection: vec2<f32>,
-    @location(12) uv_opacity:    vec2<f32>,
-    @location(13) uv_bump:       vec2<f32>,
-    @location(14) uv_refraction: vec2<f32>,
-    @location(15) uv_normal:     vec2<f32>,
+    @location(10) uv_specular_reflection: vec4<f32>,
+    @location(11) uv_opacity_bump:        vec4<f32>,
+    @location(12) uv_refraction_normal:   vec4<f32>,
 };
 
 struct VertexOut {
@@ -131,17 +118,16 @@ struct VertexOut {
     @location(2)       world_pos: vec3<f32>,
     @location(3)       material:  vec4<f32>,
     @location(4)       specular:  vec4<f32>,
-    @location(5)       eye_vec:   vec3<f32>,
-    @location(6)       uv_diffuse: vec2<f32>,
-    @location(7)       ambient:   vec4<f32>,
-    @location(8)       advanced:  vec4<f32>,
-    @location(9) @interpolate(flat) flags: vec4<u32>,
-    @location(10)      uv_specular:   vec2<f32>,
-    @location(11)      uv_reflection: vec2<f32>,
-    @location(12)      uv_opacity:    vec2<f32>,
-    @location(13)      uv_bump:       vec2<f32>,
-    @location(14)      uv_refraction: vec2<f32>,
-    @location(15)      uv_normal:     vec2<f32>,
+    @location(5)       uv_diffuse: vec2<f32>,
+    @location(6)       ambient:   vec4<f32>,
+    @location(7)       advanced:  vec4<f32>,
+    @location(8) @interpolate(flat) flags: vec4<u32>,
+    @location(9)       uv_specular:   vec2<f32>,
+    @location(10)      uv_reflection: vec2<f32>,
+    @location(11)      uv_opacity:    vec2<f32>,
+    @location(12)      uv_bump:       vec2<f32>,
+    @location(13)      uv_refraction: vec2<f32>,
+    @location(14)      uv_normal:     vec2<f32>,
 };
 
 struct EdgeVertexIn {
@@ -191,17 +177,16 @@ fn vs_main(
     out.world_pos = rel;
     out.material  = v.material;
     out.specular  = v.specular;
-    out.eye_vec   = -rel;
     out.uv_diffuse = v.uv_diffuse;
     out.ambient   = v.ambient;
     out.advanced  = v.advanced;
     out.flags     = v.flags;
-    out.uv_specular = v.uv_specular;
-    out.uv_reflection = v.uv_reflection;
-    out.uv_opacity = v.uv_opacity;
-    out.uv_bump = v.uv_bump;
-    out.uv_refraction = v.uv_refraction;
-    out.uv_normal = v.uv_normal;
+    out.uv_specular = v.uv_specular_reflection.xy;
+    out.uv_reflection = v.uv_specular_reflection.zw;
+    out.uv_opacity = v.uv_opacity_bump.xy;
+    out.uv_bump = v.uv_opacity_bump.zw;
+    out.uv_refraction = v.uv_refraction_normal.xy;
+    out.uv_normal = v.uv_refraction_normal.zw;
     return out;
 }
 
@@ -373,7 +358,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         );
         specular_color = mix(specular_color, texel, blend);
     }
-    let view = normalize(in.eye_vec);
+    let view = normalize(-in.world_pos);
     let gloss_exp = mix(2.0, 128.0, clamp(in.material.x, 0.0, 1.0));
     let fresnel0 = pow(
         (max(in.specular.w, 1.0) - 1.0) / (max(in.specular.w, 1.0) + 1.0),

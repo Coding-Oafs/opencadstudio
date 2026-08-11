@@ -3195,13 +3195,8 @@ impl Scene {
         let display = self.viewport_display_settings(inst);
         let mut flags = render_mode_flags(inst.render_mode);
         if let Some(style) = display.visual_style.as_ref() {
-            if flags.mesh_fill {
-                flags.face3d_fill &= style.face_visible();
-                flags.mesh_fill &= style.face_visible();
-                flags.show_3d_edges = style.edges_visible();
-                if style.face_lighting_quality == 1 {
-                    flags.flat_shade = true;
-                }
+            if flags.mesh_fill && style.face_lighting_quality == 1 {
+                flags.flat_shade = true;
             }
         }
         let view_wireframe = !flags.face3d_fill;
