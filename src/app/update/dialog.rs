@@ -107,17 +107,8 @@ impl OpenCADStudio {
 
 
 pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEvent) -> Task<Message> {
-                // On the Start page there is no drawing to act on, so a tool that
-                // touches the scene is inert — point the user at New / Open
-                // instead of running it into the empty welcome tab (#299).
-                //
-                // Commands are exempt: `dispatch_command` already decides which
-                // ones stand alone (About, Donate, Report, the web link…) and
-                // reports the rest. Refusing them here shadowed that list and
-                // killed the welcome page's own buttons, which by definition can
-                // only ever be clicked while `is_start` holds (#388, #389).
-                // Keep the policy in one place — this door must not second-guess
-                // it. Every other event below mutates the scene or its panels.
+                // Commands use `start_allowed`; other events need a drawing
+                // and stay blocked on the Start page (#299, #388, #389).
                 if self.tabs[self.active_tab].is_start && !matches!(event, ModuleEvent::Command(_)) {
                     self.ribbon.close_dropdown();
                     self.command_line

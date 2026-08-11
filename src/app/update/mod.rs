@@ -1267,11 +1267,7 @@ impl OpenCADStudio {
             }
 
             Message::RibbonToolClick { tool_id, event } => {
-                if self.tabs[self.active_tab].is_start {
-                    Task::none()
-                } else {
-                    self.on_ribbon_tool_click(tool_id, event)
-                }
+                self.on_ribbon_tool_click(tool_id, event)
             }
             Message::PluginFileDialogResult { command, path } => {
                 if let Some(path) = path {
@@ -5722,7 +5718,15 @@ impl OpenCADStudio {
                     crate::ui::window::about::platform_name(),
                     crate::ui::window::about::architecture_name(),
                 );
-                iced::clipboard::write(info).discard()
+                #[cfg(target_arch = "wasm32")]
+                {
+                    crate::sys::write_clipboard_text(&info);
+                    Task::none()
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    iced::clipboard::write(info).discard()
+                }
             }
 
             // ── Plugin Manager window ─────────────────────────────────────
