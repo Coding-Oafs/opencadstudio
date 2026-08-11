@@ -133,6 +133,10 @@ pub fn view_window<'a>(
                 .on_press(Message::PlotStyleLoad)
                 .style(btn_s(false))
                 .padding([4, 10]),
+            button(text(t!("Save")).size(11))
+                .on_press(Message::PlotStylePanelSaveDirect)
+                .style(btn_s(true))
+                .padding([4, 14]),
             button(text(t!("Save As…")).size(11))
                 .on_press(Message::PlotStylePanelSave)
                 .style(btn_s(false))
