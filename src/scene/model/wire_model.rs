@@ -156,6 +156,8 @@ pub struct WireModel {
     /// `true` only for a planar SOLID entity's interior. Wireframe 3D omits
     /// this fill while preserving its perimeter and every other 2-D overlay.
     pub fill_is_2d_solid: bool,
+    /// Shared block-render source and this placement's translation.
+    pub render_instance: Option<super::instance_model::RenderInstance>,
 }
 
 impl WireModel {
@@ -208,6 +210,7 @@ impl WireModel {
             depth_override: None,
             fill_is_3d: false,
             fill_is_2d_solid: false,
+            render_instance: None,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             text_verts: Vec::new(),
@@ -467,6 +470,7 @@ impl Default for WireModel {
             depth_override: None,
             fill_is_3d: false,
             fill_is_2d_solid: false,
+            render_instance: None,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
         }

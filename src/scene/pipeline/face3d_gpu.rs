@@ -85,6 +85,37 @@ pub struct Face3DChunk {
     pub vertex_count: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Face3DInstance {
+    pub translation: [f32; 3],
+    pub translation_low: [f32; 3],
+    pub draw_depth: f32,
+    pub _pad: [f32; 3],
+}
+
+impl Face3DInstance {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(Face3DInstance, translation) as u64, shader_location: 4, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(Face3DInstance, translation_low) as u64, shader_location: 5, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(Face3DInstance, draw_depth) as u64, shader_location: 6, format: wgpu::VertexFormat::Float32 },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRS,
+        }
+    }
+}
+
+pub struct BlockFace3DChunk {
+    pub vertex_buffer: wgpu::Buffer,
+    pub instance_buffer: wgpu::Buffer,
+    pub vertex_count: u32,
+    pub instance_count: u32,
+}
+
 pub struct Face3DGpu {
     /// 3DFACE quads + PolyfaceMesh / PolygonMesh face triangles.
     /// HiddenLine routes this through the depth-only pipeline so the
@@ -95,6 +126,8 @@ pub struct Face3DGpu {
     /// source wire has an empty `points` list. Always rendered with the
     /// normal face3d pipeline (visible in every mode).
     pub chunks_2d: Vec<Face3DChunk>,
+    pub block_chunks_3d: Vec<BlockFace3DChunk>,
+    pub block_chunks_2d: Vec<BlockFace3DChunk>,
 }
 
 impl Face3DGpu {
@@ -179,6 +212,9 @@ impl Face3DGpu {
             if wire.fill_tris.is_empty() {
                 continue;
             }
+            if wire.render_instance.is_some() {
+                continue;
+            }
             if !show_2d_solid_fills && wire.fill_is_2d_solid {
                 continue;
             }
@@ -236,11 +272,151 @@ impl Face3DGpu {
             }
         }
 
+        let (block_chunks_3d, block_chunks_2d) = upload_block_chunks(
+            device,
+            all_wires,
+            keep_3d_mesh_fills,
+            show_2d_solid_fills,
+            depth_map,
+        );
         Self {
             chunks_3d: upload_chunks(device, &verts_3d, "face3d.vbuf.3d"),
             chunks_2d: upload_chunks(device, &verts_2d, "face3d.vbuf.2d"),
+            block_chunks_3d,
+            block_chunks_2d,
         }
     }
+}
+
+fn upload_block_chunks(
+    device: &wgpu::Device,
+    wires: &[WireModel],
+    keep_3d_mesh_fills: bool,
+    show_2d_solid_fills: bool,
+    depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
+) -> (Vec<BlockFace3DChunk>, Vec<BlockFace3DChunk>) {
+    let mut slots = rustc_hash::FxHashMap::default();
+    let mut groups: Vec<(bool, Vec<&WireModel>)> = Vec::new();
+    for wire in wires {
+        let Some(instance) = wire.render_instance else {
+            continue;
+        };
+        if wire.fill_tris.is_empty()
+            || (!show_2d_solid_fills && wire.fill_is_2d_solid)
+            || (wire.fill_is_3d && !keep_3d_mesh_fills)
+        {
+            continue;
+        }
+        let key = (instance.source_id, wire.fill_is_3d);
+        let slot = *slots.entry(key).or_insert_with(|| {
+            let slot = groups.len();
+            groups.push((wire.fill_is_3d, Vec::new()));
+            slot
+        });
+        groups[slot].1.push(wire);
+    }
+
+    let mut chunks_3d = Vec::new();
+    let mut chunks_2d = Vec::new();
+    for (is_3d, group) in groups {
+        let Some(&source) = group.first() else {
+            continue;
+        };
+        let Some(base) = source.render_instance else {
+            continue;
+        };
+        let [r, g, b, a] = source.color;
+        let color = if is_3d { [r * 0.45, g * 0.45, b * 0.45, a] } else { source.color };
+        let vertices: Vec<Face3DVertex> = source
+            .fill_tris
+            .iter()
+            .enumerate()
+            .map(|(index, &position)| Face3DVertex {
+                position,
+                color,
+                draw_depth: 0.0,
+                position_low: source
+                    .fill_tris_low
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0; 3]),
+            })
+            .collect();
+        if vertices.is_empty() {
+            continue;
+        }
+        let budget = (device.limits().max_buffer_size as usize / 10) * 9;
+        let max_vertices = ((budget / std::mem::size_of::<Face3DVertex>()).max(3) / 3) * 3;
+        let max_instances = ((device.limits().max_buffer_size as usize / 10) * 9
+            / std::mem::size_of::<Face3DInstance>())
+            .max(1);
+        let instances: Vec<Face3DInstance> = group
+            .iter()
+            .filter_map(|wire| {
+                let instance = wire.render_instance?;
+                let delta = [
+                    instance.translation[0] - base.translation[0],
+                    instance.translation[1] - base.translation[1],
+                    instance.translation[2] - base.translation[2],
+                ];
+                let high = delta.map(|value| value as f32);
+                let (mut zmin, mut zmax) = (f32::INFINITY, f32::NEG_INFINITY);
+                for point in &wire.fill_tris {
+                    zmin = zmin.min(point[2]);
+                    zmax = zmax.max(point[2]);
+                }
+                let draw_depth = if is_3d || zmax - zmin > 1e-4 {
+                    0.0
+                } else {
+                    super::wire_gpu::wire_draw_depth(wire, depth_map)
+                };
+                Some(Face3DInstance {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                        (delta[2] - high[2] as f64) as f32,
+                    ],
+                    draw_depth,
+                    _pad: [0.0; 3],
+                })
+            })
+            .collect();
+        let instance_buffers: Vec<(wgpu::Buffer, u32)> = instances
+            .chunks(max_instances)
+            .map(|chunk| {
+                (
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("face3d.block.instances"),
+                        contents: bytemuck::cast_slice(chunk),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                    chunk.len() as u32,
+                )
+            })
+            .collect();
+        for vertex_chunk in vertices.chunks(max_vertices) {
+            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("face3d.block.vertices"),
+                contents: bytemuck::cast_slice(vertex_chunk),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            for (instance_buffer, instance_count) in &instance_buffers {
+                let chunk = BlockFace3DChunk {
+                    vertex_buffer: vertex_buffer.clone(),
+                    instance_buffer: instance_buffer.clone(),
+                    vertex_count: vertex_chunk.len() as u32,
+                    instance_count: *instance_count,
+                };
+                if is_3d {
+                    chunks_3d.push(chunk);
+                } else {
+                    chunks_2d.push(chunk);
+                }
+            }
+        }
+    }
+    (chunks_3d, chunks_2d)
 }
 
 /// Upload `verts` as one or more VERTEX buffers, each under 90% of the

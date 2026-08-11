@@ -45,6 +45,29 @@ impl HatchVertex {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WipeoutPlacement {
+    pub translation: [f32; 2],
+    pub translation_low: [f32; 2],
+    pub draw_depth: f32,
+    pub _pad: [f32; 3],
+}
+
+impl WipeoutPlacement {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 3, format: wgpu::VertexFormat::Float32 },
+            ],
+        }
+    }
+}
+
 // ── Uniform structs ───────────────────────────────────────────────────────
 
 /// Per-hatch parameters (binding 0).  Must be 96 bytes (16-byte aligned).
@@ -120,6 +143,8 @@ pub struct FamilyBatchData {
 
 pub struct WipeoutGpu {
     pub vertex_buffer: wgpu::Buffer,
+    pub instance_buffer: wgpu::Buffer,
+    pub instance_count: u32,
     pub bind_group: wgpu::BindGroup,
     /// World-space XY bounding rect [min_x, min_y, max_x, max_y] of the
     /// boundary polygon. Used by the per-frame LOD pass to skip hatches
@@ -131,7 +156,33 @@ pub struct WipeoutGpu {
 }
 
 impl WipeoutGpu {
-    pub fn new(device: &wgpu::Device, model: &HatchModel, bgl1: &wgpu::BindGroupLayout) -> Self {
+    pub fn from_models(
+        device: &wgpu::Device,
+        models: &[HatchModel],
+        bgl1: &wgpu::BindGroupLayout,
+    ) -> Vec<Self> {
+        let mut slots = rustc_hash::FxHashMap::default();
+        let mut groups: Vec<Vec<&HatchModel>> = Vec::new();
+        for (index, model) in models.iter().enumerate() {
+            let key = model
+                .render_instance
+                .map(|instance| (true, instance.source_id))
+                .unwrap_or((false, index as u64));
+            let slot = *slots.entry(key).or_insert_with(|| {
+                let slot = groups.len();
+                groups.push(Vec::new());
+                slot
+            });
+            groups[slot].push(model);
+        }
+        groups
+            .into_iter()
+            .map(|group| Self::new(device, &group, bgl1))
+            .collect()
+    }
+
+    fn new(device: &wgpu::Device, models: &[&HatchModel], bgl1: &wgpu::BindGroupLayout) -> Self {
+        let model = models[0];
         // ── Decode pattern mode ──────────────────────────────────────────
         let (mode, color2, grad_cos, grad_sin) = match &model.pattern {
             HatchPattern::Solid => (1u32, [0.0f32; 4], 0.0f32, 0.0f32),
@@ -300,7 +351,7 @@ impl WipeoutGpu {
                 (origin[0] - origin[0] as f32 as f64) as f32,
                 (origin[1] - origin[1] as f32 as f64) as f32,
             ],
-            draw_depth: model.draw_depth,
+            draw_depth: 0.0,
             _pad: [0.0; 3],
         };
 
@@ -373,16 +424,52 @@ impl WipeoutGpu {
         // is in that absolute local space rather than relative to the
         // anchor. (Sub-pixel LOD via `aabb_below_pixel` is unaffected:
         // it measures a projected diagonal, invariant under translation.)
+        let base = model
+            .render_instance
+            .map_or([0.0; 3], |instance| instance.translation);
+        let placements: Vec<WipeoutPlacement> = models
+            .iter()
+            .map(|model| {
+                let translation = model
+                    .render_instance
+                    .map_or([0.0; 3], |instance| instance.translation);
+                let delta = [translation[0] - base[0], translation[1] - base[1]];
+                let high = [delta[0] as f32, delta[1] as f32];
+                WipeoutPlacement {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                    ],
+                    draw_depth: model.draw_depth,
+                    _pad: [0.0; 3],
+                }
+            })
+            .collect();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("wipeout.instances"),
+            contents: bytemuck::cast_slice(&placements),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
         let ox = model.world_origin[0] as f32;
         let oy = model.world_origin[1] as f32;
         let world_aabb = if min_x.is_finite() && min_y.is_finite() {
-            [min_x + ox, min_y + oy, max_x + ox, max_y + oy]
+            let mut aabb = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+            for placement in &placements {
+                aabb[0] = aabb[0].min(min_x + ox + placement.translation[0]);
+                aabb[1] = aabb[1].min(min_y + oy + placement.translation[1]);
+                aabb[2] = aabb[2].max(max_x + ox + placement.translation[0]);
+                aabb[3] = aabb[3].max(max_y + oy + placement.translation[1]);
+            }
+            aabb
         } else {
             [min_x, min_y, max_x, max_y]
         };
 
         Self {
             vertex_buffer,
+            instance_buffer,
+            instance_count: placements.len() as u32,
             bind_group,
             world_aabb,
             _uniform_buf,

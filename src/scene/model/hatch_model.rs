@@ -155,6 +155,7 @@ pub const GPU_BOUNDARY_SEP: f32 = 1.0e30;
 /// A hatched region defined by a closed polygon boundary.
 #[derive(Clone, Debug)]
 pub struct HatchModel {
+    pub render_instance: Option<super::instance_model::RenderInstance>,
     /// World XY anchor (in the same offset-relative coordinate space as
     /// the rest of the scene — `world_offset` already subtracted, but
     /// kept at f64 precision). Boundary vertices are stored as f32

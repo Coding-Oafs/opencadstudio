@@ -152,6 +152,30 @@ impl HatchVertex {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct HatchPlacement {
+    pub translation: [f32; 2],
+    pub translation_low: [f32; 2],
+    pub draw_depth: f32,
+    pub visible: u32,
+}
+
+impl HatchPlacement {
+    pub(super) fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 3, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 4, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 20, shader_location: 5, format: wgpu::VertexFormat::Uint32 },
+            ],
+        }
+    }
+}
+
 // ── Batch builder ──────────────────────────────────────────────────────────
 
 /// Pack a list of `HatchModel`s into the four concatenated storage
@@ -160,7 +184,8 @@ impl HatchVertex {
 /// hatch render pass entirely).
 pub(super) struct StorageHatchBatch {
     pub vertex_buffer: wgpu::Buffer,
-    pub vertex_count: u32,
+    pub placement_buffer: wgpu::Buffer,
+    pub draws: Vec<(std::ops::Range<u32>, std::ops::Range<u32>)>,
     // The four storage buffers below are referenced via `bind_group` —
     // dropping them would invalidate it, but the bind group is the
     // only direct consumer. Keep them as fields to keep ownership in
@@ -175,14 +200,17 @@ pub(super) struct StorageHatchBatch {
     /// `visibility[instance_index]` — when 0 it emits an out-of-NDC
     /// clip position so the GPU clips the primitive before the
     /// fragment stage runs.
-    pub visibility_buffer: wgpu::Buffer,
+    #[allow(dead_code)] pub visibility_buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
     #[allow(dead_code)] pub instance_count: u32,
     /// CPU mirror — `update_visibility` re-uploads this whole slice
     /// when any flag changes. ~4 B per hatch, so 40 KB / 10 k hatches
     /// per pan tick. Far cheaper than touching the 128 B-per-instance
     /// data.
-    pub visibility: Vec<u32>,
+    pub placements: Vec<HatchPlacement>,
+    pub source_visibility: Vec<u32>,
+    pub source_aabbs: Vec<[f32; 4]>,
+    pub unique_source_count: usize,
     /// CPU-side mirror of each instance's local-space AABB (world-
     /// offset-subtracted, world_origin already added back). Used by
     /// `compute_hatch_lod` to evaluate the sub-pixel + frustum cull
@@ -208,8 +236,25 @@ impl StorageHatchBatch {
         let mut boundary: Vec<[f32; 4]> = Vec::new();
         let mut families: Vec<LineFamilyGpu> = Vec::new();
         let mut dashes: Vec<f32> = Vec::new();
+        let mut slots = rustc_hash::FxHashMap::default();
+        let mut groups: Vec<Vec<&HatchModel>> = Vec::new();
+        for (index, hatch) in hatches.iter().enumerate() {
+            let key = hatch
+                .render_instance
+                .map(|instance| (true, instance.source_id))
+                .unwrap_or((false, index as u64));
+            let slot = *slots.entry(key).or_insert_with(|| {
+                let slot = groups.len();
+                groups.push(Vec::new());
+                slot
+            });
+            groups[slot].push(hatch);
+        }
+        groups.sort_by_key(|group| std::cmp::Reverse(group.len() == 1));
+        let unique_source_count = groups.iter().take_while(|group| group.len() == 1).count();
 
-        for h in hatches {
+        for group in &groups {
+            let h = group[0];
             let boundary_offset = boundary.len() as u32;
             for &[x, y] in h.boundary.iter() {
                 // NaN sub-loop separators become the finite sentinel on the
@@ -325,7 +370,7 @@ impl StorageHatchBatch {
                     boundary_count,
                     family_offset,
                     family_count,
-                    draw_depth: h.draw_depth,
+                    draw_depth: if group.len() == 1 { h.draw_depth } else { 0.0 },
                     poly_test: 1,
                     grad_kind,
                     _pad2: 0,
@@ -368,7 +413,7 @@ impl StorageHatchBatch {
                 boundary_count,
                 family_offset,
                 family_count,
-                draw_depth: h.draw_depth,
+                draw_depth: if group.len() == 1 { h.draw_depth } else { 0.0 },
                 // Always resolve inside/outside per fragment on the GPU (the
                 // boundary is uploaded below). Dropping CPU pre-triangulation
                 // keeps the vertex buffer at 6 verts/hatch regardless of
@@ -406,11 +451,70 @@ impl StorageHatchBatch {
                 verts.push(HatchVertex { local_xy: c, instance_index: i as u32 });
             }
         }
+        let mut placements = Vec::new();
+        let mut draws = Vec::with_capacity(groups.len());
+        let mut instance_aabbs = Vec::new();
+        if unique_source_count > 0 {
+            placements.push(HatchPlacement {
+                translation: [0.0; 2],
+                translation_low: [0.0; 2],
+                draw_depth: 0.0,
+                visible: 1,
+            });
+            draws.push((0..unique_source_count as u32 * 6, 0..1));
+            let mut union = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+            for inst in instances.iter().take(unique_source_count) {
+                union[0] = union[0].min(inst.aabb[0] + inst.world_origin[0]);
+                union[1] = union[1].min(inst.aabb[1] + inst.world_origin[1]);
+                union[2] = union[2].max(inst.aabb[2] + inst.world_origin[0]);
+                union[3] = union[3].max(inst.aabb[3] + inst.world_origin[1]);
+            }
+            instance_aabbs.push(union);
+        }
+        for (source_index, group) in groups.iter().enumerate().skip(unique_source_count) {
+            let source = group[0];
+            let base = source
+                .render_instance
+                .map_or([0.0; 3], |instance| instance.translation);
+            let placement_start = placements.len() as u32;
+            for hatch in group {
+                let translation = hatch
+                    .render_instance
+                    .map_or([0.0; 3], |instance| instance.translation);
+                let delta = [translation[0] - base[0], translation[1] - base[1]];
+                let high = [delta[0] as f32, delta[1] as f32];
+                placements.push(HatchPlacement {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                    ],
+                    draw_depth: hatch.draw_depth,
+                    visible: 1,
+                });
+                let inst = &instances[source_index];
+                instance_aabbs.push([
+                    inst.aabb[0] + inst.world_origin[0] + high[0],
+                    inst.aabb[1] + inst.world_origin[1] + high[1],
+                    inst.aabb[2] + inst.world_origin[0] + high[0],
+                    inst.aabb[3] + inst.world_origin[1] + high[1],
+                ]);
+            }
+            draws.push((
+                source_index as u32 * 6..source_index as u32 * 6 + 6,
+                placement_start..placements.len() as u32,
+            ));
+        }
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.vertex"),
             contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
+        });
+        let placement_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hatch.placements"),
+            contents: bytemuck::cast_slice(&placements),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.instances"),
@@ -466,27 +570,20 @@ impl StorageHatchBatch {
                 },
             ],
         });
-
-        // CPU AABB mirror — local-space rect with world_origin added
-        // back, ready for `aabb_offscreen` / `aabb_below_pixel` to
-        // compare against the camera view_proj.
-        let instance_aabbs: Vec<[f32; 4]> = instances
+        let source_aabbs = instances
             .iter()
-            .map(|i| {
-                let ox = i.world_origin[0];
-                let oy = i.world_origin[1];
-                [
-                    i.aabb[0] + ox,
-                    i.aabb[1] + oy,
-                    i.aabb[2] + ox,
-                    i.aabb[3] + oy,
-                ]
-            })
+            .map(|inst| [
+                inst.aabb[0] + inst.world_origin[0],
+                inst.aabb[1] + inst.world_origin[1],
+                inst.aabb[2] + inst.world_origin[0],
+                inst.aabb[3] + inst.world_origin[1],
+            ])
             .collect();
 
         Some(Self {
             vertex_buffer,
-            vertex_count: verts.len() as u32,
+            placement_buffer,
+            draws,
             instance_buffer,
             boundary_buffer,
             family_buffer,
@@ -494,7 +591,10 @@ impl StorageHatchBatch {
             visibility_buffer,
             bind_group,
             instance_count: instances.len() as u32,
-            visibility,
+            placements,
+            source_visibility: visibility,
+            source_aabbs,
+            unique_source_count,
             instance_aabbs,
         })
     }
@@ -503,9 +603,14 @@ impl StorageHatchBatch {
     /// element changes (typically per-frame from compute_hatch_lod).
     pub(super) fn upload_visibility(&self, queue: &wgpu::Queue) {
         queue.write_buffer(
+            &self.placement_buffer,
+            0,
+            bytemuck::cast_slice(&self.placements),
+        );
+        queue.write_buffer(
             &self.visibility_buffer,
             0,
-            bytemuck::cast_slice(&self.visibility),
+            bytemuck::cast_slice(&self.source_visibility),
         );
     }
 

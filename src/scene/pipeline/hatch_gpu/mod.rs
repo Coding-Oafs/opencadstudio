@@ -83,10 +83,10 @@ impl HatchGpu {
                 include_str!("../../../shaders/hatch_texture.wgsl")
             })),
         });
-        let vertex_layout = if uses_storage {
-            storage::HatchVertex::layout()
+        let vertex_layouts = if uses_storage {
+            vec![storage::HatchVertex::layout(), storage::HatchPlacement::layout()]
         } else {
-            texture::vertex_layout()
+            vec![texture::vertex_layout(), texture::TextureHatchPlacement::layout()]
         };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(if uses_storage {
@@ -98,7 +98,7 @@ impl HatchGpu {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_layout],
+                buffers: &vertex_layouts,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             primitive: wgpu::PrimitiveState {
@@ -170,11 +170,17 @@ impl HatchGpu {
                 *resident = StorageHatchBatch::build(device, &self.bind_group_layout, &renderable);
             }
             HatchBackend::Texture { resident, .. } => {
-                *resident = hatches
+                let renderable: Vec<HatchModel> = hatches
                     .iter()
                     .filter(|hatch| hatch.boundary.len() >= 3)
-                    .map(|hatch| TextureHatch::new(device, queue, hatch, &self.bind_group_layout))
+                    .cloned()
                     .collect();
+                *resident = TextureHatch::from_models(
+                    device,
+                    queue,
+                    &renderable,
+                    &self.bind_group_layout,
+                );
             }
         }
     }
@@ -195,11 +201,17 @@ impl HatchGpu {
                 *preview = StorageHatchBatch::build(device, &self.bind_group_layout, &renderable);
             }
             HatchBackend::Texture { preview, .. } => {
-                *preview = hatches
+                let renderable: Vec<HatchModel> = hatches
                     .iter()
                     .filter(|hatch| hatch.boundary.len() >= 3)
-                    .map(|hatch| TextureHatch::new(device, queue, hatch, &self.bind_group_layout))
+                    .cloned()
                     .collect();
+                *preview = TextureHatch::from_models(
+                    device,
+                    queue,
+                    &renderable,
+                    &self.bind_group_layout,
+                );
             }
         }
     }
@@ -218,11 +230,21 @@ impl HatchGpu {
         else {
             return 0;
         };
+        for index in 0..batch.unique_source_count {
+            batch.source_visibility[index] = u32::from(is_visible(batch.source_aabbs[index]));
+        }
+        for index in batch.unique_source_count..batch.source_visibility.len() {
+            batch.source_visibility[index] = 1;
+        }
         for (index, aabb) in batch.instance_aabbs.iter().copied().enumerate() {
-            batch.visibility[index] = u32::from(is_visible(aabb));
+            batch.placements[index].visible = if index == 0 && batch.unique_source_count > 0 {
+                1
+            } else {
+                u32::from(is_visible(aabb))
+            };
         }
         batch.upload_visibility(queue);
-        batch.instance_aabbs.len()
+        batch.instance_aabbs.len() + batch.unique_source_count
     }
 
     pub fn draw<'pass>(
@@ -239,14 +261,18 @@ impl HatchGpu {
                 for batch in [resident.as_ref(), preview.as_ref()].into_iter().flatten() {
                     pass.set_bind_group(1, &batch.bind_group, &[]);
                     pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
-                    pass.draw(0..batch.vertex_count, 0..1);
+                    pass.set_vertex_buffer(1, batch.placement_buffer.slice(..));
+                    for (vertices, instances) in &batch.draws {
+                        pass.draw(vertices.clone(), instances.clone());
+                    }
                 }
             }
             HatchBackend::Texture { resident, preview } => {
                 for hatch in resident.iter().chain(preview) {
                     pass.set_bind_group(1, &hatch.bind_group, &[]);
                     pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
-                    pass.draw(0..6, 0..1);
+                    pass.set_vertex_buffer(1, hatch.placement_buffer.slice(..));
+                    pass.draw(0..6, 0..hatch.instance_count);
                 }
             }
         }

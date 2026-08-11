@@ -97,6 +97,10 @@ struct LineFamily {
 struct VIn {
     @location(0) local_xy:       vec2<f32>,
     @location(1) instance_index: u32,
+    @location(2) translation: vec2<f32>,
+    @location(3) translation_low: vec2<f32>,
+    @location(4) draw_depth: f32,
+    @location(5) visible: u32,
 }
 
 struct VOut {
@@ -114,7 +118,7 @@ struct VOut {
     // frustum-culls the primitive and no fragment runs. (WGSL
     // forbids literal NaN so this out-of-NDC trick replaces the
     // usual NaN-degenerate-triangle.)
-    if visibility[v.instance_index] == 0u {
+    if visibility[v.instance_index] == 0u || v.visible == 0u {
         o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         o.xz = vec2<f32>(0.0, 0.0);
         o.instance_index = v.instance_index;
@@ -126,14 +130,15 @@ struct VOut {
     // against eye_high (Sterbenz); local + anchor low + (−eye_low) carry the
     // residual. `local` is small (boundary-relative), so adding it in the low
     // term keeps full precision at UTM-scale anchors.
-    let hi = vec3<f32>(inst.world_origin.x - u.eye_high.x,
-                       inst.world_origin.y - u.eye_high.y,
+    let hi = vec3<f32>(inst.world_origin.x + v.translation.x - u.eye_high.x,
+                       inst.world_origin.y + v.translation.y - u.eye_high.y,
                        -u.eye_high.z);
-    let lo = vec3<f32>(local.x + inst.world_origin_low.x - u.eye_low.x,
-                       local.y + inst.world_origin_low.y - u.eye_low.y,
+    let lo = vec3<f32>(local.x + inst.world_origin_low.x + v.translation_low.x - u.eye_low.x,
+                       local.y + inst.world_origin_low.y + v.translation_low.y - u.eye_low.y,
                        -u.eye_low.z);
     o.clip = u.view_rot * vec4<f32>(hi + lo, 1.0);
-    o.clip.z = o.clip.z - inst.draw_depth * DRAW_ORDER_BIAS * o.clip.w;
+    o.clip.z = o.clip.z
+        - (inst.draw_depth + v.draw_depth) * DRAW_ORDER_BIAS * o.clip.w;
     o.xz = local;
     o.instance_index = v.instance_index;
     return o;

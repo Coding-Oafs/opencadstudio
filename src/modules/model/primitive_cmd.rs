@@ -516,6 +516,7 @@ fn wire(name: &str, points: Vec<[f32; 3]>) -> WireModel {
         depth_override: None,
         fill_is_3d: false,
         fill_is_2d_solid: false,
+        render_instance: None,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,

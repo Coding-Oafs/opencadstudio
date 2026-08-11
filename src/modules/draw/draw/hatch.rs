@@ -235,6 +235,7 @@ impl HatchCommand {
                 }]
             });
         HatchModel {
+            render_instance: None,
             boundary: std::sync::Arc::new(rel),
             pattern: HatchPattern::Pattern(families),
             name: pat_name.into(),
@@ -399,6 +400,7 @@ impl GradientCommand {
     fn make_hatch(&self, rings: Vec<Vec<[f64; 2]>>) -> HatchModel {
         let (rel, origin, wcs) = pack_rings(&rings);
         HatchModel {
+            render_instance: None,
             boundary: std::sync::Arc::new(rel),
             pattern: HatchPattern::Gradient {
                 angle_deg: 0.0,
@@ -614,6 +616,7 @@ impl CadCommand for BoundaryCommand {
                 // Store as a Hatch entity (solid fill) so it is selectable.
                 let (rel, origin, wcs) = pack_rings(&rings);
                 let model = HatchModel {
+                    render_instance: None,
                     boundary: std::sync::Arc::new(rel),
                     pattern: HatchPattern::Solid,
                     name: "SOLID".into(),

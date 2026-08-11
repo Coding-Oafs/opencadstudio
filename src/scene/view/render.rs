@@ -389,6 +389,7 @@ impl shader::Primitive for Primitive {
                 inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.mesh_lod_key = (usize::MAX, u64::MAX, 0, 0);
+                inner.silhouette_key = (usize::MAX, u64::MAX, u64::MAX, false);
                 inner.render_sig = u64::MAX;
             }
             // The MSAA / depth / resolve textures are always sized to the
@@ -463,9 +464,13 @@ impl shader::Primitive for Primitive {
                 continue;
             }
             let Some(vp_wires) = vp.wires.upgrade() else {
+                inner.render_sig = u64::MAX;
+                inner.skip_geometry = true;
                 continue;
             };
             let Some(draw_depths) = vp.draw_depths.upgrade() else {
+                inner.render_sig = u64::MAX;
+                inner.skip_geometry = true;
                 continue;
             };
             // Third component is the *selected-set* signature (not
@@ -531,8 +536,15 @@ impl shader::Primitive for Primitive {
                 .cached_text_source
                 .as_ref()
                 .map_or(true, |source| !Arc::ptr_eq(source, &vp.text_verts))
+                || vp.wire_content_id != inner.cached_wire_id
             {
-                inner.upload_text(device, queue, &vp.text_verts[..]);
+                inner.upload_text(
+                    device,
+                    queue,
+                    &vp.text_verts[..],
+                    &vp_wires[..],
+                    &draw_depths,
+                );
                 inner.cached_text_source = Some(Arc::clone(&vp.text_verts));
             }
             inner.cached_fill_mode = fill_mode;
@@ -607,7 +619,8 @@ impl shader::Primitive for Primitive {
                     && (inner.wire_const_bgl.is_some()
                         || ((vp.wire_patch.is_some()
                             || inner.wire_arena_id != u64::MAX)
-                            && packed_arena_owner));
+                            && packed_arena_owner))
+                    && !vp_wires.iter().any(|wire| wire.render_instance.is_some());
                 if use_wire_arena {
                     use crate::scene::pipeline::wire_arena::{
                         self, PersistentWireArena as WireArena,
@@ -824,6 +837,7 @@ impl shader::Primitive for Primitive {
                             gpus.extend(arena.wire_gpus());
                         }
                         inner.gpu_wires = std::sync::Arc::new(gpus);
+                        inner.gpu_block_wires = std::sync::Arc::new(Vec::new());
                         if _patched {
                             wire_arena::patch_handle_index(
                                 &mut inner.wire_handle_index,
@@ -881,17 +895,26 @@ impl shader::Primitive for Primitive {
                             if pipeline.wire_buffer_cache.len() > 16 {
                                 pipeline
                                     .wire_buffer_cache
-                                    .retain(|_, (w, _)| std::sync::Arc::strong_count(w) > 1);
+                                    .retain(|_, (w, b, _)| {
+                                        std::sync::Arc::strong_count(w) > 1
+                                            || std::sync::Arc::strong_count(b) > 1
+                                    });
                             }
                             entry
                         }
                     };
                     inner.gpu_wires = built.0;
-                    inner.wire_handle_index = built.1;
+                    inner.gpu_block_wires = built.1;
+                    inner.wire_handle_index = built.2;
                 } // end !arena_served
                 inner.cached_wire_id = vp.wire_content_id;
                 if _perf {
                     let gi: u32 = inner.gpu_wires.iter().map(|w| w.instance_count).sum();
+                    let bi: u32 = inner
+                        .gpu_block_wires
+                        .iter()
+                        .map(|w| w.instance_count)
+                        .sum();
                     let outcome = if !arena_served {
                         "shared-fullupload"
                     } else if _patched {
@@ -902,11 +925,12 @@ impl shader::Primitive for Primitive {
                         "arena-build"
                     };
                     crate::perf_record!(
-                        "[perf] wire {:>7.1}ms  {:<18} wires={} gpu_instances={}",
+                        "[perf] wire {:>7.1}ms  {:<18} wires={} gpu_instances={} block_instances={}",
                         _t0.elapsed().as_secs_f64() * 1000.0,
                         outcome,
                         vp_wires.len(),
                         gi,
+                        bi,
                     );
                 }
             }
@@ -953,6 +977,7 @@ impl shader::Primitive for Primitive {
                     &vp.selected_handles,
                     &vp.hover_handles,
                     &vp.annotation_context_wires,
+                    &draw_depths,
                 );
                 inner.cached_annotation_highlight_source =
                     Some(Arc::clone(&vp.annotation_context_wires));
@@ -1007,13 +1032,21 @@ impl shader::Primitive for Primitive {
                 vp.uniforms.eye_high[1] as f64 + vp.uniforms.eye_low[1] as f64,
                 vp.uniforms.eye_high[2] as f64 + vp.uniforms.eye_low[2] as f64,
             );
-            // Rebuild view-dependent silhouettes each frame when requested by
-            // DISPSILH or by a visual style such as HiddenLine. Only modes that
-            // draw edges consume them — pure shaded hides them.
-            if vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges) {
-                inner.upload_silhouettes(device, &vp.meshes[..], vp.view_dir);
-            } else {
-                inner.upload_silhouettes(device, &[], vp.view_dir);
+            let silhouette_enabled =
+                vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges);
+            let silhouette_key = (
+                Arc::as_ptr(&vp.meshes) as usize,
+                vp.wire_content_id,
+                vp.camera_generation,
+                silhouette_enabled,
+            );
+            if inner.silhouette_key != silhouette_key {
+                inner.upload_silhouettes(
+                    device,
+                    if silhouette_enabled { &vp.meshes[..] } else { &[] },
+                    vp.view_dir,
+                );
+                inner.silhouette_key = silhouette_key;
             }
             inner.upload_clip_boundary(device, &vp.clip_boundary_ndc);
             let hatch_lod_key = (
@@ -2832,6 +2865,9 @@ impl Scene {
         }
         let mut out: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
         for w in wires {
+            if w.render_instance.is_some() {
+                continue;
+            }
             if !w.text_verts.is_empty() {
                 // Bake the host wire's draw-order depth into its glyphs so
                 // text layers like the rest of the entity: its own background

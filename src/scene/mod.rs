@@ -1224,25 +1224,6 @@ fn transform_block_mesh_lod_set(
     use acadrust::types::Vector3;
     let mut out = set.clone();
     out.instance_transform = Some(*xform);
-    let origin = xform.apply(Vector3::ZERO);
-    let vectors = [
-        xform.apply_rotation(Vector3::UNIT_X),
-        xform.apply_rotation(Vector3::UNIT_Y),
-        xform.apply_rotation(Vector3::UNIT_Z),
-    ];
-    out.curved_gens.retain_mut(|generator| {
-        let transformed = cadkernel::brep::mesh::transform_silhouette_affine(
-            &generator.source,
-            vectors.map(|vector| [vector.x, vector.y, vector.z]),
-            [origin.x, origin.y, origin.z],
-        );
-        if let Some(source) = transformed {
-            generator.source = source;
-            true
-        } else {
-            false
-        }
-    });
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -3214,6 +3195,7 @@ impl Scene {
         let ((x0, y0), (x1, y1)) = self.paper_limits()?;
         let (x0, y0, x1, y1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
         Some(HatchModel {
+            render_instance: None,
             world_origin: [0.0, 0.0],
             boundary: Arc::new(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]),
             boundary_wcs: None,
@@ -5841,6 +5823,7 @@ impl Scene {
         )
         .with_viewport(viewport);
         let mut models = Vec::new();
+        let mut image_sources = rustc_hash::FxHashMap::default();
         let root = if self.block_edit_block.is_none() {
             viewport.map(|viewport| render_graph::SceneRoot::Viewport {
                 paper_block: self.current_layout_block_handle(),
@@ -5898,6 +5881,21 @@ impl Scene {
                             (point.z - vertex.pos[2] as f64) as f32,
                         ];
                     }
+                    let matrix = &context.transform.matrix.m;
+                    let linear = [
+                        matrix[0][0].to_bits(), matrix[0][1].to_bits(), matrix[0][2].to_bits(),
+                        matrix[1][0].to_bits(), matrix[1][1].to_bits(), matrix[1][2].to_bits(),
+                        matrix[2][0].to_bits(), matrix[2][1].to_bits(), matrix[2][2].to_bits(),
+                    ];
+                    let source_id = *image_sources
+                        .entry((handle.value(), linear))
+                        .or_insert_with(crate::scene::model::instance_model::next_source_id);
+                    placed.render_instance = Some(
+                        crate::scene::model::instance_model::RenderInstance {
+                            source_id,
+                            translation: [matrix[0][3], matrix[1][3], matrix[2][3]],
+                        },
+                    );
                 }
                 placed.draw_depth = context.draw_depth(handle, depth_map.as_ref());
                 models.push(placed);

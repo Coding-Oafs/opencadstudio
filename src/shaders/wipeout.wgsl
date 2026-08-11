@@ -89,7 +89,12 @@ struct FamilyBatch {
 
 // ── Vertex shader ──────────────────────────────────────────────────────────
 
-struct VIn  { @location(0) pos: vec3<f32> }
+struct VIn  {
+    @location(0) pos: vec3<f32>,
+    @location(1) translation: vec2<f32>,
+    @location(2) translation_low: vec2<f32>,
+    @location(3) draw_depth: f32,
+}
 struct VOut {
     @builtin(position) clip: vec4<f32>,
     @location(0)       xz:   vec2<f32>,
@@ -107,17 +112,17 @@ struct VOut {
     // pattern math doesn't catastrophically cancel.
     // Double-single relative-to-eye: anchor high cancels eye_high (Sterbenz);
     // boundary-local v.pos + anchor low + (−eye_low) carry the residual.
-    let hi = vec3<f32>(h.origin.x - u.eye_high.x,
-                       h.origin.y - u.eye_high.y,
+    let hi = vec3<f32>(h.origin.x + v.translation.x - u.eye_high.x,
+                       h.origin.y + v.translation.y - u.eye_high.y,
                        -u.eye_high.z);
-    let lo = vec3<f32>(v.pos.x + h.origin_low.x - u.eye_low.x,
-                       v.pos.y + h.origin_low.y - u.eye_low.y,
+    let lo = vec3<f32>(v.pos.x + h.origin_low.x + v.translation_low.x - u.eye_low.x,
+                       v.pos.y + h.origin_low.y + v.translation_low.y - u.eye_low.y,
                        v.pos.z - u.eye_low.z);
     o.clip = u.view_rot * vec4<f32>(hi + lo, 1.0);
     // Draw-order bias (see wire.wgsl): the mask erases what draws BELOW its
     // entity and loses to what draws above — including its own frame wire,
     // which rides a +half-rank override.
-    o.clip.z = o.clip.z - h.draw_depth * 0.001 * o.clip.w;
+    o.clip.z = o.clip.z - (h.draw_depth + v.draw_depth) * 0.001 * o.clip.w;
     o.xz   = vec2<f32>(v.pos.x, v.pos.y);
     return o;
 }

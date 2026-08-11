@@ -121,6 +121,7 @@ impl canvas::Program<Message> for HatchPatternPreview {
             }
             HatchPattern::Pattern(_) => {
                 let model = HatchModel {
+                    render_instance: None,
                     world_origin: [0.0, 0.0],
                     boundary: Arc::new(vec![
                         [pad, pad],

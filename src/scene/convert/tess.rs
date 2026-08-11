@@ -713,6 +713,7 @@ pub(crate) fn tessellate_entity(
             depth_override: None,
             fill_is_3d: false,
             fill_is_2d_solid: false,
+            render_instance: None,
             pick_tris,
             pick_tris_low,
             dash_from_start: false,
@@ -1071,6 +1072,7 @@ pub(crate) fn tessellate_entity(
             depth_override: None,
             fill_is_3d: false,
             fill_is_2d_solid: false,
+            render_instance: None,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1143,6 +1145,16 @@ pub(crate) fn tessellate_entity(
             let polygon =
                 pick::xclip::world_clip_polygon_for_transform(filter, &transform);
             pick::xclip::clip_wires(&mut wires, &polygon);
+            for wire in &mut wires {
+                if let Some(mut instance) = wire.render_instance {
+                    instance.source_id = cache.clip_source_id(
+                        instance.source_id,
+                        &polygon,
+                        instance.translation,
+                    );
+                    wire.render_instance = Some(instance);
+                }
+            }
             if document.header.xclip_frame != 0 && polygon.len() >= 3 {
                 wires.push(pick::xclip::frame_wire(
                     &polygon,
@@ -1434,6 +1446,7 @@ fn lod_stub_wire(
         depth_override: None,
         fill_is_3d: false,
         fill_is_2d_solid: false,
+        render_instance: None,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
         dash_from_start: false,
@@ -1524,6 +1537,7 @@ fn lod_stub_wire_3d(
         depth_override: None,
         fill_is_3d: false,
         fill_is_2d_solid: false,
+        render_instance: None,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
         dash_from_start: false,

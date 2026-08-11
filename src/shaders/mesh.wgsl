@@ -77,6 +77,17 @@ struct MaterialMaps {
 @group(1) @binding(13) var normal_sampler: sampler;
 @group(1) @binding(14) var<uniform> maps: MaterialMaps;
 
+struct MeshSurface {
+    face_color: vec4<f32>,
+    material:   vec4<f32>,
+    specular:   vec4<f32>,
+    ambient:    vec4<f32>,
+    advanced:   vec4<f32>,
+    flags:      vec4<u32>,
+};
+
+@group(1) @binding(16) var<uniform> surface: MeshSurface;
+
 struct MeshInstance {
     model_row_0:     vec4<f32>,
     model_row_1:     vec4<f32>,
@@ -93,19 +104,8 @@ var<storage, read> mesh_instances: array<MeshInstance>;
 struct VertexIn {
     @location(0) position:     vec3<f32>,
     @location(1) normal:       vec3<f32>,
-    @location(2) color:        vec4<f32>,
     @location(3) position_low: vec3<f32>,
-    // gloss, reflectivity, self illumination, luminance
-    @location(4) material:     vec4<f32>,
-    // specular RGB, refraction index
-    @location(5) specular:     vec4<f32>,
     @location(6) uv_diffuse:   vec2<f32>,
-    // ambient RGB, translucence
-    @location(7) ambient:      vec4<f32>,
-    // normal strength, bump scale, reflectance scale, transmittance scale
-    @location(8) advanced:     vec4<f32>,
-    // illumination model, channel flags, material mode, luminance mode
-    @location(9) flags:        vec4<u32>,
     @location(10) uv_specular_reflection: vec4<f32>,
     @location(11) uv_opacity_bump:        vec4<f32>,
     @location(12) uv_refraction_normal:   vec4<f32>,
@@ -113,21 +113,15 @@ struct VertexIn {
 
 struct VertexOut {
     @builtin(position) clip_pos:  vec4<f32>,
-    @location(0)       color:     vec4<f32>,
-    @location(1)       normal:    vec3<f32>,
-    @location(2)       world_pos: vec3<f32>,
-    @location(3)       material:  vec4<f32>,
-    @location(4)       specular:  vec4<f32>,
-    @location(5)       uv_diffuse: vec2<f32>,
-    @location(6)       ambient:   vec4<f32>,
-    @location(7)       advanced:  vec4<f32>,
-    @location(8) @interpolate(flat) flags: vec4<u32>,
-    @location(9)       uv_specular:   vec2<f32>,
-    @location(10)      uv_reflection: vec2<f32>,
-    @location(11)      uv_opacity:    vec2<f32>,
-    @location(12)      uv_bump:       vec2<f32>,
-    @location(13)      uv_refraction: vec2<f32>,
-    @location(14)      uv_normal:     vec2<f32>,
+    @location(0)       normal:    vec3<f32>,
+    @location(1)       world_pos: vec3<f32>,
+    @location(2)       uv_diffuse: vec2<f32>,
+    @location(3)       uv_specular:   vec2<f32>,
+    @location(4)       uv_reflection: vec2<f32>,
+    @location(5)       uv_opacity:    vec2<f32>,
+    @location(6)       uv_bump:       vec2<f32>,
+    @location(7)       uv_refraction: vec2<f32>,
+    @location(8)       uv_normal:     vec2<f32>,
 };
 
 struct EdgeVertexIn {
@@ -168,19 +162,13 @@ fn vs_main(
     let instance = mesh_instances[instance_index];
     let rel = relative_position(v.position, v.position_low, instance);
     out.clip_pos  = u.view_rot * vec4<f32>(rel, 1.0);
-    out.color     = v.color;
     out.normal    = normalize(vec3<f32>(
         dot(instance.normal_row_0.xyz, v.normal),
         dot(instance.normal_row_1.xyz, v.normal),
         dot(instance.normal_row_2.xyz, v.normal),
     ));
     out.world_pos = rel;
-    out.material  = v.material;
-    out.specular  = v.specular;
     out.uv_diffuse = v.uv_diffuse;
-    out.ambient   = v.ambient;
-    out.advanced  = v.advanced;
-    out.flags     = v.flags;
     out.uv_specular = v.uv_specular_reflection.xy;
     out.uv_reflection = v.uv_specular_reflection.zw;
     out.uv_opacity = v.uv_opacity_bump.xy;
@@ -305,7 +293,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         );
         let strength = maps.blends1.z
             * map_weight(in.uv_normal, maps.tiling1.z)
-            * max(in.advanced.x, 0.0);
+            * max(surface.advanced.x, 0.0);
         n = normalize(mix(n, mapped, clamp(strength, 0.0, 1.0)));
     } else if (maps.present1.x != 0u) {
         let height = dot(
@@ -321,7 +309,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         );
     }
 
-    var albedo = in.color.rgb;
+    var albedo = surface.face_color.rgb;
     if (maps.present0.x != 0u) {
         let texel = textureSample(diffuse_map, diffuse_sampler, in.uv_diffuse).rgb;
         let blend = clamp(
@@ -348,7 +336,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
     }
 
-    var specular_color = select(in.specular.rgb, albedo, in.flags.x == 1u);
+    var specular_color = select(surface.specular.rgb, albedo, surface.flags.x == 1u);
     if (maps.present0.y != 0u) {
         let texel = textureSample(specular_map, specular_sampler, in.uv_specular).rgb;
         let blend = clamp(
@@ -359,14 +347,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         specular_color = mix(specular_color, texel, blend);
     }
     let view = normalize(-in.world_pos);
-    let gloss_exp = mix(2.0, 128.0, clamp(in.material.x, 0.0, 1.0));
+    let gloss_exp = mix(2.0, 128.0, clamp(surface.material.x, 0.0, 1.0));
     let fresnel0 = pow(
-        (max(in.specular.w, 1.0) - 1.0) / (max(in.specular.w, 1.0) + 1.0),
+        (max(surface.specular.w, 1.0) - 1.0) / (max(surface.specular.w, 1.0) + 1.0),
         2.0,
     );
     let fresnel = fresnel0
         + (1.0 - fresnel0) * pow(1.0 - abs(dot(n, view)), 5.0);
-    let specular_strength = clamp(1.0 + in.material.y + fresnel, 0.0, 1.5);
+    let specular_strength = clamp(1.0 + surface.material.y + fresnel, 0.0, 1.5);
     let viewport_highlight = select(
         1.0,
         max(u.visual_style.z, 0.0),
@@ -441,10 +429,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             * pow(half_response, gloss_exp)
             * specular_strength
             * viewport_highlight
-            * max(in.advanced.z, 0.0)
+            * max(surface.advanced.z, 0.0)
             * strength;
     }
-    let ambient_light = clamp(in.ambient.rgb, vec3<f32>(0.0), vec3<f32>(1.0))
+    let ambient_light = clamp(surface.ambient.rgb, vec3<f32>(0.0), vec3<f32>(1.0))
         * clamp(u.lighting.yzw, vec3<f32>(0.0), vec3<f32>(1.0));
     var lit = ambient_light
         + albedo * clamp(direct_light, vec3<f32>(0.0), vec3<f32>(2.0))
@@ -473,7 +461,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             * specular_color
             * specular_strength
             * viewport_highlight
-            * max(in.advanced.z, 0.0)
+            * max(surface.advanced.z, 0.0)
             * max(u.environment_params.w, 0.0);
     }
     if (maps.present0.z != 0u) {
@@ -488,8 +476,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             clamp(
                 maps.blends0.z
                     * map_weight(in.uv_reflection, maps.tiling0.z)
-                    * in.material.y
-                    * max(in.advanced.z, 0.0),
+                    * surface.material.y
+                    * max(surface.advanced.z, 0.0),
                 0.0,
                 1.0,
             ),
@@ -507,16 +495,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             clamp(
                 maps.blends1.y
                     * map_weight(in.uv_refraction, maps.tiling1.y)
-                    * in.ambient.a
-                    * max(in.advanced.w, 0.0),
+                    * surface.ambient.a
+                    * max(surface.advanced.w, 0.0),
                 0.0,
                 1.0,
             ),
         );
     }
-    var rgb = mix(lit, albedo, clamp(in.material.z, 0.0, 1.0));
-    if (in.flags.w == 1u) {
-        rgb = lit + albedo * max(in.material.w, 0.0);
+    var rgb = mix(lit, albedo, clamp(surface.material.z, 0.0, 1.0));
+    if (surface.flags.w == 1u) {
+        rgb = lit + albedo * max(surface.material.w, 0.0);
     }
     let contrast = 1.0 + clamp(u.view_tone.y, -1.0, 1.0);
     rgb = (rgb - vec3<f32>(0.5)) * contrast + vec3<f32>(0.5);
@@ -533,7 +521,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let fog_density = mix(u.fog_params.z, u.fog_params.w, fog_position);
         rgb = mix(rgb, u.fog_color.rgb, clamp(fog_density, 0.0, 1.0));
     }
-    var material_alpha = in.color.a;
+    var material_alpha = surface.face_color.a;
     if (maps.present0.w != 0u) {
         let opacity = textureSample(opacity_map, opacity_sampler, in.uv_opacity).r;
         let blend = clamp(
@@ -543,7 +531,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         );
         material_alpha *= mix(1.0, opacity, blend);
     }
-    material_alpha *= 1.0 - clamp(in.ambient.a * max(in.advanced.w, 0.0), 0.0, 0.95);
+    material_alpha *= 1.0 - clamp(surface.ambient.a * max(surface.advanced.w, 0.0), 0.0, 0.95);
     material_alpha *= clamp(u.visual_style.y, 0.0, 1.0);
     let alpha = select(1.0, material_alpha, u.transparency_enable > 0.5);
     return vec4<f32>(rgb, alpha);
@@ -553,7 +541,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 // wireframe and hidden-line edge passes so lines read at their true colour.
 @fragment
 fn fs_edge(in: EdgeVertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color.rgb, 1.0);
+    return vec4<f32>(surface.face_color.rgb, 1.0);
 }
 
 // Edge fragment for filled render modes: force black so edges frame the shaded
@@ -566,7 +554,7 @@ fn fs_edge_black(_in: EdgeVertexOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_highlight_selected(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(
-        mix(in.color.rgb, vec3<f32>(0.15, 0.55, 1.0), 0.60),
+        mix(surface.face_color.rgb, vec3<f32>(0.15, 0.55, 1.0), 0.60),
         0.90,
     );
 }
@@ -574,7 +562,7 @@ fn fs_highlight_selected(in: VertexOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_highlight_hover(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(
-        mix(in.color.rgb, vec3<f32>(0.95, 0.55, 0.10), 0.35),
+        mix(surface.face_color.rgb, vec3<f32>(0.95, 0.55, 0.10), 0.35),
         0.82,
     );
 }

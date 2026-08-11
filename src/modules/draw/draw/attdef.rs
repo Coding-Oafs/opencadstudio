@@ -206,6 +206,7 @@ impl CadCommand for AttdefCommand {
             depth_override: None,
             fill_is_3d: false,
             fill_is_2d_solid: false,
+            render_instance: None,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,

@@ -1099,6 +1099,7 @@ impl Scene {
         .with_viewport(viewport);
         let mut hatch_block_memo = std::collections::HashMap::new();
         let mut models = Vec::new();
+        let mut hatch_sources = rustc_hash::FxHashMap::default();
         graph.walk_root(
             self.render_scene_root(layout_block),
             |entity, context| {
@@ -1185,6 +1186,35 @@ impl Scene {
                 if tint_selected && self.selected.contains(&context.root_handle) {
                     model.color = [0.15, 0.55, 1.00, model.color[3]];
                 }
+                let matrix = &context.transform.matrix.m;
+                let linear = [
+                    matrix[0][0].to_bits(), matrix[0][1].to_bits(), matrix[0][2].to_bits(),
+                    matrix[1][0].to_bits(), matrix[1][1].to_bits(), matrix[1][2].to_bits(),
+                    matrix[2][0].to_bits(), matrix[2][1].to_bits(), matrix[2][2].to_bits(),
+                ];
+                let key = (
+                    source_hatch.common.handle.value(),
+                    linear,
+                    model
+                        .boundary
+                        .iter()
+                        .flat_map(|point| point.map(f32::to_bits))
+                        .collect::<Vec<_>>(),
+                    model.color.map(f32::to_bits),
+                    model.angle_offset.to_bits(),
+                    model.scale.to_bits(),
+                    model.line_weight_px.to_bits(),
+                    model.aci,
+                );
+                let source_id = *hatch_sources
+                    .entry(key)
+                    .or_insert_with(crate::scene::model::instance_model::next_source_id);
+                model.render_instance = Some(
+                    crate::scene::model::instance_model::RenderInstance {
+                        source_id,
+                        translation: [matrix[0][3], matrix[1][3], matrix[2][3]],
+                    },
+                );
                 models.push(model);
             },
         );
@@ -1233,6 +1263,7 @@ impl Scene {
             depth_map.as_ref(),
         );
         let mut models = Vec::new();
+        let mut wipeout_sources = rustc_hash::FxHashMap::default();
         graph.walk_root(
             self.render_scene_root(target_block),
             |entity, context| {
@@ -1279,7 +1310,34 @@ impl Scene {
                 } else {
                     bg_color
                 };
+                let render_instance = if context.is_instanced() {
+                    let matrix = &context.transform.matrix.m;
+                    let linear = [
+                        matrix[0][0].to_bits(), matrix[0][1].to_bits(), matrix[0][2].to_bits(),
+                        matrix[1][0].to_bits(), matrix[1][1].to_bits(), matrix[1][2].to_bits(),
+                        matrix[2][0].to_bits(), matrix[2][1].to_bits(), matrix[2][2].to_bits(),
+                    ];
+                    let key = (
+                        source.common.handle.value(),
+                        linear,
+                        boundary
+                            .iter()
+                            .flat_map(|point| point.map(f32::to_bits))
+                            .collect::<Vec<_>>(),
+                        color.map(f32::to_bits),
+                    );
+                    let source_id = *wipeout_sources.entry(key).or_insert_with(
+                        crate::scene::model::instance_model::next_source_id,
+                    );
+                    Some(crate::scene::model::instance_model::RenderInstance {
+                        source_id,
+                        translation: [matrix[0][3], matrix[1][3], matrix[2][3]],
+                    })
+                } else {
+                    None
+                };
                 models.push(HatchModel {
+                    render_instance,
                     boundary: Arc::new(boundary),
                     boundary_wcs: None,
                     pattern: model::hatch_model::HatchPattern::Solid,
@@ -1622,6 +1680,7 @@ impl Scene {
             .collect();
 
         Some(HatchModel {
+            render_instance: None,
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
             pattern,
@@ -1926,6 +1985,7 @@ impl Scene {
             })
             .collect();
         HatchModel {
+            render_instance: None,
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
             pattern: model::hatch_model::HatchPattern::Solid,

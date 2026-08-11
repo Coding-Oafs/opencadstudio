@@ -46,6 +46,30 @@ impl ImageVertex {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ImageInstance {
+    pub translation: [f32; 3],
+    pub translation_low: [f32; 3],
+    pub draw_depth: f32,
+    pub _pad: [f32; 3],
+}
+
+impl ImageInstance {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(ImageInstance, translation) as u64, shader_location: 3, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(ImageInstance, translation_low) as u64, shader_location: 4, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(ImageInstance, draw_depth) as u64, shader_location: 5, format: wgpu::VertexFormat::Float32 },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRS,
+        }
+    }
+}
+
 // ── Uniform ───────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -62,9 +86,11 @@ struct ImageParams {
 
 pub struct ImageGpu {
     pub vertex_buffer: wgpu::Buffer,
+    pub instance_buffer: wgpu::Buffer,
     /// Number of triangle vertices in `vertex_buffer` — 6 for a plain quad, or
     /// more when the raster is clipped to a triangulated polygon.
     pub vertex_count: u32,
+    pub instance_count: u32,
     pub bind_group: wgpu::BindGroup,
     _texture: wgpu::Texture,
     _sampler: wgpu::Sampler,
@@ -72,12 +98,39 @@ pub struct ImageGpu {
 }
 
 impl ImageGpu {
-    pub fn new(
+    pub fn from_models(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        model: &ImageModel,
+        models: &[ImageModel],
+        bgl1: &wgpu::BindGroupLayout,
+    ) -> Vec<Self> {
+        let mut slots = rustc_hash::FxHashMap::default();
+        let mut groups: Vec<Vec<&ImageModel>> = Vec::new();
+        for (index, model) in models.iter().enumerate() {
+            let key = model
+                .render_instance
+                .map(|instance| (true, instance.source_id))
+                .unwrap_or((false, index as u64));
+            let slot = *slots.entry(key).or_insert_with(|| {
+                let slot = groups.len();
+                groups.push(Vec::new());
+                slot
+            });
+            groups[slot].push(model);
+        }
+        groups
+            .into_iter()
+            .filter_map(|group| Self::new(device, queue, &group, bgl1))
+            .collect()
+    }
+
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        models: &[&ImageModel],
         bgl1: &wgpu::BindGroupLayout,
     ) -> Option<Self> {
+        let &model = models.first()?;
         if model.pixels.is_empty() || model.width == 0 || model.height == 0 {
             return None;
         }
@@ -129,7 +182,7 @@ impl ImageGpu {
         // ── Opacity uniform ───────────────────────────────────────────────
         let params = ImageParams {
             opacity: model.opacity.clamp(0.0, 1.0),
-            draw_depth: model.draw_depth,
+            draw_depth: 0.0,
             _pad: [0.0; 2],
         };
         let _params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -179,10 +232,44 @@ impl ImageGpu {
             contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        let base = model
+            .render_instance
+            .map_or([0.0; 3], |instance| instance.translation);
+        let instances: Vec<ImageInstance> = models
+            .iter()
+            .map(|model| {
+                let translation = model
+                    .render_instance
+                    .map_or([0.0; 3], |instance| instance.translation);
+                let delta = [
+                    translation[0] - base[0],
+                    translation[1] - base[1],
+                    translation[2] - base[2],
+                ];
+                let high = delta.map(|value| value as f32);
+                ImageInstance {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                        (delta[2] - high[2] as f64) as f32,
+                    ],
+                    draw_depth: model.draw_depth,
+                    _pad: [0.0; 3],
+                }
+            })
+            .collect();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("image.instances"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
         Some(Self {
             vertex_buffer,
+            instance_buffer,
             vertex_count,
+            instance_count: instances.len() as u32,
             bind_group,
             _texture: texture,
             _sampler,

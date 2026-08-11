@@ -3,6 +3,7 @@ pub mod gdi;
 pub mod hatch_model;
 pub mod hatch_patterns;
 pub mod image_model;
+pub mod instance_model;
 pub mod material_model;
 pub mod ole_pres;
 pub mod pdf_raster;

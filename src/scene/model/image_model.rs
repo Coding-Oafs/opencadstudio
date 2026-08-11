@@ -82,6 +82,7 @@ fn clip_triangles_px(img: &acadrust::entities::RasterImage) -> Vec<[f64; 2]> {
 
 #[derive(Clone, Debug)]
 pub struct ImageModel {
+    pub render_instance: Option<super::instance_model::RenderInstance>,
     /// Original file path (used for reload / display in properties).
     pub file_path: String,
     /// RGBA8 pixel data in row-major order. Arc-wrapped so cloning ImageModel
@@ -168,6 +169,7 @@ impl ImageModel {
 
         let decoded = resolve_image(&img.file_path)?;
         Some(Self {
+            render_instance: None,
             file_path: img.file_path.clone(),
             pixels: decoded.pixels,
             width: decoded.width,
@@ -278,6 +280,7 @@ impl ImageModel {
             .collect();
 
         Some(Self {
+            render_instance: None,
             file_path: def.file_path.clone(),
             pixels: raster.pixels.clone(),
             width: raster.width,
@@ -334,6 +337,7 @@ impl ImageModel {
         let corners_low = [l0, l1, l2, l3];
         let verts = quad_verts(&corners, &corners_low);
         Some(Self {
+            render_instance: None,
             file_path: "OLE2FRAME".to_string(),
             pixels: Arc::new(pixels),
             width,

@@ -39,6 +39,29 @@ pub(super) fn vertex_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct TextureHatchPlacement {
+    translation: [f32; 2],
+    translation_low: [f32; 2],
+    draw_depth: f32,
+    _pad: [f32; 3],
+}
+
+impl TextureHatchPlacement {
+    pub(super) fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 3, format: wgpu::VertexFormat::Float32 },
+            ],
+        }
+    }
+}
+
 // ── Per-hatch uniform (binding 0) — 96 bytes, matches HatchUniforms in
 //    hatch_texture.wgsl. ──────────────────────────────────────────────────────
 
@@ -67,6 +90,8 @@ struct TextureHatchUniform {
 
 pub(super) struct TextureHatch {
     pub(super) vertex_buffer: wgpu::Buffer,
+    pub(super) placement_buffer: wgpu::Buffer,
+    pub(super) instance_count: u32,
     pub(super) bind_group: wgpu::BindGroup,
     /// Reserved for per-frame AABB LOD (mirrors `WipeoutGpu`); not yet wired
     /// into the web hatch draw loop — the native batched path doesn't do
@@ -78,6 +103,32 @@ pub(super) struct TextureHatch {
 }
 
 impl TextureHatch {
+    pub(super) fn from_models(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        models: &[HatchModel],
+        bgl1: &wgpu::BindGroupLayout,
+    ) -> Vec<Self> {
+        let mut slots = rustc_hash::FxHashMap::default();
+        let mut groups: Vec<Vec<&HatchModel>> = Vec::new();
+        for (index, model) in models.iter().enumerate() {
+            let key = model
+                .render_instance
+                .map(|instance| (true, instance.source_id))
+                .unwrap_or((false, index as u64));
+            let slot = *slots.entry(key).or_insert_with(|| {
+                let slot = groups.len();
+                groups.push(Vec::new());
+                slot
+            });
+            groups[slot].push(model);
+        }
+        groups
+            .into_iter()
+            .map(|group| Self::new(device, queue, &group, bgl1))
+            .collect()
+    }
+
     /// Group-1 layout: uniform header (binding 0) + non-filterable float data
     /// texture (binding 1).
     pub(super) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -111,9 +162,10 @@ impl TextureHatch {
     pub(super) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        model: &HatchModel,
+        models: &[&HatchModel],
         bgl1: &wgpu::BindGroupLayout,
     ) -> Self {
+        let model = models[0];
         // ── Decode pattern mode (mirrors WipeoutGpu::new) ─────────────────
         // The gradient shape (kind + invert bit) rides in the mode's high
         // bits — the 96-byte uniform has no spare slot.
@@ -178,6 +230,33 @@ impl TextureHatch {
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.texture.vbuf"),
             contents: bytemuck::cast_slice(&quad),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let base = model
+            .render_instance
+            .map_or([0.0; 3], |instance| instance.translation);
+        let placements: Vec<TextureHatchPlacement> = models
+            .iter()
+            .map(|model| {
+                let translation = model
+                    .render_instance
+                    .map_or([0.0; 3], |instance| instance.translation);
+                let delta = [translation[0] - base[0], translation[1] - base[1]];
+                let high = [delta[0] as f32, delta[1] as f32];
+                TextureHatchPlacement {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                    ],
+                    draw_depth: model.draw_depth,
+                    _pad: [0.0; 3],
+                }
+            })
+            .collect();
+        let placement_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hatch.texture.placements"),
+            contents: bytemuck::cast_slice(&placements),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
@@ -356,6 +435,8 @@ impl TextureHatch {
 
         Self {
             vertex_buffer,
+            placement_buffer,
+            instance_count: placements.len() as u32,
             bind_group,
             world_aabb,
             _uniform_buf,
