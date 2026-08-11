@@ -1159,6 +1159,7 @@ pub enum CmdResult {
     CommitSolid {
         entity: EntityType,
         solid: Box<cadkernel::brep::Body>,
+        history: acadrust::objects::SolidHistoryOperation,
     },
     /// Commit an acadrust entity, end the command, and open the in-place text
     /// editor on it (used by MLEADER to type the annotation after placement).

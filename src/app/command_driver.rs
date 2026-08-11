@@ -1046,10 +1046,14 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
-            CmdResult::CommitSolid { entity, solid } => {
+            CmdResult::CommitSolid {
+                entity,
+                solid,
+                history,
+            } => {
                 let label = self.history_label_from_active_cmd(i, "SOLID");
                 let pending = self.begin_undo(i, label, 1, true);
-                self.add_solid_model(entity, *solid);
+                self.add_solid_model(entity, *solid, history);
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
@@ -2673,12 +2677,20 @@ impl OpenCADStudio {
                     let result = sweep_model::extruded(&entity, height as f64)
                         .and_then(|body| Some((solid_model::mesh_from_solid(&body, color)?, body)));
                     if let Some((mesh, solid)) = result {
+                        let history = crate::scene::model::solid_history::extrusion_op(
+                            &entity,
+                            height as f64,
+                        );
                         let pending = self.begin_undo(i, "EXTRUDE", 1, true);
                         let mut s3d = empty_solid3d();
                         if let acadrust::EntityType::Solid3D(inner) = &mut s3d {
                             inner.wires = solid_model::edge_wires(&solid);
                         }
                         let new_handle = self.tabs[i].scene.add_entity(s3d);
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .create_solid_history(new_handle, history);
                         self.tabs[i].scene.register_solid_model(new_handle, solid);
                         let _ = mesh;
                         self.tabs[i].dirty = true;
@@ -2726,12 +2738,22 @@ impl OpenCADStudio {
                     )
                     .and_then(|body| Some((solid_model::mesh_from_solid(&body, color)?, body)));
                     if let Some((mesh, solid)) = result {
+                        let history = crate::scene::model::solid_history::revolve_op(
+                            &entity,
+                            axis_start.to_array(),
+                            axis_end.to_array(),
+                            (angle_deg as f64).to_radians(),
+                        );
                         let pending = self.begin_undo(i, "REVOLVE", 1, true);
                         let mut s3d = empty_solid3d();
                         if let acadrust::EntityType::Solid3D(inner) = &mut s3d {
                             inner.wires = solid_model::edge_wires(&solid);
                         }
                         let new_handle = self.tabs[i].scene.add_entity(s3d);
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .create_solid_history(new_handle, history);
                         self.tabs[i].scene.register_solid_model(new_handle, solid);
                         let _ = mesh;
                         self.tabs[i].dirty = true;
@@ -2768,6 +2790,12 @@ impl OpenCADStudio {
                     .get_entity(profile_handle)
                     .cloned();
                 let path_ent = self.tabs[i].scene.document.get_entity(path_handle).cloned();
+                let history = profile_ent
+                    .as_ref()
+                    .zip(path_ent.as_ref())
+                    .map(|(profile, path)| {
+                        crate::scene::model::solid_history::sweep_op(profile, path)
+                    });
                 let result = profile_ent
                     .zip(path_ent)
                     .and_then(|(profile, path)| sweep_model::swept(&profile, &path, color));
@@ -2782,6 +2810,12 @@ impl OpenCADStudio {
                         );
                     }
                     let new_handle = self.tabs[i].scene.add_entity(entity);
+                    if let Some(history) = history {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .create_solid_history(new_handle, history);
+                    }
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());
                     }
@@ -2810,6 +2844,7 @@ impl OpenCADStudio {
                     .filter_map(|handle| self.tabs[i].scene.document.get_entity(*handle).cloned())
                     .collect();
                 if let Some(mut set) = sweep_model::lofted(&profiles, color) {
+                    let history = crate::scene::model::solid_history::loft_op(&profiles);
                     let pending = self.begin_undo(i, "LOFT", 1, true);
                     let mut entity = empty_solid3d();
                     if let acadrust::EntityType::Solid3D(solid) = &mut entity {
@@ -2819,6 +2854,10 @@ impl OpenCADStudio {
                         );
                     }
                     let new_handle = self.tabs[i].scene.add_entity(entity);
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .create_solid_history(new_handle, history);
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());
                     }

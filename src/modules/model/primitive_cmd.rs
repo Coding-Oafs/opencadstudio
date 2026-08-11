@@ -8,6 +8,7 @@
 // entity is committed, so the Design-group boolean tools can combine it.
 
 use acadrust::entities::Solid3D;
+use acadrust::objects::SolidHistoryOperation;
 use acadrust::{primitives, EntityType};
 use glam::DVec3;
 use crate::t;
@@ -119,10 +120,22 @@ impl PrimitiveCommand {
         preview
     }
 
+    fn history_transform(&self, origin: DVec3) -> [f64; 16] {
+        glam::DMat4::from_cols(
+            self.plane.x.extend(0.0),
+            self.plane.y.extend(0.0),
+            self.plane.z.extend(0.0),
+            self.plane.to_world(origin).extend(1.0),
+        )
+        .to_cols_array()
+    }
+
     /// Build both the acadrust `Solid3D` (ACIS, for persistence) and the
     /// kernel `Body` (rendering + booleans) from the footprint + `height`.
-    fn build(&self, height: f64) -> Option<(EntityType, Body)> {
-        let (doc, solid) = match self.shape {
+    fn build(&self, height: f64) -> Option<(EntityType, Body, SolidHistoryOperation)> {
+        use crate::scene::model::solid_history;
+
+        let (doc, solid, history) = match self.shape {
             Shape::Box | Shape::Wedge => {
                 let (a, b) = (self.pts[0], self.pts[1]);
                 let length = (b.x - a.x).abs();
@@ -131,6 +144,7 @@ impl PrimitiveCommand {
                     return None;
                 }
                 if self.shape == Shape::Box {
+                    let origin = DVec3::new(a.x.min(b.x), a.y.min(b.y), a.z);
                     let center = [
                         (a.x + b.x) / 2.0,
                         (a.y + b.y) / 2.0,
@@ -139,12 +153,24 @@ impl PrimitiveCommand {
                     (
                         primitives::build_box(center, length, width, height),
                         solid_model::box_solid(center, length, width, height),
+                        solid_history::box_op(
+                            self.history_transform(origin),
+                            length,
+                            width,
+                            height,
+                        ),
                     )
                 } else {
                     let origin = [a.x.min(b.x), a.y.min(b.y), a.z];
                     (
                         primitives::build_wedge(origin, length, width, height),
                         solid_model::wedge_solid(origin, length, width, height),
+                        solid_history::wedge_op(
+                            self.history_transform(DVec3::from_array(origin)),
+                            length,
+                            width,
+                            height,
+                        ),
                     )
                 }
             }
@@ -159,11 +185,21 @@ impl PrimitiveCommand {
                     (
                         primitives::build_cylinder(center, r, height),
                         solid_model::cylinder_solid(center, r, height),
+                        solid_history::cylinder_op(
+                            self.history_transform(c),
+                            r,
+                            height,
+                        ),
                     )
                 } else {
                     (
                         primitives::build_cone(center, r, height),
                         solid_model::cone_solid(center, r, height),
+                        solid_history::cone_op(
+                            self.history_transform(c),
+                            r,
+                            height,
+                        ),
                     )
                 }
             }
@@ -177,6 +213,7 @@ impl PrimitiveCommand {
                 (
                     primitives::build_sphere(center, r),
                     solid_model::sphere_solid(center, r),
+                    solid_history::sphere_op(self.history_transform(c), r),
                 )
             }
             Shape::Torus => {
@@ -190,6 +227,11 @@ impl PrimitiveCommand {
                 (
                     primitives::build_torus(center, major, minor),
                     solid_model::torus_solid(center, major, minor),
+                    solid_history::torus_op(
+                        self.history_transform(c),
+                        major,
+                        minor,
+                    ),
                 )
             }
         };
@@ -199,12 +241,12 @@ impl PrimitiveCommand {
         // Edge wires make the solid click-pickable and draw a wireframe over
         // the shaded mesh.
         s3d.wires = solid_model::edge_wires(&solid);
-        Some((EntityType::Solid3D(s3d), solid))
+        Some((EntityType::Solid3D(s3d), solid, history))
     }
 
     fn commit(&self, height: f64) -> CmdResult {
         match self.build(height) {
-            Some((entity, solid)) => {
+            Some((entity, solid, history)) => {
                 // Built upright in its own frame, then put on the working
                 // plane — the same move `place_entity` makes for the ACIS
                 // copy, so the two stay on top of each other.
@@ -223,6 +265,7 @@ impl PrimitiveCommand {
                     Some(placed) => CmdResult::CommitSolid {
                         entity: self.plane.place_entity(entity),
                         solid: Box::new(placed),
+                        history,
                     },
                     None => CmdResult::Cancel,
                 }

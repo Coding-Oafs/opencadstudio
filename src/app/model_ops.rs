@@ -7,23 +7,34 @@
 // cylinder afterwards, and saves as one.
 
 use acadrust::entities::Solid3D;
+use acadrust::objects::SolidHistoryOperation;
 use cadkernel::brep::Body;
 use acadrust::{EntityType, Handle};
 use iced::Task;
 
 use super::Message;
 use crate::modules::model::boolean_cmd::BoolOp;
+use crate::scene::model::solid_history;
 use crate::scene::model::solid_model::{self, Bool};
 
 impl super::OpenCADStudio {
     /// Commit a Model-tab solid: add its acadrust entity to the document, then
     /// register the B-rep (caches it for booleans + tessellates it into the
     /// shaded mesh pipeline). Returns the new entity handle.
-    pub(super) fn add_solid_model(&mut self, entity: EntityType, solid: Body) -> Handle {
+    pub(super) fn add_solid_model(
+        &mut self,
+        entity: EntityType,
+        solid: Body,
+        history: SolidHistoryOperation,
+    ) -> Handle {
         let i = self.active_tab;
         let Some(handle) = self.commit_entity_handle(entity) else {
             return Handle::NULL;
         };
+        self.tabs[i]
+            .scene
+            .document
+            .create_solid_history(handle, history);
         self.tabs[i].scene.register_solid_model(handle, solid);
         handle
     }
@@ -66,7 +77,8 @@ impl super::OpenCADStudio {
         // mesh + cached B-rep; its edge wires make it pickable.
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
-        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result);
+        let history = solid_history::brep_op(&result);
+        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -137,7 +149,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
-        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result);
+        let history = solid_history::brep_op(&result);
+        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -176,7 +189,8 @@ impl super::OpenCADStudio {
                 // Keep both originals; add the interference solid.
                 let mut s3d = Solid3D::new();
                 s3d.wires = solid_model::edge_wires(&result);
-                self.add_solid_model(EntityType::Solid3D(s3d), result);
+                let history = solid_history::brep_op(&result);
+                self.add_solid_model(EntityType::Solid3D(s3d), result, history);
                 self.tabs[i].dirty = true;
                 self.refresh_properties();
                 self.command_line
@@ -223,7 +237,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&rotated);
-        let handle = self.add_solid_model(EntityType::Solid3D(s3d), rotated);
+        let history = solid_history::brep_op(&rotated);
+        let handle = self.add_solid_model(EntityType::Solid3D(s3d), rotated, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -306,7 +321,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&[handle]);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
-        let h = self.add_solid_model(EntityType::Solid3D(s3d), result);
+        let history = solid_history::brep_op(&result);
+        let h = self.add_solid_model(EntityType::Solid3D(s3d), result, history);
         self.tabs[i].scene.deselect_all();
         if !h.is_null() {
             self.tabs[i].scene.select_entity(h, false);
@@ -351,7 +367,8 @@ impl super::OpenCADStudio {
         self.push_undo_snapshot(i, "3DMIRROR");
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&reflected);
-        let h = self.add_solid_model(EntityType::Solid3D(s3d), reflected);
+        let history = solid_history::brep_op(&reflected);
+        let h = self.add_solid_model(EntityType::Solid3D(s3d), reflected, history);
         self.tabs[i].scene.deselect_all();
         if !h.is_null() {
             self.tabs[i].scene.select_entity(h, false);
@@ -421,7 +438,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&aligned);
-        let h = self.add_solid_model(EntityType::Solid3D(s3d), aligned);
+        let history = solid_history::brep_op(&aligned);
+        let h = self.add_solid_model(EntityType::Solid3D(s3d), aligned, history);
         self.tabs[i].scene.deselect_all();
         if !h.is_null() {
             self.tabs[i].scene.select_entity(h, false);
@@ -514,7 +532,13 @@ impl super::OpenCADStudio {
         if let EntityType::Solid3D(inner) = &mut entity {
             inner.wires = solid_model::edge_wires(&solid);
         }
-        let handle = self.add_solid_model(entity, solid);
+        let history = solid_history::pyramid_op(
+            glam::DMat4::IDENTITY.to_cols_array(),
+            radius,
+            height,
+            n,
+        );
+        let handle = self.add_solid_model(entity, solid, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
