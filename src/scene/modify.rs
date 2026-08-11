@@ -625,6 +625,54 @@ impl Scene {
 
     // ── Grip editing ──────────────────────────────────────────────────────
 
+    pub fn rebuild_solid_history(
+        &mut self,
+        handle: Handle,
+        operation: acadrust::objects::SolidHistoryOperation,
+    ) -> bool {
+        let Ok(body) = cadkernel::acis::rebuild_body(&operation) else {
+            return false;
+        };
+        let Some(document) = crate::scene::convert::acis_export::planar_solid_to_sat(&body) else {
+            return false;
+        };
+        let wires = crate::scene::model::solid_model::edge_wires(&body);
+        if self
+            .document
+            .update_solid_history(handle, operation)
+            .is_none()
+        {
+            return false;
+        }
+        let Some(EntityType::Solid3D(entity)) = self.document.get_entity_mut(handle) else {
+            return false;
+        };
+        entity.set_sat_document(&document);
+        entity.wires = wires;
+        entity.silhouettes.clear();
+        self.register_solid_model(handle, body);
+        true
+    }
+
+    fn apply_solid_history_grip(
+        &mut self,
+        handle: Handle,
+        grip_id: usize,
+        apply: GripApply,
+    ) -> bool {
+        let Some(mut operation) = self.document.solid_history_operation(handle).cloned() else {
+            return false;
+        };
+        if !crate::scene::model::solid_history::apply_primitive_grip(
+            &mut operation,
+            grip_id,
+            apply,
+        ) {
+            return false;
+        }
+        self.rebuild_solid_history(handle, operation)
+    }
+
     pub(crate) fn translate_solid_geometry(&mut self, handle: Handle, delta: [f64; 3]) {
         if delta.iter().all(|value| value.abs() <= f64::EPSILON) {
             return;
@@ -681,6 +729,9 @@ impl Scene {
     pub fn apply_grip(&mut self, handle: Handle, grip_id: usize, apply: GripApply) {
         // Objects on a locked layer can't be grip-edited.
         if self.is_layer_locked(handle) {
+            return;
+        }
+        if self.apply_solid_history_grip(handle, grip_id, apply.clone()) {
             return;
         }
         // For Solid3D / Region / Body, record the old point_of_reference so we

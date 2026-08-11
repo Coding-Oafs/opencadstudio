@@ -1573,7 +1573,12 @@ impl OpenCADStudio {
                     entity,
                     annotation_scale_handle,
                 );
-                for mut grip in dispatch::grips(contextual.as_ref()) {
+                let mut entity_grips = dispatch::grips(contextual.as_ref());
+                entity_grips.extend(crate::scene::model::solid_history::primitive_grips(
+                    &self.tabs[i].scene.document,
+                    handle,
+                ));
+                for mut grip in entity_grips {
                     // Subtract in f64: at UTM magnitudes an f32 cast before
                     // the offset costs ~1 unit and draws the grip off the wire.
                     grip.world.x -= wo[0];

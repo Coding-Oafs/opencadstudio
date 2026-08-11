@@ -8,6 +8,198 @@ use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
 use cadkernel::brep::Body;
 
+use crate::scene::model::object::{GripApply, GripDef, GripShape};
+
+pub const GRIP_LENGTH: usize = 10_001;
+pub const GRIP_WIDTH: usize = 10_002;
+pub const GRIP_HEIGHT: usize = 10_003;
+pub const GRIP_RADIUS: usize = 10_004;
+pub const GRIP_MAJOR_RADIUS: usize = 10_005;
+pub const GRIP_MINOR_RADIUS: usize = 10_006;
+pub const GRIP_SIDES: usize = 10_007;
+
+fn matrix(transform: [f64; 16]) -> Option<glam::DMat4> {
+    let matrix = glam::DMat4::from_cols_array(&transform);
+    (matrix.is_finite() && matrix.determinant().abs() > 1e-12).then_some(matrix)
+}
+
+fn world_point(transform: [f64; 16], point: [f64; 3]) -> Option<glam::DVec3> {
+    Some(matrix(transform)?.transform_point3(glam::DVec3::from_array(point)))
+}
+
+fn local_point(transform: [f64; 16], point: glam::DVec3) -> Option<glam::DVec3> {
+    Some(matrix(transform)?.inverse().transform_point3(point))
+}
+
+fn grip(id: usize, world: glam::DVec3, shape: GripShape) -> GripDef {
+    GripDef {
+        id,
+        world,
+        is_midpoint: false,
+        shape,
+        dir: None,
+    }
+}
+
+pub fn primitive_grips(
+    document: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Vec<GripDef> {
+    let Some(operation) = document.solid_history_operation(handle) else {
+        return Vec::new();
+    };
+    let mut grips = Vec::new();
+    let mut add = |id, transform, point, shape| {
+        if let Some(world) = world_point(transform, point) {
+            grips.push(grip(id, world, shape));
+        }
+    };
+    match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => {
+            add(
+                GRIP_LENGTH,
+                value.base.transform,
+                [value.length, value.width * 0.5, 0.0],
+                GripShape::Square,
+            );
+            add(
+                GRIP_WIDTH,
+                value.base.transform,
+                [value.length * 0.5, value.width, 0.0],
+                GripShape::Square,
+            );
+            add(
+                GRIP_HEIGHT,
+                value.base.transform,
+                [value.length * 0.5, value.width * 0.5, value.height],
+                GripShape::Square,
+            );
+        }
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
+            add(
+                GRIP_RADIUS,
+                value.base.transform,
+                [value.major_radius, 0.0, value.height * 0.5],
+                GripShape::Square,
+            );
+            add(
+                GRIP_HEIGHT,
+                value.base.transform,
+                [0.0, 0.0, value.height],
+                GripShape::Square,
+            );
+        }
+        SolidHistoryOperation::Sphere(value) => add(
+            GRIP_RADIUS,
+            value.base.transform,
+            [value.radius, 0.0, 0.0],
+            GripShape::Square,
+        ),
+        SolidHistoryOperation::Torus(value) => {
+            add(
+                GRIP_MAJOR_RADIUS,
+                value.base.transform,
+                [value.major_radius, 0.0, 0.0],
+                GripShape::Square,
+            );
+            add(
+                GRIP_MINOR_RADIUS,
+                value.base.transform,
+                [value.major_radius + value.minor_radius, 0.0, 0.0],
+                GripShape::Square,
+            );
+        }
+        SolidHistoryOperation::Pyramid(value) => {
+            add(
+                GRIP_RADIUS,
+                value.base.transform,
+                [value.radius, 0.0, 0.0],
+                GripShape::Square,
+            );
+            add(
+                GRIP_HEIGHT,
+                value.base.transform,
+                [0.0, 0.0, value.height],
+                GripShape::Square,
+            );
+            let angle = (value.sides.clamp(3, 71) as f64 * 5.0).to_radians();
+            add(
+                GRIP_SIDES,
+                value.base.transform,
+                [value.radius * angle.cos(), value.radius * angle.sin(), 0.0],
+                GripShape::Triangle,
+            );
+        }
+        _ => {}
+    }
+    grips
+}
+
+pub fn apply_primitive_grip(
+    operation: &mut SolidHistoryOperation,
+    grip_id: usize,
+    apply: GripApply,
+) -> bool {
+    let GripApply::Absolute(world) = apply else {
+        return false;
+    };
+    let Some(transform) = operation.base().map(|base| base.transform) else {
+        return false;
+    };
+    let Some(local) = local_point(transform, world) else {
+        return false;
+    };
+    let positive = |value: f64| value.abs().max(1e-6);
+    match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => {
+            match grip_id {
+                GRIP_LENGTH => value.length = positive(local.x),
+                GRIP_WIDTH => value.width = positive(local.y),
+                GRIP_HEIGHT => value.height = positive(local.z),
+                _ => return false,
+            }
+        }
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
+            match grip_id {
+                GRIP_RADIUS => {
+                    let radius = local.x.hypot(local.y).max(1e-6);
+                    value.major_radius = radius;
+                    value.minor_radius = radius;
+                    value.x_radius = radius;
+                }
+                GRIP_HEIGHT => value.height = positive(local.z),
+                _ => return false,
+            }
+        }
+        SolidHistoryOperation::Sphere(value) if grip_id == GRIP_RADIUS => {
+            value.radius = local.length().max(1e-6);
+        }
+        SolidHistoryOperation::Torus(value) => match grip_id {
+            GRIP_MAJOR_RADIUS => {
+                value.major_radius = local.x.hypot(local.y).max(1e-6)
+            }
+            GRIP_MINOR_RADIUS => {
+                value.minor_radius = (local.x.hypot(local.y) - value.major_radius)
+                    .abs()
+                    .max(1e-6)
+            }
+            _ => return false,
+        },
+        SolidHistoryOperation::Pyramid(value) => match grip_id {
+            GRIP_RADIUS => value.radius = local.x.hypot(local.y).max(1e-6),
+            GRIP_HEIGHT => value.height = positive(local.z),
+            GRIP_SIDES => {
+                let angle = local.y.atan2(local.x).rem_euclid(std::f64::consts::TAU);
+                value.sides = (angle.to_degrees() / 5.0).round() as i32;
+                value.sides = value.sides.clamp(3, 71);
+            }
+            _ => return false,
+        },
+        _ => return false,
+    }
+    true
+}
+
 fn base(transform: [f64; 16]) -> SolidHistoryNodeBase {
     let mut base = SolidHistoryNodeBase::new(1);
     base.transform = transform;
