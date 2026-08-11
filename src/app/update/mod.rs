@@ -7247,21 +7247,9 @@ impl OpenCADStudio {
             Message::DimStyleDialogSetCurrent => {
                 // Staged: persists on Apply.
                 let i = self.active_tab;
-                let read_only = self.tabs[i]
-                    .scene
-                    .document
-                    .dim_styles
-                    .get(&self.dimstyle_selected)
-                    .is_some_and(|style| {
-                        style.xref_reference
-                            || style.xref_dependent
-                            || !style.xref_handle.is_null()
-                    });
-                if read_only {
-                    return Task::none();
-                }
+
                 self.tabs[i].scene.document.header.current_dimstyle_name =
-                    self.dimstyle_selected.clone();
+                    self.dimstyle_selected.clone(); 
                 self.sync_ribbon_styles();
                 self.command_line.push_output(crate::tf!(
                     "Current dim style set to '{}'.",
