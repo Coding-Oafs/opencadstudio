@@ -2673,30 +2673,28 @@ impl Scene {
         })
     }
 
-    /// Re-evaluate every cached mesh's color through `render_style` so a
-    /// Register a Model-tab solid: cache its B-rep (for boolean ops and the
-    /// exact-geometry save path) and tessellate it into the shaded mesh
-    /// pipeline under `handle`. The body is in the same offset-relative frame
-    /// the mesh pipeline uses, so the mesh is stored as-is (Model-tab geometry
-    /// is authored at world_offset 0).
+    /// Cache and display a Model-tab kernel solid.
     pub fn register_solid_model(&mut self, handle: Handle, solid: cadkernel::brep::Body) {
-        if let Some(center) = crate::scene::model::solid_model::centre(&solid) {
+        let color = self
+            .document
+            .get_entity(handle)
+            .map(|e| self.render_style(e).0)
+            .unwrap_or([0.8, 0.8, 0.85, 1.0]);
+        if let Some((mut set, wires, center)) =
+            crate::scene::model::solid_model::display_from_solid(&solid, color)
+        {
             if let Some(EntityType::Solid3D(entity)) = self.document.get_entity_mut(handle) {
                 entity.point_of_reference = acadrust::types::Vector3::new(
                     center[0], center[1], center[2],
                 );
+                entity.wires = wires;
+                entity.silhouettes.clear();
             }
-        }
-        let entity = self.document.get_entity(handle);
-        let color = entity
-            .map(|e| self.render_style(e).0)
-            .unwrap_or([0.8, 0.8, 0.85, 1.0]);
-        if let Some(mut set) = crate::scene::model::solid_model::mesh_from_solid(&solid, color) {
             let name = handle.value().to_string();
             for mesh in &mut set.lods {
                 mesh.name = name.clone();
             }
-            if let Some(entity) = entity {
+            if let Some(entity) = self.document.get_entity(handle) {
                 crate::scene::model::material_model::resolve_material_with_base(
                     &self.document,
                     entity,
@@ -2716,6 +2714,8 @@ impl Scene {
                 );
             }
             self.meshes.insert(handle, set);
+        } else {
+            self.meshes.remove(&handle);
         }
         self.solid_models.insert(handle, solid);
         // Only this solid's mesh changed — report just its handle so the mesh /

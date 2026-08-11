@@ -102,8 +102,7 @@ impl PrimitiveCommand {
     }
 
     fn cursor_height(&self, point: DVec3) -> f64 {
-        (self.plane.to_local(point) - self.pts[0])
-            .length()
+        (self.plane.to_local(point).z - self.pts[0].z)
             .max(1e-6)
     }
 
@@ -218,11 +217,15 @@ impl PrimitiveCommand {
             }
             Shape::Torus => {
                 let c = self.pts[0];
-                let major = (self.pts[1] - c).length();
-                let minor = (self.pts[2] - self.pts[1]).length();
-                if major < 1e-6 || minor < 1e-6 {
+                let first = (self.pts[1] - c).length();
+                let second = (self.pts[2] - c).length();
+                let outer = first.max(second);
+                let inner = first.min(second);
+                if inner < 1e-6 || outer - inner < 1e-6 {
                     return None;
                 }
+                let major = (outer + inner) * 0.5;
+                let minor = (outer - inner) * 0.5;
                 let center = [c.x, c.y, c.z];
                 (
                     primitives::build_torus(center, major, minor),
@@ -238,9 +241,6 @@ impl PrimitiveCommand {
         let solid = solid?;
         let mut s3d = Solid3D::new();
         s3d.set_sat_document(&doc);
-        // Edge wires make the solid click-pickable and draw a wireframe over
-        // the shaded mesh.
-        s3d.wires = solid_model::edge_wires(&solid);
         Some((EntityType::Solid3D(s3d), solid, history))
     }
 
@@ -280,6 +280,15 @@ impl CadCommand for PrimitiveCommand {
         self.plane = plane;
     }
 
+    fn cursor_axis(&self) -> Option<(DVec3, DVec3)> {
+        self.height_step.then(|| {
+            (
+                self.plane.to_world(self.pts[0]),
+                self.plane.z.normalize_or_zero(),
+            )
+        })
+    }
+
     fn name(&self) -> &'static str {
         self.shape.name()
     }
@@ -289,12 +298,18 @@ impl CadCommand for PrimitiveCommand {
         if self.height_step {
             return t!("%{n}  Specify height <Enter for default>:", n = n).into_owned();
         }
-        match (self.shape.radial(), self.pts.len()) {
-            (false, 0) => t!("%{n}  Specify first corner:", n = n).into_owned(),
-            (false, _) => t!("%{n}  Specify opposite corner:", n = n).into_owned(),
-            (true, 0) => t!("%{n}  Specify center point:", n = n).into_owned(),
-            (true, 1) => t!("%{n}  Specify radius:", n = n).into_owned(),
-            (true, _) => t!("%{n}  Specify tube radius:", n = n).into_owned(),
+        match (self.shape, self.pts.len()) {
+            (Shape::Torus, 0) => t!("%{n}  Specify center point:", n = n).into_owned(),
+            (Shape::Torus, 1) => t!("%{n}  Specify outer radius:", n = n).into_owned(),
+            (Shape::Torus, _) => t!("%{n}  Specify inner radius:", n = n).into_owned(),
+            (shape, 0) if shape.radial() => {
+                t!("%{n}  Specify center point:", n = n).into_owned()
+            }
+            (shape, _) if shape.radial() => {
+                t!("%{n}  Specify radius:", n = n).into_owned()
+            }
+            (_, 0) => t!("%{n}  Specify first corner:", n = n).into_owned(),
+            (_, _) => t!("%{n}  Specify opposite corner:", n = n).into_owned(),
         }
     }
 
@@ -380,10 +395,9 @@ fn footprint_wire(shape: Shape, pts: &[DVec3]) -> WireModel {
         let r = (pts[1] - c).length();
         circle_points(&mut points, c, r);
         if shape == Shape::Torus && pts.len() >= 3 {
-            // outer ring at major + minor for a quick torus hint
-            let minor = (pts[2] - pts[1]).length();
+            let inner = (pts[2] - c).length();
             points.push([f32::NAN; 3]);
-            circle_points(&mut points, c, r + minor);
+            circle_points(&mut points, c, inner);
         }
     } else {
         let (a, b) = (pts[0], pts[1]);
@@ -423,7 +437,7 @@ fn height_wire(shape: Shape, pts: &[DVec3], height: f64) -> WireModel {
             let low = [
                 DVec3::new(x0, y0, a.z),
                 DVec3::new(x1, y0, a.z),
-                DVec3::new(x1, y0, a.z + height),
+                DVec3::new(x0, y0, a.z + height),
             ];
             let high = low.map(|point| DVec3::new(point.x, y1, point.z));
             push_loop(&mut points, &low);

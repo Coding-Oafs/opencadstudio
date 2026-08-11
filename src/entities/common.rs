@@ -423,6 +423,7 @@ pub fn square_grip(id: usize, world: glam::DVec3) -> GripDef {
         is_midpoint: false,
         shape: GripShape::Square,
         dir: None,
+        axis: None,
     }
 }
 
@@ -435,6 +436,7 @@ pub fn center_grip(id: usize, world: glam::DVec3) -> GripDef {
         is_midpoint: true,
         shape: GripShape::Square,
         dir: None,
+        axis: None,
     }
 }
 
@@ -447,6 +449,7 @@ pub fn circle_grip(id: usize, world: glam::DVec3) -> GripDef {
         is_midpoint: true,
         shape: GripShape::Circle,
         dir: None,
+        axis: None,
     }
 }
 
@@ -460,6 +463,7 @@ pub fn rectangle_grip(id: usize, world: glam::DVec3, dir: [f32; 2]) -> GripDef {
         is_midpoint: true,
         shape: GripShape::Rectangle,
         dir: Some(dir),
+        axis: None,
     }
 }
 
@@ -471,6 +475,7 @@ pub fn triangle_grip(id: usize, world: glam::DVec3) -> GripDef {
         is_midpoint: false,
         shape: GripShape::Triangle,
         dir: None,
+        axis: None,
     }
 }
 

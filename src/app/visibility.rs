@@ -151,6 +151,7 @@ impl OpenCADStudio {
             is_midpoint: false,
             shape: GripShape::Triangle,
             dir: None,
+            axis: None,
         });
         self.tabs[i].selected_grip_handles.push(handle);
         self.tabs[i].visibility_grip = Some(VisibilityGrip {

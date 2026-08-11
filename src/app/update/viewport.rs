@@ -35,6 +35,64 @@ fn pt_pt_d2(a: Point, b: Point) -> f32 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
 }
 
+fn cursor_on_projected_axis(
+    cursor: Point,
+    bounds: iced::Rectangle,
+    view: glam::Mat4,
+    eye: glam::DVec3,
+    origin: glam::DVec3,
+    direction: glam::DVec3,
+) -> Option<glam::DVec3> {
+    let direction = direction.normalize_or_zero();
+    if direction.length_squared() <= 1e-12 {
+        return None;
+    }
+    let relative = (origin - eye).as_vec3();
+    let start = view * relative.extend(1.0);
+    let next = view * (relative + direction.as_vec3()).extend(1.0);
+    if start.w.abs() <= 1e-9 {
+        return None;
+    }
+    let delta = next - start;
+    let ndc = start.truncate() / start.w;
+    let derivative = glam::Vec2::new(
+        (delta.x * start.w - start.x * delta.w) / start.w.powi(2),
+        (delta.y * start.w - start.y * delta.w) / start.w.powi(2),
+    );
+    let screen_origin = glam::Vec2::new(
+        (ndc.x + 1.0) * 0.5 * bounds.width,
+        (1.0 - ndc.y) * 0.5 * bounds.height,
+    );
+    let screen_direction = glam::Vec2::new(
+        derivative.x * 0.5 * bounds.width,
+        -derivative.y * 0.5 * bounds.height,
+    );
+    let length_squared = screen_direction.length_squared();
+    if length_squared <= 1e-8 {
+        return None;
+    }
+    let cursor = glam::Vec2::new(cursor.x, cursor.y);
+    let screen = screen_origin
+        + screen_direction * (cursor - screen_origin).dot(screen_direction) / length_squared;
+    let target = glam::Vec2::new(
+        screen.x / bounds.width * 2.0 - 1.0,
+        1.0 - screen.y / bounds.height * 2.0,
+    );
+    let x_denominator = target.x * delta.w - delta.x;
+    let y_denominator = target.y * delta.w - delta.y;
+    if x_denominator.abs().max(y_denominator.abs()) <= 1e-9 {
+        return None;
+    }
+    let distance = if x_denominator.abs() >= y_denominator.abs() {
+        (start.x - target.x * start.w) / x_denominator
+    } else {
+        (start.y - target.y * start.w) / y_denominator
+    };
+    distance
+        .is_finite()
+        .then_some(origin + direction * distance as f64)
+}
+
 fn is_added_polyline_vertex(
     original: &AcadEntityType,
     current: &AcadEntityType,
@@ -422,9 +480,18 @@ impl OpenCADStudio {
         is_translate: bool,
         world: glam::DVec3,
     ) -> GripEdit {
+        let axis = self.tabs[i]
+            .selected_grip_handles
+            .iter()
+            .copied()
+            .zip(self.tabs[i].selected_grips.iter())
+            .find(|(owner, grip)| *owner == handle && grip.id == grip_id)
+            .and_then(|(_, grip)| grip.axis);
         if !self.tabs[i].hot_grips.contains(&(handle, grip_id)) {
             self.tabs[i].hot_grips.clear();
-            return GripEdit::single(handle, grip_id, is_translate, world);
+            let mut edit = GripEdit::single(handle, grip_id, is_translate, world);
+            edit.axis = axis;
+            return edit;
         }
 
         let mut targets: Vec<GripTarget> = self.tabs[i]
@@ -459,14 +526,18 @@ impl OpenCADStudio {
             }
         });
         if targets.is_empty() {
-            return GripEdit::single(handle, grip_id, is_translate, world);
+            let mut edit = GripEdit::single(handle, grip_id, is_translate, world);
+            edit.axis = axis;
+            return edit;
         }
+        let axis = (targets.len() == 1).then_some(axis).flatten();
         GripEdit {
             handle,
             grip_id,
             origin_world: world,
             last_world: world,
             mode: GripEditMode::Stretch,
+            axis,
             targets,
         }
     }
@@ -1244,6 +1315,18 @@ impl OpenCADStudio {
                 }
             }
 
+            if let Some(axis) = grip.axis {
+                snapped = cursor_on_projected_axis(
+                    p,
+                    bounds,
+                    view_rot,
+                    eye,
+                    grip.origin_world,
+                    axis,
+                )
+                .unwrap_or(snapped);
+            }
+
             let snap_ms = snap_started.elapsed().as_secs_f64() * 1000.0;
             // The overlay builds the active tracking guide from `otrack_active.base`
             // to `last_cursor_world`. Keep it synchronized with the actual point used
@@ -1734,6 +1817,14 @@ impl OpenCADStudio {
                 }
                 pt
             };
+            let effective = self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .and_then(|command| command.cursor_axis())
+                .and_then(|(origin, direction)| {
+                    cursor_on_projected_axis(p, bounds, view_rot, eye, origin, direction)
+                })
+                .unwrap_or(effective);
             // Dynamic-input locked fields constrain the preview point
             // (#356): a typed angle pins the direction, a typed
             // distance pins the radius — the same resolution the Enter
@@ -2737,6 +2828,9 @@ impl OpenCADStudio {
             let history_originals = std::mem::take(&mut self.grip_history_originals);
             let dirty_before = self.grip_dirty_before.take().unwrap_or(self.tabs[i].dirty);
             if !handles.is_empty() {
+                for &handle in &handles {
+                    let _ = self.tabs[i].scene.finalize_solid_history(handle);
+                }
                 if !originals.is_empty() {
                     self.push_entity_group_history(
                         i,
@@ -2998,6 +3092,14 @@ impl OpenCADStudio {
                         }
                     }
                 }
+                pt = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .and_then(|command| command.cursor_axis())
+                    .and_then(|(origin, direction)| {
+                        cursor_on_projected_axis(p, bounds, view_rot, eye, origin, direction)
+                    })
+                    .unwrap_or(pt);
                 // A click while dynamic-input fields hold typed values
                 // commits the CONSTRAINED point — the same resolution
                 // the preview shows and Enter would commit (#356).

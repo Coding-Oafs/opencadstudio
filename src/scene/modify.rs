@@ -728,7 +728,6 @@ impl Scene {
         let Some(document) = crate::scene::convert::acis_export::planar_solid_to_sat(&body) else {
             return false;
         };
-        let wires = crate::scene::model::solid_model::edge_wires(&body);
         self.record_solid_history_before(handle);
         if self
             .document
@@ -741,8 +740,46 @@ impl Scene {
             return false;
         };
         entity.set_sat_document(&document);
-        entity.wires = wires;
-        entity.silhouettes.clear();
+        self.register_solid_model(handle, body);
+        true
+    }
+
+    pub fn finalize_solid_history(&mut self, handle: Handle) -> bool {
+        let Some(operation) = self.document.solid_history_operation(handle).cloned() else {
+            return false;
+        };
+        let Ok(body) = cadkernel::acis::rebuild_body(&operation) else {
+            return false;
+        };
+        let Some(document) = crate::scene::convert::acis_export::planar_solid_to_sat(&body) else {
+            return false;
+        };
+        let Some(EntityType::Solid3D(entity)) = self.document.get_entity_mut(handle) else {
+            return false;
+        };
+        entity.set_sat_document(&document);
+        self.register_solid_model(handle, body);
+        true
+    }
+
+    fn preview_solid_history(
+        &mut self,
+        handle: Handle,
+        operation: acadrust::objects::SolidHistoryOperation,
+    ) -> bool {
+        let Ok(body) = cadkernel::acis::rebuild_body(&operation) else {
+            return false;
+        };
+        if self
+            .document
+            .update_solid_history(handle, operation)
+            .is_none()
+        {
+            return false;
+        }
+        let Some(EntityType::Solid3D(_)) = self.document.get_entity(handle) else {
+            return false;
+        };
         self.register_solid_model(handle, body);
         true
     }
@@ -761,12 +798,18 @@ impl Scene {
         ) {
             return false;
         }
-        if self.rebuild_solid_history(handle, operation.clone()) {
+        if let EntityTransform::Translate(delta) = transform {
+            if self
+                .document
+                .update_solid_history(handle, operation)
+                .is_none()
+            {
+                return false;
+            }
+            self.translate_solid_geometry(handle, delta.to_array());
             return true;
         }
-        self.record_solid_history_before(handle);
-        let _ = self.document.update_solid_history(handle, operation);
-        false
+        self.rebuild_solid_history(handle, operation)
     }
 
     fn apply_solid_history_grip(
@@ -785,7 +828,7 @@ impl Scene {
         ) {
             return false;
         }
-        self.rebuild_solid_history(handle, operation)
+        self.preview_solid_history(handle, operation)
     }
 
     pub fn apply_solid_history_property(

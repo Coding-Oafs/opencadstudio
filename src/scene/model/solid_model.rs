@@ -211,11 +211,11 @@ pub fn edge_wires(body: &Body) -> Vec<acadrust::entities::Wire> {
     use acadrust::types::Vector3;
     tessellation(body)
         .edges
-        .into_iter()
+        .iter()
         .map(|edge| {
             acadrust::entities::Wire::from_points(
                 edge.positions
-                    .into_iter()
+                    .iter()
                     .map(|p| Vector3::new(p[0], p[1], p[2]))
                     .collect(),
             )
@@ -254,7 +254,13 @@ pub fn boolean(op: Bool, a: &Body, b: &Body) -> Option<Body> {
 /// Tessellate a `Body` into a single-LOD `MeshLodSet` (world-space, before
 /// world_offset is applied by the caller).
 pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
-    let tessellation = tessellation(body);
+    mesh_from_tessellation(tessellation(body), color)
+}
+
+fn mesh_from_tessellation(
+    tessellation: brep::mesh::BodyMesh,
+    color: [f32; 4],
+) -> Option<MeshLodSet> {
     let silhouette = tessellation.silhouette_source();
     let mesh = tessellation.mesh;
     if mesh.is_empty() {
@@ -313,12 +319,37 @@ pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
     Some(set)
 }
 
+pub fn display_from_solid(
+    body: &Body,
+    color: [f32; 4],
+) -> Option<(MeshLodSet, Vec<acadrust::entities::Wire>, [f64; 3])> {
+    use acadrust::types::Vector3;
+    let tessellation = tessellation(body);
+    let center = mesh_center(&tessellation.mesh)?;
+    let wires = tessellation
+        .edges
+        .iter()
+        .map(|edge| {
+            acadrust::entities::Wire::from_points(
+                edge.positions
+                    .iter()
+                    .map(|point| Vector3::new(point[0], point[1], point[2]))
+                    .collect(),
+            )
+        })
+        .collect();
+    Some((mesh_from_tessellation(tessellation, color)?, wires, center))
+}
+
 /// The middle of a body, for a caller needing a point to turn or scale about.
 ///
 /// Read off the mesh rather than `body_bounds`, which refuses a face that
 /// wraps a closed surface — a sphere is one such face and has no box at all.
 pub fn centre(body: &Body) -> Option<[f64; 3]> {
-    let mesh = tessellation(body).mesh;
+    mesh_center(&tessellation(body).mesh)
+}
+
+fn mesh_center(mesh: &brep::mesh::Mesh) -> Option<[f64; 3]> {
     if mesh.positions.is_empty() {
         return None;
     }

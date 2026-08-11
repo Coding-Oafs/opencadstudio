@@ -105,6 +105,8 @@ pub struct GripDef {
     /// along its segment. `None` for shapes that don't need rotation
     /// (Square, Triangle in non-directional contexts).
     pub dir: Option<[f32; 2]>,
+    /// World-space axis that constrains this grip's drag.
+    pub axis: Option<glam::DVec3>,
 }
 
 /// How to apply a grip drag result.

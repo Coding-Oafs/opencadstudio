@@ -1621,6 +1621,11 @@ pub trait CadCommand: Send {
     /// during TRIM and trims during EXTEND, #336). Default no-op.
     fn set_shift(&mut self, _shift: bool) {}
 
+    /// Constrain the cursor to a construction axis for this step.
+    fn cursor_axis(&self) -> Option<(DVec3, DVec3)> {
+        None
+    }
+
     /// Mid-command Ctrl+Z: a multi-point drawing command can take the undo
     /// itself (PLINE pops its last vertex) instead of the document undo
     /// swallowing the whole in-progress object. `None` (default) lets the

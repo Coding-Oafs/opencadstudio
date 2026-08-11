@@ -26,6 +26,8 @@ pub struct GripEdit {
     pub last_world: DVec3,
     /// How cursor movement modifies the selected grip.
     pub mode: GripEditMode,
+    /// Optional world-space drag axis.
+    pub axis: Option<DVec3>,
     /// Every hot grip moved by this edit. A normal grip edit contains one target.
     pub targets: Vec<GripTarget>,
 }
@@ -57,6 +59,7 @@ impl GripEdit {
             origin_world: world,
             last_world: world,
             mode: GripEditMode::Stretch,
+            axis: None,
             targets: vec![GripTarget {
                 handle,
                 grip_id,

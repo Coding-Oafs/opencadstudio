@@ -18,16 +18,16 @@ pub const GRIP_LENGTH: usize = 10_001;
 pub const GRIP_WIDTH: usize = 10_002;
 pub const GRIP_HEIGHT: usize = 10_003;
 pub const GRIP_RADIUS: usize = 10_004;
-pub const GRIP_MAJOR_RADIUS: usize = 10_005;
-pub const GRIP_MINOR_RADIUS: usize = 10_006;
+pub const GRIP_OUTER_RADIUS: usize = 10_005;
+pub const GRIP_INNER_RADIUS: usize = 10_006;
 pub const GRIP_SIDES: usize = 10_007;
 
 pub const PROP_LENGTH: &str = "solid_history_length";
 pub const PROP_WIDTH: &str = "solid_history_width";
 pub const PROP_HEIGHT: &str = "solid_history_height";
 pub const PROP_RADIUS: &str = "solid_history_radius";
-pub const PROP_MAJOR_RADIUS: &str = "solid_history_major_radius";
-pub const PROP_MINOR_RADIUS: &str = "solid_history_minor_radius";
+pub const PROP_OUTER_RADIUS: &str = "solid_history_outer_radius";
+pub const PROP_INNER_RADIUS: &str = "solid_history_inner_radius";
 pub const PROP_SIDES: &str = "solid_history_sides";
 
 fn history_prop(label: &str, field: &'static str, value: impl ToString) -> Property {
@@ -62,14 +62,14 @@ pub fn primitive_properties(
         )],
         SolidHistoryOperation::Torus(value) => vec![
             history_prop(
-                t!("Major Radius").as_ref(),
-                PROP_MAJOR_RADIUS,
-                value.major_radius,
+                t!("Outer Radius").as_ref(),
+                PROP_OUTER_RADIUS,
+                value.major_radius + value.minor_radius,
             ),
             history_prop(
-                t!("Minor Radius").as_ref(),
-                PROP_MINOR_RADIUS,
-                value.minor_radius,
+                t!("Inner Radius").as_ref(),
+                PROP_INNER_RADIUS,
+                (value.major_radius - value.minor_radius).max(0.0),
             ),
         ],
         SolidHistoryOperation::Pyramid(value) => vec![
@@ -92,8 +92,8 @@ pub fn is_primitive_property(field: &str) -> bool {
             | PROP_WIDTH
             | PROP_HEIGHT
             | PROP_RADIUS
-            | PROP_MAJOR_RADIUS
-            | PROP_MINOR_RADIUS
+            | PROP_OUTER_RADIUS
+            | PROP_INNER_RADIUS
             | PROP_SIDES
     )
 }
@@ -132,11 +132,33 @@ pub fn apply_primitive_property(
         SolidHistoryOperation::Sphere(value) if field == PROP_RADIUS => {
             value.radius = positive().unwrap_or(value.radius);
         }
-        SolidHistoryOperation::Torus(value) => match field {
-            PROP_MAJOR_RADIUS => value.major_radius = positive().unwrap_or(value.major_radius),
-            PROP_MINOR_RADIUS => value.minor_radius = positive().unwrap_or(value.minor_radius),
-            _ => return false,
-        },
+        SolidHistoryOperation::Torus(value) => {
+            let outer = value.major_radius + value.minor_radius;
+            let inner = (value.major_radius - value.minor_radius).max(0.0);
+            match field {
+                PROP_OUTER_RADIUS => {
+                    let Some(next_outer) = positive() else {
+                        return false;
+                    };
+                    if next_outer <= inner {
+                        return false;
+                    }
+                    value.major_radius = (next_outer + inner) * 0.5;
+                    value.minor_radius = (next_outer - inner) * 0.5;
+                }
+                PROP_INNER_RADIUS => {
+                    let Some(next_inner) = positive() else {
+                        return false;
+                    };
+                    if next_inner >= outer {
+                        return false;
+                    }
+                    value.major_radius = (outer + next_inner) * 0.5;
+                    value.minor_radius = (outer - next_inner) * 0.5;
+                }
+                _ => return false,
+            }
+        }
         SolidHistoryOperation::Pyramid(value) => match field {
             PROP_RADIUS => value.radius = positive().unwrap_or(value.radius),
             PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
@@ -232,17 +254,28 @@ fn world_point(transform: [f64; 16], point: [f64; 3]) -> Option<glam::DVec3> {
     Some(matrix(transform)?.transform_point3(glam::DVec3::from_array(point)))
 }
 
+fn world_vector(transform: [f64; 16], vector: [f64; 3]) -> Option<glam::DVec3> {
+    let vector = matrix(transform)?.transform_vector3(glam::DVec3::from_array(vector));
+    (vector.length_squared() > 1e-12).then(|| vector.normalize())
+}
+
 fn local_point(transform: [f64; 16], point: glam::DVec3) -> Option<glam::DVec3> {
     Some(matrix(transform)?.inverse().transform_point3(point))
 }
 
-fn grip(id: usize, world: glam::DVec3, shape: GripShape) -> GripDef {
+fn grip(
+    id: usize,
+    world: glam::DVec3,
+    shape: GripShape,
+    axis: Option<glam::DVec3>,
+) -> GripDef {
     GripDef {
         id,
         world,
         is_midpoint: false,
         shape,
         dir: None,
+        axis,
     }
 }
 
@@ -254,9 +287,14 @@ pub fn primitive_grips(
         return Vec::new();
     };
     let mut grips = Vec::new();
-    let mut add = |id, transform, point, shape| {
+    let mut add = |id, transform, point, shape, axis: Option<[f64; 3]>| {
         if let Some(world) = world_point(transform, point) {
-            grips.push(grip(id, world, shape));
+            grips.push(grip(
+                id,
+                world,
+                shape,
+                axis.and_then(|vector| world_vector(transform, vector)),
+            ));
         }
     };
     match operation {
@@ -266,18 +304,21 @@ pub fn primitive_grips(
                 value.base.transform,
                 [value.length, value.width * 0.5, 0.0],
                 GripShape::Square,
+                None,
             );
             add(
                 GRIP_WIDTH,
                 value.base.transform,
                 [value.length * 0.5, value.width, 0.0],
                 GripShape::Square,
+                None,
             );
             add(
                 GRIP_HEIGHT,
                 value.base.transform,
                 [value.length * 0.5, value.width * 0.5, value.height],
                 GripShape::Square,
+                Some([0.0, 0.0, 1.0]),
             );
         }
         SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
@@ -286,12 +327,14 @@ pub fn primitive_grips(
                 value.base.transform,
                 [value.major_radius, 0.0, value.height * 0.5],
                 GripShape::Square,
+                None,
             );
             add(
                 GRIP_HEIGHT,
                 value.base.transform,
                 [0.0, 0.0, value.height],
                 GripShape::Square,
+                Some([0.0, 0.0, 1.0]),
             );
         }
         SolidHistoryOperation::Sphere(value) => add(
@@ -299,19 +342,26 @@ pub fn primitive_grips(
             value.base.transform,
             [value.radius, 0.0, 0.0],
             GripShape::Square,
+            None,
         ),
         SolidHistoryOperation::Torus(value) => {
             add(
-                GRIP_MAJOR_RADIUS,
-                value.base.transform,
-                [value.major_radius, 0.0, 0.0],
-                GripShape::Square,
-            );
-            add(
-                GRIP_MINOR_RADIUS,
+                GRIP_OUTER_RADIUS,
                 value.base.transform,
                 [value.major_radius + value.minor_radius, 0.0, 0.0],
                 GripShape::Square,
+                None,
+            );
+            add(
+                GRIP_INNER_RADIUS,
+                value.base.transform,
+                [
+                    (value.major_radius - value.minor_radius).max(0.0),
+                    0.0,
+                    0.0,
+                ],
+                GripShape::Square,
+                None,
             );
         }
         SolidHistoryOperation::Pyramid(value) => {
@@ -320,12 +370,14 @@ pub fn primitive_grips(
                 value.base.transform,
                 [value.radius, 0.0, 0.0],
                 GripShape::Square,
+                None,
             );
             add(
                 GRIP_HEIGHT,
                 value.base.transform,
                 [0.0, 0.0, value.height],
                 GripShape::Square,
+                Some([0.0, 0.0, 1.0]),
             );
             let angle = (value.sides.clamp(3, 71) as f64 * 5.0).to_radians();
             add(
@@ -333,6 +385,7 @@ pub fn primitive_grips(
                 value.base.transform,
                 [value.radius * angle.cos(), value.radius * angle.sin(), 0.0],
                 GripShape::Triangle,
+                None,
             );
         }
         _ => {}
@@ -360,7 +413,7 @@ pub fn apply_primitive_grip(
             match grip_id {
                 GRIP_LENGTH => value.length = positive(local.x),
                 GRIP_WIDTH => value.width = positive(local.y),
-                GRIP_HEIGHT => value.height = positive(local.z),
+                GRIP_HEIGHT => value.height = local.z.max(1e-6),
                 _ => return false,
             }
         }
@@ -372,7 +425,7 @@ pub fn apply_primitive_grip(
                     value.minor_radius = radius;
                     value.x_radius = radius;
                 }
-                GRIP_HEIGHT => value.height = positive(local.z),
+                GRIP_HEIGHT => value.height = local.z.max(1e-6),
                 _ => return false,
             }
         }
@@ -380,19 +433,29 @@ pub fn apply_primitive_grip(
             value.radius = local.length().max(1e-6);
         }
         SolidHistoryOperation::Torus(value) => match grip_id {
-            GRIP_MAJOR_RADIUS => {
-                value.major_radius = local.x.hypot(local.y).max(1e-6)
+            GRIP_OUTER_RADIUS => {
+                let outer = local.x.hypot(local.y).max(1e-6);
+                let inner = (value.major_radius - value.minor_radius).max(1e-6);
+                if outer <= inner {
+                    return false;
+                }
+                value.major_radius = (outer + inner) * 0.5;
+                value.minor_radius = (outer - inner) * 0.5;
             }
-            GRIP_MINOR_RADIUS => {
-                value.minor_radius = (local.x.hypot(local.y) - value.major_radius)
-                    .abs()
-                    .max(1e-6)
+            GRIP_INNER_RADIUS => {
+                let inner = local.x.hypot(local.y).max(1e-6);
+                let outer = value.major_radius + value.minor_radius;
+                if inner >= outer {
+                    return false;
+                }
+                value.major_radius = (outer + inner) * 0.5;
+                value.minor_radius = (outer - inner) * 0.5;
             }
             _ => return false,
         },
         SolidHistoryOperation::Pyramid(value) => match grip_id {
             GRIP_RADIUS => value.radius = local.x.hypot(local.y).max(1e-6),
-            GRIP_HEIGHT => value.height = positive(local.z),
+            GRIP_HEIGHT => value.height = local.z.max(1e-6),
             GRIP_SIDES => {
                 let angle = local.y.atan2(local.x).rem_euclid(std::f64::consts::TAU);
                 value.sides = (angle.to_degrees() / 5.0).round() as i32;
