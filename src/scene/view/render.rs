@@ -1248,6 +1248,12 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
         .map(|image| std::sync::Arc::as_ptr(&image.pixels) as usize)
         .unwrap_or(0)
         .hash(&mut h);
+    if vp.meshes.is_empty() {
+        0usize
+    } else {
+        std::sync::Arc::as_ptr(&vp.meshes) as usize
+    }
+    .hash(&mut h);
     vp.geometry_epoch.hash(&mut h);
     vp.selection_generation.hash(&mut h);
     vp.selected_sig.hash(&mut h);

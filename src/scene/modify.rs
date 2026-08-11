@@ -625,6 +625,59 @@ impl Scene {
 
     // ── Grip editing ──────────────────────────────────────────────────────
 
+    pub(crate) fn translate_solid_geometry(&mut self, handle: Handle, delta: [f64; 3]) {
+        if delta.iter().all(|value| value.abs() <= f64::EPSILON) {
+            return;
+        }
+        let placement = cadkernel::brep::Placement::at(delta);
+        if let Some(body) = self.solid_models.get(&handle).cloned() {
+            if let Some(moved) = cadkernel::brep::transform(&body, &placement) {
+                self.solid_models.insert(handle, moved);
+            }
+        }
+        let Some(set) = self.meshes.get_mut(&handle) else {
+            return;
+        };
+        let translate_split = |high: &mut [f32; 3], low: &mut [f32; 3]| {
+            let absolute = [
+                high[0] as f64 + low[0] as f64 + delta[0],
+                high[1] as f64 + low[1] as f64 + delta[1],
+                high[2] as f64 + low[2] as f64 + delta[2],
+            ];
+            *high = [absolute[0] as f32, absolute[1] as f32, absolute[2] as f32];
+            *low = [
+                (absolute[0] - high[0] as f64) as f32,
+                (absolute[1] - high[1] as f64) as f32,
+                (absolute[2] - high[2] as f64) as f32,
+            ];
+        };
+        for lod in &mut set.lods {
+            if lod.verts_low.len() != lod.verts.len() {
+                lod.verts_low = vec![[0.0; 3]; lod.verts.len()];
+            }
+            for (high, low) in lod.verts.iter_mut().zip(lod.verts_low.iter_mut()) {
+                translate_split(high, low);
+            }
+        }
+        if set.edge_verts_low.len() != set.edge_verts.len() {
+            set.edge_verts_low = vec![[0.0; 3]; set.edge_verts.len()];
+        }
+        for (high, low) in set.edge_verts.iter_mut().zip(set.edge_verts_low.iter_mut()) {
+            translate_split(high, low);
+        }
+        for generator in &mut set.curved_gens {
+            if let Some(source) =
+                cadkernel::brep::mesh::transform_silhouette(&generator.source, &placement)
+            {
+                generator.source = source;
+            }
+        }
+        set.metrics.centroid[0] += delta[0];
+        set.metrics.centroid[1] += delta[1];
+        set.metrics.centroid[2] += delta[2];
+        set.recompute_aabb();
+    }
+
     pub fn apply_grip(&mut self, handle: Handle, grip_id: usize, apply: GripApply) {
         // Objects on a locked layer can't be grip-edited.
         if self.is_layer_locked(handle) {
@@ -660,57 +713,7 @@ impl Scene {
                 .map(|p| [p.x, p.y, p.z]);
             if let Some(new) = new_por {
                 let delta = [new[0] - old[0], new[1] - old[1], new[2] - old[2]];
-                if let Some(set) = self.meshes.get_mut(&handle) {
-                    let translate_split =
-                        |high: &mut [f32; 3], low: &mut [f32; 3]| {
-                            let absolute = [
-                                high[0] as f64 + low[0] as f64 + delta[0],
-                                high[1] as f64 + low[1] as f64 + delta[1],
-                                high[2] as f64 + low[2] as f64 + delta[2],
-                            ];
-                            *high = [
-                                absolute[0] as f32,
-                                absolute[1] as f32,
-                                absolute[2] as f32,
-                            ];
-                            *low = [
-                                (absolute[0] - high[0] as f64) as f32,
-                                (absolute[1] - high[1] as f64) as f32,
-                                (absolute[2] - high[2] as f64) as f32,
-                            ];
-                        };
-                    for lod in &mut set.lods {
-                        if lod.verts_low.len() != lod.verts.len() {
-                            lod.verts_low = vec![[0.0; 3]; lod.verts.len()];
-                        }
-                        for (high, low) in lod.verts.iter_mut().zip(lod.verts_low.iter_mut()) {
-                            translate_split(high, low);
-                        }
-                    }
-                    if set.edge_verts_low.len() != set.edge_verts.len() {
-                        set.edge_verts_low = vec![[0.0; 3]; set.edge_verts.len()];
-                    }
-                    for (high, low) in set
-                        .edge_verts
-                        .iter_mut()
-                        .zip(set.edge_verts_low.iter_mut())
-                    {
-                        translate_split(high, low);
-                    }
-                    for generator in &mut set.curved_gens {
-                        let placement = cadkernel::brep::Placement::at(delta);
-                        if let Some(source) = cadkernel::brep::mesh::transform_silhouette(
-                            &generator.source,
-                            &placement,
-                        ) {
-                            generator.source = source;
-                        }
-                    }
-                    set.metrics.centroid[0] += delta[0];
-                    set.metrics.centroid[1] += delta[1];
-                    set.metrics.centroid[2] += delta[2];
-                    set.recompute_aabb();
-                }
+                self.translate_solid_geometry(handle, delta);
             }
         }
 
@@ -731,9 +734,6 @@ impl Scene {
             }
             _ => {}
         }
-        // NOTE: no `bump_geometry()` here. The grip-drag caller hides the
-        // edited entity and previews it as an overlay during the drag (so a
-        // move doesn't re-tessellate the whole model), then bumps once on
-        // commit. Any other caller must bump geometry itself.
+        // The grip-drag caller refreshes changed resident meshes per move.
     }
 }

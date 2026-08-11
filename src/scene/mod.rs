@@ -2680,11 +2680,22 @@ impl Scene {
     /// the mesh pipeline uses, so the mesh is stored as-is (Model-tab geometry
     /// is authored at world_offset 0).
     pub fn register_solid_model(&mut self, handle: Handle, solid: cadkernel::brep::Body) {
+        if let Some(center) = crate::scene::model::solid_model::centre(&solid) {
+            if let Some(EntityType::Solid3D(entity)) = self.document.get_entity_mut(handle) {
+                entity.point_of_reference = acadrust::types::Vector3::new(
+                    center[0], center[1], center[2],
+                );
+            }
+        }
         let entity = self.document.get_entity(handle);
         let color = entity
             .map(|e| self.render_style(e).0)
             .unwrap_or([0.8, 0.8, 0.85, 1.0]);
         if let Some(mut set) = crate::scene::model::solid_model::mesh_from_solid(&solid, color) {
+            let name = handle.value().to_string();
+            for mesh in &mut set.lods {
+                mesh.name = name.clone();
+            }
             if let Some(entity) = entity {
                 crate::scene::model::material_model::resolve_material_with_base(
                     &self.document,

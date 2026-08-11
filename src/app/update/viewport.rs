@@ -1046,8 +1046,7 @@ impl OpenCADStudio {
                 .filter(|handle| seen_handles.insert(*handle))
                 .collect();
 
-            // First move of this drag: hide every edited entity from the base
-            // tessellation so subsequent moves refresh only the overlay.
+            // Wire entities use the overlay; solid meshes stay visible and move live.
             if self.grip_preview_handles != edited_handles {
                 if self.grip_dirty_before.is_none() {
                     self.grip_dirty_before = Some(self.tabs[i].dirty);
@@ -1072,7 +1071,9 @@ impl OpenCADStudio {
                         .collect();
                 }
                 for &handle in &edited_handles {
-                    self.tabs[i].scene.preview_hidden.insert(handle);
+                    if !self.tabs[i].scene.meshes.contains_key(&handle) {
+                        self.tabs[i].scene.preview_hidden.insert(handle);
+                    }
                 }
                 let changes: Vec<_> = edited_handles
                     .iter()
@@ -1377,6 +1378,13 @@ impl OpenCADStudio {
                     );
                 }
             }
+            let mesh_changes: Vec<_> = edited_handles
+                .iter()
+                .copied()
+                .filter(|handle| self.tabs[i].scene.meshes.contains_key(handle))
+                .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                .collect();
+            self.tabs[i].scene.bump_entities(&mesh_changes);
             self.tabs[i].scene.set_preview_hatches(&edited_handles);
             self.tabs[i].dirty = true;
             if let Some(active) = self.tabs[i].active_grip.as_mut() {

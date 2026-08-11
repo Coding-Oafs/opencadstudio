@@ -135,6 +135,24 @@ impl OpenCADStudio {
         let mut changed_handles: rustc_hash::FxHashSet<_> = handles.iter().copied().collect();
         for (handle, original) in originals {
             changed_handles.insert(handle);
+            let current = self.tabs[i]
+                .scene
+                .document
+                .get_entity(handle)
+                .and_then(crate::entities::solid3d::point_of_reference)
+                .map(|point| [point.x, point.y, point.z]);
+            let target = crate::entities::solid3d::point_of_reference(&original)
+                .map(|point| [point.x, point.y, point.z]);
+            if let (Some(current), Some(target)) = (current, target) {
+                self.tabs[i].scene.translate_solid_geometry(
+                    handle,
+                    [
+                        target[0] - current[0],
+                        target[1] - current[1],
+                        target[2] - current[2],
+                    ],
+                );
+            }
             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
                 *entity = original;
             }
@@ -2615,10 +2633,16 @@ impl OpenCADStudio {
                     let color = [0.6f32, 0.6, 0.8, 1.0]; // default colour; command embedded it
                     let _ = color; // color is captured inside mesh_fn
                     if let Some(mesh) = mesh_fn(name) {
-                        self.tabs[i]
-                            .scene
-                            .meshes
-                            .insert(handle, crate::scene::MeshLodSet::from_single(mesh));
+                        let set = crate::scene::MeshLodSet::from_single(mesh);
+                        if let Some(acadrust::EntityType::Solid3D(entity)) =
+                            self.tabs[i].scene.document.get_entity_mut(handle)
+                        {
+                            let center = set.metrics.centroid;
+                            entity.point_of_reference = acadrust::types::Vector3::new(
+                                center[0], center[1], center[2],
+                            );
+                        }
+                        self.tabs[i].scene.meshes.insert(handle, set);
                     }
                     self.tabs[i].dirty = true;
                     self.command_line.push_output(crate::t!("Solid created.").as_ref());
@@ -2750,7 +2774,14 @@ impl OpenCADStudio {
 
                 if let Some(mut set) = result {
                     let pending = self.begin_undo(i, "SWEEP", 1, true);
-                    let new_handle = self.tabs[i].scene.add_entity(empty_solid3d());
+                    let mut entity = empty_solid3d();
+                    if let acadrust::EntityType::Solid3D(solid) = &mut entity {
+                        let center = set.metrics.centroid;
+                        solid.point_of_reference = acadrust::types::Vector3::new(
+                            center[0], center[1], center[2],
+                        );
+                    }
+                    let new_handle = self.tabs[i].scene.add_entity(entity);
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());
                     }
@@ -2780,7 +2811,14 @@ impl OpenCADStudio {
                     .collect();
                 if let Some(mut set) = sweep_model::lofted(&profiles, color) {
                     let pending = self.begin_undo(i, "LOFT", 1, true);
-                    let new_handle = self.tabs[i].scene.add_entity(empty_solid3d());
+                    let mut entity = empty_solid3d();
+                    if let acadrust::EntityType::Solid3D(solid) = &mut entity {
+                        let center = set.metrics.centroid;
+                        solid.point_of_reference = acadrust::types::Vector3::new(
+                            center[0], center[1], center[2],
+                        );
+                    }
+                    let new_handle = self.tabs[i].scene.add_entity(entity);
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());
                     }
