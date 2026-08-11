@@ -100,6 +100,25 @@ impl PrimitiveCommand {
         .max(1.0)
     }
 
+    fn cursor_height(&self, point: DVec3) -> f64 {
+        (self.plane.to_local(point) - self.pts[0])
+            .length()
+            .max(1e-6)
+    }
+
+    fn place_preview(&self, mut preview: WireModel) -> WireModel {
+        for point in &mut preview.points {
+            if !point[0].is_nan() {
+                *point = self
+                    .plane
+                    .to_world(glam::Vec3::from_array(*point).as_dvec3())
+                    .as_vec3()
+                    .to_array();
+            }
+        }
+        preview
+    }
+
     /// Build both the acadrust `Solid3D` (ACIS, for persistence) and the
     /// kernel `Body` (rendering + booleans) from the footprint + `height`.
     fn build(&self, height: f64) -> Option<(EntityType, Body)> {
@@ -238,10 +257,7 @@ impl CadCommand for PrimitiveCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if self.height_step {
-            // A click in the ground plane has no Z; use its distance from the
-            // footprint centre as the height magnitude.
-            let h = (self.plane.to_local(pt) - self.pts[0]).length();
-            return self.commit(h.max(1e-6));
+            return self.commit(self.cursor_height(pt));
         }
         self.pts.push(self.plane.to_local(pt));
         if self.pts.len() < self.footprint_pts() {
@@ -281,27 +297,34 @@ impl CadCommand for PrimitiveCommand {
     }
 
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
-        if self.height_step || self.pts.is_empty() {
+        if self.pts.is_empty() {
             return None;
+        }
+        if self.height_step {
+            return Some(self.place_preview(height_wire(
+                self.shape,
+                &self.pts,
+                self.cursor_height(pt),
+            )));
         }
         let mut foot = self.pts.clone();
         foot.push(self.plane.to_local(pt));
-        let mut preview = footprint_wire(self.shape, &foot);
-        preview.points = preview
-            .points
-            .iter()
-            .map(|point| {
-                if point[0].is_nan() {
-                    *point
-                } else {
-                    self.plane
-                        .to_world(glam::Vec3::from_array(*point).as_dvec3())
-                        .as_vec3()
-                        .to_array()
-                }
-            })
-            .collect();
-        Some(preview)
+        Some(self.place_preview(footprint_wire(self.shape, &foot)))
+    }
+
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+
+        self.height_step.then(|| DynSpec {
+            anchor: DynAnchor::Point(self.plane.to_world(self.pts[0])),
+            fields: vec![DynFieldSpec::new(DynRole::Height)],
+            guide: DynGuide::None,
+            ref_point: None,
+        })
+    }
+
+    fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
+        self.height_step.then(|| self.cursor_height(cursor))
     }
 }
 
@@ -330,6 +353,86 @@ fn footprint_wire(shape: Shape, pts: &[DVec3]) -> WireModel {
         ]);
     }
     wire("primitive_preview", points)
+}
+
+fn height_wire(shape: Shape, pts: &[DVec3], height: f64) -> WireModel {
+    let mut points = Vec::new();
+    match shape {
+        Shape::Box => {
+            let (a, b) = (pts[0], pts[1]);
+            let base = [
+                DVec3::new(a.x, a.y, a.z),
+                DVec3::new(b.x, a.y, a.z),
+                DVec3::new(b.x, b.y, a.z),
+                DVec3::new(a.x, b.y, a.z),
+            ];
+            let top = base.map(|point| point + DVec3::Z * height);
+            push_loop(&mut points, &base);
+            push_loop(&mut points, &top);
+            for i in 0..4 {
+                push_segment(&mut points, base[i], top[i]);
+            }
+        }
+        Shape::Wedge => {
+            let (a, b) = (pts[0], pts[1]);
+            let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
+            let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+            let low = [
+                DVec3::new(x0, y0, a.z),
+                DVec3::new(x1, y0, a.z),
+                DVec3::new(x1, y0, a.z + height),
+            ];
+            let high = low.map(|point| DVec3::new(point.x, y1, point.z));
+            push_loop(&mut points, &low);
+            push_loop(&mut points, &high);
+            for i in 0..3 {
+                push_segment(&mut points, low[i], high[i]);
+            }
+        }
+        Shape::Cylinder | Shape::Cone => {
+            let center = pts[0];
+            let radius = (pts[1] - center).length();
+            push_circle(&mut points, center, radius);
+            if shape == Shape::Cylinder {
+                push_circle(&mut points, center + DVec3::Z * height, radius);
+                for i in 0..4 {
+                    let angle = i as f64 * std::f64::consts::FRAC_PI_2;
+                    let base = center + DVec3::new(angle.cos() * radius, angle.sin() * radius, 0.0);
+                    push_segment(&mut points, base, base + DVec3::Z * height);
+                }
+            } else {
+                let apex = center + DVec3::Z * height;
+                for i in 0..4 {
+                    let angle = i as f64 * std::f64::consts::FRAC_PI_2;
+                    let base = center + DVec3::new(angle.cos() * radius, angle.sin() * radius, 0.0);
+                    push_segment(&mut points, base, apex);
+                }
+            }
+        }
+        Shape::Sphere | Shape::Torus => {}
+    }
+    wire("primitive_height_preview", points)
+}
+
+fn push_break(points: &mut Vec<[f32; 3]>) {
+    if !points.is_empty() {
+        points.push([f32::NAN; 3]);
+    }
+}
+
+fn push_loop<const N: usize>(points: &mut Vec<[f32; 3]>, path: &[DVec3; N]) {
+    push_break(points);
+    points.extend(path.iter().chain(path.first()).map(|point| point.as_vec3().to_array()));
+}
+
+fn push_segment(points: &mut Vec<[f32; 3]>, a: DVec3, b: DVec3) {
+    push_break(points);
+    points.extend([a.as_vec3().to_array(), b.as_vec3().to_array()]);
+}
+
+fn push_circle(points: &mut Vec<[f32; 3]>, center: DVec3, radius: f64) {
+    push_break(points);
+    circle_points(points, center, radius);
 }
 
 fn circle_points(out: &mut Vec<[f32; 3]>, c: DVec3, r: f64) {
