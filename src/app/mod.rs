@@ -2755,7 +2755,9 @@ pub enum Message {
     PlotStylePanelScreenBuf(String),
     /// Apply current edit buffers to the selected ACI entry.
     PlotStylePanelApply,
-    /// Save the modified table back to disk.
+    /// Save the modified table directly over the currently edited CTB.
+    PlotStylePanelSaveDirect,
+    /// Save the modified table under a chosen name/path.
     PlotStylePanelSave,
     /// Save callback.
     PlotStylePanelSavePath(Option<std::path::PathBuf>),

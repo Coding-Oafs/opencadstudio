@@ -3318,10 +3318,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 }
                 Task::none()
             }
-            M::SetCurrent => {
-                if self.print_all_options {
-                    return Task::none();
-                }
+            M::SetCurrent => { 
                 self.apply_dialog_to_layout();
                 self.command_line.push_info(crate::t!("Page setup applied to the layout.").as_ref());
                 Task::none()
@@ -3424,7 +3421,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.plot_dialog.name_rename = false;
                 Task::none()
             }
-            M::Preview if self.print_all_options => Task::none(),
             M::Preview => self.on_plot_dlg_commit(true),
             M::Commit if self.print_all_options => {
                 if self.plot_dialog.style_missing {

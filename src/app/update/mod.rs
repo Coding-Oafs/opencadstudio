@@ -6531,6 +6531,32 @@ impl OpenCADStudio {
 
             // ── Plot Style Panel ──────────────────────────────────────────────
             Message::PlotStylePanelOpen => {
+                // The Plot dialog's selected table is authoritative. Make sure
+                // the editor opens that table rather than a stale active table.
+                let selected_style = self.plot_dialog.style_name.clone();
+
+                if selected_style.is_empty() {
+                    self.active_plot_style = None;
+                } else {
+                    let needs_load = self
+                        .active_plot_style
+                        .as_ref()
+                        .is_none_or(|table| !table.name.eq_ignore_ascii_case(&selected_style));
+
+                    if needs_load {
+                        match crate::io::plot_style::PlotStyleTable::load_named(&selected_style) {
+                            Ok(table) => {
+                                self.active_plot_style = Some(table);
+                                self.plot_dialog.style_missing = false;
+                            }
+                            Err(error) => {
+                                self.plot_dialog.style_missing = true;
+                                self.command_line.push_error(&error);
+                                return Task::none();
+                            }
+                        }
+                    }
+                }
                 // Initialise edit buffers for ACI 1.
                 self.plotstyle_panel_aci = 1;
                 let entry = self
@@ -6610,9 +6636,58 @@ impl OpenCADStudio {
 
             Message::PlotStylePanelApply => self.on_plot_style_panel_apply(),
 
-            Message::PlotStylePanelSave => self.on_plot_style_panel_save(),
+            Message::PlotStylePanelSaveDirect => {
+            let Some(table) = self.active_plot_style.as_ref() else {
+                self.command_line.push_error(
+                    crate::t!("No plot style table loaded. Load or create one first.").as_ref(),
+                );
+                return Task::none();
+            };
 
-            Message::PlotStylePanelSavePath(Some(path)) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let table_name = table.name.clone();
+
+                let result = crate::io::plot_style::ensure_plot_styles_dir().and_then(|dir| {
+                    let path = dir.join(&table_name);
+                    table.save(&path)?;
+                    Ok(path)
+                });
+
+                match result {
+                    Ok(path) => {
+                        self.plot_dialog.style_name = table_name;
+                        self.plot_dialog.style_missing = false;
+                        self.plot_dialog.plot_styles =
+                            crate::io::plot_style::available_ctb_names();
+
+                        self.command_line.push_output(
+                            crate::tf!(
+                                "Plot style table saved to \"{}\".",
+                                path.display()
+                            )
+                            .as_ref(),
+                        );
+                    }
+                    Err(error) => {
+                        self.command_line
+                            .push_error(crate::tf!("Save error: {error}").as_ref());
+                    }
+                }
+
+                Task::none()
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // Browsers cannot overwrite a local file directly, so fall back
+                // to the existing Save As flow.
+                self.on_plot_style_panel_save()
+            }
+        }
+
+        Message::PlotStylePanelSave => self.on_plot_style_panel_save(),
+        Message::PlotStylePanelSavePath(Some(path)) => {
                 let path = if path
                     .extension()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("ctb"))
