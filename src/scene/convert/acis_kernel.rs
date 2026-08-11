@@ -53,7 +53,7 @@ pub fn tessellate_sat(
     } else {
         1.0
     };
-    let max_angle = cadkernel::tessellation::DEFAULT_ANGLE / resolution;
+    let max_angle = cadkernel::tessellation::angle_for_resolution(resolution);
 
     // Positions stay f64 until `finalize_mesh` splits them into the coarse
     // and fine pair, so a solid at survey coordinates keeps its millimetres.
