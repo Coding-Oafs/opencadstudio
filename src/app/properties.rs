@@ -42,6 +42,7 @@ impl OpenCADStudio {
         // closes, matching the deselect / reselect / click-away expectation.
         let color_palette_open = self.tabs[i].properties.color_palette_open;
         let edit_buf = std::mem::take(&mut self.tabs[i].properties.edit_buf);
+        let active_field = std::mem::take(&mut self.tabs[i].properties.active_field);
         // Expanded coordinate groups persist across rebuilds AND selection
         // changes — it's a per-user view preference, not per-entity state.
         let expanded_groups = std::mem::take(&mut self.tabs[i].properties.expanded_groups);
@@ -1441,6 +1442,14 @@ impl OpenCADStudio {
             } else {
                 Default::default()
             };
+            // The active-row highlight only survives a rebuild for the same
+            // selection (like the edit buffer); a selection change clears it so
+            // an old row isn't marked active against new content.
+            panel.active_field = if prev_handles == new_handles {
+                active_field
+            } else {
+                None
+            };
             panel.expanded_groups = expanded_groups;
             panel.source_handles = new_handles;
             panel.prop_vertex = prop_vertex;
@@ -1458,6 +1467,7 @@ impl OpenCADStudio {
             if locked_only {
                 make_sections_read_only(&mut panel.sections);
                 panel.edit_buf.clear();
+                panel.active_field = None;
                 panel.color_picker_open = false;
                 panel.color_palette_open = false;
                 panel.bg_color_picker_open = false;

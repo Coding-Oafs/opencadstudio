@@ -2362,6 +2362,17 @@ pub enum Message {
     PropAttrInput { tag: String, value: String },
     /// User committed a block-attribute value edit (Enter pressed).
     PropAttrCommit(String),
+    /// Reports the currently keyboard-focused widget (if any) after a
+    /// [`sync_active_field_task`](crate::ui::properties::sync_active_field_task)
+    /// sweep, so the update handler can keep the active-row marker reconciled
+    /// against real focus instead of pointer hover.
+    PropSyncActive(Option<iced::widget::Id>),
+    /// A left mouse button was pressed anywhere. The clicked widget has already
+    /// been given focus by the time this arrives (the widget tree processes the
+    /// event before the runtime broadcasts it to subscriptions), so a focus
+    /// sweep — which resolves as `PropSyncActive` — reveals whether a property
+    /// value field was clicked and can select its whole value.
+    PropPointerPressed,
     /// Toggle the inline color picker dropdown open/closed.
     PropColorPickerToggle,
     /// Toggle the MTEXT background-colour picker dropdown open/closed.

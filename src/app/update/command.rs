@@ -2120,6 +2120,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
 
     pub(super) fn on_prop_geom_commit(&mut self, field: &'static str) -> Task<Message> {
                 let i = self.active_tab;
+                self.tabs[i].properties.active_field = None;
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
                     if let Some(raw_val) = self.tabs[i].properties.edit_buf.remove(field) {
@@ -2348,6 +2349,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     /// it is not run through the expression evaluator like numeric fields).
     pub(super) fn on_prop_attr_commit(&mut self, tag: String) -> Task<Message> {
         let i = self.active_tab;
+        self.tabs[i].properties.active_field = None;
         let key = crate::ui::properties::attr_edit_key(&tag);
         let handles = self.property_target_handles(i);
         if handles.is_empty() {
