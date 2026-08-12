@@ -86,6 +86,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -208,6 +209,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -297,6 +299,7 @@ impl OpenCADStudio {
                         )
                     })
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -374,6 +377,7 @@ impl OpenCADStudio {
                     .iter()
                     .filter(|(_, e)| matches!(e, acadrust::EntityType::Text(_)))
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -469,7 +473,9 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .filter_map(|(h, e)| match e {
-                        acadrust::EntityType::Text(t) => {
+                        acadrust::EntityType::Text(t)
+                            if !self.tabs[i].scene.is_layer_locked(*h) =>
+                        {
                             Some((*h, t.insertion_point.x, t.insertion_point.y))
                         }
                         _ => None,
@@ -1127,7 +1133,12 @@ impl OpenCADStudio {
 
             "EXPLODE" => {
                 use crate::modules::draw::modify::explode::explode_entity;
-                let entities: Vec<_> = self.tabs[i].scene.selected_entities().into_iter().collect();
+                let entities: Vec<_> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .filter(|(handle, _)| !self.tabs[i].scene.is_layer_locked(*handle))
+                    .collect();
                 if entities.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
                     let cmd = SelectObjectsCommand::new("EXPLODE");

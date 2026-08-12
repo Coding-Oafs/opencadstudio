@@ -2320,6 +2320,7 @@ impl OpenCADStudio {
                             if locked { "locked" } else { "unlocked" }
                         ).as_ref());
                         self.sync_ribbon_layers();
+                        self.refresh_properties();
                     }
                 }
                 Task::none()
@@ -3203,6 +3204,9 @@ impl OpenCADStudio {
             Message::AnnoObjectScaleToggle(name) => {
                 let i = self.active_tab;
                 if let Some(entity) = self.anno_object_scale_target {
+                    if self.tabs[i].scene.is_layer_locked(entity) {
+                        return Task::none();
+                    }
                     if let Some(sh) = self.tabs[i].scene.scale_handle_ensuring(&name) {
                         self.push_undo_snapshot(i, "OBJECTSCALE");
                         let doc = &mut self.tabs[i].scene.document;
@@ -4249,6 +4253,9 @@ impl OpenCADStudio {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // Persist into the tab's header (CELWEIGHT). #21.
                     self.tabs[i].scene.document.header.current_line_weight = lw.value();
                     self.tabs[i].dirty = true;
@@ -4322,6 +4329,9 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     self.tabs[i].scene.document.header.current_line_weight = lw.value();
                     self.tabs[i].dirty = true;
                     self.ribbon.active_lineweight = lw;

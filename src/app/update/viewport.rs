@@ -1079,6 +1079,14 @@ impl OpenCADStudio {
 
         // ── Grip drag ─────────────────────────────────────────────
         if let Some(grip) = self.tabs[i].active_grip.clone() {
+            if grip
+                .targets
+                .iter()
+                .any(|target| self.tabs[i].scene.is_layer_locked(target.handle))
+            {
+                self.cancel_active_grip_edit();
+                return Task::none();
+            }
             let grip_started = Instant::now();
             let (vw, vh) = vp_size;
             let bounds = iced::Rectangle {
@@ -3632,8 +3640,6 @@ impl OpenCADStudio {
                             bounds,
                             candidate_handles.as_ref(),
                         ));
-                        // Objects on a locked layer aren't selectable.
-                        handles.retain(|&h| !self.tabs[i].scene.is_layer_locked(h));
                         // Box/lasso accumulates like individual picks
                         // (issue #83): a plain box adds to the current
                         // selection, Shift+box removes the boxed
@@ -3746,7 +3752,6 @@ impl OpenCADStudio {
                         .into_iter()
                         .filter_map(|s| Scene::handle_from_wire_name(s))
                         .filter(|&h| self.tabs[i].scene.passes_selection_filter(h))
-                        .filter(|&h| !self.tabs[i].scene.is_layer_locked(h))
                         .collect();
                         if cands.len() >= 2 {
                             // Overlap: open the list box at the cursor.
@@ -3806,45 +3811,33 @@ impl OpenCADStudio {
                         // Selection filter: drop a pick whose type is excluded.
                         let hit = hit.filter(|&h| self.tabs[i].scene.passes_selection_filter(h));
                         if let Some(handle) = hit {
-                            if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
-                                // Locked layer: visible + snappable but
-                                // not selectable. Report and do nothing
-                                // else — in particular do NOT set
-                                // `selection_just_completed`, or a
-                                // gather command (MOVE's "select
-                                // objects") would wrongly finish.
-                                self.command_line.push_info(crate::tf!(
-                                            "Object is on locked layer \"{layer}\" — unlock the layer to select or edit it."
-                                        ).as_ref());
-                            } else {
-                                // Individual picks accumulate (issue #47):
-                                // each plain click adds to the selection,
-                                // Shift+click removes the picked entity.
-                                // PICKADD 0 (#226): a plain click
-                                // REPLACES the selection instead and
-                                // Shift+click toggles membership.
-                                if self.shift_down || self.select_remove_mode {
-                                    // Remove was asked for by name, so it only
-                                    // ever takes away — the toggle below is
-                                    // Shift's PICKADD-0 behaviour, not its.
-                                    if !self.select_remove_mode
-                                        && !selection_pick_add
-                                        && !self.tabs[i].scene.selected.contains(&handle)
-                                    {
-                                        self.tabs[i].scene.select_entity(handle, false);
-                                        self.tabs[i].scene.expand_selection_for_groups(&[handle]);
-                                    } else {
-                                        self.tabs[i].scene.deselect_entity(handle);
-                                    }
-                                } else {
-                                    self.tabs[i]
-                                        .scene
-                                        .select_entity(handle, !selection_pick_add);
+                            // Individual picks accumulate (issue #47):
+                            // each plain click adds to the selection,
+                            // Shift+click removes the picked entity.
+                            // PICKADD 0 (#226): a plain click
+                            // REPLACES the selection instead and
+                            // Shift+click toggles membership.
+                            if self.shift_down || self.select_remove_mode {
+                                // Remove was asked for by name, so it only
+                                // ever takes away — the toggle below is
+                                // Shift's PICKADD-0 behaviour, not its.
+                                if !self.select_remove_mode
+                                    && !selection_pick_add
+                                    && !self.tabs[i].scene.selected.contains(&handle)
+                                {
+                                    self.tabs[i].scene.select_entity(handle, false);
                                     self.tabs[i].scene.expand_selection_for_groups(&[handle]);
+                                } else {
+                                    self.tabs[i].scene.deselect_entity(handle);
                                 }
-                                self.refresh_properties();
-                                selection_just_completed = true;
+                            } else {
+                                self.tabs[i]
+                                    .scene
+                                    .select_entity(handle, !selection_pick_add);
+                                self.tabs[i].scene.expand_selection_for_groups(&[handle]);
                             }
+                            self.refresh_properties();
+                            selection_just_completed = true;
                         } else {
                             // Empty-space click only ARMS a box here; it
                             // no longer clears the selection, so a box can
@@ -4011,8 +4004,6 @@ impl OpenCADStudio {
                     ));
                     // Selection filter: keep only allowed types.
                     handles.retain(|&h| self.tabs[i].scene.passes_selection_filter(h));
-                    // Objects on a locked layer aren't selectable.
-                    handles.retain(|&h| !self.tabs[i].scene.is_layer_locked(h));
                     // Accumulate (issue #83): a plain box adds to the
                     // current selection, Shift+box removes the boxed
                     // entities. An empty box leaves the selection alone

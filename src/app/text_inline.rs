@@ -125,6 +125,9 @@ impl super::OpenCADStudio {
     /// the plain box (the rich editor needs no field focus).
     pub(super) fn begin_text_edit(&mut self, handle: Handle) -> iced::Task<super::Message> {
         let i = self.active_tab;
+        if self.tabs[i].scene.is_layer_locked(handle) {
+            return iced::Task::none();
+        }
         // Resolve a Leader chain to the annotated entity.
         let mut target = handle;
         for _ in 0..8 {
@@ -138,6 +141,9 @@ impl super::OpenCADStudio {
                 }
                 _ => break,
             }
+        }
+        if self.tabs[i].scene.is_layer_locked(target) {
+            return iced::Task::none();
         }
         // Snapshot what we need before borrowing `self` mutably to open.
         let Some(entity) = self.tabs[i].scene.document.get_entity(target) else {
@@ -178,6 +184,9 @@ impl super::OpenCADStudio {
         height: f64,
         field: TextEntityField,
     ) {
+        if handle.is_some_and(|h| self.tabs[self.active_tab].scene.is_layer_locked(h)) {
+            return;
+        }
         let mut state = TextInlineState {
             pos,
             value: initial.to_string(),
@@ -202,6 +211,10 @@ impl super::OpenCADStudio {
             return false;
         }
         if let Some(h) = ed.editing {
+            if self.tabs[i].scene.is_layer_locked(h) {
+                self.refresh_properties();
+                return false;
+            }
             self.push_undo_snapshot(i, "TEXT");
             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(h) {
                 write_text_field(entity, ed.field, ed.value.clone());

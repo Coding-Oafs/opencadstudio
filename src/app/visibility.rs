@@ -178,6 +178,10 @@ impl OpenCADStudio {
     /// anonymous-block member visible/invisible per the state, then rebuild.
     pub(super) fn apply_visibility_state(&mut self, insert_handle: Handle, state_idx: usize) {
         let i = self.active_tab;
+        if self.reject_locked_edit(i, insert_handle) {
+            self.visibility_popup = None;
+            return;
+        }
 
         // Resolve everything against an immutable borrow first.
         let mapping = {

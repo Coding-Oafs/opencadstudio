@@ -46,6 +46,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 2 {
@@ -96,6 +97,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -171,6 +173,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 2 {
@@ -210,6 +213,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -258,6 +262,7 @@ impl super::OpenCADStudio {
             .scene
             .selected_entities()
             .iter()
+            .filter(|(h, _)| !self.tabs[i].scene.is_layer_locked(*h))
             .find_map(|(h, e)| match e {
                 EntityType::LwPolyline(pl) => Some((
                     *h,
@@ -343,6 +348,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -394,6 +400,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -461,6 +468,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -561,6 +569,7 @@ impl super::OpenCADStudio {
             .scene
             .selected_entities()
             .iter()
+            .filter(|(h, _)| !self.tabs[i].scene.is_layer_locked(*h))
             .find_map(|(h, e)| match e {
                 EntityType::LwPolyline(pl) => Some((
                     *h,
@@ -632,6 +641,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.is_empty() {
@@ -672,6 +682,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.is_empty() {

@@ -98,6 +98,10 @@ impl OpenCADStudio {
 
         let search = self.find_replace.search.clone();
         let replacement = self.find_replace.replacement.clone();
+        if match_is_locked(&self.tabs[i].scene, target) {
+            self.find_replace.status = "The matching object is on a locked layer.".to_string();
+            return;
+        }
         self.push_undo_snapshot(i, "FIND/REPLACE");
         let replaced = replace_match_text(
             &mut self.tabs[i].scene.document,
@@ -152,7 +156,11 @@ impl OpenCADStudio {
         let mut replaced = 0usize;
         let mut changed = Vec::new();
         let mut changed_outside_active_space = false;
-        for target in matches {
+        let editable: Vec<_> = matches
+            .into_iter()
+            .filter(|target| !match_is_locked(&self.tabs[i].scene, *target))
+            .collect();
+        for target in editable {
             let count = replace_match_text(
                 &mut self.tabs[i].scene.document,
                 target,
@@ -355,6 +363,11 @@ fn match_document_handle(target: FindMatchKey) -> acadrust::Handle {
         FindMatchKey::BlockEntityInInsert { entity, .. } => entity,
         FindMatchKey::InsertAttribute { insert, .. } => insert,
     }
+}
+
+fn match_is_locked(scene: &crate::scene::Scene, target: FindMatchKey) -> bool {
+    scene.is_layer_locked(match_owner_handle(target))
+        || scene.is_layer_locked(match_document_handle(target))
 }
 
 fn match_label(target: FindMatchKey) -> String {

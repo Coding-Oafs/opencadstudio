@@ -327,6 +327,9 @@ impl Scene {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn update_entity(&mut self, mut entity: EntityType) -> bool {
         let handle = entity.common().handle;
+        if self.is_layer_locked(handle) {
+            return false;
+        }
         let Some(existing) = self.document.get_entity(handle) else {
             return false;
         };

@@ -607,6 +607,7 @@ impl OpenCADStudio {
                         .selected_entities()
                         .into_iter()
                         .map(|(h, _)| h)
+                        .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                         .collect();
                     if handles.is_empty() {
                         self.command_line
@@ -708,6 +709,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -756,7 +758,8 @@ impl OpenCADStudio {
                     .document
                     .entities()
                     .filter(|e| {
-                        selected.is_empty() || selected.contains(&e.common().handle.value())
+                        (selected.is_empty() || selected.contains(&e.common().handle.value()))
+                            && !self.tabs[i].scene.is_layer_locked(e.common().handle)
                     })
                     .map(|e| {
                         let key = crate::entities::names::dxf_name(e).to_string();
@@ -2284,6 +2287,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if selected_handles.is_empty() {
                     self.command_line

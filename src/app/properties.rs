@@ -1445,6 +1445,26 @@ impl OpenCADStudio {
             panel.source_handles = new_handles;
             panel.prop_vertex = prop_vertex;
             panel.prop_vertex_indicator_active = prop_vertex_indicator_active;
+            let property_handles = panel.selected_handles();
+            let property_handles = if property_handles.is_empty() {
+                &panel.source_handles
+            } else {
+                &property_handles
+            };
+            let locked_only = !property_handles.is_empty()
+                && property_handles
+                    .iter()
+                    .all(|handle| self.tabs[i].scene.is_layer_locked(*handle));
+            if locked_only {
+                make_sections_read_only(&mut panel.sections);
+                panel.edit_buf.clear();
+                panel.color_picker_open = false;
+                panel.color_palette_open = false;
+                panel.bg_color_picker_open = false;
+                panel.open_color_field = None;
+                panel.hatch_pattern_picker_open = false;
+                panel.edit_choice_open = false;
+            }
             panel
         };
 
@@ -1563,6 +1583,15 @@ impl OpenCADStudio {
     /// Rebuild the cached selected_grips from the current entity selection.
     pub(super) fn refresh_selected_grips(&mut self) {
         let i = self.active_tab;
+        let locked_active_grip = self.tabs[i].active_grip.as_ref().is_some_and(|grip| {
+            grip.targets
+                .iter()
+                .any(|target| self.tabs[i].scene.is_layer_locked(target.handle))
+        });
+        if locked_active_grip {
+            self.cancel_active_grip_edit();
+            return;
+        }
         let is_paper = self.tabs[i].scene.current_layout != "Model";
         // Paper-space entity coordinates are NOT offset by world_offset (same rule
         // as wire tessellation in wires_for_block). Only subtract in model space.
@@ -1574,10 +1603,15 @@ impl OpenCADStudio {
         let (new_handle, new_grips, new_grip_handles) = {
             let annotation_scale_handle = self.tabs[i].scene.displayed_annotation_scale_handle();
             let selected = self.tabs[i].scene.selected_entities();
-            let single_handle = (selected.len() == 1).then(|| selected[0].0);
+            let single_handle = (selected.len() == 1
+                && !self.tabs[i].scene.is_layer_locked(selected[0].0))
+                .then(|| selected[0].0);
             let mut grips = Vec::new();
             let mut handles = Vec::new();
             for (handle, entity) in selected {
+                if self.tabs[i].scene.is_layer_locked(handle) {
+                    continue;
+                }
                 let contextual = crate::scene::annotative::entity_for_annotation_context(
                     &self.tabs[i].scene.document,
                     entity,
@@ -1618,12 +1652,21 @@ impl OpenCADStudio {
     }
 
     pub(super) fn property_target_handles(&self, i: usize) -> Vec<Handle> {
-        let handles = self.tabs[i].properties.selected_handles();
-        if !handles.is_empty() {
-            handles
-        } else {
-            self.tabs[i].selected_handle.into_iter().collect()
+        let mut handles = self.tabs[i].properties.selected_handles();
+        if handles.is_empty() {
+            handles = self.tabs[i].properties.source_handles.clone();
         }
+        if handles.is_empty() {
+            handles.extend(self.tabs[i].selected_handle);
+        }
+        handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+        handles
+    }
+
+    pub(super) fn has_property_selection(&self, i: usize) -> bool {
+        !self.tabs[i].properties.selected_handles().is_empty()
+            || !self.tabs[i].properties.source_handles.is_empty()
+            || self.tabs[i].selected_handle.is_some()
     }
 
     pub(super) fn invalidate_property_targets(&mut self, i: usize, handles: &[Handle]) {
@@ -1861,6 +1904,45 @@ impl OpenCADStudio {
             }
         }
         new_handle
+    }
+}
+
+fn make_sections_read_only(
+    sections: &mut [crate::scene::model::object::PropSection],
+) {
+    use crate::scene::model::object::PropValue;
+
+    for property in sections
+        .iter_mut()
+        .flat_map(|section| section.props.iter_mut())
+    {
+        let text = match &property.value {
+            PropValue::ReadOnly(value)
+            | PropValue::EditText(value)
+            | PropValue::LayerChoice(value)
+            | PropValue::LinetypeChoice(value)
+            | PropValue::HatchPatternChoice(value) => value.clone(),
+            PropValue::Choice { selected, .. } => selected.clone(),
+            PropValue::EditChoice { value, .. } => value.clone(),
+            PropValue::ColorChoice(color) => match color {
+                acadrust::types::Color::None => "None".to_string(),
+                acadrust::types::Color::ByLayer => "ByLayer".to_string(),
+                acadrust::types::Color::ByBlock => "ByBlock".to_string(),
+                acadrust::types::Color::Index(index) => index.to_string(),
+                acadrust::types::Color::Rgb { r, g, b } => format!("{r},{g},{b}"),
+            },
+            PropValue::ColorVaries | PropValue::LwVaries => VARIES_LABEL.to_string(),
+            PropValue::LwChoice(lineweight) => {
+                ui::properties::LwItem(*lineweight).to_string()
+            }
+            PropValue::BoolToggle { value, .. } => {
+                if *value { t!("Yes") } else { t!("No") }.into_owned()
+            }
+            PropValue::Stepper { display, .. } => display.clone(),
+            PropValue::AttrText { value, .. } => value.clone(),
+        };
+        property.field = "locked_read_only";
+        property.value = PropValue::ReadOnly(text);
     }
 }
 

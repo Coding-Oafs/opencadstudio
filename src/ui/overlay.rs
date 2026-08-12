@@ -347,7 +347,7 @@ struct SelectionCanvas {
     /// is usable instead of the cursor vanishing over it. (#227)
     suppressed: bool,
     /// The entity under the crosshair is on a locked layer — draw a small lock
-    /// badge by the cursor so the user knows it can't be selected/edited.
+    /// badge by the cursor so the user knows it can't be edited.
     hover_locked: bool,
     /// Background of the active drawing space. Crosshair contrast follows this
     /// rather than the UI theme, which may be light over a dark model viewport.
@@ -1042,7 +1042,7 @@ impl canvas::Program<Message> for SelectionCanvas {
 
                 // Locked-layer badge: a small padlock beside the crosshair when
                 // the hovered object sits on a locked layer (issue: locked
-                // objects are visible + snappable but not selectable/editable).
+                // objects are visible, snappable and selectable but not editable).
                 if self.hover_locked {
                     let warning = theme.palette().warning.base;
                     let amber = warning.color.scale_alpha(0.98);

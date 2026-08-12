@@ -117,6 +117,9 @@ impl<'a> HostSession<'a> {
     /// missing so the file stays valid for other CAD apps. Returns `false` when
     /// the entity does not exist.
     pub fn write_record(&mut self, handle: Handle, record: ExtendedDataRecord) -> bool {
+        if self.app.tabs[self.tab].scene.is_layer_locked(handle) {
+            return false;
+        }
         let app = record.application_name.clone();
         self.ensure_app_id(&app);
         let app_handle = self.document().app_ids.get(&app).map(|a| a.handle.value());
@@ -150,6 +153,9 @@ impl<'a> HostSession<'a> {
     /// Remove the XDATA record for `app_name` from entity `handle`. Returns
     /// `true` when a record was actually removed.
     pub fn remove_record(&mut self, handle: Handle, app_name: &str) -> bool {
+        if self.app.tabs[self.tab].scene.is_layer_locked(handle) {
+            return false;
+        }
         let app_handle = self.document().app_ids.get(app_name).map(|a| a.handle.value());
         let Some(entity) = self.document_mut().get_entity_mut(handle) else {
             return false;

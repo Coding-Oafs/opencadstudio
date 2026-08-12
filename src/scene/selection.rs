@@ -164,16 +164,6 @@ impl Scene {
             let Some(e) = self.document.get_entity(h) else {
                 continue;
             };
-            // Never quick-select objects on a locked layer.
-            if self
-                .document
-                .layers
-                .get(&e.common().layer)
-                .map(|l| l.is_locked())
-                .unwrap_or(false)
-            {
-                continue;
-            }
             let type_ok = type_name.is_none_or(|t| entity_type_name(e) == t);
             let prop_ok = if !type_ok {
                 true

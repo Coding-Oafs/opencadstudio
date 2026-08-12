@@ -16,8 +16,6 @@ impl OpenCADStudio {
                     .entity_wires()
                     .iter()
                     .filter_map(|w| Scene::handle_from_wire_name(&w.name))
-                    // Objects on a locked layer aren't selectable.
-                    .filter(|&h| !self.tabs[i].scene.is_layer_locked(h))
                     .collect();
                 let count = handles.len();
                 for h in handles {
@@ -362,6 +360,9 @@ impl OpenCADStudio {
 
                 let handle_u64: u64 = cmd["BEDIT_BEGIN:".len()..].parse().unwrap_or(0);
                 let insert_handle = Handle::new(handle_u64);
+                if self.reject_locked_edit(i, insert_handle) {
+                    return Some(Task::none());
+                }
 
                 let insert = match self.tabs[i].scene.document.get_entity(insert_handle) {
                     Some(acadrust::EntityType::Insert(ins)) => ins.clone(),
@@ -637,6 +638,9 @@ impl OpenCADStudio {
 
                 let handle_u64: u64 = cmd["REFEDIT_BEGIN:".len()..].parse().unwrap_or(0);
                 let insert_handle = Handle::new(handle_u64);
+                if self.reject_locked_edit(i, insert_handle) {
+                    return Some(Task::none());
+                }
 
                 // Get INSERT entity.
                 let insert = match self.tabs[i].scene.document.get_entity(insert_handle) {
@@ -995,9 +999,13 @@ impl OpenCADStudio {
                             .document
                             .entities()
                             .map(|e| e.common().handle)
+                            .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                             .collect()
                     } else {
-                        sel.into_iter().map(|(h, _)| h).collect()
+                        sel.into_iter()
+                            .map(|(h, _)| h)
+                            .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                            .collect()
                     }
                 };
                 if handles.is_empty() {
@@ -1165,7 +1173,10 @@ impl OpenCADStudio {
                             handles.clone()
                         } else {
                             handles.iter().copied().take(1).collect()
-                        };
+                        }
+                        .into_iter()
+                        .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                        .collect();
                         if targets.is_empty() {
                             self.command_line
                                 .push_output(crate::tf!("FIND: \"{}\" not found.", search).as_ref());

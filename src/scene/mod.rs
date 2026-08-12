@@ -6412,8 +6412,7 @@ impl Scene {
     }
 
     /// True when `handle`'s entity sits on a locked layer. Locked objects stay
-    /// visible and snappable but cannot be selected or modified — callers in
-    /// the pick / modify paths consult this to skip them.
+    /// visible, snappable and selectable, but mutation paths must skip them.
     pub fn is_layer_locked(&self, handle: Handle) -> bool {
         self.document
             .get_entity(handle)
@@ -7807,7 +7806,6 @@ impl Scene {
             ));
         }
         handles.retain(|&h| self.passes_selection_filter(h));
-        handles.retain(|&h| !self.is_layer_locked(h));
         handles
     }
 

@@ -239,6 +239,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // Grip-menu value prompt — consume the typed number and
                 // route it through `apply_grip_menu_value`.
                 if let Some(pending) = self.grip_pending.take() {
+                    let i = self.active_tab;
+                    if self.reject_locked_edit(i, pending.handle) {
+                        self.cancel_active_grip_edit();
+                        return Task::none();
+                    }
                     let raw = crate::app::expr_eval::eval_to_string(self.command_line.input.trim());
                     self.command_line.input.clear();
                     let Ok(v) = raw.parse::<f64>() else {
@@ -249,7 +254,6 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         self.grip_pending = Some(pending);
                         return self.focus_cmd_input();
                     };
-                    let i = self.active_tab;
                     let interactive_lengthen = self.tabs[i]
                         .active_grip
                         .as_ref()
@@ -1141,6 +1145,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 let Some(popup) = self.grip_popup.take() else {
                     return Task::none();
                 };
+                if self.reject_locked_edit(i, popup.handle) {
+                    return Task::none();
+                }
                 self.grip_hover = None;
                 let Some(item) = popup.items.get(idx).cloned() else {
                     return Task::none();
@@ -1517,6 +1524,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // No selection — change the creation default. Persist
                     // into the tab's header (CLAYER) so it survives a tab
                     // switch and rides the next save. #21.
@@ -1559,6 +1569,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // Persist the new default into the tab's header so it
                     // round-trips through tab switches and writes back on
                     // save (CECOLOR). #21.
@@ -1585,6 +1598,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // Persist into the tab's header (CELTYPE). Resolve to a
                     // handle when the name matches a line_types entry so the
                     // handle-based lookup stays in sync. #21.
@@ -2361,6 +2377,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     /// attributes. Entry points: double-clicking such a block, or ATTEDIT.
     pub(crate) fn open_attribute_editor(&mut self, handle: acadrust::Handle) {
         let i = self.active_tab;
+        if self.reject_locked_edit(i, handle) {
+            return;
+        }
         let doc = &self.tabs[i].scene.document;
         // Ok((block, rows)) to open; Err(msg) to report and stay closed. The
         // borrow of `doc` ends with this match, before any `self` mutation.
