@@ -1579,6 +1579,9 @@ pub struct Scene {
         RefCell<HashMap<(Handle, String, u64), (u64, Arc<Vec<HatchModel>>)>>,
     frozen_image_cache: RefCell<HashMap<(Handle, u64), (u64, Arc<Vec<ImageModel>>)>>,
     frozen_mesh_cache: RefCell<HashMap<(Handle, String, u64), (u64, Arc<Vec<MeshLodSet>>)>>,
+    /// Viewports that carry layer color/alpha/linetype/lineweight overrides.
+    /// Cached per geometry epoch so ordinary viewports can share render data.
+    viewport_style_override_cache: RefCell<Option<(u64, HashSet<Handle>)>>,
     /// Cached block-instance hatches for hit-testing, keyed by geometry_epoch.
     /// The set is geometry-derived, so a camera move or hover never invalidates
     /// the shared graph result.
@@ -1863,6 +1866,7 @@ impl Scene {
             frozen_wipeout_cache: RefCell::new(HashMap::default()),
             frozen_image_cache: RefCell::new(HashMap::default()),
             frozen_mesh_cache: RefCell::new(HashMap::default()),
+            viewport_style_override_cache: RefCell::new(None),
             insert_hatch_cache: RefCell::new(None),
             paper_sheet_cache: RefCell::new(HashMap::default()),
             paper_viewport_cache: RefCell::new(HashMap::default()),
@@ -2016,7 +2020,7 @@ impl Scene {
             &self.document,
             &self.document.header.current_annotation_scale,
         );
-        let key = Self::resident_wire_key(
+        let key = self.resident_wire_key(
             block,
             self.bg_color,
             None,
@@ -4758,7 +4762,7 @@ impl Scene {
             self.paper_bg_color
         };
         let all_visible = self.annotation_all_visible();
-        let key = Self::resident_wire_key(
+        let key = self.resident_wire_key(
             block,
             bg,
             anno_scale_override,
@@ -4832,9 +4836,6 @@ impl Scene {
         // spaces or re-scaling a viewport can't accumulate dead full sets.
         let cur_epoch = self.geometry_epoch;
         sets.retain(|_, set| set.epoch == cur_epoch);
-        if sets.len() > 8 {
-            sets.clear();
-        }
         sets.insert(
             key,
             ResidentWireSet {
@@ -4848,6 +4849,7 @@ impl Scene {
     }
 
     fn resident_wire_key(
+        &self,
         block: Handle,
         bg: [f32; 4],
         anno_scale_override: Option<f32>,
@@ -4868,7 +4870,7 @@ impl Scene {
             .unwrap_or(u64::MAX));
         mix(annotation_scale_handle.map(|handle| handle.value()).unwrap_or(0));
         mix(all_visible as u64);
-        mix(style_viewport.map(|handle| handle.value()).unwrap_or(0));
+        mix(self.viewport_style_key(style_viewport));
         match frozen_layers {
             Some(frozen) => {
                 let mut signature = 0u64;
@@ -4970,7 +4972,7 @@ impl Scene {
         frozen_layers: Option<&HashSet<Handle>>,
         style_viewport: Option<Handle>,
     ) -> Option<Arc<Vec<WireModel>>> {
-        if style_viewport.is_some() {
+        if self.viewport_style_key(style_viewport) != 0 {
             return None;
         }
         let perf = crate::perf::enabled();
@@ -6269,6 +6271,46 @@ impl Scene {
         sig
     }
 
+    fn viewport_style_key(&self, viewport: Option<Handle>) -> u64 {
+        let Some(viewport) = viewport.filter(|handle| handle.is_valid()) else {
+            return 0;
+        };
+        let stale = self
+            .viewport_style_override_cache
+            .borrow()
+            .as_ref()
+            .map(|(epoch, _)| *epoch != self.geometry_epoch)
+            .unwrap_or(true);
+        if stale {
+            use acadrust::objects::KnownXRecordKind;
+            let kinds = [
+                KnownXRecordKind::LayerViewportAlphaOverride,
+                KnownXRecordKind::LayerViewportColorOverride,
+                KnownXRecordKind::LayerViewportLinetypeOverride,
+                KnownXRecordKind::LayerViewportLineweightOverride,
+            ];
+            let mut overridden = HashSet::default();
+            for layer in self.document.layers.iter() {
+                for kind in kinds {
+                    overridden.extend(
+                        self.document
+                            .layer_viewport_overrides(layer.handle, kind)
+                            .into_iter()
+                            .map(|(handle, _)| handle),
+                    );
+                }
+            }
+            *self.viewport_style_override_cache.borrow_mut() =
+                Some((self.geometry_epoch, overridden));
+        }
+        self.viewport_style_override_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, overridden)| overridden.contains(&viewport))
+            .then_some(viewport.value())
+            .unwrap_or(0)
+    }
+
     /// Hatch / 2-D-solid fills for a content viewport, with its frozen layers
     /// removed. Cached per frozen-set signature (viewports sharing a frozen set
     /// share the build). No frozen layers → the shared unfiltered set.
@@ -6285,7 +6327,7 @@ impl Scene {
         let all_visible = self.annotation_all_visible();
         let context_sig = scale.map_or(0, |handle| handle.value())
             ^ u64::from(all_visible).rotate_left(61)
-            ^ viewport.value().rotate_left(23);
+            ^ self.viewport_style_key(Some(viewport)).rotate_left(23);
         let sig = Self::frozen_layers_sig(frozen) ^ context_sig;
         let key = (target_block, self.current_layout.clone(), sig);
         let sel = self.selected_hatch_sig();
@@ -6320,8 +6362,7 @@ impl Scene {
         let scale = self.viewport_scale_handle(viewport);
         let all_visible = self.annotation_all_visible();
         let context_sig = scale.map_or(0, |handle| handle.value())
-            ^ u64::from(all_visible).rotate_left(61)
-            ^ viewport.value().rotate_left(23);
+            ^ u64::from(all_visible).rotate_left(61);
         let sig = Self::frozen_layers_sig(frozen) ^ context_sig;
         let key = (target_block, self.current_layout.clone(), sig);
         if let Some((e, arc)) = self.frozen_wipeout_cache.borrow().get(&key) {
@@ -6355,7 +6396,7 @@ impl Scene {
         let all_visible = self.annotation_all_visible();
         let context_sig = scale.map_or(0, |handle| handle.value())
             ^ u64::from(all_visible).rotate_left(61)
-            ^ viewport.value().rotate_left(23);
+            ^ self.viewport_style_key(Some(viewport)).rotate_left(23);
         let sig = Self::frozen_layers_sig(frozen) ^ context_sig;
         let key = (target_block, sig);
         if let Some((e, arc)) = self.frozen_image_cache.borrow().get(&key) {
@@ -6390,7 +6431,7 @@ impl Scene {
         let all_visible = self.annotation_all_visible();
         let context_sig = scale.map_or(0, |handle| handle.value())
             ^ u64::from(all_visible).rotate_left(61)
-            ^ viewport.value().rotate_left(23);
+            ^ self.viewport_style_key(Some(viewport)).rotate_left(23);
         let sig = Self::frozen_layers_sig(frozen) ^ context_sig;
         let key = (target_block, self.current_layout.clone(), sig);
         if let Some((e, arc)) = self.frozen_mesh_cache.borrow().get(&key) {
