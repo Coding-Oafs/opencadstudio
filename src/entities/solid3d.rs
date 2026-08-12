@@ -747,6 +747,33 @@ use crate::scene::model::mesh_model::MeshLodSet;
 use crate::scene::convert::solid3d_tess;
 use acadrust::{types::Vector3, EntityType};
 
+const DISPLAY_DEFLECTION_COEFFICIENT: f64 = 2.5e-4;
+
+/// Shared world-space chord tolerance for solid display.
+pub fn display_deflection(
+    header: &acadrust::document::HeaderVariables,
+    facet_res: f64,
+) -> Option<f64> {
+    let low = header.model_space_extents_min;
+    let high = header.model_space_extents_max;
+    let spans = [high.x - low.x, high.y - low.y, high.z - low.z];
+    let span = spans
+        .into_iter()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .fold(0.0, f64::max);
+    if !span.is_finite() || span <= 0.0 || span > 1.0e16 {
+        return None;
+    }
+    let resolution = if facet_res.is_finite() && facet_res > 0.0 {
+        facet_res.clamp(0.01, 10.0)
+    } else {
+        1.0
+    };
+    Some(
+        (span * DISPLAY_DEFLECTION_COEFFICIENT / resolution.max(1.0).sqrt()).max(1e-9),
+    )
+}
+
 /// `point_of_reference` of an ACIS-backed volume entity, if applicable.
 pub fn point_of_reference(e: &EntityType) -> Option<&Vector3> {
     match e {
@@ -764,13 +791,38 @@ pub fn tessellate_volume(
     e: &EntityType,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
     match e {
-        EntityType::Solid3D(s) => solid3d_tess::tessellate_solid3d(s, color, facet_res, isolines),
-        EntityType::Region(r) => solid3d_tess::tessellate_region(r, color, facet_res, isolines),
-        EntityType::Body(b) => solid3d_tess::tessellate_body(b, color, facet_res, isolines),
-        EntityType::Surface(s) => solid3d_tess::tessellate_surface(s, color, facet_res, isolines),
+        EntityType::Solid3D(s) => solid3d_tess::tessellate_solid3d(
+            s,
+            color,
+            facet_res,
+            chordal_deflection,
+            isolines,
+        ),
+        EntityType::Region(r) => solid3d_tess::tessellate_region(
+            r,
+            color,
+            facet_res,
+            chordal_deflection,
+            isolines,
+        ),
+        EntityType::Body(b) => solid3d_tess::tessellate_body(
+            b,
+            color,
+            facet_res,
+            chordal_deflection,
+            isolines,
+        ),
+        EntityType::Surface(s) => solid3d_tess::tessellate_surface(
+            s,
+            color,
+            facet_res,
+            chordal_deflection,
+            isolines,
+        ),
         EntityType::Mesh(_) | EntityType::PolygonMesh(_) | EntityType::PolyfaceMesh(_) => {
             crate::entities::mesh::tessellate_shaded_mesh(e, color)
         }

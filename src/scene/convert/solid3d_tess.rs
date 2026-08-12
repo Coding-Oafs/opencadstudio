@@ -8,9 +8,17 @@ fn tessellate_acis(
     name: String,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
-    crate::scene::convert::acis_kernel::tessellate_sat(sat, name, color, facet_res, isolines)
+    crate::scene::convert::acis_kernel::tessellate_sat(
+        sat,
+        name,
+        color,
+        facet_res,
+        chordal_deflection,
+        isolines,
+    )
 }
 
 pub(crate) fn body_transform(
@@ -167,10 +175,18 @@ fn finish(
     name: String,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
     acis: &acadrust::entities::AcisData,
 ) -> Option<MeshLodSet> {
-    let mut set = tessellate_acis(&sat, name, color, facet_res, isolines)?;
+    let mut set = tessellate_acis(
+        &sat,
+        name,
+        color,
+        facet_res,
+        chordal_deflection,
+        isolines,
+    )?;
     remap_acis_material_bindings(&mut set, acis);
     Some(set)
 }
@@ -179,6 +195,7 @@ pub fn tessellate_region(
     region: &Region,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
     let sat = parse_acis(
@@ -191,6 +208,7 @@ pub fn tessellate_region(
         region.common.handle.value().to_string(),
         color,
         facet_res,
+        chordal_deflection,
         isolines,
         &region.acis_data,
     )
@@ -200,6 +218,7 @@ pub fn tessellate_body(
     body: &Body,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
     let sat = parse_acis(
@@ -212,6 +231,7 @@ pub fn tessellate_body(
         body.common.handle.value().to_string(),
         color,
         facet_res,
+        chordal_deflection,
         isolines,
         &body.acis_data,
     )
@@ -221,6 +241,7 @@ pub fn tessellate_surface(
     surface: &acadrust::entities::Surface,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
     let sat = parse_acis(
@@ -233,6 +254,7 @@ pub fn tessellate_surface(
         surface.common.handle.value().to_string(),
         color,
         facet_res,
+        chordal_deflection,
         isolines,
         &surface.acis_data,
     )
@@ -242,6 +264,7 @@ pub fn tessellate_solid3d(
     solid: &Solid3D,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
     let sat = parse_acis(
@@ -254,6 +277,7 @@ pub fn tessellate_solid3d(
         solid.common.handle.value().to_string(),
         color,
         facet_res,
+        chordal_deflection,
         isolines,
         &solid.acis_data,
     )

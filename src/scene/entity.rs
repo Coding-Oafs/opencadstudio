@@ -136,6 +136,8 @@ impl Scene {
         };
         let image_seed = self.image_seed_for(&entity);
         let facet_res = self.document.header.facet_resolution;
+        let chordal_deflection =
+            crate::entities::solid3d::display_deflection(&self.document.header, facet_res);
         let isolines = self.document.header.isolines.max(0) as usize;
         let mesh_seed = if matches!(
             &entity,
@@ -148,8 +150,14 @@ impl Scene {
                 | EntityType::PolyfaceMesh(_)
         ) {
             let color = self.render_style(&entity).0;
-            crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines)
-                .map(|m| offset_mesh_lod_set(m))
+            crate::entities::solid3d::tessellate_volume(
+                &entity,
+                color,
+                facet_res,
+                chordal_deflection,
+                isolines,
+            )
+            .map(offset_mesh_lod_set)
         } else {
             None
         };
@@ -357,6 +365,8 @@ impl Scene {
         };
         let image_seed = self.image_seed_for(&entity);
         let facet_res = self.document.header.facet_resolution;
+        let chordal_deflection =
+            crate::entities::solid3d::display_deflection(&self.document.header, facet_res);
         let isolines = self.document.header.isolines.max(0) as usize;
         let mesh_seed = if matches!(
             &entity,
@@ -369,8 +379,14 @@ impl Scene {
                 | EntityType::PolyfaceMesh(_)
         ) {
             let color = self.render_style(&entity).0;
-            crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines)
-                .map(|m| offset_mesh_lod_set(m))
+            crate::entities::solid3d::tessellate_volume(
+                &entity,
+                color,
+                facet_res,
+                chordal_deflection,
+                isolines,
+            )
+            .map(offset_mesh_lod_set)
         } else {
             None
         };
@@ -538,6 +554,8 @@ impl Scene {
                 })
                 .collect();
         let facet_res = self.document.header.facet_resolution;
+        let chordal_deflection =
+            crate::entities::solid3d::display_deflection(&self.document.header, facet_res);
         let isolines = self.document.header.isolines.max(0) as usize;
         use crate::par::prelude::*;
         let built: Vec<(Handle, MeshLodSet, bool)> = entries
@@ -547,6 +565,7 @@ impl Scene {
                     entity.as_ref(),
                     color,
                     facet_res,
+                    chordal_deflection,
                     isolines,
                 )
                 .map(|mut mesh| {
@@ -1892,6 +1911,8 @@ impl Scene {
 
         use crate::par::prelude::*;
         let facet_res = self.document.header.facet_resolution;
+        let chordal_deflection =
+            crate::entities::solid3d::display_deflection(&self.document.header, facet_res);
         let isolines = self.document.header.isolines.max(0) as usize;
         // Top-level solids: offset into the render frame, drawn flat.
         // Block-definition solids: keep block-local coords for per-INSERT
@@ -1899,7 +1920,14 @@ impl Scene {
         let built: Vec<(Handle, MeshLodSet, bool)> = entries
             .into_par_iter()
             .filter_map(|(handle, entity, color, top_level)| {
-                crate::entities::solid3d::tessellate_volume(&entity, color, facet_res, isolines).map(|mut mesh| {
+                crate::entities::solid3d::tessellate_volume(
+                    &entity,
+                    color,
+                    facet_res,
+                    chordal_deflection,
+                    isolines,
+                )
+                .map(|mut mesh| {
                     let material = crate::scene::model::material_model::resolve_material_with_base(
                         &self.document,
                         &entity,

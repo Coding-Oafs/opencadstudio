@@ -763,12 +763,12 @@ fn build_derived_caches_impl(
         })
         .collect();
 
-    // meshes (parallel tessellation). FACETRES (header.facet_resolution)
-    // scales the per-LOD segment counts so users with finer drawings get
-    // smoother solids; clamped to AutoCAD's [0.01, 10.0] range inside.
+    // FACETRES biases one shared chordal tolerance for all solids.
     // Top-level (layout-owned) solids are offset into the render frame; block
     // definition solids keep block-local coords for per-INSERT instancing. (#123)
     let facet_res = doc.header.facet_resolution;
+    let chordal_deflection =
+        crate::entities::solid3d::display_deflection(&doc.header, facet_res);
     let isolines = doc.header.isolines.max(0) as usize;
     // Real layout blocks come from the Layout objects' block_record handles —
     // `BlockRecord::is_layout()` is unreliable here (it flags ordinary blocks).
@@ -796,8 +796,14 @@ fn build_derived_caches_impl(
                 material_base_dir,
             );
             let top_level = layout_blocks.contains(&e.common().owner_handle);
-            let result = crate::entities::solid3d::tessellate_volume(e, color, facet_res, isolines)
-                .map(|mut mesh| {
+            let result = crate::entities::solid3d::tessellate_volume(
+                e,
+                color,
+                facet_res,
+                chordal_deflection,
+                isolines,
+            )
+            .map(|mut mesh| {
                 material.apply_to_with_face_overrides(
                     &mut mesh,
                     doc,
@@ -810,7 +816,7 @@ fn build_derived_caches_impl(
                 );
                 let mesh = if top_level { offset_mesh_lod_set(mesh) } else { mesh };
                 (handle, mesh, top_level)
-                });
+            });
             let done = detail_done.fetch_add(1, Ordering::Relaxed) + 1;
             if done & 0xff == 0 || done == detail_total {
                 report_detail(done);
