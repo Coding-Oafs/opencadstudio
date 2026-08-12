@@ -1720,12 +1720,29 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 Task::none()
     }
 
-    pub(super) fn on_prop_geom_choice_changed(&mut self, field: &'static str, value: String) -> Task<Message> {
-                let i = self.active_tab;
-                let handles = self.property_target_handles(i);
-                if !handles.is_empty() {
-                    self.push_undo_snapshot(i, "CHPROP");
-                    if field == "vp_ucs_name" {
+    pub(super) fn on_prop_geom_choice_changed(
+        &mut self,
+        field: &'static str,
+        value: String,
+    ) -> Task<Message> {
+        let i = self.active_tab;
+        let handles = self.property_target_handles(i);
+
+        if !handles.is_empty() {
+            self.push_undo_snapshot(i, "CHPROP");
+
+            if field == "vscale_std" {
+                for &handle in &handles {
+                    if matches!(
+                        self.tabs[i].scene.document.get_entity(handle),
+                        Some(acadrust::EntityType::Viewport(_))
+                    ) {
+                        let _ = self.tabs[i]
+                            .scene
+                            .set_viewport_scale_named_for(handle, &value);
+                    }
+                }
+            } else if field == "vp_ucs_name" {
                         // Resolve UCS name → cloned data, then mutate viewports.
                         let ucs_data = self.tabs[i]
                             .scene

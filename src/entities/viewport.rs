@@ -24,19 +24,6 @@ const STANDARD_SCALES: &[(&str, f64)] = &[
     ("10:1", 10.0),
 ];
 
-/// Parse a scale ratio name to its paper/drawing factor: "1:50" -> 0.02,
-/// "2:1" -> 2.0. Also accepts a plain decimal ("0.02").
-fn parse_scale_ratio(label: &str) -> Option<f64> {
-    if let Some((a, b)) = label.split_once(':') {
-        let n: f64 = a.trim().parse().ok()?;
-        let d: f64 = b.trim().parse().ok()?;
-        if d.abs() > 1e-12 {
-            return Some(n / d);
-        }
-        return None;
-    }
-    label.trim().parse::<f64>().ok()
-}
 
 fn scale_label(scale: f64) -> String {
     for (label, val) in STANDARD_SCALES {
@@ -246,19 +233,6 @@ fn apply_geom_prop(vp: &mut Viewport, field: &str, value: &str) {
             return;
         }
         _ => {}
-    }
-
-    // Scale picker. The label is a ratio name from the drawing's scale list
-    // ("1:50", "2:1"); parse it to the paper/drawing factor so any named
-    // scale resolves, not just the built-in set.
-    if field == "vscale_std" {
-        if let Some(scale) = parse_scale_ratio(value) {
-            vp.custom_scale = scale;
-            if scale > 1e-9 {
-                vp.view_height = vp.height / scale;
-            }
-        }
-        return;
     }
 
     // Render mode picker.
