@@ -975,8 +975,9 @@ fn mesh_spatial_key(set: &MeshLodSet, bounds: [f32; 6]) -> u64 {
 struct MeshBatchPart<'a> {
     set: &'a MeshLodSet,
     mesh: &'a MeshModel,
-    display_mesh: &'a MeshModel,
     uv_mesh: &'a MeshModel,
+    entity_handle: Option<acadrust::Handle>,
+    display_color: [f32; 4],
     material: Option<&'a crate::scene::model::material_model::MeshMaterial>,
     color: [f32; 4],
     indices: std::sync::Arc<[u32]>,
@@ -1157,9 +1158,7 @@ fn build_instanced_chunk(
         .set
         .visual_style
         .as_ref()
-        .map_or(first.display_mesh.color, |style| {
-            style.edge_color(first.display_mesh.color)
-        });
+        .map_or(first.display_color, |style| style.edge_color(first.display_color));
     let edge_key = (source_handle, edge_color.map(f32::to_bits));
     let shared_edge_buffer = first
         .include_edges
@@ -1229,13 +1228,7 @@ fn build_instanced_chunk(
         bounds[3] = bounds[3].max(part.set.world_aabb[2]);
         bounds[4] = bounds[4].max(part.set.world_aabb[3]);
         bounds[5] = bounds[5].max(part.set.z_aabb[1]);
-        if let Some(handle) = part
-            .display_mesh
-            .name
-            .parse::<u64>()
-            .ok()
-            .map(acadrust::Handle::new)
-        {
+        if let Some(handle) = part.entity_handle {
             handles.insert(handle);
             if first.include_faces {
                 highlights.push(MeshBatchRange {
@@ -1330,24 +1323,6 @@ fn mesh_bounds(mesh: &MeshModel) -> [f32; 6] {
         }
     }
     bounds
-}
-
-fn material_uses_model_mapper(
-    material: Option<&crate::scene::model::material_model::MeshMaterial>,
-) -> bool {
-    material.is_some_and(|material| {
-        [
-            &material.diffuse_map,
-            &material.specular_map,
-            &material.reflection_map,
-            &material.opacity_map,
-            &material.bump_map,
-            &material.refraction_map,
-            &material.normal_map,
-        ]
-        .into_iter()
-        .any(|map| map.image.is_some() && map.auto_transform & 4 != 0)
-    })
 }
 
 fn material_is_transparent(
@@ -1557,34 +1532,30 @@ pub fn build_mesh_batch_filtered(
     let mut face_partitions: rustc_hash::FxHashMap<FacePartitionKey, Vec<CachedFacePart<'_>>> =
         rustc_hash::FxHashMap::default();
     for set in sets {
-        let Some(display_mesh) = set.lods.iter().find(|mesh| !mesh.indices.is_empty()) else {
+        let Some(mesh) = set
+            .geometry_lods()
+            .iter()
+            .find(|mesh| !mesh.indices.is_empty())
+        else {
             continue;
         };
-        let display_handle = display_mesh
-            .name
-            .parse::<u64>()
-            .ok()
-            .map(acadrust::Handle::new);
+        let display_handle = set.entity_handle();
         if handles.is_some_and(|wanted| {
             display_handle.is_none_or(|handle| !wanted.contains(&handle))
         }) {
             continue;
         }
-        let source_mesh = set
-            .instance_source
-            .as_ref()
-            .and_then(|source| source.lods.iter().find(|mesh| !mesh.indices.is_empty()));
-        let mesh = source_mesh.unwrap_or(display_mesh);
+        let display_color = set.display_color().unwrap_or(mesh.color);
         let source_identity = set.instance_source.as_ref().map_or_else(
-            || (false, display_mesh as *const MeshModel as usize as u64),
+            || (false, mesh as *const MeshModel as usize as u64),
             |source| (true, source.handle.value()),
         );
-        let triangle_count = display_mesh.indices.len() / 3;
+        let triangle_count = mesh.indices.len() / 3;
         let has_face_materials =
-            display_mesh.triangle_material_handles.len() == triangle_count
+            mesh.triangle_material_handles.len() == triangle_count
             && !set.face_materials.is_empty();
-        let has_face_colors = display_mesh.triangle_colors.len() == triangle_count
-            && display_mesh.triangle_colors.iter().any(Option::is_some);
+        let has_face_colors = mesh.triangle_colors.len() == triangle_count
+            && mesh.triangle_colors.iter().any(Option::is_some);
         let include_faces = set
             .visual_style
             .as_ref()
@@ -1595,7 +1566,7 @@ pub fn build_mesh_batch_filtered(
             .map_or(true, |style| style.edges_visible());
         if !has_face_materials && !has_face_colors {
             let base_color =
-                set.material.as_ref().map_or(display_mesh.color, |material| material.diffuse);
+                set.material.as_ref().map_or(display_color, |material| material.diffuse);
             let color = set
                 .visual_style
                 .as_ref()
@@ -1603,7 +1574,7 @@ pub fn build_mesh_batch_filtered(
             let (shared_indices, shared_hash) = source_indices
                 .entry(source_identity)
                 .or_insert_with(|| {
-                    let indices = std::sync::Arc::<[u32]>::from(display_mesh.indices.as_slice());
+                    let indices = std::sync::Arc::<[u32]>::from(mesh.indices.as_slice());
                     let hash = index_hash(indices.as_ref());
                     (indices, hash)
                 })
@@ -1611,8 +1582,9 @@ pub fn build_mesh_batch_filtered(
             ordered.push(MeshBatchPart {
                 set,
                 mesh,
-                display_mesh,
                 uv_mesh: mesh,
+                entity_handle: display_handle,
+                display_color,
                 material: set.material.as_ref(),
                 color,
                 indices: shared_indices,
@@ -1637,10 +1609,10 @@ pub fn build_mesh_batch_filtered(
         let partition_key = FacePartitionKey {
             instanced: source_identity.0,
             source: source_identity.1,
-            base_material: material_key(set.material.as_ref(), display_mesh.color),
+            base_material: material_key(set.material.as_ref(), display_color),
             face_materials,
             visual_style: visual_style_partition_key(set.visual_style.as_ref()),
-            display_color: display_mesh.color.map(f32::to_bits),
+            display_color: display_color.map(f32::to_bits),
             include_faces,
             include_edges,
         };
@@ -1655,18 +1627,18 @@ pub fn build_mesh_batch_filtered(
                     Vec<u32>,
                 ),
             > = std::collections::BTreeMap::new();
-            for (triangle, indices) in display_mesh.indices.chunks_exact(3).enumerate() {
+            for (triangle, indices) in mesh.indices.chunks_exact(3).enumerate() {
                 let material = if has_face_materials {
-                    display_mesh.triangle_material_handles[triangle]
+                    mesh.triangle_material_handles[triangle]
                         .and_then(|handle| set.face_materials.get(&handle))
                         .or(set.material.as_ref())
                 } else {
                     set.material.as_ref()
                 };
                 let base_color =
-                    material.map_or(display_mesh.color, |material| material.diffuse);
+                    material.map_or(display_color, |material| material.diffuse);
                 let base_color = if has_face_colors {
-                    display_mesh.triangle_colors[triangle].unwrap_or(base_color)
+                    mesh.triangle_colors[triangle].unwrap_or(base_color)
                 } else {
                     base_color
                 };
@@ -1700,8 +1672,9 @@ pub fn build_mesh_batch_filtered(
             ordered.push(MeshBatchPart {
                 set,
                 mesh,
-                display_mesh,
                 uv_mesh: mesh,
+                entity_handle: display_handle,
+                display_color,
                 material: part.material,
                 color: part.color,
                 indices: part.indices,
@@ -1738,25 +1711,34 @@ pub fn build_mesh_batch_filtered(
             mesh_spatial_key(part.set, spatial_bounds),
         )
     });
-    let storage_instancing =
-        device.limits().max_storage_buffers_per_shader_stage > 0;
+    let storage_instancing = device.limits().max_storage_buffers_per_shader_stage > 0;
     let mut instance_groups: std::collections::BTreeMap<
         InstanceGroupKey,
         Vec<MeshBatchPart<'_>>,
     > = std::collections::BTreeMap::new();
     let mut direct_parts = Vec::with_capacity(ordered.len());
-    for mut part in ordered {
-        let eligible = storage_instancing
-            && part.set.instance_transform.is_some()
+    for part in ordered {
+        let eligible = part.set.instance_transform.is_some()
             && part.set.instance_source.is_some()
-            && !material_uses_model_mapper(part.material)
-            && part.mesh.verts.len() <= max_verts
-            && part.indices.len() / 3 <= max_tris
+            && part
+                .mesh
+                .verts
+                .len()
+                .saturating_mul(std::mem::size_of::<MeshVertex>())
+                <= hard_budget
+            && part.indices.len().saturating_mul(2 * std::mem::size_of::<u32>())
+                <= hard_budget
             && part
                 .set
                 .instance_source
                 .as_ref()
-                .is_some_and(|source| source.edge_verts.len() <= max_verts)
+                .is_some_and(|source| {
+                    source
+                        .edge_verts
+                        .len()
+                        .saturating_mul(std::mem::size_of::<MeshEdgeVertex>())
+                        <= hard_budget
+                })
             && part
                 .indices
                 .iter()
@@ -1782,44 +1764,7 @@ pub fn build_mesh_batch_filtered(
                 .or_default()
                 .push(part);
         } else {
-            // Compatibility and non-instanced meshes keep their already
-            // transformed display vertices in the ordinary static batch.
-            part.mesh = part.display_mesh;
             direct_parts.push(part);
-        }
-    }
-    let sparse_groups: Vec<_> = instance_groups
-        .iter()
-        .filter_map(|(key, parts)| {
-            let first = parts.first()?;
-            let geometry_bytes = first
-                .mesh
-                .verts
-                .len()
-                .saturating_mul(std::mem::size_of::<MeshVertex>())
-                .saturating_add(first.indices.len().saturating_mul(12))
-                .saturating_add(
-                    first
-                        .set
-                        .instance_source
-                        .as_ref()
-                        .map_or(0, |source| {
-                            source
-                                .edge_verts
-                                .len()
-                                .saturating_mul(std::mem::size_of::<MeshEdgeVertex>())
-                        }),
-                );
-            let saved_bytes = geometry_bytes.saturating_mul(parts.len().saturating_sub(1));
-            (parts.len() < 4 && saved_bytes < 512 * 1024).then_some(*key)
-        })
-        .collect();
-    for key in sparse_groups {
-        if let Some(parts) = instance_groups.remove(&key) {
-            for mut part in parts {
-                part.mesh = part.display_mesh;
-                direct_parts.push(part);
-            }
         }
     }
     direct_parts.sort_by_key(|part| {
@@ -1838,12 +1783,7 @@ pub fn build_mesh_batch_filtered(
         let mesh = part.mesh;
         let material = part.material;
         let part_color = part.color;
-        let entity_handle = part
-            .display_mesh
-            .name
-            .parse::<u64>()
-            .ok()
-            .map(acadrust::Handle::new);
+        let entity_handle = part.entity_handle;
         let key = material_key(material, part_color);
         if active_key.is_some_and(|active| active != key)
             && (!verts.is_empty() || !edge_verts.is_empty())
@@ -1887,7 +1827,7 @@ pub fn build_mesh_batch_filtered(
         let edge_color = set
             .visual_style
             .as_ref()
-            .map_or(mesh.color, |style| style.edge_color(mesh.color));
+            .map_or(part.display_color, |style| style.edge_color(part.display_color));
         let vtx = |vi: usize| {
             let normal = if has_normals {
                 mesh.normals[vi]
@@ -2259,10 +2199,11 @@ pub fn build_mesh_batch_filtered(
         // granularity. Small block definitions get spatial clusters of roughly
         // 64–256 INSERTs; a huge source is duplicated only a few times.
         let max_clusters = ((64 * 1024 * 1024) / source_bytes).clamp(1, 64);
-        let cluster_len = parts
-            .len()
-            .div_ceil(max_clusters)
-            .max(64);
+        let cluster_len = if storage_instancing {
+            parts.len().div_ceil(max_clusters).max(64)
+        } else {
+            1
+        };
         for cluster in parts.chunks(cluster_len) {
             if let Some((chunk, triangles, profile)) =
                 build_instanced_chunk(

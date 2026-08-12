@@ -221,8 +221,12 @@ impl MeshMaterial {
     }
 
     pub fn apply_to(&self, set: &mut super::mesh_model::MeshLodSet) {
-        for lod in &mut set.lods {
-            lod.color = self.diffuse;
+        if set.instance_source.is_some() {
+            set.instance_color = Some(self.diffuse);
+        } else {
+            for lod in &mut set.lods {
+                lod.color = self.diffuse;
+            }
         }
         set.material = Some(self.clone());
     }
@@ -236,7 +240,7 @@ impl MeshMaterial {
         self.apply_to(set);
         set.face_materials.clear();
         let handles: rustc_hash::FxHashSet<Handle> = set
-            .lods
+            .geometry_lods()
             .iter()
             .flat_map(|lod| lod.triangle_material_handles.iter().flatten().copied())
             .collect();

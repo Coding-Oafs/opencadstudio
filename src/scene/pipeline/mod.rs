@@ -2694,11 +2694,7 @@ impl Pipeline {
         let mut slots = rustc_hash::FxHashMap::default();
         let mut groups: Vec<Vec<&crate::scene::model::mesh_model::MeshLodSet>> = Vec::new();
         for (index, set) in sets.iter().enumerate() {
-            let color = set
-                .lods
-                .first()
-                .map(|mesh| mesh.color)
-                .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            let color = set.display_color().unwrap_or([0.0, 0.0, 0.0, 1.0]);
             let key = match (&set.instance_source, set.instance_transform) {
                 (Some(source), Some(transform)) => {
                     let matrix = &transform.matrix.m;
@@ -2771,11 +2767,7 @@ impl Pipeline {
                     )
                 })
                 .collect();
-            let color = source
-                .lods
-                .first()
-                .map(|mesh| mesh.color)
-                .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            let color = source.display_color().unwrap_or([0.0, 0.0, 0.0, 1.0]);
             let mk = |w: glam::DVec3| -> SilhouetteVertex {
                 let (hx, hy, hz) = (w.x as f32, w.y as f32, w.z as f32);
                 SilhouetteVertex {
@@ -2813,7 +2805,13 @@ impl Pipeline {
                     });
                 }
             };
-            for generator in &source.curved_gens {
+            let generators = source
+                .instance_source
+                .as_ref()
+                .map_or(source.curved_gens.as_slice(), |instance| {
+                    instance.curved_gens.as_slice()
+                });
+            for generator in generators {
                 let transformed;
                 let silhouette_source = if let Some(transform) = source.instance_transform {
                     let origin = transform.apply(acadrust::types::Vector3::ZERO);
@@ -3259,12 +3257,7 @@ impl Pipeline {
         }
         let current_handles: rustc_hash::FxHashSet<_> = meshes
             .iter()
-            .filter_map(|set| {
-                set.lods
-                    .first()
-                    .and_then(|mesh| mesh.name.parse::<u64>().ok())
-                    .map(acadrust::Handle::new)
-            })
+            .filter_map(MeshLodSet::entity_handle)
             .collect();
         let changed: rustc_hash::FxHashSet<_> = changes
             .iter()
