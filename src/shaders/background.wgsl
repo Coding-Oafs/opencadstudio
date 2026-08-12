@@ -66,8 +66,12 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     return out;
 }
 
+fn world_direction(ndc: vec2<f32>) -> vec3<f32> {
+    return normalize((u.environment_view * vec4<f32>(ndc, -1.0, 0.0)).xyz);
+}
+
 fn equirect_uv(ndc: vec2<f32>, rotation: f32) -> vec2<f32> {
-    let direction = normalize((u.environment_view * vec4<f32>(ndc, -1.0, 0.0)).xyz);
+    let direction = world_direction(ndc);
     let longitude = atan2(direction.x, -direction.z) + rotation;
     let latitude = asin(clamp(direction.y, -1.0, 1.0));
     return vec2<f32>(fract(longitude / (2.0 * 3.14159265359) + 0.5),
@@ -75,8 +79,11 @@ fn equirect_uv(ndc: vec2<f32>, rotation: f32) -> vec2<f32> {
 }
 
 fn image_uv(source_uv: vec2<f32>) -> vec2<f32> {
-    var uv = (source_uv - u.background_image_transform.xy)
-        / max(abs(u.background_image_transform.zw), vec2<f32>(1e-6));
+    var uv = source_uv;
+    if u.background_image_params.x < 0.5 {
+        uv = (source_uv - u.background_image_transform.xy)
+            / max(abs(u.background_image_transform.zw), vec2<f32>(1e-6));
+    }
     if u.background_image_params.y > 0.5 {
         let image_aspect = max(u.background_image_params.w, 1e-6);
         let viewport_aspect = max(u.viewport_size.x / max(u.viewport_size.y, 1.0), 1e-6);
@@ -91,7 +98,7 @@ fn image_uv(source_uv: vec2<f32>) -> vec2<f32> {
     if u.background_image_params.z > 0.5 {
         return fract(uv);
     }
-    return clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    return uv;
 }
 
 @fragment
@@ -111,24 +118,41 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let low_color = mix(u.background_bottom.rgb, u.background_middle.rgb, lower);
         color = mix(low_color, u.background_top.rgb, upper);
     } else if mode == 3u {
-        let horizon = 0.5;
-        if in.uv.y <= horizon {
-            let sky = smoothstep(0.0, horizon, in.uv.y);
-            color = mix(u.background_top.rgb, u.background_middle.rgb, sky);
+        let direction = world_direction(in.ndc);
+        if direction.z >= 0.0 {
+            let sky = smoothstep(0.0, 1.0, direction.z);
+            color = mix(u.background_middle.rgb, u.background_top.rgb, sky);
         } else {
-            let ground = smoothstep(horizon, 1.0, in.uv.y);
-            let underground = mix(u.background_bottom.rgb, u.background_aux0.rgb, ground);
-            let distance_tint = mix(u.background_aux1.rgb, u.viewport_background.rgb, ground);
-            color = mix(underground, distance_tint, 0.35);
+            let depth = smoothstep(0.0, 1.0, -direction.z);
+            let underground = mix(u.background_bottom.rgb, u.background_aux0.rgb, depth);
+            let ground = mix(u.viewport_background.rgb, u.background_aux1.rgb, depth);
+            color = mix(underground, ground, 0.65);
         }
     } else if mode == 4u {
-        color = textureSample(background_texture, background_sampler, image_uv(in.uv)).rgb;
+        let uv = image_uv(in.uv);
+        if u.background_image_params.z < 0.5
+            && (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+            color = u.viewport_background.rgb;
+        } else {
+            color = textureSample(background_texture, background_sampler, uv).rgb;
+        }
     } else if mode == 5u {
         color = textureSample(background_texture, background_sampler,
             equirect_uv(in.ndc, u.background_params.w)).rgb;
     } else if mode == 6u {
-        let t = smoothstep(0.0, 1.0, in.uv.y);
-        color = mix(u.background_bottom.rgb, u.background_top.rgb, t);
+        let direction = world_direction(in.ndc);
+        let elevation = clamp(direction.z, 0.0, 1.0);
+        color = mix(u.background_bottom.rgb, u.background_top.rgb,
+            smoothstep(0.0, 1.0, elevation));
+        let sun_length = length(u.background_params.yzw);
+        if sun_length > 0.5 {
+            let sun_direction = u.background_params.yzw / sun_length;
+            let alignment = dot(direction, sun_direction);
+            let glow = smoothstep(0.96, 1.0, alignment) * 0.18;
+            let disk = smoothstep(0.9997, 0.99995, alignment);
+            let intensity = max(u.background_middle.a, 0.0);
+            color += u.background_middle.rgb * intensity * (glow + disk);
+        }
     } else {
         color = u.viewport_background.rgb;
     }
