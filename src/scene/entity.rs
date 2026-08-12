@@ -2000,7 +2000,7 @@ impl Scene {
         }
     }
 
-    pub fn add_hatch(&mut self, model: HatchModel) -> Handle {
+    pub fn add_hatch(&mut self, model: HatchModel, layer: Option<&str>) -> Handle {
         let mut dxf = DxfHatch::new();
         dxf.is_solid = matches!(
             model.pattern,
@@ -2117,14 +2117,19 @@ impl Scene {
                 },
             ];
         }
-
         // `add_entity` already builds the render model from the DXF entity via
         // `hatch_model_from_dxf` and inserts it with a correct `world_origin`
         // (AABB-centred) for the relative-to-eye fill. The command-built `model`
         // carries `world_origin: [0, 0]`, which after the world_offset removal
         // leaves the fill mis-placed and effectively invisible until a later
         // edit rebuilds it from the DXF — so keep the seed, don't overwrite it.
-        self.add_entity(EntityType::Hatch(dxf))
+        let mut entity = EntityType::Hatch(dxf);
+
+        if let Some(layer) = layer {
+            entity.as_entity_mut().set_layer(layer.to_string());
+        }
+
+        self.add_entity(entity)
     }
 
     pub fn clear(&mut self) {
