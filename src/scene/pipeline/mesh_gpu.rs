@@ -95,6 +95,41 @@ impl MeshVertex {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MeshPlainVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub position_low: [f32; 3],
+}
+
+impl MeshPlainVertex {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshPlainVertex, position) as u64,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshPlainVertex, normal) as u64,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshPlainVertex, position_low) as u64,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: ATTRS,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshEdgeVertex {
     pub position: [f32; 3],
@@ -240,6 +275,51 @@ impl MeshInstanceGpu {
             normal_row_2: [n[2] as f32, n[5] as f32, n[8] as f32, 0.0],
         }
     }
+
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, model_row_0) as u64,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, model_row_1) as u64,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, model_row_2) as u64,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, translation_low) as u64,
+                shader_location: 8,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, normal_row_0) as u64,
+                shader_location: 9,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, normal_row_1) as u64,
+                shader_location: 13,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(MeshInstanceGpu, normal_row_2) as u64,
+                shader_location: 14,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRS,
+        }
+    }
 }
 
 // ── Batched mesh buffers ──────────────────────────────────────────────────
@@ -254,6 +334,7 @@ impl MeshInstanceGpu {
 
 pub struct MeshBatchChunk {
     pub vertex_buffer: wgpu::Buffer,
+    pub compact_vertices: bool,
     /// Opaque triangle indices (mesh colour alpha ≈ 1). Drawn with depth write.
     pub index_buffer: wgpu::Buffer,
     pub index_count: u32,
@@ -274,8 +355,6 @@ pub struct MeshBatchChunk {
     pub instance_count: u32,
     pub highlight_ranges: Vec<MeshBatchRange>,
     pub handles: rustc_hash::FxHashSet<acadrust::Handle>,
-    pub world_aabb: [f32; 6],
-    pub visible: bool,
     pub material: Option<crate::scene::model::material_model::MeshMaterial>,
     pub face_color: [f32; 4],
     pub material_bind_group: Option<wgpu::BindGroup>,
@@ -326,7 +405,7 @@ fn make_chunk(
     highlight_ranges: &[MeshBatchRange],
     instances: &[MeshInstanceGpu],
     handles: &rustc_hash::FxHashSet<acadrust::Handle>,
-    bounds_override: Option<[f32; 6]>,
+    _bounds_override: Option<[f32; 6]>,
     material: Option<&crate::scene::model::material_model::MeshMaterial>,
     face_color: [f32; 4],
     vertex_buffer_override: Option<wgpu::Buffer>,
@@ -358,6 +437,28 @@ fn make_chunk(
         queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
         buffer
     };
+    let compact_vertices = !material_has_textures(material) && wire_indices.is_empty();
+    let mk_plain_vertex = |data: &[MeshVertex]| {
+        if data.is_empty() {
+            return stubs.vertex.clone();
+        }
+        let compact: Vec<MeshPlainVertex> = data
+            .iter()
+            .map(|vertex| MeshPlainVertex {
+                position: vertex.position,
+                normal: vertex.normal,
+                position_low: vertex.position_low,
+            })
+            .collect();
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh.batch.plain_vbuf"),
+            size: std::mem::size_of_val(compact.as_slice()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&compact));
+        buffer
+    };
     let mk_edge_vertex = |data: &[MeshEdgeVertex], label: &'static str| {
         if data.is_empty() {
             return stubs.vertex.clone();
@@ -377,46 +478,15 @@ fn make_chunk(
     } else {
         instances
     };
-    let instance_usage =
-        if device.limits().max_storage_buffers_per_shader_stage > 0 {
-            wgpu::BufferUsages::STORAGE
-        } else {
-            wgpu::BufferUsages::UNIFORM
-        };
-    let mut computed_aabb = [
-        f32::INFINITY,
-        f32::INFINITY,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::NEG_INFINITY,
-        f32::NEG_INFINITY,
-    ];
-    for vertex in verts {
-        let point = [
-            vertex.position[0] + vertex.position_low[0],
-            vertex.position[1] + vertex.position_low[1],
-            vertex.position[2] + vertex.position_low[2],
-        ];
-        for axis in 0..3 {
-            computed_aabb[axis] = computed_aabb[axis].min(point[axis]);
-            computed_aabb[axis + 3] = computed_aabb[axis + 3].max(point[axis]);
-        }
-    }
-    for vertex in edge_verts {
-        let point = [
-            vertex.position[0] + vertex.position_low[0],
-            vertex.position[1] + vertex.position_low[1],
-            vertex.position[2] + vertex.position_low[2],
-        ];
-        for axis in 0..3 {
-            computed_aabb[axis] = computed_aabb[axis].min(point[axis]);
-            computed_aabb[axis + 3] = computed_aabb[axis + 3].max(point[axis]);
-        }
-    }
-    let world_aabb = bounds_override.unwrap_or(computed_aabb);
     MeshBatchChunk {
-        vertex_buffer: vertex_buffer_override
-            .unwrap_or_else(|| mk_vertex(verts, "mesh.batch.vbuf")),
+        vertex_buffer: vertex_buffer_override.unwrap_or_else(|| {
+            if compact_vertices {
+                mk_plain_vertex(verts)
+            } else {
+                mk_vertex(verts, "mesh.batch.vbuf")
+            }
+        }),
+        compact_vertices,
         index_buffer: mk_index(indices, "mesh.batch.ibuf"),
         index_count: indices.len() as u32,
         transp_index_buffer: mk_index(transp_indices, "mesh.batch.transp_ibuf"),
@@ -428,9 +498,9 @@ fn make_chunk(
         edge_vertex_count: edge_verts.len() as u32,
         instance_buffer: {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mesh.batch.instances"),
+                label: Some("mesh.batch.instances"),
                 size: std::mem::size_of_val(instance_data) as u64,
-                usage: instance_usage | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             queue.write_buffer(&buffer, 0, bytemuck::cast_slice(instance_data));
@@ -439,8 +509,6 @@ fn make_chunk(
         instance_count: instance_data.len() as u32,
         highlight_ranges: highlight_ranges.to_vec(),
         handles: handles.clone(),
-        world_aabb,
-        visible: true,
         material: material.cloned(),
         face_color,
         material_bind_group: None,
@@ -727,29 +795,9 @@ pub fn create_material_bind_group_from_resources(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     resources: &MeshMaterialResources,
-    instance_buffer: Option<&wgpu::Buffer>,
     material: Option<&crate::scene::model::material_model::MeshMaterial>,
     face_color: [f32; 4],
 ) -> wgpu::BindGroup {
-    let fallback_instances;
-    let instance_buffer = match instance_buffer {
-        Some(buffer) => buffer,
-        None => {
-            let usage =
-                if device.limits().max_storage_buffers_per_shader_stage > 0 {
-                    wgpu::BufferUsages::STORAGE
-                } else {
-                    wgpu::BufferUsages::UNIFORM
-                };
-            fallback_instances =
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mesh.instances.identity"),
-                    contents: bytemuck::bytes_of(&MeshInstanceGpu::identity()),
-                    usage,
-                });
-            &fallback_instances
-        }
-    };
     let (material_params, specular, ambient, advanced, flags) =
         material_vertex_params(material);
     let surface = MeshSurfaceParams {
@@ -830,10 +878,6 @@ pub fn create_material_bind_group_from_resources(
                 resource: resources.params_buffer.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
-                binding: 15,
-                resource: instance_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
                 binding: 16,
                 resource: surface_buffer.as_entire_binding(),
             },
@@ -846,7 +890,6 @@ pub fn create_material_bind_group(
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     material: Option<&crate::scene::model::material_model::MeshMaterial>,
-    instance_buffer: Option<&wgpu::Buffer>,
 ) -> wgpu::BindGroup {
     let resources = create_material_resources(device, queue, material);
     let color = material.map_or([0.8, 0.8, 0.8, 1.0], |material| material.diffuse);
@@ -854,7 +897,6 @@ pub fn create_material_bind_group(
         device,
         layout,
         &resources,
-        instance_buffer,
         material,
         color,
     )
@@ -879,7 +921,6 @@ pub fn upload_chunk_material_bind_groups(
                         device,
                         layout,
                         &resources,
-                        Some(&chunk.instance_buffer),
                         chunk.material.as_ref(),
                         chunk.face_color,
                     ));
@@ -894,7 +935,6 @@ pub fn upload_chunk_material_bind_groups(
             device,
             layout,
             resources,
-            Some(&chunk.instance_buffer),
             chunk.material.as_ref(),
             chunk.face_color,
         ));
@@ -1025,6 +1065,18 @@ fn index_hash(indices: &[u32]) -> u64 {
     hasher.finish()
 }
 
+fn optimize_triangle_indices(indices: &[u32], vertex_count: usize) -> std::sync::Arc<[u32]> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        return meshopt::optimize::optimize_vertex_cache(indices, vertex_count).into();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = vertex_count;
+        indices.into()
+    }
+}
+
 fn visual_style_partition_key(
     style: Option<&crate::scene::model::visual_style_model::MeshVisualStyle>,
 ) -> [u64; 12] {
@@ -1061,6 +1113,7 @@ struct InstancedBuildProfile {
 struct InstancedVertexKey {
     source: u64,
     material: u64,
+    compact: bool,
 }
 
 #[derive(Default)]
@@ -1102,6 +1155,8 @@ fn build_instanced_chunk(
     let material = first.material;
     let color = first.color;
     let source_handle = source.handle.value();
+    let compact_vertices = !material_has_textures(material)
+        && (!first.include_edges || !source.edge_verts.is_empty());
     let material_identity = if material_has_textures(material) {
         material.map_or(0, |material| {
             material
@@ -1114,6 +1169,7 @@ fn build_instanced_chunk(
     let vertex_key = InstancedVertexKey {
         source: source_handle,
         material: material_identity,
+        compact: compact_vertices,
     };
     let shared_vertex_buffer = buffers.vertices.get(&vertex_key).cloned();
     let has_normals = mesh.normals.len() == mesh.verts.len();
@@ -1574,7 +1630,7 @@ pub fn build_mesh_batch_filtered(
             let (shared_indices, shared_hash) = source_indices
                 .entry(source_identity)
                 .or_insert_with(|| {
-                    let indices = std::sync::Arc::<[u32]>::from(mesh.indices.as_slice());
+                    let indices = optimize_triangle_indices(&mesh.indices, mesh.verts.len());
                     let hash = index_hash(indices.as_ref());
                     (indices, hash)
                 })
@@ -1655,7 +1711,7 @@ pub fn build_mesh_batch_filtered(
             let parts: Vec<_> = groups
                 .into_values()
                 .map(|(material, color, indices)| {
-                    let indices = std::sync::Arc::<[u32]>::from(indices);
+                    let indices = optimize_triangle_indices(&indices, mesh.verts.len());
                     let index_hash = index_hash(indices.as_ref());
                     CachedFacePart {
                         material,
@@ -1711,7 +1767,6 @@ pub fn build_mesh_batch_filtered(
             mesh_spatial_key(part.set, spatial_bounds),
         )
     });
-    let storage_instancing = device.limits().max_storage_buffers_per_shader_stage > 0;
     let mut instance_groups: std::collections::BTreeMap<
         InstanceGroupKey,
         Vec<MeshBatchPart<'_>>,
@@ -2173,59 +2228,24 @@ pub fn build_mesh_batch_filtered(
     let mut instanced_profile = InstancedBuildProfile::default();
     let mut instanced_buffers = InstancedBufferCache::default();
     for parts in instance_groups.values() {
-        let Some(first) = parts.first() else {
-            continue;
-        };
-        let source_bytes = first
-            .mesh
-            .verts
-            .len()
-            .saturating_mul(std::mem::size_of::<MeshVertex>())
-            .saturating_add(first.indices.len().saturating_mul(12))
-            .saturating_add(
-                first
-                    .set
-                    .instance_source
-                    .as_ref()
-                    .map_or(0, |source| {
-                        source
-                            .edge_verts
-                            .len()
-                            .saturating_mul(std::mem::size_of::<MeshEdgeVertex>())
-                    }),
-            )
-            .max(1);
-        // Keep repeated geometry bounded while retaining useful culling
-        // granularity. Small block definitions get spatial clusters of roughly
-        // 64–256 INSERTs; a huge source is duplicated only a few times.
-        let max_clusters = ((64 * 1024 * 1024) / source_bytes).clamp(1, 64);
-        let cluster_len = if storage_instancing {
-            parts.len().div_ceil(max_clusters).max(64)
-        } else {
-            1
-        };
-        for cluster in parts.chunks(cluster_len) {
-            if let Some((chunk, triangles, profile)) =
-                build_instanced_chunk(
-                    device,
-                    queue,
-                    &stubs,
-                    &mut instanced_buffers,
-                    cluster,
-                    perf_started.is_some(),
-                )
-            {
-                total_tris += triangles;
-                chunks.push(chunk);
-                instanced_profile.vertices += profile.vertices;
-                instanced_profile.edges += profile.edges;
-                instanced_profile.instances += profile.instances;
-                instanced_profile.upload += profile.upload;
-                instanced_profile.vertex_count += profile.vertex_count;
-                instanced_profile.edge_count += profile.edge_count;
-                instanced_profile.index_count += profile.index_count;
-                instanced_profile.chunk_count += profile.chunk_count;
-            }
+        if let Some((chunk, triangles, profile)) = build_instanced_chunk(
+            device,
+            queue,
+            &stubs,
+            &mut instanced_buffers,
+            parts,
+            perf_started.is_some(),
+        ) {
+            total_tris += triangles;
+            chunks.push(chunk);
+            instanced_profile.vertices += profile.vertices;
+            instanced_profile.edges += profile.edges;
+            instanced_profile.instances += profile.instances;
+            instanced_profile.upload += profile.upload;
+            instanced_profile.vertex_count += profile.vertex_count;
+            instanced_profile.edge_count += profile.edge_count;
+            instanced_profile.index_count += profile.index_count;
+            instanced_profile.chunk_count += profile.chunk_count;
         }
     }
     if let Some(started) = perf_started {

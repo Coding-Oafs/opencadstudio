@@ -390,8 +390,7 @@ impl shader::Primitive for Primitive {
                 inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
                 inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
-                inner.mesh_lod_key = (usize::MAX, u64::MAX, 0, 0);
-                inner.silhouette_key = (usize::MAX, u64::MAX, u64::MAX, false);
+                inner.silhouette_key = (usize::MAX, u64::MAX, [u32::MAX; 3], false);
                 inner.render_sig = u64::MAX;
             }
             // The MSAA / depth / resolve textures are always sized to the
@@ -1039,13 +1038,14 @@ impl shader::Primitive for Primitive {
             let silhouette_key = (
                 Arc::as_ptr(&vp.meshes) as usize,
                 vp.wire_content_id,
-                vp.camera_generation,
+                vp.view_dir.to_array().map(f32::to_bits),
                 silhouette_enabled,
             );
             if inner.silhouette_key != silhouette_key {
                 inner.upload_silhouettes(
                     device,
                     if silhouette_enabled { &vp.meshes[..] } else { &[] },
+                    vp.wire_content_id,
                     vp.view_dir,
                 );
                 inner.silhouette_key = silhouette_key;
@@ -1072,22 +1072,6 @@ impl shader::Primitive for Primitive {
             if inner.wipeout_lod_key != wipeout_lod_key {
                 inner.compute_wipeout_lod(view_rot, eye, clip_size.width, clip_size.height);
                 inner.wipeout_lod_key = wipeout_lod_key;
-            }
-            let mesh_lod_key = (
-                Arc::as_ptr(&vp.meshes) as usize,
-                vp.camera_generation,
-                clip_size.width,
-                clip_size.height,
-            );
-            if inner.mesh_lod_key != mesh_lod_key {
-                inner.compute_mesh_lod(
-                    queue,
-                    view_rot,
-                    eye,
-                    clip_size.width,
-                    clip_size.height,
-                );
-                inner.mesh_lod_key = mesh_lod_key;
             }
             let cull_key = (
                 vp.wire_content_id,
@@ -1298,6 +1282,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     vp.show_2d_solid_fills.hash(&mut h);
     vp.mesh_fill.hash(&mut h);
     vp.show_3d_edges.hash(&mut h);
+    vp.display_silhouette.hash(&mut h);
     vp.hidden_line.hash(&mut h);
     // ViewCube visibility is excluded from the *scene* signature elsewhere only
     // for the live-hover pass; here it MUST invalidate the cache so toggling the
@@ -3701,6 +3686,7 @@ impl Scene {
         } else {
             Arc::new(vec![])
         };
+        let navigating = !inst.paper_sheet && self.navigating_lod();
         Some(ViewportData {
             instance_id,
             force_rasterize,
@@ -3744,7 +3730,7 @@ impl Scene {
             // actively moving; the scene-render cache holds the full-quality
             // (hatched) frame once it settles. Only applied to the on-screen
             // Model / paper content — the paper *sheet* keeps its fills.
-            skip_hatch: self.hatch_lod_enabled() && !inst.paper_sheet && self.navigating_lod(),
+            skip_hatch: self.hatch_lod_enabled() && navigating,
             skip_background: !inst.paper_sheet && self.current_layout != "Model",
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,

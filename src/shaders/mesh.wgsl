@@ -98,9 +98,6 @@ struct MeshInstance {
     normal_row_2:    vec4<f32>,
 };
 
-@group(1) @binding(15)
-var<storage, read> mesh_instances: array<MeshInstance>;
-
 struct VertexIn {
     @location(0) position:     vec3<f32>,
     @location(1) normal:       vec3<f32>,
@@ -109,6 +106,22 @@ struct VertexIn {
     @location(10) uv_specular_reflection: vec4<f32>,
     @location(11) uv_opacity_bump:        vec4<f32>,
     @location(12) uv_refraction_normal:   vec4<f32>,
+};
+
+struct PlainVertexIn {
+    @location(0) position:     vec3<f32>,
+    @location(1) normal:       vec3<f32>,
+    @location(3) position_low: vec3<f32>,
+};
+
+struct InstanceIn {
+    @location(4) model_row_0: vec4<f32>,
+    @location(5) model_row_1: vec4<f32>,
+    @location(7) model_row_2: vec4<f32>,
+    @location(8) translation_low: vec4<f32>,
+    @location(9) normal_row_0: vec4<f32>,
+    @location(13) normal_row_1: vec4<f32>,
+    @location(14) normal_row_2: vec4<f32>,
 };
 
 struct VertexOut {
@@ -153,13 +166,25 @@ fn relative_position(
     return (world_high - u.eye_high) + (world_low - u.eye_low);
 }
 
+fn mesh_instance(input: InstanceIn) -> MeshInstance {
+    return MeshInstance(
+        input.model_row_0,
+        input.model_row_1,
+        input.model_row_2,
+        input.translation_low,
+        input.normal_row_0,
+        input.normal_row_1,
+        input.normal_row_2,
+    );
+}
+
 @vertex
 fn vs_main(
     v: VertexIn,
-    @builtin(instance_index) instance_index: u32,
+    i: InstanceIn,
 ) -> VertexOut {
     var out: VertexOut;
-    let instance = mesh_instances[instance_index];
+    let instance = mesh_instance(i);
     let rel = relative_position(v.position, v.position_low, instance);
     out.clip_pos  = u.view_rot * vec4<f32>(rel, 1.0);
     out.normal    = normalize(vec3<f32>(
@@ -179,12 +204,37 @@ fn vs_main(
 }
 
 @vertex
+fn vs_main_plain(
+    v: PlainVertexIn,
+    i: InstanceIn,
+) -> VertexOut {
+    var out: VertexOut;
+    let instance = mesh_instance(i);
+    let rel = relative_position(v.position, v.position_low, instance);
+    out.clip_pos  = u.view_rot * vec4<f32>(rel, 1.0);
+    out.normal    = normalize(vec3<f32>(
+        dot(instance.normal_row_0.xyz, v.normal),
+        dot(instance.normal_row_1.xyz, v.normal),
+        dot(instance.normal_row_2.xyz, v.normal),
+    ));
+    out.world_pos = rel;
+    out.uv_diffuse = vec2<f32>(0.0);
+    out.uv_specular = vec2<f32>(0.0);
+    out.uv_reflection = vec2<f32>(0.0);
+    out.uv_opacity = vec2<f32>(0.0);
+    out.uv_bump = vec2<f32>(0.0);
+    out.uv_refraction = vec2<f32>(0.0);
+    out.uv_normal = vec2<f32>(0.0);
+    return out;
+}
+
+@vertex
 fn vs_edge(
     v: EdgeVertexIn,
-    @builtin(instance_index) instance_index: u32,
+    i: InstanceIn,
 ) -> EdgeVertexOut {
     var out: EdgeVertexOut;
-    let instance = mesh_instances[instance_index];
+    let instance = mesh_instance(i);
     let rel = relative_position(v.position, v.position_low, instance);
     out.clip_pos = u.view_rot * vec4<f32>(rel, 1.0);
     out.color = v.color;

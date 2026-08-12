@@ -51,19 +51,24 @@ struct MeshInstance {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(1) @binding(15) var<storage, read> mesh_instances: array<MeshInstance>;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(3) position_low: vec3<f32>,
 };
 
+struct InstanceIn {
+    @location(4) model_row_0: vec4<f32>,
+    @location(5) model_row_1: vec4<f32>,
+    @location(7) model_row_2: vec4<f32>,
+    @location(8) translation_low: vec4<f32>,
+};
+
 @vertex
 fn vs_main(
     vertex: VertexIn,
-    @builtin(instance_index) instance_index: u32,
+    instance: InstanceIn,
 ) -> @builtin(position) vec4<f32> {
-    let instance = mesh_instances[instance_index];
     let world_high = vec3<f32>(
         dot(instance.model_row_0.xyz, vertex.position) + instance.model_row_0.w,
         dot(instance.model_row_1.xyz, vertex.position) + instance.model_row_1.w,
