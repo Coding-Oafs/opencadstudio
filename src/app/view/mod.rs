@@ -2293,7 +2293,14 @@ impl OpenCADStudio {
         let tab_strip = (!pinned.is_empty()).then(|| {
             let tabs: Vec<Element<'_, Message>> = pinned
                 .iter()
-                .map(|id| self.rail_slice(*id, side))
+                .map(|id| {
+                    self.rail_slice(
+                        *id,
+                        side,
+                        self.dock_expanded == Some(*id),
+                        self.dock_dragging == Some(*id),
+                    )
+                })
                 .collect();
             column(tabs).width(DOCK_RAIL_W).height(Fill).into()
         });
@@ -2338,6 +2345,8 @@ impl OpenCADStudio {
         &self,
         id: crate::ui::dock::PanelId,
         side: crate::app::config::DockSide,
+        is_active: bool,
+        is_dragging: bool,
     ) -> Element<'_, Message> {
         let label = canvas(VBarLabel {
             text: id.title().to_string(),
@@ -2345,26 +2354,37 @@ impl OpenCADStudio {
         })
         .width(Fill)
         .height(Fill);
-        mouse_area(
-            container(label)
-                .width(Length::Fixed(DOCK_RAIL_W))
-                .height(Fill)
-                .style(|theme: &Theme| container::Style {
-                    background: Some(Background::Color(
-                        theme.palette().background.base.color,
-                    )),
-                    border: Border {
-                        color: theme.palette().background.neutral.color,
-                        width: 1.0,
-                        radius: 0.0.into(),
+        let bg = move |theme: &Theme| {
+            let palette = theme.palette();
+            if is_active {
+                palette.primary.weak.color
+            } else if is_dragging {
+                palette.primary.weak.color.scale_alpha(0.55)
+            } else {
+                palette.background.base.color
+            }
+        };
+        let tab = container(label)
+            .width(Length::Fixed(DOCK_RAIL_W))
+            .height(Fill)
+            .style(move |theme: &Theme| container::Style {
+                background: Some(Background::Color(bg(theme))),
+                border: Border {
+                    color: if is_active {
+                        theme.palette().primary.base.color
+                    } else {
+                        theme.palette().background.neutral.color
                     },
-                    ..Default::default()
-                }),
-        )
-        .interaction(iced::mouse::Interaction::Pointer)
-        .on_press(Message::Dock(crate::ui::dock::DockMsg::DockGrab(id)))
-        .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
-        .into()
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            });
+        mouse_area(tab)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .on_press(Message::Dock(crate::ui::dock::DockMsg::DockGrab(id)))
+            .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
+            .into()
     }
 
     /// A panel expanded to the full edge column: the panel body plus a
