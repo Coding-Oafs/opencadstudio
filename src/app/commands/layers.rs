@@ -876,6 +876,28 @@ impl OpenCADStudio {
             }
             reframed += 1;
         }
+
+        // Keep the active model-space annotation scale in sync as well.
+        // annotation_scale is drawing/paper, while CANNOSCALEVALUE stores
+        // the reciprocal paper/drawing factor.
+        if self.tabs[i].scene.annotation_scale.abs() > 1.0e-12 {
+            self.tabs[i].scene.annotation_scale *= factor as f32;
+        }
+
+        if self.tabs[i]
+            .scene
+            .document
+            .header
+            .annotation_scale_value
+            .abs()
+            > 1.0e-12
+        {
+            self.tabs[i]
+                .scene
+                .document
+                .header
+                .annotation_scale_value /= factor;
+        }
         // Sizes the drawing keeps as settings rather than as geometry: dash
         // lengths, default heights and widths, the radii the fillet and chamfer
         // commands start from. They are all lengths in the unit that just

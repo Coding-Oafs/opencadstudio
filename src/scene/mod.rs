@@ -3566,6 +3566,26 @@ impl Scene {
             Self::DEFAULT_METRIC_SCALES
         }
     }
+    /// Conversion from one drawing unit to the paper unit used by the
+    /// standard annotation-scale family: millimetres for metric drawings
+    /// and inches for imperial drawings.
+    ///
+    /// The built-in scale factors are defined assuming model and paper use
+    /// the same base unit. A drawing in metres therefore needs an extra
+    /// factor of 1000 when its paper side is measured in millimetres.
+    fn annotation_scale_unit_factor(&self) -> f64 {
+        let paper_unit = if self.prefers_imperial_scales() == Some(true) {
+            1 // Inches
+        } else {
+            4 // Millimeters
+        };
+
+        crate::modules::draw::units::conversion_factor(
+            self.document.header.insertion_units,
+            paper_unit,
+        )
+        .unwrap_or(1.0)
+    }
 
     fn is_architectural_scale_name(name: &str) -> bool {
         name.contains('=') && name.contains('"') && name.contains('\'')
@@ -3624,6 +3644,7 @@ impl Scene {
     }
 
     pub fn scale_list(&self) -> Vec<(String, f32, f64)> {
+        let unit_factor = self.annotation_scale_unit_factor();
         let mut list: Vec<(String, f32, f64)> = self
             .document
             .objects
@@ -3638,7 +3659,11 @@ impl Scene {
                         && !s.name.contains('|')
                         && !s.name.to_ascii_uppercase().ends_with("_XREF") =>
                 {
-                    Some((s.name.clone(), s.inverse_factor() as f32, s.factor()))
+                    Some((
+                        s.name.clone(),
+                        (s.inverse_factor() / unit_factor) as f32,
+                        s.factor() * unit_factor,
+                    ))
                 }
                 _ => None,
             })
@@ -3650,10 +3675,14 @@ impl Scene {
             // annotation / viewport scale picker would be empty and so appear
             // broken. Substitute the standard ratio set — file scales still
             // win whenever the drawing actually defines any. (#154)
+
             list = self
                 .default_scales()
                 .iter()
-                .map(|&(label, vp)| (label.to_string(), (1.0 / vp) as f32, vp))
+                .map(|&(label, base_vp)| {
+                    let vp = base_vp * unit_factor;
+                    (label.to_string(), (1.0 / vp) as f32, vp)
+                })
                 .collect();
         }
         list
@@ -3691,10 +3720,15 @@ impl Scene {
             }
         });
         if !has_matching_family {
+            let unit_factor = self.annotation_scale_unit_factor();
+
             visible.extend(
                 self.default_scales()
                     .iter()
-                    .map(|&(label, vp)| (label.to_string(), (1.0 / vp) as f32, vp)),
+                    .map(|&(label, base_vp)| {
+                        let vp = base_vp * unit_factor;
+                        (label.to_string(), (1.0 / vp) as f32, vp)
+                    }),
             );
         }
 
@@ -3987,6 +4021,7 @@ impl Scene {
                 return Some(h);
             }
         }
+
         let fallback = self
             .default_scales()
             .iter()
@@ -4436,9 +4471,13 @@ impl Scene {
     }
 
     fn viewport_annotation_multiplier(&self, viewport: Handle) -> f32 {
+        let unit_factor = self.annotation_scale_unit_factor();
+
         self.viewport_scale_handle(viewport)
             .and_then(|handle| match self.document.objects.get(&handle) {
-                Some(ObjectType::Scale(scale)) => Some(scale.inverse_factor() as f32),
+                Some(ObjectType::Scale(scale)) => {
+                    Some((scale.inverse_factor() / unit_factor) as f32)
+                }
                 _ => None,
             })
             .unwrap_or(self.annotation_scale)
@@ -4465,27 +4504,45 @@ impl Scene {
     }
 
     pub fn set_viewport_scale_named(&mut self, name: &str) -> Option<Handle> {
+        let viewport = self.explicit_viewport_handle()?;
+        self.set_viewport_scale_named_for(viewport, name)
+    }
+
+    pub fn set_viewport_scale_named_for(
+        &mut self,
+        viewport: Handle,
+        name: &str,
+    ) -> Option<Handle> {
         let scale_handle = self.scale_handle_ensuring(name)?;
+        let unit_factor = self.annotation_scale_unit_factor();
+
         let factor = match self.document.objects.get(&scale_handle) {
-            Some(ObjectType::Scale(scale)) => scale.factor(),
+            Some(ObjectType::Scale(scale)) => scale.factor() * unit_factor,
             _ => return None,
         };
-        let viewport = self.explicit_viewport_handle()?;
+
         let locked = matches!(
             self.document.get_entity(viewport),
             Some(EntityType::Viewport(vp)) if vp.status.locked
         );
+
         if locked || factor <= 1.0e-9 {
             return None;
         }
+
         if let Some(EntityType::Viewport(vp)) = self.document.get_entity_mut(viewport) {
             vp.custom_scale = factor;
             vp.view_height = vp.height / factor;
+        } else {
+            return None;
         }
+
         self.document
             .set_viewport_annotation_scale(viewport, scale_handle);
+
         self.resident_wire_sets.borrow_mut().clear();
         self.bump_geometry();
+
         Some(scale_handle)
     }
 
@@ -4494,14 +4551,25 @@ impl Scene {
         let EntityType::Viewport(vp) = self.document.get_entity(viewport)? else {
             return None;
         };
+
         let scale = self.viewport_scale_handle(viewport)?;
         let ObjectType::Scale(scale) = self.document.objects.get(&scale)? else {
             return None;
         };
-        let effective = vp_effective_scale(vp.custom_scale, vp.view_height, vp.height);
-        Some((effective - scale.factor()).abs() <= 1.0e-6 * scale.factor().max(1.0))
-    }
 
+        let effective = vp_effective_scale(
+            vp.custom_scale,
+            vp.view_height,
+            vp.height,
+        );
+
+        let expected = scale.factor() * self.annotation_scale_unit_factor();
+
+        Some(
+            (effective - expected).abs()
+                <= 1.0e-6 * expected.max(1.0),
+        )
+    }
     pub fn sync_viewport_annotation_scale(&mut self) -> bool {
         let Some(viewport) = self.explicit_viewport_handle() else {
             return false;
@@ -4509,8 +4577,10 @@ impl Scene {
         let Some(scale_handle) = self.viewport_scale_handle(viewport) else {
             return false;
         };
+        let unit_factor = self.annotation_scale_unit_factor();
+
         let factor = match self.document.objects.get(&scale_handle) {
-            Some(ObjectType::Scale(scale)) => scale.factor(),
+            Some(ObjectType::Scale(scale)) => scale.factor() * unit_factor,
             _ => return false,
         };
         let Some(EntityType::Viewport(vp)) = self.document.get_entity_mut(viewport) else {
