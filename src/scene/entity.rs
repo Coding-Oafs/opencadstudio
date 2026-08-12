@@ -698,7 +698,12 @@ impl Scene {
 
         let mut insert = DxfInsert::new(name, acadrust::types::Vector3::ZERO);
         acadrust::Entity::apply_transform(&mut insert, block_to_world);
-        Ok(self.add_entity(EntityType::Insert(insert)))
+        let insert_handle = self.add_entity(EntityType::Insert(insert));
+        // A new block definition landed in the document; advance the block
+        // epoch so consumers (the block palette stale check) notice it even
+        // when the panel stays open. Mirrors `define_block_from_owned_entities`.
+        self.bump_geometry();
+        Ok(insert_handle)
     }
 
     /// Define a new block named `name` from `entities` (owned, not yet in the

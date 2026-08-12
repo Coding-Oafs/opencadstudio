@@ -1040,6 +1040,49 @@ mod tests {
     }
 
     #[test]
+    fn blockpalette_reflects_new_block_without_reopen() {
+        use acadrust::types::Transform;
+
+        let mut app = fresh();
+        let i = app.active_tab;
+
+        // Reproduce the user-facing flow: select entities and run the BLOCK
+        // command, which goes through `create_block_from_entities` (not the
+        // clipboard / paste-as-block path).
+        let mut line = Line::new();
+        line.start = Vector3::ZERO;
+        line.end = Vector3::new(10.0, 0.0, 0.0);
+        let first = app.tabs[i].scene.add_entity(EntityType::Line(line));
+        app.tabs[i].scene.select_entity(first, false);
+        app.show_block_palette = true;
+        let ws = Transform::identity();
+        let id = Transform::identity();
+        app.tabs[i]
+            .scene
+            .create_block_from_entities(&[first], "First", &ws, &id)
+            .unwrap();
+        app.refresh_block_palette_if_stale();
+        assert!(app.block_palette.blocks.iter().any(|b| b.name == "First"));
+
+        // Create a second block on the same tab, then re-run the per-update
+        // stale check. It must pick up the new block WITHOUT reopening.
+        line = Line::new();
+        line.start = Vector3::ZERO;
+        line.end = Vector3::new(9.0, 0.0, 0.0);
+        let second = app.tabs[i].scene.add_entity(EntityType::Line(line));
+        app.tabs[i].scene.select_entity(second, false);
+        app.tabs[i]
+            .scene
+            .create_block_from_entities(&[second], "Second", &ws, &id)
+            .unwrap();
+        app.refresh_block_palette_if_stale();
+        assert!(
+            app.block_palette.blocks.iter().any(|b| b.name == "Second"),
+            "Second must appear without reopening the panel"
+        );
+    }
+
+    #[test]
     fn blockpalette_pin_toggles_autocollapse_and_close_hides() {
         let mut app = fresh();
         app.show_block_palette = true;
