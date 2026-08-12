@@ -1203,7 +1203,8 @@ impl OpenCADStudio {
             CmdResult::CommitHatch(hatch) => {
                 let label = self.history_label_from_active_cmd(i, "HATCH");
                 let pending = self.begin_undo(i, label, 1, true);
-                let new_handle = self.tabs[i].scene.add_hatch(hatch);
+                let layer = self.tabs[i].active_layer.clone();
+                let new_handle = self.tabs[i].scene.add_hatch(hatch, Some(&layer));
                 if !new_handle.is_null() {
                     self.tabs[i].scene.select_entity(new_handle, true);
                 }
@@ -2914,6 +2915,12 @@ impl OpenCADStudio {
                 angle,
             } => {
                 if let Some(mut model) = self.tabs[i].scene.hatches.get(&handle).cloned() {
+                    let layer = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(handle)
+                        .map(|entity| entity.as_entity().layer().to_string())
+                        .unwrap_or_else(|| "0".to_string());
                     // Update model fields
                     if !name.is_empty() {
                         use crate::scene::model::hatch_model::HatchPattern;
@@ -2933,7 +2940,7 @@ impl OpenCADStudio {
                     // Remove old hatch (entity + GPU model)
                     self.tabs[i].scene.erase_entities(&[handle]);
                     // Re-add with updated model
-                    self.tabs[i].scene.add_hatch(model);
+                    self.tabs[i].scene.add_hatch(model, Some(&layer));
                     self.tabs[i].dirty = true;
                     self.command_line.push_output(crate::t!("HATCHEDIT: hatch updated.").as_ref());
                 } else {
