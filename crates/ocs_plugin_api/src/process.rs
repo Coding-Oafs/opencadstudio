@@ -10,19 +10,97 @@ use std::time::{Duration, Instant};
 use interprocess::local_socket::traits::Listener;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, Stream, ToNsName};
 
-use crate::host::{CommandStep, HostApi};
+use crate::host::{CommandSource, CommandStep, ExecutionResult, HostApi, HostNotification, PluginNotification};
 use crate::ipc::protocol::{
-    HostRequest, HostResponse, HostToPlugin, InteractiveEvent, PluginToHost, RunnerHandshake,
-    PLUGIN_TOKEN_ENV,
+    CadDocument, EntityType, Handle, HostRequest, HostResponse, HostToPlugin, InteractiveEvent,
+    PluginToHost, RunnerHandshake, PLUGIN_TOKEN_ENV,
 };
 use crate::ipc::server::handle_plugin_request;
 use crate::ipc::transport::{recv, send};
+use crate::process::v4::V4Connection;
 use crate::ribbon::owned::{OwnedPluginManifest, OwnedRibbonGroup as OwnedRibbonGroupAlias};
 
 use serde::de::DeserializeOwned;
+use std::sync::Arc;
 
 mod manager;
-pub use manager::{DispatchResult, PluginManager};
+mod v4;
+pub use manager::{DispatchResult, NotificationHandler, PluginManager};
+
+/// A dummy `HostApi` used for V4 paths that do not supply a real host surface
+/// (e.g., interactive events). Nested plugin requests receive safe defaults.
+struct NullHost;
+
+impl HostApi for NullHost {
+    fn tab_index(&self) -> usize {
+        0
+    }
+    fn document(&self) -> &CadDocument {
+        panic!("NullHost: document not available")
+    }
+    fn document_mut(&mut self) -> &mut CadDocument {
+        panic!("NullHost: document_mut not available")
+    }
+    fn document_reader(&self) -> Box<dyn crate::host::DocumentReader + '_> {
+        Box::new(NullReader)
+    }
+    fn add_entity(&mut self, _entity: EntityType) -> Handle {
+        Handle::default()
+    }
+    fn bump_geometry(&mut self) {}
+    fn read_record(
+        &self,
+        _handle: Handle,
+        _app_name: &str,
+    ) -> Option<&crate::ipc::protocol::ExtendedDataRecord> {
+        None
+    }
+    fn write_record(&mut self, _handle: Handle, _record: crate::ipc::protocol::ExtendedDataRecord) -> bool {
+        false
+    }
+    fn remove_record(&mut self, _handle: Handle, _app_name: &str) -> bool {
+        false
+    }
+    fn push_undo(&mut self, _label: &str) {}
+    fn set_dirty(&mut self) {}
+    fn push_info(&mut self, _msg: &str) {}
+    fn push_output(&mut self, _msg: &str) {}
+    fn push_error(&mut self, _msg: &str) {}
+    fn start_interactive(&mut self, _command: Box<dyn crate::host::InteractiveCommand>) {}
+    fn plugin_state_any(
+        &self,
+        _plugin_id: &str,
+    ) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        None
+    }
+    fn plugin_state_any_mut(
+        &mut self,
+        _plugin_id: &str,
+    ) -> Option<&mut (dyn std::any::Any + Send + Sync)> {
+        None
+    }
+    fn ensure_plugin_state_any(
+        &mut self,
+        _plugin_id: &'static str,
+        _init: &mut dyn FnMut() -> Box<dyn std::any::Any + Send + Sync>,
+    ) -> &mut (dyn std::any::Any + Send + Sync) {
+        panic!("NullHost: ensure_plugin_state_any not available")
+    }
+}
+
+struct NullReader;
+impl crate::host::DocumentReader for NullReader {
+    fn entity_count(&self) -> usize {
+        0
+    }
+    fn for_each_entity(&self, _f: &mut dyn FnMut(crate::host::ReaderEntity<'_>)) {}
+    fn layer_name(&self, _handle: Handle) -> Option<&str> {
+        None
+    }
+    fn app_id_name(&self, _handle: Handle) -> Option<&str> {
+        None
+    }
+}
 
 /// Whether verbose plugin-IPC logging is on. Off by default so a normal run
 /// only prints the one-line "Loaded plugin" notice; set `OCS_PLUGIN_VERBOSE=1`
@@ -44,7 +122,7 @@ macro_rules! vlog {
 }
 
 /// Maximum time to wait for the plugin runner to connect back to the host.
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn spawn_timeout() -> Duration {
     std::env::var("OCS_PLUGIN_SPAWN_TIMEOUT_SECS")
@@ -74,6 +152,16 @@ fn request_timeout(kind: &'static str) -> Duration {
     base_max_floor(call_timeout(), kind)
 }
 
+fn execute_code_timeout() -> Duration {
+    const DEFAULT: Duration = Duration::from_secs(60);
+    std::env::var("OCS_PLUGIN_EXECUTE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT)
+        .max(DEFAULT)
+}
+
 fn base_max_floor(base: Duration, kind: &'static str) -> Duration {
     // Tests lower the floor via OCS_PLUGIN_TEST_FLOOR_SECS so the suite does not
     // wait out the real 10 s Dispatch minimum. The seam is compiled in only
@@ -89,6 +177,7 @@ fn base_max_floor(base: Duration, kind: &'static str) -> Duration {
         "GetManifest" | "GetRibbon" => Duration::from_secs(5),
         "Dispatch" => Duration::from_secs(10),
         "InteractiveEvent" | "GetPrompt" | "NeedsEntityPick" => Duration::from_secs(2),
+        "ExecuteCode" => execute_code_timeout(),
         _ => Duration::from_secs(1),
     };
     base.max(floor)
@@ -102,6 +191,7 @@ fn request_kind(req: &HostRequest) -> &'static str {
         HostRequest::InteractiveEvent { .. } => "InteractiveEvent",
         HostRequest::GetPrompt { .. } => "GetPrompt",
         HostRequest::NeedsEntityPick { .. } => "NeedsEntityPick",
+        HostRequest::ExecuteCode { .. } => "ExecuteCode",
         HostRequest::Shutdown => "Shutdown",
     }
 }
@@ -114,22 +204,24 @@ pub enum PluginError {
     Transport(#[from] crate::ipc::transport::TransportError),
     #[error("plugin runner error: {0}")]
     Runner(String),
-    #[error("spawn timeout: runner did not connect within {0:?}")]
-    SpawnTimeout(Duration),
     #[error("call timeout: {request} did not respond within {duration:?}")]
     CallTimeout {
         request: &'static str,
         duration: Duration,
     },
-    #[error("runner exited before connecting")]
-    RunnerExited,
+    #[error("runner exited unexpectedly during {request} ({status})")]
+    RunnerCrashed {
+        request: &'static str,
+        status: String,
+    },
     #[error("unexpected response: {0:?}")]
-    UnexpectedResponse(HostResponse),
+    UnexpectedResponse(Box<HostResponse>),
 }
 
 /// One spawned plugin process.
 pub struct PluginProcess {
     stream: Mutex<Option<Stream>>,
+    v4: Option<V4Connection>,
     child: Mutex<Option<Child>>,
     id: String,
     manifest: OwnedPluginManifest,
@@ -138,7 +230,11 @@ pub struct PluginProcess {
 
 impl PluginProcess {
     /// Spawn the plugin cdylib in a separate process and connect to it.
-    pub fn spawn(cdylib_path: &Path, host: &mut dyn HostApi) -> Result<Self, PluginError> {
+    pub fn spawn(
+        cdylib_path: &Path,
+        host: &mut dyn HostApi,
+        notification_handler: NotificationHandler,
+    ) -> Result<Self, PluginError> {
         let socket_name = generate_socket_name();
         let socket_name_ref: interprocess::local_socket::Name = socket_name
             .clone()
@@ -156,15 +252,28 @@ impl PluginProcess {
         // Create the listener before spawning so the runner can connect immediately.
         let listener = ListenerOptions::new().name(socket_name_ref).create_sync()?;
 
-        let child = Command::new(&runner_path)
+        let mut child = Command::new(&runner_path)
             .arg("--ocs-plugin-runner")
             .arg(&socket_name)
             .arg(cdylib_path)
             .env(PLUGIN_TOKEN_ENV, &token)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()?;
+        let last_stderr: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let last_stderr = Arc::clone(&last_stderr);
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if let Ok(mut guard) = last_stderr.lock() {
+                        *guard = line.clone();
+                    }
+                    eprintln!("[runner stderr] {line}");
+                }
+            });
+        }
         let child = Mutex::new(Some(child));
 
         // Accept the runner connection with a timeout so a hung/crashed runner
@@ -183,13 +292,21 @@ impl PluginProcess {
                 if let Some(child) = child.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     reap(child);
                 }
-                return Err(PluginError::SpawnTimeout(spawn_timeout()));
+                let status = spawn_failure_status(&child, &last_stderr);
+                return Err(PluginError::RunnerCrashed {
+                    request: "spawn/accept",
+                    status,
+                });
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if let Some(child) = child.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     reap(child);
                 }
-                return Err(PluginError::RunnerExited);
+                let status = spawn_failure_status(&child, &last_stderr);
+                return Err(PluginError::RunnerCrashed {
+                    request: "spawn/accept",
+                    status,
+                });
             }
         };
 
@@ -207,32 +324,69 @@ impl PluginProcess {
             handshake_timeout,
             "Handshake",
         )?;
-        if let Err(e) = verify_runner_handshake(handshake, &token) {
-            mark_dead(&stream, &child);
-            return Err(e);
+        let is_v4 = match verify_runner_handshake(handshake, &token) {
+            Ok(v4) => v4,
+            Err(e) => {
+                mark_dead(&stream, &child);
+                return Err(e);
+            }
+        };
+
+        let no_op = &mut |_| {};
+        let manifest;
+        let ribbon;
+        let v4: Option<V4Connection>;
+        if is_v4 {
+            // V4 path: split the stream into reader/writer halves and start
+            // the V4 reader thread. The notification handler receives an empty
+            // plugin id until we read the manifest below; that brief window is
+            // fine because the plugin has not yet been asked to do work.
+            let stream = stream.lock().unwrap_or_else(|e| e.into_inner()).take().expect("V4 stream");
+            let plugin_id_placeholder = Arc::new(std::sync::Mutex::new(String::new()));
+            let handler_for_v4: Arc<dyn Fn(Option<u64>, PluginNotification) + Send + Sync> = {
+                let plugin_id = Arc::clone(&plugin_id_placeholder);
+                let base_handler = Arc::clone(&notification_handler);
+                Arc::new(move |command_id, notification| {
+                    let id = plugin_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    base_handler(&id, command_id, notification);
+                })
+            };
+            let v4_conn = V4Connection::new(stream, handler_for_v4)?;
+            manifest = match v4_conn.call(host, HostRequest::GetManifest, no_op)? {
+                HostResponse::Manifest(m) => m,
+                other => return Err(PluginError::UnexpectedResponse(Box::new(other))),
+            };
+            *plugin_id_placeholder.lock().unwrap_or_else(|e| e.into_inner()) = manifest.id.clone();
+            ribbon = match v4_conn.call(host, HostRequest::GetRibbon, no_op)? {
+                HostResponse::Ribbon(r) => r,
+                other => return Err(PluginError::UnexpectedResponse(Box::new(other))),
+            };
+            v4 = Some(v4_conn);
+        } else {
+            // The runner first answers GetManifest and GetRibbon so the host can
+            // build the UI without keeping the plugin object alive.
+            manifest = match call(&stream, &child, host, HostRequest::GetManifest, no_op)? {
+                HostResponse::Manifest(m) => m,
+                other => return Err(PluginError::UnexpectedResponse(Box::new(other))),
+            };
+            ribbon = match call(&stream, &child, host, HostRequest::GetRibbon, no_op)? {
+                HostResponse::Ribbon(r) => r,
+                other => return Err(PluginError::UnexpectedResponse(Box::new(other))),
+            };
+            v4 = None;
         }
 
-        // The runner first answers GetManifest and GetRibbon so the host can
-        // build the UI without keeping the plugin object alive.
-        let no_op = &mut |_| {};
-        let manifest = match call(&stream, &child, host, HostRequest::GetManifest, no_op)? {
-            HostResponse::Manifest(m) => m,
-            other => return Err(PluginError::UnexpectedResponse(other)),
-        };
         // Normal-run notice: just the loaded plugin's name (id + version). The
         // full IPC trace above/below is gated behind OCS_PLUGIN_VERBOSE.
         eprintln!(
             "Loaded plugin: {} ({} {})",
             manifest.name, manifest.id, manifest.version
         );
-        let ribbon = match call(&stream, &child, host, HostRequest::GetRibbon, no_op)? {
-            HostResponse::Ribbon(r) => r,
-            other => return Err(PluginError::UnexpectedResponse(other)),
-        };
 
         let id = manifest.id.clone();
         Ok(Self {
             stream,
+            v4,
             child,
             id,
             manifest,
@@ -259,20 +413,50 @@ impl PluginProcess {
         on_start_interactive: &mut dyn FnMut(u64),
     ) -> Result<bool, PluginError> {
         vlog!("[plugin] dispatching {cmd}");
-        let result = match call(
-            &self.stream,
-            &self.child,
-            host,
-            HostRequest::Dispatch {
-                cmd: cmd.to_string(),
-            },
-            on_start_interactive,
-        )? {
-            HostResponse::Bool(b) => Ok(b),
-            other => Err(PluginError::UnexpectedResponse(other)),
+        let result = if let Some(v4) = &self.v4 {
+            match v4.call(
+                host,
+                HostRequest::Dispatch {
+                    cmd: cmd.to_string(),
+                },
+                on_start_interactive,
+            )? {
+                HostResponse::Bool(b) => Ok(b),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
+        } else {
+            match call(
+                &self.stream,
+                &self.child,
+                host,
+                HostRequest::Dispatch {
+                    cmd: cmd.to_string(),
+                },
+                on_start_interactive,
+            )? {
+                HostResponse::Bool(b) => Ok(b),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
         };
         vlog!("[plugin] dispatch {cmd} result: {result:?}");
         result
+    }
+
+    /// Execute a REPL code snippet on a V4 plugin. The session is tied to the
+    /// active document tab via `host.tab_index()`.
+    pub fn execute_code(
+        &self,
+        host: &mut dyn HostApi,
+        command_id: u64,
+        source: CommandSource,
+        code: &str,
+    ) -> Result<ExecutionResult, PluginError> {
+        match &self.v4 {
+            Some(v4) => v4.execute_code(host, command_id, source, code),
+            None => Err(PluginError::Runner(
+                "ExecuteCode requires V4 protocol".into(),
+            )),
+        }
     }
 
     /// Send an interactive event for `command_id` and return the step the
@@ -283,27 +467,39 @@ impl PluginProcess {
         command_id: u64,
         event: InteractiveEvent,
     ) -> Result<CommandStep, PluginError> {
-        self.send_request(HostRequest::InteractiveEvent { command_id, event })?;
-        let kind = "InteractiveEvent";
-        let timeout = request_timeout(kind);
-        let deadline = Instant::now() + timeout;
-        loop {
-            match recv_with_deadline::<PluginToHost>(
-                &self.stream,
-                &self.child,
-                deadline,
-                timeout,
-                kind,
-            )? {
-                PluginToHost::Response(HostResponse::CommandStep(s)) => return Ok(s),
-                PluginToHost::Response(other) => {
-                    return Err(PluginError::UnexpectedResponse(other))
-                }
-                PluginToHost::Request(req) => {
-                    let resp = crate::ipc::protocol::PluginResponse::Error(format!(
-                        "unexpected nested request during interactive event: {req:?}"
-                    ));
-                    self.send_response(resp)?;
+        if let Some(v4) = &self.v4 {
+            let resp = v4.call(
+                &mut NullHost,
+                HostRequest::InteractiveEvent { command_id, event },
+                &mut |_| {},
+            )?;
+            match resp {
+                HostResponse::CommandStep(s) => Ok(*s),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
+        } else {
+            self.send_request(HostRequest::InteractiveEvent { command_id, event })?;
+            let kind = "InteractiveEvent";
+            let timeout = request_timeout(kind);
+            let deadline = Instant::now() + timeout;
+            loop {
+                match recv_with_deadline::<PluginToHost>(
+                    &self.stream,
+                    &self.child,
+                    deadline,
+                    timeout,
+                    kind,
+                )? {
+                    PluginToHost::Response(HostResponse::CommandStep(s)) => return Ok(*s),
+                    PluginToHost::Response(other) => {
+                        return Err(PluginError::UnexpectedResponse(Box::new(other)))
+                    }
+                    PluginToHost::Request(req) => {
+                        let resp = crate::ipc::protocol::PluginResponse::Error(format!(
+                            "unexpected nested request during interactive event: {req:?}"
+                        ));
+                        self.send_response(resp)?;
+                    }
                 }
             }
         }
@@ -311,27 +507,39 @@ impl PluginProcess {
 
     /// Ask the plugin process for the current prompt of an interactive command.
     pub fn get_prompt(&self, command_id: u64) -> Result<String, PluginError> {
-        self.send_request(HostRequest::GetPrompt { command_id })?;
-        let kind = "GetPrompt";
-        let timeout = request_timeout(kind);
-        let deadline = Instant::now() + timeout;
-        loop {
-            match recv_with_deadline::<PluginToHost>(
-                &self.stream,
-                &self.child,
-                deadline,
-                timeout,
-                kind,
-            )? {
-                PluginToHost::Response(HostResponse::Text(s)) => return Ok(s),
-                PluginToHost::Response(other) => {
-                    return Err(PluginError::UnexpectedResponse(other))
-                }
-                PluginToHost::Request(req) => {
-                    let resp = crate::ipc::protocol::PluginResponse::Error(format!(
-                        "unexpected nested request during get_prompt: {req:?}"
-                    ));
-                    self.send_response(resp)?;
+        if let Some(v4) = &self.v4 {
+            let resp = v4.call(
+                &mut NullHost,
+                HostRequest::GetPrompt { command_id },
+                &mut |_| {},
+            )?;
+            match resp {
+                HostResponse::Text(s) => Ok(s),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
+        } else {
+            self.send_request(HostRequest::GetPrompt { command_id })?;
+            let kind = "GetPrompt";
+            let timeout = request_timeout(kind);
+            let deadline = Instant::now() + timeout;
+            loop {
+                match recv_with_deadline::<PluginToHost>(
+                    &self.stream,
+                    &self.child,
+                    deadline,
+                    timeout,
+                    kind,
+                )? {
+                    PluginToHost::Response(HostResponse::Text(s)) => return Ok(s),
+                    PluginToHost::Response(other) => {
+                        return Err(PluginError::UnexpectedResponse(Box::new(other)))
+                    }
+                    PluginToHost::Request(req) => {
+                        let resp = crate::ipc::protocol::PluginResponse::Error(format!(
+                            "unexpected nested request during get_prompt: {req:?}"
+                        ));
+                        self.send_response(resp)?;
+                    }
                 }
             }
         }
@@ -339,33 +547,48 @@ impl PluginProcess {
 
     /// Ask the plugin process whether an interactive command wants object picks.
     pub fn needs_entity_pick(&self, command_id: u64) -> Result<bool, PluginError> {
-        self.send_request(HostRequest::NeedsEntityPick { command_id })?;
-        let kind = "NeedsEntityPick";
-        let timeout = request_timeout(kind);
-        let deadline = Instant::now() + timeout;
-        loop {
-            match recv_with_deadline::<PluginToHost>(
-                &self.stream,
-                &self.child,
-                deadline,
-                timeout,
-                kind,
-            )? {
-                PluginToHost::Response(HostResponse::Bool(b)) => return Ok(b),
-                PluginToHost::Response(other) => {
-                    return Err(PluginError::UnexpectedResponse(other))
-                }
-                PluginToHost::Request(req) => {
-                    let resp = crate::ipc::protocol::PluginResponse::Error(format!(
-                        "unexpected nested request during needs_entity_pick: {req:?}"
-                    ));
-                    self.send_response(resp)?;
+        if let Some(v4) = &self.v4 {
+            let resp = v4.call(
+                &mut NullHost,
+                HostRequest::NeedsEntityPick { command_id },
+                &mut |_| {},
+            )?;
+            match resp {
+                HostResponse::Bool(b) => Ok(b),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
+        } else {
+            self.send_request(HostRequest::NeedsEntityPick { command_id })?;
+            let kind = "NeedsEntityPick";
+            let timeout = request_timeout(kind);
+            let deadline = Instant::now() + timeout;
+            loop {
+                match recv_with_deadline::<PluginToHost>(
+                    &self.stream,
+                    &self.child,
+                    deadline,
+                    timeout,
+                    kind,
+                )? {
+                    PluginToHost::Response(HostResponse::Bool(b)) => return Ok(b),
+                    PluginToHost::Response(other) => {
+                        return Err(PluginError::UnexpectedResponse(Box::new(other)))
+                    }
+                    PluginToHost::Request(req) => {
+                        let resp = crate::ipc::protocol::PluginResponse::Error(format!(
+                            "unexpected nested request during needs_entity_pick: {req:?}"
+                        ));
+                        self.send_response(resp)?;
+                    }
                 }
             }
         }
     }
 
     pub fn is_alive(&self) -> bool {
+        if let Some(v4) = &self.v4 {
+            return v4.is_alive();
+        }
         let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_mut() {
             Some(child) => match child.try_wait() {
@@ -376,10 +599,46 @@ impl PluginProcess {
         }
     }
 
-    /// Tear down the plugin process without blocking the caller. The stream is
-    /// closed and the child is killed synchronously; the blocking `wait()` is
-    /// done in a detached background thread so the host never waits on a plugin.
+    /// Send a best-effort host-to-plugin notification. Requires V4; on V3
+    /// processes this returns an error.
+    pub fn notify_plugin(
+        &self,
+        command_id: Option<u64>,
+        notification: HostNotification,
+    ) -> Result<(), PluginError> {
+        if let Some(v4) = &self.v4 {
+            v4.notify_plugin(command_id, notification)
+        } else {
+            Err(PluginError::Runner(
+                "notify_plugin requires V4 protocol".into(),
+            ))
+        }
+    }
+
+    /// Drain any plugin→host requests that have arrived asynchronously for
+    /// this process. On V3 processes this is a no-op.
+    pub fn drain_requests(
+        &self,
+        host: &mut dyn HostApi,
+        on_start_interactive: &mut dyn FnMut(u64),
+    ) -> Result<(), PluginError> {
+        if let Some(v4) = &self.v4 {
+            v4.drain_requests(host, on_start_interactive)?;
+        }
+        Ok(())
+    }
+
+    /// Tear down the plugin process without blocking the caller. The child is
+    /// killed first so the socket closes, which unblocks the V4 reader thread
+    /// join. The stream is dropped and the blocking `wait()` is done in a
+    /// detached background thread so the host never waits on a plugin.
     pub fn shutdown(&self) {
+        // For V4 connections, request a graceful shutdown first so the plugin
+        // can tear down any child processes it created. The V4 shutdown waits
+        // a bounded amount of time for the runner to close its side.
+        if let Some(v4) = &self.v4 {
+            v4.shutdown();
+        }
         let (stream, child) = self.take_resources();
         drop(stream);
         if let Some(child) = child {
@@ -412,7 +671,7 @@ impl PluginProcess {
     fn send_response(&self, resp: crate::ipc::protocol::PluginResponse) -> Result<(), PluginError> {
         let mut guard = self.stream.lock().unwrap_or_else(|e| e.into_inner());
         let stream = guard.as_mut().ok_or_else(shutdown_error)?;
-        send(stream, &HostToPlugin::Response(resp)).map_err(Into::into)
+        send(stream, &HostToPlugin::Response(Box::new(resp))).map_err(Into::into)
     }
 }
 
@@ -447,6 +706,42 @@ fn mark_dead(stream: &Mutex<Option<Stream>>, child: &Mutex<Option<Child>>) {
     if let Some(child) = child.lock().unwrap_or_else(|e| e.into_inner()).take() {
         reap(child);
     }
+}
+
+/// Check whether a child process has already exited, returning its status if so.
+fn child_status(child: &Mutex<Option<Child>>) -> Option<std::process::ExitStatus> {
+    let mut guard = child.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_mut() {
+        Some(c) => c.try_wait().ok().flatten(),
+        None => None,
+    }
+}
+
+/// Human-readable description of a process exit status.
+fn format_exit_status(status: Option<std::process::ExitStatus>) -> String {
+    match status {
+        Some(s) if s.success() => "exited successfully".to_string(),
+        Some(s) => match s.code() {
+            Some(code) => format!("exit code {code}"),
+            None => "terminated by signal".to_string(),
+        },
+        None => "unknown status".to_string(),
+    }
+}
+
+/// Describe why a runner failed before/during connection, including any stderr
+/// it produced.
+fn spawn_failure_status(
+    child: &Mutex<Option<Child>>,
+    last_stderr: &Mutex<String>,
+) -> String {
+    let mut parts = vec![format_exit_status(child_status(child))];
+    if let Ok(line) = last_stderr.lock() {
+        if !line.is_empty() {
+            parts.push(format!("stderr: {line}"));
+        }
+    }
+    parts.join("; ")
 }
 
 /// Receive one message from the plugin runner with a deadline.
@@ -492,16 +787,43 @@ fn recv_with_deadline<T: DeserializeOwned + Send + 'static>(
         }
         Ok((Err(e), stream_opt)) => {
             *stream.lock().unwrap_or_else(|e| e.into_inner()) = stream_opt;
+            let status = child_status(child);
+            let connection_error = matches!(e, PluginError::Transport(_) | PluginError::Io(_));
+            if connection_error || status.is_some() {
+                let status_text = match status {
+                    Some(status) => format_exit_status(Some(status)),
+                    None => "connection lost before response; the plugin may have crashed or be ABI-incompatible".to_string(),
+                };
+                return Err(PluginError::RunnerCrashed {
+                    request,
+                    status: format!("{status_text}; cause: {e}"),
+                });
+            }
             Err(e)
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
+            let status = child_status(child);
             mark_dead(stream, child);
+            if let Some(status) = status {
+                return Err(PluginError::RunnerCrashed {
+                    request,
+                    status: format_exit_status(Some(status)),
+                });
+            }
             Err(PluginError::CallTimeout {
                 request,
                 duration: timeout,
             })
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(shutdown_error()),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            if let Some(status) = child_status(child) {
+                return Err(PluginError::RunnerCrashed {
+                    request,
+                    status: format_exit_status(Some(status)),
+                });
+            }
+            Err(shutdown_error())
+        }
     }
 }
 
@@ -529,11 +851,11 @@ fn call(
         match msg {
             PluginToHost::Response(resp) => return Ok(resp),
             PluginToHost::Request(plugin_req) => {
-                let resp = handle_plugin_request(host, plugin_req, on_start_interactive);
+                let resp = handle_plugin_request(host, *plugin_req, on_start_interactive);
                 vlog!("[plugin] host -> runner response: {resp:?}");
                 let mut guard = stream.lock().unwrap_or_else(|e| e.into_inner());
                 let stream = guard.as_mut().ok_or_else(shutdown_error)?;
-                send(stream, &HostToPlugin::Response(resp))?;
+                send(stream, &HostToPlugin::Response(Box::new(resp)))?;
             }
         }
     }
@@ -566,6 +888,11 @@ fn runner_executable() -> Result<PathBuf, PluginError> {
             )));
         }
     } else {
+        // The host spawns itself in runner mode. We used to create a hard link
+        // with a distinct name so task managers show plugin processes
+        // separately, but re-creating that link on every launch triggers
+        // antivirus scanners on some systems and makes the first plugin spawn
+        // time out. Spawning the host executable directly avoids that.
         let host = std::env::current_exe()?;
         if !host.exists() {
             return Err(PluginError::Runner(format!(
@@ -573,17 +900,7 @@ fn runner_executable() -> Result<PathBuf, PluginError> {
                 host.display()
             )));
         }
-
-        // Create a hard link with a distinct name next to the host binary. This
-        // makes runner processes visible as separate sub-processes in task
-        // managers / ps, while keeping the runner the exact same binary as the
-        // host so they can never drift out of sync.
-        let runner = distinct_runner_path(&host);
-        let _ = std::fs::remove_file(&runner);
-        match std::fs::hard_link(&host, &runner) {
-            Ok(()) => runner,
-            Err(_) => host,
-        }
+        host
     };
 
     *cached = Some(path.clone());
@@ -593,6 +910,7 @@ fn runner_executable() -> Result<PathBuf, PluginError> {
 /// Build a runner path like `<host>-plugin-runner<ext>` in the same directory.
 /// Using a distinct image name lets task managers show plugin processes as
 /// children/sub-processes of the host instead of collapsing them into one row.
+#[allow(dead_code)]
 fn distinct_runner_path(host: &Path) -> PathBuf {
     let mut runner = host.as_os_str().to_owned();
     if let Some(ext) = host.extension().and_then(|s| s.to_str()) {
@@ -611,16 +929,36 @@ fn distinct_runner_path(host: &Path) -> PathBuf {
 }
 
 /// Verify that the runner's `handshake` presents `expected_token`.
+///
+/// Returns `Ok(true)` for a V4 handshake, `Ok(false)` for a V3 handshake, and
+/// `Err` on token mismatch or unsupported protocol version.
 fn verify_runner_handshake(
     handshake: RunnerHandshake,
     expected_token: &str,
-) -> Result<(), PluginError> {
+) -> Result<bool, PluginError> {
     match handshake {
         RunnerHandshake::Token(ref presented) if presented == expected_token => {
-            vlog!("[plugin] runner authenticated");
-            Ok(())
+            vlog!("[plugin] runner authenticated (V3)");
+            Ok(false)
         }
-        RunnerHandshake::Token(_) => Err(PluginError::Runner("authentication failed".into())),
+        RunnerHandshake::TokenV4 {
+            token: ref presented,
+            protocol_version,
+        } if presented == expected_token => {
+            if protocol_version != 4 {
+                return Err(PluginError::Runner(format!(
+                    "unsupported V4 protocol version {protocol_version}"
+                )));
+            }
+            if crate::effective_max_api_version() < 4 {
+                return Err(PluginError::Runner(
+                    "V4 protocol is disabled by OCS_PLUGIN_MAX_API_VERSION".into(),
+                ));
+            }
+            vlog!("[plugin] runner authenticated (V4)");
+            Ok(true)
+        }
+        _ => Err(PluginError::Runner("authentication failed".into())),
     }
 }
 
@@ -821,6 +1159,7 @@ mod timeout_tests {
         let (host_stream, runner_stream) = connected_pair();
         let process = PluginProcess {
             stream: Mutex::new(Some(host_stream)),
+            v4: None,
             child: Mutex::new(Some(sleepy_child())),
             id: "test.plugin".to_string(),
             manifest: fake_manifest(),
@@ -906,11 +1245,11 @@ mod timeout_tests {
             );
             send(
                 &mut peer,
-                &PluginToHost::Request(PluginRequest::PushInfo("hello".to_string())),
+                &PluginToHost::Request(Box::new(PluginRequest::PushInfo("hello".to_string()))),
             )
             .expect("send nested request");
             let resp = recv::<HostToPlugin>(&mut peer).expect("read nested response");
-            assert!(matches!(resp, HostToPlugin::Response(PluginResponse::Ok)));
+            assert!(matches!(resp, HostToPlugin::Response(ref r) if matches!(**r, PluginResponse::Ok)));
             send(&mut peer, &PluginToHost::Response(HostResponse::Bool(true)))
                 .expect("send final response");
         });
@@ -953,10 +1292,63 @@ mod timeout_tests {
 
     #[test]
     fn runner_handshake_correct_token_is_accepted() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("OCS_PLUGIN_MAX_API_VERSION");
         let result = verify_runner_handshake(
             RunnerHandshake::Token("correct-token".to_string()),
             "correct-token",
         );
         assert!(result.is_ok(), "expected authentication success, got {result:?}");
+        assert!(!result.unwrap(), "V3 token should select V3 path");
+    }
+
+    #[test]
+    fn runner_handshake_tokenv4_selects_v4_path() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("OCS_PLUGIN_MAX_API_VERSION");
+        let result = verify_runner_handshake(
+            RunnerHandshake::TokenV4 {
+                token: "correct-token".to_string(),
+                protocol_version: 4,
+            },
+            "correct-token",
+        );
+        assert!(result.is_ok(), "expected authentication success, got {result:?}");
+        assert!(result.unwrap(), "TokenV4 should select V4 path");
+    }
+
+    #[test]
+    fn runner_handshake_tokenv4_mismatched_version_is_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("OCS_PLUGIN_MAX_API_VERSION");
+        let result = verify_runner_handshake(
+            RunnerHandshake::TokenV4 {
+                token: "correct-token".to_string(),
+                protocol_version: 5,
+            },
+            "correct-token",
+        );
+        assert!(
+            matches!(result, Err(PluginError::Runner(ref s)) if s.contains("unsupported")),
+            "expected unsupported version error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn runner_handshake_tokenv4_rejected_when_v4_disabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("OCS_PLUGIN_MAX_API_VERSION", "3");
+        let result = verify_runner_handshake(
+            RunnerHandshake::TokenV4 {
+                token: "correct-token".to_string(),
+                protocol_version: 4,
+            },
+            "correct-token",
+        );
+        assert!(
+            matches!(result, Err(PluginError::Runner(ref s)) if s.contains("disabled")),
+            "expected V4 disabled error, got {result:?}"
+        );
+        std::env::remove_var("OCS_PLUGIN_MAX_API_VERSION");
     }
 }

@@ -55,7 +55,7 @@ pub struct ExternalPlugin {
 impl ExternalPlugin {
     /// True when the package's API version is supported by this host.
     pub fn api_compatible(&self) -> bool {
-        self.api_version == ocs_plugin_api::API_VERSION
+        ocs_plugin_api::manifest::host_accepts_plugin_version(self.api_version)
     }
 
     /// True when the package can be loaded today: compatible API *and* a native
@@ -273,6 +273,7 @@ pub(crate) use loader::{load_at_startup, loaded_ids};
 #[cfg_attr(test, allow(dead_code))]
 mod loader {
     use super::lib_extension;
+    use crate::plugin::v4_support;
     use ocs_plugin_api::process::PluginManager;
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -291,6 +292,7 @@ mod loader {
     ) -> Vec<(String, Result<(), String>)> {
         let discovered = super::discover();
         let mut manager = PluginManager::new();
+        manager.set_notification_handler(v4_support::notification_handler());
         let mut out = Vec::new();
         for d in &discovered {
             if !d.api_compatible() || !d.lib_present {
@@ -350,12 +352,13 @@ mod loader {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use crate::plugin::v4_support;
 
     #[test]
-    fn api_v2_plugin_from_template_is_incompatible() {
+    fn api_v2_plugin_from_template_is_compatible() {
         let toml = r#"
 [plugin]
 id = "opencad.my_plugin"
@@ -374,7 +377,7 @@ xdata_apps = ["MYPLUGIN_RECORD"]
         assert_eq!(p.api_version, 2);
         assert_eq!(p.repository.as_deref(), Some("example/opencad-my-plugin"));
         assert!(p.command_prefixes.contains(&"MP_".to_string()));
-        assert!(!p.api_compatible(), "old API plugins must be rebuilt");
+        assert!(p.api_compatible(), "V2 plugins must be accepted by the V4 host");
     }
 
     #[test]
@@ -415,7 +418,11 @@ xdata_apps = ["MYPLUGIN_RECORD"]
 
         let mut app = crate::app::OpenCADStudio::new_for_test();
         let mut host = crate::app::plugin_host::HostSession::new(&mut app, 0);
-        let process = ocs_plugin_api::process::PluginProcess::spawn(&path, &mut host)
+        let process = ocs_plugin_api::process::PluginProcess::spawn(
+                &path,
+                &mut host,
+                v4_support::notification_handler(),
+            )
             .expect("spawn test plugin");
         assert_eq!(process.id(), "opencad.my_plugin");
         let mut started = false;

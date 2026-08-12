@@ -111,7 +111,44 @@ impl Scene {
         let _ = self.document.layers.add(layer);
     }
 
-    pub fn add_entity(&mut self, mut entity: EntityType) -> Handle {
+    pub fn add_entity(&mut self, entity: EntityType) -> Handle {
+        self.add_entity_internal(entity, true)
+    }
+
+    /// Batch-add several entities, publishing geometry changes once at the end.
+    /// This is the fast path used by plugin `add_entities` requests.
+    pub fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
+        let mut handles = Vec::with_capacity(entities.len());
+        let mut changes = Vec::with_capacity(entities.len());
+        let mut needs_geometry_bump = false;
+
+        for entity in entities {
+            let affects_blocks = matches!(
+                &entity,
+                EntityType::Block(_) | EntityType::BlockEnd(_)
+            );
+            let handle = self.add_entity_internal(entity, false);
+            handles.push(handle);
+            if handle.is_null() {
+                continue;
+            }
+            if affects_blocks {
+                needs_geometry_bump = true;
+            } else {
+                changes.push((handle, ChangeKind::Added));
+            }
+        }
+
+        if needs_geometry_bump {
+            self.bump_geometry();
+        } else if !changes.is_empty() {
+            self.bump_entities(&changes);
+        }
+
+        handles
+    }
+
+    fn add_entity_internal(&mut self, mut entity: EntityType, bump: bool) -> Handle {
         // Only block sentinels mutate a block definition and require rebuilding
         // the block cache. A top-level INSERT merely references an existing
         // definition, so adding it can patch just that new render handle.
@@ -256,12 +293,14 @@ impl Scene {
                     self.poison_undo_recording();
                 }
             }
-            if affects_blocks {
-                self.bump_geometry();
-            } else {
-                // Plain top-level add: name the new handle so every derived cache
-                // patches in just this one entity instead of rebuilding.
-                self.bump_entities(&[(handle, ChangeKind::Added)]);
+            if bump {
+                if affects_blocks {
+                    self.bump_geometry();
+                } else {
+                    // Plain top-level add: name the new handle so every derived cache
+                    // patches in just this one entity instead of rebuilding.
+                    self.bump_entities(&[(handle, ChangeKind::Added)]);
+                }
             }
         }
         handle

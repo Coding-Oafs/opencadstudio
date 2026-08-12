@@ -302,6 +302,21 @@ impl OpenCADStudio {
 
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
         match msg {
+            // Drain plugin-to-host requests that arrived outside of a host call.
+            // This runs on a periodic timer so long-lived plugin sessions such
+            // as the Python REPL can mutate the document without requiring a
+            // user-generated message. Desktop only.
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::DrainPluginRequests => {
+                if self.active_tab < self.tabs.len() {
+                    let mut host = crate::app::plugin_host::HostSession::new(self, self.active_tab);
+                    crate::plugin::external::with_manager(|mgr| {
+                        mgr.drain_requests(&mut host, &mut |_| {});
+                    });
+                }
+                Task::none()
+            }
+
             // Web: fetch every script queued by startup language selection or
             // drawing text discovery. Each script has one shared store entry.
             Message::PollWebFonts => {
