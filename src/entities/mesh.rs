@@ -1101,11 +1101,7 @@ impl RenderConvertible for Mesh {
 
 impl Grippable for Mesh {
     fn grips(&self) -> Vec<GripDef> {
-        self.vertices
-            .iter()
-            .enumerate()
-            .map(|(i, v)| square_grip(i, glam::DVec3::new(v.x, v.y, v.z)))
-            .collect()
+        Vec::new()
     }
 
     fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {

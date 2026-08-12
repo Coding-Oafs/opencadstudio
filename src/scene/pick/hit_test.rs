@@ -658,20 +658,40 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
     hits.into_iter().map(|(_, name)| name).collect()
 }
 
+type MeshPickItem<'a> = (
+    Handle,
+    &'a MeshModel,
+    Option<acadrust::types::Transform>,
+    [f64; 6],
+);
+
 pub(crate) fn mesh_click_hit<'a>(
     cursor: Point,
-    meshes: impl Iterator<
-        Item = (
-            Handle,
-            &'a MeshModel,
-            Option<acadrust::types::Transform>,
-            [f64; 6],
-        ),
-    >,
+    meshes: impl Iterator<Item = MeshPickItem<'a>>,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
 ) -> Option<Handle> {
+    mesh_click_result(cursor, meshes, view_rot, eye, bounds).map(|(_, handle, _)| handle)
+}
+
+pub(crate) fn mesh_click_point<'a>(
+    cursor: Point,
+    meshes: impl Iterator<Item = MeshPickItem<'a>>,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Option<glam::DVec3> {
+    mesh_click_result(cursor, meshes, view_rot, eye, bounds).map(|(_, _, point)| point)
+}
+
+fn mesh_click_result<'a>(
+    cursor: Point,
+    meshes: impl Iterator<Item = MeshPickItem<'a>>,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Option<(f64, Handle, glam::DVec3)> {
     let profile = crate::perf::enabled().then(std::time::Instant::now);
     let mut set_count = 0usize;
     let mut bound_hits = 0usize;
@@ -692,7 +712,7 @@ pub(crate) fn mesh_click_hit<'a>(
     {
         return None;
     }
-    let mut best: Option<(f64, Handle)> = None;
+    let mut best: Option<(f64, Handle, glam::DVec3)> = None;
     for (handle, mesh, transform, aabb) in meshes {
         set_count += 1;
         let Some((near_t, _)) = ray_aabb(near, world_direction, aabb) else {
@@ -700,7 +720,7 @@ pub(crate) fn mesh_click_hit<'a>(
         };
         bound_hits += 1;
         exact_triangles += mesh.indices.len() / 3;
-        if best.is_some_and(|(distance, _)| near_t > distance) {
+        if best.is_some_and(|(distance, _, _)| near_t > distance) {
             continue;
         }
         let model = transform.map(codec_transform_matrix);
@@ -747,8 +767,8 @@ pub(crate) fn mesh_click_hit<'a>(
             let local_hit = origin + direction * local_t;
             let world_hit = model.map_or(local_hit, |model| model.transform_point3(local_hit));
             let distance = (world_hit - near).dot(world_direction);
-            if distance >= 0.0 && best.is_none_or(|(current, _)| distance < current) {
-                best = Some((distance, handle));
+            if distance >= 0.0 && best.is_none_or(|(current, _, _)| distance < current) {
+                best = Some((distance, handle, world_hit));
             }
         }
     }
@@ -761,7 +781,7 @@ pub(crate) fn mesh_click_hit<'a>(
             exact_triangles,
         );
     }
-    best.map(|(_, h)| h)
+    best
 }
 
 fn codec_transform_matrix(transform: acadrust::types::Transform) -> glam::DMat4 {

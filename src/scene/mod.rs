@@ -7878,6 +7878,34 @@ impl Scene {
         )
     }
 
+    pub fn view_center_surface_pivot(
+        &self,
+        bounds: iced::Rectangle,
+    ) -> Option<glam::DVec3> {
+        let camera = self.camera.borrow();
+        let view_rot = camera.view_proj_rte(bounds);
+        let eye = camera.eye();
+        drop(camera);
+        let meshes = self.interaction_meshes_arc();
+        let center = iced::Point::new(bounds.width * 0.5, bounds.height * 0.5);
+        pick::hit_test::mesh_click_point(
+            center,
+            meshes.iter().filter_map(|set| {
+                let handle = set.entity_handle()?;
+                let mesh = set.geometry_lods().first()?;
+                Some((
+                    handle,
+                    mesh,
+                    set.instance_transform,
+                    mesh_interaction_aabb(set)?,
+                ))
+            }),
+            view_rot,
+            eye,
+            bounds,
+        )
+    }
+
     /// Hover may use the coarsest cached solid LOD. Click selection keeps the
     /// full-resolution mesh, while rollover only needs a stable parent handle
     /// and must stay within an interactive frame budget.
@@ -9061,8 +9089,8 @@ impl Scene {
 
     /// The AABB centre of the current selection, in absolute world coordinates
     /// (same space as `Camera::target`) — the point the 3D view orbits around
-    /// when something is selected. `None` when nothing is selected; the caller
-    /// then orbits about the point under the cursor. (#229)
+    /// when something is selected. `None` keeps the current camera target as
+    /// the orbit centre. (#229)
     pub fn orbit_pivot(&self) -> Option<glam::DVec3> {
         if self.selected.is_empty() {
             return None;
@@ -9086,9 +9114,16 @@ impl Scene {
             self.annotation_all_visible(),
             None,
         );
-        let mut min = glam::DVec2::splat(f64::INFINITY);
-        let mut max = glam::DVec2::splat(f64::NEG_INFINITY);
+        let mut min = glam::DVec3::splat(f64::INFINITY);
+        let mut max = glam::DVec3::splat(f64::NEG_INFINITY);
         let mut any = false;
+        let mut include = |point: glam::DVec3| {
+            if point.is_finite() {
+                min = min.min(point);
+                max = max.max(point);
+                any = true;
+            }
+        };
         for wire in &wires {
             let Some(h) = Self::handle_from_wire_name(&wire.name) else {
                 continue;
@@ -9096,17 +9131,33 @@ impl Scene {
             if !self.selected.contains(&h) {
                 continue;
             }
-            for &[x, y, _] in &wire.points {
-                if x.is_finite() && y.is_finite() {
-                    min = min.min(glam::DVec2::new(x as f64, y as f64));
-                    max = max.max(glam::DVec2::new(x as f64, y as f64));
-                    any = true;
-                }
+            for (index, &[x, y, z]) in wire.points.iter().enumerate() {
+                let [lx, ly, lz] = wire
+                    .points_low
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0; 3]);
+                include(glam::DVec3::new(
+                    x as f64 + lx as f64,
+                    y as f64 + ly as f64,
+                    z as f64 + lz as f64,
+                ));
+            }
+        }
+        for set in self.interaction_meshes_arc().iter() {
+            let Some(handle) = set.entity_handle() else {
+                continue;
+            };
+            if !self.selected.contains(&handle) {
+                continue;
+            }
+            if let Some(aabb) = mesh_interaction_aabb(set) {
+                include(glam::DVec3::new(aabb[0], aabb[1], aabb[2]));
+                include(glam::DVec3::new(aabb[3], aabb[4], aabb[5]));
             }
         }
         if any {
-            let c = (min + max) * 0.5;
-            Some(glam::DVec3::new(c.x, c.y, 0.0))
+            Some((min + max) * 0.5)
         } else {
             None
         }

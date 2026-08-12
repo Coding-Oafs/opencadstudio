@@ -1841,39 +1841,28 @@ fn ucs_icon_geometry(
         return None;
     }
 
-    // Project to NDC (including depth) then to screen pixels.
-    let w2ndc = |world: Vec3| -> Option<Vec3> {
-        let ndc = vp.project_point3(world);
-        if !ndc.x.is_finite() || !ndc.y.is_finite() || !ndc.z.is_finite() {
+    // Transform directions directly. Projecting a point at the eye origin is
+    // undefined in perspective views.
+    let axis_screen = |axis: Vec3| -> Option<(f32, f32, f32, f32)> {
+        let clip = vp * axis.extend(0.0);
+        if !clip.x.is_finite() || !clip.y.is_finite() || !clip.z.is_finite() {
             return None;
         }
-        Some(ndc)
-    };
-    let ndc2s = |ndc: Vec3| -> Point {
-        Point::new(
-            bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
-            bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
-        )
+        let dx = clip.x * 0.5 * bounds.width;
+        let dy = -clip.y * 0.5 * bounds.height;
+        Some((dx, dy, (dx * dx + dy * dy).sqrt(), clip.z))
     };
 
-    // Project the UCS axis directions (not fixed world axes) so the tripod
-    // rotates to the active UCS. Directions are translation-invariant, so a
-    // common origin is fine.
     let (ax, ay, az) = axes;
-    let org = w2ndc(Vec3::ZERO)?;
-    let xn = w2ndc(ax)?;
-    let yn = w2ndc(ay)?;
-    let zn = w2ndc(az)?;
-
-    let org_s = ndc2s(org);
+    let (xdx, xdy, xlen, xdepth) = axis_screen(ax)?;
+    let (ydx, ydy, ylen, ydepth) = axis_screen(ay)?;
+    let (zdx, zdy, zlen, zdepth) = axis_screen(az)?;
     let corner = Point::new(
         bounds.x + UCS_ICON_MARGIN,
         bounds.y + (bounds.height - UCS_ICON_MARGIN).max(UCS_ICON_MARGIN),
     );
     // Snap the tripod to the projected UCS origin when it is on-screen
-    // (UCSICON ORigin); otherwise keep it in the corner. `org_s` (the
-    // rotation-only origin) stays the reference for axis-tip directions —
-    // those are translation-invariant, so only the anchor point moves.
+    // (UCSICON ORigin); otherwise keep it in the corner.
     let (icon_origin, at_origin) = match origin_screen {
         Some(p)
             if p.x >= bounds.x
@@ -1886,37 +1875,24 @@ fn ucs_icon_geometry(
         _ => (corner, false),
     };
 
-    // Raw screen-space displacement for each axis tip.
-    let raw = |ndc_tip: Vec3| -> (f32, f32, f32) {
-        let s = ndc2s(ndc_tip);
-        let dx = s.x - org_s.x;
-        let dy = s.y - org_s.y;
-        (dx, dy, (dx * dx + dy * dy).sqrt())
-    };
-
-    let (xdx, xdy, xlen) = raw(xn);
-    let (ydx, ydy, ylen) = raw(yn);
-    let (zdx, zdy, zlen) = raw(zn);
-
     // Scale so the longest projected axis fills UCS_ICON_LEN; shorter axes
     // stay proportionally shorter (this IS the foreshortening effect).
     let max_len = xlen.max(ylen).max(zlen).max(1e-4);
     let sc = UCS_ICON_LEN / max_len;
 
-    let mk = |dx: f32, dy: f32, len: f32, tip_z: f32| IconAxis {
+    let mk = |dx: f32, dy: f32, len: f32, depth: f32| IconAxis {
         dx: dx * sc,
         dy: dy * sc,
         sc_len: len * sc,
-        // depth > 0 → tip farther than origin (into screen); < 0 → toward viewer.
-        depth: tip_z - org.z,
+        depth,
     };
     Some((
         icon_origin,
         at_origin,
         [
-            mk(xdx, xdy, xlen, xn.z),
-            mk(ydx, ydy, ylen, yn.z),
-            mk(zdx, zdy, zlen, zn.z),
+            mk(xdx, xdy, xlen, xdepth),
+            mk(ydx, ydy, ylen, ydepth),
+            mk(zdx, zdy, zlen, zdepth),
         ],
     ))
 }

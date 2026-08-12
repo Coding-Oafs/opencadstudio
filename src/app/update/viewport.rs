@@ -351,9 +351,8 @@ impl OpenCADStudio {
         (origin, (x.as_vec3(), y.as_vec3(), z.as_vec3()))
     }
 
-    /// Adopt the active viewport's grid *display* into the live toggle. Called
-    /// on load and whenever the active tab or viewport changes, so the grid
-    /// drawing follows the active viewport.
+    /// Adopt the active viewport's display state into the live toggles. Called
+    /// on load and whenever the active tab or viewport changes.
     ///
     /// Grid *snap* (`SnapType::Grid`) is deliberately NOT adopted here: it stays
     /// off by default everywhere and is controlled solely by the user's snap
@@ -363,6 +362,9 @@ impl OpenCADStudio {
         if let Some((grid_on, _snap_on)) = self.tabs[i].scene.active_tile_grid_snap() {
             self.show_grid = grid_on;
         }
+        let ortho = self.tabs[i].scene.active_camera_projection()
+            == crate::scene::Projection::Orthographic;
+        self.ribbon.set_ortho(ortho);
     }
 
     pub(in crate::app) fn sync_render_mode_to_active_tile(&mut self, i: usize) {
@@ -982,12 +984,14 @@ impl OpenCADStudio {
                         return Task::none();
                     } else if self.tabs[i].scene.current_layout == "Model" {
                         if sel.orbit_pivot.is_none() {
-                            // Selection centre when something is selected,
-                            // otherwise the point under the cursor. (#229)
-                            sel.orbit_pivot = self.tabs[i]
-                                .scene
-                                .orbit_pivot()
-                                .or(Some(self.tabs[i].last_cursor_world));
+                            let scene = &self.tabs[i].scene;
+                            let bounds = scene.active_model_tile_bounds(vp_size.0, vp_size.1);
+                            sel.orbit_pivot = Some(
+                                scene
+                                    .orbit_pivot()
+                                    .or_else(|| scene.view_center_surface_pivot(bounds))
+                                    .unwrap_or_else(|| scene.camera.borrow().target),
+                            );
                         }
                         let pivot = sel.orbit_pivot;
                         drop(sel);
