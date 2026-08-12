@@ -1,15 +1,7 @@
-// Hatch texture shader — storage-free, UNCAPPED variant of wipeout.wgsl.
-//
-// Devices without vertex/fragment storage buffers cannot use the batched
-// storage-buffer renderer (hatch.wgsl). This shader keeps the exact
-// wipeout.wgsl hatch algorithm (in_polygon + per-family line/dash/dot + solid +
-// gradient) but reads the variable-length boundary / family / dash arrays from a
-// single RGBA32F data texture via textureLoad instead of fixed-size uniforms —
-// removing the MAX_FAMILIES (16) / MAX_HATCH_BOUNDARY_VERTS (1024) / MAX_DASHES
-// (128) caps of the uniform path.
+// Texture-backed hatch shader. The kernel mesh bounds the fill; this shader
+// evaluates only the pattern, solid, or gradient colour.
 //
 // Data texture layout (row-major, width = h.tex_width, one vec4 per texel):
-//   [ 0 .. vcount )                 boundary verts, .xy = local XY, NaN = break
 //   [ fam_off .. fam_off+3*n_fam )  families, 3 texels each (see load_family)
 //   [ dash_off .. )                 dash values, 4 per texel (RGBA)
 
@@ -36,7 +28,7 @@ struct HatchUniforms {
     color:        vec4<f32>,  //  0
     color2:       vec4<f32>,  // 16
     mode:         u32,        // 32: 0=pattern, 1=solid, 2=gradient
-    vcount:       u32,        // 36: boundary vertex count
+    _reserved:    u32,        // 36
     angle_offset: f32,        // 40
     scale:        f32,        // 44
     grad_cos:     f32,        // 48
@@ -119,56 +111,6 @@ struct VOut {
     return o;
 }
 
-// ── Point-in-polygon (ray casting) ────────────────────────────────────────
-
-fn valid_vertex(p: vec2<f32>) -> bool {
-    // Sub-loop separators are a huge finite sentinel (1e30, see
-    // GPU_BOUNDARY_SEP), not NaN: `x == x` NaN detection gets folded to
-    // `true` by some drivers (Intel Mesa fast math), which made separators
-    // read as real vertices and bleed fills past their boundary (#386, #416).
-    return abs(p.x) < 1.0e29 && abs(p.y) < 1.0e29;
-}
-
-fn edge_crosses(p: vec2<f32>, a: vec2<f32>, c: vec2<f32>) -> bool {
-    if (a.y > p.y) != (c.y > p.y) {
-        let x_int = (c.x - a.x) * (p.y - a.y) / (c.y - a.y) + a.x;
-        return p.x < x_int;
-    }
-    return false;
-}
-
-fn in_polygon(p: vec2<f32>) -> bool {
-    var inside = false;
-    let n = h.vcount;
-    var prev = vec2<f32>(0.0, 0.0);
-    var first = vec2<f32>(0.0, 0.0);
-    var have_prev = false;
-    for (var i = 0u; i < n; i++) {
-        let vi = texel(i).xy;
-        if !valid_vertex(vi) {
-            // NaN sentinel closes the current sub-loop (last → first edge). (#140)
-            if have_prev && edge_crosses(p, prev, first) {
-                inside = !inside;
-            }
-            have_prev = false;
-            continue;
-        }
-        if have_prev {
-            if edge_crosses(p, prev, vi) {
-                inside = !inside;
-            }
-        } else {
-            first = vi;
-        }
-        prev = vi;
-        have_prev = true;
-    }
-    if have_prev && edge_crosses(p, prev, first) {
-        inside = !inside;
-    }
-    return inside;
-}
-
 // ── Per-family hatch test (identical math to wipeout.wgsl) ─────────────────
 
 // `ddx_xz`/`ddy_xz` are screen-space derivatives of `xz`, taken once in
@@ -243,8 +185,6 @@ fn check_family(
     // Taken here, in uniform control flow — see check_family.
     let ddx_xz = dpdx(v.xz);
     let ddy_xz = dpdy(v.xz);
-
-    if !in_polygon(v.xz) { discard; }
 
     let base_mode = h.mode & 0xFFu;
     let gk = (h.mode >> 8u) & 15u;

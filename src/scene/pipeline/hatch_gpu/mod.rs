@@ -34,8 +34,8 @@ impl HatchBackendKind {
 
 enum HatchBackend {
     Storage {
-        resident: Option<StorageHatchBatch>,
-        preview: Option<StorageHatchBatch>,
+        resident: Vec<StorageHatchBatch>,
+        preview: Vec<StorageHatchBatch>,
     },
     Texture {
         resident: Vec<TextureHatch>,
@@ -137,8 +137,8 @@ impl HatchGpu {
         });
         let backend = match backend_kind {
             HatchBackendKind::Storage => HatchBackend::Storage {
-                resident: None,
-                preview: None,
+                resident: Vec::new(),
+                preview: Vec::new(),
             },
             HatchBackendKind::Texture => HatchBackend::Texture {
                 resident: Vec::new(),
@@ -223,28 +223,29 @@ impl HatchGpu {
         queue: &wgpu::Queue,
         mut is_visible: impl FnMut([f32; 4]) -> bool,
     ) -> usize {
-        let HatchBackend::Storage {
-            resident: Some(batch),
-            ..
-        } = &mut self.backend
+        let HatchBackend::Storage { resident, .. } = &mut self.backend
         else {
             return 0;
         };
-        for index in 0..batch.unique_source_count {
-            batch.source_visibility[index] = u32::from(is_visible(batch.source_aabbs[index]));
+        let mut updated = 0;
+        for batch in resident {
+            for index in 0..batch.unique_source_count {
+                batch.source_visibility[index] = u32::from(is_visible(batch.source_aabbs[index]));
+            }
+            for index in batch.unique_source_count..batch.source_visibility.len() {
+                batch.source_visibility[index] = 1;
+            }
+            for (index, aabb) in batch.instance_aabbs.iter().copied().enumerate() {
+                batch.placements[index].visible = if index == 0 && batch.unique_source_count > 0 {
+                    1
+                } else {
+                    u32::from(is_visible(aabb))
+                };
+            }
+            batch.upload_visibility(queue);
+            updated += batch.instance_aabbs.len() + batch.unique_source_count;
         }
-        for index in batch.unique_source_count..batch.source_visibility.len() {
-            batch.source_visibility[index] = 1;
-        }
-        for (index, aabb) in batch.instance_aabbs.iter().copied().enumerate() {
-            batch.placements[index].visible = if index == 0 && batch.unique_source_count > 0 {
-                1
-            } else {
-                u32::from(is_visible(aabb))
-            };
-        }
-        batch.upload_visibility(queue);
-        batch.instance_aabbs.len() + batch.unique_source_count
+        updated
     }
 
     pub fn draw<'pass>(
@@ -258,12 +259,13 @@ impl HatchGpu {
         pass.set_stencil_reference(stencil_reference);
         match &self.backend {
             HatchBackend::Storage { resident, preview } => {
-                for batch in [resident.as_ref(), preview.as_ref()].into_iter().flatten() {
+                for batch in resident.iter().chain(preview) {
                     pass.set_bind_group(1, &batch.bind_group, &[]);
                     pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
                     pass.set_vertex_buffer(1, batch.placement_buffer.slice(..));
-                    for (vertices, instances) in &batch.draws {
-                        pass.draw(vertices.clone(), instances.clone());
+                    pass.set_index_buffer(batch.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    for (indices, instances) in &batch.draws {
+                        pass.draw_indexed(indices.clone(), 0, instances.clone());
                     }
                 }
             }
@@ -272,7 +274,11 @@ impl HatchGpu {
                     pass.set_bind_group(1, &hatch.bind_group, &[]);
                     pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
                     pass.set_vertex_buffer(1, hatch.placement_buffer.slice(..));
-                    pass.draw(0..6, 0..hatch.instance_count);
+                    pass.set_index_buffer(
+                        hatch.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.draw_indexed(0..hatch.index_count, 0, 0..hatch.instance_count);
                 }
             }
         }
@@ -294,11 +300,11 @@ mod tests {
     #[test]
     fn selects_backend_from_device_limits() {
         assert_eq!(
-            HatchBackendKind::select(capabilities(5), false),
+            HatchBackendKind::select(capabilities(4), false),
             HatchBackendKind::Storage
         );
         assert_eq!(
-            HatchBackendKind::select(capabilities(4), false),
+            HatchBackendKind::select(capabilities(3), false),
             HatchBackendKind::Texture
         );
     }
