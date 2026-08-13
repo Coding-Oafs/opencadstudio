@@ -872,10 +872,12 @@ pub fn prepare_open_geometry(
     scene.local_center = caches.local_center;
     scene.bg_color = model_bg;
     let cannoscale_value = scene.document.header.annotation_scale_value;
+    let unit_factor = scene.annotation_scale_unit_factor();
+
     scene.annotation_scale = if cannoscale_value > 1e-9 {
-        (1.0 / cannoscale_value) as f32
+        ((1.0 / cannoscale_value) / unit_factor) as f32
     } else {
-        1.0
+        (1.0 / unit_factor) as f32
     };
     scene.current_layout = "Model".to_string();
     let camera = scene.camera.borrow().clone();
@@ -3553,7 +3555,7 @@ impl Scene {
     /// The built-in scale factors are defined assuming model and paper use
     /// the same base unit. A drawing in metres therefore needs an extra
     /// factor of 1000 when its paper side is measured in millimetres.
-    fn annotation_scale_unit_factor(&self) -> f64 {
+    pub(crate) fn annotation_scale_unit_factor(&self) -> f64 {
         let paper_unit = if self.prefers_imperial_scales() == Some(true) {
             1 // Inches
         } else {
@@ -3836,14 +3838,25 @@ impl Scene {
 
     pub fn set_annotation_scale_named(&mut self, name: &str) -> Option<Handle> {
         let handle = self.scale_handle_ensuring(name)?;
-        let ObjectType::Scale(scale) = self.document.objects.get(&handle)? else {
-            return None;
+        let unit_factor = self.annotation_scale_unit_factor();
+
+        let (scale_name, scale_factor, multiplier) = {
+            let ObjectType::Scale(scale) = self.document.objects.get(&handle)? else {
+                return None;
+            };
+
+            (
+                scale.name.clone(),
+                scale.factor(),
+                scale.inverse_factor() / unit_factor,
+            )
         };
-        let multiplier = scale.inverse_factor();
+
         self.annotation_scale = multiplier as f32;
-        self.document.header.current_annotation_scale = scale.name.clone();
-        self.document.header.annotation_scale_value = scale.factor();
+        self.document.header.current_annotation_scale = scale_name;
+        self.document.header.annotation_scale_value = scale_factor;
         self.invalidate_annotation_dependencies();
+
         Some(handle)
     }
 
