@@ -480,7 +480,15 @@ pub fn annotative_offscale_for(
         }),
     }
 }
-
+pub(crate) fn annotation_scale_handles_for_entity(
+    doc: &CadDocument,
+    entity_handle: Handle,
+) -> Vec<Handle> {
+    object_scale_memberships(doc, entity_handle)
+        .into_iter()
+        .map(|(_, scale_handle)| scale_handle)
+        .collect()
+}
 pub fn scale_handle_by_name(doc: &CadDocument, name: &str) -> Option<Handle> {
     doc.objects.iter().find_map(|(handle, object)| match object {
         ObjectType::Scale(scale)
