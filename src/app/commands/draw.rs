@@ -625,8 +625,16 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(handle, _)| handle)
-                    .collect();
-                let new_cmd = HatchCommand::new(outlines, boundary_sources, selected);
+                    .collect::<Vec<_>>();
+                let inherited = selected
+                    .iter()
+                    .find_map(|handle| {
+                        let model = self.tabs[i].scene.hatches.get(handle)?.clone();
+                        let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
+                        Some((model, common.color.clone(), common.transparency))
+                    });
+                let new_cmd =
+                    HatchCommand::new(outlines, boundary_sources, selected, inherited);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 self.refresh_area_preview(i);

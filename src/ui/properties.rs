@@ -131,6 +131,7 @@ impl canvas::Program<Message> for HatchPatternPreview {
                     ]),
                     boundary_wcs: None,
                     boundary_exterior: None,
+                    boundary_sources: None,
                     pattern: self.pattern.clone(),
                     name: String::new(),
                     color: [1.0; 4],

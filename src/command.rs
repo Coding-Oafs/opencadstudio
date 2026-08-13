@@ -1151,6 +1151,8 @@ pub enum CmdResult {
     CommitEntity(EntityType),
     /// Commit several acadrust entities in one undo step; keep the command active.
     CommitEntities(Vec<EntityType>),
+    /// Commit several entities in one undo step and end the command.
+    CommitEntitiesAndExit(Vec<EntityType>),
     /// Commit an acadrust entity to the document and end the command.
     CommitAndExit(EntityType),
     /// Commit a Model-tab 3D solid: the acadrust entity (for selection /
@@ -1183,6 +1185,18 @@ pub enum CmdResult {
     CopySelected(Vec<Handle>, EntityTransform),
     /// Commit a hatch fill (stored in Scene::hatches, not the DXF document).
     CommitHatch(HatchModel),
+    /// Commit a hatch with the selected hatch's entity colour and transparency.
+    CommitStyledHatch {
+        hatch: HatchModel,
+        color: acadrust::types::Color,
+        transparency: acadrust::types::Transparency,
+    },
+    /// Commit a hatch and retain each boundary ring as an entity.
+    CommitHatchWithBoundaries {
+        hatch: HatchModel,
+        boundaries: Vec<EntityType>,
+        entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
+    },
     /// Copy selected entities with multiple transforms (e.g. rectangular array); end command.
     BatchCopy(Vec<Handle>, Vec<EntityTransform>),
     /// Erase `handle` and replace with new entities; command stays active.

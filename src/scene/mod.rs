@@ -33,6 +33,8 @@ mod project;
 mod scene_markers;
 mod selection;
 
+pub(crate) use boundary::{boundary_entities, ring_source_handles};
+
 // Parallel tessellation free functions live in `convert::tess` (alongside the
 // other tessellation code); re-exported here so this root and sibling topic
 // modules (each does `use super::*`) keep referencing them unqualified.
@@ -1677,6 +1679,9 @@ pub struct Scene {
     /// `geometry_epoch`: a layer colour toggle can reuse the index, invalidate
     /// only its dependants, and avoid a whole-document scan on every toggle.
     dependency_index_cache: RefCell<Option<SceneDependencyIndex>>,
+    /// Boundary source → associative hatch handles. Source edits reuse this
+    /// index instead of scanning the document during every drag step.
+    associative_hatch_source_cache: RefCell<Option<HashMap<Handle, Vec<Handle>>>>,
     /// Tessellated block definitions in block-local coords, keyed by render
     /// background and block epoch. Model and Paper adapt black/white colours
     /// differently; retaining both variants prevents a full block rebuild on
@@ -1893,6 +1898,7 @@ impl Scene {
             model_extents_cache: RefCell::new(None),
             entity_block_map_cache: RefCell::new(None),
             dependency_index_cache: RefCell::new(None),
+            associative_hatch_source_cache: RefCell::new(None),
             block_defn_cache: RefCell::new(HashMap::default()),
             entity_index_cache: RefCell::new(None),
             last_render_aspect: std::cell::Cell::new(16.0 / 9.0),
@@ -2368,6 +2374,21 @@ impl Scene {
     }
 
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        if changes.iter().any(|(handle, kind)| {
+            matches!(kind, ChangeKind::Removed)
+                || self
+                    .document
+                    .get_entity(*handle)
+                    .is_some_and(|entity| matches!(entity, EntityType::Hatch(_)))
+        }) {
+            self.associative_hatch_source_cache.borrow_mut().take();
+        }
+        let mut changes = changes.to_vec();
+        for change in self.refresh_associative_hatches(&changes) {
+            if !changes.iter().any(|(handle, _)| *handle == change.0) {
+                changes.push(change);
+            }
+        }
         if !changes.is_empty() {
             // A Modified delta can change layer/style/block references as well
             // as coordinates. Rebuild the reverse dependency map lazily on its
@@ -2386,14 +2407,14 @@ impl Scene {
                 .is_some_and(|entity| matches!(entity, EntityType::Light(_)))
         });
         if cached_light_changed || live_light_changed {
-            for (handle, _) in changes {
+            for &(handle, _) in &changes {
                 let exists = self
                     .document
-                    .get_entity(*handle)
+                    .get_entity(handle)
                     .is_some_and(|entity| matches!(entity, EntityType::Light(_)));
                 crate::entities::object_data::update_light_entity(
                     &mut self.object_data_cache,
-                    *handle,
+                    handle,
                     exists,
                 );
             }
@@ -2404,7 +2425,7 @@ impl Scene {
         {
             let mut tm = self.tess_memo.borrow_mut();
             let mut rm = self.resident_tess_memo.borrow_mut();
-            for &(h, k) in changes {
+            for &(h, k) in &changes {
                 // A changed or removed entity must re-tessellate; a fresh Add has
                 // no memo entry yet, so there is nothing to drop.
                 if matches!(k, ChangeKind::Modified | ChangeKind::Removed) {
@@ -2413,7 +2434,7 @@ impl Scene {
                 }
             }
         }
-        self.push_geometry_delta(epoch, changes.to_vec(), false);
+        self.push_geometry_delta(epoch, changes, false);
     }
 
     /// True when any changed handle belongs to an ordinary block definition
@@ -3182,6 +3203,7 @@ impl Scene {
             boundary: Arc::new(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]),
             boundary_wcs: None,
             boundary_exterior: None,
+            boundary_sources: None,
             pattern: crate::scene::model::hatch_model::HatchPattern::Solid,
             name: "SOLID".to_string(),
             color: self.paper_bg_color,

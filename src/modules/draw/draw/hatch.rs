@@ -211,6 +211,12 @@ pub struct HatchCommand {
     mode: HatchMode,
     manual_pts: Vec<DVec3>,
     missed: bool,
+    retain_boundaries: bool,
+    inherited: Option<(
+        HatchModel,
+        acadrust::types::Color,
+        acadrust::types::Transparency,
+    )>,
 }
 
 impl HatchCommand {
@@ -218,7 +224,16 @@ impl HatchCommand {
         outlines: Vec<Vec<[f64; 2]>>,
         boundary_sources: rustc_hash::FxHashMap<Handle, Vec<Line>>,
         selected_objects: Vec<Handle>,
+        inherited: Option<(
+            HatchModel,
+            acadrust::types::Color,
+            acadrust::types::Transparency,
+        )>,
     ) -> Self {
+        let selected_objects: Vec<_> = selected_objects
+            .into_iter()
+            .filter(|handle| boundary_sources.contains_key(handle))
+            .collect();
         let has_selection = !selected_objects.is_empty();
         let mut command = Self {
             outlines,
@@ -233,6 +248,8 @@ impl HatchCommand {
             },
             manual_pts: vec![],
             missed: false,
+            retain_boundaries: false,
+            inherited,
         };
         command.set_object_selection(selected_objects);
         command
@@ -289,6 +306,51 @@ impl HatchCommand {
             .into_iter()
             .map(|depth| depth % 2 == 0)
             .collect();
+        let boundary_sources = rings
+            .iter()
+            .map(|ring| crate::scene::ring_source_handles(ring, &self.boundary_sources))
+            .collect();
+        if let Some((source, _, _)) = &self.inherited {
+            let mut pattern = source.pattern.clone();
+            if let HatchPattern::Pattern(families) = &mut pattern {
+                let scale = if source.scale.abs() > 1.0e-6 {
+                    source.scale
+                } else {
+                    1.0
+                };
+                let (sin, cos) = source.angle_offset.sin_cos();
+                for family in families {
+                    let base_x = source.world_origin[0]
+                        + (family.x0 as f64 * cos as f64
+                            - family.y0 as f64 * sin as f64)
+                            * scale as f64;
+                    let base_y = source.world_origin[1]
+                        + (family.x0 as f64 * sin as f64
+                            + family.y0 as f64 * cos as f64)
+                            * scale as f64;
+                    let dx = base_x - origin[0];
+                    let dy = base_y - origin[1];
+                    family.x0 = ((dx * cos as f64 + dy * sin as f64) / scale as f64) as f32;
+                    family.y0 = ((-dx * sin as f64 + dy * cos as f64) / scale as f64) as f32;
+                }
+            }
+            return HatchModel {
+                render_instance: None,
+                boundary: std::sync::Arc::new(rel),
+                pattern,
+                name: source.name.clone(),
+                color: source.color,
+                aci: source.aci,
+                line_weight_px: source.line_weight_px,
+                angle_offset: source.angle_offset,
+                scale: source.scale,
+                world_origin: origin,
+                boundary_wcs: Some(std::sync::Arc::new(wcs)),
+                boundary_exterior: Some(std::sync::Arc::new(exterior)),
+                boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
+                draw_depth: source.draw_depth,
+            };
+        }
         // Default: ANSI31 from catalog; fallback to a single 45° family.
         let pat_name = "ANSI31";
         let families = crate::scene::model::hatch_patterns::find(pat_name)
@@ -324,6 +386,7 @@ impl HatchCommand {
             world_origin: origin,
             boundary_wcs: Some(std::sync::Arc::new(wcs)),
             boundary_exterior: Some(std::sync::Arc::new(exterior)),
+            boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
             draw_depth: 0.0,
         }
     }
@@ -381,6 +444,14 @@ impl CadCommand for HatchCommand {
                 let mut options = vec![
                     CmdOption::new(t!("Select objects").as_ref(), "O"),
                     CmdOption::new(t!("Draw manually").as_ref(), "S"),
+                    CmdOption::new(
+                        if self.retain_boundaries {
+                            "Keep boundaries: on"
+                        } else {
+                            "Keep boundaries: off"
+                        },
+                        "B",
+                    ),
                 ];
                 if self.region_count() > 0 {
                     options.push(CmdOption::enter(t!("Accept").as_ref()));
@@ -391,6 +462,14 @@ impl CadCommand for HatchCommand {
                 let mut options = vec![
                     CmdOption::new(t!("Pick internal points").as_ref(), "I"),
                     CmdOption::new(t!("Draw manually").as_ref(), "S"),
+                    CmdOption::new(
+                        if self.retain_boundaries {
+                            "Keep boundaries: on"
+                        } else {
+                            "Keep boundaries: off"
+                        },
+                        "B",
+                    ),
                 ];
                 if self.region_count() > 0 {
                     options.push(CmdOption::enter(t!("Accept").as_ref()));
@@ -441,6 +520,21 @@ impl CadCommand for HatchCommand {
         let rings = self.combined_rings();
         if rings.is_empty() {
             CmdResult::Cancel
+        } else if self.retain_boundaries {
+            CmdResult::CommitHatchWithBoundaries {
+                hatch: self.make_hatch(rings.clone()),
+                boundaries: crate::scene::boundary_entities(&rings),
+                entity_style: self
+                    .inherited
+                    .as_ref()
+                    .map(|(_, color, transparency)| (color.clone(), *transparency)),
+            }
+        } else if let Some((_, color, transparency)) = &self.inherited {
+            CmdResult::CommitStyledHatch {
+                hatch: self.make_hatch(rings),
+                color: color.clone(),
+                transparency: *transparency,
+            }
         } else {
             CmdResult::CommitHatch(self.make_hatch(rings))
         }
@@ -508,6 +602,10 @@ impl CadCommand for HatchCommand {
             "S" => {
                 self.mode = HatchMode::Manual;
                 self.missed = false;
+                Some(CmdResult::NeedPoint)
+            }
+            "B" | "BOUNDARY" | "BOUNDARIES" => {
+                self.retain_boundaries = !self.retain_boundaries;
                 Some(CmdResult::NeedPoint)
             }
             _ => None,
@@ -586,6 +684,7 @@ impl GradientCommand {
             world_origin: origin,
             boundary_wcs: Some(std::sync::Arc::new(wcs)),
             boundary_exterior: None,
+            boundary_sources: None,
             draw_depth: 0.0,
         }
     }
@@ -783,24 +882,7 @@ impl CadCommand for BoundaryCommand {
         match resolve_hatch_rings(&self.outlines, xy) {
             Some(rings) => {
                 self.missed = false;
-                // Store as a Hatch entity (solid fill) so it is selectable.
-                let (rel, origin, wcs) = pack_rings(&rings);
-                let model = HatchModel {
-                    render_instance: None,
-                    boundary: std::sync::Arc::new(rel),
-                    pattern: HatchPattern::Solid,
-                    name: "SOLID".into(),
-                    color: [0.45, 0.45, 0.45, 0.60],
-                    aci: 0,
-                    line_weight_px: 1.0,
-                    angle_offset: 0.0,
-                    scale: 1.0,
-                    world_origin: origin,
-                    boundary_wcs: Some(std::sync::Arc::new(wcs)),
-                    boundary_exterior: None,
-                    draw_depth: 0.0,
-                };
-                CmdResult::CommitHatch(model)
+                CmdResult::CommitEntitiesAndExit(crate::scene::boundary_entities(&rings))
             }
             None => {
                 self.missed = true;

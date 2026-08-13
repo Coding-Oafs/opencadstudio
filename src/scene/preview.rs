@@ -159,6 +159,7 @@ impl Scene {
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
             boundary_exterior: None,
+            boundary_sources: None,
             pattern: HatchPattern::Solid,
             name: "AREA_PREVIEW".into(),
             color: [0.0; 4],

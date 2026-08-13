@@ -1363,6 +1363,7 @@ impl Scene {
                     boundary: Arc::new(boundary),
                     boundary_wcs: None,
                     boundary_exterior: None,
+                    boundary_sources: None,
                     pattern: model::hatch_model::HatchPattern::Solid,
                     name: "WIPEOUT_FILL".into(),
                     color,
@@ -1714,6 +1715,13 @@ impl Scene {
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
             boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
+            boundary_sources: Some(std::sync::Arc::new(
+                dxf.paths
+                    .iter()
+                    .filter(|path| path.flags.bits() & 8 == 0)
+                    .map(|path| path.boundary_handles.clone())
+                    .collect(),
+            )),
             pattern,
             name,
             // A gradient starts from its first stop; other fills use the
@@ -2029,6 +2037,7 @@ impl Scene {
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
             boundary_exterior: None,
+            boundary_sources: None,
             pattern: model::hatch_model::HatchPattern::Solid,
             name: "SOLID".into(),
             color,
@@ -2041,7 +2050,12 @@ impl Scene {
         }
     }
 
-    pub fn add_hatch(&mut self, model: HatchModel, layer: Option<&str>) -> Handle {
+    pub fn add_hatch(
+        &mut self,
+        model: HatchModel,
+        layer: Option<&str>,
+        entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
+    ) -> Handle {
         let mut dxf = DxfHatch::new();
         dxf.is_solid = matches!(
             model.pattern,
@@ -2074,7 +2088,7 @@ impl Scene {
         let mut ring: Vec<Vector2> = Vec::new();
         let mut first = true;
         let mut ring_index = 0usize;
-        let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool| {
+        let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool, index: usize| {
             if !r.is_empty() {
                 let edge = PolylineEdge::new(std::mem::take(r), true);
                 let mut path = if is_outer {
@@ -2088,6 +2102,17 @@ impl Scene {
                     BoundaryPath::new()
                 };
                 path.add_edge(BoundaryEdge::Polyline(edge));
+                if let Some(handles) = model
+                    .boundary_sources
+                    .as_deref()
+                    .and_then(|sources| sources.get(index))
+                {
+                    for &handle in handles {
+                        if handle.is_valid() {
+                            path.add_boundary_handle(handle);
+                        }
+                    }
+                }
                 dxf.paths.push(path);
             }
         };
@@ -2101,11 +2126,11 @@ impl Scene {
                     .and_then(|roles| roles.get(ring_index))
                     .copied()
                     .unwrap_or(first);
+                first = false;
                 if !ring.is_empty() {
+                    push_ring(&mut ring, is_outer, ring_index);
                     ring_index += 1;
                 }
-                first = false;
-                push_ring(&mut ring, is_outer);
             }
         }
         let is_outer = model
@@ -2114,29 +2139,56 @@ impl Scene {
             .and_then(|roles| roles.get(ring_index))
             .copied()
             .unwrap_or(first);
-        push_ring(&mut ring, is_outer);
+        push_ring(&mut ring, is_outer, ring_index);
+        dxf.is_associative = dxf
+            .paths
+            .iter()
+            .any(|path| !path.boundary_handles.is_empty());
         let pattern_scale = if model.scale.abs() > 1e-6 {
             model.scale as f64
         } else {
             1.0
         };
-        if let Some(entry) = crate::scene::model::hatch_patterns::find(&model.name) {
-            dxf.pattern = crate::scene::model::hatch_patterns::build_dxf_pattern(entry);
-            if let Some(base) = dxf.pattern.lines.first().map(|line| line.base_point) {
-                let angle = model.angle_offset as f64;
-                let (sin, cos) = angle.sin_cos();
-                let target_x = model.world_origin[0]
-                    + (base.x * cos - base.y * sin) * pattern_scale;
-                let target_y = model.world_origin[1]
-                    + (base.x * sin + base.y * cos) * pattern_scale;
-                crate::entities::hatch::scale_pattern_geometry(&mut dxf.pattern, pattern_scale);
-                crate::entities::hatch::rotate_pattern_geometry(&mut dxf.pattern, angle);
-                crate::entities::hatch::translate_pattern_geometry(
-                    &mut dxf.pattern,
-                    target_x - base.x,
-                    target_y - base.y,
-                );
+        if let crate::scene::model::hatch_model::HatchPattern::Pattern(families) = &model.pattern {
+            let mut pattern = acadrust::entities::HatchPattern::new(&model.name);
+            let rotation = model.angle_offset as f64;
+            let (rotation_sin, rotation_cos) = rotation.sin_cos();
+            for family in families {
+                let family_angle = (family.angle_deg as f64).to_radians();
+                let angle = family_angle + rotation;
+                let (family_sin, family_cos) = family_angle.sin_cos();
+                let local_offset_x = family.dx as f64 * family_cos
+                    - family.dy as f64 * family_sin;
+                let local_offset_y = family.dx as f64 * family_sin
+                    + family.dy as f64 * family_cos;
+                let base_x = family.x0 as f64 * pattern_scale;
+                let base_y = family.y0 as f64 * pattern_scale;
+                pattern.lines.push(acadrust::entities::HatchPatternLine {
+                    angle,
+                    base_point: Vector2::new(
+                        model.world_origin[0]
+                            + base_x * rotation_cos
+                            - base_y * rotation_sin,
+                        model.world_origin[1]
+                            + base_x * rotation_sin
+                            + base_y * rotation_cos,
+                    ),
+                    offset: Vector2::new(
+                        (local_offset_x * rotation_cos
+                            - local_offset_y * rotation_sin)
+                            * pattern_scale,
+                        (local_offset_x * rotation_sin
+                            + local_offset_y * rotation_cos)
+                            * pattern_scale,
+                    ),
+                    dash_lengths: family
+                        .dashes
+                        .iter()
+                        .map(|dash| *dash as f64 * pattern_scale)
+                        .collect(),
+                });
             }
+            dxf.pattern = pattern;
         }
         dxf.pattern_angle = model.angle_offset as f64;
         dxf.pattern_scale = pattern_scale;
@@ -2195,6 +2247,10 @@ impl Scene {
         if let Some(layer) = layer {
             entity.as_entity_mut().set_layer(layer.to_string());
         }
+        if let Some((color, transparency)) = entity_style {
+            entity.common_mut().color = color;
+            entity.common_mut().transparency = transparency;
+        }
 
         self.add_entity(entity)
     }
@@ -2207,6 +2263,7 @@ impl Scene {
         self.preview_text = vec![];
         self.current_layout = "Model".to_string();
         self.hatches = HashMap::default();
+        self.associative_hatch_source_cache.borrow_mut().take();
         self.images = HashMap::default();
         self.meshes = HashMap::default();
         self.block_meshes = HashMap::default();

@@ -793,6 +793,24 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
+            CmdResult::CommitEntitiesAndExit(entities) => {
+                let label = self.history_label_from_active_cmd(i, "ENTITY");
+                let delta_safe = entities
+                    .iter()
+                    .all(|entity| self.delta_add_safe(i, entity));
+                let pending = self.begin_undo(i, label, entities.len(), delta_safe);
+                for entity in entities {
+                    self.commit_entity(entity);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
             CmdResult::MviewCreate {
                 viewport,
                 preserve_view,
@@ -1271,7 +1289,67 @@ impl OpenCADStudio {
                 let label = self.history_label_from_active_cmd(i, "HATCH");
                 let pending = self.begin_undo(i, label, 1, true);
                 let layer = self.tabs[i].active_layer.clone();
-                let new_handle = self.tabs[i].scene.add_hatch(hatch, Some(&layer));
+                let new_handle = self.tabs[i].scene.add_hatch(hatch, Some(&layer), None);
+                if !new_handle.is_null() {
+                    self.tabs[i].scene.select_entity(new_handle, true);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::CommitStyledHatch {
+                hatch,
+                color,
+                transparency,
+            } => {
+                let label = self.history_label_from_active_cmd(i, "HATCH");
+                let pending = self.begin_undo(i, label, 1, true);
+                let layer = self.tabs[i].active_layer.clone();
+                let new_handle = self.tabs[i].scene.add_hatch(
+                    hatch,
+                    Some(&layer),
+                    Some((color, transparency)),
+                );
+                if !new_handle.is_null() {
+                    self.tabs[i].scene.select_entity(new_handle, true);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::CommitHatchWithBoundaries {
+                mut hatch,
+                boundaries,
+                entity_style,
+            } => {
+                let label = self.history_label_from_active_cmd(i, "HATCH");
+                let pending = self.begin_undo(i, label, boundaries.len() + 1, true);
+                let mut sources = Vec::with_capacity(boundaries.len());
+                for boundary in boundaries {
+                    let handles = self
+                        .commit_entity_handle(boundary)
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    sources.push(handles);
+                }
+                hatch.boundary_sources = Some(std::sync::Arc::new(sources));
+                let layer = self.tabs[i].active_layer.clone();
+                let new_handle =
+                    self.tabs[i]
+                        .scene
+                        .add_hatch(hatch, Some(&layer), entity_style);
                 if !new_handle.is_null() {
                     self.tabs[i].scene.select_entity(new_handle, true);
                 }
@@ -3097,7 +3175,7 @@ impl OpenCADStudio {
                     // Remove old hatch (entity + GPU model)
                     self.tabs[i].scene.erase_entities(&[handle]);
                     // Re-add with updated model
-                    self.tabs[i].scene.add_hatch(model, Some(&layer));
+                    self.tabs[i].scene.add_hatch(model, Some(&layer), None);
                     self.tabs[i].dirty = true;
                     self.command_line.push_output(crate::t!("HATCHEDIT: hatch updated.").as_ref());
                 } else {

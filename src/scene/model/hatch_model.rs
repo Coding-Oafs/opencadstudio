@@ -182,6 +182,8 @@ pub struct HatchModel {
     pub boundary_wcs: Option<Arc<Vec<[f64; 2]>>>,
     /// Per-ring DXF role, aligned with the NaN-separated boundary paths.
     pub boundary_exterior: Option<Arc<Vec<bool>>>,
+    /// Source entity handles for each boundary ring.
+    pub boundary_sources: Option<Arc<Vec<Vec<acadrust::Handle>>>>,
     /// Fill pattern.
     pub pattern: HatchPattern,
     /// Catalog name for this pattern (e.g. "ANSI31", "SOLID", "LINEAR").
