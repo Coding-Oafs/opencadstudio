@@ -280,7 +280,7 @@ impl PluginProcess {
         // Create the listener before spawning so the runner can connect immediately.
         let listener = ListenerOptions::new().name(socket_name_ref).create_sync()?;
 
-        let child = Command::new(&runner_path)
+        let mut child = Command::new(&runner_path)
             .arg("--ocs-plugin-runner")
             .arg(&socket_name)
             .arg(cdylib_path)
@@ -289,6 +289,48 @@ impl PluginProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+
+        // Start draining the child's stdout/stderr immediately. If the
+        // plugin prints during GetManifest/GetRibbon, a full pipe buffer
+        // would otherwise block (or kill) the runner before the host ever
+        // reads it. The plugin id is filled in once we read the manifest.
+        let (io_tx, io_rx) = mpsc::channel::<PluginIoLine>();
+        let plugin_id_for_io: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let last_stderr: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        if let Some(stdout) = child.stdout.take() {
+            let io_tx = io_tx.clone();
+            let plugin_id = Arc::clone(&plugin_id_for_io);
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    let id = plugin_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let _ = io_tx.send(PluginIoLine {
+                        source: IoStream::Stdout,
+                        plugin_id: id,
+                        text: line,
+                    });
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let last_stderr = Arc::clone(&last_stderr);
+            let io_tx = io_tx.clone();
+            let plugin_id = Arc::clone(&plugin_id_for_io);
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if let Ok(mut guard) = last_stderr.lock() {
+                        *guard = line.clone();
+                    }
+                    let id = plugin_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let _ = io_tx.send(PluginIoLine {
+                        source: IoStream::Stderr,
+                        plugin_id: id,
+                        text: line,
+                    });
+                }
+            });
+        }
         let child = Mutex::new(Some(child));
 
         // Accept the runner connection with a timeout so a hung/crashed runner
@@ -297,7 +339,6 @@ impl PluginProcess {
         std::thread::spawn(move || {
             let _ = tx.send(listener.accept());
         });
-        let last_stderr: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let stream = match rx.recv_timeout(spawn_timeout()) {
             Ok(Ok(stream)) => {
                 vlog!("[plugin] runner connected");
@@ -400,42 +441,7 @@ impl PluginProcess {
         );
 
         let id = manifest.id.clone();
-
-        // Start forwarding plugin stdout/stderr to the host UI.
-        let (io_tx, io_rx) = mpsc::channel::<PluginIoLine>();
-        if let Some(child_ref) = child.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            let plugin_id_stdout = id.clone();
-            if let Some(stdout) = child_ref.stdout.take() {
-                let io_tx = io_tx.clone();
-                std::thread::spawn(move || {
-                    use std::io::{BufRead, BufReader};
-                    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                        let _ = io_tx.send(PluginIoLine {
-                            source: IoStream::Stdout,
-                            plugin_id: plugin_id_stdout.clone(),
-                            text: line,
-                        });
-                    }
-                });
-            }
-            let plugin_id_stderr = id.clone();
-            if let Some(stderr) = child_ref.stderr.take() {
-                let last_stderr = Arc::clone(&last_stderr);
-                std::thread::spawn(move || {
-                    use std::io::{BufRead, BufReader};
-                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        if let Ok(mut guard) = last_stderr.lock() {
-                            *guard = line.clone();
-                        }
-                        let _ = io_tx.send(PluginIoLine {
-                            source: IoStream::Stderr,
-                            plugin_id: plugin_id_stderr.clone(),
-                            text: line,
-                        });
-                    }
-                });
-            }
-        }
+        *plugin_id_for_io.lock().unwrap_or_else(|e| e.into_inner()) = id.clone();
 
         Ok(Self {
             stream,
