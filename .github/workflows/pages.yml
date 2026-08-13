@@ -50,10 +50,8 @@ jobs:
         with:
           tool: wasm-bindgen@${{ steps.wasm-bindgen-version.outputs.version }}
 
-      # `--public-url` matches the project page sub-path:
-      # https://<user>.github.io/OpenCADStudio/.
       - name: Build web bundle
-        run: trunk build --release --public-url /OpenCADStudio/
+        run: trunk build --release --public-url /
 
       # GitHub Pages runs Jekyll, which ignores files; opt out so the
       # wasm-bindgen output is served verbatim.
