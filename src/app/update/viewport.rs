@@ -4206,46 +4206,75 @@ impl OpenCADStudio {
                     height: vh,
                 };
 
-                // 1) Try direct wire hit — works when the border is clicked.
-                let wire_hit: Option<acadrust::Handle> = {
-                    let (view_rot, eye) = {
-                        let c = self.tabs[i].scene.camera.borrow();
-                        (c.view_proj_rte(bounds), c.eye())
-                    };
-                    let all_wires = self.tabs[i].scene.hit_test_wires();
-                    let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-                    let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
-                        all_wires,
-                        click_world,
-                        view_rot,
-                        eye,
-                        bounds,
-                        crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
-                    );
-                    scene::pick::hit_test::click_hit(
-                        p,
-                        &click_candidates,
-                        view_rot,
-                        eye,
-                        bounds,
-                        self.tabs[i].scene.document.header.lineweight_display,
-                        crate::ui::overlay::pick_box_aperture_px(self.pick_box),
-                    )
-                    .and_then(|s| Scene::handle_from_wire_name(s))
-                    .and_then(|h| {
-                        if let Some(AcadEntityType::Viewport(vp)) =
-                            self.tabs[i].scene.document.get_entity(h)
-                        {
-                            if Scene::is_content_viewport(vp) {
-                                Some(h)
-                            } else {
-                                None
-                            }
+                let (view_rot, eye) = {
+                    let c = self.tabs[i].scene.camera.borrow();
+                    (c.view_proj_rte(bounds), c.eye())
+                };
+
+                let all_wires = self.tabs[i].scene.hit_test_wires();
+                let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
+                let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
+                    all_wires,
+                    click_world,
+                    view_rot,
+                    eye,
+                    bounds,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
+                );
+
+                let raw_wire_hit = scene::pick::hit_test::click_hit(
+                    p,
+                    &click_candidates,
+                    view_rot,
+                    eye,
+                    bounds,
+                    self.tabs[i].scene.document.header.lineweight_display,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
+                )
+                .and_then(|s| Scene::handle_from_wire_name(s));
+
+                // In paper space, text editing takes precedence over entering MSPACE.
+                // This mirrors the model-space double-click behaviour.
+                if let Some(handle) = raw_wire_hit {
+                    let is_editable_text = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(handle)
+                        .is_some_and(|entity| {
+                            crate::app::text_inline::read_text_field(entity).is_some()
+                                || matches!(entity, AcadEntityType::Leader(_))
+                        });
+
+                    if is_editable_text {
+                        if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
+                            self.command_line.push_info(
+                                crate::tf!(
+                                    "Object is on locked layer \"{layer}\" — unlock the layer to edit it."
+                                )
+                                .as_ref(),
+                            );
+                            return Task::none();
+                        }
+
+                        return self.begin_text_edit(handle);
+                    }
+                }
+
+                // If the double-click was not on editable text, keep the existing
+                // paper-space behaviour and try to enter the clicked viewport.
+                let wire_hit: Option<acadrust::Handle> = raw_wire_hit.and_then(|h| {
+                    if let Some(AcadEntityType::Viewport(vp)) =
+                        self.tabs[i].scene.document.get_entity(h)
+                    {
+                        if Scene::is_content_viewport(vp) {
+                            Some(h)
                         } else {
                             None
                         }
-                    })
-                };
+                    } else {
+                        None
+                    }
+                });
 
                 // 2) Decide which viewport (if any) the click enters,
                 //    keyed on the *visible* on-screen rectangle. Screen-space
