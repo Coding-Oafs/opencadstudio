@@ -2115,15 +2115,31 @@ impl Scene {
             .copied()
             .unwrap_or(first);
         push_ring(&mut ring, is_outer);
-        if let Some(entry) = crate::scene::model::hatch_patterns::find(&model.name) {
-            dxf.pattern = crate::scene::model::hatch_patterns::build_dxf_pattern(entry);
-        }
-        dxf.pattern_angle = model.angle_offset as f64;
-        dxf.pattern_scale = if model.scale.abs() > 1e-6 {
+        let pattern_scale = if model.scale.abs() > 1e-6 {
             model.scale as f64
         } else {
             1.0
         };
+        if let Some(entry) = crate::scene::model::hatch_patterns::find(&model.name) {
+            dxf.pattern = crate::scene::model::hatch_patterns::build_dxf_pattern(entry);
+            if let Some(base) = dxf.pattern.lines.first().map(|line| line.base_point) {
+                let angle = model.angle_offset as f64;
+                let (sin, cos) = angle.sin_cos();
+                let target_x = model.world_origin[0]
+                    + (base.x * cos - base.y * sin) * pattern_scale;
+                let target_y = model.world_origin[1]
+                    + (base.x * sin + base.y * cos) * pattern_scale;
+                crate::entities::hatch::scale_pattern_geometry(&mut dxf.pattern, pattern_scale);
+                crate::entities::hatch::rotate_pattern_geometry(&mut dxf.pattern, angle);
+                crate::entities::hatch::translate_pattern_geometry(
+                    &mut dxf.pattern,
+                    target_x - base.x,
+                    target_y - base.y,
+                );
+            }
+        }
+        dxf.pattern_angle = model.angle_offset as f64;
+        dxf.pattern_scale = pattern_scale;
         // A gradient fill must be encoded on the DXF entity itself: the render
         // model is rebuilt from the entity below (`add_entity` →
         // `hatch_model_from_dxf`), so a gradient kept only on the command's
