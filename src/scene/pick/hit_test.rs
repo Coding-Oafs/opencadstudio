@@ -692,7 +692,7 @@ fn mesh_click_result<'a>(
     eye: glam::DVec3,
     bounds: Rectangle,
 ) -> Option<(f64, Handle, glam::DVec3)> {
-    let profile = crate::perf::enabled().then(std::time::Instant::now);
+    let profile = crate::perf::enabled().then(iced::time::Instant::now);
     let mut set_count = 0usize;
     let mut bound_hits = 0usize;
     let mut exact_triangles = 0usize;
