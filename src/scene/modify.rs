@@ -551,11 +551,43 @@ impl Scene {
     }
 
     pub fn copy_entities(&mut self, handles: &[Handle], t: &EntityTransform) -> Vec<Handle> {
+        let copy_handles = self.handles_expanded_for_leader_annotations(handles);
+
+        // LEADER + attached MTEXT are a logical pair. Their entity clones must not
+        // retain the source extension dictionary, otherwise both copies share the
+        // same annotation-context objects.
+        let leader_pair_handles: Vec<Handle> = copy_handles
+            .iter()
+            .flat_map(|&handle| {
+                let annotation = match self.document.get_entity(handle) {
+                    Some(EntityType::Leader(leader)) if !leader.annotation_handle.is_null() => {
+                        Some(leader.annotation_handle)
+                    }
+                    _ => None,
+                };
+
+                std::iter::once(handle).chain(annotation)
+            })
+            .collect();
+
         // Objects on a locked layer can be selected but not copied.
-        let clones: Vec<(Handle, EntityType)> = handles
+        let clones: Vec<(Handle, EntityType, Vec<Handle>)> = copy_handles
             .iter()
             .filter(|&&h| !self.is_layer_locked(h))
-            .filter_map(|&h| self.document.get_entity(h).cloned().map(|e| (h, e)))
+            .filter_map(|&h| {
+                let entity = self.document.get_entity(h)?.clone();
+
+                let annotation_scales = if leader_pair_handles.contains(&h) {
+                    crate::scene::annotative::annotation_scale_handles_for_entity(
+                        &self.document,
+                        h,
+                    )
+                } else {
+                    Vec::new()
+                };
+
+                Some((h, entity, annotation_scales))
+            })
             .collect();
         // MIRRTEXT also governs the copy path (default MIRROR keeps the source
         // and adds a mirrored copy): keep the copied text right-reading when the
@@ -567,7 +599,7 @@ impl Scene {
         let mut new_handles = Vec::with_capacity(clones.len());
         let mut handle_map = rustc_hash::FxHashMap::default();
         let mut refresh_solid_handles = Vec::new();
-        for (src_handle, mut entity) in clones {
+        for (src_handle, mut entity, annotation_scales) in clones {
             let text_orient = if preserve_text_orientation {
                 capture_text_orient(&entity)
             } else {
@@ -598,9 +630,31 @@ impl Scene {
                 }
             }
             Self::reset_clone_subhandles(&mut self.document, &mut entity);
+
+            // An annotative LEADER/MTEXT pair must receive a fresh extension dictionary.
+            // Keeping this handle would make the copy share the source's context tree.
+            if !annotation_scales.is_empty() {
+                entity.common_mut().xdictionary_handle = None;
+            }
+
             entity.common_mut().handle = Handle::NULL;
             let h = self.document.add_entity(entity).unwrap_or(Handle::NULL);
             if !h.is_null() {
+                if !annotation_scales.is_empty() {
+                    for scale_handle in annotation_scales {
+                        crate::scene::annotative::create_annotation_context(
+                            &mut self.document,
+                            h,
+                            scale_handle,
+                        );
+                    }
+
+                    // Annotation contexts add dictionary/object records outside the entity
+                    // delta itself, so keep undo on the safe full-snapshot path.
+                    if self.is_recording_undo() {
+                        self.poison_undo_recording();
+                    }
+                }
                 // Delta-undo: a copy's before-image is "nothing" (undo erases it).
                 if self.is_recording_undo() {
                     self.record_undo_before(h, None);
@@ -640,7 +694,35 @@ impl Scene {
                 handle_map.insert(src_handle, h);
             }
         }
+        // A copied LEADER must reference the copied annotation, never the
+        // source annotation. Both entities now exist, so remap the stored handle.
+        let leader_links: Vec<(Handle, Handle)> = handle_map
+            .iter()
+            .filter_map(|(&source_handle, &copied_handle)| {
+                let EntityType::Leader(source_leader) =
+                    self.document.get_entity(source_handle)?
+                else {
+                    return None;
+                };
 
+                let copied_annotation = handle_map
+                    .get(&source_leader.annotation_handle)
+                    .copied()
+                    .unwrap_or(Handle::NULL);
+
+                Some((copied_handle, copied_annotation))
+            })
+            .collect();
+
+        for (leader_handle, annotation_handle) in leader_links {
+            if let Some(EntityType::Leader(leader)) =
+                self.document.get_entity_mut(leader_handle)
+            {
+                leader.annotation_handle = annotation_handle;
+            }
+
+            let _ = self.sync_displayed_annotation_context(leader_handle);
+        }
         // Complete group copies record their new Group objects and dictionary
         // entry as targeted object deltas inside copy_complete_groups.
         self.copy_complete_groups(&handle_map);
@@ -956,9 +1038,65 @@ impl Scene {
             .get_entity(handle)
             .and_then(crate::entities::solid3d::point_of_reference)
             .map(|p| [p.x, p.y, p.z]);
+        // A LEADER's final vertex is the end of its horizontal landing.
+        // Remember its old position and linked MTEXT so the annotation can follow
+        // when that grip stretches the landing.
+        let leader_landing_before = self.document.get_entity(handle).and_then(|entity| {
+            let EntityType::Leader(leader) = entity else {
+                return None;
+            };
 
+            let n = leader.vertices.len();
+            if n < 3 || (grip_id != n - 1 && grip_id != n - 2) || leader.annotation_handle.is_null() {
+                return None;
+            }
+
+            let point = leader.vertices.last()?;
+
+            Some((
+                leader.annotation_handle,
+                glam::DVec3::new(point.x, point.y, point.z),
+            ))
+        });
         if let Some(entity) = self.document.get_entity_mut(handle) {
             view::dispatch::apply_grip(entity, grip_id, apply);
+        }
+        if let Some((annotation_handle, old_landing)) = leader_landing_before {
+            let new_landing = self.document.get_entity(handle).and_then(|entity| {
+                let EntityType::Leader(leader) = entity else {
+                    return None;
+                };
+
+                let point = leader.vertices.last()?;
+                Some(glam::DVec3::new(point.x, point.y, point.z))
+            });
+
+            if let Some(new_landing) = new_landing {
+                let delta = new_landing - old_landing;
+
+                if delta.length_squared() > 1.0e-20 {
+                    if self.is_recording_undo() {
+                        if let Some(before) = self.document.get_entity_arc(annotation_handle) {
+                            self.record_undo_before(annotation_handle, Some(before));
+                        }
+                    }
+
+                    if let Some(annotation) = self.document.get_entity_mut(annotation_handle) {
+                        view::dispatch::apply_transform(
+                            annotation,
+                            &crate::command::EntityTransform::Translate(delta),
+                        );
+                    }
+
+                    if self.sync_displayed_annotation_context(annotation_handle) {
+                        self.poison_undo_recording();
+                    }
+                    self.bump_entities(&[(
+                        annotation_handle,
+                        crate::scene::ChangeKind::Modified,
+                    )]);
+                }
+            }
         }
         if self.sync_displayed_annotation_context(handle) {
             self.poison_undo_recording();

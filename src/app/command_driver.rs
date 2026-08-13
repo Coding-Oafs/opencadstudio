@@ -1176,10 +1176,27 @@ impl OpenCADStudio {
                 // Link the leader to its annotation so the pair edits as a unit
                 // (double-click on the leader resolves to the text entity).
                 if let (Some(lh), Some(ah)) = (leader_handle, edit_handle) {
-                    if let Some(acadrust::EntityType::Leader(l)) =
+                    let linked = if let Some(acadrust::EntityType::Leader(l)) =
                         self.tabs[i].scene.document.get_entity_mut(lh)
                     {
                         l.annotation_handle = ah;
+                        true
+                    } else {
+                        false
+                    };
+
+                    if linked {
+                        // The LEADER may already have received its annotation context while
+                        // annotation_handle was still NULL. Refresh it now that the MTEXT link
+                        // is known so the context represents the finished leader.
+                        self.tabs[i]
+                            .scene
+                            .sync_displayed_annotation_context(lh);
+
+                        self.tabs[i].scene.bump_entities(&[(
+                            lh,
+                            crate::scene::ChangeKind::Modified,
+                        )]);
                     }
                 }
                 self.tabs[i].dirty = true;
@@ -3367,6 +3384,45 @@ impl OpenCADStudio {
             _ => glam::DVec3::ZERO,
         };
         self.merge_clipboard_ext_objects(i, &by_index, annotation_delta);
+                // Source handles stored in the clipboard map one-to-one to the freshly
+        // pasted handles. Use that map to reconnect LEADER -> copied annotation.
+        let mut handle_map = rustc_hash::FxHashMap::default();
+
+        for (source, &copied) in self.clipboard.iter().zip(by_index.iter()) {
+            if !copied.is_null() {
+                handle_map.insert(source.common().handle, copied);
+            }
+        }
+
+        let leader_links: Vec<(Handle, Handle)> = self
+            .clipboard
+            .iter()
+            .filter_map(|source| {
+                let acadrust::EntityType::Leader(leader) = source else {
+                    return None;
+                };
+
+                let copied_leader = handle_map.get(&source.common().handle).copied()?;
+                let copied_annotation = handle_map
+                    .get(&leader.annotation_handle)
+                    .copied()
+                    .unwrap_or(Handle::NULL);
+
+                Some((copied_leader, copied_annotation))
+            })
+            .collect();
+
+        for (leader_handle, annotation_handle) in leader_links {
+            if let Some(acadrust::EntityType::Leader(leader)) =
+                self.tabs[i].scene.document.get_entity_mut(leader_handle)
+            {
+                leader.annotation_handle = annotation_handle;
+            }
+
+            let _ = self.tabs[i]
+                .scene
+                .sync_displayed_annotation_context(leader_handle);
+        }
         // Recreate any group whose whole membership was copied, so a pasted
         // group stays grouped — cross-drawing too, since the groups were
         // snapshotted into the clipboard at copy time. `by_index` is aligned
@@ -3374,12 +3430,6 @@ impl OpenCADStudio {
         // its clipboard clone to its new handle. Same shared `recreate_groups`
         // the in-drawing COPY path uses. (#440)
         if !self.clipboard_deps.groups.is_empty() {
-            let mut handle_map = rustc_hash::FxHashMap::default();
-            for (src, &new) in self.clipboard.iter().zip(by_index.iter()) {
-                if !new.is_null() {
-                    handle_map.insert(src.common().handle, new);
-                }
-            }
             let groups = self.clipboard_deps.groups.clone();
             self.tabs[i].scene.recreate_groups(groups, &handle_map);
         }
