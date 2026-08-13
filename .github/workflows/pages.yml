@@ -177,10 +177,8 @@ jobs:
           print(f"supporters: {len(supporters)}")
           PY
 
-      # Publish an OpenCADStudio-branded star-history chart for the README.
-      # The timestamp media type returns when each current stargazer starred
-      # the repository; the script follows every API page and emits both themes.
-      - name: Generate star history charts
+      # Publish one themed growth chart for stars and release downloads.
+      - name: Generate project growth charts
         env:
           GITHUB_TOKEN: ${{ secrets.OCS_GITHUB_TOKEN }}
         run: python3 scripts/generate-star-history.py --output-dir dist

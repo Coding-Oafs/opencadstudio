@@ -156,13 +156,13 @@ cd OpenCADStudio
 cargo build --release --bin OpenCADStudio
 ./target/release/OpenCADStudio
 ```
-## Star History
+## Stars & Release Downloads
 
 <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://hakanseven12.github.io/OpenCADStudio/star-history-dark.svg" />
    <source media="(prefers-color-scheme: light)" srcset="https://hakanseven12.github.io/OpenCADStudio/star-history-light.svg" />
-   <img alt="OpenCADStudio GitHub star history" src="https://hakanseven12.github.io/OpenCADStudio/star-history-light.svg" />
+   <img alt="OpenCADStudio GitHub stars and release downloads" src="https://hakanseven12.github.io/OpenCADStudio/star-history-light.svg" />
  </picture>
 </a>
 
