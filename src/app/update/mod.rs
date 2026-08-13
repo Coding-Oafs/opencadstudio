@@ -313,6 +313,28 @@ impl OpenCADStudio {
                     crate::plugin::external::with_manager(|mgr| {
                         mgr.drain_requests(&mut host, &mut |_| {});
                     });
+                    crate::plugin::external::with_manager(|mgr| {
+                        for line in mgr.drain_io() {
+                            // Skip internal runner/plugin/REPL trace noise when
+                            // verbose logging is enabled; real plugin stdout/stderr
+                            // and non-trace runner errors still pass through.
+                            if line.text.starts_with("[runner]")
+                                || line.text.starts_with("[plugin] ")
+                                || line.text.starts_with("[python-repl]")
+                            {
+                                continue;
+                            }
+                            let prefixed = format!("[{} {}] {}", line.plugin_id, line.source, line.text);
+                            match line.source {
+                                ocs_plugin_api::process::IoStream::Stderr => {
+                                    self.command_line.push_error(&prefixed);
+                                }
+                                _ => {
+                                    self.command_line.push_output(&prefixed);
+                                }
+                            }
+                        }
+                    });
                 }
                 Task::none()
             }

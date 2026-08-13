@@ -193,6 +193,19 @@ impl PluginManager {
         }
     }
 
+    /// Drain any plugin stdout/stderr lines that have accumulated across all
+    /// loaded plugins. Errors are logged; this is best-effort.
+    pub fn drain_io(&self) -> Vec<crate::process::PluginIoLine> {
+        let mut out = Vec::new();
+        for p in &self.plugins {
+            if !p.process.is_alive() {
+                continue;
+            }
+            out.extend(p.process.drain_io());
+        }
+        out
+    }
+
     /// Begin asynchronous shutdown of every plugin process.
     ///
     /// Kills every child synchronously on the calling thread and moves the

@@ -367,7 +367,19 @@ mod tests {
         }
     }
 
-    struct DummyHost;
+    struct DummyHost {
+        push_info_messages: StdMutex<Vec<String>>,
+    }
+    impl DummyHost {
+        fn new() -> Self {
+            Self {
+                push_info_messages: StdMutex::new(Vec::new()),
+            }
+        }
+        fn take_push_info(&self) -> Vec<String> {
+            std::mem::take(&mut *self.push_info_messages.lock().unwrap())
+        }
+    }
     impl HostApi for DummyHost {
         fn tab_index(&self) -> usize {
             0
@@ -404,7 +416,9 @@ mod tests {
         }
         fn push_undo(&mut self, _label: &str) {}
         fn set_dirty(&mut self) {}
-        fn push_info(&mut self, _msg: &str) {}
+        fn push_info(&mut self, msg: &str) {
+            self.push_info_messages.lock().unwrap().push(msg.to_string());
+        }
         fn push_output(&mut self, _msg: &str) {}
         fn push_error(&mut self, _msg: &str) {}
         fn start_interactive(&mut self, _command: Box<dyn crate::host::InteractiveCommand>) {}
@@ -489,7 +503,7 @@ mod tests {
             }
         });
 
-        let mut host = DummyHost;
+        let mut host = DummyHost::new();
         let resp = conn
             .call(&mut host, HostRequest::Dispatch { cmd: "HELLO".to_string() }, &mut |_| {})
             .unwrap();
@@ -541,11 +555,13 @@ mod tests {
             }
         });
 
-        let mut host = DummyHost;
+        let mut host = DummyHost::new();
         let resp = conn
             .call(&mut host, HostRequest::Dispatch { cmd: "NESTED".to_string() }, &mut |_| {})
             .unwrap();
         assert!(matches!(resp, HostResponse::Bool(true)));
+        let infos = host.take_push_info();
+        assert_eq!(infos, vec!["nested".to_string()], "push_info should be delivered to host");
         runner.join().unwrap();
         restore_test_env();
     }
@@ -731,7 +747,7 @@ mod tests {
             }
         });
 
-        let mut host = DummyHost;
+        let mut host = DummyHost::new();
         let result = conn
             .execute_code(&mut host, 1, CommandSource::Editor, "1+1")
             .expect("execute_code should succeed");

@@ -395,12 +395,6 @@ pub trait HostApi {
 
     /// Add an entity to the active document, returning its handle.
     fn add_entity(&mut self, entity: EntityType) -> Handle;
-    /// Add multiple entities to the active document, returning their handles.
-    /// The default implementation calls [`add_entity`](Self::add_entity) for each
-    /// entity; hosts should override it for batch efficiency.
-    fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
-        entities.into_iter().map(|e| self.add_entity(e)).collect()
-    }
     /// Replace the existing entity that carries `entity`'s handle, preserving
     /// its identity (handle and owning block). Returns `false` when no entity
     /// has that handle. This is the sanctioned way to commit in-place edits
@@ -518,6 +512,16 @@ pub trait HostApi {
     /// Close the host-side V4 shared document view for `tab_id`.
     fn close_document_view_v4(&mut self, tab_id: u64) {
         let _ = tab_id;
+    }
+
+    // ── Batch entities (added after API v4; appended at the very end so older
+    // plugins compiled without it keep stable vtable indices) ────────────────
+
+    /// Add multiple entities to the active document, returning their handles.
+    /// The default implementation calls [`add_entity`](Self::add_entity) for each
+    /// entity; hosts should override it for batch efficiency.
+    fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
+        entities.into_iter().map(|e| self.add_entity(e)).collect()
     }
 }
 

@@ -27,6 +27,33 @@ mod manager;
 mod v4;
 pub use manager::{DispatchResult, NotificationHandler, PluginManager};
 
+/// A line emitted by a plugin process on stdout or stderr.
+#[derive(Debug, Clone)]
+pub struct PluginIoLine {
+    /// Which stream the line came from.
+    pub source: IoStream,
+    /// Plugin id that produced the line.
+    pub plugin_id: String,
+    /// Text content without the trailing newline.
+    pub text: String,
+}
+
+/// Stream source for a [`PluginIoLine`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoStream {
+    Stdout,
+    Stderr,
+}
+
+impl std::fmt::Display for IoStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IoStream::Stdout => write!(f, "stdout"),
+            IoStream::Stderr => write!(f, "stderr"),
+        }
+    }
+}
+
 /// A dummy `HostApi` used for V4 paths that do not supply a real host surface
 /// (e.g., interactive events). Nested plugin requests receive safe defaults.
 struct NullHost;
@@ -226,6 +253,7 @@ pub struct PluginProcess {
     id: String,
     manifest: OwnedPluginManifest,
     ribbon: Vec<OwnedRibbonGroupAlias>,
+    io_lines: Mutex<Option<mpsc::Receiver<PluginIoLine>>>,
 }
 
 impl PluginProcess {
@@ -252,28 +280,15 @@ impl PluginProcess {
         // Create the listener before spawning so the runner can connect immediately.
         let listener = ListenerOptions::new().name(socket_name_ref).create_sync()?;
 
-        let mut child = Command::new(&runner_path)
+        let child = Command::new(&runner_path)
             .arg("--ocs-plugin-runner")
             .arg(&socket_name)
             .arg(cdylib_path)
             .env(PLUGIN_TOKEN_ENV, &token)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        let last_stderr: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-        if let Some(stderr) = child.stderr.take() {
-            let last_stderr = Arc::clone(&last_stderr);
-            std::thread::spawn(move || {
-                use std::io::{BufRead, BufReader};
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    if let Ok(mut guard) = last_stderr.lock() {
-                        *guard = line.clone();
-                    }
-                    eprintln!("[runner stderr] {line}");
-                }
-            });
-        }
         let child = Mutex::new(Some(child));
 
         // Accept the runner connection with a timeout so a hung/crashed runner
@@ -282,6 +297,7 @@ impl PluginProcess {
         std::thread::spawn(move || {
             let _ = tx.send(listener.accept());
         });
+        let last_stderr: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let stream = match rx.recv_timeout(spawn_timeout()) {
             Ok(Ok(stream)) => {
                 vlog!("[plugin] runner connected");
@@ -384,6 +400,43 @@ impl PluginProcess {
         );
 
         let id = manifest.id.clone();
+
+        // Start forwarding plugin stdout/stderr to the host UI.
+        let (io_tx, io_rx) = mpsc::channel::<PluginIoLine>();
+        if let Some(child_ref) = child.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let plugin_id_stdout = id.clone();
+            if let Some(stdout) = child_ref.stdout.take() {
+                let io_tx = io_tx.clone();
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader};
+                    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                        let _ = io_tx.send(PluginIoLine {
+                            source: IoStream::Stdout,
+                            plugin_id: plugin_id_stdout.clone(),
+                            text: line,
+                        });
+                    }
+                });
+            }
+            let plugin_id_stderr = id.clone();
+            if let Some(stderr) = child_ref.stderr.take() {
+                let last_stderr = Arc::clone(&last_stderr);
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader};
+                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                        if let Ok(mut guard) = last_stderr.lock() {
+                            *guard = line.clone();
+                        }
+                        let _ = io_tx.send(PluginIoLine {
+                            source: IoStream::Stderr,
+                            plugin_id: plugin_id_stderr.clone(),
+                            text: line,
+                        });
+                    }
+                });
+            }
+        }
+
         Ok(Self {
             stream,
             v4,
@@ -391,6 +444,7 @@ impl PluginProcess {
             id,
             manifest,
             ribbon,
+            io_lines: Mutex::new(Some(io_rx)),
         })
     }
 
@@ -404,6 +458,22 @@ impl PluginProcess {
 
     pub fn ribbon(&self) -> &[OwnedRibbonGroupAlias] {
         &self.ribbon
+    }
+
+    /// Drain any stdout/stderr lines that have accumulated from the plugin
+    /// runner. This should be called regularly by the host (e.g., alongside
+    /// [`drain_requests`]) so plugin `println!` / `eprintln!` output appears in
+    /// the host command line.
+    pub fn drain_io(&self) -> Vec<PluginIoLine> {
+        let mut rx = self.io_lines.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(rx) = rx.as_mut() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        while let Ok(line) = rx.try_recv() {
+            out.push(line);
+        }
+        out
     }
 
     pub fn dispatch(
@@ -1045,6 +1115,19 @@ mod timeout_tests {
 
     struct DummyHost {
         doc: CadDocument,
+        push_info_messages: StdMutex<Vec<String>>,
+    }
+
+    impl DummyHost {
+        fn new(doc: CadDocument) -> Self {
+            Self {
+                doc,
+                push_info_messages: StdMutex::new(Vec::new()),
+            }
+        }
+        fn take_push_info(&self) -> Vec<String> {
+            std::mem::take(&mut *self.push_info_messages.lock().unwrap())
+        }
     }
 
     impl HostApi for DummyHost {
@@ -1075,7 +1158,9 @@ mod timeout_tests {
         }
         fn push_undo(&mut self, _label: &str) {}
         fn set_dirty(&mut self) {}
-        fn push_info(&mut self, _msg: &str) {}
+        fn push_info(&mut self, msg: &str) {
+            self.push_info_messages.lock().unwrap().push(msg.to_string());
+        }
         fn push_output(&mut self, _msg: &str) {}
         fn push_error(&mut self, _msg: &str) {}
         fn start_interactive(&mut self, _command: Box<dyn crate::host::InteractiveCommand>) {}
@@ -1164,6 +1249,7 @@ mod timeout_tests {
             id: "test.plugin".to_string(),
             manifest: fake_manifest(),
             ribbon: vec![],
+            io_lines: Mutex::new(None),
         };
         (process, runner_stream)
     }
@@ -1189,9 +1275,7 @@ mod timeout_tests {
             let _ = recv::<HostToPlugin>(&mut peer);
         });
 
-        let mut host = DummyHost {
-            doc: CadDocument::default(),
-        };
+        let mut host = DummyHost::new(CadDocument::default());
         let start = Instant::now();
         let result = process.dispatch(&mut host, "HANG", &mut |_| {});
         let elapsed = start.elapsed();
@@ -1254,12 +1338,12 @@ mod timeout_tests {
                 .expect("send final response");
         });
 
-        let mut host = DummyHost {
-            doc: CadDocument::default(),
-        };
+        let mut host = DummyHost::new(CadDocument::default());
         let result = process.dispatch(&mut host, "NESTED", &mut |_| {});
         assert!(result.expect("dispatch succeeds"));
         assert!(process.is_alive(), "process should still be alive");
+        let infos = host.take_push_info();
+        assert_eq!(infos, vec!["hello".to_string()], "push_info should be delivered to host");
 
         // Clean up the helper child so it does not outlive the test.
         if let Some(mut child) = process
