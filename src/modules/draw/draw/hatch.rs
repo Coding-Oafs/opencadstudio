@@ -13,6 +13,8 @@ use crate::command::{CadCommand, CmdResult};
 use crate::modules::IconKind;
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern, PatFamily};
 use crate::scene::model::wire_model::WireModel;
+use acadrust::Handle;
+use cadkernel::geom2d::{bounded_faces, Line, Tolerance};
 use glam::DVec3;
 use crate::t;
 
@@ -45,6 +47,13 @@ enum Mode {
     /// Primary: click inside a closed shape → boundary auto-detected.
     PickInside,
     /// Fallback: user manually picks polygon vertices (type "S" to enter).
+    Manual,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HatchMode {
+    PickInside,
+    SelectObjects,
     Manual,
 }
 
@@ -195,23 +204,91 @@ fn rte_boundary(pts: impl Iterator<Item = (f64, f64)>) -> (Vec<[f32; 2]>, [f64; 
 
 pub struct HatchCommand {
     outlines: Vec<Vec<[f64; 2]>>,
-    mode: Mode,
+    boundary_sources: rustc_hash::FxHashMap<Handle, Vec<Line>>,
+    point_regions: Vec<Vec<Vec<[f64; 2]>>>,
+    object_regions: Vec<Vec<Vec<[f64; 2]>>>,
+    selected_objects: Vec<Handle>,
+    mode: HatchMode,
     manual_pts: Vec<DVec3>,
     missed: bool,
 }
 
 impl HatchCommand {
-    pub fn new(outlines: Vec<Vec<[f64; 2]>>) -> Self {
-        Self {
+    pub fn new(
+        outlines: Vec<Vec<[f64; 2]>>,
+        boundary_sources: rustc_hash::FxHashMap<Handle, Vec<Line>>,
+        selected_objects: Vec<Handle>,
+    ) -> Self {
+        let has_selection = !selected_objects.is_empty();
+        let mut command = Self {
             outlines,
-            mode: Mode::PickInside,
+            boundary_sources,
+            point_regions: Vec::new(),
+            object_regions: Vec::new(),
+            selected_objects: Vec::new(),
+            mode: if has_selection {
+                HatchMode::SelectObjects
+            } else {
+                HatchMode::PickInside
+            },
             manual_pts: vec![],
             missed: false,
+        };
+        command.set_object_selection(selected_objects);
+        command
+    }
+
+    fn set_object_selection(&mut self, handles: Vec<Handle>) {
+        let mut segments = Vec::new();
+        for handle in &handles {
+            if let Some(source) = self.boundary_sources.get(handle) {
+                segments.extend(source.iter().copied());
+            }
         }
+        self.object_regions = bounded_faces(&segments, Tolerance::new(1.0e-6))
+            .into_iter()
+            .map(|ring| vec![ring])
+            .collect();
+        self.missed = !handles.is_empty() && self.object_regions.is_empty();
+        self.selected_objects = handles;
+    }
+
+    fn add_point_region(&mut self, rings: Vec<Vec<[f64; 2]>>) {
+        let duplicate = rings.first().is_some_and(|outer| {
+            self.point_regions
+                .iter()
+                .any(|region| region.first() == Some(outer))
+        });
+        if !duplicate {
+            self.point_regions.push(rings);
+        }
+    }
+
+    fn region_count(&self) -> usize {
+        self.point_regions.len() + self.object_regions.len()
+    }
+
+    fn combined_rings(&self) -> Vec<Vec<[f64; 2]>> {
+        let mut rings = Vec::new();
+        for ring in self
+            .point_regions
+            .iter()
+            .chain(self.object_regions.iter())
+            .flat_map(|region| region.iter())
+        {
+            if !rings.iter().any(|existing| existing == ring) {
+                rings.push(ring.clone());
+            }
+        }
+        rings
     }
 
     fn make_hatch(&self, rings: Vec<Vec<[f64; 2]>>) -> HatchModel {
         let (rel, origin, wcs) = pack_rings(&rings);
+        let exterior = cadkernel::geom2d::ring_nesting_depths(&rings)
+            .into_iter()
+            .map(|depth| depth % 2 == 0)
+            .collect();
         // Default: ANSI31 from catalog; fallback to a single 45° family.
         let pat_name = "ANSI31";
         let families = crate::scene::model::hatch_patterns::find(pat_name)
@@ -246,6 +323,7 @@ impl HatchCommand {
             scale: 1.0,
             world_origin: origin,
             boundary_wcs: Some(std::sync::Arc::new(wcs)),
+            boundary_exterior: Some(std::sync::Arc::new(exterior)),
             draw_depth: 0.0,
         }
     }
@@ -258,15 +336,34 @@ impl CadCommand for HatchCommand {
 
     fn prompt(&self) -> String {
         match &self.mode {
-            Mode::PickInside => {
+            HatchMode::PickInside => {
                 let miss = if self.missed {
                     t!("  ⚠ No closed boundary found.").into_owned()
                 } else {
                     String::new()
                 };
-                t!("HATCH  Pick internal point:%{miss}", miss = miss).into_owned()
+                t!(
+                    "HATCH  Pick internal point (%{count} regions selected, Enter to apply):%{miss}",
+                    count = self.region_count(),
+                    miss = miss
+                )
+                .into_owned()
             }
-            Mode::Manual => {
+            HatchMode::SelectObjects => {
+                let miss = if self.missed {
+                    t!("  ⚠ Selection has no closed boundary.").into_owned()
+                } else {
+                    String::new()
+                };
+                t!(
+                    "HATCH  Select boundary objects (%{objects} objects, %{count} regions; Enter to apply):%{miss}",
+                    objects = self.selected_objects.len(),
+                    count = self.region_count(),
+                    miss = miss
+                )
+                .into_owned()
+            }
+            HatchMode::Manual => {
                 if self.manual_pts.is_empty() {
                     t!("HATCH  Boundary point 1:").into_owned()
                 } else {
@@ -280,8 +377,27 @@ impl CadCommand for HatchCommand {
     fn options(&self) -> Vec<crate::command::CmdOption> {
         use crate::command::CmdOption;
         match &self.mode {
-            Mode::PickInside => vec![CmdOption::new(t!("Draw manually").as_ref(), "S")],
-            Mode::Manual => {
+            HatchMode::PickInside => {
+                let mut options = vec![
+                    CmdOption::new(t!("Select objects").as_ref(), "O"),
+                    CmdOption::new(t!("Draw manually").as_ref(), "S"),
+                ];
+                if self.region_count() > 0 {
+                    options.push(CmdOption::enter(t!("Accept").as_ref()));
+                }
+                options
+            }
+            HatchMode::SelectObjects => {
+                let mut options = vec![
+                    CmdOption::new(t!("Pick internal points").as_ref(), "I"),
+                    CmdOption::new(t!("Draw manually").as_ref(), "S"),
+                ];
+                if self.region_count() > 0 {
+                    options.push(CmdOption::enter(t!("Accept").as_ref()));
+                }
+                options
+            }
+            HatchMode::Manual => {
                 // Enter accepts the boundary once at least 3 points are picked.
                 if self.manual_pts.len() >= 3 {
                     vec![CmdOption::enter(t!("Accept").as_ref())]
@@ -294,12 +410,13 @@ impl CadCommand for HatchCommand {
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.mode {
-            Mode::PickInside => {
+            HatchMode::PickInside => {
                 let xy = [pt.x, pt.y];
                 match resolve_hatch_rings(&self.outlines, xy) {
                     Some(rings) => {
                         self.missed = false;
-                        return CmdResult::CommitHatch(self.make_hatch(rings));
+                        self.add_point_region(rings);
+                        CmdResult::NeedPoint
                     }
                     None => {
                         self.missed = true;
@@ -307,7 +424,8 @@ impl CadCommand for HatchCommand {
                     }
                 }
             }
-            Mode::Manual => {
+            HatchMode::SelectObjects => CmdResult::NeedPoint,
+            HatchMode::Manual => {
                 // Keep the typed/snapped point exact (issue #311).
                 self.manual_pts.push(pt);
                 CmdResult::NeedPoint
@@ -316,16 +434,55 @@ impl CadCommand for HatchCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        match &self.mode {
-            Mode::PickInside => CmdResult::Cancel,
-            Mode::Manual => {
-                if self.manual_pts.len() < 3 {
-                    return CmdResult::Cancel;
-                }
-                let wcs = self.manual_pts.iter().map(|p| [p.x, p.y]).collect();
-                CmdResult::CommitHatch(self.make_hatch(vec![wcs]))
-            }
+        if matches!(self.mode, HatchMode::Manual) && self.manual_pts.len() >= 3 {
+            let ring = self.manual_pts.iter().map(|p| [p.x, p.y]).collect();
+            self.add_point_region(vec![ring]);
         }
+        let rings = self.combined_rings();
+        if rings.is_empty() {
+            CmdResult::Cancel
+        } else {
+            CmdResult::CommitHatch(self.make_hatch(rings))
+        }
+    }
+
+    fn is_selection_gathering(&self) -> bool {
+        matches!(self.mode, HatchMode::SelectObjects)
+    }
+
+    fn selection_forces_add(&self) -> bool {
+        matches!(self.mode, HatchMode::SelectObjects)
+    }
+
+    fn on_selection_complete(&mut self, handles: Vec<Handle>) -> CmdResult {
+        if matches!(self.mode, HatchMode::SelectObjects) {
+            self.set_object_selection(handles);
+            CmdResult::NeedPoint
+        } else {
+            CmdResult::Cancel
+        }
+    }
+
+    fn on_undo_step(&mut self) -> Option<CmdResult> {
+        if matches!(self.mode, HatchMode::PickInside) && self.point_regions.pop().is_some() {
+            Some(CmdResult::NeedPoint)
+        } else {
+            None
+        }
+    }
+
+    fn hatch_preview_models(&self) -> Option<Vec<HatchModel>> {
+        let mut rings = self.combined_rings();
+        if matches!(self.mode, HatchMode::Manual) && self.manual_pts.len() >= 3 {
+            rings.push(self.manual_pts.iter().map(|point| [point.x, point.y]).collect());
+        }
+        Some(if rings.is_empty() {
+            Vec::new()
+        } else {
+            let mut preview = self.make_hatch(rings);
+            preview.color = [0.15, 0.55, 1.0, 0.75];
+            vec![preview]
+        })
     }
 
     fn on_escape(&mut self) -> CmdResult {
@@ -333,20 +490,32 @@ impl CadCommand for HatchCommand {
     }
 
     fn wants_text_input(&self) -> bool {
-        matches!(self.mode, Mode::PickInside)
+        !matches!(self.mode, HatchMode::Manual)
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        if text.trim().eq_ignore_ascii_case("s") {
-            self.mode = Mode::Manual;
-            self.missed = false;
-            return Some(CmdResult::NeedPoint);
+        match text.trim().to_ascii_uppercase().as_str() {
+            "O" | "OBJECT" | "OBJECTS" => {
+                self.mode = HatchMode::SelectObjects;
+                self.missed = false;
+                Some(CmdResult::NeedPoint)
+            }
+            "I" | "INTERNAL" => {
+                self.mode = HatchMode::PickInside;
+                self.missed = false;
+                Some(CmdResult::NeedPoint)
+            }
+            "S" => {
+                self.mode = HatchMode::Manual;
+                self.missed = false;
+                Some(CmdResult::NeedPoint)
+            }
+            _ => None,
         }
-        None
     }
 
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
-        if let Mode::Manual = &self.mode {
+        if let HatchMode::Manual = &self.mode {
             if self.manual_pts.is_empty() {
                 return None;
             }
@@ -416,6 +585,7 @@ impl GradientCommand {
             scale: 1.0,
             world_origin: origin,
             boundary_wcs: Some(std::sync::Arc::new(wcs)),
+            boundary_exterior: None,
             draw_depth: 0.0,
         }
     }
@@ -627,6 +797,7 @@ impl CadCommand for BoundaryCommand {
                     scale: 1.0,
                     world_origin: origin,
                     boundary_wcs: Some(std::sync::Arc::new(wcs)),
+                    boundary_exterior: None,
                     draw_depth: 0.0,
                 };
                 CmdResult::CommitHatch(model)

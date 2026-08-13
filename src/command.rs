@@ -1844,6 +1844,12 @@ pub trait CadCommand: Send {
         None
     }
 
+    fn hatch_preview_models(
+        &self,
+    ) -> Option<Vec<crate::scene::model::hatch_model::HatchModel>> {
+        None
+    }
+
     /// Returns `true` when the current step picks a corner of a selection
     /// *window* by point (e.g. STRETCH's crossing window). Such a pick must be a
     /// free point: applying the Ortho/Polar lock would pin the opposite corner to

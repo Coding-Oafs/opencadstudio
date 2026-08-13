@@ -1362,6 +1362,7 @@ impl Scene {
                     render_instance,
                     boundary: Arc::new(boundary),
                     boundary_wcs: None,
+                    boundary_exterior: None,
                     pattern: model::hatch_model::HatchPattern::Solid,
                     name: "WIPEOUT_FILL".into(),
                     color,
@@ -1466,6 +1467,7 @@ impl Scene {
         }
 
         let mut boundary: Vec<[f64; 2]> = Vec::new();
+        let mut boundary_exterior = Vec::new();
 
         for path in &dxf.paths {
             // Skip TEXTBOX boundary paths (flag bit 3). These are text
@@ -1499,6 +1501,7 @@ impl Scene {
                 boundary.truncate(before_path);
                 continue;
             }
+            boundary_exterior.push(path.flags.is_external() || path.flags.is_outermost());
             if boundary.len() >= path_start + 3 {
                 let first = boundary[path_start];
                 let last = *boundary.last().unwrap();
@@ -1510,6 +1513,11 @@ impl Scene {
 
         if boundary.is_empty() {
             return None;
+        }
+        if !boundary_exterior.iter().any(|role| *role) {
+            if let Some(first) = boundary_exterior.first_mut() {
+                *first = true;
+            }
         }
         // The batched hatch renderer keeps boundaries in a GPU storage
         // buffer (no fixed length), so a hatch with many island loops must
@@ -1705,6 +1713,7 @@ impl Scene {
             render_instance: None,
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
+            boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
             pattern,
             name,
             // A gradient starts from its first stop; other fills use the
@@ -2019,6 +2028,7 @@ impl Scene {
             render_instance: None,
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
+            boundary_exterior: None,
             pattern: model::hatch_model::HatchPattern::Solid,
             name: "SOLID".into(),
             color,
@@ -2037,64 +2047,74 @@ impl Scene {
             model.pattern,
             crate::scene::model::hatch_model::HatchPattern::Solid
         );
-        // Prefer the command-supplied exact f64 boundary so a typed vertex is
-        // persisted without f32 quantization (issue #311). Falling back to the
-        // render-side `boundary`, the points arrive in local render space
-        // (world_offset already subtracted), so add `world_origin` back —
-        // otherwise the boundary wire lands `world_offset` away from the fill.
-        // Build one DXF boundary path per ring. The command layer separates
-        // the outer boundary from its holes with NaN sentinels in
-        // `boundary_wcs`; split on those so nested hatches (e.g. a small
-        // rectangle inside a big one) persist with real holes instead of a
-        // single self-intersecting polyline. Only the FIRST ring carries the
-        // external / outermost flags — every later ring is a hole and must not
-        // be flagged external, or DXF/DWG consumers treat the inner loop as
-        // another outer island rather than a hole.
-        if let Some(wcs) = &model.boundary_wcs {
-            let mut ring: Vec<Vector2> = Vec::new();
-            let mut first = true;
-            let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool| {
-                if !r.is_empty() {
-                    let edge = PolylineEdge::new(std::mem::take(r), true);
-                    let mut path = if is_outer {
-                        let mut p = BoundaryPath::external();
-                        p.flags = acadrust::entities::hatch::BoundaryPathFlags::from_bits(
-                            p.flags.bits()
-                                | acadrust::entities::hatch::BoundaryPathFlags::OUTERMOST.bits(),
-                        );
-                        p
-                    } else {
-                        BoundaryPath::new()
-                    };
-                    path.add_edge(BoundaryEdge::Polyline(edge));
-                    dxf.paths.push(path);
-                }
-            };
-            for &[x, y] in wcs.iter() {
-                if x.is_finite() && y.is_finite() {
-                    ring.push(Vector2::new(x, y));
-                } else {
-                    let is_outer = first;
-                    first = false;
-                    push_ring(&mut ring, is_outer);
-                }
-            }
-            push_ring(&mut ring, first);
-        }
-        if dxf.paths.is_empty() {
-            let wx = model.world_origin[0];
-            let wy = model.world_origin[1];
-            let verts: Vec<Vector2> = model
+        // Prefer exact command geometry; otherwise reconstruct every ring from
+        // the render offsets without dropping its separators.
+        // Build one DXF path per NaN-separated ring and retain each outer/hole role.
+        let reconstructed_wcs: Vec<[f64; 2]> = if model.boundary_wcs.is_none() {
+            let [wx, wy] = model.world_origin;
+            model
                 .boundary
                 .iter()
-                .filter(|v| v[0].is_finite() && v[1].is_finite())
-                .map(|&[x, y]| Vector2::new(x as f64 + wx, y as f64 + wy))
-                .collect();
-            let edge = PolylineEdge::new(verts, true);
-            let mut path = BoundaryPath::external();
-            path.add_edge(BoundaryEdge::Polyline(edge));
-            dxf.paths.push(path);
+                .map(|&[x, y]| {
+                    if x.is_finite() && y.is_finite() {
+                        [x as f64 + wx, y as f64 + wy]
+                    } else {
+                        [f64::NAN, f64::NAN]
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let wcs = model
+            .boundary_wcs
+            .as_deref()
+            .map(|points| points.as_slice())
+            .unwrap_or(reconstructed_wcs.as_slice());
+        let mut ring: Vec<Vector2> = Vec::new();
+        let mut first = true;
+        let mut ring_index = 0usize;
+        let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool| {
+            if !r.is_empty() {
+                let edge = PolylineEdge::new(std::mem::take(r), true);
+                let mut path = if is_outer {
+                    let mut p = BoundaryPath::external();
+                    p.flags = acadrust::entities::hatch::BoundaryPathFlags::from_bits(
+                        p.flags.bits()
+                            | acadrust::entities::hatch::BoundaryPathFlags::OUTERMOST.bits(),
+                    );
+                    p
+                } else {
+                    BoundaryPath::new()
+                };
+                path.add_edge(BoundaryEdge::Polyline(edge));
+                dxf.paths.push(path);
+            }
+        };
+        for &[x, y] in wcs {
+            if x.is_finite() && y.is_finite() {
+                ring.push(Vector2::new(x, y));
+            } else {
+                let is_outer = model
+                    .boundary_exterior
+                    .as_deref()
+                    .and_then(|roles| roles.get(ring_index))
+                    .copied()
+                    .unwrap_or(first);
+                if !ring.is_empty() {
+                    ring_index += 1;
+                }
+                first = false;
+                push_ring(&mut ring, is_outer);
+            }
         }
+        let is_outer = model
+            .boundary_exterior
+            .as_deref()
+            .and_then(|roles| roles.get(ring_index))
+            .copied()
+            .unwrap_or(first);
+        push_ring(&mut ring, is_outer);
         if let Some(entry) = crate::scene::model::hatch_patterns::find(&model.name) {
             dxf.pattern = crate::scene::model::hatch_patterns::build_dxf_pattern(entry);
         }

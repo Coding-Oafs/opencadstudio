@@ -180,6 +180,8 @@ pub struct HatchModel {
     /// rebuilt from a DXF entity — `add_hatch` then reconstructs the persisted
     /// vertices from `boundary` + `world_origin` instead.
     pub boundary_wcs: Option<Arc<Vec<[f64; 2]>>>,
+    /// Per-ring DXF role, aligned with the NaN-separated boundary paths.
+    pub boundary_exterior: Option<Arc<Vec<bool>>>,
     /// Fill pattern.
     pub pattern: HatchPattern,
     /// Catalog name for this pattern (e.g. "ANSI31", "SOLID", "LINEAR").

@@ -14,7 +14,15 @@ impl OpenCADStudio {
         true
     }
 
-    fn refresh_area_preview(&mut self, i: usize) {
+    pub(super) fn refresh_area_preview(&mut self, i: usize) {
+        let hatches = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.hatch_preview_models());
+        if let Some(hatches) = hatches {
+            self.tabs[i].scene.set_command_preview_hatches(hatches);
+            return;
+        }
         let regions = self.tabs[i]
             .active_cmd
             .as_ref()

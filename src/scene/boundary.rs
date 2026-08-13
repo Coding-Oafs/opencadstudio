@@ -10,6 +10,31 @@ use cadkernel::geom2d::{bounded_faces, Line, Tolerance};
 /// enough not to weld genuinely separate corners together.
 const WELD_TOLERANCE: f64 = 1.0e-6;
 
+fn wire_segments(wire: &WireModel) -> Vec<Line> {
+    let mut segments = Vec::new();
+    let mut previous: Option<[f64; 2]> = None;
+
+    for (index, high) in wire.points.iter().copied().enumerate() {
+        if !high[0].is_finite() || !high[1].is_finite() {
+            previous = None;
+            continue;
+        }
+        let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
+        let current = [
+            high[0] as f64 + low[0] as f64,
+            high[1] as f64 + low[1] as f64,
+        ];
+        if let Some(start) = previous {
+            let (dx, dy) = (current[0] - start[0], current[1] - start[1]);
+            if dx.hypot(dy) > WELD_TOLERANCE {
+                segments.push(Line { start, end: current });
+            }
+        }
+        previous = Some(current);
+    }
+    segments
+}
+
 impl Scene {
     /// Build closed planar regions from the visible wire geometry.
     ///
@@ -30,41 +55,26 @@ impl Scene {
         let mut segments = Vec::<Line>::new();
 
         for wire in self.entity_wires().iter() {
-            let mut previous: Option<[f64; 2]> = None;
-
-            for (index, high) in wire.points.iter().copied().enumerate() {
-                // NaNs delimit independent segments inside some WireModels,
-                // notably polylines stored as A-B | B-C | C-D.
-                if !high[0].is_finite() || !high[1].is_finite() {
-                    previous = None;
-                    continue;
-                }
-
-                // The wire carries its coordinates as a double-single pair, so
-                // both halves are needed to recover the f64 the tessellation
-                // produced. Reading only the high half would put every vertex
-                // of a survey-coordinate drawing on a grid coarser than the
-                // weld tolerance.
-                let low = wire.points_low.get(index).copied().unwrap_or([0.0; 3]);
-                let current = [
-                    high[0] as f64 + low[0] as f64,
-                    high[1] as f64 + low[1] as f64,
-                ];
-
-                if let Some(start) = previous {
-                    let (dx, dy) = (current[0] - start[0], current[1] - start[1]);
-                    if dx.hypot(dy) > WELD_TOLERANCE {
-                        segments.push(Line {
-                            start,
-                            end: current,
-                        });
-                    }
-                }
-
-                previous = Some(current);
-            }
+            segments.extend(wire_segments(wire));
         }
 
         bounded_faces(&segments, Tolerance::new(WELD_TOLERANCE))
+    }
+
+    /// Tessellated boundary segments grouped by their selectable entity.
+    pub fn hatch_boundary_sources(
+        &self,
+    ) -> rustc_hash::FxHashMap<acadrust::Handle, Vec<Line>> {
+        let mut sources = rustc_hash::FxHashMap::default();
+        for wire in self.entity_wires().iter() {
+            let Some(handle) = Self::handle_from_wire_name(&wire.name) else {
+                continue;
+            };
+            sources
+                .entry(handle)
+                .or_insert_with(Vec::new)
+                .extend(wire_segments(wire));
+        }
+        sources
     }
 }
