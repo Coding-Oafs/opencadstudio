@@ -1,27 +1,27 @@
 name: Build Snap Package
 
 on:
-  # workflow_run werkt alleen als dit workflowbestand op de DEFAULT branch staat.
-  # De workflow wordt getriggerd zodra "Release" afrondt (die triggert zelf op
-  # `release: published` + workflow_dispatch, niet op elke main-push).
+  # workflow_run only works if this workflow file lives on the DEFAULT branch.
+  # Triggered as soon as "Release" finishes (which itself triggers on
+  # `release: published` + workflow_dispatch, not on every push to main).
   workflow_run:
     workflows: ["Release"]
     types: [completed]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Bestaande release-tag om tegen te bouwen (test)'
+        description: 'Existing release tag to build against (test)'
         required: true
         default: 'v0.9.0'
 
-# Minimale default; de build-snap-job zet zelf `contents: write` omdat hij de
-# snap als asset aan de release hangt.
+# Minimal default; the build-snap job raises this to `contents: write` itself,
+# because it attaches the snap as a release asset.
 permissions:
   contents: read
 
-# Eén globale groep, NIET annuleren: twee releases kort na elkaar publiceren
-# allebei naar het `stable`-kanaal van de Snap Store, en een Snap-release is
-# niet in te trekken.
+# One global group, and deliberately NOT cancel-in-progress: two releases in
+# quick succession would both publish to the Snap Store's `stable` channel, and
+# a Snap release cannot be retracted.
 concurrency:
   group: snap
   cancel-in-progress: false
@@ -30,34 +30,34 @@ jobs:
   build-snap:
     timeout-minutes: 75
     runs-on: ubuntu-22.04
-    # `types: [completed]` vuurt OOK als de release-workflow faalde of werd
-    # geannuleerd; zonder deze gate zou een mislukte release alsnog een snap
-    # bouwen. Geen extra head_branch-guard nodig zoals bij open-calc-studio:
-    # "Release" triggert uitsluitend op `release: published` + workflow_dispatch,
-    # nooit op een gewone main-push, dus er is geen vervuilingsscenario.
+    # `types: [completed]` also fires when the release workflow FAILED or was
+    # cancelled; without this gate a failed release would still build a snap.
+    # No extra head_branch guard is needed here: "Release" only triggers on
+    # `release: published` + workflow_dispatch, never on an ordinary push to
+    # main, so there is no spurious-trigger scenario.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write
     env:
-      # Job-level zodat de gated publish-stap er in `if:` naar kan verwijzen.
+      # Job-level so the gated publish step can reference it from `if:`.
       SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
 
     steps:
       - uses: actions/checkout@v5
         with:
-          # Bij workflow_run checkt checkout standaard de DEFAULT BRANCH uit,
-          # niet de tag/commit die de release-workflow bouwde — fout, want
-          # snap/snapcraft.yaml moet van de gebouwde commit komen. Daarom
-          # expliciet de head_sha van die workflow; voor workflow_dispatch
-          # (geen workflow_run-event) valt die weg naar github.ref (de branch
-          # waarop handmatig werd gedispatcht).
+          # On workflow_run, checkout defaults to the DEFAULT BRANCH rather than
+          # the tag/commit the release workflow built — wrong, because
+          # snap/snapcraft.yaml must come from the built commit. Hence the
+          # explicit head_sha of that workflow; for workflow_dispatch (no
+          # workflow_run event) it falls back to github.ref, i.e. the branch the
+          # manual dispatch was started from.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Get version
         id: get-version
         env:
-          # Niet-vertrouwde invoer via env, NOOIT rechtstreeks ${} in de shell.
-          # GITHUB_*-namen zelf NIET zetten: gereserveerd en al aanwezig in de runner.
+          # Untrusted input goes through env, NEVER directly as ${} in the shell.
+          # Do not set GITHUB_* names here: they are reserved and already present.
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
@@ -66,10 +66,10 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$DISPATCH_VERSION"
           elif [ "$EVENT_NAME" = "workflow_run" ]; then
-            # head_branch is voor een `release`-getriggerde workflow_run niet
-            # betrouwbaar gegarandeerd de tagnaam (kan de default branch zijn) —
-            # daarom altijd de laatste gepubliceerde release opzoeken i.p.v. op
-            # head_branch te vertrouwen.
+            # For a `release`-triggered workflow_run, head_branch is not
+            # guaranteed to be the tag name (it can be the default branch), so
+            # fall back to looking up the latest published release instead of
+            # trusting head_branch.
             if printf '%s' "$HEAD_BRANCH" | grep -qE '^v[0-9]'; then
               VERSION="$HEAD_BRANCH"
             else
@@ -79,54 +79,54 @@ jobs:
             VERSION=""
           fi
           if [ -z "$VERSION" ]; then
-            echo "::error::Kon geen versie afleiden (event=$EVENT_NAME, head_branch=$HEAD_BRANCH)"
+            echo "::error::Could not determine version (event=$EVENT_NAME, head_branch=$HEAD_BRANCH)"
             exit 1
           fi
-          # `version` en `version_number` gaan verderop een `sed`-VERVANGINGSPATROON
-          # in, en een dispatch-input is vrije tekst — een '/' of '&' herschrijft dat
-          # patroon, een nieuwe regel schrijft een tweede regel in $GITHUB_OUTPUT
-          # (output-injectie). Whitelist: de `case` dekt de hele waarde (dus ook
-          # nieuwe regels), de regex daarna de structuur.
+          # `version` and `version_number` are fed into a `sed` REPLACEMENT
+          # PATTERN below, and a dispatch input is free text — a '/' or '&' would
+          # rewrite that pattern, and a newline would write a second line into
+          # $GITHUB_OUTPUT (output injection). Whitelist: the `case` covers the
+          # entire value (including newlines), the regex then checks structure.
           case "$VERSION" in
             *[!v0-9.]*)
-              echo "::error::Versie bevat tekens buiten 'v', cijfers en punten." >&2
+              echo "::error::Version contains characters other than 'v', digits and dots." >&2
               exit 1
               ;;
           esac
           if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Versie '$VERSION' heeft niet de vorm vX.Y.Z." >&2
+            echo "::error::Version '$VERSION' is not of the form vX.Y.Z." >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "version_number=${VERSION#v}" >> "$GITHUB_OUTPUT"
 
-      # We bouwen de Rust-app NIET opnieuw: de snap herverpakt de AppImage van de
-      # gepubliceerde GitHub-release (--appimage-extract i.p.v. dpkg-deb -x, want
-      # dit project levert geen .deb).
+      # We do NOT rebuild the Rust app: the snap repackages the AppImage from the
+      # published GitHub release (--appimage-extract rather than dpkg-deb -x,
+      # since this project does not produce a .deb).
       - name: Wait for release AppImage and download it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.get-version.outputs.version }}
         run: |
-          echo "Wachten op AppImage-asset van release $VERSION..."
+          echo "Waiting for AppImage asset of release $VERSION..."
           found=""
           for i in $(seq 1 10); do
             if gh release view "$VERSION" --json assets --jq '.assets[].name' 2>/dev/null | grep -q '\.AppImage$'; then
               found=1
-              echo "AppImage-asset gevonden"
+              echo "AppImage asset found"
               break
             fi
-            echo "nog geen AppImage-asset... (poging $i/10)"
+            echo "no AppImage asset yet... (attempt $i/10)"
             sleep 15
           done
           if [ -z "$found" ]; then
-            echo "::error::AppImage-asset voor $VERSION verscheen niet op tijd"
+            echo "::error::AppImage asset for $VERSION did not appear in time"
             exit 1
           fi
           gh release download "$VERSION" -p '*.AppImage' --clobber --dir .
           appimage=$(ls *.AppImage | head -1)
           cp "$appimage" open-cad-studio.AppImage
-          echo "Gebruik $appimage -> open-cad-studio.AppImage"
+          echo "Using $appimage -> open-cad-studio.AppImage"
 
       - name: Set version in snapcraft.yaml
         env:
@@ -139,7 +139,7 @@ jobs:
         uses: snapcore/action-build@v1
         id: snapcraft
 
-      # Echte release (via workflow_run): snap als asset aan de release hangen.
+      # Real release (via workflow_run): attach the snap as a release asset.
       - name: Upload snap to GitHub release
         if: github.event_name == 'workflow_run'
         env:
@@ -149,7 +149,7 @@ jobs:
         run: |
           gh release upload "$VERSION" "$SNAP" --clobber
 
-      # Handmatige test: snap als CI-artifact (de release NIET aanraken).
+      # Manual test run: snap as a CI artifact only, do NOT touch the release.
       - name: Upload snap as workflow artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
@@ -158,9 +158,9 @@ jobs:
           path: ${{ steps.snapcraft.outputs.snap }}
           if-no-files-found: error
 
-      # Live publiceren naar de Snap Store: alleen op een echte release én pas
-      # zodra het store-credentials-secret bestaat (eigenaar-stap) — én pas
-      # zodra de naam `open-cad-studio` op snapcraft.io geregistreerd is.
+      # Publishing live to the Snap Store: only on a real release, and only once
+      # the store credentials secret exists (an owner step) — and only once the
+      # name `open-cad-studio` has been registered on snapcraft.io.
       - name: Publish to Snap Store
         if: github.event_name == 'workflow_run' && env.SNAPCRAFT_STORE_CREDENTIALS != ''
         uses: snapcore/action-publish@v1

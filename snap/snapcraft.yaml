@@ -1,6 +1,6 @@
 name: open-cad-studio
 base: core22
-# Versie wordt in CI overschreven met het release-versienummer (zie .github/workflows/snap.yml).
+# Overwritten in CI with the release version number (see .github/workflows/snap.yml).
 version: '0.0.0'
 title: Open CAD Studio
 summary: 2D drafting and 3D modeling with native DWG/DXF support
@@ -40,10 +40,10 @@ apps:
     command: usr/bin/OpenCADStudio
     desktop: usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop
     plugs:
-      - home            # tekeningen openen/opslaan/exporteren in de home-map
-      - removable-media # idem op externe schijven/USB
-      - network         # licentie-/Patreon-check
-      - opengl          # GPU-toegang voor wgpu (Vulkan/GL)
+      - home            # open/save/export drawings in the home directory
+      - removable-media # same, on external drives / USB
+      - network         # license / Patreon check
+      - opengl          # GPU access for wgpu (Vulkan/GL)
       - wayland
       - x11
       - desktop
@@ -52,20 +52,19 @@ apps:
 parts:
   open-cad-studio:
     plugin: nil
-    # De CI-stap kopieert de gepubliceerde release-AppImage naar de project-root
-    # als `open-cad-studio.AppImage`; we pakken die uit i.p.v. opnieuw te bouwen
-    # (dezelfde herverpak-aanpak als de .deb-gebaseerde OpenAEC-snaps, maar dan
-    # voor een AppImage: `--appimage-extract` levert een kant-en-klare AppDir).
+    # The CI step copies the published release AppImage to the project root as
+    # `open-cad-studio.AppImage`; we unpack that instead of rebuilding from
+    # source. `--appimage-extract` yields a ready-made AppDir.
     override-build: |
       set -eu
       chmod +x "${CRAFT_PROJECT_DIR}/open-cad-studio.AppImage"
       "${CRAFT_PROJECT_DIR}/open-cad-studio.AppImage" --appimage-extract
       mkdir -p "${CRAFT_PART_INSTALL}/usr"
       cp -r squashfs-root/usr/. "${CRAFT_PART_INSTALL}/usr/"
-    # OCS gebruikt winit (X11/Wayland) + wgpu (Vulkan met GL-fallback), geen
-    # GTK/WebKit — dus GEEN `extensions: [gnome]` (dat is voor de Tauri-apps).
-    # libvulkan1/mesa-vulkan-drivers zijn een fallback; echte hardware-versnelling
-    # loopt via de `opengl`-plug naar de host-driver.
+    # OCS uses winit (X11/Wayland) + wgpu (Vulkan with a GL fallback), not
+    # GTK/WebKit — so deliberately NO `extensions: [gnome]`.
+    # libvulkan1/mesa-vulkan-drivers are a fallback; real hardware acceleration
+    # goes through the `opengl` plug to the host driver.
     stage-packages:
       - libvulkan1
       - mesa-vulkan-drivers
