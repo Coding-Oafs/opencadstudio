@@ -7,4 +7,7 @@ description = "Bounded LAS/LAZ I/O and classification editing for Open CAD Studi
 
 [dependencies]
 las = { version = "0.11.0", features = ["laz-parallel"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

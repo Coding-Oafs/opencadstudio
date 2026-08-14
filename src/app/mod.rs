@@ -13,6 +13,8 @@ pub(crate) mod helpers;
 mod history;
 mod layers;
 mod model_ops;
+#[cfg(not(target_arch = "wasm32"))]
+mod mnu;
 mod mtext_editor;
 #[cfg(not(target_arch = "wasm32"))]
 mod point_cloud;
@@ -1541,6 +1543,8 @@ pub enum ModalKind {
     About,
     Shortcuts,
     PluginManager,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudManager,
     UpdateNotice,
     Layers,
     LayerStateManager,
@@ -3002,6 +3006,12 @@ pub enum Message {
         Result<ocs_pointcloud::PointSample, String>,
     ),
     #[cfg(not(target_arch = "wasm32"))]
+    PointCloudIndexed(
+        u64,
+        std::path::PathBuf,
+        Result<ocs_pointcloud::TileCacheManifest, String>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudExport,
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudExportPathPicked(Option<std::path::PathBuf>),
@@ -3011,6 +3021,22 @@ pub enum Message {
         std::path::PathBuf,
         Result<ocs_pointcloud::ExportStats, String>,
     ),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudPtcImport,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudPtcImportPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudPtcExport,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudPtcExportPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    MnuImport,
+    #[cfg(not(target_arch = "wasm32"))]
+    MnuImportPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    MnuExport,
+    #[cfg(not(target_arch = "wasm32"))]
+    MnuExportPathPicked(Option<std::path::PathBuf>),
 }
 
 #[derive(Debug, Clone)]

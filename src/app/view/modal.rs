@@ -16,6 +16,8 @@ impl OpenCADStudio {
             Some(K::Options) => crate::tr!("action", "options"),
             Some(K::FindReplace) => crate::tr!("modal", "find-replace"),
             Some(K::PluginManager) => crate::tr!("modal", "plugin-manager"),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(K::PointCloudManager) => "LiDAR Point Cloud Manager".to_string(),
             Some(K::UpdateNotice) => crate::tr!("modal", "update-available"),
             Some(K::Layers) => crate::tr!("modal", "layer-manager"),
             Some(K::LayerStateManager) => crate::tr!("modal", "layer-state-manager"),
@@ -195,6 +197,13 @@ impl OpenCADStudio {
                     })
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            super::super::ModalKind::PointCloudManager => sized_flow(ex, 940, 640, |flow| {
+                crate::ui::window::point_cloud_manager::view_window(
+                    self.point_cloud_manager_data(self.active_tab),
+                    flow,
+                )
+            }),
             super::super::ModalKind::UpdateNotice => {
                 let latest = self.update_notice_version.as_deref().unwrap_or("?");
                 let body = self.update_notice_body.as_deref().unwrap_or("");

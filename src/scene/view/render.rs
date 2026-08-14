@@ -18,8 +18,8 @@ use crate::scene::model::visual_style_model::{
     resolve_visual_style_handle, MeshVisualStyle,
 };
 use crate::scene::{
-    vp_effective_scale, Camera, HatchModel, ImageModel, MeshLodSet, NavPerfSample, Scene,
-    SceneLight, Uniforms, ViewportInstance, WireModel,
+    vp_effective_scale, Camera, HatchModel, ImageModel, MeshLodSet, NavPerfSample,
+    PointCloudModel, Scene, SceneLight, Uniforms, ViewportInstance, WireModel,
 };
 
 // ── Camera hover state (shader::Program::State) ───────────────────────────
@@ -124,6 +124,8 @@ pub struct ViewportData {
     /// the main `wires` buffer so a drag re-uploads only this small set each
     /// frame, never the resident base buffer. Drawn on top in the wire pass.
     pub(in crate::scene) preview_wires: Arc<Vec<WireModel>>,
+    /// Native LiDAR point model, shared across all viewports for this drawing.
+    pub(in crate::scene) point_cloud: Arc<PointCloudModel>,
     /// Non-current scale representations of selected or hovered annotative
     /// entities. Uploaded with the xray highlight instead of the resident set.
     pub(in crate::scene) annotation_context_wires: Arc<Vec<WireModel>>,
@@ -385,6 +387,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_mesh_source = None;
                 inner.cached_face3d_source = None;
                 inner.cached_face3d_depth_source = None;
+                inner.point_gpu.reset();
                 inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
                 inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
@@ -468,6 +471,7 @@ impl shader::Primitive for Primitive {
             let Some(draw_depths) = vp.draw_depths.upgrade() else {
                 continue;
             };
+            inner.point_gpu.upload(device, &vp.point_cloud);
             // Third component is the *selected-set* signature (not
             // selection_generation, which also bumps on hover) so a rollover
             // doesn't re-upload the static hatch / face3d buffers.
@@ -1252,6 +1256,9 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     vp.selection_generation.hash(&mut h);
     vp.selected_sig.hash(&mut h);
     vp.wire_content_id.hash(&mut h);
+    vp.point_cloud.generation.hash(&mut h);
+    vp.point_cloud.point_size_px.to_bits().hash(&mut h);
+    (Arc::as_ptr(&vp.point_cloud.points) as usize).hash(&mut h);
     vp.fill_mode.hash(&mut h);
     vp.view_wireframe.hash(&mut h);
     vp.show_2d_solid_fills.hash(&mut h);
@@ -3348,22 +3355,17 @@ impl Scene {
         };
         // Point-cloud samples are model-space references: show them in Model
         // and inside paper-space content viewports, never directly on a sheet.
-        let point_cloud_wires = if self.current_layout == "Model" || !inst.paper_sheet {
-            Arc::clone(&self.point_cloud_wires)
+        let point_cloud = if self.current_layout == "Model" || !inst.paper_sheet {
+            Arc::clone(&self.point_cloud)
         } else {
-            Arc::new(Vec::new())
+            Arc::new(PointCloudModel::default())
         };
         let has_transient_overlay = show_live_overlay
             && (self.interim_wire.is_some() || !self.preview_wires.is_empty());
         let preview_wires = if !has_transient_overlay {
-            // Normal navigation is the important path: share the cloud Arc so
-            // a large display sample is not deep-cloned on every frame.
-            point_cloud_wires
+            Arc::new(Vec::new())
         } else {
-            let mut v: Vec<WireModel> = Vec::with_capacity(
-                point_cloud_wires.len() + self.preview_wires.len() + 1,
-            );
-            v.extend(point_cloud_wires.iter().cloned());
+            let mut v: Vec<WireModel> = Vec::with_capacity(self.preview_wires.len() + 1);
             if let Some(iw) = &self.interim_wire {
                 v.push(iw.clone());
             }
@@ -3603,6 +3605,7 @@ impl Scene {
             wires: Arc::downgrade(&all_wires),
             clip_boundary_ndc,
             preview_wires,
+            point_cloud,
             annotation_context_wires,
             preview_hatches,
             face3d_wires,

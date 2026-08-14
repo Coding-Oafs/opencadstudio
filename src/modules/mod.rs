@@ -27,6 +27,8 @@ pub use ocs_plugin_api::ribbon::{
 pub mod annotate;
 pub mod draw;
 pub mod insert;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod lidar;
 pub mod model;
 pub mod layout;
 pub mod manage;

@@ -4,6 +4,31 @@
 //! viewer can retain only a bounded display sample plus a sparse set of edits,
 //! then stream the original file when it is time to export a revised LAS/LAZ.
 
+mod display;
+mod edit;
+mod ptc;
+mod selection;
+mod sidecar;
+mod tile_cache;
+
+pub use display::{
+    classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode,
+    DisplaySettings,
+};
+pub use edit::{EditStore, EditTransaction, PointPatch};
+pub use ptc::{parse_ptc, write_ptc, PtcError};
+pub use selection::{
+    select_brush, select_nearest, select_polygon, IndexRange, PointFilter, SelectionSet,
+};
+pub use sidecar::{
+    sidecar_path_for_drawing, AttachmentState, AuditEntry, SidecarError, SidecarResult,
+    SidecarStore, SourceFingerprint,
+};
+pub use tile_cache::{
+    build_tiled_cache, read_tile, IndexProgress, TileCacheError, TileCacheManifest,
+    TileCacheOptions, TileCacheResult, TileEntry, TileKey,
+};
+
 use las::{point::Classification, Header, Point, Reader, Writer};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,6 +47,7 @@ pub enum Error {
     UnsupportedExtension(PathBuf),
     OutputExists(PathBuf),
     SameInputAndOutput(PathBuf),
+    Cancelled(&'static str),
 }
 
 impl fmt::Display for Error {
@@ -47,6 +73,7 @@ impl fmt::Display for Error {
                 "input and output point-cloud paths must differ: {}",
                 path.display()
             ),
+            Self::Cancelled(operation) => write!(f, "{operation} cancelled"),
         }
     }
 }
@@ -174,6 +201,29 @@ impl SamplePoint {
             is_withheld: point.is_withheld,
             is_overlap: point.is_overlap,
         }
+    }
+
+    /// Returns a display copy with a sparse edit overlay applied.
+    pub fn with_patch(mut self, patch: PointPatch) -> Self {
+        if let Some(classification) = patch.classification {
+            self.classification = classification;
+        }
+        if let Some(value) = patch.synthetic {
+            self.is_synthetic = value;
+        }
+        if let Some(value) = patch.key_point {
+            self.is_key_point = value;
+        }
+        if let Some(value) = patch.withheld {
+            self.is_withheld = value;
+        }
+        if let Some(value) = patch.overlap {
+            self.is_overlap = value;
+        }
+        if let Some(value) = patch.elevation {
+            self.position[2] = value;
+        }
+        self
     }
 }
 
@@ -355,6 +405,14 @@ pub struct ExportStats {
     pub points_read: u64,
     pub points_written: u64,
     pub points_reclassified: u64,
+    pub point_flags_changed: u64,
+    pub elevations_changed: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportProgress {
+    pub points_read: u64,
+    pub total_points: u64,
 }
 
 /// Streams the source cloud to a new LAS/LAZ and applies sparse edits.
@@ -368,10 +426,67 @@ pub fn export_with_edits(
     output: impl AsRef<Path>,
     edits: &ClassificationEdits,
 ) -> Result<ExportStats> {
+    export_internal(
+        input.as_ref(),
+        output.as_ref(),
+        |source_index, point, stats| {
+            if let Some(classification) = edits.classification_for(source_index) {
+                apply_classification(point, classification)?;
+                stats.points_reclassified += 1;
+            }
+            Ok(())
+        },
+        |_| true,
+    )
+}
+
+/// Streams the source cloud while applying generalized classification, point
+/// flag and elevation transactions.
+pub fn export_with_patches(
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    edits: &EditStore,
+) -> Result<ExportStats> {
+    export_internal(
+        input.as_ref(),
+        output.as_ref(),
+        |source_index, point, stats| {
+            if let Some(patch) = edits.patch_for(source_index) {
+                apply_point_patch(point, patch, stats)?;
+            }
+            Ok(())
+        },
+        |_| true,
+    )
+}
+
+pub fn export_with_patches_progress(
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    edits: &EditStore,
+    continue_export: impl FnMut(ExportProgress) -> bool,
+) -> Result<ExportStats> {
+    export_internal(
+        input.as_ref(),
+        output.as_ref(),
+        |source_index, point, stats| {
+            if let Some(patch) = edits.patch_for(source_index) {
+                apply_point_patch(point, patch, stats)?;
+            }
+            Ok(())
+        },
+        continue_export,
+    )
+}
+
+fn export_internal(
+    input: &Path,
+    output: &Path,
+    mut apply: impl FnMut(u64, &mut Point, &mut ExportStats) -> Result<()>,
+    mut continue_export: impl FnMut(ExportProgress) -> bool,
+) -> Result<ExportStats> {
     const CHUNK_SIZE: u64 = 65_536;
 
-    let input = input.as_ref();
-    let output = output.as_ref();
     validate_output_path(input, output)?;
 
     let mut reader = Reader::from_path(input)?;
@@ -390,13 +505,16 @@ pub fn export_with_edits(
 
         for point in point_data.points() {
             let mut point = point?;
-            if let Some(classification) = edits.classification_for(stats.points_read) {
-                apply_classification(&mut point, classification)?;
-                stats.points_reclassified += 1;
-            }
+            apply(stats.points_read, &mut point, &mut stats)?;
             writer.write_point(point)?;
             stats.points_read += 1;
             stats.points_written += 1;
+        }
+        if !continue_export(ExportProgress {
+            points_read: stats.points_read,
+            total_points: point_count,
+        }) {
+            return Err(Error::Cancelled("point-cloud export"));
         }
     }
 
@@ -405,6 +523,35 @@ pub fn export_with_edits(
     fs::rename(&temporary, output)?;
     temporary_guard.commit();
     Ok(stats)
+}
+
+fn apply_point_patch(point: &mut Point, patch: PointPatch, stats: &mut ExportStats) -> Result<()> {
+    if let Some(classification) = patch.classification {
+        apply_classification(point, classification)?;
+        stats.points_reclassified += 1;
+    }
+    let changes_flag = patch.synthetic.is_some()
+        || patch.key_point.is_some()
+        || patch.withheld.is_some()
+        || patch.overlap.is_some();
+    if let Some(value) = patch.synthetic {
+        point.is_synthetic = value;
+    }
+    if let Some(value) = patch.key_point {
+        point.is_key_point = value;
+    }
+    if let Some(value) = patch.withheld {
+        point.is_withheld = value;
+    }
+    if let Some(value) = patch.overlap {
+        point.is_overlap = value;
+    }
+    stats.point_flags_changed += u64::from(changes_flag);
+    if let Some(value) = patch.elevation {
+        point.z = value;
+        stats.elevations_changed += 1;
+    }
+    Ok(())
 }
 
 fn apply_classification(point: &mut Point, classification: u8) -> Result<()> {
@@ -652,5 +799,192 @@ mod tests {
             ),
             Err(Error::UnsupportedExtension(_))
         ));
+    }
+
+    #[test]
+    fn generalized_edits_selection_and_export_are_source_indexed() {
+        let directory = TestDirectory::new();
+        let input = directory.join("patch-input.las");
+        let output = directory.join("patch-output.las");
+        create_cloud(&input, 12);
+
+        let mut edits = EditStore::default();
+        assert_eq!(
+            2,
+            edits.apply(
+                "ground cleanup",
+                [2, 5, 5],
+                PointPatch {
+                    classification: Some(2),
+                    withheld: Some(true),
+                    elevation: Some(321.25),
+                    ..PointPatch::default()
+                },
+            )
+        );
+        assert_eq!(1, edits.transaction_count());
+        assert_eq!(2, SelectionSet::from_indices("picked", [2, 5, 5]).len());
+        assert!(edits.undo().is_some());
+        assert!(edits.is_empty());
+        assert!(edits.redo().is_some());
+
+        let stats = export_with_patches(&input, &output, &edits).unwrap();
+        assert_eq!(2, stats.points_reclassified);
+        assert_eq!(2, stats.point_flags_changed);
+        assert_eq!(2, stats.elevations_changed);
+        let mut reader = Reader::from_path(output).unwrap();
+        let points: Vec<_> = reader
+            .read_all()
+            .unwrap()
+            .points()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(321.25, points[2].z);
+        assert!(points[2].is_withheld);
+    }
+
+    #[test]
+    fn tiled_cache_is_bounded_and_round_trips_attributes() {
+        let directory = TestDirectory::new();
+        let input = directory.join("tiled-input.las");
+        let cache = directory.join("tiled-input.ocstiles");
+        create_cloud(&input, 100);
+        let manifest = build_tiled_cache(
+            &input,
+            &cache,
+            TileCacheOptions {
+                target_leaf_points: 8,
+                read_chunk_size: 11,
+                max_depth: 8,
+            },
+            |_| true,
+        )
+        .unwrap();
+        manifest.validate_source(&input).unwrap();
+        assert!(manifest.leaf_level > 0);
+        let leaf_count: u64 = manifest
+            .tiles
+            .iter()
+            .filter(|tile| tile.key.level == manifest.leaf_level)
+            .map(|tile| tile.point_count)
+            .sum();
+        assert_eq!(100, leaf_count);
+
+        let root = manifest.select_tiles(
+            manifest.source_metadata.bounds_min,
+            manifest.source_metadata.bounds_max,
+            8,
+        );
+        assert!(root.iter().map(|tile| tile.point_count).sum::<u64>() <= 8);
+        let points = read_tile(&cache, &root[0]).unwrap();
+        assert_eq!(Some(50_000.0), points[0].gps_time);
+        assert_eq!(Some([0, 20, 30]), points[0].color);
+    }
+
+    #[test]
+    fn sidecar_persists_sparse_state_and_repairs_relative_paths() {
+        let directory = TestDirectory::new();
+        let drawing_dir = directory.join("drawings");
+        let lidar_dir = directory.join("lidar");
+        std::fs::create_dir_all(&drawing_dir).unwrap();
+        std::fs::create_dir_all(&lidar_dir).unwrap();
+        let drawing = drawing_dir.join("survey.dwg");
+        let input = lidar_dir.join("survey.laz");
+        create_cloud(&input, 10);
+        let mut state = AttachmentState::new("primary", &drawing, &input).unwrap();
+        state.edits.apply(
+            "mark key point",
+            [3],
+            PointPatch {
+                key_point: Some(true),
+                ..PointPatch::default()
+            },
+        );
+        state
+            .selection_sets
+            .push(SelectionSet::from_indices("review", [3, 4, 5]));
+        state.selection_filter.classes = vec![2, 6];
+        state.selection_filter.returns = vec![1];
+        let sidecar = sidecar_path_for_drawing(&drawing);
+        let mut store = SidecarStore::open(&sidecar).unwrap();
+        store.save_attachment(&state).unwrap();
+        store
+            .append_audit("primary", "edit", "marked one key point")
+            .unwrap();
+
+        let loaded = store.load_attachment("primary").unwrap().unwrap();
+        assert_eq!(Some(input), loaded.resolve_source(&drawing));
+        assert_eq!(1, loaded.edits.len());
+        assert_eq!(3, loaded.selection_sets[0].len());
+        assert_eq!(vec![2, 6], loaded.selection_filter.classes);
+        assert_eq!(vec![1], loaded.selection_filter.returns);
+        assert_eq!(1, store.audit_log("primary").unwrap().len());
+    }
+
+    #[test]
+    fn sidecar_migrates_version_one_selection_filters() {
+        let directory = TestDirectory::new();
+        let sidecar = directory.join("legacy.ocspc");
+        let connection = rusqlite::Connection::open(&sidecar).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE attachments (
+                    id TEXT PRIMARY KEY,
+                    source_relative TEXT,
+                    source_absolute TEXT NOT NULL,
+                    fingerprint_json TEXT NOT NULL,
+                    cache_relative TEXT,
+                    display_json TEXT NOT NULL,
+                    classes_json TEXT NOT NULL,
+                    edits_json TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        drop(SidecarStore::open(&sidecar).unwrap());
+        let connection = rusqlite::Connection::open(&sidecar).unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let filter_column: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('attachments')
+                 WHERE name = 'selection_filter_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(2, version);
+        assert_eq!(1, filter_column);
+    }
+
+    #[test]
+    fn ptc_text_round_trip_preserves_custom_classes() {
+        let table = parse_ptc(
+            "Code,Description,Red,Green,Blue\n100,Radial - <2 ft,255,0,0\n121,Undergrowth - 4 ft,128,128,220\n",
+        )
+        .unwrap();
+        assert_eq!([255, 0, 0], table.color(100));
+        assert_eq!("Undergrowth - 4 ft", table.classes[&121].name);
+        let reparsed = parse_ptc(&write_ptc(&table)).unwrap();
+        assert_eq!(table, reparsed);
+    }
+
+    #[test]
+    fn cancellable_export_does_not_publish_partial_output() {
+        let directory = TestDirectory::new();
+        let input = directory.join("cancel-input.las");
+        let output = directory.join("cancel-output.las");
+        create_cloud(&input, 70_000);
+        let result = export_with_patches_progress(
+            &input,
+            &output,
+            &EditStore::default(),
+            |_| false,
+        );
+        assert!(matches!(result, Err(Error::Cancelled(_))));
+        assert!(!output.exists());
     }
 }

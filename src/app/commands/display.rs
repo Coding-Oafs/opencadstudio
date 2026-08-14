@@ -1213,8 +1213,28 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDMANAGER" => {
+                self.active_modal = Some(crate::app::ModalKind::PointCloudManager);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDRESTORE" => {
+                return Some(self.start_point_cloud_restore(i));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDINFO" => {
                 self.point_cloud_info(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDINDEX" => {
+                return Some(self.start_point_cloud_index(i));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDINDEXCANCEL" => {
+                self.cancel_point_cloud_index(i);
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1250,6 +1270,527 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSTATS" => {
+                self.point_cloud_statistics(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTBOX" => {
+                use crate::command::ValuePromptCommand;
+                if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
+                    self.active_modal = None;
+                    self.reset_modal_geometry();
+                }
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDSELECTBOX",
+                    "POINTCLOUDSELECTBOX  Enter minX minY minZ maxX maxY maxZ:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTBRUSH" => {
+                use crate::command::ValuePromptCommand;
+                if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
+                    self.active_modal = None;
+                    self.reset_modal_geometry();
+                }
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDSELECTBRUSH",
+                    "POINTCLOUDSELECTBRUSH  Enter centerX centerY centerZ radius:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTPOINT" => {
+                use crate::command::ValuePromptCommand;
+                if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
+                    self.active_modal = None;
+                    self.reset_modal_geometry();
+                }
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDSELECTPOINT",
+                    "POINTCLOUDSELECTPOINT  Enter X Y Z search-radius:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDCOLOR ") => {
+                let value = cmd.trim_start_matches("POINTCLOUDCOLOR").trim();
+                let mode = match value {
+                    "CLASS" | "CLASSIFICATION" => Some(ocs_pointcloud::ColorMode::Classification),
+                    "RGB" | "COLOR" => Some(ocs_pointcloud::ColorMode::Rgb),
+                    "INTENSITY" => Some(ocs_pointcloud::ColorMode::Intensity),
+                    "ELEVATION" | "HEIGHT" | "Z" => Some(ocs_pointcloud::ColorMode::Elevation),
+                    "RETURN" | "RETURNS" => Some(ocs_pointcloud::ColorMode::ReturnNumber),
+                    "SOURCE" | "POINTSOURCE" => Some(ocs_pointcloud::ColorMode::PointSource),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    self.set_point_cloud_color_mode(i, mode);
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDCOLOR <CLASS|RGB|INTENSITY|ELEVATION|RETURN|SOURCE>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDPOINTSIZE ") => {
+                match cmd
+                    .trim_start_matches("POINTCLOUDPOINTSIZE")
+                    .trim()
+                    .parse::<f32>()
+                {
+                    Ok(size) => self.set_point_cloud_point_size(i, size),
+                    Err(_) => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDPOINTSIZE <1-32 pixels>"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDCLASSVISIBLE ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDCLASSVISIBLE")
+                    .split_whitespace()
+                    .collect();
+                let class = values.first().and_then(|value| value.parse::<u8>().ok());
+                let visible = values.get(1).and_then(|value| match *value {
+                    "ON" | "TRUE" | "1" | "SHOW" => Some(true),
+                    "OFF" | "FALSE" | "0" | "HIDE" => Some(false),
+                    _ => None,
+                });
+                match (class, visible) {
+                    (Some(class), Some(visible)) => {
+                        self.set_point_cloud_class_visible(i, class, visible)
+                    }
+                    _ => self.command_line.push_error(
+                        "Usage: POINTCLOUDCLASSVISIBLE <0-255 class> <ON|OFF>",
+                    ),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSELECTBOX ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDSELECTBOX")
+                    .split_whitespace()
+                    .filter_map(|value| value.parse::<f64>().ok())
+                    .collect();
+                if values.len() == 6 {
+                    self.point_cloud_select_box(
+                        i,
+                        [values[0], values[1], values[2]],
+                        [values[3], values[4], values[5]],
+                    );
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDSELECTBOX <minX minY minZ maxX maxY maxZ>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSELECTBRUSH ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDSELECTBRUSH")
+                    .split_whitespace()
+                    .filter_map(|value| value.parse::<f64>().ok())
+                    .collect();
+                if values.len() == 4 {
+                    self.point_cloud_select_brush(
+                        i,
+                        [values[0], values[1], values[2]],
+                        values[3],
+                    );
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDSELECTBRUSH <centerX centerY centerZ radius>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSELECTPOINT ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDSELECTPOINT")
+                    .split_whitespace()
+                    .filter_map(|value| value.parse::<f64>().ok())
+                    .collect();
+                if values.len() == 4 {
+                    self.point_cloud_select_nearest(
+                        i,
+                        [values[0], values[1], values[2]],
+                        values[3],
+                    );
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDSELECTPOINT <X Y Z search-radius>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTSLICE" => {
+                use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDSELECTSLICE",
+                    "POINTCLOUDSELECTSLICE  Enter minimum-Z maximum-Z:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSELECTSLICE ") => {
+                let values = cmd
+                    .trim_start_matches("POINTCLOUDSELECTSLICE")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                match values {
+                    Ok(values)
+                        if values.len() == 2
+                            && values[0].is_finite()
+                            && values[1].is_finite() =>
+                    {
+                        self.point_cloud_select_elevation_slice(i, values[0], values[1]);
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDSELECTSLICE <minimum-Z maximum-Z>"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTFILTER" => {
+                use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDSELECTFILTER",
+                    "POINTCLOUDSELECTFILTER  Enter CLEAR, CLASS/RETURN/SOURCE list, ELEVATION low high, or flag ON/OFF/ANY:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTCLEAR" => {
+                self.set_point_cloud_selection(
+                    i,
+                    ocs_pointcloud::SelectionSet::from_indices(
+                        "active",
+                        std::iter::empty::<u64>(),
+                    ),
+                );
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSELECTFILTER ") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDSELECTFILTER").trim();
+                let mut fields = arguments.split_whitespace();
+                let field = fields.next().unwrap_or("");
+                let Some(mut filter) = self.tabs[i]
+                    .point_cloud
+                    .as_ref()
+                    .map(|cloud| cloud.selection_filter.clone())
+                else {
+                    self.command_line
+                        .push_error("POINTCLOUDSELECTFILTER: attach a LAS/LAZ cloud first.");
+                    return Some(Task::none());
+                };
+                let values: Vec<_> = fields.collect();
+                let parse_u8_list = |value: &str| {
+                    value
+                        .split(',')
+                        .map(str::parse::<u8>)
+                        .collect::<Result<Vec<_>, _>>()
+                };
+                let parse_u16_list = |value: &str| {
+                    value
+                        .split(',')
+                        .map(str::parse::<u16>)
+                        .collect::<Result<Vec<_>, _>>()
+                };
+                let flag_value = |value: Option<&&str>| match value.copied() {
+                    Some("ON" | "TRUE" | "1") => Some(Ok(Some(true))),
+                    Some("OFF" | "FALSE" | "0") => Some(Ok(Some(false))),
+                    Some("ANY" | "CLEAR") => Some(Ok(None)),
+                    Some(_) => Some(Err(())),
+                    None => None,
+                };
+                let result: Result<(), ()> = match field {
+                    "CLEAR" if values.is_empty() => {
+                        filter = ocs_pointcloud::PointFilter::default();
+                        Ok(())
+                    }
+                    "CLASS" if values.len() == 1 => {
+                        if matches!(values[0], "ANY" | "CLEAR") {
+                            filter.classes.clear();
+                            Ok(())
+                        } else {
+                            parse_u8_list(values[0])
+                                .map(|mut parsed| {
+                                    parsed.sort_unstable();
+                                    parsed.dedup();
+                                    filter.classes = parsed;
+                                })
+                                .map_err(|_| ())
+                        }
+                    }
+                    "RETURN" if values.len() == 1 => {
+                        if matches!(values[0], "ANY" | "CLEAR") {
+                            filter.returns.clear();
+                            Ok(())
+                        } else {
+                            parse_u8_list(values[0])
+                                .map(|mut parsed| {
+                                    parsed.sort_unstable();
+                                    parsed.dedup();
+                                    filter.returns = parsed;
+                                })
+                                .map_err(|_| ())
+                        }
+                    }
+                    "SOURCE" if values.len() == 1 => {
+                        if matches!(values[0], "ANY" | "CLEAR") {
+                            filter.sources.clear();
+                            Ok(())
+                        } else {
+                            parse_u16_list(values[0])
+                                .map(|mut parsed| {
+                                    parsed.sort_unstable();
+                                    parsed.dedup();
+                                    filter.sources = parsed;
+                                })
+                                .map_err(|_| ())
+                        }
+                    }
+                    "ELEVATION" if values.len() == 1 && matches!(values[0], "ANY" | "CLEAR") => {
+                        filter.elevation = None;
+                        Ok(())
+                    }
+                    "ELEVATION" if values.len() == 2 => {
+                        match (values[0].parse::<f64>(), values[1].parse::<f64>()) {
+                            (Ok(low), Ok(high)) if low.is_finite() && high.is_finite() => {
+                                filter.elevation = Some([low.min(high), low.max(high)]);
+                                Ok(())
+                            }
+                            _ => Err(()),
+                        }
+                    }
+                    "WITHHELD" if values.len() == 1 => flag_value(values.first())
+                        .unwrap_or(Err(()))
+                        .map(|value| filter.withheld = value),
+                    "OVERLAP" if values.len() == 1 => flag_value(values.first())
+                        .unwrap_or(Err(()))
+                        .map(|value| filter.overlap = value),
+                    "KEY" | "KEYPOINT" if values.len() == 1 => flag_value(values.first())
+                        .unwrap_or(Err(()))
+                        .map(|value| filter.key_point = value),
+                    "SYNTHETIC" if values.len() == 1 => flag_value(values.first())
+                        .unwrap_or(Err(()))
+                        .map(|value| filter.synthetic = value),
+                    _ => Err(()),
+                };
+                if result.is_ok() {
+                    self.set_point_cloud_selection_filter(i, filter);
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDSELECTFILTER <CLEAR|CLASS list|RETURN list|SOURCE list|ELEVATION low high|WITHHELD/OVERLAP/KEY/SYNTHETIC ON/OFF/ANY>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDCLASSIFYSELECTION ") => {
+                match cmd
+                    .trim_start_matches("POINTCLOUDCLASSIFYSELECTION")
+                    .trim()
+                    .parse::<u8>()
+                {
+                    Ok(class) => self.patch_point_cloud_selection(
+                        i,
+                        &format!("Assign class {class}"),
+                        ocs_pointcloud::PointPatch::classification(class),
+                    ),
+                    Err(_) => self.command_line.push_error(
+                        "Usage: POINTCLOUDCLASSIFYSELECTION <0-255 class>",
+                    ),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDCLASSIFYSELECTION" => {
+                use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDCLASSIFYSELECTION",
+                    "POINTCLOUDCLASSIFYSELECTION  Enter class 0-255:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDBRUSHCLASSIFY ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDBRUSHCLASSIFY")
+                    .split_whitespace()
+                    .collect();
+                if values.len() == 1 {
+                    match values[0].parse::<u8>() {
+                        Ok(classification) => {
+                            let command = crate::app::point_cloud::PointCloudBrushClassifyCommand::new(
+                                classification,
+                            );
+                            self.command_line.push_info(&command.prompt());
+                            self.tabs[i].active_cmd = Some(Box::new(command));
+                        }
+                        Err(_) => self.command_line.push_error(
+                            "Usage: POINTCLOUDBRUSHCLASSIFY <class> <centerX centerY centerZ radius>",
+                        ),
+                    }
+                } else if values.len() == 5 {
+                    let classification = values[0].parse::<u8>();
+                    let brush = values[1..]
+                        .iter()
+                        .map(|value| value.parse::<f64>())
+                        .collect::<Result<Vec<_>, _>>();
+                    match (classification, brush) {
+                        (Ok(classification), Ok(brush)) if brush[3].is_finite() => {
+                            self.point_cloud_select_brush(
+                                i,
+                                [brush[0], brush[1], brush[2]],
+                                brush[3],
+                            );
+                            self.patch_point_cloud_selection(
+                                i,
+                                &format!("Brush assign class {classification}"),
+                                ocs_pointcloud::PointPatch::classification(classification),
+                            );
+                        }
+                        _ => self.command_line.push_error(
+                            "Usage: POINTCLOUDBRUSHCLASSIFY <class> <centerX centerY centerZ radius>",
+                        ),
+                    }
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDBRUSHCLASSIFY <class> <centerX centerY centerZ radius>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDABOVELINE")
+                || cmd.starts_with("POINTCLOUDBELOWLINE") =>
+            {
+                self.command_line.push_info(
+                    "This imported profile-view key-in is preserved, but above/below-screen-line classification is not connected yet. Use 3D fence/brush selection for this build.",
+                );
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDFLAGSELECTION ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDFLAGSELECTION")
+                    .split_whitespace()
+                    .collect();
+                let enabled = values.get(1).and_then(|value| match *value {
+                    "ON" | "TRUE" | "1" => Some(true),
+                    "OFF" | "FALSE" | "0" => Some(false),
+                    _ => None,
+                });
+                let patch = values.first().zip(enabled).and_then(|(flag, enabled)| {
+                    let mut patch = ocs_pointcloud::PointPatch::default();
+                    match *flag {
+                        "WITHHELD" => patch.withheld = Some(enabled),
+                        "OVERLAP" => patch.overlap = Some(enabled),
+                        "KEY" | "KEYPOINT" => patch.key_point = Some(enabled),
+                        "SYNTHETIC" => patch.synthetic = Some(enabled),
+                        _ => return None,
+                    }
+                    Some(patch)
+                });
+                if let Some(patch) = patch {
+                    self.patch_point_cloud_selection(i, "Change point flag", patch);
+                } else {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDFLAGSELECTION <WITHHELD|OVERLAP|KEY|SYNTHETIC> <ON|OFF>",
+                    );
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDELEVATIONSELECTION ") => {
+                match cmd
+                    .trim_start_matches("POINTCLOUDELEVATIONSELECTION")
+                    .trim()
+                    .parse::<f64>()
+                {
+                    Ok(elevation) if elevation.is_finite() => self.patch_point_cloud_selection(
+                        i,
+                        &format!("Set elevation {elevation}"),
+                        ocs_pointcloud::PointPatch {
+                            elevation: Some(elevation),
+                            ..Default::default()
+                        },
+                    ),
+                    _ => self.command_line.push_error(
+                        "Usage: POINTCLOUDELEVATIONSELECTION <survey elevation>",
+                    ),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDPTCIMPORT ") => {
+                let path = cmd.trim_start_matches("POINTCLOUDPTCIMPORT").trim();
+                self.import_point_cloud_ptc(i, std::path::PathBuf::from(path));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDPTCIMPORT" => {
+                return Some(Task::done(Message::PointCloudPtcImport));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDPTCEXPORT ") => {
+                let path = cmd.trim_start_matches("POINTCLOUDPTCEXPORT").trim();
+                self.export_point_cloud_ptc(i, std::path::PathBuf::from(path));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDPTCEXPORT" => {
+                return Some(Task::done(Message::PointCloudPtcExport));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("MNUIMPORT ") => {
+                let path = cmd.trim_start_matches("MNUIMPORT").trim();
+                self.import_function_key_mnu(std::path::PathBuf::from(path));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "MNUIMPORT" => {
+                return Some(Task::done(Message::MnuImport));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("MNUEXPORT ") => {
+                let path = cmd.trim_start_matches("MNUEXPORT").trim();
+                self.export_function_key_mnu(std::path::PathBuf::from(path));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "MNUEXPORT" => {
+                return Some(Task::done(Message::MnuExport));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDDETACH" => {
                 self.detach_point_cloud(i);
             }
@@ -1257,6 +1798,16 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDEXPORT" => {
                 return Some(Task::done(Message::PointCloudExport));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDEXPORTSTATUS" => {
+                self.point_cloud_export_status(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDEXPORTCANCEL" => {
+                self.cancel_point_cloud_export(i);
             }
 
             #[cfg(not(target_arch = "wasm32"))]

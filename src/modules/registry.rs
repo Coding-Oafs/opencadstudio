@@ -16,6 +16,8 @@ pub fn all_modules() -> Vec<Box<dyn CadModule>> {
         Box::new(super::draw::DrawModule),
         Box::new(super::model::ModelModule),
         Box::new(super::insert::InsertModule),
+        #[cfg(not(target_arch = "wasm32"))]
+        Box::new(super::lidar::LidarModule),
         Box::new(super::annotate::AnnotateModule),
         Box::new(super::view::ViewModule),
         Box::new(super::manage::ManageModule),

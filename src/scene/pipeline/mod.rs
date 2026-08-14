@@ -4,6 +4,7 @@ pub mod hatch_gpu;
 pub mod wipeout_gpu;
 pub mod image_gpu;
 pub mod mesh_gpu;
+pub mod point_gpu;
 pub mod text_gpu;
 pub mod uniforms;
 pub mod viewcube;
@@ -86,6 +87,7 @@ pub struct Pipeline {
     /// Same shader as wire_pipeline but depth_compare=Greater, depth_write_enabled=false.
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
+    pub(crate) point_gpu: point_gpu::PointGpu,
     /// Layout for the per-wire `WireConst` storage buffer (group 1 of the wire /
     /// xray pipelines). `Some` on any storage-capable device; `None` in packed
     /// compatibility mode. Passed to `WireGpu::from_run` / `from_batch`.
@@ -610,6 +612,12 @@ impl Pipeline {
             read_mask: 0xff,
             write_mask: 0x00,
         };
+        let point_gpu = point_gpu::PointGpu::new(
+            device,
+            format,
+            &frame_bgl,
+            content_stencil.clone(),
+        );
 
         let background_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("background.shader"),
@@ -1905,6 +1913,7 @@ impl Pipeline {
             clip_mask_pipeline,
             wire_black_pipeline,
             wire_xray_pipeline,
+            point_gpu,
             wire_const_bgl,
             wipeout_pipeline,
             hatch_gpu,
@@ -3818,6 +3827,40 @@ impl Pipeline {
                     );
                 }
             }
+        }
+
+        // Native LiDAR points share the scene depth buffer so points behind
+        // solids are hidden and CAD wires drawn next remain crisp on top.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("point_cloud.render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: msaa,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
+            self.point_gpu
+                .draw(&mut pass, &self.uniform_bind_group, stencil_ref);
         }
 
         // ── Pass 5: wires ─────────────────────────────────────────────────

@@ -142,6 +142,55 @@ fn is_named_key(key: &str) -> bool {
 }
 
 impl OpenCADStudio {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn import_function_key_mnu(&mut self, path: std::path::PathBuf) {
+        let result = std::fs::read_to_string(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| super::mnu::parse(&text));
+        match result {
+            Ok(import) => {
+                let count = import.bindings.len();
+                for (key, action) in import.bindings {
+                    self.shortcut_bindings.insert(key, action);
+                }
+                let mut rows: Vec<_> = self
+                    .shortcut_bindings
+                    .iter()
+                    .map(|(key, action)| (key.clone(), action.clone()))
+                    .collect();
+                rows.sort_by(|a, b| a.0.cmp(&b.0));
+                self.shortcut_editor_rows = rows;
+                self.persist_settings_if_changed();
+                self.command_line.push_output(
+                    format!("MNUIMPORT: imported {count} function-key binding(s) from \"{}\".", path.display()).as_str(),
+                );
+                for warning in import.warnings {
+                    self.command_line
+                        .push_info(format!("MNUIMPORT: {warning}").as_str());
+                }
+            }
+            Err(error) => self
+                .command_line
+                .push_error(format!("MNUIMPORT: {error}").as_str()),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn export_function_key_mnu(&mut self, path: std::path::PathBuf) {
+        let bindings = self
+            .shortcut_bindings
+            .iter()
+            .map(|(key, action)| (key.clone(), action.clone()));
+        match std::fs::write(&path, super::mnu::write(bindings)) {
+            Ok(()) => self.command_line.push_output(
+                format!("MNUEXPORT: wrote function-key bindings to \"{}\".", path.display()).as_str(),
+            ),
+            Err(error) => self
+                .command_line
+                .push_error(format!("MNUEXPORT: {error}").as_str()),
+        }
+    }
+
     pub(super) fn apply_shortcut_editor_rows(&mut self) {
         let bindings: FxHashMap<String, String> = self
             .shortcut_editor_rows

@@ -945,6 +945,12 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudIndexed(tab_id, path, result) => {
+                self.finish_point_cloud_index(tab_id, path, result);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudExport => {
                 let Some(cloud) = self.tabs[self.active_tab].point_cloud.as_ref() else {
                     self.command_line
@@ -980,6 +986,96 @@ impl OpenCADStudio {
                 self.finish_point_cloud_export(tab_id, path, result);
                 Task::none()
             }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPtcImport => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Import Point Class Table")
+                        .add_filter("Point Class Tables", &["ptc", "PTC"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PointCloudPtcImportPathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPtcImportPathPicked(Some(path)) => {
+                self.import_point_cloud_ptc(self.active_tab, path);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPtcImportPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPtcExport => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Export Point Class Table")
+                        .set_file_name("point-classes.ptc")
+                        .add_filter("Point Class Tables", &["ptc", "PTC"])
+                        .save_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PointCloudPtcExportPathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPtcExportPathPicked(Some(path)) => {
+                self.export_point_cloud_ptc(self.active_tab, path);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPtcExportPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::MnuImport => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Import Function-Key Menu")
+                        .add_filter("MicroStation Function-Key Menus", &["mnu", "MNU"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::MnuImportPathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::MnuImportPathPicked(Some(path)) => {
+                self.import_function_key_mnu(path);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::MnuImportPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::MnuExport => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Export Function-Key Menu")
+                        .set_file_name("function-keys.mnu")
+                        .add_filter("MicroStation Function-Key Menus", &["mnu", "MNU"])
+                        .save_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::MnuExportPathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::MnuExportPathPicked(Some(path)) => {
+                self.export_function_key_mnu(path);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::MnuExportPathPicked(None) => Task::none(),
 
             Message::XAttachPick => Task::perform(
                 async {
