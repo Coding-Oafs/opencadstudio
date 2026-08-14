@@ -1147,6 +1147,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 // CANNOSCALEVALUE (paper/drawing factor). Convert its inverse into
                 // drawing units as well: metric annotation sizes are paper millimetres
                 // and imperial annotation sizes are paper inches.
+                // Current model-space annotation scale comes from the drawing's
+                // CANNOSCALEVALUE (paper/drawing factor). Convert its paper unit into
+                // the drawing's INSUNITS as well, so e.g. a metre drawing uses
+                // 0.001 model units for 1 mm of paper at 1:1.
                 let cannoscale_value = self.tabs[i].scene.document.header.annotation_scale_value;
                 let unit_factor = self.tabs[i].scene.annotation_scale_unit_factor();
 
