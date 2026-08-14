@@ -195,11 +195,6 @@ impl DockState {
         stack.insert(index, id);
         true
     }
-
-    /// Number of panels currently docked on `side`.
-    pub fn len(&self, side: DockSide) -> usize {
-        self.stack(side).len()
-    }
 }
 
 /// Insertion index (0..=total) for dropping a panel whose pointer is at
@@ -318,12 +313,5 @@ mod tests {
         // of the last slot lands after the last (== total, append).
         assert_eq!(drop_index(10.0, 2, 900.0), 0);
         assert_eq!(drop_index(890.0, 2, 900.0), 2);
-    }
-
-    #[test]
-    fn len_reports_stack_size() {
-        let state = DockState::default();
-        assert_eq!(state.len(DockSide::Left), 1);
-        assert_eq!(state.len(DockSide::Right), 1);
     }
 }

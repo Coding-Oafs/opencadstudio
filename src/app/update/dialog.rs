@@ -644,7 +644,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     };
                     let index = crate::ui::dock::drop_index(
                         point.y,
-                        std::cmp::max(self.dock.len(side), 1),
+                        std::cmp::max(self.dock_visible_len(side), 1),
                         avail,
                     );
                     self.dock_drag_target = Some((side, index));
@@ -679,6 +679,33 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 iced::Task::none()
             }
         }
+    }
+
+    /// Whether `id` is currently rendered (not closed, not on the start screen /
+    /// clean-screen viewport). Mirrors the visibility filter the edge column
+    /// renderer applies before building each side's stack.
+    pub(crate) fn dock_panel_visible(&self, id: crate::ui::dock::PanelId) -> bool {
+        use crate::ui::dock::PanelId;
+        if self.tabs[self.active_tab].is_start || self.clean_screen {
+            return false;
+        }
+        match id {
+            PanelId::Properties => self.show_properties,
+            PanelId::BlockPalette => self.show_block_palette,
+        }
+    }
+
+    /// Number of panels currently rendered on `side`. Closed panels keep their
+    /// stack slot but take no vertical space, so drag preview geometry must
+    /// size slots against only the panels that are actually visible.
+    pub(crate) fn dock_visible_len(&self, side: crate::app::config::DockSide) -> usize {
+        let ids: &[crate::ui::dock::PanelId] = match side {
+            crate::app::config::DockSide::Left => &self.dock.left,
+            crate::app::config::DockSide::Right => &self.dock.right,
+        };
+        ids.iter()
+            .filter(|id| self.dock_panel_visible(**id))
+            .count()
     }
 
     /// Start placing `name` through the INSERT command, skipping the name prompt.
@@ -1118,6 +1145,89 @@ mod tests {
         assert_eq!(
             app.dock.location(id),
             Some((crate::app::config::DockSide::Left, 0))
+        );
+    }
+
+    #[test]
+    fn dock_visible_len_counts_only_rendered_panels() {
+        let mut app = fresh();
+        app.dock = Default::default();
+        app.dock.left = vec![
+            crate::ui::dock::PanelId::BlockPalette,
+            crate::ui::dock::PanelId::Properties,
+        ];
+        // Left: block palette hidden, properties shown -> 1 visible panel.
+        app.show_block_palette = false;
+        app.show_properties = true;
+        assert_eq!(
+            app.dock_visible_len(crate::app::config::DockSide::Left),
+            1
+        );
+        // Reveal the block palette -> both count.
+        app.show_block_palette = true;
+        assert_eq!(
+            app.dock_visible_len(crate::app::config::DockSide::Left),
+            2
+        );
+        // A hidden (closed) panel counts for nothing even when stacked.
+        app.show_block_palette = false;
+        assert_eq!(
+            app.dock_visible_len(crate::app::config::DockSide::Left),
+            1
+        );
+    }
+
+    #[test]
+    fn dock_drag_target_ignores_hidden_panels_on_the_side() {
+        // Reproduce the persisted layout that exposed a half-height ghost: two
+        // panels live in the left stack but the block palette is hidden
+        // (show_block_palette=false), so only Properties renders. Drag geometry
+        // must count only panels that are actually visible.
+        let mut app = fresh();
+        app.dock = Default::default();
+        app.dock.left = vec![
+            crate::ui::dock::PanelId::BlockPalette,
+            crate::ui::dock::PanelId::Properties,
+        ];
+        app.show_block_palette = false;
+        app.show_properties = true;
+        let i = app.active_tab;
+        app.tabs[i].scene.selection.borrow_mut().vp_size = (1600.0, 900.0);
+        app.win_size = (1600.0, 900.0).into();
+        let id = crate::ui::dock::PanelId::Properties;
+        let _ = app.on_dock(crate::ui::dock::DockMsg::DockGrab(id));
+        // Pointer near the bottom of the left edge: one visible panel means a
+        // single slot, so every y maps to index 0 (no top/bottom split).
+        let _ =
+            app.on_dock(crate::ui::dock::DockMsg::DragMove(iced::Point::new(100.0, 850.0)));
+        assert_eq!(
+            app.dock_drag_target,
+            Some((crate::app::config::DockSide::Left, 0))
+        );
+    }
+
+    #[test]
+    fn dock_drag_target_counts_all_visible_panels() {
+        let mut app = fresh();
+        app.dock = Default::default();
+        app.dock.left = vec![
+            crate::ui::dock::PanelId::BlockPalette,
+            crate::ui::dock::PanelId::Properties,
+        ];
+        // Both panels shown: two real slots on the left edge. A pointer near
+        // the bottom maps to the append slot (index == 2).
+        app.show_block_palette = true;
+        app.show_properties = true;
+        let i = app.active_tab;
+        app.tabs[i].scene.selection.borrow_mut().vp_size = (1600.0, 900.0);
+        app.win_size = (1600.0, 900.0).into();
+        let id = crate::ui::dock::PanelId::Properties;
+        let _ = app.on_dock(crate::ui::dock::DockMsg::DockGrab(id));
+        let _ =
+            app.on_dock(crate::ui::dock::DockMsg::DragMove(iced::Point::new(100.0, 850.0)));
+        assert_eq!(
+            app.dock_drag_target,
+            Some((crate::app::config::DockSide::Left, 2))
         );
     }
 

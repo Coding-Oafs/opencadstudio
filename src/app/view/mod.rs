@@ -1528,13 +1528,17 @@ impl OpenCADStudio {
                     .unwrap_or(crate::app::config::DockSide::Right),
             );
             // Dropping onto an edge joins that edge's stack, whose column is as
-            // wide as its widest panel (the dragged panel included).
+            // wide as its widest currently-shown panel (the dragged panel
+            // included). Hidden (closed) panels don't render, so they can't
+            // widen the column being previewed.
             let preview_width = {
                 let mut widths: Vec<f32> = match side {
-                    crate::app::config::DockSide::Left => self.dock.left.clone(),
-                    crate::app::config::DockSide::Right => self.dock.right.clone(),
+                    crate::app::config::DockSide::Left => &self.dock.left,
+                    crate::app::config::DockSide::Right => &self.dock.right,
                 }
-                .into_iter()
+                .iter()
+                .copied()
+                .filter(|&pid| self.dock_panel_visible(pid))
                 .map(|pid| self.dock.width(pid, self.win_size.0))
                 .collect();
                 widths.push(self.dock.width(id, self.win_size.0));
@@ -1555,13 +1559,17 @@ impl OpenCADStudio {
                     }
                 });
             // The ghost is the dragged panel at its real size: its own saved
-            // width and its 1/N share of the edge (N = stack size after the
-            // drop), with a header naming which panel is being moved.
+            // width and its 1/N share of the edge (N = number of panels shown
+            // on the edge after the drop), with a header naming which panel is
+            // being moved. Only visibly-docked panels share the column height:
+            // a hidden (closed) panel keeps its stack slot but no screen space,
+            // so it must not split the preview.
             let was_here = self.dock.location(id).map(|(s, _)| s) == Some(side);
+            let visible = self.dock_visible_len(side);
             let final_count = if was_here {
-                std::cmp::max(self.dock.len(side), 1)
+                std::cmp::max(visible, 1)
             } else {
-                self.dock.len(side) + 1
+                visible + 1
             };
             let edge_h = tab.scene.selection.borrow().vp_size.1;
             let slot_h = edge_h / final_count as f32;
