@@ -15,6 +15,8 @@ mod layers;
 mod model_ops;
 mod mtext_editor;
 #[cfg(not(target_arch = "wasm32"))]
+mod point_cloud;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod plugin_host;
 mod properties;
 mod recent;
@@ -2987,6 +2989,27 @@ pub enum Message {
         u64,
         std::path::PathBuf,
         Result<crate::scene::model::mesh_model::MeshModel, String>,
+    ),
+    // ── LAS/LAZ point clouds (native) ────────────────────────────────────
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudAttach,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudLoaded(
+        u64,
+        std::path::PathBuf,
+        Result<ocs_pointcloud::PointSample, String>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudExport,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudExportPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudExported(
+        u64,
+        std::path::PathBuf,
+        Result<ocs_pointcloud::ExportStats, String>,
     ),
 }
 

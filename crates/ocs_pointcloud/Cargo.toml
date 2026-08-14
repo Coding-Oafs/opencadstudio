@@ -1,0 +1,10 @@
+[package]
+name = "ocs_pointcloud"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Bounded LAS/LAZ I/O and classification editing for Open CAD Studio"
+
+[dependencies]
+las = { version = "0.11.0", features = ["laz-parallel"] }
+serde = { version = "1", features = ["derive"] }

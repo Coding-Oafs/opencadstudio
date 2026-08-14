@@ -3346,12 +3346,24 @@ impl Scene {
         } else {
             Arc::new(Vec::new())
         };
-        let preview_wires = if !show_live_overlay
-            || (self.interim_wire.is_none() && self.preview_wires.is_empty())
-        {
-            Arc::new(Vec::new())
+        // Point-cloud samples are model-space references: show them in Model
+        // and inside paper-space content viewports, never directly on a sheet.
+        let point_cloud_wires = if self.current_layout == "Model" || !inst.paper_sheet {
+            Arc::clone(&self.point_cloud_wires)
         } else {
-            let mut v: Vec<WireModel> = Vec::with_capacity(self.preview_wires.len() + 1);
+            Arc::new(Vec::new())
+        };
+        let has_transient_overlay = show_live_overlay
+            && (self.interim_wire.is_some() || !self.preview_wires.is_empty());
+        let preview_wires = if !has_transient_overlay {
+            // Normal navigation is the important path: share the cloud Arc so
+            // a large display sample is not deep-cloned on every frame.
+            point_cloud_wires
+        } else {
+            let mut v: Vec<WireModel> = Vec::with_capacity(
+                point_cloud_wires.len() + self.preview_wires.len() + 1,
+            );
+            v.extend(point_cloud_wires.iter().cloned());
             if let Some(iw) = &self.interim_wire {
                 v.push(iw.clone());
             }

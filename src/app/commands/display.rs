@@ -1207,8 +1207,68 @@ impl OpenCADStudio {
                 }
             }
 
-            "POINTCLOUDATTACH" | "RECAP" | "SYNCPVIEWPORTS" | "UNDERLAYLAYERS"
-            | "UOSNAP" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDATTACH" | "RECAP" => {
+                return Some(Task::done(Message::PointCloudAttach));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDINFO" => {
+                self.point_cloud_info(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDCLASSIFY" => {
+                use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDCLASSIFY",
+                    "POINTCLOUDCLASSIFY  Enter class and source indices (example: 2 10-25,40):",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDCLASSIFY ") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDCLASSIFY").trim();
+                let mut fields = arguments.splitn(2, char::is_whitespace);
+                let classification = fields.next().and_then(|value| value.parse::<u8>().ok());
+                let source_indices = fields.next().unwrap_or("").trim();
+                match classification {
+                    Some(classification) if !source_indices.is_empty() => {
+                        self.reclassify_point_cloud(i, classification, source_indices);
+                    }
+                    _ => self.command_line.push_error(
+                        "Usage: POINTCLOUDCLASSIFY <0-255 class> <indices/ranges>; example: POINTCLOUDCLASSIFY 2 10-25,40",
+                    ),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDUNDO" => {
+                self.undo_point_cloud_edit(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDDETACH" => {
+                self.detach_point_cloud(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDEXPORT" => {
+                return Some(Task::done(Message::PointCloudExport));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDEXPORT ") => {
+                let path = cmd.trim_start_matches("POINTCLOUDEXPORT").trim();
+                if path.is_empty() {
+                    return Some(Task::done(Message::PointCloudExport));
+                }
+                return Some(self.start_point_cloud_export(std::path::PathBuf::from(path)));
+            }
+
+            "SYNCPVIEWPORTS" | "UNDERLAYLAYERS" | "UOSNAP" => {
                 self.command_line
                     .push_info(crate::tf!("{cmd}: not yet implemented.").as_ref());
             }

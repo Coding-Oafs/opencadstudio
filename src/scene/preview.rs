@@ -16,6 +16,15 @@ impl Scene {
         self.preview_wires = wires;
     }
 
+    /// Replace the persistent, session-only point-cloud display sample.
+    ///
+    /// The cloud rides the existing high-precision wire overlay path for the
+    /// first viewer implementation. Unlike a command preview, it survives
+    /// Escape and ordinary drawing commands.
+    pub fn set_point_cloud_wires(&mut self, wires: Vec<WireModel>) {
+        self.point_cloud_wires = std::sync::Arc::new(wires);
+    }
+
     /// Publish all edited hatches as one live fill overlay.
     pub fn set_preview_hatches(&mut self, handles: &[Handle]) {
         let mut models = Vec::new();

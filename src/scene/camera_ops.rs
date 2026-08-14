@@ -1491,5 +1491,50 @@ impl Scene {
         self.camera_generation += 1;
     }
 
+    /// Fit the active Model view to externally supplied world-space bounds.
+    /// Used by session references such as LAS/LAZ clouds which intentionally
+    /// do not participate in the CAD document's entity extents.
+    pub fn fit_external_bounds(&mut self, min: [f64; 3], max: [f64; 3]) {
+        let finite = min
+            .iter()
+            .chain(max.iter())
+            .all(|coordinate| coordinate.is_finite());
+        if !finite {
+            return;
+        }
+        let mut min = glam::Vec3::new(min[0] as f32, min[1] as f32, min[2] as f32);
+        let mut max = glam::Vec3::new(max[0] as f32, max[1] as f32, max[2] as f32);
+        if min.x > max.x || min.y > max.y || min.z > max.z {
+            return;
+        }
+        if min == max {
+            min -= glam::Vec3::splat(1.0);
+            max += glam::Vec3::splat(1.0);
+        }
+
+        let fallback = self.last_render_aspect.get().max(0.01);
+        self.camera.borrow_mut().fit_to_bounds(min, max, fallback);
+        if self.current_layout == "Model" {
+            let (canvas_w, canvas_h) = self.selection.borrow().vp_size;
+            let active = self.active_model_tile.get();
+            let live = self.camera.borrow().clone();
+            for (index, tile) in self.model_tiles.borrow_mut().iter_mut().enumerate() {
+                if index == active {
+                    tile.camera = live.clone();
+                } else {
+                    let width = tile.rect.width * canvas_w;
+                    let height = tile.rect.height * canvas_h;
+                    let aspect = if width.is_finite() && height.is_finite() && height > 0.0 {
+                        width / height
+                    } else {
+                        fallback
+                    };
+                    tile.camera.fit_to_bounds(min, max, aspect.max(0.01));
+                }
+            }
+        }
+        self.camera_generation += 1;
+    }
+
     pub fn update(&mut self, _dt: Duration) {}
 }

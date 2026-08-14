@@ -918,6 +918,69 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudAttach => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Attach LAS/LAZ Point Cloud")
+                        .add_filter("LAS/LAZ Point Clouds", &["las", "laz", "LAS", "LAZ"])
+                        .add_filter("LAS Files", &["las", "LAS"])
+                        .add_filter("LAZ Files", &["laz", "LAZ"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PointCloudPathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPathPicked(Some(path)) => self.start_point_cloud_load(path),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudLoaded(tab_id, path, result) => {
+                self.install_point_cloud(tab_id, path, result)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExport => {
+                let Some(cloud) = self.tabs[self.active_tab].point_cloud.as_ref() else {
+                    self.command_line
+                        .push_error("POINTCLOUDEXPORT: attach a LAS/LAZ cloud first.");
+                    return Task::none();
+                };
+                let file_name = cloud.suggested_export_name();
+                Task::perform(
+                    async move {
+                        crate::sys::file_dialog()
+                            .set_title("Export Classified Point Cloud")
+                            .set_file_name(file_name)
+                            .add_filter("LAZ Point Cloud", &["laz", "LAZ"])
+                            .add_filter("LAS Point Cloud", &["las", "LAS"])
+                            .save_file()
+                            .await
+                            .map(|handle| crate::sys::handle_path(&handle))
+                    },
+                    Message::PointCloudExportPathPicked,
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExportPathPicked(Some(path)) => {
+                self.start_point_cloud_export(path)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExportPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExported(tab_id, path, result) => {
+                self.finish_point_cloud_export(tab_id, path, result);
+                Task::none()
+            }
+
             Message::XAttachPick => Task::perform(
                 async {
                     let handle = crate::sys::file_dialog()
