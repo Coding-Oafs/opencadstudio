@@ -718,7 +718,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn install_native_edit_guard(
+    pub(in crate::app) fn install_native_edit_guard(
         &mut self,
         i: usize,
         path: &std::path::Path,

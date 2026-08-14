@@ -11,7 +11,7 @@
 use acadrust::entities::{Dimension, DimensionLinear, Text};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
-use OpenCADStudio::io::pdf_export::export_pdf;
+use OpenCADStudio::io::pdf_export::{export_pdf, PdfPlotOptions};
 use OpenCADStudio::scene::Scene;
 
 #[test]
@@ -69,6 +69,7 @@ fn text_and_dim_reach_pdf_export() {
         None,
         &p_text,
         None,
+        PdfPlotOptions::default(),
     )
     .expect("export with text");
     let with_text = std::fs::read(&p_text).expect("read pdf");
@@ -96,6 +97,7 @@ fn text_and_dim_reach_pdf_export() {
         None,
         &p_bare,
         None,
+        PdfPlotOptions::default(),
     )
     .expect("export without text");
     let no_text = std::fs::read(&p_bare).expect("read pdf");

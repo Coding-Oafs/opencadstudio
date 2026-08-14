@@ -212,9 +212,30 @@ impl OpenCADStudio {
                 let Some(path) = req["path"].as_str() else {
                     return err("open: missing \"path\"");
                 };
+                let i = self.active_tab;
+                // A synchronous automation save installs the same edit lease as
+                // the GUI. Release the current tab's lease before re-reading a
+                // path (including the file we just saved), then install a fresh
+                // guard for whichever drawing remains active.
+                #[cfg(not(target_arch = "wasm32"))]
+                let previous_path = self.tabs[i].current_path.clone();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.tabs[i].edit_lease = None;
+                    self.tabs[i].edit_lock_conflict = false;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let loaded_fingerprint =
+                    crate::io::edit_lock::FileFingerprint::capture(std::path::Path::new(path)).ok();
                 let bytes = match std::fs::read(path) {
                     Ok(b) => b,
-                    Err(e) => return err(format!("open: {e}")),
+                    Err(e) => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(previous_path) = previous_path.as_deref() {
+                            self.install_native_edit_guard(i, previous_path, None);
+                        }
+                        return err(format!("open: {e}"));
+                    }
                 };
                 let name = PathBuf::from(path)
                     .file_name()
@@ -222,7 +243,6 @@ impl OpenCADStudio {
                     .unwrap_or_else(|| path.to_string());
                 match crate::io::load_bytes(&name, bytes) {
                     Ok(doc) => {
-                        let i = self.active_tab;
                         self.tabs[i].scene.document = doc;
                         crate::app::style_ops::ensure_standard_styles(
                             &mut self.tabs[i].scene.document,
@@ -230,10 +250,22 @@ impl OpenCADStudio {
                         self.tabs[i].adopt_active_ucs_from_header();
                         self.tabs[i].current_path = Some(PathBuf::from(path));
                         self.tabs[i].is_start = false;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        self.install_native_edit_guard(
+                            i,
+                            std::path::Path::new(path),
+                            loaded_fingerprint,
+                        );
                         self.tabs[i].scene.bump_geometry();
                         self.entity_summary()
                     }
-                    Err(e) => err(format!("open: {e}")),
+                    Err(e) => {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(previous_path) = previous_path.as_deref() {
+                            self.install_native_edit_guard(i, previous_path, None);
+                        }
+                        err(format!("open: {e}"))
+                    }
                 }
             }
             "run" => {
@@ -550,9 +582,15 @@ mod tests {
             })
             .expect("CIRCLE should create one entity");
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(circle.center.x, 2.0));
-        assert!(close(circle.center.y, 0.0));
-        assert!(close(circle.center.z, 3.0));
+        // CIRCLE centers are stored in the entity's OCS, so compare the
+        // corresponding world point rather than its raw DXF fields.
+        let center = crate::scene::view::transform::ocs_point_to_wcs(
+            (circle.center.x, circle.center.y, circle.center.z),
+            (circle.normal.x, circle.normal.y, circle.normal.z),
+        );
+        assert!(close(center.0, 2.0));
+        assert!(close(center.1, 0.0));
+        assert!(close(center.2, 3.0));
         assert!(close(circle.normal.x, 0.0));
         assert!(close(circle.normal.y, -1.0));
         assert!(close(circle.normal.z, 0.0));
@@ -976,17 +1014,21 @@ mod tests {
     #[test]
     fn save_then_open_round_trips() {
         let mut app = OpenCADStudio::new_for_test();
-        let path = std::env::temp_dir().join("ocs_automation_test.dxf");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ocs_automation_test_{}_{}.dxf",
+            std::process::id(),
+            unique
+        ));
         let p = path.to_string_lossy().replace('\\', "\\\\");
         app.automation_op(r#"{"op":"new"}"#);
-        assert_eq!(
-            app.automation_op(&format!(r#"{{"op":"save","path":"{p}"}}"#))["ok"],
-            true
-        );
-        assert_eq!(
-            app.automation_op(&format!(r#"{{"op":"open","path":"{p}"}}"#))["ok"],
-            true
-        );
+        let saved = app.automation_op(&format!(r#"{{"op":"save","path":"{p}"}}"#));
+        assert_eq!(saved["ok"], true, "save response: {saved}");
+        let opened = app.automation_op(&format!(r#"{{"op":"open","path":"{p}"}}"#));
+        assert_eq!(opened["ok"], true, "open response: {opened}");
         let _ = std::fs::remove_file(&path);
     }
 }

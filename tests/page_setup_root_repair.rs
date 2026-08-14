@@ -121,8 +121,25 @@ fn ctab_is_created_against_a_repaired_root() {
     else {
         panic!("root must be a dictionary");
     };
+    let variable_dictionary = root
+        .entries
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("AcDbVariableDictionary"))
+        .map(|(_, handle)| *handle)
+        .expect("the repaired root NOD must register the variable dictionary");
+    let ObjectType::Dictionary(variables) = scene
+        .document
+        .objects
+        .get(&variable_dictionary)
+        .expect("the variable dictionary must resolve")
+    else {
+        panic!("the variable dictionary handle must name a dictionary");
+    };
     assert!(
-        root.entries.iter().any(|(k, _)| k == "CTAB"),
-        "CTAB must be registered in the repaired root NOD"
+        variables
+            .entries
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("CTAB")),
+        "CTAB must be registered in the repaired root's variable dictionary"
     );
 }
