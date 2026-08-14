@@ -486,6 +486,7 @@ impl OpenCADStudio {
             // BLOCKPALETTE / BLOCKSPALETTE — toggle the docked Insert Block panel.
             "BLOCKPALETTE" | "BLOCKSPALETTE" => {
                 self.show_block_palette ^= true;
+                self.ribbon.set_block_palette(self.show_block_palette);
                 if self.show_block_palette {
                     // Always open expanded so the panel is immediately usable;
                     // the user can still collapse it via the pin (Auto) button.
