@@ -1,171 +1,203 @@
-# Open CAD Studio
+<p align="center">
+  <img src="assets/logo.svg" width="112" alt="Open CAD Studio logo">
+</p>
 
-[![Release](https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio)](https://github.com/HakanSeven12/OpenCADStudio/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total)](https://github.com/HakanSeven12/OpenCADStudio/releases)
-[![Stars](https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio)](https://github.com/HakanSeven12/OpenCADStudio/stargazers)
-[![License](https://img.shields.io/github/license/HakanSeven12/OpenCADStudio)](LICENSE)
+<h1 align="center">Open CAD Studio</h1>
 
-OCS is a CAD application for 2D drafting and 3D modeling, built with Rust. Reads and writes DWG and DXF files natively. Also has a web version now!
+<p align="center">
+  Open-source 2D drafting and 3D modeling for desktop and web, built with Rust.
+</p>
 
-## OCS Web try it in the browser: www.opencadstudio.com
+<p align="center">
+  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
+  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="Release downloads" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
+  <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
+  <a href="LICENSE"><img alt="GPL-3.0 license" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+</p>
 
-<img width="1920" height="940" alt="resim" src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" />
-<img width="1920" height="940" alt="resim2" src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" />
+<p align="center">
+  <a href="https://www.opencadstudio.com"><strong>Launch the web app</strong></a>
+  ·
+  <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><strong>Download the desktop app</strong></a>
+  ·
+  <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Join the discussion</strong></a>
+</p>
 
-## Features
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studio workspace" width="100%">
+</p>
 
-### File Formats
-- **DWG** read/write (R13 through R2018)
-- **DXF** read/write (R13 through R2018)
-- **STL** export (`STLOUT` / `EXPORTSTL`)
-- **STEP AP203** export (`STEPOUT`)
-- **OBJ** import (`IMPORTOBJ`)
-- **PDF** export (plot layouts to PDF)
-- **WBLOCK** — write selected entities or a block to an external file
-- **XREF** — attach, reload, and auto-resolve external references
+## Overview
 
-### 2D Drafting
-| Command | Description |
-|---------|-------------|
-| `LINE`, `PLINE`, `RECTANG`, `POLYGON` | Basic geometry |
-| `CIRCLE`, `ARC`, `ELLIPSE`, `SPLINE` | Curves |
-| `HATCH`, `HATCHEDIT` | Hatch fills with pattern, scale, angle editing |
-| `OFFSET`, `TRIM`, `EXTEND`, `FILLET` | Modify geometry (supports lines, arcs, ellipses, polylines, splines) |
-| `BREAK`, `STRETCH`, `LENGTHEN` | Shape editing |
-| `ARRAY`, `MIRROR`, `MOVE`, `COPY`, `ROTATE`, `SCALE` | Transformations |
-| `EXPLODE` | Explode blocks, dimensions, polylines, mlines |
-| `DDEDIT` | Double-click text editing |
-| `MASSPROP` | Area, perimeter, centroid of selected entities |
+Open CAD Studio is a cross-platform application for technical drawing, layout work, and solid modeling. It reads and writes DWG and DXF drawings natively, with a shared editing core across the desktop and browser versions.
 
-### 3D Modeling
-| Command | Description |
-|---------|-------------|
-| `BOX`, `SPHERE`, `CYLINDER` | Solid primitives |
-| `EXTRUDE`, `REVOLVE` | Profile-based solids |
-| `LOFT` | Ruled-surface loft through cross-sections |
-| `SWEEP` | Sweep a profile along a path |
-| `ARRAY3D` | 3D array |
-| ACIS tessellation | Renders `3DSOLID`, `REGION`, and `BODY` entities |
+The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/HakanSeven12/OpenCADStudio/issues).
 
-### Annotations & Dimensions
-- **Dimensions**: Linear, Aligned, Angular, Radial, Diameter, Ordinate — with full `DIMSTYLE` support (`DIMASZ`, `DIMSCALE`, `DIMEXO`, `DIMEXE`, and more)
-- **Text**: `MTEXT`, `TEXT`, `DTEXT` with font browser (`STYLE DIALOG`)
-- **Leaders**: `MLEADER` with straight and spline path types; `MLEADERSTYLE` manager
-- **Tolerances**: GD&T feature control frames
-- **Tables**: `TABLE` entity render; `TABLESTYLE` manager
-- **MLine**: `MLINE` entity with `MLSTYLE` manager and `EXPLODE` support
+## Highlights
 
-### Paper Space & Layouts
-- Multi-tab layout system with model space and unlimited paper space tabs
-- **Viewport projection**: Model content correctly projected into paper-space viewport rectangles
-- **Camera persistence**: View position and zoom saved per layout; restored on file open and tab switch
-- **Correct paper size**: Physical paper dimensions read from embedded PlotSettings (not drawing limits)
-- Inline MSPACE overlay — enter a viewport with double-click; edit model entities in place
-- `VPORTS` — preset viewport configurations (single, 2H, 2V, 4-way)
-- `LAYOUTMANAGER` / `LAYOUTPANEL` — GUI layout manager
-- `PLOTSTYLEPANEL` / `STYLESMANAGER` — plot style table editor (CTB/STB)
-- `PRINT` — send layout to system printer
+- **Native drawing workflow** — open, edit, recover, and save DWG and DXF files without a conversion service.
+- **Precise 2D drafting** — lines, polylines, curves, splines, hatches, object snaps, tracking, layers, blocks, and external references.
+- **Documentation tools** — text, dimensions, leaders, tolerances, tables, model space, paper space, viewports, and plot styles.
+- **Kernel-backed 3D modeling** — solid primitives, extrusion, revolution, sweep, loft, Boolean operations, and ACIS entity tessellation.
+- **GPU rendering** — accelerated 2D and 3D viewports through `wgpu`, with orthographic and perspective cameras.
+- **Extensible workflows** — native plugins, command scripts, headless conversion, and a line-based JSON automation API.
 
-### Blocks & References
-- `INSERT` with attribute prompting (`ATTREQ`)
-- `ATTEDIT` — edit block attribute values interactively
-- `REFEDIT` / `REFCLOSE` — in-place block reference editing
-- `XREF` — attach, reload, and resolve external DWG/DXF references
-- `DATAEXTRACTION` — export entity property data to CSV
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D model in Open CAD Studio" width="100%">
+</p>
 
-### Snapping & Precision
-- Object snaps: Endpoint, Midpoint, Center, Node, Quadrant, Intersection, Perpendicular, Tangent, Nearest, Insertion, and more
-- Ellipse arc endpoints, LWPolyline arc midpoints, Hatch boundary points
-- **Object Snap Tracking** (`OTRACK` / `F11`)
-- **Polar Tracking** with configurable angle increment
-- **Dynamic Input** overlay (`DYNMODE` / `F12`)
-- Grid snap with adaptive spacing
-- Command history navigation (↑ / ↓)
+## File workflows
 
-### Rendering
-- GPU-accelerated via WebGPU (wgpu)
-- 4× MSAA anti-aliasing
-- Orthographic and perspective camera
-- ViewCube with face/edge/corner snapping
-- **Wide polylines**: LWPolyline and Polyline2D filled strokes
-- **Raster images**: GPU-textured quad pipeline (`IMAGE` command)
-- **Wipeout**: Solid fill masking
-- **Complex linetypes**: Text and shape elements rendered in linetype patterns
-- White/black entity colors adapt to background luminance
-- Per-viewport background color (`BACKGROUND`)
-- Visual style selector (Wireframe, Shaded, etc.)
-- X-ray ghost pass for selected wires occluded by geometry
+| Format or workflow | Support |
+| --- | --- |
+| DWG | Read and write; versioned save targets from R14 through 2018 |
+| DXF | Read and write; versioned save targets from R14 through 2018 |
+| BAK / SV$ | Open drawing backups and autosave files |
+| OBJ | Import polygon meshes |
+| LandXML | Import `CgPoint` survey points |
+| STL | Export 3D mesh data |
+| STEP AP203 | Export 3D mesh data |
+| PDF | Plot layouts and selected geometry on desktop |
+| CSV | Extract entity property data |
+| CTB / STB | Load and edit plot style tables |
 
-### UI
-- Modular ribbon interface — Home, Insert, Annotate, View, Manage, Layout
-- Command line with autocomplete and history
-- Layer Manager with per-viewport freeze columns
-- Properties panel
-- `COLORSCHEME` — runtime theme switching
-- `SHORTCUTS` — keyboard shortcuts panel
-- `SPLINEDIT` — close, open, reverse spline control points
-- UCS icon with 3D foreshortening and axis labels
+## Desktop or web
 
-## Installation
+Use the [web app](https://www.opencadstudio.com) for immediate access with no installation. Drawings are selected through the browser and saved as local downloads.
 
-### Linux (AppImage)
+Use the desktop application for native file associations, file-manager thumbnails, system printing, PDF output, external plugins, command scripts, and headless automation. Release builds are available for Windows, Linux, and Apple Silicon macOS.
 
-Download `OpenCADStudio-*-linux-x86_64.AppImage` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest), then:
+## Install
+
+Download all current packages from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest).
+
+### Windows
+
+Choose one of these signed x86-64 packages:
+
+- `OpenCADStudio-*-windows-x86_64-installer.msi` — recommended installer with Start Menu shortcuts, DWG/DXF file associations, and drawing thumbnails.
+- `OpenCADStudio-*-windows-x86_64-portable.exe` — standalone application; no installation required.
+
+### Linux
+
+Download the x86-64 AppImage, make it executable, and run it:
 
 ```bash
 chmod +x OpenCADStudio-*-linux-x86_64.AppImage
 ./OpenCADStudio-*-linux-x86_64.AppImage
 ```
 
-No installation required — runs directly on any modern Linux distribution.
+### macOS
 
-### Windows
+The published macOS package supports Apple Silicon:
 
-Download `OpenCADStudio-*-windows-x86_64.exe` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest) and run it directly. Windows SmartScreen may show "Windows protected your PC" because the binary is not yet code-signed — click **More info → Run anyway**.
+1. Download `OpenCADStudio-*-macos-arm64.dmg`.
+2. Open the image and drag `OpenCADStudio.app` into **Applications**.
+3. If Gatekeeper blocks the first launch, approve the app from **System Settings → Privacy & Security**.
 
-### macOS (Apple Silicon)
+The application is ad-hoc signed but is not currently notarized by Apple.
 
-Apple Silicon (M-series) only; Intel macOS isn't built. The app is ad-hoc signed but **not Apple-notarised** (notarisation requires a paid Apple Developer ID), so macOS Gatekeeper guards the first launch. Pick whichever path is easiest:
+## Languages
 
-**Option A — Homebrew (recommended):**
+Open CAD Studio can follow the system language or use any of these 19 interface languages:
+
+> Arabic · Brazilian Portuguese · Czech · Dutch · English · Finnish · French · German · Hindi · Hungarian · Italian · Japanese · Korean · Polish · Russian · Simplified Chinese · Spanish · Traditional Chinese · Turkish
+
+Change the language from the application settings. The browser version also uses the browser's preferred locale when **System** is selected.
+
+## Build from source
+
+### Desktop
+
+Requirements:
+
+- Git
+- Current stable Rust toolchain
+- Platform graphics and font development libraries
+
+On Ubuntu or Debian, install the native dependencies with:
 
 ```bash
-brew install --cask --no-quarantine \
-  https://raw.githubusercontent.com/HakanSeven12/OpenCADStudio/main/packaging/homebrew/open-cad-studio.rb
+sudo apt update
+sudo apt install libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev \
+  libxrandr-dev libxkbcommon-dev libwayland-dev libfontconfig1-dev \
+  libfreetype6-dev
 ```
 
-`--no-quarantine` lets Gatekeeper skip the unsigned-app prompt. See [`packaging/homebrew/`](packaging/homebrew/) for publishing this as a `brew tap`.
-
-**Option B — manual .dmg:**
-
-Download `OpenCADStudio-*-macos-arm64.dmg` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest), open it, and drag `OpenCADStudio.app` to `/Applications`. If the first launch is blocked, clear the quarantine flag once:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/OpenCADStudio.app
-```
-
-On older macOS you can instead right-click `OpenCADStudio.app → Open` and confirm; on macOS Ventura and later, approve it via **System Settings → Privacy & Security → Open Anyway**.
-
-### Build from Source
-
-Requirements: Rust 1.75+
+Then build and run:
 
 ```bash
 git clone https://github.com/HakanSeven12/OpenCADStudio.git
 cd OpenCADStudio
 cargo build --release --bin OpenCADStudio
-./target/release/OpenCADStudio
 ```
-## Stars & Release Downloads
+
+The resulting binary is written to `target/release/OpenCADStudio` (`OpenCADStudio.exe` on Windows).
+
+### Web
+
+Install the WebAssembly target and build tools once:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install trunk wasm-bindgen-cli
+```
+
+Start the development server:
+
+```bash
+trunk serve
+```
+
+## Automation
+
+The desktop binary supports one-shot conversion and a persistent headless server:
+
+```bash
+OpenCADStudio --export input.dwg output.dxf
+OpenCADStudio --serve
+OpenCADStudio --serve --port 4242
+```
+
+The server exchanges one JSON object per line over standard input/output or a local TCP socket. See the [automation guide](docs/automation/README.md) and the included [Python client](docs/automation/ocs.py).
+
+## Plugins
+
+Desktop plugins run in separate processes and communicate with the host through the versioned plugin API. The browser build does not load native plugins.
+
+- [Plugin architecture](docs/plugin-architecture.md)
+- [Plugin template](docs/plugin-template/README.md)
+- [Plugin registry](plugins/README.md)
+
+## Project documentation
+
+- [Automation API](docs/automation/README.md)
+- [Plugin architecture](docs/plugin-architecture.md)
+- [Tessellation pipeline](docs/tessellation.md)
+- [Security policy](SECURITY.md)
+
+## Contributing
+
+Bug reports, focused pull requests, translations, documentation improvements, and plugin contributions are welcome.
+
+- Search existing [issues](https://github.com/HakanSeven12/OpenCADStudio/issues) before opening a new report.
+- Use [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) for questions and ideas.
+- Report vulnerabilities privately by following the [security policy](SECURITY.md).
+
+## Project growth
 
 <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://hakanseven12.github.io/OpenCADStudio/star-history-dark.svg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://hakanseven12.github.io/OpenCADStudio/star-history-light.svg" />
-   <img alt="OpenCADStudio GitHub stars and release downloads" src="https://hakanseven12.github.io/OpenCADStudio/star-history-light.svg" />
- </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://www.opencadstudio.com/star-history-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://www.opencadstudio.com/star-history-light.svg">
+    <img alt="Open CAD Studio stars and release downloads" src="https://www.opencadstudio.com/star-history-light.svg">
+  </picture>
 </a>
+
+## Support the project
+
+If Open CAD Studio helps your work, support continued development through [GitHub Sponsors](https://github.com/sponsors/HakanSeven12) or [Patreon](https://www.patreon.com/HakanSeven12).
 
 ## License
 
-GPL-3.0-only — see [LICENSE](LICENSE)
+Open CAD Studio is distributed under the [GNU General Public License v3.0](LICENSE).
