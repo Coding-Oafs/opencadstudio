@@ -302,10 +302,12 @@ impl V4Connection {
         }
         // Dropping the writer closes the socket. The reader thread will then
         // exit and clear `alive`. Joining can deadlock if a plugin child
-        // inherited the socket handle, so we only poll briefly.
-        let deadline = Instant::now() + Duration::from_secs(3);
+        // inherited the socket handle, so we only poll briefly. The host process
+        // will kill the runner afterwards, so a long wait only delays shutdown
+        // without improving cleanup.
+        let deadline = Instant::now() + Duration::from_millis(100);
         while self.shared.alive.load(Ordering::SeqCst) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(10));
         }
         let _ = self.reader_handle.lock().unwrap_or_else(|e| e.into_inner()).take();
     }

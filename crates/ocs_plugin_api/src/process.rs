@@ -722,6 +722,28 @@ impl PluginProcess {
         }
     }
 
+    /// Tear down the plugin process and block until the child exits or the
+    /// timeout elapses. Use this when the caller needs the DLL/files to be
+    /// released before continuing (e.g. uninstalling a plugin on Windows).
+    pub fn shutdown_and_wait(&self, timeout: Duration) -> Option<std::process::ExitStatus> {
+        if let Some(v4) = &self.v4 {
+            v4.shutdown();
+        }
+        let (stream, child) = self.take_resources();
+        drop(stream);
+        if let Some(mut child) = child {
+            let _ = child.kill();
+            let start = Instant::now();
+            while start.elapsed() < timeout {
+                if let Ok(Some(status)) = child.try_wait() {
+                    return Some(status);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        None
+    }
+
     /// Take the stream and child handles out of the process. After this the
     /// process is considered shut down and any further IPC will fail.
     fn take_resources(&self) -> (Option<Stream>, Option<Child>) {

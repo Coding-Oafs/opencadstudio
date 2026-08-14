@@ -5990,11 +5990,16 @@ impl OpenCADStudio {
             Message::PluginUninstall(id) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    // Stop the plugin runner first so Windows releases the DLL
+                    // and allows the package directory to be deleted.
+                    crate::plugin::external::remove_plugin(&id);
                     match crate::plugin::external::uninstall(&id) {
                         Ok(()) => {
                             self.marketplace_status =
-                                format!("Uninstalled '{id}'. Restart to unload it.");
+                                format!("Uninstalled '{id}'.");
                             self.plugin_load_errors.remove(&id);
+                            self.loaded_plugin_ids.remove(&id);
+                            self.rebuild_ribbon_modules();
                             self.external_plugins = crate::plugin::external::discover();
                         }
                         Err(e) => {

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::host::{HostApi, HostNotification, PluginNotification};
 use crate::process::{PluginError, PluginProcess};
@@ -204,6 +205,21 @@ impl PluginManager {
             out.extend(p.process.drain_io());
         }
         out
+    }
+
+    /// Shut down and remove the plugin with `id` from the manager.
+    ///
+    /// Returns `true` if a plugin with that id was found and removed. The
+    /// process is killed and waited on so its DLL is released; this is intended
+    /// for uninstall, where the caller needs the files to become deletable on
+    /// Windows.
+    pub fn remove(&mut self, id: &str) -> bool {
+        let Some(index) = self.plugins.iter().position(|p| p.process.id() == id) else {
+            return false;
+        };
+        let plugin = self.plugins.remove(index);
+        plugin.process.shutdown_and_wait(Duration::from_secs(5));
+        true
     }
 
     /// Begin asynchronous shutdown of every plugin process.

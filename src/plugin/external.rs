@@ -267,7 +267,7 @@ fn parse_string_array(s: &str) -> Vec<String> {
 pub(crate) use loader::{shutdown_plugins, with_manager};
 
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-pub(crate) use loader::{load_at_startup, loaded_ids};
+pub(crate) use loader::{load_at_startup, loaded_ids, remove_plugin};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(test, allow(dead_code))]
@@ -340,6 +340,19 @@ mod loader {
                 manager.shutdown_all();
             }
         });
+    }
+
+    /// Shut down the loaded plugin with `id` and remove it from the manager so
+    /// its files can be deleted on Windows. Returns true if the plugin was
+    /// loaded and has been removed.
+    pub fn remove_plugin(id: &str) -> bool {
+        MANAGER.with(|m| {
+            if let Some(manager) = m.borrow_mut().as_mut() {
+                manager.remove(id)
+            } else {
+                false
+            }
+        })
     }
 
     /// Path to the native library beside `plugin.toml`, if any.
