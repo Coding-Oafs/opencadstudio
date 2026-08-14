@@ -148,7 +148,9 @@ On older macOS you can instead right-click `OpenCADStudio.app → Open` and conf
 
 ### Build from Source
 
-Requirements: Rust 1.75+
+Requirements: the Rust toolchain pinned in `rust-toolchain.toml`. On Windows,
+use the MSVC toolchain plus Visual Studio Desktop development with C++ and a
+Windows 11 SDK.
 
 ```bash
 git clone https://github.com/HakanSeven12/OpenCADStudio.git
@@ -156,6 +158,9 @@ cd OpenCADStudio
 cargo build --release --bin OpenCADStudio
 ./target/release/OpenCADStudio
 ```
+
+For the native LAS/LAZ workflow, commands, safeguards, and current limitations,
+see [`docs/lidar-point-clouds.md`](docs/lidar-point-clouds.md).
 ## Star History
 
 <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers">
