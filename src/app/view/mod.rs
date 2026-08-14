@@ -1563,7 +1563,8 @@ impl OpenCADStudio {
             } else {
                 self.dock.len(side) + 1
             };
-            let slot_h = self.win_size.1 / final_count as f32;
+            let edge_h = tab.scene.selection.borrow().vp_size.1;
+            let slot_h = edge_h / final_count as f32;
             let index = self.dock_drag_target.map(|(_, i)| i).unwrap_or(0);
             let slot = index.min(final_count.saturating_sub(1));
             let ghost_top = slot as f32 * slot_h;

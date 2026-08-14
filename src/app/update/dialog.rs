@@ -636,6 +636,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             }
             DockMsg::DragMove(point) => {
                 if self.dock_dragging.is_some() {
+                    let avail = self.tabs[self.active_tab].scene.selection.borrow().vp_size.1;
                     let side = if point.x < self.win_size.0 * 0.5 {
                         DockSide::Left
                     } else {
@@ -644,7 +645,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     let index = crate::ui::dock::drop_index(
                         point.y,
                         std::cmp::max(self.dock.len(side), 1),
-                        self.win_size.1,
+                        avail,
                     );
                     self.dock_drag_target = Some((side, index));
                 } else if let Some(id) = self.dock_resizing {
