@@ -157,7 +157,7 @@ impl DockState {
     pub fn width(&self, id: PanelId, win_w: f32) -> f32 {
         self.settings(id)
             .width
-            .clamp(DOCK_MIN_W, DOCK_MAX_W.min(win_w * 0.45))
+            .clamp(DOCK_MIN_W, DOCK_MAX_W.min(win_w * 0.45).max(DOCK_MIN_W))
     }
 
     pub fn auto_collapse(&self, id: PanelId) -> bool {
@@ -286,6 +286,17 @@ mod tests {
         state.set_width(PanelId::BlockPalette, 500.0);
         // Window too narrow -> capped by the 0.45 fraction, not DOCK_MAX_W.
         assert_eq!(state.width(PanelId::BlockPalette, 800.0), DOCK_MAX_W.min(360.0));
+    }
+
+    #[test]
+    fn width_does_not_panic_when_window_minimized() {
+        let mut state = DockState::default();
+        state.set_width(PanelId::BlockPalette, 500.0);
+        // A minimized or not-yet-laid-out window reports width 0; the clamp
+        // must fall back to DOCK_MIN_W instead of panicking on min > max.
+        assert_eq!(state.width(PanelId::BlockPalette, 0.0), DOCK_MIN_W);
+        // Deleted right below the minimum dock width behaves the same way.
+        assert_eq!(state.width(PanelId::BlockPalette, 100.0), DOCK_MIN_W);
     }
 
     #[test]
