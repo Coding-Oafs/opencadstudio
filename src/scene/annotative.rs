@@ -670,7 +670,19 @@ pub fn effective_annotation_scale_for(
     if !context_annotative && (text_like || !style_annotative) {
         return 1.0;
     }
-
+    // Annotative TEXT/MTEXT store their paper text height as the base value.
+    // `fallback` is the absolute paper-to-model multiplier for the active
+    // annotation scale and already includes the drawing's INSUNITS conversion.
+    //
+    // Example for a metre drawing with 2 mm paper text:
+    //   1:1   -> 2 * 0.001 = 0.002 m
+    //   1:100 -> 2 * 0.100 = 0.200 m
+    //
+    // Using active/native here would only produce 1 / 100 and would lose the
+    // millimetre-to-metre conversion entirely.
+    if matches!(entity, EntityType::Text(_) | EntityType::MText(_)) {
+        return fallback;
+    }
     if matches!(
         entity,
         EntityType::Dimension(_)
