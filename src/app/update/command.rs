@@ -1103,9 +1103,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         .get(idx)
                         .map(|l| l.name.clone())
                         .unwrap_or_default();
+                    let case_only_rename = new_name.eq_ignore_ascii_case(&old_name);
                     if !new_name.is_empty()
                         && new_name != old_name
-                        && !self.tabs[i].scene.document.layers.contains(&new_name)
+                        && (case_only_rename
+                            || !self.tabs[i].scene.document.layers.contains(&new_name))
                     {
                         self.push_undo_snapshot(i, "LAYER RENAME");
                         // Keep the whole record (handle, color, linetype,
@@ -1113,21 +1115,28 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         // renamed layer still has a valid handle and survives a
                         // DWG save (issue #67).
                         if let Some(mut nl) =
-                            self.tabs[i].scene.document.layers.get(&old_name).cloned()
+                            self.tabs[i].scene.document.layers.remove(&old_name)
                         {
                             nl.name = new_name.clone();
                             if !nl.handle.is_valid() {
                                 nl.handle = self.tabs[i].scene.document.allocate_handle();
                             }
                             let _ = self.tabs[i].scene.document.layers.add(nl);
-                        }
-                        self.tabs[i].scene.document.layers.remove(&old_name);
-                        for e in self.tabs[i].scene.document.entities_mut() {
-                            if e.as_entity().layer() == old_name {
-                                e.as_entity_mut().set_layer(new_name.clone());
+                            for e in self.tabs[i].scene.document.entities_mut() {
+                                if e.as_entity().layer() == old_name {
+                                    e.as_entity_mut().set_layer(new_name.clone());
+                                }
                             }
+                            if self.tabs[i]
+                                .active_layer
+                                .eq_ignore_ascii_case(&old_name)
+                            {
+                                self.tabs[i].active_layer = new_name.clone();
+                                self.tabs[i].scene.document.header.current_layer_name =
+                                    new_name.clone();
+                            }
+                            self.tabs[i].dirty = true;
                         }
-                        self.tabs[i].dirty = true;
                     }
                     let doc_layers = self.tabs[i].scene.document.layers.clone();
                     let vp_info = self.tabs[i].scene.viewport_list();
@@ -2603,4 +2612,65 @@ fn block_attr_prompts(
         }
     }
     map
+}
+
+#[cfg(test)]
+mod layer_rename_tests {
+    use crate::app::OpenCADStudio;
+
+    fn app_with_editing_layer() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.on_layer_new();
+        app
+    }
+
+    #[test]
+    fn current_layer_rename_updates_active_layer() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let idx = app.tabs[i]
+            .layers
+            .editing
+            .expect("new layer is being edited");
+        app.tabs[i].layers.selected = Some(idx);
+        let _ = app.on_layer_set_current();
+
+        app.tabs[i].layers.editing = Some(idx);
+        app.tabs[i].layers.edit_buf = "Renamed".to_string();
+        let _ = app.on_layer_rename_commit();
+
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_name,
+            "Renamed"
+        );
+        assert_eq!(app.tabs[i].layers.current_layer, "Renamed");
+        assert_eq!(app.ribbon.active_layer, "Renamed");
+    }
+
+    #[test]
+    fn layer_rename_allows_case_only_change() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        assert!(app.tabs[i].layers.editing.is_some());
+        app.tabs[i].layers.edit_buf = "TEST".to_string();
+        let _ = app.on_layer_rename_commit();
+
+        let idx = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .position(|layer| layer.name == "TEST")
+            .expect("first rename succeeded");
+        app.tabs[i].layers.editing = Some(idx);
+        app.tabs[i].layers.edit_buf = "test".to_string();
+        let _ = app.on_layer_rename_commit();
+
+        assert!(app.tabs[i].scene.document.layers.get("test").is_some());
+        assert_eq!(
+            app.tabs[i].scene.document.layers.get("test").unwrap().name,
+            "test"
+        );
+    }
 }
