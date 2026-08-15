@@ -7,8 +7,14 @@ use iced::{Background, Border, Color, Element, Length, Theme};
 /// disabled, so the caret is never drawn and typing does nothing — but mouse
 /// click/drag selection and Ctrl+C / Ctrl+A still work. This gives a field the
 /// user can select and copy but never edit or place a blinker in.
-#[allow(dead_code)] // consumed by the read-only field unification tasks
-pub fn field<'a, Message: Clone + 'a>(value: &'a str, size: f32, width: Length) -> Element<'a, Message> {
+///
+/// The value is copied into the widget's owned buffer, so the returned
+/// element does not borrow `value`: callers may hand in a transient `String`.
+pub fn field<'a, Message: Clone + 'a>(
+    value: &str,
+    size: f32,
+    width: Length,
+) -> Element<'a, Message> {
     iced::widget::text_input("", value)
         .size(size)
         .style(read_only_style)
@@ -20,7 +26,6 @@ pub fn field<'a, Message: Clone + 'a>(value: &'a str, size: f32, width: Length) 
 /// Muted "disabled input box" look: the same bordered box geometry as the
 /// editable fields but with a quieter background and text so it reads as
 /// read-only. The selection highlight is kept so copy stays discoverable.
-#[allow(dead_code)] // used only via `field`, which the later tasks wire up
 fn read_only_style(theme: &Theme, _status: Status) -> text_input::Style {
     let palette = theme.palette();
     text_input::Style {

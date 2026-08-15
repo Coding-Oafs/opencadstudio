@@ -1718,13 +1718,8 @@ fn render_group_row(
         .height(Length::Fixed(ROW_H))
         .align_y(iced::Center);
 
-    // text_input copies the value, so the locally-built `joined` is fine here.
-    let value_field = text_input("", &joined)
-        .on_input(|_| Message::Noop)
-        .size(FONT_SZ)
-        .style(ro_input_style)
-        .padding([3, 6])
-        .width(Length::Fill);
+    // The field copies the value, so the locally-built `joined` is fine here.
+    let value_field = crate::ui::read_only::field(&joined, FONT_SZ, Length::Fill);
     let value_col = container(value_field)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
@@ -1758,12 +1753,7 @@ fn render_annotative_scale_row<'a>(
     label: &'a str,
     value: &'a str,
 ) -> Element<'a, Message> {
-    let field = text_input("", value)
-        .on_input(|_| Message::Noop)
-        .size(FONT_SZ)
-        .style(ro_input_style)
-        .padding([3, 6])
-        .width(Length::Fill);
+    let field = crate::ui::read_only::field(value, FONT_SZ, Length::Fill);
 
     let manage = button(text("...").size(FONT_SZ))
         .on_press(Message::AnnoObjectScaleOpen)
@@ -1782,17 +1772,11 @@ fn render_annotative_scale_row<'a>(
     prop_row_widget(label, controls.into())
 }
 fn render_ro_row<'a>(label: &'a str, value: &'a str) -> Element<'a, Message> {
-    // A read-only value is shown as a non-editable but selectable text field:
-    // the user can select the text (which carries the full, un-truncated
-    // value) and copy it with Ctrl+C. Keystrokes route to Noop, so the value
-    // can be selected/copied but never edited.
-    let field = text_input("", value)
-        .on_input(|_| Message::Noop)
-        .size(FONT_SZ)
-        .style(ro_input_style)
-        .padding([3, 6])
-        .width(Length::Fill);
-    prop_row_widget(label, field.into())
+    // A read-only value is shown as a non-editable but selectable field: no
+    // on_input means the caret never appears, but the text can be selected
+    // (carrying the full, un-truncated value) and copied with Ctrl+C.
+    let field = crate::ui::read_only::field(value, FONT_SZ, Length::Fill);
+    prop_row_widget(label, field)
 }
 
 /// Build a label | widget property row.
@@ -1969,25 +1953,6 @@ fn text_input_style(theme: &Theme, status: text_input::Status) -> text_input::St
 
 fn combo_input_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
     text_input_style(theme, status)
-}
-
-/// Style for a read-only-but-selectable value field: flat (no input box or
-/// focus highlight, so it reads as plain text, unlike the bordered editable
-/// fields) yet with a visible selection colour so Ctrl+C copy is discoverable.
-fn ro_input_style(theme: &Theme, _status: text_input::Status) -> text_input::Style {
-    let palette = theme.palette();
-    text_input::Style {
-        background: Background::Color(palette.background.base.color),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        icon: Color::TRANSPARENT,
-        placeholder: palette.background.base.text.scale_alpha(0.48),
-        value: palette.background.base.text,
-        selection: palette.primary.base.color.scale_alpha(0.5),
-    }
 }
 
 fn muted_text_style(theme: &Theme) -> iced::widget::text::Style {
