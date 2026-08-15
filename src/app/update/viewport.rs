@@ -489,37 +489,65 @@ impl OpenCADStudio {
             .zip(self.tabs[i].selected_grips.iter())
             .find(|(owner, grip)| *owner == handle && grip.id == grip_id)
             .and_then(|(_, grip)| grip.axis);
-        if !self.tabs[i].hot_grips.contains(&(handle, grip_id)) {
-            self.tabs[i].hot_grips.clear();
-            let mut edit = GripEdit::single(handle, grip_id, is_translate, world);
-            edit.axis = axis;
-            return edit;
-        }
 
-        let mut targets: Vec<GripTarget> = self.tabs[i]
-            .selected_grip_handles
-            .iter()
-            .copied()
-            .zip(self.tabs[i].selected_grips.iter())
-            .filter(|(owner, grip)| self.tabs[i].hot_grips.contains(&(*owner, grip.id)))
-            .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
-            .map(|(owner, grip)| GripTarget {
-                handle: owner,
-                grip_id: grip.id,
-                is_translate: grip.is_midpoint,
-                last_world: grip.world,
-            })
-            .collect();
+        let clicked_is_hot = self.tabs[i].hot_grips.contains(&(handle, grip_id));
+
+        let mut targets: Vec<GripTarget> = if clicked_is_hot {
+            // Explicit hot grips keep their existing multi-grip behaviour.
+            self.tabs[i]
+                .selected_grip_handles
+                .iter()
+                .copied()
+                .zip(self.tabs[i].selected_grips.iter())
+                .filter(|(owner, grip)| {
+                    self.tabs[i].hot_grips.contains(&(*owner, grip.id))
+                })
+                .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
+                .map(|(owner, grip)| GripTarget {
+                    handle: owner,
+                    grip_id: grip.id,
+                    is_translate: grip.is_midpoint,
+                    last_world: grip.world,
+                })
+                .collect()
+        } else {
+            // A normal click on coincident grips stretches all selected grips that
+            // share the same geometric point. Use a tiny world-space tolerance:
+            // visually-near grips caused by zoom must remain independent.
+            self.tabs[i].hot_grips.clear();
+
+            const COINCIDENT_GRIP_EPSILON: f64 = 1.0e-9;
+            let epsilon_sq = COINCIDENT_GRIP_EPSILON * COINCIDENT_GRIP_EPSILON;
+
+            self.tabs[i]
+                .selected_grip_handles
+                .iter()
+                .copied()
+                .zip(self.tabs[i].selected_grips.iter())
+                .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
+                .filter(|(_, grip)| {
+                    (grip.world - world).length_squared() <= epsilon_sq
+                })
+                .map(|(owner, grip)| GripTarget {
+                    handle: owner,
+                    grip_id: grip.id,
+                    is_translate: grip.is_midpoint,
+                    last_world: grip.world,
+                })
+                .collect()
+        };
 
         // A midpoint/centre grip translates its whole entity. If that entity also
-        // has hot point grips, applying both would move it twice; one translate
-        // target owns the entity in that case.
+        // has coincident point grips, applying both would move it twice; one
+        // translate target owns that entity in that case.
         let translate_handles: rustc_hash::FxHashSet<_> = targets
             .iter()
             .filter(|target| target.is_translate)
             .map(|target| target.handle)
             .collect();
+
         let mut used_translates = rustc_hash::FxHashSet::default();
+
         targets.retain(|target| {
             if translate_handles.contains(&target.handle) {
                 target.is_translate && used_translates.insert(target.handle)
@@ -527,12 +555,17 @@ impl OpenCADStudio {
                 true
             }
         });
+
         if targets.is_empty() {
             let mut edit = GripEdit::single(handle, grip_id, is_translate, world);
             edit.axis = axis;
             return edit;
         }
+
+        // An axis constraint belongs to a single grip. When several coincident
+        // grips participate, let the common cursor delta drive all of them.
         let axis = (targets.len() == 1).then_some(axis).flatten();
+
         GripEdit {
             handle,
             grip_id,
