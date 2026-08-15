@@ -220,7 +220,7 @@ fn input_row<'a>(
     read_only: bool,
 ) -> Element<'a, Message> {
     let control: Element<'a, Message> = if read_only {
-        container(text(value).size(11)).padding([5, 7]).width(180).into()
+        crate::ui::read_only::field(value, 11.0, Length::Fixed(180.0))
     } else {
         text_input(placeholder.as_ref(), value)
             .on_input(move |value| Message::TextStyleEdit { field, value })

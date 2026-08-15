@@ -3112,7 +3112,7 @@ impl Scene {
                 }
                 let context_scale = match self.document.objects.get(&scale) {
                     Some(acadrust::objects::ObjectType::Scale(value)) => {
-                        value.inverse_factor() as f32
+                        (value.inverse_factor() / self.annotation_scale_unit_factor()) as f32
                     }
                     _ => annotation_scale,
                 };

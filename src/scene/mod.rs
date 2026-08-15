@@ -33,6 +33,8 @@ mod project;
 mod scene_markers;
 mod selection;
 
+pub(crate) use boundary::{boundary_entities, ring_source_handles};
+
 // Parallel tessellation free functions live in `convert::tess` (alongside the
 // other tessellation code); re-exported here so this root and sibling topic
 // modules (each does `use super::*`) keep referencing them unqualified.
@@ -147,6 +149,7 @@ use acadrust::entities::{
     BoundaryEdge, BoundaryPath, Hatch as DxfHatch, PolylineEdge, Solid as DxfSolid,
 };
 use acadrust::objects::ObjectType;
+use acadrust::tables::normalize_name;
 use acadrust::types::Vector2;
 use acadrust::{CadDocument, EntityType, Handle, TableEntry};
 use glam;
@@ -872,10 +875,12 @@ pub fn prepare_open_geometry(
     scene.local_center = caches.local_center;
     scene.bg_color = model_bg;
     let cannoscale_value = scene.document.header.annotation_scale_value;
+    let unit_factor = scene.annotation_scale_unit_factor();
+
     scene.annotation_scale = if cannoscale_value > 1e-9 {
-        (1.0 / cannoscale_value) as f32
+        ((1.0 / cannoscale_value) / unit_factor) as f32
     } else {
-        1.0
+        (1.0 / unit_factor) as f32
     };
     scene.current_layout = "Model".to_string();
     let camera = scene.camera.borrow().clone();
@@ -1675,6 +1680,9 @@ pub struct Scene {
     /// `geometry_epoch`: a layer colour toggle can reuse the index, invalidate
     /// only its dependants, and avoid a whole-document scan on every toggle.
     dependency_index_cache: RefCell<Option<SceneDependencyIndex>>,
+    /// Boundary source → associative hatch handles. Source edits reuse this
+    /// index instead of scanning the document during every drag step.
+    associative_hatch_source_cache: RefCell<Option<HashMap<Handle, Vec<Handle>>>>,
     /// Tessellated block definitions in block-local coords, keyed by render
     /// background and block epoch. Model and Paper adapt black/white colours
     /// differently; retaining both variants prevents a full block rebuild on
@@ -1891,6 +1899,7 @@ impl Scene {
             model_extents_cache: RefCell::new(None),
             entity_block_map_cache: RefCell::new(None),
             dependency_index_cache: RefCell::new(None),
+            associative_hatch_source_cache: RefCell::new(None),
             block_defn_cache: RefCell::new(HashMap::default()),
             entity_index_cache: RefCell::new(None),
             last_render_aspect: std::cell::Cell::new(16.0 / 9.0),
@@ -2366,6 +2375,21 @@ impl Scene {
     }
 
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        if changes.iter().any(|(handle, kind)| {
+            matches!(kind, ChangeKind::Removed)
+                || self
+                    .document
+                    .get_entity(*handle)
+                    .is_some_and(|entity| matches!(entity, EntityType::Hatch(_)))
+        }) {
+            self.associative_hatch_source_cache.borrow_mut().take();
+        }
+        let mut changes = changes.to_vec();
+        for change in self.refresh_associative_hatches(&changes) {
+            if !changes.iter().any(|(handle, _)| *handle == change.0) {
+                changes.push(change);
+            }
+        }
         if !changes.is_empty() {
             // A Modified delta can change layer/style/block references as well
             // as coordinates. Rebuild the reverse dependency map lazily on its
@@ -2384,14 +2408,14 @@ impl Scene {
                 .is_some_and(|entity| matches!(entity, EntityType::Light(_)))
         });
         if cached_light_changed || live_light_changed {
-            for (handle, _) in changes {
+            for &(handle, _) in &changes {
                 let exists = self
                     .document
-                    .get_entity(*handle)
+                    .get_entity(handle)
                     .is_some_and(|entity| matches!(entity, EntityType::Light(_)));
                 crate::entities::object_data::update_light_entity(
                     &mut self.object_data_cache,
-                    *handle,
+                    handle,
                     exists,
                 );
             }
@@ -2402,7 +2426,7 @@ impl Scene {
         {
             let mut tm = self.tess_memo.borrow_mut();
             let mut rm = self.resident_tess_memo.borrow_mut();
-            for &(h, k) in changes {
+            for &(h, k) in &changes {
                 // A changed or removed entity must re-tessellate; a fresh Add has
                 // no memo entry yet, so there is nothing to drop.
                 if matches!(k, ChangeKind::Modified | ChangeKind::Removed) {
@@ -2411,7 +2435,7 @@ impl Scene {
                 }
             }
         }
-        self.push_geometry_delta(epoch, changes.to_vec(), false);
+        self.push_geometry_delta(epoch, changes, false);
     }
 
     /// True when any changed handle belongs to an ordinary block definition
@@ -3179,6 +3203,8 @@ impl Scene {
             world_origin: [0.0, 0.0],
             boundary: Arc::new(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]),
             boundary_wcs: None,
+            boundary_exterior: None,
+            boundary_sources: None,
             pattern: crate::scene::model::hatch_model::HatchPattern::Solid,
             name: "SOLID".to_string(),
             color: self.paper_bg_color,
@@ -3553,7 +3579,7 @@ impl Scene {
     /// The built-in scale factors are defined assuming model and paper use
     /// the same base unit. A drawing in metres therefore needs an extra
     /// factor of 1000 when its paper side is measured in millimetres.
-    fn annotation_scale_unit_factor(&self) -> f64 {
+    pub(crate) fn annotation_scale_unit_factor(&self) -> f64 {
         let paper_unit = if self.prefers_imperial_scales() == Some(true) {
             1 // Inches
         } else {
@@ -3836,14 +3862,25 @@ impl Scene {
 
     pub fn set_annotation_scale_named(&mut self, name: &str) -> Option<Handle> {
         let handle = self.scale_handle_ensuring(name)?;
-        let ObjectType::Scale(scale) = self.document.objects.get(&handle)? else {
-            return None;
+        let unit_factor = self.annotation_scale_unit_factor();
+
+        let (scale_name, scale_factor, multiplier) = {
+            let ObjectType::Scale(scale) = self.document.objects.get(&handle)? else {
+                return None;
+            };
+
+            (
+                scale.name.clone(),
+                scale.factor(),
+                scale.inverse_factor() / unit_factor,
+            )
         };
-        let multiplier = scale.inverse_factor();
+
         self.annotation_scale = multiplier as f32;
-        self.document.header.current_annotation_scale = scale.name.clone();
-        self.document.header.annotation_scale_value = scale.factor();
+        self.document.header.current_annotation_scale = scale_name;
+        self.document.header.annotation_scale_value = scale_factor;
         self.invalidate_annotation_dependencies();
+
         Some(handle)
     }
 
@@ -8555,7 +8592,7 @@ impl Scene {
             .document
             .block_records
             .iter()
-            .map(|record| (record.handle, record.name.to_ascii_uppercase()))
+            .map(|record| (record.handle, normalize_name(&record.name)))
             .collect();
         let membership: HashMap<Handle, Handle> = self
             .document
@@ -8582,7 +8619,7 @@ impl Scene {
             let EntityType::Insert(insert) = entity else {
                 continue;
             };
-            let target = insert.block_name.to_ascii_uppercase();
+            let target = normalize_name(&insert.block_name);
             let common = &insert.common;
             let owner = if common.owner_handle.is_null() {
                 membership
@@ -8666,7 +8703,7 @@ impl Scene {
                 extend_category(&mut index.annotation_geometry);
             }
             let add = |map: &mut HashMap<String, DependencyTargets>, name: &str| {
-                let target = map.entry(name.to_ascii_uppercase()).or_default();
+                let target = map.entry(normalize_name(name)).or_default();
                 target.render_handles.extend(render_handles.iter().copied());
                 target.source_handles.insert(common.handle);
                 target.touches_block_definition |= inside_block;
@@ -8805,7 +8842,7 @@ impl Scene {
         };
         let mut combined = DependencyTargets::default();
         for name in names {
-            let Some(target) = map.get(&name.to_ascii_uppercase()) else {
+            let Some(target) = map.get(&normalize_name(name)) else {
                 continue;
             };
             combined

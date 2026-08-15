@@ -29,7 +29,11 @@ pub enum HostToPluginV4 {
 #[derive(Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum PluginToHostV4 {
-    Request { id: u64, payload: PluginRequest },
+    Request {
+        id: u64,
+        tab_id: Option<u64>,
+        payload: PluginRequest,
+    },
     Response { id: u64, payload: HostResponse },
     Notification(NotificationEnvelope<PluginNotification>),
 }

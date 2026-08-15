@@ -619,9 +619,25 @@ impl OpenCADStudio {
             "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
                 let outlines = self.tabs[i].scene.hatch_boundary_outlines();
-                let new_cmd = HatchCommand::new(outlines);
+                let boundary_sources = self.tabs[i].scene.hatch_boundary_sources();
+                let selected = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .map(|(handle, _)| handle)
+                    .collect::<Vec<_>>();
+                let inherited = selected
+                    .iter()
+                    .find_map(|handle| {
+                        let model = self.tabs[i].scene.hatches.get(handle)?.clone();
+                        let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
+                        Some((model, common.color.clone(), common.transparency))
+                    });
+                let new_cmd =
+                    HatchCommand::new(outlines, boundary_sources, selected, inherited);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+                self.refresh_area_preview(i);
             }
 
             "HATCHEDIT" => {

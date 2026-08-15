@@ -348,9 +348,13 @@ mod loader {
     pub fn remove_plugin(id: &str) -> bool {
         MANAGER.with(|m| {
             if let Some(manager) = m.borrow_mut().as_mut() {
-                manager.remove(id)
+                if manager.ids().iter().any(|loaded| loaded == id) {
+                    manager.remove(id)
+                } else {
+                    true
+                }
             } else {
-                false
+                true
             }
         })
     }

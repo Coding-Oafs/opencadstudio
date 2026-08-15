@@ -1148,7 +1148,7 @@ fn build_instanced_chunk(
     parts: &[MeshBatchPart<'_>],
     profile_enabled: bool,
 ) -> Option<(MeshBatchChunk, u64, InstancedBuildProfile)> {
-    let started = profile_enabled.then(std::time::Instant::now);
+    let started = profile_enabled.then(iced::time::Instant::now);
     let first = parts.first()?;
     let source = first.set.instance_source.as_ref()?;
     let mesh = first.mesh;
@@ -1209,7 +1209,7 @@ fn build_instanced_chunk(
     } else {
         Vec::new()
     };
-    let vertices_at = profile_enabled.then(std::time::Instant::now);
+    let vertices_at = profile_enabled.then(iced::time::Instant::now);
     let edge_color = first
         .set
         .visual_style
@@ -1250,7 +1250,7 @@ fn build_instanced_chunk(
             ]);
         }
     }
-    let edges_at = profile_enabled.then(std::time::Instant::now);
+    let edges_at = profile_enabled.then(iced::time::Instant::now);
     let transparent = material_is_transparent(material, color);
     let face_indices = first.include_faces.then_some(first.indices.as_ref());
     let opaque_indices = if transparent {
@@ -1298,7 +1298,7 @@ fn build_instanced_chunk(
             }
         }
     }
-    let instances_at = profile_enabled.then(std::time::Instant::now);
+    let instances_at = profile_enabled.then(iced::time::Instant::now);
     let triangles = if first.include_faces {
         (first.indices.len() / 3) as u64 * instances.len() as u64
     } else {
@@ -1332,7 +1332,7 @@ fn build_instanced_chunk(
             .entry(edge_key)
             .or_insert_with(|| chunk.edge_vertex_buffer.clone());
     }
-    let uploaded_at = profile_enabled.then(std::time::Instant::now);
+    let uploaded_at = profile_enabled.then(iced::time::Instant::now);
     Some((
         chunk,
         triangles,
@@ -1559,7 +1559,7 @@ pub fn build_mesh_batch_filtered(
     sets: &[MeshLodSet],
     handles: Option<&rustc_hash::FxHashSet<acadrust::Handle>>,
 ) -> (Vec<MeshBatchChunk>, u64) {
-    let perf_started = crate::perf::enabled().then(std::time::Instant::now);
+    let perf_started = crate::perf::enabled().then(iced::time::Instant::now);
     // Derive the caps from the real device limit and vertex size. The previous
     // fixed 6 M-vertex cap assumed 40 B/vertex, but `position_low` (RTE) grew
     // MeshVertex to 52 B, so 6 M × 52 B = 312 MB blew past the 256 MB cap.
@@ -1741,7 +1741,7 @@ pub fn build_mesh_batch_filtered(
             });
         }
     }
-    let prepared_at = std::time::Instant::now();
+    let prepared_at = iced::time::Instant::now();
     let spatial_bounds = sets.iter().fold(
         [
             f32::INFINITY,
@@ -1828,7 +1828,7 @@ pub fn build_mesh_batch_filtered(
             mesh_spatial_key(part.set, spatial_bounds),
         )
     });
-    let grouped_at = std::time::Instant::now();
+    let grouped_at = iced::time::Instant::now();
     let ordered = direct_parts;
     let mut active_key: Option<MaterialBatchKey> = None;
     let mut active_material: Option<&crate::scene::model::material_model::MeshMaterial> = None;
@@ -2224,7 +2224,7 @@ pub fn build_mesh_batch_filtered(
             None,
         ));
     }
-    let direct_at = std::time::Instant::now();
+    let direct_at = iced::time::Instant::now();
     let mut instanced_profile = InstancedBuildProfile::default();
     let mut instanced_buffers = InstancedBufferCache::default();
     for parts in instance_groups.values() {
@@ -2249,7 +2249,7 @@ pub fn build_mesh_batch_filtered(
         }
     }
     if let Some(started) = perf_started {
-        let done = std::time::Instant::now();
+        let done = iced::time::Instant::now();
         crate::perf_record!(
             "[perf] mesh-build-detail prepare={:.1} group={:.1} direct={:.1} instanced={:.1}",
             prepared_at.duration_since(started).as_secs_f64() * 1000.0,

@@ -37,12 +37,17 @@ impl<'a> HostSession<'a> {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn document_view_v4(&mut self, tab_id: u64) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
+        if tab_id != self.tab_id() {
+            return None;
+        }
         v4_support::open_document_view_v4(tab_id, self.document())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn close_document_view_v4(&mut self, tab_id: u64) {
-        v4_support::close_document_view_v4(tab_id);
+        if tab_id == self.tab_id() {
+            v4_support::close_document_view_v4(tab_id);
+        }
     }
 
     pub fn document(&self) -> &CadDocument {

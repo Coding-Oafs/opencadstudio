@@ -42,6 +42,7 @@ impl OpenCADStudio {
         // closes, matching the deselect / reselect / click-away expectation.
         let color_palette_open = self.tabs[i].properties.color_palette_open;
         let edit_buf = std::mem::take(&mut self.tabs[i].properties.edit_buf);
+        let active_field = std::mem::take(&mut self.tabs[i].properties.active_field);
         // Expanded coordinate groups persist across rebuilds AND selection
         // changes — it's a per-user view preference, not per-entity state.
         let expanded_groups = std::mem::take(&mut self.tabs[i].properties.expanded_groups);
@@ -1431,6 +1432,9 @@ impl OpenCADStudio {
                     }
                 }
             };
+            // Precompute the focused-id → field-key map for O(1) lookups on
+            // `PropSyncActive`; derived from `sections`, so rebuild it here.
+            panel.field_key_by_id = crate::ui::properties::build_field_key_map(&panel.sections);
             panel.color_palette_open = color_palette_open;
             let new_handles: Vec<acadrust::Handle> = selected.iter().map(|(h, _)| *h).collect();
             // Carry the in-progress edits only when the selection is unchanged
@@ -1440,6 +1444,14 @@ impl OpenCADStudio {
                 edit_buf
             } else {
                 Default::default()
+            };
+            // The active-row highlight only survives a rebuild for the same
+            // selection (like the edit buffer); a selection change clears it so
+            // an old row isn't marked active against new content.
+            panel.active_field = if prev_handles == new_handles {
+                active_field
+            } else {
+                None
             };
             panel.expanded_groups = expanded_groups;
             panel.source_handles = new_handles;
@@ -1457,7 +1469,12 @@ impl OpenCADStudio {
                     .all(|handle| self.tabs[i].scene.is_layer_locked(*handle));
             if locked_only {
                 make_sections_read_only(&mut panel.sections);
+                // Rows demoted to read-only no longer back an editable field;
+                // drop them from the id→key map so focus can't map onto them.
+                panel.field_key_by_id =
+                    crate::ui::properties::build_field_key_map(&panel.sections);
                 panel.edit_buf.clear();
+                panel.active_field = None;
                 panel.color_picker_open = false;
                 panel.color_palette_open = false;
                 panel.bg_color_picker_open = false;
@@ -1618,6 +1635,49 @@ impl OpenCADStudio {
                     annotation_scale_handle,
                 );
                 let mut entity_grips = dispatch::grips(contextual.as_ref());
+                // Dimension::grips() cannot see the document, so an automatic dimension
+                // text grip cannot resolve its real DIMSTYLE/annotation-scaled position
+                // there. Correct it here, where both the document and displayed annotation
+                // scale are available.
+                if let acadrust::EntityType::Dimension(dim) = contextual.as_ref() {
+                    if matches!(
+                        dim,
+                        acadrust::entities::Dimension::Linear(_)
+                            | acadrust::entities::Dimension::Aligned(_)
+                    ) && !dim.base().text_user_positioned
+                    {
+                        let anno_scale = annotation_scale_handle
+                            .and_then(|handle| {
+                                match self.tabs[i].scene.document.objects.get(&handle) {
+                                    Some(acadrust::objects::ObjectType::Scale(scale)) => Some(
+                                        scale.inverse_factor()
+                                            / self.tabs[i].scene.annotation_scale_unit_factor(),
+                                    ),
+                                    _ => None,
+                                }
+                            })
+                            .unwrap_or(self.tabs[i].scene.annotation_scale as f64);
+
+                        if let Some(position) =
+                            crate::entities::dimension::dimension_text_grip_position(
+                                dim,
+                                &self.tabs[i].scene.document,
+                                anno_scale,
+                            )
+                        {
+                            // The text grip is the final native grip of Linear/Aligned dims.
+                            // While the text is still automatic, make this a point/stretch grip
+                            // rather than a midpoint-translate grip. That makes the first drag use
+                            // the displayed automatic position as its absolute starting point instead
+                            // of translating the stale DWG text_middle_point.
+                            if let Some(text_grip) = entity_grips.last_mut() {
+                                text_grip.world =
+                                    glam::DVec3::new(position.x, position.y, position.z);
+                                text_grip.is_midpoint = false;
+                            }
+                        }
+                    }
+                }
                 entity_grips.extend(crate::scene::model::solid_history::primitive_grips(
                     &self.tabs[i].scene.document,
                     handle,

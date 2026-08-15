@@ -89,16 +89,14 @@ fn run_v4(
             }));
         }
 
-        match client.recv_runner_frame() {
+        match client.recv_runner_frame_timeout(std::time::Duration::from_millis(50)) {
             Ok(RunnerFrame::Request { id, payload }) => {
                 if let Some(resp) = handle_host_request_v4(&mut *plugin, interactive, &client, id, payload) {
                     client.send_response(id, resp)?;
                 }
             }
-            Err(_) => {
-                // Host disconnected.
-                break;
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     Ok(())

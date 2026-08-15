@@ -260,10 +260,6 @@ impl<'de> Deserialize<'de> for PluginNotification {
 /// command dispatch. Built-in (in-tree) and dynamically-loaded (cdylib) plugins
 /// implement the same trait from this crate, so an out-of-tree add-on targets
 /// the stable contract rather than the host binary.
-/// An add-on package's entry point: its manifest, optional ribbon tab, and
-/// command dispatch. Built-in (in-tree) and dynamically-loaded (cdylib) plugins
-/// implement the same trait from this crate, so an out-of-tree add-on targets
-/// the stable contract rather than the host binary.
 pub trait BuiltinPlugin: Send + Sync {
     fn manifest(&self) -> &'static PluginManifest;
     fn ribbon(&self) -> Box<dyn CadModule>;

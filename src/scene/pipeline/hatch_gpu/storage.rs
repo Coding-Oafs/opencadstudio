@@ -1,48 +1,5 @@
-// Hatch rendering — the single, canonical GPU hatch renderer. One draw
-// call for all hatches, per-instance data fetched from storage buffers in
-// the vertex shader. There is NO per-family cap here: every pattern line
-// family is uploaded (`family_count` per instance) and the fragment shader
-// loops over all of them, so complex baked patterns (ROOFING, GRAVEL,
-// CAROLINA-LEDGESTONE with dozens–hundreds of families) draw in full,
-// matching the PDF export. Unavailable on devices that lack vertex-stage
-// storage buffers. The old per-hatch renderer with the
-// 16-family cap now lives in `wipeout_gpu.rs` and serves only wipeouts.
-//
-// Data layout — three storage buffers fed from `HatchModel`s:
-//
-//   InstanceBuffer  (binding 0)   :  HatchInstance[]      (128 B each)
-//                                    color, color2, mode, gradient,
-//                                    pattern angle/scale, world_origin,
-//                                    boundary_offset, boundary_count,
-//                                    family_offset, family_count,
-//                                    dash_offset, dash_count, aabb,
-//                                    visibility flag (CPU writes; GPU
-//                                    skip)
-//   BoundaryBuffer  (binding 1)   :  vec4<f32>[]          (all boundary
-//                                    verts concatenated; NaN markers
-//                                    preserved as separators just like
-//                                    the per-hatch path)
-//   FamilyBuffer    (binding 2)   :  LineFamilyGpu[]      (all line
-//                                    families concatenated)
-//   DashBuffer      (binding 3)   :  f32[]                (all dash
-//                                    lengths concatenated)
-//
-// The vertex buffer holds each hatch's tessellated boundary triangles as
-// per-vertex local-space positions (`local_xy`) plus a per-vertex
-// `instance_index` (u32 attribute) — instance_index lets us avoid relying
-// on `@builtin(instance_index)` for portability. An instance whose
-// boundary failed to tessellate instead gets an AABB quad here, with
-// `poly_test == 1` on its `HatchInstance` so the fragment shader still
-// runs the `in_polygon` test to clip the quad to the real shape; on the
-// tessellated fast path (`poly_test == 0`) the triangles already bound
-// the fill and the fragment shader skips that test. When the visibility
-// flag is 0, the vertex shader returns a degenerate position and the
-// fragment shader runs zero times for that instance.
-//
-// Two storage usages — vertex shader reads InstanceBuffer + Boundary
-// for the AABB / boundary range; fragment shader reads
-// InstanceBuffer + Boundary + Family + Dash. Both stages share group
-// 1 with `read_only` access.
+// Batched hatch rendering. The kernel triangulates each boundary once; the
+// fragment shader only evaluates the fill pattern inside that mesh.
 
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern, PatFamily};
 use iced::wgpu;
@@ -70,23 +27,16 @@ pub struct HatchInstance {
     pub grad_range: f32,            //  84
     pub mode: u32,                  //  88  (0=pattern, 1=solid, 2=gradient)
     pub visible: u32,               //  92  (CPU sets to 0 to skip)
-    pub boundary_offset: u32,       //  96  (first boundary vert index)
-    pub boundary_count: u32,        // 100
-    pub family_offset: u32,         // 104
-    pub family_count: u32,          // 108
+    pub family_offset: u32,         //  96
+    pub family_count: u32,          // 100
     /// Signed draw-order depth (-1,1); 0.0 = neutral. Applied as a clip-z
     /// bias in the vertex shader so this fill orders against other types.
-    pub draw_depth: f32,            // 112
-    /// 1 = run the per-fragment `in_polygon` boundary test (fallback path for
-    /// an instance whose boundary failed to tessellate); 0 = the rasterized
-    /// triangles already bound the fill, skip the test.
-    pub poly_test: u32,             // 116
+    pub draw_depth: f32,            // 104
     /// Gradient shape (`GradientKind::shader_kind`), bit 4 = inverted stops.
-    pub grad_kind: u32,             // 120
-    pub _pad2: u32,                 // 124
+    pub grad_kind: u32,             // 108
 }
 
-const _: () = assert!(std::mem::size_of::<HatchInstance>() == 128);
+const _: () = assert!(std::mem::size_of::<HatchInstance>() == 112);
 
 /// Split a hatch's f64 world-origin anchor into double-single (high, low) f32
 /// pairs so the GPU keeps sub-unit precision at UTM-scale coordinates.
@@ -120,10 +70,7 @@ pub struct LineFamilyGpu {
 
 const _: () = assert!(std::mem::size_of::<LineFamilyGpu>() == 48);
 
-/// Per-vertex data — tessellated boundary triangles in local (world_origin-
-/// relative) space, each carrying its instance index (avoids relying on
-/// `@builtin(instance_index)` across backends). Instances whose boundary
-/// failed to tessellate emit an AABB quad here instead (see `build`).
+/// Kernel mesh vertex in local space with its source instance.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct HatchVertex {
@@ -184,6 +131,7 @@ impl HatchPlacement {
 /// hatch render pass entirely).
 pub(super) struct StorageHatchBatch {
     pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
     pub placement_buffer: wgpu::Buffer,
     pub draws: Vec<(std::ops::Range<u32>, std::ops::Range<u32>)>,
     // The four storage buffers below are referenced via `bind_group` —
@@ -191,7 +139,6 @@ pub(super) struct StorageHatchBatch {
     // only direct consumer. Keep them as fields to keep ownership in
     // one place; `#[allow(dead_code)]` silences the read-never warning.
     #[allow(dead_code)] pub instance_buffer: wgpu::Buffer,
-    #[allow(dead_code)] pub boundary_buffer: wgpu::Buffer,
     #[allow(dead_code)] pub family_buffer:   wgpu::Buffer,
     #[allow(dead_code)] pub dash_buffer:     wgpu::Buffer,
     /// Per-instance visibility flag (1=draw, 0=skip). Stored in its
@@ -205,8 +152,7 @@ pub(super) struct StorageHatchBatch {
     #[allow(dead_code)] pub instance_count: u32,
     /// CPU mirror — `update_visibility` re-uploads this whole slice
     /// when any flag changes. ~4 B per hatch, so 40 KB / 10 k hatches
-    /// per pan tick. Far cheaper than touching the 128 B-per-instance
-    /// data.
+    /// per pan tick. Far cheaper than touching the instance data.
     pub placements: Vec<HatchPlacement>,
     pub source_visibility: Vec<u32>,
     pub source_aabbs: Vec<[f32; 4]>,
@@ -218,24 +164,76 @@ pub(super) struct StorageHatchBatch {
     pub instance_aabbs: Vec<[f32; 4]>,
 }
 
+fn hatch_buffer_cost(hatch: &HatchModel) -> [u64; 7] {
+    let boundary = hatch.boundary.len() as u64;
+    let (families, dashes) = match &hatch.pattern {
+        HatchPattern::Pattern(families) => (
+            families.len() as u64,
+            families.iter().map(|family| family.dashes.len() as u64).sum(),
+        ),
+        _ => (0, 0),
+    };
+    [
+        boundary.saturating_mul(std::mem::size_of::<HatchVertex>() as u64),
+        boundary.saturating_mul(24),
+        std::mem::size_of::<HatchInstance>() as u64,
+        families.saturating_mul(std::mem::size_of::<LineFamilyGpu>() as u64),
+        dashes.saturating_mul(std::mem::size_of::<f32>() as u64),
+        std::mem::size_of::<u32>() as u64,
+        std::mem::size_of::<HatchPlacement>() as u64,
+    ]
+}
+
 impl StorageHatchBatch {
-    /// One-time build from the full hatch list. Re-uploaded only when
-    /// `geometry_epoch` advances (mirrors the existing per-hatch
-    /// upload trigger). Per-frame visibility flips go through
-    /// [`upload_visibility`].
+    /// Builds whole-hatch chunks within the device's buffer limits.
     pub(super) fn build(
         device: &wgpu::Device,
         bgl: &wgpu::BindGroupLayout,
         hatches: &[HatchModel],
-    ) -> Option<Self> {
+    ) -> Vec<Self> {
         if hatches.is_empty() {
-            return None;
+            return Vec::new();
         }
 
+        let limits = device.limits();
+        let chunk_limit = limits
+            .max_buffer_size
+            .min(limits.max_storage_buffer_binding_size as u64);
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        let mut used = [0u64; 7];
+        for (index, hatch) in hatches.iter().enumerate() {
+            let cost = hatch_buffer_cost(hatch);
+            let overflow = used
+                .iter()
+                .zip(cost)
+                .any(|(used, cost)| used.saturating_add(cost) > chunk_limit);
+            if overflow && index > start {
+                ranges.push(start..index);
+                start = index;
+                used = [0; 7];
+            }
+            for (used, cost) in used.iter_mut().zip(cost) {
+                *used = used.saturating_add(cost);
+            }
+        }
+        ranges.push(start..hatches.len());
+        ranges
+            .into_iter()
+            .filter_map(|range| Self::build_chunk(device, bgl, &hatches[range]))
+            .collect()
+    }
+
+    fn build_chunk(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+        hatches: &[HatchModel],
+    ) -> Option<Self> {
+
         let mut instances: Vec<HatchInstance> = Vec::with_capacity(hatches.len());
-        let mut boundary: Vec<[f32; 4]> = Vec::new();
         let mut families: Vec<LineFamilyGpu> = Vec::new();
         let mut dashes: Vec<f32> = Vec::new();
+        let mut meshes = Vec::with_capacity(hatches.len());
         let mut slots = rustc_hash::FxHashMap::default();
         let mut groups: Vec<Vec<&HatchModel>> = Vec::new();
         for (index, hatch) in hatches.iter().enumerate() {
@@ -255,22 +253,9 @@ impl StorageHatchBatch {
 
         for group in &groups {
             let h = group[0];
-            let boundary_offset = boundary.len() as u32;
-            for &[x, y] in h.boundary.iter() {
-                // NaN sub-loop separators become the finite sentinel on the
-                // GPU: Intel drivers fold the shader NaN self-compare to
-                // `true`, turning separators into vertices and bleeding the
-                // fill outside its boundary (#386, #416).
-                if x.is_finite() && y.is_finite() {
-                    boundary.push([x, y, 0.0, 0.0]);
-                } else {
-                    let s = crate::scene::model::hatch_model::GPU_BOUNDARY_SEP;
-                    boundary.push([s, s, 0.0, 0.0]);
-                }
-            }
-            let boundary_count = boundary.len() as u32 - boundary_offset;
-
-
+            let mesh = h.fill_mesh();
+            let has_mesh = !mesh.0.is_empty() && !mesh.1.is_empty();
+            meshes.push(mesh);
             let family_offset = families.len() as u32;
             let mut family_count = 0u32;
 
@@ -301,11 +286,8 @@ impl StorageHatchBatch {
                             dashes.push(d);
                         }
                         let n_dashes = (dashes.len() as u32 - dash_offset).min(u32::MAX);
-                        // QCAD PAT local-frame convention (mirrors
-                        // the storage batch convention: `dy` is
-                        // the perpendicular spacing, `dx` is the along-line
-                        // phase shift — both in family-local coords. The
-                        // shader applies cos_off/sin_off to rotate them.
+                        // PAT local frame: perpendicular spacing and
+                        // along-line phase.
                         let perp_step = fam.dy;
                         let along_step = fam.dx;
                         // Screen-space derivative drives 1-px line width
@@ -366,39 +348,19 @@ impl StorageHatchBatch {
                     grad_range,
                     mode,
                     visible: 0,
-                    boundary_offset,
-                    boundary_count,
                     family_offset,
                     family_count,
                     draw_depth: if group.len() == 1 { h.draw_depth } else { 0.0 },
-                    poly_test: 1,
                     grad_kind,
-                    _pad2: 0,
                 });
                 continue;
             }
-
-            // Pad the AABB so the quad covers any pattern halo + the
-            // family origin. Mirrors the per-hatch shader's quad sizing
-            // logic — `diag * 0.8 + max_spacing * 2 * scale`.
-            let diag = ((max_x - min_x).powi(2) + (max_y - min_y).powi(2)).sqrt();
-            // `perp_step.abs()` per family — uses the same QCAD local-
-            // frame convention as `LineFamilyGpu.perp_step` above so
-            // the quad padding matches what the shader will sample.
-            let max_spacing = match &h.pattern {
-                HatchPattern::Pattern(fs) => fs
-                    .iter()
-                    .map(|f| f.dy.abs())
-                    .fold(0.0f32, f32::max),
-                _ => 5.0,
-            };
-            let pad = (diag * 0.8 + max_spacing * 2.0 * h.scale).max(1.0);
 
             let (wo_hi, wo_lo) = split_origin_ds(h.world_origin);
             instances.push(HatchInstance {
                 color: h.color,
                 color2,
-                aabb: [min_x - pad, min_y - pad, max_x + pad, max_y + pad],
+                aabb: [min_x, min_y, max_x, max_y],
                 world_origin: wo_hi,
                 world_origin_low: wo_lo,
                 angle_offset: h.angle_offset,
@@ -408,26 +370,14 @@ impl StorageHatchBatch {
                 grad_min,
                 grad_range,
                 mode,
-                visible: 1,
-                boundary_offset,
-                boundary_count,
+                visible: u32::from(has_mesh),
                 family_offset,
                 family_count,
                 draw_depth: if group.len() == 1 { h.draw_depth } else { 0.0 },
-                // Always resolve inside/outside per fragment on the GPU (the
-                // boundary is uploaded below). Dropping CPU pre-triangulation
-                // keeps the vertex buffer at 6 verts/hatch regardless of
-                // boundary complexity, so a hatch-dense drawing can't overflow
-                // the device buffer limit. Each instance draws its AABB quad.
-                poly_test: 1,
                 grad_kind,
-                _pad2: 0,
             });
         }
         // Empty fallbacks — storage buffers can't be zero-sized.
-        if boundary.is_empty() {
-            boundary.push([0.0; 4]);
-        }
         if families.is_empty() {
             families.push(LineFamilyGpu::default_filler());
         }
@@ -435,21 +385,33 @@ impl StorageHatchBatch {
             dashes.push(0.0);
         }
 
-        // Vertex buffer — one AABB quad (two triangles, BL,BR,TL, BR,TR,TL) per
-        // instance; the GPU shader clips each fragment to the boundary via the
-        // in_polygon test (poly_test == 1). 6 verts/hatch, independent of
-        // boundary complexity, so the buffer can never overflow the device
-        // limit no matter how dense the drawing.
-        let mut verts: Vec<HatchVertex> = Vec::with_capacity(instances.len() * 6);
-        for (i, inst) in instances.iter().enumerate() {
-            let [xmin, ymin, xmax, ymax] = inst.aabb;
-            let quad = [
-                [xmin, ymin], [xmax, ymin], [xmin, ymax],
-                [xmax, ymin], [xmax, ymax], [xmin, ymax],
-            ];
-            for c in quad {
-                verts.push(HatchVertex { local_xy: c, instance_index: i as u32 });
+        let mut verts = Vec::new();
+        let mut indices = Vec::new();
+        let mut mesh_ranges = Vec::with_capacity(meshes.len());
+        for (instance_index, (points, mesh_indices)) in meshes.into_iter().enumerate() {
+            let Ok(base) = u32::try_from(verts.len()) else {
+                return None;
+            };
+            let Ok(start) = u32::try_from(indices.len()) else {
+                return None;
+            };
+            verts.extend(points.into_iter().map(|local_xy| HatchVertex {
+                local_xy,
+                instance_index: instance_index as u32,
+            }));
+            for index in mesh_indices {
+                let Some(index) = base.checked_add(index) else {
+                    return None;
+                };
+                indices.push(index);
             }
+            let Ok(end) = u32::try_from(indices.len()) else {
+                return None;
+            };
+            mesh_ranges.push(start..end);
+        }
+        if indices.is_empty() {
+            return None;
         }
         let mut placements = Vec::new();
         let mut draws = Vec::with_capacity(groups.len());
@@ -461,7 +423,10 @@ impl StorageHatchBatch {
                 draw_depth: 0.0,
                 visible: 1,
             });
-            draws.push((0..unique_source_count as u32 * 6, 0..1));
+            let end = mesh_ranges[unique_source_count - 1].end;
+            if end > 0 {
+                draws.push((0..end, 0..1));
+            }
             let mut union = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
             for inst in instances.iter().take(unique_source_count) {
                 union[0] = union[0].min(inst.aabb[0] + inst.world_origin[0]);
@@ -500,16 +465,43 @@ impl StorageHatchBatch {
                     inst.aabb[3] + inst.world_origin[1] + high[1],
                 ]);
             }
-            draws.push((
-                source_index as u32 * 6..source_index as u32 * 6 + 6,
-                placement_start..placements.len() as u32,
-            ));
+            if !mesh_ranges[source_index].is_empty() {
+                draws.push((
+                    mesh_ranges[source_index].clone(),
+                    placement_start..placements.len() as u32,
+                ));
+            }
+        }
+
+        let visibility: Vec<u32> = instances.iter().map(|instance| instance.visible).collect();
+        let limits = device.limits();
+        let buffer_fits = |count: usize, stride: usize| {
+            (count as u64).saturating_mul(stride as u64) <= limits.max_buffer_size
+        };
+        let storage_fits = |count: usize, stride: usize| {
+            (count as u64).saturating_mul(stride as u64)
+                <= limits.max_storage_buffer_binding_size as u64
+        };
+        if !buffer_fits(verts.len(), std::mem::size_of::<HatchVertex>())
+            || !buffer_fits(indices.len(), std::mem::size_of::<u32>())
+            || !buffer_fits(placements.len(), std::mem::size_of::<HatchPlacement>())
+            || !storage_fits(instances.len(), std::mem::size_of::<HatchInstance>())
+            || !storage_fits(families.len(), std::mem::size_of::<LineFamilyGpu>())
+            || !storage_fits(dashes.len(), std::mem::size_of::<f32>())
+            || !storage_fits(visibility.len(), std::mem::size_of::<u32>())
+        {
+            return None;
         }
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.vertex"),
             contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hatch.index"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
         });
         let placement_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.placements"),
@@ -520,11 +512,6 @@ impl StorageHatchBatch {
             label: Some("hatch.instances"),
             contents: bytemuck::cast_slice(&instances),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let boundary_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("hatch.boundary"),
-            contents: bytemuck::cast_slice(&boundary),
-            usage: wgpu::BufferUsages::STORAGE,
         });
         let family_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.families"),
@@ -537,7 +524,6 @@ impl StorageHatchBatch {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let visibility: Vec<u32> = instances.iter().map(|i| i.visible).collect();
         let visibility_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.visibility"),
             contents: bytemuck::cast_slice(&visibility),
@@ -554,18 +540,14 @@ impl StorageHatchBatch {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: boundary_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
                     resource: family_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 3,
+                    binding: 2,
                     resource: dash_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 4,
+                    binding: 3,
                     resource: visibility_buffer.as_entire_binding(),
                 },
             ],
@@ -582,10 +564,10 @@ impl StorageHatchBatch {
 
         Some(Self {
             vertex_buffer,
+            index_buffer,
             placement_buffer,
             draws,
             instance_buffer,
-            boundary_buffer,
             family_buffer,
             dash_buffer,
             visibility_buffer,
@@ -614,10 +596,7 @@ impl StorageHatchBatch {
         );
     }
 
-    /// Group-1 bind group layout — shared by the pipeline so it can be
-    /// constructed once at startup. All four bindings are read-only
-    /// storage and visible to both VS (AABB+visibility lookup) and FS
-    /// (boundary / family / dash sampling).
+    /// Shared layout for instance, family, dash, and visibility storage.
     #[allow(dead_code)]
     pub(super) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let entry = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -632,7 +611,7 @@ impl StorageHatchBatch {
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("hatch.bgl"),
-            entries: &[entry(0), entry(1), entry(2), entry(3), entry(4)],
+            entries: &[entry(0), entry(1), entry(2), entry(3)],
         })
     }
 }

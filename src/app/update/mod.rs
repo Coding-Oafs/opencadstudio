@@ -217,6 +217,20 @@ impl OpenCADStudio {
         self.reset_modal_geometry();
     }
 
+    /// Fire the focus-sweep once when a property field is active, so a
+    /// click-away that moved focus off the field (viewport, toolbar, command
+    /// line) clears the active-row highlight. Idle (`Task::none()`) unless a
+    /// field is active, and the sweep itself keeps the marker whenever the
+    /// active field still holds focus — re-firing it on unrelated messages is
+    /// cheap and safe.
+    fn sync_active_field_if_any(&self) -> Task<Message> {
+        if self.tabs[self.active_tab].properties.active_field.is_some() {
+            crate::ui::properties::sync_active_field_task()
+        } else {
+            Task::none()
+        }
+    }
+
     pub fn update(&mut self, msg: Message) -> Task<Message> {
         let perf_started = crate::perf::enabled().then(Instant::now);
         let perf_label = perf_message_label(&msg);
@@ -308,34 +322,31 @@ impl OpenCADStudio {
             // user-generated message. Desktop only.
             #[cfg(not(target_arch = "wasm32"))]
             Message::DrainPluginRequests => {
-                if self.active_tab < self.tabs.len() {
-                    let mut host = crate::app::plugin_host::HostSession::new(self, self.active_tab);
+                for tab in 0..self.tabs.len() {
+                    let mut host = crate::app::plugin_host::HostSession::new(self, tab);
                     crate::plugin::external::with_manager(|mgr| {
                         mgr.drain_requests(&mut host, &mut |_| {});
                     });
-                    crate::plugin::external::with_manager(|mgr| {
-                        for line in mgr.drain_io() {
-                            // Skip internal runner/plugin/REPL trace noise when
-                            // verbose logging is enabled; real plugin stdout/stderr
-                            // and non-trace runner errors still pass through.
-                            if line.text.starts_with("[runner]")
-                                || line.text.starts_with("[plugin] ")
-                                || line.text.starts_with("[python-repl]")
-                            {
-                                continue;
+                }
+                crate::plugin::external::with_manager(|mgr| {
+                    for line in mgr.drain_io() {
+                        if line.text.starts_with("[runner]")
+                            || line.text.starts_with("[plugin] ")
+                            || line.text.starts_with("[python-repl]")
+                        {
+                            continue;
+                        }
+                        let prefixed = format!("[{} {}] {}", line.plugin_id, line.source, line.text);
+                        match line.source {
+                            ocs_plugin_api::process::IoStream::Stderr => {
+                                self.command_line.push_error(&prefixed);
                             }
-                            let prefixed = format!("[{} {}] {}", line.plugin_id, line.source, line.text);
-                            match line.source {
-                                ocs_plugin_api::process::IoStream::Stderr => {
-                                    self.command_line.push_error(&prefixed);
-                                }
-                                _ => {
-                                    self.command_line.push_output(&prefixed);
-                                }
+                            _ => {
+                                self.command_line.push_output(&prefixed);
                             }
                         }
-                    });
-                }
+                    }
+                });
                 Task::none()
             }
 
@@ -1195,7 +1206,8 @@ impl OpenCADStudio {
             }
 
             Message::RibbonToolClick { tool_id, event } => {
-                self.on_ribbon_tool_click(tool_id, event)
+                let sweep = self.sync_active_field_if_any();
+                Task::batch(vec![sweep, self.on_ribbon_tool_click(tool_id, event)])
             }
             Message::PluginFileDialogResult { command, path } => {
                 if let Some(path) = path {
@@ -1438,14 +1450,15 @@ impl OpenCADStudio {
                 // the submit path, which tokenises multi-token lines — so a typed
                 // token, a pasted `LINE 0,0 10,10`, or API-fed text all run their
                 // spaces as step separators. A leading `>` keeps spaces literal.
+                let sweep = self.sync_active_field_if_any();
                 if !self.command_line.literal_spaces && !s.starts_with('>') && s.contains(' ') {
                     self.command_line.input = s;
-                    return self.update(Message::CommandSubmit);
+                    return Task::batch(vec![sweep, self.update(Message::CommandSubmit)]);
                 }
                 self.command_line.input = s;
                 self.command_line.autocomplete_cursor = None;
                 self.command_line.cancel_history_navigation();
-                Task::none()
+                Task::batch(vec![sweep, Task::none()])
             }
 
             Message::CommandAppendChar(s) => self.on_command_append_char(s),
@@ -2628,10 +2641,13 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::PanePress(idx) => {
+                // A click-away into the drawing area re-syncs the active-row
+                // highlight against real focus before the pick runs.
+                let sweep = self.sync_active_field_if_any();
                 // A fresh press ends any stale (un-dropped) pane move.
                 self.pane_move_from = None;
                 self.focus_model_pane(idx);
-                self.on_viewport_left_press()
+                Task::batch(vec![sweep, self.on_viewport_left_press()])
             }
             Message::PaneRelease(idx) => {
                 // Finishing a pane-move drag: swap the source pane with the one
@@ -2666,7 +2682,10 @@ impl OpenCADStudio {
                 self.update(Message::ViewportScroll(d))
             }
 
-            Message::ViewportLeftPress => self.on_viewport_left_press(),
+            Message::ViewportLeftPress => {
+                let sweep = self.sync_active_field_if_any();
+                Task::batch(vec![sweep, self.on_viewport_left_press()])
+            }
 
             Message::ViewportLeftRelease => self.on_viewport_left_release(),
 
@@ -4613,7 +4632,7 @@ impl OpenCADStudio {
                 self.tabs[self.active_tab]
                     .properties
                     .edit_buf
-                    .insert(field.to_string(), value);
+                    .insert(crate::ui::properties::FieldKey::Geom(field), value);
                 Task::none()
             }
 
@@ -4646,6 +4665,38 @@ impl OpenCADStudio {
             }
 
             Message::PropAttrCommit(tag) => self.on_prop_attr_commit(tag),
+
+            Message::PropPointerPressed => {
+                if !self.dock_panel_visible(crate::ui::dock::PanelId::Properties) {
+                    return Task::none();
+                }
+                crate::ui::properties::sync_active_field_task()
+            }
+
+            Message::PropSyncActive(focused) => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                if let Some(id) = focused.as_ref() {
+                    if let Some(key) = panel.prop_field_key_for_id(id) {
+                        let changed = panel.active_field.as_ref() != Some(&key);
+                        panel.active_field = Some(key);
+                        // Only select the whole value when focus landed on a
+                        // field that wasn't already the active one; re-focusing
+                        // the same field (or sweeping after a click elsewhere
+                        // left its focus in place) must keep caret placement.
+                        if changed {
+                            return iced::widget::operation::select_all(id.clone());
+                        }
+                        return Task::none();
+                    }
+                }
+                if !crate::ui::properties::active_key_focused(
+                    panel.active_field.as_ref(),
+                    focused.as_ref(),
+                ) {
+                    panel.active_field = None;
+                }
+                Task::none()
+            }
 
             Message::PropColorPickerToggle => {
                 let i = self.active_tab;
@@ -5992,7 +6043,11 @@ impl OpenCADStudio {
                 {
                     // Stop the plugin runner first so Windows releases the DLL
                     // and allows the package directory to be deleted.
-                    crate::plugin::external::remove_plugin(&id);
+                    if !crate::plugin::external::remove_plugin(&id) {
+                        self.marketplace_status =
+                            format!("Uninstall failed: plugin '{id}' did not stop in time");
+                        return Task::none();
+                    }
                     match crate::plugin::external::uninstall(&id) {
                         Ok(()) => {
                             self.marketplace_status =
@@ -7514,5 +7569,43 @@ impl OpenCADStudio {
             }
             n += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod prop_pointer_tests {
+    use super::Message;
+    use crate::app::OpenCADStudio;
+    use crate::ui::dock::PanelId;
+
+    fn drawing_app() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app
+    }
+
+    #[test]
+    fn hidden_properties_panel_skips_the_focus_sweep() {
+        // A click while the panel is closed must not run the widget-tree sweep:
+        // the returned task is a bare `Task::none` (units == 0).
+        let mut app = drawing_app();
+        assert!(app.dock_panel_visible(PanelId::Properties));
+        app.show_properties = false;
+        assert!(!app.dock_panel_visible(PanelId::Properties));
+
+        let task = app.update(Message::PropPointerPressed);
+        assert_eq!(task.units(), 0);
+    }
+
+    #[test]
+    fn visible_properties_panel_runs_the_focus_sweep() {
+        // A click while the panel is open must still fire the sweep (units > 0)
+        // so the select-whole-value feature keeps working.
+        let mut app = drawing_app();
+        app.show_properties = true;
+        assert!(app.dock_panel_visible(PanelId::Properties));
+
+        let task = app.update(Message::PropPointerPressed);
+        assert!(task.units() > 0);
     }
 }

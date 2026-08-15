@@ -144,6 +144,25 @@ mod tests {
     }
 
     #[test]
+    fn v4_additions_preserve_legacy_discriminants() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u32 {
+            let bytes = bincode::serialize(value).unwrap();
+            u32::from_le_bytes(bytes[..4].try_into().unwrap())
+        }
+
+        assert_eq!(discriminant(&HostRequest::Shutdown), 6);
+        assert_eq!(discriminant(&HostResponse::Error(String::new())), 5);
+        assert_eq!(
+            discriminant(&crate::ipc::protocol::PluginRequest::BumpGeometry),
+            6
+        );
+        assert_eq!(
+            discriminant(&crate::ipc::protocol::PluginResponse::Record(None)),
+            3
+        );
+    }
+
+    #[test]
     fn transport_rejects_oversized_message() {
         let (mut a, _b) = connect_pair();
         // A Vec<u8> larger than MAX_MESSAGE_SIZE should be rejected on send.

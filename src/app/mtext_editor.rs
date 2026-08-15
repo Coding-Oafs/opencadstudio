@@ -705,7 +705,7 @@ impl super::OpenCADStudio {
         // it keeps the layout's shape, wrapping and alignment identical.
         mt.insertion_point = Vector3::new(0.0, 0.0, 0.0);
         let entity = EntityType::MText(mt.clone());
-        let anno = self.tabs[i].scene.annotation_scale;
+        let anno = 1.0;
         let bg = self.tabs[i].scene.bg_color;
         let wires: Vec<WireModel> = tessellate::tessellate(
             &self.tabs[i].scene.document,

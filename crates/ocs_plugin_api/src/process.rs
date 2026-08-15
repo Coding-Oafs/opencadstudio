@@ -346,20 +346,20 @@ impl PluginProcess {
             }
             Ok(Err(e)) => return Err(e.into()),
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                let status = spawn_failure_status(&child, &last_stderr);
                 if let Some(child) = child.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     reap(child);
                 }
-                let status = spawn_failure_status(&child, &last_stderr);
                 return Err(PluginError::RunnerCrashed {
                     request: "spawn/accept",
                     status,
                 });
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let status = spawn_failure_status(&child, &last_stderr);
                 if let Some(child) = child.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     reap(child);
                 }
-                let status = spawn_failure_status(&child, &last_stderr);
                 return Err(PluginError::RunnerCrashed {
                     request: "spawn/accept",
                     status,
@@ -740,6 +740,7 @@ impl PluginProcess {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
+            reap(child);
         }
         None
     }

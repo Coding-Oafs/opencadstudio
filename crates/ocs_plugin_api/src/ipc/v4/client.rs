@@ -43,7 +43,7 @@ type NotificationQueue = mpsc::Receiver<(Option<u64>, HostNotification)>;
 struct Shared {
     writer: Mutex<Stream>,
     next_id: AtomicU64,
-    in_flight: Mutex<Option<mpsc::Sender<(u64, PluginResponse)>>>,
+    in_flight: Mutex<HashMap<u64, mpsc::Sender<PluginResponse>>>,
 }
 
 /// A frame the V4 reader thread delivers to the plugin runner loop.
@@ -96,7 +96,7 @@ impl V4Client {
         let shared = Arc::new(Shared {
             writer: Mutex::new(stream),
             next_id: AtomicU64::new(1),
-            in_flight: Mutex::new(None),
+            in_flight: Mutex::new(HashMap::new()),
         });
 
         let shared_for_reader = Arc::clone(&shared);
@@ -120,6 +120,15 @@ impl V4Client {
     /// Block until the next host request arrives for the runner loop.
     pub fn recv_runner_frame(&self) -> Result<RunnerFrame, mpsc::RecvError> {
         self.runner_queue.recv()
+    }
+
+    /// Wait up to `timeout` for a host request so the runner can also drain
+    /// notifications while otherwise idle.
+    pub fn recv_runner_frame_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<RunnerFrame, mpsc::RecvTimeoutError> {
+        self.runner_queue.recv_timeout(timeout)
     }
 
     /// Non-blocking poll for host-to-plugin notifications.
@@ -214,8 +223,13 @@ fn reader_thread(
         loop {
             match recv::<HostToPluginV4>(&mut reader) {
                 Ok(HostToPluginV4::Response { id, payload }) => {
-                    if let Some(tx) = shared.in_flight.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                        let _ = tx.send((id, payload));
+                    let tx = shared
+                        .in_flight
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&id);
+                    if let Some(tx) = tx {
+                        let _ = tx.send(payload);
                     } else {
                         eprintln!("[plugin] V4 reader: unexpected response id={id}");
                     }
@@ -249,8 +263,11 @@ fn reader_thread(
             }
         }
     }));
-    // Ensure any synchronous waiter is unblocked.
-    let _ = shared.in_flight.lock().unwrap_or_else(|e| e.into_inner()).take();
+    shared
+        .in_flight
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
 }
 
 /// `HostApi` implementation used inside the plugin process over the V4
@@ -264,7 +281,7 @@ pub struct V4PluginHostApi {
     next_command_id: Cell<u64>,
     record_cache: RefCell<HashMap<(Handle, String), &'static ExtendedDataRecord>>,
     doc_view: RefCell<Option<DocumentViewInfo>>,
-    doc_view_v4: RefCell<Option<DocumentViewInfo>>,
+    doc_view_v4: RefCell<Option<(u64, DocumentViewInfo)>>,
     tab_id_cache: Cell<Option<u64>>,
 }
 
@@ -293,7 +310,7 @@ impl V4PluginHostApi {
         &self,
         req: PluginRequest,
     ) -> Result<PluginResponse, crate::ipc::transport::TransportError> {
-        send_plugin_request(&self.shared, req)
+        send_plugin_request(&self.shared, self.tab_id_cache.get(), req)
     }
 
     fn fetch_document(&self) -> CadDocument {
@@ -316,23 +333,37 @@ impl V4PluginHostApi {
 /// thread-safe [`V4PluginRequestSender`].
 fn send_plugin_request(
     shared: &Arc<Shared>,
+    tab_id: Option<u64>,
     req: PluginRequest,
 ) -> Result<PluginResponse, crate::ipc::transport::TransportError> {
     let id = shared.next_id.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
-    *shared.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
-    {
+    shared
+        .in_flight
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, tx);
+    let send_result = {
         let mut writer = shared.writer.lock().unwrap_or_else(|e| e.into_inner());
-        send(&mut writer, &PluginToHostV4::Request { id, payload: req })?;
+        send(
+            &mut writer,
+            &PluginToHostV4::Request {
+                id,
+                tab_id,
+                payload: req,
+            },
+        )
+    };
+    if let Err(error) = send_result {
+        shared
+            .in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
+        return Err(error);
     }
     match rx.recv() {
-        Ok((resp_id, resp)) if resp_id == id => Ok(resp),
-        Ok((resp_id, _)) => Err(crate::ipc::transport::TransportError::Io(
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("V4 response id mismatch: expected {id}, got {resp_id}"),
-            ),
-        )),
+        Ok(resp) => Ok(resp),
         Err(_) => Err(crate::ipc::transport::TransportError::Io(
             std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
@@ -343,17 +374,16 @@ fn send_plugin_request(
 }
 
 /// Thread-safe wrapper around the V4 connection so worker threads can issue
-/// host requests. A per-sender mutex serializes requests, matching the
-/// single-in-flight behavior of [`V4PluginHostApi::request`].
+/// host requests for the originating document tab.
 struct V4PluginRequestSender {
     shared: Arc<Shared>,
-    lock: Mutex<()>,
+    tab_id: u64,
 }
 
 impl PluginRequestSender for V4PluginRequestSender {
     fn request(&self, req: PluginRequest) -> Result<PluginResponse, PluginRequestError> {
-        let _guard = self.lock.lock().map_err(|e| PluginRequestError(e.to_string()))?;
-        send_plugin_request(&self.shared, req).map_err(|e| PluginRequestError(e.to_string()))
+        send_plugin_request(&self.shared, Some(self.tab_id), req)
+            .map_err(|e| PluginRequestError(e.to_string()))
     }
 }
 
@@ -631,7 +661,7 @@ impl HostApi for V4PluginHostApi {
     fn plugin_request_sender(&self) -> Option<Box<dyn PluginRequestSender>> {
         Some(Box::new(V4PluginRequestSender {
             shared: Arc::clone(&self.shared),
-            lock: Mutex::new(()),
+            tab_id: self.tab_id(),
         }))
     }
 
@@ -655,14 +685,13 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    fn document_view_v4(&mut self, _tab_id: u64) -> Option<DocumentViewInfo> {
+    fn document_view_v4(&mut self, tab_id: u64) -> Option<DocumentViewInfo> {
         {
             let mut view = self.doc_view_v4.borrow_mut();
-            if view.is_none() {
-                let tab_id = self.tab_id();
+            if view.as_ref().map(|(cached_id, _)| *cached_id) != Some(tab_id) {
                 match self.request(PluginRequest::OpenDocumentViewV4 { tab_id }) {
                     Ok(PluginResponse::DocumentViewV4 { path, version }) => {
-                        *view = Some(DocumentViewInfo { path, version });
+                        *view = Some((tab_id, DocumentViewInfo { path, version }));
                     }
                     Ok(other) => {
                         eprintln!("[plugin] unexpected OpenDocumentViewV4 response: {other:?}");
@@ -673,13 +702,18 @@ impl HostApi for V4PluginHostApi {
                 }
             }
         }
-        self.doc_view_v4.borrow().clone()
+        self.doc_view_v4
+            .borrow()
+            .as_ref()
+            .map(|(_, info)| info.clone())
     }
 
-    fn close_document_view_v4(&mut self, _tab_id: u64) {
-        let tab_id = self.tab_id();
+    fn close_document_view_v4(&mut self, tab_id: u64) {
         let _ = self.request(PluginRequest::CloseDocumentViewV4 { tab_id });
-        self.doc_view_v4.borrow_mut().take();
+        let mut view = self.doc_view_v4.borrow_mut();
+        if view.as_ref().map(|(cached_id, _)| *cached_id) == Some(tab_id) {
+            view.take();
+        }
     }
 }
 
@@ -694,7 +728,7 @@ impl V4Client {
         let shared = Arc::new(Shared {
             writer: Mutex::new(stream),
             next_id: AtomicU64::new(1),
-            in_flight: Mutex::new(None),
+            in_flight: Mutex::new(HashMap::new()),
         });
         let shared_for_reader = Arc::clone(&shared);
         let notifications = Arc::new(Mutex::new(notify_rx));
@@ -776,7 +810,11 @@ mod tests {
         let runner = thread::spawn(move || {
             let req = recv::<PluginToHostV4>(&mut runner_stream).unwrap();
             match req {
-                PluginToHostV4::Request { id, payload: PluginRequest::PushInfo(s) } => {
+                PluginToHostV4::Request {
+                    id,
+                    tab_id: _,
+                    payload: PluginRequest::PushInfo(s),
+                } => {
                     assert_eq!(s, "hello host");
                     send(
                         &mut runner_stream,
@@ -804,7 +842,11 @@ mod tests {
         let runner = thread::spawn(move || {
             let req = recv::<PluginToHostV4>(&mut runner_stream).unwrap();
             match req {
-                PluginToHostV4::Request { id, payload: PluginRequest::AddEntities(v) } => {
+                PluginToHostV4::Request {
+                    id,
+                    tab_id: _,
+                    payload: PluginRequest::AddEntities(v),
+                } => {
                     assert_eq!(v.len(), 2);
                     send(
                         &mut runner_stream,
@@ -825,6 +867,56 @@ mod tests {
             EntityType::Point(Point::new()),
         ]);
         assert_eq!(handles, vec![Handle::new(1), Handle::new(2)]);
+        runner.join().unwrap();
+    }
+
+    #[test]
+    fn concurrent_requests_match_out_of_order_responses() {
+        let (host_stream, mut runner_stream) = connect_pair();
+        let client = V4Client::from_stream_for_test(host_stream);
+        let sender = Arc::new(V4PluginRequestSender {
+            shared: Arc::clone(&client.shared),
+            tab_id: 42,
+        });
+
+        let runner = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                match recv::<PluginToHostV4>(&mut runner_stream).unwrap() {
+                    PluginToHostV4::Request {
+                        id,
+                        tab_id: Some(42),
+                        payload: PluginRequest::PushInfo(message),
+                    } => requests.push((id, message)),
+                    other => panic!("unexpected: {other:?}"),
+                }
+            }
+            for (id, message) in requests.into_iter().rev() {
+                send(
+                    &mut runner_stream,
+                    &HostToPluginV4::Response {
+                        id,
+                        payload: PluginResponse::Bool(message == "first"),
+                    },
+                )
+                .unwrap();
+            }
+        });
+
+        let first_sender = Arc::clone(&sender);
+        let first = thread::spawn(move || {
+            first_sender
+                .request(PluginRequest::PushInfo("first".to_string()))
+                .unwrap()
+        });
+        let second = thread::spawn(move || {
+            sender
+                .request(PluginRequest::PushInfo("second".to_string()))
+                .unwrap()
+        });
+
+        assert!(matches!(first.join().unwrap(), PluginResponse::Bool(true)));
+        assert!(matches!(second.join().unwrap(), PluginResponse::Bool(false)));
         runner.join().unwrap();
     }
 

@@ -1528,13 +1528,17 @@ impl OpenCADStudio {
                     .unwrap_or(crate::app::config::DockSide::Right),
             );
             // Dropping onto an edge joins that edge's stack, whose column is as
-            // wide as its widest panel (the dragged panel included).
+            // wide as its widest currently-shown panel (the dragged panel
+            // included). Hidden (closed) panels don't render, so they can't
+            // widen the column being previewed.
             let preview_width = {
                 let mut widths: Vec<f32> = match side {
-                    crate::app::config::DockSide::Left => self.dock.left.clone(),
-                    crate::app::config::DockSide::Right => self.dock.right.clone(),
+                    crate::app::config::DockSide::Left => &self.dock.left,
+                    crate::app::config::DockSide::Right => &self.dock.right,
                 }
-                .into_iter()
+                .iter()
+                .copied()
+                .filter(|&pid| self.dock_panel_visible(pid))
                 .map(|pid| self.dock.width(pid, self.win_size.0))
                 .collect();
                 widths.push(self.dock.width(id, self.win_size.0));
@@ -1555,15 +1559,20 @@ impl OpenCADStudio {
                     }
                 });
             // The ghost is the dragged panel at its real size: its own saved
-            // width and its 1/N share of the edge (N = stack size after the
-            // drop), with a header naming which panel is being moved.
+            // width and its 1/N share of the edge (N = number of panels shown
+            // on the edge after the drop), with a header naming which panel is
+            // being moved. Only visibly-docked panels share the column height:
+            // a hidden (closed) panel keeps its stack slot but no screen space,
+            // so it must not split the preview.
             let was_here = self.dock.location(id).map(|(s, _)| s) == Some(side);
+            let visible = self.dock_visible_len(side);
             let final_count = if was_here {
-                std::cmp::max(self.dock.len(side), 1)
+                std::cmp::max(visible, 1)
             } else {
-                self.dock.len(side) + 1
+                visible + 1
             };
-            let slot_h = self.win_size.1 / final_count as f32;
+            let edge_h = tab.scene.selection.borrow().vp_size.1;
+            let slot_h = edge_h / final_count as f32;
             let index = self.dock_drag_target.map(|(_, i)| i).unwrap_or(0);
             let slot = index.min(final_count.saturating_sub(1));
             let ghost_top = slot as f32 * slot_h;
@@ -1733,6 +1742,7 @@ impl OpenCADStudio {
                     self.tabs[self.active_tab].is_start,
                     self.tabs[self.active_tab].history.undo_stack.len(),
                     self.tabs[self.active_tab].history.redo_stack.len(),
+                    self.show_block_palette,
                 ));
             }
             if self.show_file_tabs {
@@ -2129,6 +2139,9 @@ impl OpenCADStudio {
             event::listen_with(|ev, status, win_id| {
                 use iced::event::Status;
                 match ev {
+                    iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                        iced::mouse::Button::Left,
+                    )) => Some(Message::PropPointerPressed),
                     iced::Event::Window(window::Event::CloseRequested) => {
                         Some(Message::WindowCloseRequested(win_id))
                     }
@@ -2306,7 +2319,14 @@ impl OpenCADStudio {
         let tab_strip = (!pinned.is_empty()).then(|| {
             let tabs: Vec<Element<'_, Message>> = pinned
                 .iter()
-                .map(|id| self.rail_slice(*id, side))
+                .map(|id| {
+                    self.rail_slice(
+                        *id,
+                        side,
+                        self.dock_expanded == Some(*id),
+                        self.dock_dragging == Some(*id),
+                    )
+                })
                 .collect();
             column(tabs).width(DOCK_RAIL_W).height(Fill).into()
         });
@@ -2351,6 +2371,8 @@ impl OpenCADStudio {
         &self,
         id: crate::ui::dock::PanelId,
         side: crate::app::config::DockSide,
+        is_active: bool,
+        is_dragging: bool,
     ) -> Element<'_, Message> {
         let label = canvas(VBarLabel {
             text: id.title().to_string(),
@@ -2358,26 +2380,37 @@ impl OpenCADStudio {
         })
         .width(Fill)
         .height(Fill);
-        mouse_area(
-            container(label)
-                .width(Length::Fixed(DOCK_RAIL_W))
-                .height(Fill)
-                .style(|theme: &Theme| container::Style {
-                    background: Some(Background::Color(
-                        theme.palette().background.base.color,
-                    )),
-                    border: Border {
-                        color: theme.palette().background.neutral.color,
-                        width: 1.0,
-                        radius: 0.0.into(),
+        let bg = move |theme: &Theme| {
+            let palette = theme.palette();
+            if is_active {
+                palette.primary.weak.color
+            } else if is_dragging {
+                palette.primary.weak.color.scale_alpha(0.55)
+            } else {
+                palette.background.base.color
+            }
+        };
+        let tab = container(label)
+            .width(Length::Fixed(DOCK_RAIL_W))
+            .height(Fill)
+            .style(move |theme: &Theme| container::Style {
+                background: Some(Background::Color(bg(theme))),
+                border: Border {
+                    color: if is_active {
+                        theme.palette().primary.base.color
+                    } else {
+                        theme.palette().background.neutral.color
                     },
-                    ..Default::default()
-                }),
-        )
-        .interaction(iced::mouse::Interaction::Pointer)
-        .on_press(Message::Dock(crate::ui::dock::DockMsg::DockGrab(id)))
-        .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
-        .into()
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+                ..Default::default()
+            });
+        mouse_area(tab)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .on_press(Message::Dock(crate::ui::dock::DockMsg::DockGrab(id)))
+            .on_enter(Message::Dock(crate::ui::dock::DockMsg::Hover(id)))
+            .into()
     }
 
     /// A panel expanded to the full edge column: the panel body plus a

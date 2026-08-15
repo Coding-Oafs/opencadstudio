@@ -18,7 +18,10 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     generate_type_registry(&out_dir);
     generate_version_info(&out_dir);
-    println!("cargo:rerun-if-changed=Cargo.lock");
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_cargo_lock_path().display()
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════════

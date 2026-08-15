@@ -59,13 +59,13 @@ pub enum HostRequest {
     NeedsEntityPick {
         command_id: u64,
     },
+    Shutdown,
     ExecuteCode {
         command_id: u64,
         source: CommandSource,
         code: String,
         tab_index: usize,
     },
-    Shutdown,
 }
 
 /// Responses the plugin runner sends back for `HostRequest`.
@@ -76,8 +76,8 @@ pub enum HostResponse {
     Text(String),
     Ribbon(Vec<OwnedRibbonGroup>),
     Manifest(OwnedPluginManifest),
-    CodeExecutionResult(crate::host::ExecutionResult),
     Error(String),
+    CodeExecutionResult(crate::host::ExecutionResult),
 }
 
 /// Requests the plugin runner sends to the host.
@@ -87,8 +87,6 @@ pub enum PluginRequest {
     PushOutput(String),
     PushError(String),
     AddEntity(EntityType),
-    /// Add multiple entities in a single request.
-    AddEntities(Vec<EntityType>),
     /// Replace the existing entity carrying this entity's handle in place.
     UpdateEntity(EntityType),
     /// Delete the entity with `handle`.
@@ -119,6 +117,8 @@ pub enum PluginRequest {
     /// Ask the host to create/refresh a shared-memory document view and return
     /// the file path + current version.
     OpenDocumentView,
+    /// Add multiple entities in a single request.
+    AddEntities(Vec<EntityType>),
     /// V4: ask the host to create/refresh a tab-keyed shared-memory document
     /// view and return the file path + current version.
     OpenDocumentViewV4 { tab_id: u64 },
@@ -134,7 +134,6 @@ pub enum PluginResponse {
     Ok,
     Bool(bool),
     Handle(Handle),
-    Handles(Vec<Handle>),
     Record(Option<ExtendedDataRecord>),
     Document(Box<CadDocument>),
     Error(String),
@@ -143,6 +142,7 @@ pub enum PluginResponse {
         path: String,
         version: u64,
     },
+    Handles(Vec<Handle>),
     /// V4: path to the tab-keyed memory-mapped file and current version.
     DocumentViewV4 {
         path: String,

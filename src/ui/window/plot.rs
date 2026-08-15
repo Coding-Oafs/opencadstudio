@@ -401,9 +401,11 @@ fn drop_row_enabled<'a>(
     }
     row![
         text(label).size(11).style(muted_style).width(92),
-        container(text(selected.map(|choice| choice.to_string()).unwrap_or_default()).size(12).style(muted_style))
-            .padding([4, 7])
-            .width(width),
+        crate::ui::read_only::field(
+            selected.map(|choice| choice.to_string()).unwrap_or_default().as_str(),
+            12.0,
+            width,
+        ),
     ]
     .spacing(8)
     .align_y(iced::Center)
@@ -442,9 +444,7 @@ fn field_row_enabled<'a>(
     }
     row![
         text(label).size(11).style(muted_style).width(92),
-        container(text(value.to_string()).size(12).style(muted_style))
-            .padding([4, 7])
-            .width(width as f32),
+        crate::ui::read_only::field(value, 12.0, Length::Fixed(width as f32)),
     ]
     .spacing(8)
     .align_y(iced::Center)

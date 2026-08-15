@@ -29,6 +29,10 @@ impl Scene {
         self.preview_hatches = std::sync::Arc::new(models);
     }
 
+    pub fn set_command_preview_hatches(&mut self, models: Vec<HatchModel>) {
+        self.preview_hatches = std::sync::Arc::new(models);
+    }
+
     pub fn set_area_preview_regions(&mut self, regions: &[AreaPreviewRegion]) {
         let mut models = Vec::new();
         for region in regions {
@@ -154,6 +158,8 @@ impl Scene {
             world_origin: origin,
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
+            boundary_exterior: None,
+            boundary_sources: None,
             pattern: HatchPattern::Solid,
             name: "AREA_PREVIEW".into(),
             color: [0.0; 4],

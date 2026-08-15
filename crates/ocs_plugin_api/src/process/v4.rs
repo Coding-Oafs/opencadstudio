@@ -1,14 +1,15 @@
 //! Private V4 connection owned by [`PluginProcess`](crate::process::PluginProcess).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use interprocess::local_socket::Stream;
 use interprocess::TryClone;
 
 use crate::host::{CommandSource, ExecutionResult, HostApi, HostNotification, PluginNotification};
-use crate::ipc::protocol::{HostRequest, HostResponse};
+use crate::ipc::protocol::{HostRequest, HostResponse, PluginRequest};
 use crate::ipc::server::handle_plugin_request;
 use crate::ipc::transport::send;
 use crate::ipc::v4::protocol::{HostToPluginV4, NotificationEnvelope};
@@ -77,6 +78,8 @@ fn request_kind(req: &HostRequest) -> &'static str {
 pub(crate) struct V4Connection {
     shared: Arc<V4HostShared>,
     incoming: Mutex<mpsc::Receiver<HostIncoming>>,
+    deferred: Mutex<VecDeque<(u64, Option<u64>, Box<PluginRequest>)>>,
+    call_lock: Mutex<()>,
     next_id: AtomicU64,
     reader_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -117,6 +120,8 @@ impl V4Connection {
         Ok(Self {
             shared,
             incoming: Mutex::new(incoming_rx),
+            deferred: Mutex::new(VecDeque::new()),
+            call_lock: Mutex::new(()),
             next_id: AtomicU64::new(1),
             reader_handle: Mutex::new(Some(handle)),
         })
@@ -157,6 +162,7 @@ impl V4Connection {
         req: HostRequest,
         on_start_interactive: &mut dyn FnMut(u64),
     ) -> Result<HostResponse, PluginError> {
+        let _call_guard = self.call_lock.lock().unwrap_or_else(|e| e.into_inner());
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let kind = request_kind(&req);
         let timeout = request_timeout(kind);
@@ -188,16 +194,24 @@ impl V4Connection {
                 Ok(HostIncoming::Response { payload, .. }) => {
                     return Err(PluginError::UnexpectedResponse(Box::new(payload)))
                 }
-                Ok(HostIncoming::Request { id: rid, payload }) => {
-                    let resp = handle_plugin_request(host, *payload, on_start_interactive);
-                    let mut writer = self.shared.writer.lock().unwrap_or_else(|e| e.into_inner());
-                    let stream = writer.as_mut().ok_or_else(|| {
-                        PluginError::Io(std::io::Error::new(
-                            std::io::ErrorKind::NotConnected,
-                            "V4 connection is shut down",
-                        ))
-                    })?;
-                    send(stream, &HostToPluginV4::Response { id: rid, payload: resp })?;
+                Ok(HostIncoming::Request {
+                    id: rid,
+                    tab_id,
+                    payload,
+                }) => {
+                    if tab_id.map_or(true, |request_tab| request_tab == host.tab_id()) {
+                        self.respond_to_plugin_request(
+                            host,
+                            rid,
+                            payload,
+                            on_start_interactive,
+                        )?;
+                    } else {
+                        self.deferred
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push_back((rid, tab_id, payload));
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     self.shared.alive.store(false, Ordering::SeqCst);
@@ -226,19 +240,50 @@ impl V4Connection {
         host: &mut dyn HostApi,
         on_start_interactive: &mut dyn FnMut(u64),
     ) -> Result<(), PluginError> {
+        let _call_guard = match self.call_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => return Ok(()),
+        };
+        let current_tab_id = host.tab_id();
+        let mut ready = VecDeque::new();
+        {
+            let mut deferred = self.deferred.lock().unwrap_or_else(|e| e.into_inner());
+            let mut waiting = VecDeque::new();
+            while let Some((id, tab_id, payload)) = deferred.pop_front() {
+                if tab_id.map_or(true, |request_tab| request_tab == current_tab_id) {
+                    ready.push_back((id, payload));
+                } else {
+                    waiting.push_back((id, tab_id, payload));
+                }
+            }
+            *deferred = waiting;
+        }
+        while let Some((id, payload)) = ready.pop_front() {
+            self.respond_to_plugin_request(host, id, payload, on_start_interactive)?;
+        }
+
         let incoming = self.incoming.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             match incoming.try_recv() {
-                Ok(HostIncoming::Request { id, payload }) => {
-                    let resp = handle_plugin_request(host, *payload, on_start_interactive);
-                    let mut writer = self.shared.writer.lock().unwrap_or_else(|e| e.into_inner());
-                    let stream = writer.as_mut().ok_or_else(|| {
-                        PluginError::Io(std::io::Error::new(
-                            std::io::ErrorKind::NotConnected,
-                            "V4 connection is shut down",
-                        ))
-                    })?;
-                    send(stream, &HostToPluginV4::Response { id, payload: resp })?;
+                Ok(HostIncoming::Request {
+                    id,
+                    tab_id,
+                    payload,
+                }) => {
+                    if tab_id.map_or(true, |request_tab| request_tab == current_tab_id) {
+                        self.respond_to_plugin_request(
+                            host,
+                            id,
+                            payload,
+                            on_start_interactive,
+                        )?;
+                    } else {
+                        self.deferred
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push_back((id, tab_id, payload));
+                    }
                 }
                 Ok(HostIncoming::Response { .. }) => {
                     // Responses without a matching active call should not
@@ -254,6 +299,31 @@ impl V4Connection {
                 }
             }
         }
+    }
+
+    fn respond_to_plugin_request(
+        &self,
+        host: &mut dyn HostApi,
+        id: u64,
+        payload: Box<PluginRequest>,
+        on_start_interactive: &mut dyn FnMut(u64),
+    ) -> Result<(), PluginError> {
+        let response = handle_plugin_request(host, *payload, on_start_interactive);
+        let mut writer = self.shared.writer.lock().unwrap_or_else(|e| e.into_inner());
+        let stream = writer.as_mut().ok_or_else(|| {
+            PluginError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "V4 connection is shut down",
+            ))
+        })?;
+        send(
+            stream,
+            &HostToPluginV4::Response {
+                id,
+                payload: response,
+            },
+        )?;
+        Ok(())
     }
 
     /// Send an `ExecuteCode` request and block until the plugin returns the
@@ -532,6 +602,7 @@ mod tests {
                         &mut runner_stream,
                         &PluginToHostV4::Request {
                             id: 99,
+                            tab_id: None,
                             payload: PluginRequest::PushInfo("nested".to_string()),
                         },
                     )

@@ -218,8 +218,10 @@ impl PluginManager {
             return false;
         };
         let plugin = self.plugins.remove(index);
-        plugin.process.shutdown_and_wait(Duration::from_secs(5));
-        true
+        plugin
+            .process
+            .shutdown_and_wait(Duration::from_secs(5))
+            .is_some()
     }
 
     /// Begin asynchronous shutdown of every plugin process.

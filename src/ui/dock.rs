@@ -157,7 +157,7 @@ impl DockState {
     pub fn width(&self, id: PanelId, win_w: f32) -> f32 {
         self.settings(id)
             .width
-            .clamp(DOCK_MIN_W, DOCK_MAX_W.min(win_w * 0.45))
+            .clamp(DOCK_MIN_W, DOCK_MAX_W.min(win_w * 0.45).max(DOCK_MIN_W))
     }
 
     pub fn auto_collapse(&self, id: PanelId) -> bool {
@@ -195,11 +195,6 @@ impl DockState {
         stack.insert(index, id);
         true
     }
-
-    /// Number of panels currently docked on `side`.
-    pub fn len(&self, side: DockSide) -> usize {
-        self.stack(side).len()
-    }
 }
 
 /// Insertion index (0..=total) for dropping a panel whose pointer is at
@@ -211,6 +206,11 @@ pub fn drop_index(y: f32, total: usize, avail: f32) -> usize {
     }
     let h = avail / total as f32;
     let idx = (y / h).round() as usize;
+    // A single full-height panel must not offer a top/bottom split: any drop
+    // lands in the one available slot.
+    if total <= 1 {
+        return 0;
+    }
     idx.min(total)
 }
 
@@ -289,6 +289,17 @@ mod tests {
     }
 
     #[test]
+    fn width_does_not_panic_when_window_minimized() {
+        let mut state = DockState::default();
+        state.set_width(PanelId::BlockPalette, 500.0);
+        // A minimized or not-yet-laid-out window reports width 0; the clamp
+        // must fall back to DOCK_MIN_W instead of panicking on min > max.
+        assert_eq!(state.width(PanelId::BlockPalette, 0.0), DOCK_MIN_W);
+        // Deleted right below the minimum dock width behaves the same way.
+        assert_eq!(state.width(PanelId::BlockPalette, 100.0), DOCK_MIN_W);
+    }
+
+    #[test]
     fn drop_index_maps_between_zero_and_total() {
         assert_eq!(drop_index(0.0, 3, 300.0), 0);
         assert_eq!(drop_index(100.0, 3, 300.0), 1);
@@ -298,9 +309,20 @@ mod tests {
     }
 
     #[test]
-    fn len_reports_stack_size() {
-        let state = DockState::default();
-        assert_eq!(state.len(DockSide::Left), 1);
-        assert_eq!(state.len(DockSide::Right), 1);
+    fn drop_index_single_slot_is_always_zero() {
+        // One panel sharing the full edge height: any pointer y lands in the
+        // single slot, so the insertion index must be 0 (no top/bottom split).
+        assert_eq!(drop_index(5.0, 1, 900.0), 0);
+        assert_eq!(drop_index(450.0, 1, 900.0), 0);
+        assert_eq!(drop_index(895.0, 1, 900.0), 0);
+    }
+
+    #[test]
+    fn drop_index_multi_slot_maps_position() {
+        // Two panels on an edge produce insertion positions 0..=total: pointer
+        // near the top lands before the first slot (0); pointer near the bottom
+        // of the last slot lands after the last (== total, append).
+        assert_eq!(drop_index(10.0, 2, 900.0), 0);
+        assert_eq!(drop_index(890.0, 2, 900.0), 2);
     }
 }

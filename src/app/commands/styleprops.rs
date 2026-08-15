@@ -1881,6 +1881,8 @@ impl OpenCADStudio {
                         // INSERT reference; refuses anonymous/xref sources and
                         // invalid/taken names.
                         self.tabs[i].scene.rename_block(&old_name, &new_name)
+                    } else if type_str == "LAYER" {
+                        self.tabs[i].rename_layer(&old_name, &new_name)
                     } else if known {
                         rename_symbol(
                             &mut self.tabs[i].scene.document,
@@ -1892,14 +1894,8 @@ impl OpenCADStudio {
                         false
                     };
                     if ok {
-                        // Renamed references resolve at tessellation time —
-                        // rebuild so nothing renders off a stale name.
-                        self.tabs[i].scene.bump_geometry_no_blocks();
-                        // The per-tab active layer tracks the name.
-                        if type_str == "LAYER"
-                            && self.tabs[i].active_layer.eq_ignore_ascii_case(&old_name)
-                        {
-                            self.tabs[i].active_layer = new_name.clone();
+                        if type_str != "LAYER" {
+                            self.tabs[i].scene.bump_geometry_no_blocks();
                         }
                         if type_str == "UCS" {
                             if let Some(active) = self.tabs[i].active_ucs.as_mut() {
@@ -1910,6 +1906,9 @@ impl OpenCADStudio {
                             }
                         }
                         self.tabs[i].dirty = true;
+                        if type_str == "LAYER" {
+                            self.refresh_layer_panel();
+                        }
                         self.command_line
                             .push_output(crate::tf!("RENAME: '{}' → '{}'.", old_name, new_name).as_ref());
                     } else {
@@ -2352,13 +2351,7 @@ impl OpenCADStudio {
     }
 }
 
-/// RENAME for the name-keyed symbol tables (layer / text style / dim style /
-/// linetype / UCS / view). `Table<T>` stores entries in a map keyed by
-/// UPPERCASE name, so a rename must remove + re-add — mutating `.name` in
-/// place leaves the map keyed by the old name and every later
-/// `get(new_name)` lookup silently fails. Name-based references (entity
-/// layer/linetype/style fields, layer linetypes, header current-* names) are
-/// chased case-insensitively, matching how the tables resolve names.
+/// RENAME for the remaining name-keyed symbol tables.
 fn rename_symbol(doc: &mut acadrust::CadDocument, ty: &str, old: &str, new: &str) -> bool {
     use acadrust::{EntityType, Table, TableEntry};
 
@@ -2366,38 +2359,10 @@ fn rename_symbol(doc: &mut acadrust::CadDocument, ty: &str, old: &str, new: &str
         if !crate::scene::valid_block_name(new) {
             return false;
         }
-        // A case-only rename reuses its own key; any other target must be free.
-        if !old.eq_ignore_ascii_case(new) && table.contains(new) {
-            return false;
-        }
-        let Some(mut e) = table.remove(old) else {
-            return false;
-        };
-        e.set_name(new.to_string());
-        let _ = table.add(e);
-        true
+        table.rename(old, new.to_string()).is_ok()
     }
 
     match ty {
-        "LAYER" => {
-            // Layer 0 and Defpoints are fixed names; xref-dependent ("|")
-            // layers belong to the referenced file.
-            if old == "0" || old.eq_ignore_ascii_case("Defpoints") || old.contains('|') {
-                return false;
-            }
-            if !rekey(&mut doc.layers, old, new) {
-                return false;
-            }
-            for e in doc.entities_mut() {
-                if e.common().layer.eq_ignore_ascii_case(old) {
-                    e.common_mut().layer = new.to_string();
-                }
-            }
-            if doc.header.current_layer_name.eq_ignore_ascii_case(old) {
-                doc.header.current_layer_name = new.to_string();
-            }
-            true
-        }
         "STYLE" | "TEXTSTYLE" => {
             if !rekey(&mut doc.text_styles, old, new) {
                 return false;

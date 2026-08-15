@@ -11,7 +11,7 @@
 //! formats or enum variants.
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -82,7 +82,7 @@ pub fn recv_framed<R: Read, T: serde::de::DeserializeOwned>(reader: &mut R) -> R
 /// Thread-safe [`PluginRequestSender`] implementation that forwards requests
 /// over a single TCP stream to a request proxy server.
 pub struct ProxyPluginRequestSender {
-    stream: Mutex<TcpStream>,
+    stream: Arc<Mutex<TcpStream>>,
 }
 
 impl ProxyPluginRequestSender {
@@ -98,21 +98,14 @@ impl ProxyPluginRequestSender {
         stream.flush()?;
         stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
         Ok(Self {
-            stream: Mutex::new(stream),
+            stream: Arc::new(Mutex::new(stream)),
         })
     }
 
-    /// Create a second handle to the same underlying socket so multiple
-    /// callers can share the proxy connection (requests are still serialized
-    /// by the mutex on each handle).
+    /// Create a second handle that shares the connection and its request lock.
     pub fn try_clone(&self) -> Result<Self, ProxyError> {
-        let stream = self
-            .stream
-            .lock()
-            .map_err(|e| ProxyError::Io(std::io::Error::other(e.to_string())))?
-            .try_clone()?;
         Ok(Self {
-            stream: Mutex::new(stream),
+            stream: Arc::clone(&self.stream),
         })
     }
 
@@ -145,6 +138,7 @@ impl ProxyPluginRequestSender {
                         || e.kind() == ErrorKind::TimedOut =>
                 {
                     if let Err(e) = poll() {
+                        let _ = stream.shutdown(Shutdown::Both);
                         break Err(e);
                     }
                 }

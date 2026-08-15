@@ -49,7 +49,8 @@ merge /tmp/NotoDeva.ttf /tmp/NotoDevaMerged.ttf
 sub /tmp/NotoDevaMerged.ttf "U+0000-024F,U+1E00-1EFF,U+2000-206F,U+0900-097F,U+A8E0-A8FF" devanagari.ttf
 
 # CJK comes from the noto-cjk repo (CFF/OTF; ttf-parser reads CFF outlines) and
-# is split by language: Chinese, Japanese and Korean each get their own file.
+# is split by language: Simplified Chinese, Traditional Chinese, Japanese and
+# Korean each get their own file.
 # Han ideographs share code points but differ in glyph shape, so each language
 # ships its own. These are the heavy ones and remain split so startup only loads
 # the active language.
@@ -57,6 +58,10 @@ CJK="https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF"
 dl /tmp/NotoSC.otf "$CJK/SimplifiedChinese/NotoSansCJKsc-Regular.otf"
 sub /tmp/NotoSC.otf "U+3000-303F,U+4E00-9FFF,U+FF00-FFEF" /tmp/chinese.otf
 collection chinese.ttf latin.ttf /tmp/chinese.otf
+
+dl /tmp/NotoTC.otf "$CJK/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+sub /tmp/NotoTC.otf "U+3000-303F,U+4E00-9FFF,U+FF00-FFEF" /tmp/traditional_chinese.otf
+collection traditional_chinese.ttf latin.ttf /tmp/traditional_chinese.otf
 
 dl /tmp/NotoJP.otf "$CJK/Japanese/NotoSansCJKjp-Regular.otf"
 sub /tmp/NotoJP.otf "U+3000-303F,U+3040-30FF,U+31F0-31FF,U+4E00-9FFF,U+FF00-FFEF" /tmp/japanese.otf

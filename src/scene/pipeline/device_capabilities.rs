@@ -16,9 +16,8 @@ impl DeviceCapabilities {
     /// Indexed wires read one per-wire constants storage buffer.
     const WIRE_STORAGE_BINDINGS: u32 = 1;
 
-    /// Batched hatch uses five storage bindings in one shader stage:
-    /// instances, boundaries, families, dashes, and visibility.
-    const HATCH_STORAGE_BINDINGS: u32 = 5;
+    /// Batched hatch stores instances, families, dashes, and visibility.
+    const HATCH_STORAGE_BINDINGS: u32 = 4;
 
     pub fn detect(device: &wgpu::Device) -> Self {
         Self::from_limits(&device.limits())

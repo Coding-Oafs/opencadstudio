@@ -14,12 +14,7 @@ serde = { version = "1", features = ["derive"] }
 # Pulled in only by the `host` feature, which adds the `acadrust`-typed
 # `HostApi` runtime surface. The default crate stays dependency-free so engine
 # crates and external tooling can depend on the manifest/ribbon contract cheaply.
-#
-# acadrust types appear in the HostApi trait object, so the plugin and host
-# MUST resolve the exact same acadrust source. The root Cargo.toml pins the
-# exact revision via [patch.crates-io]; this crate uses the same version
-# requirement so the patch applies consistently across the workspace.
-acadrust = { version = "0.4", optional = true, features = ["serde"] }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "c28b2cd", optional = true, features = ["serde"] }
 
 # Runtime IPC and serialization (host feature only).
 interprocess = { version = "2", optional = true }
@@ -42,9 +37,7 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 cargo-lock = "11"
 # acadrust is scanned at build time to generate the embedded type registry.
-# Use the same version requirement as the root Cargo.toml so the
-# [patch.crates-io] override applies here too.
-acadrust = { version = "0.4", features = ["serde"] }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "c28b2cd", features = ["serde"] }
 
 [dev-dependencies]
 serde_json = "1"
