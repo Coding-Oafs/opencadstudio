@@ -1338,6 +1338,27 @@ impl std::fmt::Display for SaveFailure {
 
 impl std::error::Error for SaveFailure {}
 
+const SUPPORTED_SAVE_FORMATS: &str = ".dwg, .dxf";
+
+fn validate_save_extension(path: &Path) -> Result<(), SaveFailure> {
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if matches!(extension.as_str(), "dwg" | "dxf") {
+        return Ok(());
+    }
+
+    let requested = if extension.is_empty() {
+        "<none>".to_string()
+    } else {
+        format!(".{extension}")
+    };
+    Err(SaveFailure::other(format!(
+        "unsupported output format {requested}; supported formats: {SUPPORTED_SAVE_FORMATS}"
+    )))
+}
+
 fn replace_error_is_file_in_use(error: &std::io::Error) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -1360,7 +1381,7 @@ fn windows_replace_error_is_file_in_use(raw_os_error: Option<i32>) -> bool {
 
 #[cfg(test)]
 mod save_failure_tests {
-    use super::windows_replace_error_is_file_in_use;
+    use super::{save_as_version, windows_replace_error_is_file_in_use};
 
     #[test]
     fn issue_498_recognizes_windows_file_sharing_errors() {
@@ -1368,6 +1389,31 @@ mod save_failure_tests {
         assert!(windows_replace_error_is_file_in_use(Some(33)));
         assert!(!windows_replace_error_is_file_in_use(Some(5)));
         assert!(!windows_replace_error_is_file_in_use(None));
+    }
+
+    #[test]
+    fn unsupported_output_extension_is_rejected_before_write() {
+        let path = std::env::temp_dir().join(format!(
+            "ocs_unsupported_export_{}_{}.pdf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let error = save_as_version(
+            &acadrust::CadDocument::new(),
+            &path,
+            acadrust::DxfVersion::AC1032,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "unsupported output format .pdf; supported formats: .dwg, .dxf"
+        );
+        assert!(!path.exists(), "unsupported export created an output file");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1486,6 +1532,7 @@ fn save_owned_as_version_inner<F>(
 where
     F: FnOnce(&Path) -> Result<(), SaveFailure>,
 {
+    validate_save_extension(path)?;
     let perf = crate::perf::enabled();
     let total_started = iced::time::Instant::now();
     doc.version = version;
