@@ -2951,13 +2951,6 @@ fn start_page_content<'a>(
         outline_btn(crate::tr!("action", "options"), Message::OptionsOpen).into(),
     ];
     secondary_items.push(outline_btn(crate::tr!("action", "plugins"), Message::PluginManagerOpen).into());
-    secondary_items.push(
-        outline_btn(
-            "r/OpenCADStudio".to_string(),
-            Message::OpenUrl("https://www.reddit.com/r/OpenCADStudio/".to_string()),
-        )
-        .into(),
-    );
     // The web build is already in the browser, so only the desktop offers a
     // link to the web version.
     #[cfg(not(target_arch = "wasm32"))]
@@ -2974,10 +2967,54 @@ fn start_page_content<'a>(
                 .into(),
         );
     }
+    #[cfg(target_arch = "wasm32")]
+    secondary_items.push(
+        button(text("OCS Desktop").size(14))
+            .on_press(Message::OpenUrl(
+                "https://github.com/HakanSeven12/OpenCADStudio/releases/latest".to_string(),
+            ))
+            .padding([10, 22])
+            .style(|theme: &Theme, status| start_action_shape(button::primary(theme, status)))
+            .into(),
+    );
     let secondary_row = WrapFlow::new(secondary_items)
         .spacing_x(12.0)
         .row_h(44.0)
         .report_natural_width(action_width_out.clone());
+
+    let reddit_btn = button(
+        row![
+            iced::widget::svg(iced::widget::svg::Handle::from_memory(include_bytes!(
+                "../../../assets/icons/reddit.svg"
+            )))
+            .width(20)
+            .height(20),
+            text("r/OpenCADStudio").size(14),
+        ]
+        .spacing(7)
+        .align_y(iced::Center),
+    )
+    .on_press(Message::OpenUrl(
+        "https://www.reddit.com/r/OpenCADStudio/".to_string(),
+    ))
+    .padding([10, 22])
+    .style(|theme: &Theme, status| {
+        let palette = theme.palette();
+        let pair = match status {
+            button::Status::Hovered => palette.background.strong,
+            _ => palette.background.weak,
+        };
+        start_action_shape(button::Style {
+            background: Some(Background::Color(pair.color)),
+            text_color: pair.text,
+            border: Border {
+                color: Color::from_rgb8(255, 69, 0),
+                width: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    });
 
     let sponsors = column![
         text(crate::tr!("start", "sponsors")).size(15),
@@ -3006,6 +3043,8 @@ fn start_page_content<'a>(
         container(primary_row).center_x(Fill),
         Space::new().height(iced::Length::Fixed(10.0)),
         container(secondary_row).center_x(Fill),
+        Space::new().height(iced::Length::Fixed(10.0)),
+        container(reddit_btn).center_x(Fill),
         Space::new().height(Fill),
         sponsors,
         Space::new().height(iced::Length::Fixed(52.0)),
