@@ -12,10 +12,6 @@ members = [
     "crates/dwg-thumbnailer-win",
 ]
 
-[features]
-default = []
-ifc = ["dep:acadifc"]
-
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
@@ -31,9 +27,8 @@ glam = { version = "0.33", features = ["bytemuck"] }
 rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
-acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "c28b2cd", features = ["serde"] }
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "617bdec", features = ["acis", "offset"] }
-acadifc = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "47b5603", optional = true }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "931c4ab", features = ["serde"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "efc77f5", features = ["acis", "offset"] }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
