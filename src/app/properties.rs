@@ -1432,6 +1432,9 @@ impl OpenCADStudio {
                     }
                 }
             };
+            // Precompute the focused-id → field-key map for O(1) lookups on
+            // `PropSyncActive`; derived from `sections`, so rebuild it here.
+            panel.field_key_by_id = crate::ui::properties::build_field_key_map(&panel.sections);
             panel.color_palette_open = color_palette_open;
             let new_handles: Vec<acadrust::Handle> = selected.iter().map(|(h, _)| *h).collect();
             // Carry the in-progress edits only when the selection is unchanged
@@ -1466,6 +1469,10 @@ impl OpenCADStudio {
                     .all(|handle| self.tabs[i].scene.is_layer_locked(*handle));
             if locked_only {
                 make_sections_read_only(&mut panel.sections);
+                // Rows demoted to read-only no longer back an editable field;
+                // drop them from the id→key map so focus can't map onto them.
+                panel.field_key_by_id =
+                    crate::ui::properties::build_field_key_map(&panel.sections);
                 panel.edit_buf.clear();
                 panel.active_field = None;
                 panel.color_picker_open = false;

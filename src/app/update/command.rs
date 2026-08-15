@@ -2005,7 +2005,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         // selected inserts to the picked definition. A stale
                         // typed value in the text buffer would mask the pick,
                         // so drop it; the pick also closes the list.
-                        self.tabs[i].properties.edit_buf.remove("block");
+                        self.tabs[i]
+                            .properties
+                            .edit_buf
+                            .remove(&crate::ui::properties::FieldKey::Geom("block"));
                         self.tabs[i].properties.edit_choice_open = false;
                         let canon = self.tabs[i]
                             .scene
@@ -2144,7 +2147,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.tabs[i].properties.active_field = None;
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
-                    if let Some(raw_val) = self.tabs[i].properties.edit_buf.remove(field) {
+                    if let Some(raw_val) = self.tabs[i]
+                        .properties
+                        .edit_buf
+                        .remove(&crate::ui::properties::FieldKey::Geom(field))
+                    {
                         // Block names are free-form text — a name like "10-5"
                         // must not be arithmetic-evaluated.
                         let val = if field == "block" {

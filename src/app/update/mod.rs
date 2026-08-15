@@ -4598,7 +4598,7 @@ impl OpenCADStudio {
                 self.tabs[self.active_tab]
                     .properties
                     .edit_buf
-                    .insert(field.to_string(), value);
+                    .insert(crate::ui::properties::FieldKey::Geom(field), value);
                 Task::none()
             }
 
@@ -4642,11 +4642,8 @@ impl OpenCADStudio {
             Message::PropSyncActive(focused) => {
                 let panel = &mut self.tabs[self.active_tab].properties;
                 if let Some(id) = focused.as_ref() {
-                    if let Some(key) = crate::ui::properties::prop_field_key_for_id(
-                        &panel.sections,
-                        id,
-                    ) {
-                        let changed = panel.active_field.as_deref() != Some(key.as_str());
+                    if let Some(key) = panel.prop_field_key_for_id(id) {
+                        let changed = panel.active_field.as_ref() != Some(&key);
                         panel.active_field = Some(key);
                         // Only select the whole value when focus landed on a
                         // field that wasn't already the active one; re-focusing
@@ -4659,7 +4656,7 @@ impl OpenCADStudio {
                     }
                 }
                 if !crate::ui::properties::active_key_focused(
-                    panel.active_field.as_deref(),
+                    panel.active_field.as_ref(),
                     focused.as_ref(),
                 ) {
                     panel.active_field = None;
