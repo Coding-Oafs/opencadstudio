@@ -218,8 +218,7 @@ fn external_card<'a>(
     disabled: bool,
     selected: bool,
 ) -> Element<'a, Message> {
-    let failed_old_api =
-        load_error.is_some() && p.api_version != ocs_plugin_api::API_VERSION;
+    let failed_old_api = load_error.is_some() && !p.api_compatible();
     let (status, kind) = if loaded && disabled {
         (t!("Disabled"), StatusKind::Muted)
     } else if loaded {
@@ -369,7 +368,9 @@ fn install_controls<'a>(
         .into()
     };
     let action = match selected_api {
-        Some(api_version) if api_version == ocs_plugin_api::API_VERSION => {
+        Some(api_version)
+            if ocs_plugin_api::manifest::host_accepts_plugin_version(api_version) =>
+        {
             pill_button(
                 t!("Install"),
                 Message::PluginInstall(repo_s.clone()),
@@ -845,7 +846,9 @@ pub fn view_window<'a>(
                     let compatible_tags = releases
                         .iter()
                         .filter(|release| {
-                            release.api_version == ocs_plugin_api::API_VERSION
+                            ocs_plugin_api::manifest::host_accepts_plugin_version(
+                                release.api_version,
+                            )
                         })
                         .map(|release| release.tag.clone())
                         .collect::<Vec<_>>();

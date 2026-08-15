@@ -1692,6 +1692,9 @@ pub enum ArrowKey {
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick(Instant),
+    /// Periodic drain of plugin-to-host requests that arrived outside a host
+    /// call (e.g. mutations from the Python REPL).
+    DrainPluginRequests,
     /// Web: periodic check for per-script fonts a drawing needs but hasn't
     /// fetched yet (#141). Native: never emitted.
     PollWebFonts,

@@ -1,16 +1,20 @@
 //! Process manager for out-of-process plugins.
 
 use std::path::Path;
-use std::process::Child;
 use std::sync::Arc;
+use std::time::Duration;
 
-use crate::host::HostApi;
+use crate::host::{HostApi, HostNotification, PluginNotification};
 use crate::process::{PluginError, PluginProcess};
 use crate::ribbon::owned::{to_shared_module, SharedCadModule};
+
+/// Callback the host installs to receive plugin-to-host notifications.
+pub type NotificationHandler = Arc<dyn Fn(&str, Option<u64>, PluginNotification) + Send + Sync>;
 
 /// Owner of every spawned plugin process.
 pub struct PluginManager {
     plugins: Vec<LoadedPlugin>,
+    notification_handler: Option<NotificationHandler>,
 }
 
 struct LoadedPlugin {
@@ -42,7 +46,16 @@ impl PluginManager {
     pub fn new() -> Self {
         Self {
             plugins: Vec::new(),
+            notification_handler: None,
         }
+    }
+
+    /// Install a handler for plugin-to-host notifications. The handler runs on
+    /// the V4 reader thread and must not block or allocate heavily; forward to
+    /// a channel if heavy work is required. Should be set before [`load`] is
+    /// called so notifications from newly loaded plugins are delivered.
+    pub fn set_notification_handler(&mut self, handler: NotificationHandler) {
+        self.notification_handler = Some(handler);
     }
 
     /// Spawn `cdylib_path` as a separate plugin process, build its ribbon
@@ -52,7 +65,11 @@ impl PluginManager {
         cdylib_path: &Path,
         host: &mut dyn HostApi,
     ) -> Result<String, PluginError> {
-        let process = PluginProcess::spawn(cdylib_path, host)?;
+        let handler: NotificationHandler = match self.notification_handler.as_ref() {
+            Some(h) => Arc::clone(h),
+            None => Arc::new(|_id, _cmd, _notif| {}),
+        };
+        let process = PluginProcess::spawn(cdylib_path, host, handler)?;
         let id = process.id().to_string();
         let name = process.manifest().name.clone();
         let module = to_shared_module(id.clone(), name, process.ribbon().to_vec());
@@ -61,6 +78,26 @@ impl PluginManager {
             module,
         });
         Ok(id)
+    }
+
+    /// Fan out a host notification to every alive V4 plugin. Per-process errors
+    /// are logged; this is best-effort.
+    pub fn broadcast_notification(
+        &self,
+        command_id: Option<u64>,
+        notification: HostNotification,
+    ) {
+        for p in &self.plugins {
+            if !p.process.is_alive() {
+                continue;
+            }
+            if let Err(e) = p.process.notify_plugin(command_id, notification.clone()) {
+                eprintln!(
+                    "[plugin] broadcast_notification failed for {}: {e}",
+                    p.process.id()
+                );
+            }
+        }
     }
 
     /// Ribbon modules for alive, non-disabled plugins, sorted by `ribbon_order`.
@@ -140,6 +177,53 @@ impl PluginManager {
         out
     }
 
+    /// Drain any plugin→host requests that have arrived asynchronously across
+    /// all loaded plugins. Errors are logged; this is best-effort.
+    pub fn drain_requests(
+        &self,
+        host: &mut dyn HostApi,
+        on_start_interactive: &mut dyn FnMut(u64),
+    ) {
+        for p in &self.plugins {
+            if !p.process.is_alive() {
+                continue;
+            }
+            if let Err(e) = p.process.drain_requests(host, on_start_interactive) {
+                eprintln!("[plugin] drain_requests failed for {}: {e}", p.process.id());
+            }
+        }
+    }
+
+    /// Drain any plugin stdout/stderr lines that have accumulated across all
+    /// loaded plugins. Errors are logged; this is best-effort.
+    pub fn drain_io(&self) -> Vec<crate::process::PluginIoLine> {
+        let mut out = Vec::new();
+        for p in &self.plugins {
+            if !p.process.is_alive() {
+                continue;
+            }
+            out.extend(p.process.drain_io());
+        }
+        out
+    }
+
+    /// Shut down and remove the plugin with `id` from the manager.
+    ///
+    /// Returns `true` if a plugin with that id was found and removed. The
+    /// process is killed and waited on so its DLL is released; this is intended
+    /// for uninstall, where the caller needs the files to become deletable on
+    /// Windows.
+    pub fn remove(&mut self, id: &str) -> bool {
+        let Some(index) = self.plugins.iter().position(|p| p.process.id() == id) else {
+            return false;
+        };
+        let plugin = self.plugins.remove(index);
+        plugin
+            .process
+            .shutdown_and_wait(Duration::from_secs(5))
+            .is_some()
+    }
+
     /// Begin asynchronous shutdown of every plugin process.
     ///
     /// Kills every child synchronously on the calling thread and moves the
@@ -147,21 +231,8 @@ impl PluginManager {
     /// shutdown is fast regardless of how many plugins are loaded.
     pub fn shutdown_all(&mut self) {
         let plugins = std::mem::take(&mut self.plugins);
-        let mut children: Vec<Child> = Vec::with_capacity(plugins.len());
         for p in plugins {
-            let (stream, child) = p.process.take_resources();
-            drop(stream);
-            if let Some(mut child) = child {
-                let _ = child.kill();
-                children.push(child);
-            }
-        }
-        if !children.is_empty() {
-            std::thread::spawn(move || {
-                for mut child in children {
-                    let _ = child.wait();
-                }
-            });
+            p.process.shutdown();
         }
     }
 }

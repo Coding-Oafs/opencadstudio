@@ -2104,6 +2104,18 @@ impl OpenCADStudio {
         let single_instance = crate::io::single_instance::subscribe().map(Message::OpenExternal);
         #[cfg(target_arch = "wasm32")]
         let single_instance = Subscription::none();
+        // Drain plugin-to-host requests on a timer when any plugin is loaded.
+        // This lets long-lived plugin sessions (e.g. the Python REPL) mutate the
+        // host document without requiring a user-generated message.
+        #[cfg(not(target_arch = "wasm32"))]
+        let plugin_drain = if crate::plugin::external::with_manager(|mgr| !mgr.ids().is_empty()) {
+            iced::time::every(std::time::Duration::from_millis(100))
+                .map(|_| Message::DrainPluginRequests)
+        } else {
+            Subscription::none()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let plugin_drain = Subscription::none();
         let hatch_pattern_keys = if self.tabs[self.active_tab]
             .properties
             .hatch_pattern_picker_open
@@ -2121,6 +2133,7 @@ impl OpenCADStudio {
             caret_blink,
             web_fonts,
             autosave,
+            plugin_drain,
             single_instance,
             hatch_pattern_keys,
             event::listen_with(|ev, status, win_id| {

@@ -316,6 +316,40 @@ impl OpenCADStudio {
 
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
         match msg {
+            // Drain plugin-to-host requests that arrived outside of a host call.
+            // This runs on a periodic timer so long-lived plugin sessions such
+            // as the Python REPL can mutate the document without requiring a
+            // user-generated message. Desktop only.
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::DrainPluginRequests => {
+                for tab in 0..self.tabs.len() {
+                    let mut host = crate::app::plugin_host::HostSession::new(self, tab);
+                    crate::plugin::external::with_manager(|mgr| {
+                        mgr.drain_requests(&mut host, &mut |_| {});
+                    });
+                }
+                crate::plugin::external::with_manager(|mgr| {
+                    for line in mgr.drain_io() {
+                        if line.text.starts_with("[runner]")
+                            || line.text.starts_with("[plugin] ")
+                            || line.text.starts_with("[python-repl]")
+                        {
+                            continue;
+                        }
+                        let prefixed = format!("[{} {}] {}", line.plugin_id, line.source, line.text);
+                        match line.source {
+                            ocs_plugin_api::process::IoStream::Stderr => {
+                                self.command_line.push_error(&prefixed);
+                            }
+                            _ => {
+                                self.command_line.push_output(&prefixed);
+                            }
+                        }
+                    }
+                });
+                Task::none()
+            }
+
             // Web: fetch every script queued by startup language selection or
             // drawing text discovery. Each script has one shared store entry.
             Message::PollWebFonts => {
@@ -6007,11 +6041,20 @@ impl OpenCADStudio {
             Message::PluginUninstall(id) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    // Stop the plugin runner first so Windows releases the DLL
+                    // and allows the package directory to be deleted.
+                    if !crate::plugin::external::remove_plugin(&id) {
+                        self.marketplace_status =
+                            format!("Uninstall failed: plugin '{id}' did not stop in time");
+                        return Task::none();
+                    }
                     match crate::plugin::external::uninstall(&id) {
                         Ok(()) => {
                             self.marketplace_status =
-                                format!("Uninstalled '{id}'. Restart to unload it.");
+                                format!("Uninstalled '{id}'.");
                             self.plugin_load_errors.remove(&id);
+                            self.loaded_plugin_ids.remove(&id);
+                            self.rebuild_ribbon_modules();
                             self.external_plugins = crate::plugin::external::discover();
                         }
                         Err(e) => {

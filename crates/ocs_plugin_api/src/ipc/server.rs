@@ -28,6 +28,7 @@ pub fn handle_plugin_request(
             PluginResponse::Ok
         }
         AddEntity(entity) => PluginResponse::Handle(host.add_entity(entity)),
+        AddEntities(entities) => PluginResponse::Handles(host.add_entities(entities)),
         UpdateEntity(entity) => PluginResponse::Bool(host.update_entity(entity)),
         RemoveEntity { handle } => PluginResponse::Bool(host.remove_entity(handle)),
         BumpGeometry => {
@@ -53,7 +54,7 @@ pub fn handle_plugin_request(
             on_start_interactive(command_id);
             PluginResponse::Ok
         }
-        DocumentSnapshot => PluginResponse::Document(host.document().clone()),
+        DocumentSnapshot => PluginResponse::Document(Box::new(host.document().clone())),
         OpenDocumentView => match host.document_view() {
             Some(info) => PluginResponse::DocumentView {
                 path: info.path,
@@ -61,5 +62,17 @@ pub fn handle_plugin_request(
             },
             None => PluginResponse::Error("shared document view unavailable".to_string()),
         },
+        OpenDocumentViewV4 { tab_id } => match host.document_view_v4(tab_id) {
+            Some(info) => PluginResponse::DocumentViewV4 {
+                path: info.path,
+                version: info.version,
+            },
+            None => PluginResponse::Error("V4 shared document view unavailable".to_string()),
+        },
+        CloseDocumentViewV4 { tab_id } => {
+            host.close_document_view_v4(tab_id);
+            PluginResponse::Ok
+        }
+        GetTabId => PluginResponse::TabId(host.tab_id()),
     }
 }

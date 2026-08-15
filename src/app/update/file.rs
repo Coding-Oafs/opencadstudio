@@ -477,12 +477,22 @@ impl OpenCADStudio {
     }
 
     /// Background task: fetch `owner/repo`'s installable releases and their
-    /// manifest API versions.
+    /// manifest API versions. The fetch runs on its own OS thread because the
+    /// several sequential HTTP requests inside `fetch_release_info` would
+    /// otherwise block the async executor and serialise all repo fetches.
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn fetch_releases_task(&self, repo: String) -> Task<Message> {
         let label = repo.clone();
         Task::perform(
-            async move { crate::plugin::marketplace::fetch_release_info(&repo) },
+            async move {
+                let (tx, rx) = iced::futures::channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let result = crate::plugin::marketplace::fetch_release_info(&repo);
+                    let _ = tx.send(result);
+                });
+                rx.await
+                    .unwrap_or_else(|_| Err("release fetch thread died".into()))
+            },
             move |res| Message::PluginReleasesFetched(label, res),
         )
     }

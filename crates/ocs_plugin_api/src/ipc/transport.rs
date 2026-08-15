@@ -20,6 +20,8 @@ pub enum TransportError {
     Empty,
     #[error("message too large: {0} bytes")]
     TooLarge(usize),
+    #[error("peer disconnected")]
+    Disconnected,
 }
 
 /// Send a length-framed serialized message.
@@ -38,7 +40,13 @@ pub fn send<T: Serialize>(stream: &mut Stream, msg: &T) -> Result<(), TransportE
 /// Receive a length-framed serialized message.
 pub fn recv<T: DeserializeOwned>(stream: &mut Stream) -> Result<T, TransportError> {
     let mut len_buf = [0u8; 8];
-    stream.read_exact(&mut len_buf)?;
+    if let Err(e) = stream.read_exact(&mut len_buf) {
+        return if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Err(TransportError::Disconnected)
+        } else {
+            Err(TransportError::Io(e))
+        };
+    }
     let len = u64::from_le_bytes(len_buf) as usize;
     if len == 0 {
         return Err(TransportError::Empty);
@@ -47,6 +55,12 @@ pub fn recv<T: DeserializeOwned>(stream: &mut Stream) -> Result<T, TransportErro
         return Err(TransportError::TooLarge(len));
     }
     let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf)?;
+    if let Err(e) = stream.read_exact(&mut buf) {
+        return if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Err(TransportError::Disconnected)
+        } else {
+            Err(TransportError::Io(e))
+        };
+    }
     Ok(bincode::deserialize(&buf)?)
 }

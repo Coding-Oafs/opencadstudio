@@ -4,6 +4,10 @@
 //! rkyv-serialized view of the active document. The plugin maps the same file
 //! read-only and reads entity/layer data directly from the mapping without
 //! copying the full `CadDocument` into its own address space.
+//!
+//! This module is generic over the payload type so that the V3 simplified view
+//! and the V4 bincode-per-entity view can share the same double-buffered
+//! control-page logic.
 
 use std::fs::OpenOptions;
 use std::io;
@@ -33,29 +37,51 @@ pub struct DocumentViewInfo {
     pub version: u64,
 }
 
+/// Marker trait for types that can be placed in a shared-memory snapshot.
+///
+/// Implementers provide rkyv serialization/deserialization without exposing
+/// rkyv's generic serializer types in the public API.
+pub trait SnapshotData: Clone + std::fmt::Debug + Send + Sync + 'static {
+    /// The archived (zero-copy) type returned by [`Self::check_bytes`].
+    type Archived: 'static;
+
+    /// Serialize `self` into rkyv bytes.
+    fn to_rkyv_bytes(&self) -> io::Result<Vec<u8>>;
+
+    /// Validate `bytes` and return a reference to the archived type.
+    fn check_rkyv_bytes(bytes: &[u8]) -> Option<&Self::Archived>;
+}
+
 /// Host-side, file-backed double buffer for the document view.
-pub struct DocumentSnapshotStore {
+pub struct DocumentSnapshotStore<T: SnapshotData> {
     path: PathBuf,
     mmap: MmapMut,
     segment_size: usize,
     current_version: u64,
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl DocumentSnapshotStore {
-    /// Create a new store for `tab`. `segment_size` is the maximum size of one
+impl<T: SnapshotData> DocumentSnapshotStore<T> {
+    /// Create a new store for `tab_id`. `segment_size` is the maximum size of one
     /// snapshot buffer; the file is sized to hold two segments plus the control
     /// page.
-    pub fn new(tab: usize, segment_size: usize) -> io::Result<Self> {
+    pub fn new(tab_id: u64, segment_size: usize) -> io::Result<Self> {
         let segment_size = segment_size.next_multiple_of(4096);
         static STORE_ID: AtomicUsize = AtomicUsize::new(0);
         let id = STORE_ID.fetch_add(1, Ordering::Relaxed);
-        let path = Self::temp_path(tab, id);
+        let path = Self::temp_path(tab_id, id);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
             .open(&path)?;
+        #[cfg(unix)]
+        {
+            use std::fs::Permissions;
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(Permissions::from_mode(0o600))?;
+        }
         let total = CONTROL_SIZE + 2 * segment_size;
         file.set_len(total as u64)?;
 
@@ -72,15 +98,16 @@ impl DocumentSnapshotStore {
             mmap,
             segment_size,
             current_version: 0,
+            _phantom: std::marker::PhantomData,
         })
     }
 
-    fn temp_path(tab: usize, id: usize) -> PathBuf {
+    fn temp_path(tab_id: u64, id: usize) -> PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "ocs_plugin_doc_{}_{}_{}_{}.bin",
+            "ocs_plugin_doc_v4_{}_{}_{}_{}.bin",
             std::process::id(),
-            tab,
+            tab_id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -95,12 +122,9 @@ impl DocumentSnapshotStore {
         &self.path
     }
 
-    /// Serialize `doc` into the inactive segment and atomically publish it.
-    pub fn publish(&mut self, doc: &CadDocument) -> io::Result<()> {
-        let data = DocumentViewData::from(doc);
-        let bytes = to_bytes::<_, 256>(&data).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("rkyv serialize: {e}"))
-        })?;
+    /// Serialize `data` into the inactive segment and atomically publish it.
+    pub fn publish(&mut self, data: &T) -> io::Result<()> {
+        let bytes = data.to_rkyv_bytes()?;
         if bytes.len() > self.segment_size {
             return Err(io::Error::new(
                 io::ErrorKind::OutOfMemory,
@@ -143,20 +167,21 @@ impl DocumentSnapshotStore {
     }
 }
 
-impl Drop for DocumentSnapshotStore {
+impl<T: SnapshotData> Drop for DocumentSnapshotStore<T> {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
 }
 
 /// Plugin-side read-only mapping of the host's document view.
-pub struct SharedDocumentReader {
+pub struct SharedDocumentReader<T: SnapshotData> {
     mmap: Mmap,
     segment_size: usize,
     cached_version: u64,
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl SharedDocumentReader {
+impl<T: SnapshotData> SharedDocumentReader<T> {
     /// Open the file at `path` read-only and map it. The mapping may initially
     /// contain no valid snapshot; the caller should `refresh()` before use.
     pub fn open(path: &Path) -> io::Result<Self> {
@@ -172,6 +197,7 @@ impl SharedDocumentReader {
             mmap,
             segment_size,
             cached_version: 0,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -201,13 +227,28 @@ impl SharedDocumentReader {
         &self.mmap[offset..offset + len]
     }
 
-    fn archived(&self) -> Option<&ArchivedDocumentViewData> {
+    fn archived(&self) -> Option<&T::Archived> {
         let bytes = self.active_segment_bytes();
-        check_archived_root::<DocumentViewData>(bytes).ok()
+        T::check_rkyv_bytes(bytes)
     }
 }
 
-impl DocumentReader for SharedDocumentReader {
+impl<T: SnapshotData> SharedDocumentReader<T> {
+    /// Public accessor for the archived payload. Used by V4 consumers that
+    /// need typed access to `DocumentViewDataV4` entities.
+    pub fn payload(&self) -> Option<&T::Archived> {
+        self.archived()
+    }
+}
+
+impl SharedDocumentReader<DocumentViewData> {
+    /// V3 convenience accessor for the entity count.
+    pub fn entity_count(&self) -> usize {
+        self.archived().map(|doc| doc.entities.len()).unwrap_or(0)
+    }
+}
+
+impl DocumentReader for SharedDocumentReader<DocumentViewData> {
     fn entity_count(&self) -> usize {
         self.archived().map(|doc| doc.entities.len()).unwrap_or(0)
     }
@@ -251,6 +292,12 @@ impl DocumentReader for SharedDocumentReader {
     }
 }
 
+/// V3 alias: host-side snapshot store for the simplified document view.
+pub type DocumentSnapshotStoreV3 = DocumentSnapshotStore<DocumentViewData>;
+
+/// V3 alias: plugin-side reader for the simplified document view.
+pub type SharedDocumentReaderV3 = SharedDocumentReader<DocumentViewData>;
+
 /// Raw control page shared between host and plugin.
 #[repr(C, align(8))]
 struct ControlPage {
@@ -276,6 +323,8 @@ impl ControlPage {
     }
 }
 
+// ── V3 simplified document view ─────────────────────────────────────────────
+
 /// Serializable document view. This is the only data type placed in shared
 /// memory, so it must contain no pointers into host memory.
 #[derive(Archive, Serialize, Deserialize, Debug, Clone)]
@@ -293,6 +342,20 @@ impl From<&CadDocument> for DocumentViewData {
             app_ids: doc.app_ids.iter().map(AppIdView::from).collect(),
             entities: doc.entities().map(EntityView::from).collect(),
         }
+    }
+}
+
+impl SnapshotData for DocumentViewData {
+    type Archived = ArchivedDocumentViewData;
+
+    fn to_rkyv_bytes(&self) -> io::Result<Vec<u8>> {
+        to_bytes::<_, 256>(self)
+            .map(|av| av.into_vec())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+    }
+
+    fn check_rkyv_bytes(bytes: &[u8]) -> Option<&Self::Archived> {
+        check_archived_root::<Self>(bytes).ok()
     }
 }
 
@@ -395,6 +458,59 @@ impl ReaderEntityKind {
     }
 }
 
+// ── V4 full-entity document view ────────────────────────────────────────────
+
+/// Serializable V4 document view. The outer structure is rkyv; each entity's
+/// `data` is a bincode-encoded `acadrust::EntityType` so that the plugin can
+/// reconstruct the full typed entity without relying on acadrust's own rkyv
+/// support.
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
+#[archive(check_bytes)]
+pub struct DocumentViewDataV4 {
+    pub layers: Vec<LayerView>,
+    pub app_ids: Vec<AppIdView>,
+    pub entities: Vec<EntityViewV4>,
+}
+
+impl From<&CadDocument> for DocumentViewDataV4 {
+    fn from(doc: &CadDocument) -> Self {
+        Self {
+            layers: doc.layers.iter().map(LayerView::from).collect(),
+            app_ids: doc.app_ids.iter().map(AppIdView::from).collect(),
+            entities: doc.entities().map(EntityViewV4::from).collect(),
+        }
+    }
+}
+
+impl SnapshotData for DocumentViewDataV4 {
+    type Archived = ArchivedDocumentViewDataV4;
+
+    fn to_rkyv_bytes(&self) -> io::Result<Vec<u8>> {
+        to_bytes::<_, 256>(self)
+            .map(|av| av.into_vec())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+    }
+
+    fn check_rkyv_bytes(bytes: &[u8]) -> Option<&Self::Archived> {
+        check_archived_root::<Self>(bytes).ok()
+    }
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, Clone)]
+#[archive(check_bytes)]
+pub struct EntityViewV4 {
+    pub handle: u64,
+    pub data: Vec<u8>,
+}
+
+impl From<&EntityType> for EntityViewV4 {
+    fn from(entity: &EntityType) -> Self {
+        let handle = entity.common().handle.value();
+        let data = bincode::serialize(entity).unwrap_or_default();
+        Self { handle, data }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,10 +531,10 @@ mod tests {
     #[test]
     fn shared_document_reader_roundtrip() {
         let doc = sample_doc();
-        let mut store = DocumentSnapshotStore::new(0, 1024 * 1024).unwrap();
-        store.publish(&doc).unwrap();
+        let mut store = DocumentSnapshotStore::<DocumentViewData>::new(0, 1024 * 1024).unwrap();
+        store.publish(&(&doc).into()).unwrap();
 
-        let reader = SharedDocumentReader::open(store.path()).unwrap();
+        let reader = SharedDocumentReader::<DocumentViewData>::open(store.path()).unwrap();
         assert_eq!(reader.entity_count(), 1);
 
         let mut seen = Vec::new();
@@ -445,17 +561,17 @@ mod tests {
     #[test]
     fn shared_document_reader_updates_after_publish() {
         let doc = sample_doc();
-        let mut store = DocumentSnapshotStore::new(0, 1024 * 1024).unwrap();
-        store.publish(&doc).unwrap();
+        let mut store = DocumentSnapshotStore::<DocumentViewData>::new(0, 1024 * 1024).unwrap();
+        store.publish(&(&doc).into()).unwrap();
 
-        let reader = SharedDocumentReader::open(store.path()).unwrap();
+        let reader = SharedDocumentReader::<DocumentViewData>::open(store.path()).unwrap();
         assert_eq!(reader.entity_count(), 1);
 
         let mut doc2 = doc;
         let mut point2 = Point::from_coords(1.0, 2.0, 3.0);
         point2.common.layer = "SURVEY".to_string();
         doc2.add_entity(EntityType::Point(point2)).unwrap();
-        store.publish(&doc2).unwrap();
+        store.publish(&(&doc2).into()).unwrap();
 
         assert_eq!(reader.entity_count(), 2);
     }
@@ -463,11 +579,28 @@ mod tests {
     #[test]
     fn layer_name_lookup_by_handle() {
         let doc = sample_doc();
-        let mut store = DocumentSnapshotStore::new(0, 1024 * 1024).unwrap();
-        store.publish(&doc).unwrap();
+        let mut store = DocumentSnapshotStore::<DocumentViewData>::new(0, 1024 * 1024).unwrap();
+        store.publish(&(&doc).into()).unwrap();
 
         let survey = doc.layers.iter().find(|l| l.name == "SURVEY").unwrap();
-        let reader = SharedDocumentReader::open(store.path()).unwrap();
+        let reader = SharedDocumentReader::<DocumentViewData>::open(store.path()).unwrap();
         assert_eq!(reader.layer_name(survey.handle), Some("SURVEY"));
+    }
+
+    #[test]
+    fn v4_document_view_roundtrip() {
+        let doc = sample_doc();
+        let mut store = DocumentSnapshotStore::<DocumentViewDataV4>::new(7, 1024 * 1024).unwrap();
+        let view: DocumentViewDataV4 = (&doc).into();
+        store.publish(&view).unwrap();
+
+        let reader = SharedDocumentReader::<DocumentViewDataV4>::open(store.path()).unwrap();
+        assert_eq!(reader.archived().map(|d| d.entities.len()).unwrap_or(0), 1);
+
+        let archived = reader.archived().unwrap();
+        let entity = &archived.entities[0];
+        assert_eq!(entity.handle, doc.entities().next().unwrap().common().handle.value());
+        let decoded: EntityType = bincode::deserialize(&entity.data).expect("bincode decode");
+        assert!(matches!(decoded, EntityType::Point(_)));
     }
 }

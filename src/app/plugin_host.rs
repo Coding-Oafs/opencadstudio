@@ -4,16 +4,18 @@ use std::any::Any;
 
 use acadrust::tables::AppId;
 use acadrust::xdata::ExtendedDataRecord;
-use acadrust::{CadDocument, EntityType, Handle};
-use ocs_plugin_api::host::HostApi;
+use ocs_plugin_api::host::{CadDocument, EntityType, Handle, HostApi};
+use ocs_plugin_api::shm::{DocumentSnapshotStore, DocumentViewData};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::plugin::v4_support;
 use super::OpenCADStudio;
 
 /// Session adapter: one active document tab, command line, undo.
 pub(crate) struct HostSession<'a> {
     app: &'a mut OpenCADStudio,
     tab: usize,
-    doc_store: Option<ocs_plugin_api::shm::DocumentSnapshotStore>,
+    doc_store: Option<DocumentSnapshotStore<DocumentViewData>>,
 }
 
 impl<'a> HostSession<'a> {
@@ -29,6 +31,25 @@ impl<'a> HostSession<'a> {
         self.tab
     }
 
+    pub fn tab_id(&self) -> u64 {
+        self.app.tabs[self.tab].id
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn document_view_v4(&mut self, tab_id: u64) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
+        if tab_id != self.tab_id() {
+            return None;
+        }
+        v4_support::open_document_view_v4(tab_id, self.document())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn close_document_view_v4(&mut self, tab_id: u64) {
+        if tab_id == self.tab_id() {
+            v4_support::close_document_view_v4(tab_id);
+        }
+    }
+
     pub fn document(&self) -> &CadDocument {
         &self.app.tabs[self.tab].scene.document
     }
@@ -38,10 +59,9 @@ impl<'a> HostSession<'a> {
     }
 
     pub fn document_view(&mut self) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
-        use ocs_plugin_api::shm::DocumentSnapshotStore;
         if self.doc_store.is_none() {
-            let mut store = DocumentSnapshotStore::new(self.tab, 8 * 1024 * 1024).ok()?;
-            store.publish(self.document()).ok()?;
+            let mut store = DocumentSnapshotStore::<DocumentViewData>::new(self.tab as u64, 8 * 1024 * 1024).ok()?;
+            store.publish(&self.document().into()).ok()?;
             self.doc_store = Some(store);
         }
         let store = self.doc_store.as_ref()?;
@@ -53,20 +73,30 @@ impl<'a> HostSession<'a> {
 
     fn publish_document_view(&mut self) {
         let doc = &self.app.tabs[self.tab].scene.document;
+        // Only publish views that have been opened by a consumer. V3 is lazily
+        // created by document_view(); V4 is tracked per-tab by the V4 manager.
         if let Some(store) = self.doc_store.as_mut() {
-            if let Err(e) = store.publish(doc) {
+            if let Err(e) = store.publish(&doc.into()) {
                 eprintln!(
                     "[host] failed to publish document view for tab {}: {e}",
                     self.tab
                 );
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        v4_support::publish_document_view_v4(self.tab_id(), doc);
     }
 
     pub fn add_entity(&mut self, entity: EntityType) -> Handle {
         let handle = self.app.tabs[self.tab].scene.add_entity(entity);
         self.publish_document_view();
         handle
+    }
+
+    pub fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
+        let handles = self.app.tabs[self.tab].scene.add_entities(entities);
+        self.publish_document_view();
+        handles
     }
 
     pub fn bump_geometry(&mut self) {
@@ -239,6 +269,9 @@ impl HostApi for HostSession<'_> {
     fn add_entity(&mut self, entity: EntityType) -> Handle {
         self.add_entity(entity)
     }
+    fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
+        self.add_entities(entities)
+    }
     fn update_entity(&mut self, entity: EntityType) -> bool {
         self.update_entity(entity)
     }
@@ -304,6 +337,17 @@ impl HostApi for HostSession<'_> {
     }
     fn document_view(&mut self) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
         self.document_view()
+    }
+    fn tab_id(&self) -> u64 {
+        self.tab_id()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn document_view_v4(&mut self, tab_id: u64) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
+        self.document_view_v4(tab_id)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn close_document_view_v4(&mut self, tab_id: u64) {
+        self.close_document_view_v4(tab_id)
     }
 }
 
@@ -507,6 +551,34 @@ mod tests {
     }
 
     #[test]
+    fn add_entities_batch_assigns_handles_and_publishes_once() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+
+        let pts: Vec<EntityType> = (0..5)
+            .map(|i| {
+                EntityType::Point(Point::at(acadrust::types::Vector3::new(
+                    i as f64, i as f64, 0.0,
+                )))
+            })
+            .collect();
+        let handles = host.add_entities(pts);
+
+        assert_eq!(handles.len(), 5);
+        assert!(handles.iter().all(|h| !h.is_null()));
+        // Each handle is unique.
+        let mut set = std::collections::HashSet::new();
+        for h in &handles {
+            assert!(set.insert(h.value()));
+        }
+        // All entities are in the document.
+        for h in &handles {
+            assert!(host.document().get_entity(*h).is_some());
+        }
+    }
+
+    #[test]
     fn update_entity_replaces_in_place_preserving_handle() {
         let mut app = OpenCADStudio::new_for_test();
         app.tabs[0].is_start = false;
@@ -704,7 +776,7 @@ mod tests {
         let mut host = HostSession::new(&mut app, 0);
         let info = host.document_view().unwrap();
         let reader =
-            ocs_plugin_api::shm::SharedDocumentReader::open(std::path::Path::new(&info.path))
+            ocs_plugin_api::shm::SharedDocumentReader::<ocs_plugin_api::shm::DocumentViewData>::open(std::path::Path::new(&info.path))
                 .unwrap();
         assert_eq!(reader.entity_count(), 0);
 
@@ -755,7 +827,7 @@ mod tests {
         let mut host = HostSession::new(&mut app, 0);
         let info = host.document_view().unwrap();
         let reader =
-            ocs_plugin_api::shm::SharedDocumentReader::open(std::path::Path::new(&info.path))
+            ocs_plugin_api::shm::SharedDocumentReader::<ocs_plugin_api::shm::DocumentViewData>::open(std::path::Path::new(&info.path))
                 .unwrap();
 
         let h = host.add_entity(EntityType::Point(Point::at(acadrust::types::Vector3::new(
