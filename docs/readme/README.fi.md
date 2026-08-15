@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="Open CAD Studion logo"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="Open CAD Studion logo"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center">Avoimen lähdekoodin 2D-piirtäminen ja 3D-mallinnus työpöydälle ja verkkoon, toteutettu Rustilla.</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="Uusin julkaisu" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="Lataukset" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub-tähdet" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0-lisenssi" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="GPL-3.0-lisenssi" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-Palvelin vaihtaa yhden JSON-objektin riviä kohti vakiotulon/-lähdön tai paikallisen TCP-pistokkeen kautta. Katso [automaatio-opas](docs/automation/README.md) ja mukana toimitettu [Python-asiakas](docs/automation/ocs.py).
+Palvelin vaihtaa yhden JSON-objektin riviä kohti vakiotulon/-lähdön tai paikallisen TCP-pistokkeen kautta. Katso [automaatio-opas](../automation/README.md) ja mukana toimitettu [Python-asiakas](../automation/ocs.py).
 
 ## Liitännäiset
 
 Työpöytäliitännäiset suoritetaan erillisissä prosesseissa ja ne viestivät isännän kanssa versioidun liitännäisrajapinnan kautta. Selainversio ei lataa natiiviliitännäisiä.
 
-- [Liitännäisarkkitehtuuri](docs/plugin-architecture.md)
-- [Liitännäismalli](docs/plugin-template/README.md)
-- [Liitännäisrekisteri](plugins/README.md)
+- [Liitännäisarkkitehtuuri](../plugin-architecture.md)
+- [Liitännäismalli](../plugin-template/README.md)
+- [Liitännäisrekisteri](../../plugins/README.md)
 
 ## Projektin dokumentaatio
 
-- [Automaatiorajapinta](docs/automation/README.md)
-- [Liitännäisarkkitehtuuri](docs/plugin-architecture.md)
-- [Tessellointiputki](docs/tessellation.md)
-- [Tietoturvakäytäntö](SECURITY.md)
+- [Automaatiorajapinta](../automation/README.md)
+- [Liitännäisarkkitehtuuri](../plugin-architecture.md)
+- [Tessellointiputki](../tessellation.md)
+- [Tietoturvakäytäntö](../../SECURITY.md)
 
 ## Osallistuminen
 
@@ -174,7 +174,7 @@ Virheraportit, rajatut pull requestit, käännökset, dokumentaatioparannukset j
 
 - Etsi olemassa olevista [issueista](https://github.com/HakanSeven12/OpenCADStudio/issues) ennen uuden raportin avaamista.
 - Käytä [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions)-osiota kysymyksiin ja ideoihin.
-- Ilmoita haavoittuvuuksista yksityisesti [tietoturvakäytännön](SECURITY.md) mukaisesti.
+- Ilmoita haavoittuvuuksista yksityisesti [tietoturvakäytännön](../../SECURITY.md) mukaisesti.
 
 ## Projektin kasvu
 
@@ -192,4 +192,4 @@ Jos Open CAD Studio auttaa työssäsi, tue jatkokehitystä [GitHub Sponsorsin](h
 
 ## Lisenssi
 
-Open CAD Studioa jaetaan [GNU General Public License v3.0](LICENSE) -lisenssillä.
+Open CAD Studioa jaetaan [GNU General Public License v3.0](../../LICENSE) -lisenssillä.

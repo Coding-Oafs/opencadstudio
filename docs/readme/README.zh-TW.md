@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="Open CAD Studio 標誌"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="Open CAD Studio 標誌"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center">使用 Rust 建構、適用於桌面與網頁的開放原始碼二維繪圖和三維建模應用程式。</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="版本下載量" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub 星號" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0 授權" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="GPL-3.0 授權" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-伺服器透過標準輸入/輸出或本機 TCP 通訊端逐行交換 JSON 物件。請參閱[自動化指南](docs/automation/README.md)和隨附的 [Python 用戶端](docs/automation/ocs.py)。
+伺服器透過標準輸入/輸出或本機 TCP 通訊端逐行交換 JSON 物件。請參閱[自動化指南](../automation/README.md)和隨附的 [Python 用戶端](../automation/ocs.py)。
 
 ## 外掛程式
 
 桌面外掛程式在獨立處理程序中執行，並透過有版本管理的外掛程式 API 與主程式通訊。瀏覽器版本不會載入原生外掛程式。
 
-- [外掛程式架構](docs/plugin-architecture.md)
-- [外掛程式範本](docs/plugin-template/README.md)
-- [外掛程式登錄檔](plugins/README.md)
+- [外掛程式架構](../plugin-architecture.md)
+- [外掛程式範本](../plugin-template/README.md)
+- [外掛程式登錄檔](../../plugins/README.md)
 
 ## 專案文件
 
-- [自動化 API](docs/automation/README.md)
-- [外掛程式架構](docs/plugin-architecture.md)
-- [細分處理流程](docs/tessellation.md)
-- [安全性政策](SECURITY.md)
+- [自動化 API](../automation/README.md)
+- [外掛程式架構](../plugin-architecture.md)
+- [細分處理流程](../tessellation.md)
+- [安全性政策](../../SECURITY.md)
 
 ## 參與貢獻
 
@@ -174,7 +174,7 @@ OpenCADStudio --serve --port 4242
 
 - 建立新報告前請搜尋現有 [issues](https://github.com/HakanSeven12/OpenCADStudio/issues)。
 - 問題和想法請使用 [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions)。
-- 請依照[安全性政策](SECURITY.md)私下回報弱點。
+- 請依照[安全性政策](../../SECURITY.md)私下回報弱點。
 
 ## 專案成長
 
@@ -192,4 +192,4 @@ OpenCADStudio --serve --port 4242
 
 ## 授權
 
-Open CAD Studio 依 [GNU General Public License v3.0](LICENSE) 散佈。
+Open CAD Studio 依 [GNU General Public License v3.0](../../LICENSE) 散佈。

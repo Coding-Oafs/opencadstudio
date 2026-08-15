@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="شعار Open CAD Studio"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="شعار Open CAD Studio"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center" dir="rtl">تطبيق مفتوح المصدر للرسم ثنائي الأبعاد والنمذجة ثلاثية الأبعاد على سطح المكتب والويب، مبني بلغة Rust.</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="أحدث إصدار" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="تنزيلات الإصدارات" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="نجوم GitHub" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="ترخيص GPL-3.0" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="ترخيص GPL-3.0" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center" dir="rtl">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-يتبادل الخادم كائن JSON واحداً في كل سطر عبر الإدخال/الإخراج القياسي أو مقبس TCP محلي. راجع [دليل الأتمتة](docs/automation/README.md) و[عميل Python](docs/automation/ocs.py) المرفق.
+يتبادل الخادم كائن JSON واحداً في كل سطر عبر الإدخال/الإخراج القياسي أو مقبس TCP محلي. راجع [دليل الأتمتة](../automation/README.md) و[عميل Python](../automation/ocs.py) المرفق.
 
 ## الإضافات
 
 تعمل إضافات سطح المكتب في عمليات منفصلة وتتواصل مع المضيف عبر واجهة إضافات ذات إصدارات. لا يحمّل إصدار المتصفح الإضافات الأصلية.
 
-- [بنية الإضافات](docs/plugin-architecture.md)
-- [قالب الإضافة](docs/plugin-template/README.md)
-- [سجل الإضافات](plugins/README.md)
+- [بنية الإضافات](../plugin-architecture.md)
+- [قالب الإضافة](../plugin-template/README.md)
+- [سجل الإضافات](../../plugins/README.md)
 
 ## وثائق المشروع
 
-- [واجهة الأتمتة](docs/automation/README.md)
-- [بنية الإضافات](docs/plugin-architecture.md)
-- [مسار التجزئة](docs/tessellation.md)
-- [سياسة الأمان](SECURITY.md)
+- [واجهة الأتمتة](../automation/README.md)
+- [بنية الإضافات](../plugin-architecture.md)
+- [مسار التجزئة](../tessellation.md)
+- [سياسة الأمان](../../SECURITY.md)
 
 ## المساهمة
 
@@ -174,7 +174,7 @@ OpenCADStudio --serve --port 4242
 
 - ابحث في [المشكلات](https://github.com/HakanSeven12/OpenCADStudio/issues) الحالية قبل فتح تقرير جديد.
 - استخدم [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) للأسئلة والأفكار.
-- أبلغ عن الثغرات بشكل خاص وفق [سياسة الأمان](SECURITY.md).
+- أبلغ عن الثغرات بشكل خاص وفق [سياسة الأمان](../../SECURITY.md).
 
 ## نمو المشروع
 
@@ -192,4 +192,4 @@ OpenCADStudio --serve --port 4242
 
 ## الترخيص
 
-يُوزّع Open CAD Studio بموجب [رخصة جنو العمومية الإصدار 3.0](LICENSE).
+يُوزّع Open CAD Studio بموجب [رخصة جنو العمومية الإصدار 3.0](../../LICENSE).

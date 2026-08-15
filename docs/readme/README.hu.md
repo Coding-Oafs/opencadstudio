@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="Open CAD Studio logó"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="Open CAD Studio logó"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center">Nyílt forráskódú 2D rajzolás és 3D modellezés asztali gépre és webre, Rust nyelven.</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="Legújabb kiadás" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="Letöltések" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub-csillagok" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0 licenc" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="GPL-3.0 licenc" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-A kiszolgáló soronként egy JSON-objektumot cserél a szabványos bemeneten/kimeneten vagy helyi TCP-foglalaton. Lásd az [automatizálási útmutatót](docs/automation/README.md) és a mellékelt [Python-klienst](docs/automation/ocs.py).
+A kiszolgáló soronként egy JSON-objektumot cserél a szabványos bemeneten/kimeneten vagy helyi TCP-foglalaton. Lásd az [automatizálási útmutatót](../automation/README.md) és a mellékelt [Python-klienst](../automation/ocs.py).
 
 ## Bővítmények
 
 Az asztali bővítmények külön folyamatokban futnak, és a verziózott bővítmény-API-n keresztül kommunikálnak a gazdával. A böngészős változat nem tölt be natív bővítményeket.
 
-- [Bővítményarchitektúra](docs/plugin-architecture.md)
-- [Bővítménysablon](docs/plugin-template/README.md)
-- [Bővítményjegyzék](plugins/README.md)
+- [Bővítményarchitektúra](../plugin-architecture.md)
+- [Bővítménysablon](../plugin-template/README.md)
+- [Bővítményjegyzék](../../plugins/README.md)
 
 ## Projektdokumentáció
 
-- [Automatizálási API](docs/automation/README.md)
-- [Bővítményarchitektúra](docs/plugin-architecture.md)
-- [Tesszellációs folyamat](docs/tessellation.md)
-- [Biztonsági szabályzat](SECURITY.md)
+- [Automatizálási API](../automation/README.md)
+- [Bővítményarchitektúra](../plugin-architecture.md)
+- [Tesszellációs folyamat](../tessellation.md)
+- [Biztonsági szabályzat](../../SECURITY.md)
 
 ## Közreműködés
 
@@ -174,7 +174,7 @@ Hibajelentéseket, célzott pull requesteket, fordításokat, dokumentációfejl
 
 - Új jelentés előtt keress a meglévő [issue-k](https://github.com/HakanSeven12/OpenCADStudio/issues) között.
 - Kérdésekhez és ötletekhez használd a [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) oldalt.
-- A sérülékenységeket a [biztonsági szabályzat](SECURITY.md) szerint, bizalmasan jelentsd.
+- A sérülékenységeket a [biztonsági szabályzat](../../SECURITY.md) szerint, bizalmasan jelentsd.
 
 ## A projekt növekedése
 
@@ -192,4 +192,4 @@ Ha az Open CAD Studio segíti a munkádat, támogasd a további fejlesztést a [
 
 ## Licenc
 
-Az Open CAD Studio a [GNU General Public License v3.0](LICENSE) alatt kerül terjesztésre.
+Az Open CAD Studio a [GNU General Public License v3.0](../../LICENSE) alatt kerül terjesztésre.

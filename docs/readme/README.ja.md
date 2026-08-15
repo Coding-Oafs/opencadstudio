@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="Open CAD Studio ロゴ"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="Open CAD Studio ロゴ"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center">Rust で開発された、デスクトップと Web 向けのオープンソース 2D 製図・3D モデリングアプリケーション。</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="最新リリース" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="ダウンロード数" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub スター" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0 ライセンス" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="GPL-3.0 ライセンス" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-サーバーは標準入出力またはローカル TCP ソケットを通じ、1 行につき 1 個の JSON オブジェクトを交換します。[自動化ガイド](docs/automation/README.md) と付属の [Python クライアント](docs/automation/ocs.py) を参照してください。
+サーバーは標準入出力またはローカル TCP ソケットを通じ、1 行につき 1 個の JSON オブジェクトを交換します。[自動化ガイド](../automation/README.md) と付属の [Python クライアント](../automation/ocs.py) を参照してください。
 
 ## プラグイン
 
 デスクトッププラグインは別プロセスで動作し、バージョン管理されたプラグイン API を介してホストと通信します。ブラウザ版はネイティブプラグインを読み込みません。
 
-- [プラグインアーキテクチャ](docs/plugin-architecture.md)
-- [プラグインテンプレート](docs/plugin-template/README.md)
-- [プラグインレジストリ](plugins/README.md)
+- [プラグインアーキテクチャ](../plugin-architecture.md)
+- [プラグインテンプレート](../plugin-template/README.md)
+- [プラグインレジストリ](../../plugins/README.md)
 
 ## プロジェクト文書
 
-- [自動化 API](docs/automation/README.md)
-- [プラグインアーキテクチャ](docs/plugin-architecture.md)
-- [テッセレーションパイプライン](docs/tessellation.md)
-- [セキュリティポリシー](SECURITY.md)
+- [自動化 API](../automation/README.md)
+- [プラグインアーキテクチャ](../plugin-architecture.md)
+- [テッセレーションパイプライン](../tessellation.md)
+- [セキュリティポリシー](../../SECURITY.md)
 
 ## コントリビューション
 
@@ -174,7 +174,7 @@ OpenCADStudio --serve --port 4242
 
 - 新しい報告を作成する前に既存の [issues](https://github.com/HakanSeven12/OpenCADStudio/issues) を検索してください。
 - 質問やアイデアには [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) を利用してください。
-- 脆弱性は [セキュリティポリシー](SECURITY.md) に従って非公開で報告してください。
+- 脆弱性は [セキュリティポリシー](../../SECURITY.md) に従って非公開で報告してください。
 
 ## プロジェクトの成長
 
@@ -192,4 +192,4 @@ Open CAD Studio が作業に役立つ場合は、[GitHub Sponsors](https://githu
 
 ## ライセンス
 
-Open CAD Studio は [GNU General Public License v3.0](LICENSE) の下で配布されています。
+Open CAD Studio は [GNU General Public License v3.0](../../LICENSE) の下で配布されています。

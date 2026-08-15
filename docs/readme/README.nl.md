@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="Logo van Open CAD Studio"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="Logo van Open CAD Studio"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center">Open-source 2D-tekenen en 3D-modelleren voor desktop en web, gebouwd met Rust.</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="Nieuwste versie" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub-sterren" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0-licentie" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="GPL-3.0-licentie" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-De server wisselt per regel één JSON-object uit via standaardinvoer/-uitvoer of een lokale TCP-socket. Bekijk de [automatiseringshandleiding](docs/automation/README.md) en de meegeleverde [Python-client](docs/automation/ocs.py).
+De server wisselt per regel één JSON-object uit via standaardinvoer/-uitvoer of een lokale TCP-socket. Bekijk de [automatiseringshandleiding](../automation/README.md) en de meegeleverde [Python-client](../automation/ocs.py).
 
 ## Plug-ins
 
 Desktopplug-ins draaien in afzonderlijke processen en communiceren via de geversioneerde plug-in-API met de host. De browserbuild laadt geen native plug-ins.
 
-- [Plug-inarchitectuur](docs/plugin-architecture.md)
-- [Plug-insjabloon](docs/plugin-template/README.md)
-- [Plug-inregister](plugins/README.md)
+- [Plug-inarchitectuur](../plugin-architecture.md)
+- [Plug-insjabloon](../plugin-template/README.md)
+- [Plug-inregister](../../plugins/README.md)
 
 ## Projectdocumentatie
 
-- [Automatiserings-API](docs/automation/README.md)
-- [Plug-inarchitectuur](docs/plugin-architecture.md)
-- [Tessellatiepijplijn](docs/tessellation.md)
-- [Beveiligingsbeleid](SECURITY.md)
+- [Automatiserings-API](../automation/README.md)
+- [Plug-inarchitectuur](../plugin-architecture.md)
+- [Tessellatiepijplijn](../tessellation.md)
+- [Beveiligingsbeleid](../../SECURITY.md)
 
 ## Bijdragen
 
@@ -174,7 +174,7 @@ Bugmeldingen, gerichte pull requests, vertalingen, documentatieverbeteringen en 
 
 - Doorzoek bestaande [issues](https://github.com/HakanSeven12/OpenCADStudio/issues) voordat je een nieuwe melding opent.
 - Gebruik [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) voor vragen en ideeën.
-- Meld kwetsbaarheden privé volgens het [beveiligingsbeleid](SECURITY.md).
+- Meld kwetsbaarheden privé volgens het [beveiligingsbeleid](../../SECURITY.md).
 
 ## Projectgroei
 
@@ -192,4 +192,4 @@ Als Open CAD Studio je werk helpt, steun dan de verdere ontwikkeling via [GitHub
 
 ## Licentie
 
-Open CAD Studio wordt verspreid onder de [GNU General Public License v3.0](LICENSE).
+Open CAD Studio wordt verspreid onder de [GNU General Public License v3.0](../../LICENSE).

@@ -1,8 +1,8 @@
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
+  <a href="../../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a> · <a href="README.cs.md">Čeština</a> · <a href="README.nl.md">Nederlands</a> · <a href="README.fr.md">Français</a> · <a href="README.fi.md">Suomi</a> · <a href="README.de.md">Deutsch</a> · <a href="README.hu.md">Magyar</a> · <a href="README.it.md">Italiano</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a> · <a href="README.pl.md">Polski</a> · <a href="README.ru.md">Русский</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.hi.md">हिन्दी</a> · <a href="README.ar.md">العربية</a>
 </p>
 
-<p align="center"><img src="assets/logo.svg" width="112" alt="Open CAD Studio लोगो"></p>
+<p align="center"><img src="../../assets/logo.svg" width="112" alt="Open CAD Studio लोगो"></p>
 <h1 align="center">Open CAD Studio</h1>
 <p align="center">Rust से निर्मित, डेस्कटॉप और वेब के लिए मुक्त-स्रोत 2D ड्राफ्टिंग और 3D मॉडलिंग अनुप्रयोग।</p>
 
@@ -10,7 +10,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases/latest"><img alt="नवीनतम रिलीज़" src="https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/releases"><img alt="रिलीज़ डाउनलोड" src="https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total"></a>
   <a href="https://github.com/HakanSeven12/OpenCADStudio/stargazers"><img alt="GitHub स्टार" src="https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio"></a>
-  <a href="LICENSE"><img alt="GPL-3.0 लाइसेंस" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
+  <a href="../../LICENSE"><img alt="GPL-3.0 लाइसेंस" src="https://img.shields.io/github/license/HakanSeven12/OpenCADStudio"></a>
 </p>
 
 <p align="center">
@@ -151,22 +151,22 @@ OpenCADStudio --serve
 OpenCADStudio --serve --port 4242
 ```
 
-सर्वर मानक इनपुट/आउटपुट या स्थानीय TCP सॉकेट के माध्यम से प्रति पंक्ति एक JSON ऑब्जेक्ट का आदान-प्रदान करता है। [स्वचालन मार्गदर्शिका](docs/automation/README.md) और शामिल [Python क्लाइंट](docs/automation/ocs.py) देखें।
+सर्वर मानक इनपुट/आउटपुट या स्थानीय TCP सॉकेट के माध्यम से प्रति पंक्ति एक JSON ऑब्जेक्ट का आदान-प्रदान करता है। [स्वचालन मार्गदर्शिका](../automation/README.md) और शामिल [Python क्लाइंट](../automation/ocs.py) देखें।
 
 ## प्लगइन
 
 डेस्कटॉप प्लगइन अलग प्रक्रियाओं में चलते हैं और संस्करणित प्लगइन API के माध्यम से होस्ट से संवाद करते हैं। ब्राउज़र बिल्ड मूल प्लगइन लोड नहीं करता।
 
-- [प्लगइन संरचना](docs/plugin-architecture.md)
-- [प्लगइन टेम्पलेट](docs/plugin-template/README.md)
-- [प्लगइन रजिस्ट्री](plugins/README.md)
+- [प्लगइन संरचना](../plugin-architecture.md)
+- [प्लगइन टेम्पलेट](../plugin-template/README.md)
+- [प्लगइन रजिस्ट्री](../../plugins/README.md)
 
 ## परियोजना दस्तावेज़
 
-- [स्वचालन API](docs/automation/README.md)
-- [प्लगइन संरचना](docs/plugin-architecture.md)
-- [टेसेलेशन पाइपलाइन](docs/tessellation.md)
-- [सुरक्षा नीति](SECURITY.md)
+- [स्वचालन API](../automation/README.md)
+- [प्लगइन संरचना](../plugin-architecture.md)
+- [टेसेलेशन पाइपलाइन](../tessellation.md)
+- [सुरक्षा नीति](../../SECURITY.md)
 
 ## योगदान
 
@@ -174,7 +174,7 @@ OpenCADStudio --serve --port 4242
 
 - नई रिपोर्ट खोलने से पहले मौजूदा [issues](https://github.com/HakanSeven12/OpenCADStudio/issues) खोजें।
 - प्रश्नों और विचारों के लिए [Discussions](https://github.com/HakanSeven12/OpenCADStudio/discussions) उपयोग करें।
-- [सुरक्षा नीति](SECURITY.md) के अनुसार कमजोरियों की निजी रूप से रिपोर्ट करें।
+- [सुरक्षा नीति](../../SECURITY.md) के अनुसार कमजोरियों की निजी रूप से रिपोर्ट करें।
 
 ## परियोजना की वृद्धि
 
@@ -192,4 +192,4 @@ OpenCADStudio --serve --port 4242
 
 ## लाइसेंस
 
-Open CAD Studio को [GNU General Public License v3.0](LICENSE) के अंतर्गत वितरित किया जाता है।
+Open CAD Studio को [GNU General Public License v3.0](../../LICENSE) के अंतर्गत वितरित किया जाता है।
