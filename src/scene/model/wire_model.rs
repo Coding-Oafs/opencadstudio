@@ -321,30 +321,64 @@ impl WireModel {
     /// outside stay put. Exact for line/polyline vertices (the primary stretch
     /// targets); curve tessellation points may deform where a window edge cuts
     /// through them, matching the per-vertex nature of the operation.
-    pub fn stretched(&self, win_min: glam::Vec3, win_max: glam::Vec3, delta: glam::Vec3) -> Self {
+    pub fn stretched(
+    &self,
+    win_min: glam::Vec3,
+    win_max: glam::Vec3,
+    delta: glam::Vec3,
+) -> Self {
+    self.stretched_windows(&[(win_min, win_max)], delta)
+}
+
+/// Return a clone for a multi-window STRETCH preview. A point moves exactly
+/// once when it lies inside any of the crossing windows.
+pub fn stretched_windows(
+    &self,
+    windows: &[(glam::Vec3, glam::Vec3)],
+    delta: glam::Vec3,
+) -> Self {
         let mut out = self.clone();
         out.name = format!("preview_{}", self.name);
         out.color = Self::CYAN;
         out.selected = false;
+
+        let inside = |x: f32, y: f32| {
+            windows.iter().any(|(win_min, win_max)| {
+                x >= win_min.x
+                    && x <= win_max.x
+                    && y >= win_min.y
+                    && y <= win_max.y
+            })
+        };
+
         for p in &mut out.points {
-            if p[0] >= win_min.x && p[0] <= win_max.x && p[1] >= win_min.y && p[1] <= win_max.y {
+            if inside(p[0], p[1]) {
                 p[0] += delta.x;
                 p[1] += delta.y;
                 p[2] += delta.z;
             }
         }
+
         if !out.text_verts.is_empty() {
-            let (mnx, mny) = (win_min.x as f64, win_min.y as f64);
-            let (mxx, mxy) = (win_max.x as f64, win_max.y as f64);
-            let (dx, dy, dz) = (delta.x as f64, delta.y as f64, delta.z as f64);
+            let (dx, dy, dz) =
+                (delta.x as f64, delta.y as f64, delta.z as f64);
+
             out.text_verts = map_text_verts(&self.text_verts, |x, y, z| {
-                if x >= mnx && x <= mxx && y >= mny && y <= mxy {
+                let inside = windows.iter().any(|(win_min, win_max)| {
+                    x >= win_min.x as f64
+                        && x <= win_max.x as f64
+                        && y >= win_min.y as f64
+                        && y <= win_max.y as f64
+                });
+
+                if inside {
                     (x + dx, y + dy, z + dz)
                 } else {
                     (x, y, z)
                 }
             });
         }
+
         out
     }
 

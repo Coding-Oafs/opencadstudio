@@ -2568,48 +2568,56 @@ impl OpenCADStudio {
                 self.restore_pre_cmd_tangent();
                 return self.on_quick_print_handles(handles);
             }
-            CmdResult::StretchWindow { win_min, win_max } => {
-                // Implicit STRETCH selection (#338): the crossing window drawn
-                // with no prior selection picks the objects itself. Entities
-                // whose world AABB touches the window are handed back to the
-                // command at the base-point step — over-selection is harmless,
-                // since only points INSIDE the window move anyway.
-                let mut handles: Vec<Handle> = Vec::new();
+            CmdResult::StretchWindow {
+                mut handles,
+                windows,
+            } => {
+                // Accumulate every entity touched by any crossing window. Keep STRETCH
+                // in its selection stage; Enter is what advances to the base point.
                 {
                     let scene = &self.tabs[i].scene;
-                    handles.extend(
-                        scene
-                            .interaction_handles_in_world_aabb([
-                                win_min.x, win_min.y, win_max.x, win_max.y,
-                            ])
-                            .into_iter()
-                            .filter(|&h| !scene.is_layer_locked(h)),
+
+                    for (win_min, win_max) in &windows {
+                        handles.extend(
+                            scene
+                                .interaction_handles_in_world_aabb([
+                                    win_min.x,
+                                    win_min.y,
+                                    win_max.x,
+                                    win_max.y,
+                                ])
+                                .into_iter()
+                                .filter(|&handle| !scene.is_layer_locked(handle)),
+                        );
+                    }
+                }
+
+                handles.sort_unstable_by_key(|handle| handle.value());
+                handles.dedup();
+
+                if handles.is_empty() {
+                    self.command_line.push_output(
+                        crate::t!("STRETCH: nothing crosses the window.").as_ref(),
                     );
                 }
+
                 use crate::command::CadCommand;
                 use crate::modules::draw::modify::stretch::StretchCommand;
-                // A window that caught nothing is a missed aim, not a decision
-                // to stop. Ending the command there made the user restart it to
-                // try again; instead say so and ask for the corner afresh, the
-                // way a selection that picks nothing leaves MOVE still asking.
-                // (#676)
-                let cmd = if handles.is_empty() {
-                    self.command_line
-                        .push_output(crate::t!("STRETCH: nothing crosses the window.").as_ref());
-                    StretchCommand::new(Vec::new(), Vec::new())
-                } else {
-                    let wires = self.tabs[i].scene.wire_models_for(&handles);
-                    StretchCommand::with_window(handles, wires, win_min, win_max)
-                };
-                self.tabs[i].snap_result = None;
-                self.tabs[i].scene.clear_preview_wire();
+
+                let wires = self.tabs[i].scene.wire_models_for(&handles);
+
+                let cmd = StretchCommand::with_windows(
+                    handles,
+                    wires,
+                    windows,
+                );
+
                 self.command_line.push_info(&CadCommand::prompt(&cmd));
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
             CmdResult::StretchEntities {
                 mut handles,
-                win_min,
-                win_max,
+                windows,
                 delta,
             } => {
                 handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
@@ -2630,7 +2638,12 @@ impl OpenCADStudio {
                 // Helper: is DXF point (x, y) inside the world-space window?
                 // Drawing plane is world XY (= DXF XY).
                 let in_win = |x: f64, y: f64| -> bool {
-                    x >= win_min.x && x <= win_max.x && y >= win_min.y && y <= win_max.y
+                    windows.iter().any(|(win_min, win_max)| {
+                        x >= win_min.x
+                            && x <= win_max.x
+                            && y >= win_min.y
+                            && y <= win_max.y
+                    })
                 };
 
                 let dx = delta.x as f64;
@@ -2739,8 +2752,14 @@ impl OpenCADStudio {
                             }
                         }
                         acadrust::EntityType::Viewport(vp) => {
-                            stretched =
-                                crate::entities::viewport::stretch(vp, win_min, win_max, delta);
+                            stretched = windows.iter().any(|(win_min, win_max)| {
+                                crate::entities::viewport::stretch(
+                                    vp,
+                                    *win_min,
+                                    *win_max,
+                                    delta,
+                                )
+                            });
                         }
                         acadrust::EntityType::Dimension(dim) => {
                             use acadrust::entities::Dimension;

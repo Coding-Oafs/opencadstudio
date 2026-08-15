@@ -1335,18 +1335,21 @@ pub enum CmdResult {
         scale: f32,
         angle: f32,
     },
-    /// Implicit STRETCH selection: the crossing window was drawn with no prior
-    /// selection, so the host resolves which entities it touches and restarts
-    /// the command at the base-point step with them. (#338)
-    StretchWindow { win_min: DVec3, win_max: DVec3 },
-    /// Stretch entities: move only vertices/endpoints inside the crossing window.
+    /// STRETCH crossing-window selection. The command can accumulate several
+    /// independent crossing windows before Enter ends the selection stage.
+    StretchWindow {
+        /// Handles already gathered by previous crossing windows / preselection.
+        handles: Vec<Handle>,
+        /// Every crossing window gathered so far.
+        windows: Vec<(DVec3, DVec3)>,
+    },
+    /// Stretch entities: move only vertices/endpoints inside any gathered
+    /// crossing window.
     StretchEntities {
         handles: Vec<Handle>,
-        /// Min corner of the crossing window in world XZ (= DXF XY).
-        win_min: DVec3,
-        /// Max corner of the crossing window in world XZ (= DXF XY).
-        win_max: DVec3,
-        /// Translation vector to apply to vertices inside the window.
+        /// Independent crossing windows that define the points to move.
+        windows: Vec<(DVec3, DVec3)>,
+        /// Translation vector applied once to every selected point.
         delta: DVec3,
     },
     /// Create a Solid3D placeholder entity + associated MeshModel.
