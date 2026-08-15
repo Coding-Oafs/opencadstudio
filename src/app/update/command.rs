@@ -1103,9 +1103,12 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         .get(idx)
                         .map(|l| l.name.clone())
                         .unwrap_or_default();
+                    let old_key = old_name.to_uppercase();
+                    let case_only_rename = new_name.to_uppercase() == old_key;
                     if !new_name.is_empty()
                         && new_name != old_name
-                        && !self.tabs[i].scene.document.layers.contains(&new_name)
+                        && (case_only_rename
+                            || !self.tabs[i].scene.document.layers.contains(&new_name))
                     {
                         self.push_undo_snapshot(i, "LAYER RENAME");
                         // Keep the whole record (handle, color, linetype,
@@ -1113,21 +1116,39 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         // renamed layer still has a valid handle and survives a
                         // DWG save (issue #67).
                         if let Some(mut nl) =
-                            self.tabs[i].scene.document.layers.get(&old_name).cloned()
+                            self.tabs[i].scene.document.layers.remove(&old_name)
                         {
                             nl.name = new_name.clone();
                             if !nl.handle.is_valid() {
                                 nl.handle = self.tabs[i].scene.document.allocate_handle();
                             }
+                            let layer_handle = nl.handle;
                             let _ = self.tabs[i].scene.document.layers.add(nl);
-                        }
-                        self.tabs[i].scene.document.layers.remove(&old_name);
-                        for e in self.tabs[i].scene.document.entities_mut() {
-                            if e.as_entity().layer() == old_name {
-                                e.as_entity_mut().set_layer(new_name.clone());
+                            for e in self.tabs[i].scene.document.entities_mut() {
+                                if e.as_entity().layer().to_uppercase() == old_key {
+                                    e.as_entity_mut().set_layer(new_name.clone());
+                                }
                             }
+                            self.tabs[i].scene.invalidate_dependency_index();
+
+                            if self.tabs[i].active_layer.to_uppercase() == old_key {
+                                self.tabs[i].active_layer = new_name.clone();
+                            }
+                            if self.tabs[i]
+                                .scene
+                                .document
+                                .header
+                                .current_layer_name
+                                .to_uppercase()
+                                == old_key
+                            {
+                                self.tabs[i].scene.document.header.current_layer_name =
+                                    new_name.clone();
+                                self.tabs[i].scene.document.header.current_layer_handle =
+                                    layer_handle;
+                            }
+                            self.tabs[i].dirty = true;
                         }
-                        self.tabs[i].dirty = true;
                     }
                     let doc_layers = self.tabs[i].scene.document.layers.clone();
                     let vp_info = self.tabs[i].scene.viewport_list();
@@ -2603,4 +2624,158 @@ fn block_attr_prompts(
         }
     }
     map
+}
+
+#[cfg(test)]
+mod layer_rename_tests {
+    use crate::app::OpenCADStudio;
+    use acadrust::entities::Line;
+    use acadrust::{EntityType, Handle};
+
+    fn app_with_editing_layer() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.on_layer_new();
+        app
+    }
+
+    fn rename_layer(app: &mut OpenCADStudio, old_name: &str, new_name: &str) {
+        let i = app.active_tab;
+        let idx = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .position(|layer| layer.name == old_name)
+            .expect("layer exists in panel");
+        app.tabs[i].layers.editing = Some(idx);
+        app.tabs[i].layers.edit_buf = new_name.to_string();
+        let _ = app.on_layer_rename_commit();
+    }
+
+    #[test]
+    fn layer_rename_allows_ascii_case_only_change() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "TEST");
+        let handle = app.tabs[i].scene.document.layers.get("TEST").unwrap().handle;
+
+        rename_layer(&mut app, "TEST", "test");
+
+        let layer = app.tabs[i].scene.document.layers.get("test").unwrap();
+        assert_eq!(layer.name, "test");
+        assert_eq!(layer.handle, handle);
+    }
+
+    #[test]
+    fn layer_rename_allows_unicode_case_only_change() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "é");
+
+        rename_layer(&mut app, "é", "É");
+
+        assert_eq!(
+            app.tabs[i].scene.document.layers.get("É").unwrap().name,
+            "É"
+        );
+    }
+
+    #[test]
+    fn current_layer_rename_updates_name_and_allocated_handle() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let idx = app.tabs[i].layers.editing.expect("new layer is being edited");
+        let old_name = app.tabs[i].layers.layers[idx].name.clone();
+        app.tabs[i]
+            .scene
+            .document
+            .layers
+            .get_mut(&old_name)
+            .unwrap()
+            .handle = Handle::NULL;
+        app.tabs[i].layers.selected = Some(idx);
+        let _ = app.on_layer_set_current();
+
+        rename_layer(&mut app, &old_name, "Renamed");
+
+        let layer = app.tabs[i]
+            .scene
+            .document
+            .layers
+            .get("Renamed")
+            .unwrap();
+        assert!(layer.handle.is_valid());
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(app.tabs[i].layers.current_layer, "Renamed");
+        assert_eq!(app.ribbon.active_layer, "Renamed");
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_name,
+            "Renamed"
+        );
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_handle,
+            layer.handle
+        );
+    }
+
+    #[test]
+    fn layer_rename_keeps_independent_current_layer_mirrors() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "A");
+        let _ = app.on_layer_new();
+        let b_idx = app.tabs[i].layers.editing.expect("new layer is being edited");
+        app.tabs[i].layers.selected = Some(b_idx);
+        let _ = app.on_layer_set_current();
+        let header_name = app.tabs[i].scene.document.header.current_layer_name.clone();
+        let header_handle = app.tabs[i].scene.document.header.current_layer_handle;
+        app.tabs[i].active_layer = "A".to_string();
+
+        rename_layer(&mut app, "A", "Renamed");
+
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_name,
+            header_name
+        );
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_handle,
+            header_handle
+        );
+    }
+
+    #[test]
+    fn layer_rename_updates_mixed_case_entity_references() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "TEST");
+        let mut line = Line::new();
+        line.common.layer = "test".to_string();
+        let handle = app.tabs[i].scene.add_entity(EntityType::Line(line));
+        app.tabs[i]
+            .scene
+            .invalidate_layer_dependencies(&["TEST".to_string()]);
+
+        rename_layer(&mut app, "TEST", "Renamed");
+
+        assert_eq!(
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(handle)
+                .unwrap()
+                .common()
+                .layer,
+            "Renamed"
+        );
+        let epoch = app.tabs[i].scene.geometry_epoch;
+        app.tabs[i]
+            .scene
+            .invalidate_layer_dependencies(&["Renamed".to_string()]);
+        assert_ne!(app.tabs[i].scene.geometry_epoch, epoch);
+    }
 }
