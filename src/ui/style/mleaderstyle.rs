@@ -98,7 +98,7 @@ fn input_row<'a>(
 fn readonly_row<'a>(label: Cow<'static, str>, value: Cow<'static, str>) -> Element<'a, Message> {
     row![
         text(label).size(11).style(muted_style).width(165),
-        container(text(value).size(11).style(muted_style)).padding([5, 7]),
+        crate::ui::read_only::field(value.as_ref(), 11.0, Length::Fill),
     ]
     .spacing(8)
     .align_y(iced::Center)
