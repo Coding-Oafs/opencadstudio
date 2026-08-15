@@ -328,10 +328,7 @@ pub fn view_window<'a>(
 
     let mk_field = |fld: DsField, val: &'a str| -> Element<'a, Message> {
         if vals.read_only {
-            container(text(val).size(11).style(muted_style))
-                .padding([4, 7])
-                .width(100)
-                .into()
+            crate::ui::read_only::field(val, 11.0, Length::Fixed(100.0))
         } else {
             text_input("", val)
                 .on_input(move |s| Message::DsEdit(fld.clone(), s))
@@ -351,10 +348,7 @@ pub fn view_window<'a>(
                 .width(100)
                 .into()
         } else {
-            container(text(val).size(11).style(muted_style))
-                .padding([4, 7])
-                .width(100)
-                .into()
+            crate::ui::read_only::field(val, 11.0, Length::Fixed(100.0))
         }
     };
 
@@ -390,10 +384,7 @@ pub fn view_window<'a>(
                 label: val.to_string(),
             });
         let choice: Element<'a, Message> = if vals.read_only {
-            container(text(cur.to_string()).size(11).style(muted_style))
-                .padding([4, 7])
-                .width(150)
-                .into()
+            crate::ui::read_only::field(cur.to_string().as_str(), 11.0, Length::Fixed(150.0))
         } else {
             iced::widget::pick_list(Some(cur), options, |value| value.to_string())
                 .on_select(move |chosen: DimEnumChoice| {
@@ -476,8 +467,7 @@ pub fn view_window<'a>(
                     Message::DsZeroBase(target.clone(), choice.code.parse().unwrap_or(0))
                 }).into()
             } else {
-                container(text(feet_current.to_string()).size(11).style(muted_style))
-                    .padding([4, 7]).width(210).into()
+                crate::ui::read_only::field(feet_current.to_string().as_str(), 11.0, Length::Fixed(210.0))
             };
             row![lbl(t!("Feet and inches")), list]
                 .spacing(8).align_y(iced::Center).into()
@@ -513,9 +503,7 @@ pub fn view_window<'a>(
         if vals.read_only {
             return row![
                 lbl(label),
-                container(text(_val).size(11).style(muted_style))
-                    .padding([4, 7])
-                    .width(150)
+                crate::ui::read_only::field(_val, 11.0, Length::Fixed(150.0)),
             ]
             .spacing(8)
             .align_y(iced::Center)
@@ -552,10 +540,7 @@ pub fn view_window<'a>(
                      field: &'static str|
           -> Element<'a, Message> {
         let list: Element<'a, Message> = if vals.read_only {
-            container(text(selected).size(11).style(muted_style))
-                .padding([4, 7])
-                .width(150)
-                .into()
+            crate::ui::read_only::field(&selected, 11.0, Length::Fixed(150.0))
         } else {
             iced::widget::pick_list(Some(selected), options, |value| value.to_string())
                 .on_select(move |value| Message::DsSetHandle { field, value })
@@ -581,10 +566,7 @@ pub fn view_window<'a>(
         let list: Element<'a, Message> = if enabled && !vals.read_only {
             list.on_select(move |value| Message::DsSetHandle { field, value }).into()
         } else {
-            container(text(selected).size(11).style(muted_style))
-                .padding([4, 7])
-                .width(150)
-                .into()
+            crate::ui::read_only::field(&selected, 11.0, Length::Fixed(150.0))
         };
         row![lbl(label), list]
             .spacing(8)
@@ -593,10 +575,7 @@ pub fn view_window<'a>(
     };
 
     let text_style_field: Element<'a, Message> = if vals.read_only {
-        container(text(vals.dimtxsty).size(11).style(muted_style))
-            .padding([4, 7])
-            .width(150)
-            .into()
+        crate::ui::read_only::field(&vals.dimtxsty, 11.0, Length::Fixed(150.0))
     } else {
         iced::widget::pick_list(
             Some(vals.dimtxsty.to_string()),
@@ -631,8 +610,7 @@ pub fn view_window<'a>(
         center_choices[0].clone()
     };
     let center_method_field: Element<'a, Message> = if vals.read_only {
-        container(text(center_current.to_string()).size(11).style(muted_style))
-            .padding([4, 7]).width(150).into()
+        crate::ui::read_only::field(center_current.to_string().as_str(), 11.0, Length::Fixed(150.0))
     } else {
         iced::widget::pick_list(Some(center_current), center_choices, |choice| choice.to_string())
             .on_select(|choice| Message::DsCenterMarkMode(choice.code))
@@ -659,8 +637,7 @@ pub fn view_window<'a>(
         tolerance_choices[0].clone()
     };
     let tolerance_method_field: Element<'a, Message> = if vals.read_only {
-        container(text(tolerance_current.to_string()).size(11).style(muted_style))
-            .padding([4, 7]).width(150).into()
+        crate::ui::read_only::field(tolerance_current.to_string().as_str(), 11.0, Length::Fixed(150.0))
     } else {
         iced::widget::pick_list(
             Some(tolerance_current),
