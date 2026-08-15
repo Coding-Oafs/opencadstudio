@@ -2951,6 +2951,13 @@ fn start_page_content<'a>(
         outline_btn(crate::tr!("action", "options"), Message::OptionsOpen).into(),
     ];
     secondary_items.push(outline_btn(crate::tr!("action", "plugins"), Message::PluginManagerOpen).into());
+    secondary_items.push(
+        outline_btn(
+            "r/OpenCADStudio".to_string(),
+            Message::OpenUrl("https://www.reddit.com/r/OpenCADStudio/".to_string()),
+        )
+        .into(),
+    );
     // The web build is already in the browser, so only the desktop offers a
     // link to the web version.
     #[cfg(not(target_arch = "wasm32"))]
