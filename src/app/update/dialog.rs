@@ -597,7 +597,6 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 match id {
                     PanelId::BlockPalette => {
                         self.show_block_palette = false;
-                        self.ribbon.set_block_palette(false);
                         self.block_palette.placing = None;
                     }
                     PanelId::Properties => {

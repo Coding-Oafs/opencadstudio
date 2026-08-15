@@ -50,9 +50,6 @@ pub struct Ribbon {
     pub show_ucs_icon: bool,
     /// Properties panel (PROPERTIES) visibility — drives the Properties button highlight.
     pub show_properties: bool,
-    /// Block Palette panel (BLOCKPALETTE) visibility — drives the Block Palette
-    /// button highlight.
-    pub show_block_palette: bool,
     /// File tabs (FILETAB) visibility — drives the File Tabs button highlight.
     pub show_file_tabs: bool,
     /// Layout tabs (LAYOUTTAB) visibility — drives the Layout Tabs button highlight.
@@ -161,7 +158,6 @@ impl Ribbon {
             show_viewcube: true,
             show_ucs_icon: true,
             show_properties: true,
-            show_block_palette: false,
             show_file_tabs: true,
             show_layout_tabs: true,
             open_dropdown: None,
@@ -315,9 +311,6 @@ impl Ribbon {
     pub fn set_properties(&mut self, on: bool) {
         self.show_properties = on;
     }
-    pub fn set_block_palette(&mut self, on: bool) {
-        self.show_block_palette = on;
-    }
     pub fn set_file_tabs(&mut self, on: bool) {
         self.show_file_tabs = on;
     }
@@ -325,14 +318,17 @@ impl Ribbon {
         self.show_layout_tabs = on;
     }
     /// Snapshot of every ribbon toggle's live state, for the render path.
-    fn toggle_state(&self) -> widgets::ToggleState {
+    /// The Block Palette highlight is threaded in from the app's authoritative
+    /// `show_block_palette` rather than a ribbon copy, so it can't drift from
+    /// the panel's true visibility.
+    fn toggle_state(&self, show_block_palette: bool) -> widgets::ToggleState {
         use widgets::ToggleState;
         ToggleState {
             ortho_mode: self.ortho_mode,
             show_viewcube: self.show_viewcube,
             show_ucs_icon: self.show_ucs_icon,
             show_properties: self.show_properties,
-            show_block_palette: self.show_block_palette,
+            show_block_palette,
             show_file_tabs: self.show_file_tabs,
             show_layout_tabs: self.show_layout_tabs,
         }
@@ -406,6 +402,7 @@ impl Ribbon {
         is_start: bool,
         undo_count: usize,
         redo_count: usize,
+        show_block_palette: bool,
     ) -> Element<'_, Message> {
         // ── Quick-access file commands + undo/redo, one merged flow ────────
         let lead = iced::widget::Row::with_children(vec![
@@ -586,7 +583,7 @@ impl Ribbon {
                 let panels: Vec<Panel<'_>> = groups
                     .iter()
                     .map(|g| {
-                        let ts = self.toggle_state();
+                        let ts = self.toggle_state(show_block_palette);
                         Panel {
                         id: g.title.to_string(),
                         full: render_group(
@@ -1561,5 +1558,24 @@ fn collapse_button<'a>(
 impl Default for Ribbon {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::widgets::is_active_tool;
+    use super::Ribbon;
+
+    #[test]
+    fn block_palette_highlight_follows_the_app_state_passed_to_the_view() {
+        // The Block Palette button highlight is derived from the app's
+        // authoritative `show_block_palette`, threaded into the view at render
+        // time: the ribbon keeps no second copy that a BLOCKPALETTE / close
+        // handler must remember to keep in sync.
+        let ribbon = Ribbon::default();
+        let on = ribbon.toggle_state(true);
+        assert!(is_active_tool("BLOCKPALETTE", &None, &on));
+        let off = ribbon.toggle_state(false);
+        assert!(!is_active_tool("BLOCKPALETTE", &None, &off));
     }
 }

@@ -1742,6 +1742,7 @@ impl OpenCADStudio {
                     self.tabs[self.active_tab].is_start,
                     self.tabs[self.active_tab].history.undo_stack.len(),
                     self.tabs[self.active_tab].history.redo_stack.len(),
+                    self.show_block_palette,
                 ));
             }
             if self.show_file_tabs {
