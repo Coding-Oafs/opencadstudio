@@ -1103,60 +1103,14 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         .get(idx)
                         .map(|l| l.name.clone())
                         .unwrap_or_default();
-                    let old_key = old_name.to_uppercase();
-                    let case_only_rename = new_name.to_uppercase() == old_key;
-                    if !new_name.is_empty()
-                        && new_name != old_name
-                        && (case_only_rename
-                            || !self.tabs[i].scene.document.layers.contains(&new_name))
-                    {
+                    if !new_name.is_empty() && new_name != old_name {
                         self.push_undo_snapshot(i, "LAYER RENAME");
-                        // Keep the whole record (handle, color, linetype,
-                        // lineweight, flags) and only change the name, so the
-                        // renamed layer still has a valid handle and survives a
-                        // DWG save (issue #67).
-                        if let Some(mut nl) =
-                            self.tabs[i].scene.document.layers.remove(&old_name)
-                        {
-                            nl.name = new_name.clone();
-                            if !nl.handle.is_valid() {
-                                nl.handle = self.tabs[i].scene.document.allocate_handle();
-                            }
-                            let layer_handle = nl.handle;
-                            let _ = self.tabs[i].scene.document.layers.add(nl);
-                            for e in self.tabs[i].scene.document.entities_mut() {
-                                if e.as_entity().layer().to_uppercase() == old_key {
-                                    e.as_entity_mut().set_layer(new_name.clone());
-                                }
-                            }
-                            self.tabs[i].scene.invalidate_dependency_index();
-
-                            if self.tabs[i].active_layer.to_uppercase() == old_key {
-                                self.tabs[i].active_layer = new_name.clone();
-                            }
-                            if self.tabs[i]
-                                .scene
-                                .document
-                                .header
-                                .current_layer_name
-                                .to_uppercase()
-                                == old_key
-                            {
-                                self.tabs[i].scene.document.header.current_layer_name =
-                                    new_name.clone();
-                                self.tabs[i].scene.document.header.current_layer_handle =
-                                    layer_handle;
-                            }
-                            self.tabs[i].dirty = true;
+                        if !self.tabs[i].rename_layer(&old_name, &new_name) {
+                            self.discard_last_undo_entry(i);
                         }
                     }
-                    let doc_layers = self.tabs[i].scene.document.layers.clone();
-                    let vp_info = self.tabs[i].scene.viewport_list();
-                    self.tabs[i]
-                        .layers
-                        .sync_with_viewports(&doc_layers, vp_info);
                     self.tabs[i].layers.edit_buf.clear();
-                    self.sync_ribbon_layers();
+                    self.refresh_layer_panel();
                 }
                 Task::none()
     }
@@ -2725,6 +2679,29 @@ mod layer_rename_tests {
             app.tabs[i].scene.document.header.current_layer_handle,
             layer.handle
         );
+    }
+
+    #[test]
+    fn layer_rename_undo_redo_restores_active_layer() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let idx = app.tabs[i].layers.editing.expect("new layer is being edited");
+        let old_name = app.tabs[i].layers.layers[idx].name.clone();
+        app.tabs[i].layers.selected = Some(idx);
+        let _ = app.on_layer_set_current();
+
+        rename_layer(&mut app, &old_name, "Renamed");
+        app.undo_active_tab();
+
+        assert!(app.tabs[i].scene.document.layers.contains(&old_name));
+        assert_eq!(app.tabs[i].active_layer, old_name);
+        assert_eq!(app.ribbon.active_layer, app.tabs[i].active_layer);
+
+        app.redo_active_tab();
+
+        assert!(app.tabs[i].scene.document.layers.contains("Renamed"));
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(app.ribbon.active_layer, "Renamed");
     }
 
     #[test]

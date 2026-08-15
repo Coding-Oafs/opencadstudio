@@ -267,6 +267,14 @@ impl Scene {
         handle
     }
 
+    pub fn rename_layer(&mut self, old: &str, new: &str) -> bool {
+        if self.document.rename_layer(old, new).is_err() {
+            return false;
+        }
+        self.invalidate_dependency_index();
+        true
+    }
+
     /// Rename a block definition: re-key its record, update the Block marker's
     /// name, and repoint every INSERT that referenced the old name so all
     /// instances keep resolving. Returns false if `old` is missing or

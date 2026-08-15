@@ -7,7 +7,7 @@ use crate::scene::GripDef;
 use crate::scene::{ObjectIsolationState, Scene};
 use crate::snap::SnapResult;
 use crate::ui::{LayerPanel, PropertiesPanel};
-use acadrust::tables::Ucs;
+use acadrust::tables::{normalize_name, Ucs};
 use acadrust::{CadDocument, EntityType, Handle};
 use iced;
 use crate::t;
@@ -222,6 +222,18 @@ pub(super) struct DocumentTab {
 }
 
 impl DocumentTab {
+    pub(super) fn rename_layer(&mut self, old_name: &str, new_name: &str) -> bool {
+        let active = normalize_name(&self.active_layer) == normalize_name(old_name);
+        if !self.scene.rename_layer(old_name, new_name) {
+            return false;
+        }
+        if active {
+            self.active_layer = new_name.to_string();
+        }
+        self.dirty = true;
+        true
+    }
+
     pub(super) fn active_block_edit_session(&self) -> Option<&BlockEditSession> {
         self.active_block_edit
             .and_then(|index| self.block_edits.get(index))
@@ -546,6 +558,11 @@ impl HistorySnapshot {
                 )
                 .saturating_add(d.selected_before.len().saturating_mul(16))
                 .saturating_add(d.selected_after.len().saturating_mul(16))
+                .saturating_add(
+                    d.active_layer
+                        .as_ref()
+                        .map_or(0, |(before, after)| before.len().saturating_add(after.len())),
+                )
                 .saturating_add(d.label.len()),
             HistorySnapshot::ObjectVisibility(v) => v
                 .before
@@ -598,6 +615,7 @@ pub(super) struct DeltaSnapshot {
     pub(super) selected_after: Vec<Handle>,
     pub(super) dirty_before: bool,
     pub(super) dirty_after: bool,
+    pub(super) active_layer: Option<(String, String)>,
     /// Opposite non-entity document state. `apply_delta_state` swaps this with
     /// the live structure, so the same allocation shuttles between undo/redo.
     pub(super) structure: Option<StructureSnapshot>,
@@ -671,6 +689,7 @@ pub(super) struct HistoryState {
 pub(super) struct PendingHistorySnapshot {
     pub(super) label: String,
     pub(super) current_layout: String,
+    pub(super) active_layer: String,
     pub(super) selected_before: Vec<Handle>,
     pub(super) dirty_before: bool,
     pub(super) structure_before: CadDocument,

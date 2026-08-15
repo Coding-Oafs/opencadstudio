@@ -149,6 +149,7 @@ use acadrust::entities::{
     BoundaryEdge, BoundaryPath, Hatch as DxfHatch, PolylineEdge, Solid as DxfSolid,
 };
 use acadrust::objects::ObjectType;
+use acadrust::tables::normalize_name;
 use acadrust::types::Vector2;
 use acadrust::{CadDocument, EntityType, Handle, TableEntry};
 use glam;
@@ -8591,7 +8592,7 @@ impl Scene {
             .document
             .block_records
             .iter()
-            .map(|record| (record.handle, record.name.to_ascii_uppercase()))
+            .map(|record| (record.handle, normalize_name(&record.name)))
             .collect();
         let membership: HashMap<Handle, Handle> = self
             .document
@@ -8618,7 +8619,7 @@ impl Scene {
             let EntityType::Insert(insert) = entity else {
                 continue;
             };
-            let target = insert.block_name.to_ascii_uppercase();
+            let target = normalize_name(&insert.block_name);
             let common = &insert.common;
             let owner = if common.owner_handle.is_null() {
                 membership
@@ -8702,7 +8703,7 @@ impl Scene {
                 extend_category(&mut index.annotation_geometry);
             }
             let add = |map: &mut HashMap<String, DependencyTargets>, name: &str| {
-                let target = map.entry(name.to_ascii_uppercase()).or_default();
+                let target = map.entry(normalize_name(name)).or_default();
                 target.render_handles.extend(render_handles.iter().copied());
                 target.source_handles.insert(common.handle);
                 target.touches_block_definition |= inside_block;
@@ -8841,7 +8842,7 @@ impl Scene {
         };
         let mut combined = DependencyTargets::default();
         for name in names {
-            let Some(target) = map.get(&name.to_ascii_uppercase()) else {
+            let Some(target) = map.get(&normalize_name(name)) else {
                 continue;
             };
             combined
