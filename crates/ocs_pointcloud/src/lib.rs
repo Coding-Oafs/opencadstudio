@@ -4,6 +4,7 @@
 //! viewer can retain only a bounded display sample plus a sparse set of edits,
 //! then stream the original file when it is time to export a revised LAS/LAZ.
 
+mod crs;
 mod display;
 mod edit;
 mod ptc;
@@ -11,6 +12,10 @@ mod selection;
 mod sidecar;
 mod tile_cache;
 
+pub use crs::{
+    assess_survey_readiness, inspect_crs, reproject_with_patches_progress, CrsInfo,
+    ReprojectionStats, SurveyReadiness,
+};
 pub use display::{
     classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode,
     DisplaySettings,
@@ -48,6 +53,7 @@ pub enum Error {
     OutputExists(PathBuf),
     SameInputAndOutput(PathBuf),
     Cancelled(&'static str),
+    Crs(String),
 }
 
 impl fmt::Display for Error {
@@ -74,6 +80,7 @@ impl fmt::Display for Error {
                 path.display()
             ),
             Self::Cancelled(operation) => write!(f, "{operation} cancelled"),
+            Self::Crs(message) => write!(f, "coordinate-reference-system error: {message}"),
         }
     }
 }
@@ -120,6 +127,8 @@ pub struct CloudMetadata {
     pub creation_date: Option<String>,
     pub file_source_id: u16,
     pub has_crs: bool,
+    #[serde(default)]
+    pub crs: CrsInfo,
     pub vlr_count: usize,
     pub evlr_count: usize,
 }
@@ -150,6 +159,7 @@ impl CloudMetadata {
             creation_date: header.date().map(|date| date.to_string()),
             file_source_id: header.file_source_id(),
             has_crs: header.has_crs_vlrs(),
+            crs: CrsInfo::from_header(header),
             vlr_count: header.vlrs().len(),
             evlr_count: header.evlrs().len(),
         })
@@ -726,6 +736,55 @@ mod tests {
     }
 
     #[test]
+    fn reprojection_streams_xy_preserves_z_and_rewrites_crs() {
+        let directory = TestDirectory::new();
+        let input = directory.join("geographic.las");
+        let output = directory.join("web-mercator.las");
+        let mut builder = Builder::default();
+        builder.version = las::Version::new(1, 4);
+        builder.point_format = Format::new(3).unwrap();
+        let mut header = builder.into_header().unwrap();
+        header
+            .set_wkt_crs(
+                crs_definitions::from_code(4326)
+                    .unwrap()
+                    .wkt
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .unwrap();
+        let mut writer = Writer::from_path(&input, header).unwrap();
+        writer
+            .write_point(Point {
+                x: -88.0,
+                y: 41.0,
+                z: 182.75,
+                gps_time: Some(1.0),
+                color: Some(las::Color::new(1, 2, 3)),
+                ..Point::default()
+            })
+            .unwrap();
+        writer.close().unwrap();
+
+        let stats =
+            reproject_with_patches_progress(&input, &output, &EditStore::default(), 3857, |_| true)
+                .unwrap();
+        assert_eq!(1, stats.points_written);
+        let metadata = inspect(&output).unwrap();
+        assert_eq!(Some(3857), metadata.crs.horizontal_epsg);
+        let mut reader = Reader::from_path(output).unwrap();
+        let points: Vec<_> = reader
+            .read_all()
+            .unwrap()
+            .points()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!((points[0].x + 9_796_113.0).abs() < 10.0);
+        assert!((points[0].y - 5_012_342.0).abs() < 10.0);
+        assert_eq!(182.75, points[0].z);
+    }
+
+    #[test]
     fn sparse_edits_are_transactional_and_undoable() {
         let mut edits = ClassificationEdits::default();
         assert_eq!(2, edits.reclassify([2, 4, 4], 2));
@@ -978,12 +1037,8 @@ mod tests {
         let input = directory.join("cancel-input.las");
         let output = directory.join("cancel-output.las");
         create_cloud(&input, 70_000);
-        let result = export_with_patches_progress(
-            &input,
-            &output,
-            &EditStore::default(),
-            |_| false,
-        );
+        let result =
+            export_with_patches_progress(&input, &output, &EditStore::default(), |_| false);
         assert!(matches!(result, Err(Error::Cancelled(_))));
         assert!(!output.exists());
     }

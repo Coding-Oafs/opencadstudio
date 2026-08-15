@@ -29,9 +29,10 @@ build can exhaust the Windows paging file.
 
 The native build has a **LiDAR** ribbon tab and a **LiDAR Point Cloud Manager**.
 Use **Attach**, then **Build / Open LOD** for dense production data. The manager
-provides color and point-size controls, selection prompts, common ASPRS classes,
-point flags, statistics, class-table interchange, export progress/cancel, and
-detach. `POINTCLOUDMANAGER` opens it from the command line or a function key.
+provides color and point-size controls, direct viewport selection tools, an
+editable class/statistics grid, CRS safeguards, common ASPRS point edits,
+class-table interchange, audit history, export/reprojection progress/cancel,
+and detach. `POINTCLOUDMANAGER` opens it from the command line or a function key.
 
 The source LAS/LAZ is read-only during attachment and editing. A revised cloud
 is created only by **Export LAS/LAZ**.
@@ -50,18 +51,22 @@ is created only by **Export LAS/LAZ**.
 | `POINTCLOUDCLASSVISIBLE <class> <ON/OFF>` | Show or hide one class. |
 | `POINTCLOUDSTATS` | Report per-class counts for the current full/sample/LOD working set. |
 | `POINTCLOUDCLASSIFY <class> <indices>` | Queue an ASPRS class for source indices. Indices accept comma-separated values and inclusive ranges, for example `POINTCLOUDCLASSIFY 2 10-25,40`. |
-| `POINTCLOUDSELECTPOINT` | Prompt for `X Y Z search-radius` and create the active source-index selection. |
-| `POINTCLOUDSELECTBOX` | Prompt for `minX minY minZ maxX maxY maxZ` and create the active selection. |
-| `POINTCLOUDSELECTBRUSH` | Prompt for `centerX centerY centerZ radius` and create the active selection. |
+| `POINTCLOUDSELECTPOINT` | Pick the nearest displayed point within a fixed screen-pixel aperture. |
+| `POINTCLOUDSELECTBOX` | Pick two viewport corners for a screen-space window selection. Coordinate arguments remain available for scripts. |
+| `POINTCLOUDSELECTFENCE` | Click a screen-space polygon fence and press Enter to close it. |
+| `POINTCLOUDSELECTBRUSH` | Apply a repeating 32-pixel viewport selection brush; press Enter to finish. Coordinate arguments remain available for scripts. |
 | `POINTCLOUDSELECTSLICE` | Select the resident points between two survey elevations. |
 | `POINTCLOUDSELECTFILTER` | Set/clear persistent class, return, source, elevation, synthetic, key, withheld, or overlap filters used by spatial selections. |
 | `POINTCLOUDSELECTCLEAR` | Clear the active highlighted selection without changing saved edits. |
-| `POINTCLOUDBRUSHCLASSIFY <class>` | Function-key-friendly world-space brush prompt that selects and classifies in one transaction. |
+| `POINTCLOUDBRUSHCLASSIFY <class>` | Function-key-friendly repeating fixed-pixel viewport brush that selects and classifies source points. |
 | `POINTCLOUDCLASSIFYSELECTION <class>` | Reclassify the active selection as one transaction. |
 | `POINTCLOUDFLAGSELECTION <flag> <ON/OFF>` | Change `WITHHELD`, `OVERLAP`, `KEY`, or `SYNTHETIC` on the active selection. |
 | `POINTCLOUDELEVATIONSELECTION <z>` | Set an elevation patch on the active selection. |
 | `POINTCLOUDUNDO` | Undo the most recent sparse point edit transaction. This is separate from CAD entity undo. |
 | `POINTCLOUDPTCIMPORT` / `POINTCLOUDPTCEXPORT` | Pick and import/export an editable `.ptc` class/color table. A path argument is also accepted. |
+| `POINTCLOUDCLASSADD` | Add the next available class code to the manager's editable class grid. |
+| `POINTCLOUDCRS` | Report WKT/GeoTIFF CRS source, horizontal/vertical EPSG identifiers, and survey-product readiness. |
+| `POINTCLOUDREPROJECT <EPSG>` | Pick an output LAS/LAZ and stream a reprojected copy. Sparse edits are applied, XY transforms, and Z is deliberately preserved. |
 | `MNUIMPORT` / `MNUEXPORT` | Pick and import/export `$FK5.0$` function-key `.mnu` files. A path argument is also accepted. |
 | `POINTCLOUDEXPORT` | Pick a new `.las`/`.laz` path and stream the full source cloud with pending sparse edits applied. |
 | `POINTCLOUDEXPORTSTATUS` / `POINTCLOUDEXPORTCANCEL` | Report or cancel a background export. |
@@ -87,6 +92,13 @@ The active selection is highlighted amber in the GPU view before editing.
   `<cloud>.las.ocstiles` or `<cloud>.laz.ocstiles`. It retains full leaf records,
   deterministic coarser levels, caps simultaneously open tile files, and
   rejects a cache when the source fingerprint has changed.
+- Camera-frustum-driven tile selection chooses the finest visible level that
+  fits the point, CPU-memory, and GPU-memory budgets. Missing tiles load on a
+  worker thread; an LRU retains recently used CPU tiles and the GPU model holds
+  only the active visible working set.
+- Direct viewport point, window, polygon-fence, and fixed-pixel brush queries
+  use a camera-generation-keyed screen spatial grid. Attribute filters and all
+  resulting edit transactions retain stable source indices.
 - Sparse source-indexed edit patches, transaction audit data, undo, and compact
   selection ranges rather than an in-memory copy of every edited source point.
 - A versioned SQLite sidecar adjacent to a saved drawing: `<drawing>.ocspc`.
@@ -103,43 +115,46 @@ The active selection is highlighted amber in the GPU view before editing.
 - `.ptc` parsing accepts header-aware CSV, semicolon, tab, and whitespace forms.
   `.mnu` support reads/writes `$FK5.0$` function keys and preserves unsupported
   VBA/MDL/Scan key-ins with visible compatibility warnings.
+- WKT and GeoTIFF CRS records are inspected into horizontal/vertical EPSG
+  identifiers when possible. Survey-product readiness blocks missing,
+  unresolved, geographic, or invalid coordinate systems and warns when the
+  vertical datum is unresolved.
+- Copy reprojection uses a bundled pure-Rust EPSG/PROJ pipeline, densifies the
+  transformed source envelope, writes safe LAS XY offsets/scales, updates the
+  output WKT, applies sparse edits, and preserves Z rather than silently
+  applying an unverified vertical-datum conversion.
 
 ## Important current limits
 
 This is a production-oriented foundation and file-integrity path, not yet a
 complete TerraScan replacement.
 
-- The cache currently loads the best whole-cloud LOD under the point budget.
-  Camera-frustum tile streaming, GPU/CPU residency eviction, and continuously
-  adaptive screen-error LOD selection are the next renderer increment.
-- Point/box/brush selection currently uses survey-coordinate prompts and the
-  resident sample/LOD. Direct viewport click, screen fence/lasso/polygon,
-  screen-space brush strokes, and graphical filter widgets are not connected
-  yet. Elevation slices and class/return/source/flag filters are available from
-  the manager's command prompts.
+- LOD adapts by visible tile count and configured memory/point budgets. It does
+  not yet use per-tile projected spacing/error metrics or direct COPC HTTP range
+  streaming.
+- The fixed-pixel brush is a repeating click brush in v0.9.6; a continuous
+  mouse-down paint stroke and freehand lasso overlay are future refinements.
 - Saved drawings persist sidecars automatically. An unsaved drawing cannot have
   an adjacent durable sidecar until it is first saved.
-- Class tables are editable through `.ptc` interchange and class visibility
-  commands; an in-app row editor for names/colors/locks is still pending.
 - There is no automatic ground/building/vegetation classification, noise
   detection, flight-line processing, tiling, thinning, or batch macro engine.
-- CRS metadata is preserved and reported, but coordinates are not reprojected.
+- Horizontal reprojection supports EPSG definitions available in the bundled
+  pure-Rust database. Grid-based and orthometric vertical datum transformations
+  require a separately validated geodetic backend; v0.9.6 preserves Z and says
+  so in the UI and audit log.
 - COPC, E57, PTS/PTX, raster surfaces, contours, and point-cloud-to-CAD feature
   extraction are not implemented.
 
 ## Next production increments
 
-1. Connect frustum-aware tile streaming and budgeted CPU/GPU LRU residency to
-   camera movement.
-2. Connect viewport point picking, fence/lasso/polygon, brush strokes, slice
-   planes, and graphical filter widgets to the implemented source-index query
-   and edit model.
-3. Add an in-app class-table grid, audit-log viewer, selection-set manager, and
-   continuously updating job progress bars.
+1. Add projected-spacing screen-error refinement and native COPC/E57 readers.
+2. Add continuous mouse-down brush painting, a freehand lasso overlay, and a
+   named selection-set organizer.
+3. Add continuously updating in-modal job progress bars and export queueing.
 4. Compatibility-test `.ptc` and `.mnu` parsing against representative files
    from the user's MicroStation/TerraScan production environment.
-5. Add CRS inspection/reprojection and survey-coordinate safeguards before
-   surface generation, contours, breaklines, and automated classifiers.
+5. Add validated surface generation, contours, breaklines, and automated
+   classifiers; every entry point must pass the v0.9.6 survey-readiness gate.
 
 The `ocs_pointcloud` workspace crate is intentionally UI-independent so these
 increments can be tested against real LAS/LAZ fixtures without loading the CAD

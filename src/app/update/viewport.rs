@@ -42,12 +42,10 @@ fn is_added_polyline_vertex(
 ) -> bool {
     match (original, current) {
         (AcadEntityType::LwPolyline(before), AcadEntityType::LwPolyline(after)) => {
-            after.vertices.len() == before.vertices.len() + 1
-                && vertex_id < after.vertices.len()
+            after.vertices.len() == before.vertices.len() + 1 && vertex_id < after.vertices.len()
         }
         (AcadEntityType::Polyline2D(before), AcadEntityType::Polyline2D(after)) => {
-            after.vertices.len() == before.vertices.len() + 1
-                && vertex_id < after.vertices.len()
+            after.vertices.len() == before.vertices.len() + 1 && vertex_id < after.vertices.len()
         }
         _ => false,
     }
@@ -623,6 +621,11 @@ impl OpenCADStudio {
             self.command_line.push_error(&msg);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.point_cloud_stream_needed(i) {
+            return self.start_point_cloud_stream(i);
+        }
+
         Task::none()
     }
 
@@ -685,8 +688,7 @@ impl OpenCADStudio {
         // viewport's screen rectangle in a paper layout.
         let i = self.active_tab;
         if self.tabs[i].scene.active_viewport != expected_viewport
-            || (expected_viewport.is_none()
-                && self.tabs[i].scene.current_layout != "Model")
+            || (expected_viewport.is_none() && self.tabs[i].scene.current_layout != "Model")
         {
             return Task::none();
         }
@@ -869,9 +871,7 @@ impl OpenCADStudio {
                     let zoom_delta = -dy * 0.03;
                     if self.tabs[i].scene.active_viewport.is_some() {
                         self.tabs[i].scene.pan_active_viewport(dx, 0.0, bounds);
-                        self.tabs[i]
-                            .scene
-                            .zoom_active_viewport(zoom_delta, None);
+                        self.tabs[i].scene.zoom_active_viewport(zoom_delta, None);
                     } else {
                         let local = iced::Point {
                             x: p.x - bounds.x,
@@ -1087,7 +1087,7 @@ impl OpenCADStudio {
                 // dimension re-tessellates) and a Square insertion grip (so
                 // an MTEXT width handle, a Triangle, still re-tessellates so
                 // the re-wrap is exact).
-               let snap = self.tabs[i].scene.wire_models_for(&edited_handles);
+                let snap = self.tabs[i].scene.wire_models_for(&edited_handles);
 
                 // Keep the entity's original geometry available for self-OSNAP,
                 // Extension and OTRACK while the live grip preview is being deformed.
@@ -1102,9 +1102,7 @@ impl OpenCADStudio {
                     .iter()
                     .copied()
                     .zip(self.tabs[i].selected_grips.iter())
-                    .find(|(owner, grip_def)| {
-                        *owner == grip.handle && grip_def.id == grip.grip_id
-                    })
+                    .find(|(owner, grip_def)| *owner == grip.handle && grip_def.id == grip.grip_id)
                     .map(|(_, grip_def)| {
                         grip_def.shape == crate::scene::model::object::GripShape::Square
                     })
@@ -1144,12 +1142,9 @@ impl OpenCADStudio {
             // This intentionally uses a plain Vec<WireModel>: Snapper will use its normal
             // unindexed fallback over this already-small local candidate set rather than
             // cloning/scanning the whole drawing.
-            let mut grip_snap_candidates: Vec<_> =
-                snap_candidates.iter().cloned().collect();
+            let mut grip_snap_candidates: Vec<_> = snap_candidates.iter().cloned().collect();
 
-            grip_snap_candidates.extend(
-                self.grip_snap_wires.iter().cloned()
-            );
+            grip_snap_candidates.extend(self.grip_snap_wires.iter().cloned());
             // The engaged grip is the rubber-band origin. Perpendicular
             // snapping must drop its foot from this point, including when a
             // hot-grip set is moved by the same drag vector.
@@ -1184,16 +1179,7 @@ impl OpenCADStudio {
             );
             let axis_lock = self.active_axis_lock(i, raw, base, true);
             let otrack_hit = if axis_lock.is_none() {
-                self.active_otrack_hit(
-                    i,
-                    raw,
-                    snap_hit,
-                    Some(base),
-                    true,
-                    view_rot,
-                    eye,
-                    bounds,
-                )
+                self.active_otrack_hit(i, raw, snap_hit, Some(base), true, view_rot, eye, bounds)
             } else {
                 None
             };
@@ -1251,8 +1237,7 @@ impl OpenCADStudio {
 
             // Project the grip's original position into full-canvas coordinates.
             // Dynamic Input uses this as the polar Distance/Angle anchor.
-            let anchor_ndc =
-                view_rot.project_point3((grip.origin_world - eye).as_vec3());
+            let anchor_ndc = view_rot.project_point3((grip.origin_world - eye).as_vec3());
 
             self.tabs[i].last_point_screen = Some(Point::new(
                 (anchor_ndc.x + 1.0) * 0.5 * bounds.width + tile_b.x,
@@ -1309,10 +1294,8 @@ impl OpenCADStudio {
             // Arc point grips are coupled: moving one point must rebuild the
             // circle from the drag-start start/middle/end set, otherwise the
             // supposedly fixed points drift a little on every mouse event.
-            let mut arc_grip_edits: rustc_hash::FxHashMap<
-                Handle,
-                Vec<(usize, glam::DVec3)>,
-            > = rustc_hash::FxHashMap::default();
+            let mut arc_grip_edits: rustc_hash::FxHashMap<Handle, Vec<(usize, glam::DVec3)>> =
+                rustc_hash::FxHashMap::default();
             for (handle, grip_id, apply) in &actions {
                 if let GripApply::Absolute(point) = apply {
                     if (1..=3).contains(grip_id) {
@@ -1336,12 +1319,8 @@ impl OpenCADStudio {
                 let Some(current) = self.tabs[i].scene.document.get_entity_mut(handle) else {
                     continue;
                 };
-                if crate::scene::view::dispatch::refit_arc_grips(
-                    current,
-                    &original,
-                    &edits,
-                )
-                .is_some()
+                if crate::scene::view::dispatch::refit_arc_grips(current, &original, &edits)
+                    .is_some()
                 {
                     rebuilt_arcs.insert(handle);
                 }
@@ -1355,10 +1334,7 @@ impl OpenCADStudio {
                         .iter()
                         .find(|(handle, _)| *handle == target.handle)
                         .map(|(_, entity)| entity)?;
-                    let current = self.tabs[i]
-                        .scene
-                        .document
-                        .get_entity(target.handle)?;
+                    let current = self.tabs[i].scene.document.get_entity(target.handle)?;
                     added_arc_bulge(original, current, target.grip_id)
                         .map(|bulge| (target.handle, target.grip_id, bulge))
                 })
@@ -1455,9 +1431,7 @@ impl OpenCADStudio {
             // On dense drawings, clearing a rollover immediately schedules a
             // second full scene frame just as motion resumes. Keep the previous
             // highlight until the next settled pick replaces it.
-            if self.tabs[i].scene.last_tess_wires.get()
-                < crate::app::HOVER_DWELL_DENSE_WIRES
-            {
+            if self.tabs[i].scene.last_tess_wires.get() < crate::app::HOVER_DWELL_DENSE_WIRES {
                 self.tabs[i].scene.set_hover_highlight(None);
             }
             self.hover_dwell = Some(crate::app::HoverDwell {
@@ -1572,14 +1546,7 @@ impl OpenCADStudio {
                     None
                 } else {
                     self.last_point.and_then(|base| {
-                        self.active_construction_ray(
-                            i,
-                            snap_cursor,
-                            base,
-                            view_rot,
-                            eye,
-                            bounds,
-                        )
+                        self.active_construction_ray(i, snap_cursor, base, view_rot, eye, bounds)
                     })
                 };
 
@@ -1602,12 +1569,7 @@ impl OpenCADStudio {
                     && !command.is_selection_gathering()
             });
             let axis_lock = if let Some(base) = self.last_point {
-                self.active_axis_lock(
-                    i,
-                    cursor_world,
-                    base,
-                    wants_point && !is_window_corner,
-                )
+                self.active_axis_lock(i, cursor_world, base, wants_point && !is_window_corner)
             } else {
                 self.axis_lock_dir = None;
                 None
@@ -1649,10 +1611,7 @@ impl OpenCADStudio {
             // the point onto the line through last_point parallel to the
             // acquired reference, and drive the alignment guide off it.
             // (#277)
-            if axis_lock.is_none()
-                && self.tabs[i].snap_result.is_none()
-                && otrack_hit.is_none()
-            {
+            if axis_lock.is_none() && self.tabs[i].snap_result.is_none() && otrack_hit.is_none() {
                 if let Some(par) = self.snapper.parallel_snap(
                     cursor_world.as_vec3(),
                     self.last_point.map(|p| p.as_vec3()),
@@ -1670,54 +1629,53 @@ impl OpenCADStudio {
             }
 
             let effective = {
-                let mut pt: glam::DVec3 = if let (Some(dir), Some(base)) =
-                    (axis_lock, self.last_point)
-                {
-                    let point = self.tabs[i]
-                        .snap_result
-                        .map(|snap| snap.world)
-                        .unwrap_or(cursor_world);
-                    axis_lock_apply(point, base, dir)
-                } else if let Some(h) = otrack_hit {
-                    h.aligned
-                } else {
-                    // Snap runs in model space (viewport camera or the
-                    // model/paper view), so the result is already model.
-                    let mut pt = self.tabs[i]
-                        .snap_result
-                        .map(|s| s.world)
-                        .unwrap_or(cursor_world);
-                    let osnap_locked = self.tabs[i]
-                        .snap_result
-                        .is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid);
-                    if !osnap_locked && !is_window_corner {
-                        if let Some(base) = self.last_point {
-                            let ucs_xf = self.tabs[i].ucs_xform();
-                            if self.ortho_mode {
-                                pt = drafting_constrain(
-                                    pt,
-                                    base,
-                                    &ucs_xf,
-                                    self.isometric_drafting,
-                                    self.iso_plane,
-                                    self.snap_angle_deg,
-                                );
-                            } else if self.polar_mode {
-                                pt = polar_constrain_near(
-                                    pt,
-                                    base,
-                                    self.polar_increment_deg,
-                                    view_rot,
-                                    eye,
-                                    bounds,
-                                    self.snapper.osnap_radius_px,
-                                    &ucs_xf,
-                                );
+                let mut pt: glam::DVec3 =
+                    if let (Some(dir), Some(base)) = (axis_lock, self.last_point) {
+                        let point = self.tabs[i]
+                            .snap_result
+                            .map(|snap| snap.world)
+                            .unwrap_or(cursor_world);
+                        axis_lock_apply(point, base, dir)
+                    } else if let Some(h) = otrack_hit {
+                        h.aligned
+                    } else {
+                        // Snap runs in model space (viewport camera or the
+                        // model/paper view), so the result is already model.
+                        let mut pt = self.tabs[i]
+                            .snap_result
+                            .map(|s| s.world)
+                            .unwrap_or(cursor_world);
+                        let osnap_locked = self.tabs[i]
+                            .snap_result
+                            .is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid);
+                        if !osnap_locked && !is_window_corner {
+                            if let Some(base) = self.last_point {
+                                let ucs_xf = self.tabs[i].ucs_xform();
+                                if self.ortho_mode {
+                                    pt = drafting_constrain(
+                                        pt,
+                                        base,
+                                        &ucs_xf,
+                                        self.isometric_drafting,
+                                        self.iso_plane,
+                                        self.snap_angle_deg,
+                                    );
+                                } else if self.polar_mode {
+                                    pt = polar_constrain_near(
+                                        pt,
+                                        base,
+                                        self.polar_increment_deg,
+                                        view_rot,
+                                        eye,
+                                        bounds,
+                                        self.snapper.osnap_radius_px,
+                                        &ucs_xf,
+                                    );
+                                }
                             }
                         }
-                    }
-                    pt
-                };
+                        pt
+                    };
                 // Clamp to world XY only when no UCS is active; with a
                 // UCS the point already lies on the UCS XY plane.
                 if self.tabs[i].active_cmd.is_some() && self.tabs[i].active_ucs.is_none() {
@@ -2049,8 +2007,7 @@ impl OpenCADStudio {
         self.sync_dyn_fields();
         let move_ms = move_started.elapsed().as_secs_f64() * 1000.0;
         if perf_move
-            && (self.tabs[i].active_cmd.is_some()
-                || self.tabs[i].scene.active_viewport.is_some())
+            && (self.tabs[i].active_cmd.is_some() || self.tabs[i].scene.active_viewport.is_some())
             && move_ms >= 16.7
         {
             let mode = if self.tabs[i].active_cmd.is_some() {
@@ -2058,10 +2015,7 @@ impl OpenCADStudio {
             } else {
                 "MSPACE"
             };
-            crate::perf_record!(
-                "[perf] pointer-move mode={mode:<7} {:>7.1}ms",
-                move_ms,
-            );
+            crate::perf_record!("[perf] pointer-move mode={mode:<7} {:>7.1}ms", move_ms,);
         }
         Task::none()
     }
@@ -2212,9 +2166,17 @@ impl OpenCADStudio {
         // No rubber-band origin (perp/extension feet don't apply to a free drag).
         self.snapper.from_point = None;
         let (go, gr) = self.drafting_grid_basis(i);
-        let snap_hit = self
-            .snapper
-            .snap(raw, p, &snap_candidates, view_rot, eye, bounds, go, gr, None);
+        let snap_hit = self.snapper.snap(
+            raw,
+            p,
+            &snap_candidates,
+            view_rot,
+            eye,
+            bounds,
+            go,
+            gr,
+            None,
+        );
         let world = snap_hit.map(|s| s.world).unwrap_or(raw);
         self.tabs[i].snap_result = snap_hit;
         if let Some(s) = self.tabs[i].snap_result.as_mut() {
@@ -2275,9 +2237,8 @@ impl OpenCADStudio {
     /// its transient origin and axes are baked into the block definition, then
     /// the editor returns to canonical local coordinates.
     pub(in crate::app) fn commit_active_ucs_change(&mut self, i: usize, label: &'static str) {
-        if let Some((session_index, block_record)) = self.tabs[i]
-            .active_block_edit
-            .and_then(|index| {
+        if let Some((session_index, block_record)) =
+            self.tabs[i].active_block_edit.and_then(|index| {
                 self.tabs[i]
                     .block_edits
                     .get(index)
@@ -2324,9 +2285,8 @@ impl OpenCADStudio {
         } else {
             None
         };
-        let same_basis = |a: Option<&acadrust::tables::Ucs>,
-                          b: Option<&acadrust::tables::Ucs>| {
-            match (a, b) {
+        let same_basis =
+            |a: Option<&acadrust::tables::Ucs>, b: Option<&acadrust::tables::Ucs>| match (a, b) {
                 (None, None) => true,
                 (Some(a), Some(b)) => {
                     a.origin == b.origin
@@ -2336,8 +2296,7 @@ impl OpenCADStudio {
                         && a.name.eq_ignore_ascii_case(&b.name)
                 }
                 _ => false,
-            }
-        };
+            };
         if !same_basis(self.tabs[i].active_ucs.as_ref(), persisted.as_ref()) {
             self.push_undo_snapshot(i, label);
             self.tabs[i].persist_active_ucs();
@@ -2455,10 +2414,7 @@ impl OpenCADStudio {
 
         // Interactive navigation tools reuse the middle-button movement path,
         // so no selection/pick logic runs while the left button drives them.
-        if self.tabs[i].orbit_mode
-            || self.tabs[i].pan_mode
-            || self.tabs[i].zoom_dynamic_mode
-        {
+        if self.tabs[i].orbit_mode || self.tabs[i].pan_mode || self.tabs[i].zoom_dynamic_mode {
             self.clear_navigation_hover(i);
             self.tabs[i].scene.remember_current_view();
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
@@ -2607,13 +2563,8 @@ impl OpenCADStudio {
                         self.grip_popup = None;
                         return Task::none();
                     }
-                    self.tabs[i].active_grip = Some(self.grip_edit_for_hit(
-                        i,
-                        handle,
-                        grip_id,
-                        is_translate,
-                        world,
-                    ));
+                    self.tabs[i].active_grip =
+                        Some(self.grip_edit_for_hit(i, handle, grip_id, is_translate, world));
                     self.grip_hover = None;
                     self.grip_popup = None;
 
@@ -2642,10 +2593,7 @@ impl OpenCADStudio {
 
         // Navigation mode: end this drag but keep the tool armed for the next
         // left drag (exit is Esc / another command). Mirror of the press.
-        if self.tabs[i].orbit_mode
-            || self.tabs[i].pan_mode
-            || self.tabs[i].zoom_dynamic_mode
-        {
+        if self.tabs[i].orbit_mode || self.tabs[i].pan_mode || self.tabs[i].zoom_dynamic_mode {
             let mut sel = self.tabs[i].scene.selection.borrow_mut();
             sel.middle_down = false;
             sel.middle_last_pos = None;
@@ -2713,10 +2661,7 @@ impl OpenCADStudio {
                     .iter()
                     .find(|(handle, _)| *handle == target.handle)
                     .map(|(_, entity)| entity)?;
-                let current = self.tabs[i]
-                    .scene
-                    .document
-                    .get_entity(target.handle)?;
+                let current = self.tabs[i].scene.document.get_entity(target.handle)?;
                 is_added_polyline_vertex(original, current, target.grip_id)
                     .then_some(target.grip_id)
             });
@@ -2794,12 +2739,7 @@ impl OpenCADStudio {
             .as_ref()
             .map(|c| c.is_selection_gathering())
             .unwrap_or(false);
-        let selection_box_active = self.tabs[i]
-            .scene
-            .selection
-            .borrow()
-            .box_anchor
-            .is_some();
+        let selection_box_active = self.tabs[i].scene.selection.borrow().box_anchor.is_some();
         let selection_pick_add = self.pick_add
             || self.tabs[i]
                 .active_cmd
@@ -3226,7 +3166,8 @@ impl OpenCADStudio {
                         .as_mut()
                         .map(|c| c.on_tangent_point(obj, pick_wcs))
                 } else {
-                    self.command_line.push_info(crate::t!("Select a tangent object.").as_ref());
+                    self.command_line
+                        .push_info(crate::t!("Select a tangent object.").as_ref());
                     None
                 }
             } else if !self.command_point_allowed(i, world_pt) {
@@ -3353,8 +3294,7 @@ impl OpenCADStudio {
                         })
                         .collect();
                     if points.last().is_none_or(|last| {
-                        (last.x - p.x).abs() > f32::EPSILON
-                            || (last.y - p.y).abs() > f32::EPSILON
+                        (last.x - p.x).abs() > f32::EPSILON || (last.y - p.y).abs() > f32::EPSILON
                     }) {
                         points.push(p);
                     }
@@ -3789,10 +3729,7 @@ impl OpenCADStudio {
                     );
                     let command_result = self.tabs[i].active_cmd.as_mut().and_then(|command| {
                         command.set_shift(self.shift_down);
-                        command.on_drag_selection(
-                            &command_fence,
-                            Some((command_min, command_max)),
-                        )
+                        command.on_drag_selection(&command_fence, Some((command_min, command_max)))
                     });
                     if let Some(result) = command_result {
                         let mut selection = self.tabs[i].scene.selection.borrow_mut();
@@ -4019,9 +3956,12 @@ impl OpenCADStudio {
                     // Locked layer: double-click must not open any editor
                     // (text / attribute / in-place block edit).
                     if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
-                        self.command_line.push_info(crate::tf!(
+                        self.command_line.push_info(
+                            crate::tf!(
                             "Object is on locked layer \"{layer}\" — unlock the layer to edit it."
-                        ).as_ref());
+                        )
+                            .as_ref(),
+                        );
                         return Task::none();
                     }
                     // Any text-bearing entity opens its in-place editor
@@ -4245,7 +4185,8 @@ impl OpenCADStudio {
             self.tabs[i]
                 .scene
                 .record_nav_perf(crate::scene::NavPerfOp::Zoom, now);
-            self.command_line.push_output(crate::t!("Zoom Extents").as_ref());
+            self.command_line
+                .push_output(crate::t!("Zoom Extents").as_ref());
         }
         Task::none()
     }
@@ -4350,8 +4291,7 @@ impl OpenCADStudio {
     ) -> Task<Message> {
         let i = self.active_tab;
         if self.tabs[i].scene.active_viewport != expected_viewport
-            || (expected_viewport.is_none()
-                && self.tabs[i].scene.current_layout != "Model")
+            || (expected_viewport.is_none() && self.tabs[i].scene.current_layout != "Model")
         {
             return Task::none();
         }
@@ -4578,9 +4518,13 @@ impl OpenCADStudio {
         }
         if hovered.is_none() {
             let started = Instant::now();
-            hovered = self.tabs[i]
-                .scene
-                .solid_hover_hit(p, view_rot, eye, bounds, candidate_handles.as_ref());
+            hovered = self.tabs[i].scene.solid_hover_hit(
+                p,
+                view_rot,
+                eye,
+                bounds,
+                candidate_handles.as_ref(),
+            );
             solid_ms = started.elapsed().as_secs_f64() * 1000.0;
         }
         self.tabs[i].scene.set_hover_highlight(hovered);
@@ -4717,10 +4661,7 @@ impl OpenCADStudio {
     /// MVIEW's "Insert view > New" flow deliberately visits Model space to
     /// define a view and then returns to its paper layout. This is the only
     /// layout transition allowed to preserve an active command.
-    pub(crate) fn on_layout_switch_preserving_command(
-        &mut self,
-        name: String,
-    ) -> Task<Message> {
+    pub(crate) fn on_layout_switch_preserving_command(&mut self, name: String) -> Task<Message> {
         self.on_layout_switch_inner(name, true)
     }
 
@@ -4886,9 +4827,10 @@ impl OpenCADStudio {
                 self.tabs[i].scene.ensure_sheet_viewport(&new_name);
                 let switch_task = self.on_layout_switch(new_name.clone());
                 self.tabs[i].scene.fit_all();
-                self.command_line.push_output(crate::tf!(
-                    "Layout \"{new_name}\" created — use MVIEW to add a viewport"
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!("Layout \"{new_name}\" created — use MVIEW to add a viewport")
+                        .as_ref(),
+                );
                 self.tabs[i].dirty = true;
                 return Task::batch([cancel_task, switch_task]);
             }
@@ -4917,14 +4859,13 @@ impl OpenCADStudio {
                         .get(&new_name)
                         .is_some()
                     {
-                        self.command_line
-                            .push_error(crate::tf!("\"{}\" name already in use", new_name).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!("\"{}\" name already in use", new_name).as_ref(),
+                        );
                     } else {
                         self.push_undo_snapshot(i, "BLOCK RENAME");
                         if self.tabs[i].scene.rename_block(&orig, &new_name) {
-                            if let Some(session) =
-                                self.tabs[i].active_block_edit_session_mut()
-                            {
+                            if let Some(session) = self.tabs[i].active_block_edit_session_mut() {
                                 session.block_name = new_name.clone();
                             }
                             for session in &mut self.tabs[i].block_edits {
@@ -4933,11 +4874,13 @@ impl OpenCADStudio {
                                 }
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line
-                                .push_output(crate::tf!("Block \"{orig}\" → \"{new_name}\"").as_ref());
+                            self.command_line.push_output(
+                                crate::tf!("Block \"{orig}\" → \"{new_name}\"").as_ref(),
+                            );
                         } else {
-                            self.command_line
-                                .push_error(crate::tf!("Could not rename block \"{orig}\"").as_ref());
+                            self.command_line.push_error(
+                                crate::tf!("Could not rename block \"{orig}\"").as_ref(),
+                            );
                         }
                     }
                     return Task::none();

@@ -1,8 +1,30 @@
 //! Click-first manager for an attached LAS/LAZ point cloud.
 
 use crate::app::Message;
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{
+    button, checkbox, column, container, row, scrollable, slider, text, text_input, Space,
+};
 use iced::{Background, Element, Length, Theme};
+
+#[derive(Clone, Debug, Default)]
+pub struct PointCloudClassRow {
+    pub code: u8,
+    pub name: String,
+    pub color: [u8; 3],
+    pub visible: bool,
+    pub locked: bool,
+    pub total: u64,
+    pub withheld: u64,
+    pub overlap: u64,
+    pub key_points: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PointCloudAuditRow {
+    pub created_unix_ms: u64,
+    pub action: String,
+    pub detail: String,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct PointCloudManagerData {
@@ -25,6 +47,13 @@ pub struct PointCloudManagerData {
     pub export_progress: Option<(u64, u64)>,
     pub sidecar_available: bool,
     pub selection_filter: String,
+    pub resident_tiles: usize,
+    pub resident_points: usize,
+    pub visible_tiles: usize,
+    pub crs_label: String,
+    pub survey_readiness: String,
+    pub class_rows: Vec<PointCloudClassRow>,
+    pub audit_rows: Vec<PointCloudAuditRow>,
 }
 
 fn action(label: &'static str, command: &'static str, enabled: bool) -> Element<'static, Message> {
@@ -129,6 +158,13 @@ pub fn view_window(
                     "Not built".to_string()
                 },
             ),
+            status(
+                "Streaming",
+                format!(
+                    "{} visible / {} resident tiles; {} resident points",
+                    data.visible_tiles, data.resident_tiles, data.resident_points
+                ),
+            ),
             status("Export", export_status),
             row![
                 action("Attach / Replace", "POINTCLOUDATTACH", true),
@@ -191,16 +227,111 @@ pub fn view_window(
     ]
     .spacing(7);
 
+    let mut class_rows = column![row![
+        text("Show").size(10).width(36),
+        text("Code / name").size(10).width(Length::Fixed(245.0)),
+        text("R").size(10),
+        text("G").size(10),
+        text("B").size(10),
+        text("Displayed statistics").size(10),
+    ]
+    .spacing(8)
+    .align_y(iced::Center)]
+    .spacing(4);
+    for class in data.class_rows {
+        let code = class.code;
+        let color = class.color;
+        class_rows = class_rows.push(
+            row![
+                checkbox(class.visible)
+                    .on_toggle(move |visible| Message::PointCloudClassVisibilityChanged(
+                        code, visible
+                    ))
+                    .size(15)
+                    .width(36),
+                row![
+                    text(code.to_string()).size(11).width(30),
+                    text_input("Class name", &class.name)
+                        .on_input(move |name| Message::PointCloudClassNameChanged(code, name))
+                        .size(11)
+                        .padding([3, 5])
+                        .width(Length::Fixed(205.0)),
+                ]
+                .spacing(4),
+                slider(0..=255, color[0], move |value| {
+                    Message::PointCloudClassColorChanged(code, 0, value)
+                })
+                .step(1)
+                .width(Length::Fixed(74.0)),
+                slider(0..=255, color[1], move |value| {
+                    Message::PointCloudClassColorChanged(code, 1, value)
+                })
+                .step(1)
+                .width(Length::Fixed(74.0)),
+                slider(0..=255, color[2], move |value| {
+                    Message::PointCloudClassColorChanged(code, 2, value)
+                })
+                .step(1)
+                .width(Length::Fixed(74.0)),
+                text(format!(
+                    "{} pts · W{} O{} K{}",
+                    class.total, class.withheld, class.overlap, class.key_points
+                ))
+                .size(10)
+                .width(Length::Fill),
+                button(text("Delete").size(10))
+                    .on_press_maybe((!class.locked).then_some(Message::PointCloudClassRemove(code)))
+                    .padding([3, 6])
+                    .style(button::secondary),
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+        );
+    }
+    class_rows = class_rows.push(
+        row![
+            action("Add Class", "POINTCLOUDCLASSADD", attached),
+            text("Changes are saved to the drawing sidecar and .ptc export.").size(10),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
+    );
+
+    let mut audit_rows = column![].spacing(3);
+    for entry in data.audit_rows.iter().rev().take(20) {
+        audit_rows = audit_rows.push(
+            text(format!(
+                "{}  {} — {}",
+                entry.created_unix_ms, entry.action, entry.detail
+            ))
+            .size(10),
+        );
+    }
+    if data.audit_rows.is_empty() {
+        audit_rows = audit_rows.push(text("No persisted audit entries yet.").size(10));
+    }
+
+    let coordinates = column![
+        status("Declared CRS", data.crs_label),
+        status("Survey safeguard", data.survey_readiness),
+        text("Reprojection transforms XY through a selected EPSG definition and preserves Z values unless a separately verified vertical transformation is performed.").size(10),
+        row![
+            action("Inspect CRS", "POINTCLOUDCRS", attached),
+            action("Reproject Copy", "POINTCLOUDREPROJECT", attached),
+        ]
+        .spacing(6),
+    ]
+    .spacing(6);
+
     let edit = column![
-        text(
-            "Selection tools prompt for survey coordinates; edits target stable LAS source indices."
-        )
+        text("Viewport tools select displayed points in screen space; edits target stable LAS source indices.")
         .size(11),
         status("Active filter", data.selection_filter),
         row![
             action("Single Point", "POINTCLOUDSELECTPOINT", attached),
-            action("3D Fence", "POINTCLOUDSELECTBOX", attached),
-            action("3D Brush", "POINTCLOUDSELECTBRUSH", attached),
+            action("Screen Window", "POINTCLOUDSELECTBOX", attached),
+            action("Polygon Fence", "POINTCLOUDSELECTFENCE", attached),
+            action("32 px Brush", "POINTCLOUDSELECTBRUSH", attached),
             action("Elevation Slice", "POINTCLOUDSELECTSLICE", attached),
             action("Set Filter", "POINTCLOUDSELECTFILTER", attached),
             action("Clear Filter", "POINTCLOUDSELECTFILTER CLEAR", attached),
@@ -291,7 +422,10 @@ pub fn view_window(
     let body = column![
         section("Attachment and jobs", overview),
         section("GPU display", display),
+        section("CRS and survey safeguards", coordinates),
         section("Selection and sparse edits", edit),
+        section("Editable class table and displayed statistics", class_rows),
+        section("Point-cloud edit audit", audit_rows),
         section("Interchange and output", interchange),
     ]
     .spacing(8)

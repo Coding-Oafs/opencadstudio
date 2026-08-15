@@ -71,9 +71,7 @@ impl OpenCADStudio {
         // running command down, so a transparent one skips straight past it.
         // (#677)
         if is_transparent(cmd) {
-            return self
-                .dispatch_families(cmd, i)
-                .unwrap_or_else(Task::none);
+            return self.dispatch_families(cmd, i).unwrap_or_else(Task::none);
         }
         // Starting a command closes any open ribbon dropdown (e.g. a style
         // combo left open) so it does not stay stuck behind the new tool.
@@ -136,8 +134,9 @@ impl OpenCADStudio {
         // the single place that decides; `on_ribbon_tool_click` defers to it
         // rather than keeping a second, blunter copy (#388, #389).
         if self.tabs[i].is_start && !start_allowed(cmd) {
-            self.command_line
-                .push_info(crate::t!("No drawing open. Use NEW or OPEN to start a drawing.").as_ref());
+            self.command_line.push_info(
+                crate::t!("No drawing open. Use NEW or OPEN to start a drawing.").as_ref(),
+            );
             return Task::none();
         }
 
@@ -598,7 +597,9 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDCLASSIFY",
         "POINTCLOUDCLASSIFYSELECTION",
         "POINTCLOUDCLASSVISIBLE",
+        "POINTCLOUDCLASSADD",
         "POINTCLOUDCOLOR",
+        "POINTCLOUDCRS",
         "POINTCLOUDDETACH",
         "POINTCLOUDEXPORT",
         "POINTCLOUDEXPORTCANCEL",
@@ -612,10 +613,12 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDPTCEXPORT",
         "POINTCLOUDPTCIMPORT",
         "POINTCLOUDRESTORE",
+        "POINTCLOUDREPROJECT",
         "POINTCLOUDSELECTBOX",
         "POINTCLOUDSELECTBRUSH",
         "POINTCLOUDSELECTCLEAR",
         "POINTCLOUDSELECTFILTER",
+        "POINTCLOUDSELECTFENCE",
         "POINTCLOUDSELECTPOINT",
         "POINTCLOUDSELECTSLICE",
         "POINTCLOUDSTATS",

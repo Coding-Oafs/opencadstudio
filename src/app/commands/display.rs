@@ -8,8 +8,9 @@ impl OpenCADStudio {
             "PAN" => {
                 self.tabs[i].pan_mode = true;
                 self.clear_navigation_hover(i);
-                self.command_line
-                    .push_output(crate::t!("PAN: drag with the left mouse button. Press Esc to exit.").as_ref());
+                self.command_line.push_output(
+                    crate::t!("PAN: drag with the left mouse button. Press Esc to exit.").as_ref(),
+                );
             }
 
             // ── TABLE cell editing ─────────────────────────────────────────────
@@ -47,9 +48,10 @@ impl OpenCADStudio {
                             if found {
                                 self.push_undo_snapshot(i, "TABLE CELL");
                                 self.tabs[i].dirty = true;
-                                self.command_line.push_output(crate::tf!(
-                                    "TABLE CELL: set [{row},{col}] = \"{text}\"."
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("TABLE CELL: set [{row},{col}] = \"{text}\".")
+                                        .as_ref(),
+                                );
                             } else {
                                 self.command_line.push_error(
                                     crate::t!("TABLE CELL: select a Table entity first, or row/col out of range.").as_ref()
@@ -57,8 +59,9 @@ impl OpenCADStudio {
                             }
                         }
                         _ => {
-                            self.command_line
-                                .push_info(crate::t!("Usage: TABLE CELL <row> <col> <text>").as_ref());
+                            self.command_line.push_info(
+                                crate::t!("Usage: TABLE CELL <row> <col> <text>").as_ref(),
+                            );
                         }
                     }
                 } else {
@@ -112,9 +115,10 @@ impl OpenCADStudio {
                             }
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
-                            "UCSICON {sub}: updated {count} viewport(s) + model space."
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("UCSICON {sub}: updated {count} viewport(s) + model space.")
+                                .as_ref(),
+                        );
                     }
                     "" => {
                         // Bare UCSICON toggles visibility.
@@ -129,11 +133,13 @@ impl OpenCADStudio {
                         }
                         self.tabs[i].dirty = true;
                         let state = if visible { "ON" } else { "OFF" };
-                        self.command_line.push_output(crate::tf!("UCSICON {state}").as_ref());
+                        self.command_line
+                            .push_output(crate::tf!("UCSICON {state}").as_ref());
                     }
                     _ => {
-                        self.command_line
-                            .push_info(crate::t!("Usage: UCSICON ON | OFF | NOORIGIN | ORIGIN").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("Usage: UCSICON ON | OFF | NOORIGIN | ORIGIN").as_ref(),
+                        );
                     }
                 }
             }
@@ -172,29 +178,38 @@ impl OpenCADStudio {
                 let values: Result<Vec<f64>, _> =
                     tokens.iter().map(|value| value.parse()).collect();
                 let Ok(values) = values else {
-                    self.command_line
-                        .push_error(crate::t!("LIMITS: four numeric coordinates required.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("LIMITS: four numeric coordinates required.").as_ref(),
+                    );
                     return Some(Task::none());
                 };
                 if tokens.len() != 4 || !values.iter().all(|value| value.is_finite()) {
-                    self.command_line
-                        .push_error(crate::t!("LIMITS: four finite numeric coordinates required.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("LIMITS: four finite numeric coordinates required.").as_ref(),
+                    );
                 } else {
                     let first = glam::DVec2::new(values[0], values[1]);
                     let opposite = glam::DVec2::new(values[2], values[3]);
                     let min = first.min(opposite);
                     let max = first.max(opposite);
                     if min.x == max.x || min.y == max.y {
-                        self.command_line
-                            .push_error(crate::t!("LIMITS: corners must define a non-zero area.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("LIMITS: corners must define a non-zero area.").as_ref(),
+                        );
                     } else {
                         self.push_undo_snapshot(i, "LIMITS");
                         self.tabs[i].scene.set_current_drawing_limits(min, max);
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
-                            "Drawing limits: {:.4},{:.4} to {:.4},{:.4}.",
-                            min.x, min.y, max.x, max.y
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!(
+                                "Drawing limits: {:.4},{:.4} to {:.4},{:.4}.",
+                                min.x,
+                                min.y,
+                                max.x,
+                                max.y
+                            )
+                            .as_ref(),
+                        );
                     }
                 }
             }
@@ -223,15 +238,20 @@ impl OpenCADStudio {
             // it only queues a per-viewport cache invalidation.
             "REDRAW" => {
                 use crate::scene::ViewportRefreshScope;
-                self.tabs[i].scene.request_refresh(ViewportRefreshScope::Active);
+                self.tabs[i]
+                    .scene
+                    .request_refresh(ViewportRefreshScope::Active);
                 self.command_line.push_output("REDRAW: viewport refreshed.");
                 return Some(Task::none());
             }
             // REDRAWALL — force re-rasterize of every generated viewport.
             "REDRAWALL" => {
                 use crate::scene::ViewportRefreshScope;
-                self.tabs[i].scene.request_refresh(ViewportRefreshScope::All);
-                self.command_line.push_output("REDRAWALL: viewports refreshed.");
+                self.tabs[i]
+                    .scene
+                    .request_refresh(ViewportRefreshScope::All);
+                self.command_line
+                    .push_output("REDRAWALL: viewports refreshed.");
                 return Some(Task::none());
             }
             // REGEN — full model regeneration (bump_geometry: geometry_epoch AND
@@ -319,14 +339,16 @@ impl OpenCADStudio {
 
             // ── TOOLPALETTES — not yet implemented ───────────────────────────────
             "TOOLPALETTES" => {
-                self.command_line
-                    .push_info(crate::t!("TOOLPALETTES: Tool Palettes not yet implemented.").as_ref());
+                self.command_line.push_info(
+                    crate::t!("TOOLPALETTES: Tool Palettes not yet implemented.").as_ref(),
+                );
             }
 
             // ── SHEETSET — not yet implemented ───────────────────────────────────
             "SHEETSET" => {
-                self.command_line
-                    .push_info(crate::t!("SHEETSET: Sheet Set Manager not yet implemented.").as_ref());
+                self.command_line.push_info(
+                    crate::t!("SHEETSET: Sheet Set Manager not yet implemented.").as_ref(),
+                );
             }
 
             // ── XDATA — read/write extended entity data ──────────────────────────
@@ -367,19 +389,24 @@ impl OpenCADStudio {
                                 if let Some(entity) = self.tabs[i].scene.document.get_entity(*sh) {
                                     let xd = &entity.common().extended_data;
                                     if xd.is_empty() {
-                                        self.command_line
-                                            .push_output(crate::tf!("  {:x}: no xdata.", sh.value()).as_ref());
+                                        self.command_line.push_output(
+                                            crate::tf!("  {:x}: no xdata.", sh.value()).as_ref(),
+                                        );
                                     } else {
                                         for rec in xd.records() {
-                                            self.command_line.push_output(crate::tf!(
-                                                "  {:x} [{}]: {} value(s)",
-                                                sh.value(),
-                                                rec.application_name,
-                                                rec.values.len()
-                                            ).as_ref());
+                                            self.command_line.push_output(
+                                                crate::tf!(
+                                                    "  {:x} [{}]: {} value(s)",
+                                                    sh.value(),
+                                                    rec.application_name,
+                                                    rec.values.len()
+                                                )
+                                                .as_ref(),
+                                            );
                                             for v in &rec.values {
-                                                self.command_line
-                                                    .push_output(crate::tf!("    {:?}", v).as_ref());
+                                                self.command_line.push_output(
+                                                    crate::tf!("    {:?}", v).as_ref(),
+                                                );
                                             }
                                         }
                                     }
@@ -400,10 +427,13 @@ impl OpenCADStudio {
                                 }
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::tf!(
-                                "XDATA: set [{app}] = \"{val}\" on {} entity/entities.",
-                                selected_handles.len()
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!(
+                                    "XDATA: set [{app}] = \"{val}\" on {} entity/entities.",
+                                    selected_handles.len()
+                                )
+                                .as_ref(),
+                            );
                         }
                         "CLEAR" => {
                             let app_filter = parts.get(1).copied();
@@ -431,11 +461,14 @@ impl OpenCADStudio {
                                 }
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::t!("XDATA: cleared.").as_ref());
+                            self.command_line
+                                .push_output(crate::t!("XDATA: cleared.").as_ref());
                         }
                         _ => {
-                            self.command_line
-                                .push_info(crate::t!("Usage: XDATA LIST | SET <app> <value> | CLEAR [app]").as_ref());
+                            self.command_line.push_info(
+                                crate::t!("Usage: XDATA LIST | SET <app> <value> | CLEAR [app]")
+                                    .as_ref(),
+                            );
                         }
                     }
                 }
@@ -559,8 +592,9 @@ impl OpenCADStudio {
                         self.command_line.push_output(&msg);
                     }
                     _ => {
-                        self.command_line
-                            .push_error(crate::t!("Usage: PLOTSTYLE [LOAD | CLEAR | STATUS]").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("Usage: PLOTSTYLE [LOAD | CLEAR | STATUS]").as_ref(),
+                        );
                     }
                 }
             }
@@ -602,8 +636,9 @@ impl OpenCADStudio {
                     .map(|(h, _)| *h)
                     .collect();
                 if handles.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("UNDERLAY: select underlay entities first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("UNDERLAY: select underlay entities first.").as_ref(),
+                    );
                 } else {
                     let parts: Vec<&str> = sub.splitn(2, char::is_whitespace).collect();
                     let action = parts.first().copied().unwrap_or("");
@@ -714,8 +749,10 @@ impl OpenCADStudio {
                 }
                 self.push_undo_snapshot(i, "OBJECTSCALE");
                 let Some(scale) = self.tabs[i].scene.creation_annotation_scale_handle() else {
-                    self.command_line
-                        .push_error(crate::t!("OBJECTSCALE: the active annotation scale is unavailable.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("OBJECTSCALE: the active annotation scale is unavailable.")
+                            .as_ref(),
+                    );
                     return Some(Task::none());
                 };
                 let mut n = 0usize;
@@ -739,9 +776,9 @@ impl OpenCADStudio {
                     .collect();
                 self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(crate::tf!(
-                    "OBJECTSCALE: added the active scale to {n} object(s)."
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!("OBJECTSCALE: added the active scale to {n} object(s).").as_ref(),
+                );
                 return Some(Task::none());
             }
 
@@ -750,25 +787,33 @@ impl OpenCADStudio {
             "HYPERLINK" => {
                 use crate::command::SelectThenValueCommand;
                 let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
-                let c = SelectThenValueCommand::new(
-                    "HYPERLINK",
-                    "HYPERLINK  URL to attach:",
-                    has_sel,
-                );
+                let c =
+                    SelectThenValueCommand::new("HYPERLINK", "HYPERLINK  URL to attach:", has_sel);
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
             cmd if cmd.starts_with("HYPERLINK ") => {
                 use acadrust::xdata::{ExtendedDataRecord, XDataValue};
-                let url = cmd.strip_prefix("HYPERLINK").unwrap_or("").trim().to_string();
+                let url = cmd
+                    .strip_prefix("HYPERLINK")
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 if url.is_empty() {
-                    self.command_line.push_info(crate::t!("Usage: HYPERLINK <url>   (select objects first)").as_ref());
+                    self.command_line.push_info(
+                        crate::t!("Usage: HYPERLINK <url>   (select objects first)").as_ref(),
+                    );
                     return Some(Task::none());
                 }
-                let handles: Vec<acadrust::Handle> =
-                    self.tabs[i].scene.selected_entities().iter().map(|(h, _)| *h).collect();
+                let handles: Vec<acadrust::Handle> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .iter()
+                    .map(|(h, _)| *h)
+                    .collect();
                 if handles.is_empty() {
-                    self.command_line.push_error(crate::t!("HYPERLINK: select objects first.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("HYPERLINK: select objects first.").as_ref());
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "HYPERLINK");
@@ -797,7 +842,11 @@ impl OpenCADStudio {
                     "ADJUST",
                     "ADJUST  [Brightness / Contrast / Fade]:",
                     vec![
-                        ("Brightness", "BRIGHTNESS", Some("ADJUST  brightness 0-100:")),
+                        (
+                            "Brightness",
+                            "BRIGHTNESS",
+                            Some("ADJUST  brightness 0-100:"),
+                        ),
                         ("Contrast", "CONTRAST", Some("ADJUST  contrast 0-100:")),
                         ("Fade", "FADE", Some("ADJUST  fade 0-100:")),
                     ],
@@ -821,8 +870,9 @@ impl OpenCADStudio {
                     self.command_line
                         .push_error(crate::t!("ADJUST: select raster image(s) first.").as_ref());
                 } else if action.is_empty() {
-                    self.command_line
-                        .push_info(crate::t!("Usage: ADJUST BRIGHTNESS|CONTRAST|FADE <0-100>").as_ref());
+                    self.command_line.push_info(
+                        crate::t!("Usage: ADJUST BRIGHTNESS|CONTRAST|FADE <0-100>").as_ref(),
+                    );
                 } else if let Ok(v) = arg.parse::<u8>() {
                     let v = v.min(100);
                     self.push_undo_snapshot(i, "ADJUST");
@@ -865,15 +915,17 @@ impl OpenCADStudio {
                             .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                             .collect();
                         self.tabs[i].scene.bump_entities(&changes);
-                        self.command_line
-                            .push_output(crate::tf!("ADJUST: {action} = {v} on {changed} image(s).").as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("ADJUST: {action} = {v} on {changed} image(s).").as_ref(),
+                        );
                     } else {
                         self.command_line.push_error(
                             "ADJUST: no raster images selected, or unknown property (use BRIGHTNESS|CONTRAST|FADE).",
                         );
                     }
                 } else {
-                    self.command_line.push_error(crate::t!("ADJUST: value must be 0-100.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("ADJUST: value must be 0-100.").as_ref());
                 }
             }
 
@@ -891,10 +943,8 @@ impl OpenCADStudio {
             }
             "ANNOALLVISIBLE" => {
                 use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new(
-                    "ANNOALLVISIBLE",
-                    "ANNOALLVISIBLE  new value [0/1]:",
-                );
+                let c =
+                    ValuePromptCommand::new("ANNOALLVISIBLE", "ANNOALLVISIBLE  new value [0/1]:");
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -916,10 +966,8 @@ impl OpenCADStudio {
             }
             "ANNOAUTOSCALE" => {
                 use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new(
-                    "ANNOAUTOSCALE",
-                    "ANNOAUTOSCALE  new value [-4..4]:",
-                );
+                let c =
+                    ValuePromptCommand::new("ANNOAUTOSCALE", "ANNOAUTOSCALE  new value [-4..4]:");
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -927,9 +975,9 @@ impl OpenCADStudio {
                 let value = cmd.split_whitespace().nth(1).unwrap_or("");
                 match value.parse::<i8>() {
                     Ok(mode @ -4..=4) => self.annotation_auto_scale = mode,
-                    _ => self.command_line.push_error(
-                        "ANNOAUTOSCALE: enter an integer from -4 through 4.",
-                    ),
+                    _ => self
+                        .command_line
+                        .push_error("ANNOAUTOSCALE: enter an integer from -4 through 4."),
                 }
             }
             "ANNOUPDATE" => {
@@ -940,8 +988,9 @@ impl OpenCADStudio {
                     .map(|(handle, _)| *handle)
                     .collect();
                 if handles.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("ANNOUPDATE: select annotation objects first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("ANNOUPDATE: select annotation objects first.").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "ANNOUPDATE");
@@ -1000,9 +1049,9 @@ impl OpenCADStudio {
                         self.command_line
                             .push_output(crate::tf!("Annotation scale: {arg}").as_ref());
                     }
-                    None => self
-                        .command_line
-                        .push_error(crate::t!("Usage: ANNOSCALE <ratio>  e.g. 1:50, 2:1, or a factor").as_ref()),
+                    None => self.command_line.push_error(
+                        crate::t!("Usage: ANNOSCALE <ratio>  e.g. 1:50, 2:1, or a factor").as_ref(),
+                    ),
                 }
             }
 
@@ -1016,8 +1065,16 @@ impl OpenCADStudio {
                     "SCALELISTEDIT",
                     "SCALELISTEDIT  [Add / Delete]:",
                     vec![
-                        ("Add", "ADD", Some("SCALELISTEDIT ADD  new scale ratio (e.g. 1:50):")),
-                        ("Delete", "DELETE", Some("SCALELISTEDIT DELETE  scale ratio to remove:")),
+                        (
+                            "Add",
+                            "ADD",
+                            Some("SCALELISTEDIT ADD  new scale ratio (e.g. 1:50):"),
+                        ),
+                        (
+                            "Delete",
+                            "DELETE",
+                            Some("SCALELISTEDIT DELETE  scale ratio to remove:"),
+                        ),
                     ],
                 );
                 self.command_line.push_info(&c.prompt());
@@ -1035,20 +1092,22 @@ impl OpenCADStudio {
                                 self.push_undo_snapshot(i, "SCALELISTEDIT");
                                 if self.tabs[i].scene.add_scale(arg, paper, drawing) {
                                     self.tabs[i].dirty = true;
-                                    self.command_line
-                                        .push_output(crate::tf!("Added annotation scale {arg}.").as_ref());
+                                    self.command_line.push_output(
+                                        crate::tf!("Added annotation scale {arg}.").as_ref(),
+                                    );
                                 } else {
-                                    self.command_line
-                                        .push_info(crate::tf!("Scale {arg} already exists.").as_ref());
+                                    self.command_line.push_info(
+                                        crate::tf!("Scale {arg} already exists.").as_ref(),
+                                    );
                                 }
                             }
-                            _ => self
-                                .command_line
-                                .push_error(crate::t!("SCALELISTEDIT ADD: use a ratio like 1:50.").as_ref()),
+                            _ => self.command_line.push_error(
+                                crate::t!("SCALELISTEDIT ADD: use a ratio like 1:50.").as_ref(),
+                            ),
                         },
-                        None => self
-                            .command_line
-                            .push_error(crate::t!("SCALELISTEDIT ADD: use a ratio like 1:50.").as_ref()),
+                        None => self.command_line.push_error(
+                            crate::t!("SCALELISTEDIT ADD: use a ratio like 1:50.").as_ref(),
+                        ),
                     },
                     "DELETE" | "REMOVE" => {
                         let current = self.tabs[i]
@@ -1058,20 +1117,25 @@ impl OpenCADStudio {
                             .current_annotation_scale
                             .clone();
                         if arg.is_empty() {
-                            self.command_line.push_info(crate::t!("Usage: SCALELISTEDIT DELETE <name>").as_ref());
+                            self.command_line.push_info(
+                                crate::t!("Usage: SCALELISTEDIT DELETE <name>").as_ref(),
+                            );
                         } else if arg.eq_ignore_ascii_case(&current) {
-                            self.command_line.push_error(crate::tf!(
-                                "Cannot delete the current annotation scale ({arg})."
-                            ).as_ref());
+                            self.command_line.push_error(
+                                crate::tf!("Cannot delete the current annotation scale ({arg}).")
+                                    .as_ref(),
+                            );
                         } else {
                             self.push_undo_snapshot(i, "SCALELISTEDIT");
                             if self.tabs[i].scene.remove_scale(arg) {
                                 self.tabs[i].dirty = true;
-                                self.command_line
-                                    .push_output(crate::tf!("Removed annotation scale {arg}.").as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("Removed annotation scale {arg}.").as_ref(),
+                                );
                             } else {
-                                self.command_line
-                                    .push_info(crate::tf!("No annotation scale named {arg}.").as_ref());
+                                self.command_line.push_info(
+                                    crate::tf!("No annotation scale named {arg}.").as_ref(),
+                                );
                             }
                         }
                     }
@@ -1083,15 +1147,17 @@ impl OpenCADStudio {
                             .map(|(n, _, _)| n)
                             .collect();
                         if names.is_empty() {
-                            self.command_line.push_info(crate::t!("No annotation scales defined.").as_ref());
-                        } else {
                             self.command_line
-                                .push_output(crate::tf!("Annotation scales: {}", names.join(", ")).as_ref());
+                                .push_info(crate::t!("No annotation scales defined.").as_ref());
+                        } else {
+                            self.command_line.push_output(
+                                crate::tf!("Annotation scales: {}", names.join(", ")).as_ref(),
+                            );
                         }
                     }
-                    _ => self
-                        .command_line
-                        .push_info(crate::t!("Usage: SCALELISTEDIT [ADD 1:50 | DELETE 1:50]").as_ref()),
+                    _ => self.command_line.push_info(
+                        crate::t!("Usage: SCALELISTEDIT [ADD 1:50 | DELETE 1:50]").as_ref(),
+                    ),
                 }
             }
 
@@ -1150,13 +1216,17 @@ impl OpenCADStudio {
                             .scene
                             .add_entity_clone(acadrust::EntityType::Table(table));
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
+                        self.command_line.push_output(
+                            crate::tf!(
                             "DATALINK: imported {nrows}×{ncols} cells into a table at the origin."
-                        ).as_ref());
+                        )
+                            .as_ref(),
+                        );
                     }
                     Err(e) => {
-                        self.command_line
-                            .push_error(crate::tf!("DATALINK: cannot read \"{path}\": {e}").as_ref());
+                        self.command_line.push_error(
+                            crate::tf!("DATALINK: cannot read \"{path}\": {e}").as_ref(),
+                        );
                     }
                 }
             }
@@ -1166,8 +1236,10 @@ impl OpenCADStudio {
             // (northing easting elevation) → Point at (easting, northing, elev).
             "LANDXMLIMPORT" => {
                 use crate::command::ValuePromptCommand;
-                let c =
-                    ValuePromptCommand::new("LANDXMLIMPORT", "LANDXMLIMPORT  path to the .xml file:");
+                let c = ValuePromptCommand::new(
+                    "LANDXMLIMPORT",
+                    "LANDXMLIMPORT  path to the .xml file:",
+                );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -1183,8 +1255,10 @@ impl OpenCADStudio {
                     Ok(xml) => {
                         let pts = parse_landxml_cgpoints(&xml);
                         if pts.is_empty() {
-                            self.command_line
-                                .push_info(crate::t!("LANDXMLIMPORT: no <CgPoint> survey points found.").as_ref());
+                            self.command_line.push_info(
+                                crate::t!("LANDXMLIMPORT: no <CgPoint> survey points found.")
+                                    .as_ref(),
+                            );
                             return Some(Task::none());
                         }
                         self.push_undo_snapshot(i, "LANDXMLIMPORT");
@@ -1196,14 +1270,17 @@ impl OpenCADStudio {
                                 .add_entity_clone(acadrust::EntityType::Point(p));
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
+                        self.command_line.push_output(
+                            crate::tf!(
                             "LANDXMLIMPORT: imported {} survey point(s). Use ZOOM EXTENTS to view.",
                             pts.len()
-                        ).as_ref());
+                        )
+                            .as_ref(),
+                        );
                     }
-                    Err(e) => self
-                        .command_line
-                        .push_error(crate::tf!("LANDXMLIMPORT: cannot read \"{path}\": {e}").as_ref()),
+                    Err(e) => self.command_line.push_error(
+                        crate::tf!("LANDXMLIMPORT: cannot read \"{path}\": {e}").as_ref(),
+                    ),
                 }
             }
 
@@ -1275,48 +1352,189 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            "POINTCLOUDSELECTBOX" => {
+            "POINTCLOUDCRS" => {
+                self.point_cloud_crs_info(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDREPROJECT" => {
                 use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "POINTCLOUDREPROJECT",
+                    "POINTCLOUDREPROJECT  Enter target horizontal EPSG code (XY transforms; Z is preserved):",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDREPROJECT ") => {
+                match cmd
+                    .trim_start_matches("POINTCLOUDREPROJECT")
+                    .trim()
+                    .parse::<u16>()
+                {
+                    Ok(code) if code > 0 => {
+                        return Some(Task::done(Message::PointCloudReproject(code)))
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDREPROJECT <target EPSG code>"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDCLASSADD" => {
+                self.add_point_cloud_class(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTBOX" => {
                 if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
                     self.active_modal = None;
                     self.reset_modal_geometry();
                 }
-                let command = ValuePromptCommand::new(
-                    "POINTCLOUDSELECTBOX",
-                    "POINTCLOUDSELECTBOX  Enter minX minY minZ maxX maxY maxZ:",
-                );
+                let command = crate::app::point_cloud::PointCloudScreenRectangleCommand::new();
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSELECTFENCE" => {
+                if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
+                    self.active_modal = None;
+                    self.reset_modal_geometry();
+                }
+                let command = crate::app::point_cloud::PointCloudScreenFenceCommand::new();
                 self.command_line.push_info(&command.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(command));
             }
 
             #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDSELECTBRUSH" => {
-                use crate::command::ValuePromptCommand;
                 if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
                     self.active_modal = None;
                     self.reset_modal_geometry();
                 }
-                let command = ValuePromptCommand::new(
-                    "POINTCLOUDSELECTBRUSH",
-                    "POINTCLOUDSELECTBRUSH  Enter centerX centerY centerZ radius:",
-                );
+                let command = crate::app::point_cloud::PointCloudScreenBrushCommand;
                 self.command_line.push_info(&command.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(command));
             }
 
             #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDSELECTPOINT" => {
-                use crate::command::ValuePromptCommand;
                 if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
                     self.active_modal = None;
                     self.reset_modal_geometry();
                 }
-                let command = ValuePromptCommand::new(
-                    "POINTCLOUDSELECTPOINT",
-                    "POINTCLOUDSELECTPOINT  Enter X Y Z search-radius:",
-                );
+                let command = crate::app::point_cloud::PointCloudScreenPointCommand;
                 self.command_line.push_info(&command.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSCREENPOINT ") => {
+                let values = cmd
+                    .trim_start_matches("POINTCLOUDSCREENPOINT")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                match values {
+                    Ok(values) if values.len() == 4 => self.point_cloud_select_screen_point(
+                        i,
+                        glam::dvec3(values[0], values[1], values[2]),
+                        values[3] as f32,
+                    ),
+                    _ => self
+                        .command_line
+                        .push_error("POINTCLOUDSCREENPOINT: invalid gesture."),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSCREENRECT ") => {
+                let values = cmd
+                    .trim_start_matches("POINTCLOUDSCREENRECT")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                match values {
+                    Ok(values) if values.len() == 6 => self.point_cloud_select_screen_rectangle(
+                        i,
+                        glam::dvec3(values[0], values[1], values[2]),
+                        glam::dvec3(values[3], values[4], values[5]),
+                    ),
+                    _ => self
+                        .command_line
+                        .push_error("POINTCLOUDSCREENRECT: invalid gesture."),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSCREENFENCE ") => {
+                let values = cmd
+                    .trim_start_matches("POINTCLOUDSCREENFENCE")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                match values {
+                    Ok(values) if values.len() >= 9 && values.len() % 3 == 0 => {
+                        let vertices: Vec<_> = values
+                            .chunks_exact(3)
+                            .map(|point| glam::dvec3(point[0], point[1], point[2]))
+                            .collect();
+                        self.point_cloud_select_screen_fence(i, &vertices);
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("POINTCLOUDSCREENFENCE: invalid gesture."),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSCREENBRUSH ") => {
+                let values: Vec<_> = cmd
+                    .trim_start_matches("POINTCLOUDSCREENBRUSH")
+                    .split_whitespace()
+                    .collect();
+                let (classification, offset) = match values.first().copied() {
+                    Some("SELECT") => (Some(None), 1),
+                    Some("CLASS") => (
+                        values
+                            .get(1)
+                            .and_then(|value| value.parse::<u8>().ok())
+                            .map(Some),
+                        2,
+                    ),
+                    _ => (None, 0),
+                };
+                let coordinates = values
+                    .get(offset..)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|value| value.parse::<f64>())
+                    .collect::<Result<Vec<_>, _>>();
+                match (classification, coordinates) {
+                    (Some(classification), Ok(values)) if values.len() == 4 => {
+                        self.point_cloud_select_screen_brush(
+                            i,
+                            glam::dvec3(values[0], values[1], values[2]),
+                            values[3] as f32,
+                            classification,
+                        );
+                        let command: Box<dyn crate::command::CadCommand> = match classification {
+                            Some(class) => Box::new(
+                                crate::app::point_cloud::PointCloudBrushClassifyCommand::new(class),
+                            ),
+                            None => Box::new(crate::app::point_cloud::PointCloudScreenBrushCommand),
+                        };
+                        self.command_line.push_info(&command.prompt());
+                        self.tabs[i].active_cmd = Some(command);
+                    }
+                    _ => self
+                        .command_line
+                        .push_error("POINTCLOUDSCREENBRUSH: invalid gesture."),
+                }
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1370,9 +1588,9 @@ impl OpenCADStudio {
                     (Some(class), Some(visible)) => {
                         self.set_point_cloud_class_visible(i, class, visible)
                     }
-                    _ => self.command_line.push_error(
-                        "Usage: POINTCLOUDCLASSVISIBLE <0-255 class> <ON|OFF>",
-                    ),
+                    _ => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDCLASSVISIBLE <0-255 class> <ON|OFF>"),
                 }
             }
 
@@ -1390,9 +1608,8 @@ impl OpenCADStudio {
                         [values[3], values[4], values[5]],
                     );
                 } else {
-                    self.command_line.push_error(
-                        "Usage: POINTCLOUDSELECTBOX <minX minY minZ maxX maxY maxZ>",
-                    );
+                    self.command_line
+                        .push_error("Usage: POINTCLOUDSELECTBOX <minX minY minZ maxX maxY maxZ>");
                 }
             }
 
@@ -1404,11 +1621,7 @@ impl OpenCADStudio {
                     .filter_map(|value| value.parse::<f64>().ok())
                     .collect();
                 if values.len() == 4 {
-                    self.point_cloud_select_brush(
-                        i,
-                        [values[0], values[1], values[2]],
-                        values[3],
-                    );
+                    self.point_cloud_select_brush(i, [values[0], values[1], values[2]], values[3]);
                 } else {
                     self.command_line.push_error(
                         "Usage: POINTCLOUDSELECTBRUSH <centerX centerY centerZ radius>",
@@ -1430,9 +1643,8 @@ impl OpenCADStudio {
                         values[3],
                     );
                 } else {
-                    self.command_line.push_error(
-                        "Usage: POINTCLOUDSELECTPOINT <X Y Z search-radius>",
-                    );
+                    self.command_line
+                        .push_error("Usage: POINTCLOUDSELECTPOINT <X Y Z search-radius>");
                 }
             }
 
@@ -1456,9 +1668,7 @@ impl OpenCADStudio {
                     .collect::<Result<Vec<_>, _>>();
                 match values {
                     Ok(values)
-                        if values.len() == 2
-                            && values[0].is_finite()
-                            && values[1].is_finite() =>
+                        if values.len() == 2 && values[0].is_finite() && values[1].is_finite() =>
                     {
                         self.point_cloud_select_elevation_slice(i, values[0], values[1]);
                     }
@@ -1483,10 +1693,7 @@ impl OpenCADStudio {
             "POINTCLOUDSELECTCLEAR" => {
                 self.set_point_cloud_selection(
                     i,
-                    ocs_pointcloud::SelectionSet::from_indices(
-                        "active",
-                        std::iter::empty::<u64>(),
-                    ),
+                    ocs_pointcloud::SelectionSet::from_indices("active", std::iter::empty::<u64>()),
                 );
             }
 
@@ -1619,9 +1826,9 @@ impl OpenCADStudio {
                         &format!("Assign class {class}"),
                         ocs_pointcloud::PointPatch::classification(class),
                     ),
-                    Err(_) => self.command_line.push_error(
-                        "Usage: POINTCLOUDCLASSIFYSELECTION <0-255 class>",
-                    ),
+                    Err(_) => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDCLASSIFYSELECTION <0-255 class>"),
                 }
             }
 
@@ -1740,9 +1947,9 @@ impl OpenCADStudio {
                             ..Default::default()
                         },
                     ),
-                    _ => self.command_line.push_error(
-                        "Usage: POINTCLOUDELEVATIONSELECTION <survey elevation>",
-                    ),
+                    _ => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDELEVATIONSELECTION <survey elevation>"),
                 }
             }
 
@@ -1887,8 +2094,14 @@ mod tests {
             app.tabs[i].scene.refresh_pending_any(),
             "REDRAW must leave a pending force request"
         );
-        assert_eq!(app.tabs[i].scene.geometry_epoch, geom_before, "REDRAW must not regen");
-        assert_eq!(app.tabs[i].scene.block_epoch, block_before, "REDRAW must not regen blocks");
+        assert_eq!(
+            app.tabs[i].scene.geometry_epoch, geom_before,
+            "REDRAW must not regen"
+        );
+        assert_eq!(
+            app.tabs[i].scene.block_epoch, block_before,
+            "REDRAW must not regen blocks"
+        );
     }
 
     #[test]
@@ -1898,7 +2111,10 @@ mod tests {
         let _ = full.run_command_line("REDRAW");
         let _ = short.run_command_line("R");
         let i = full.active_tab;
-        assert!(short.tabs[i].scene.refresh_pending_any(), "'R' must trigger REDRAW");
+        assert!(
+            short.tabs[i].scene.refresh_pending_any(),
+            "'R' must trigger REDRAW"
+        );
         assert_eq!(
             short.tabs[i].scene.refresh_pending_any(),
             full.tabs[i].scene.refresh_pending_any(),
@@ -1911,7 +2127,10 @@ mod tests {
         let mut app = fresh_app();
         let i = app.active_tab;
         let _ = app.run_command_line("REDRAWALL");
-        assert!(app.tabs[i].scene.refresh_pending_any(), "REDRAWALL must leave a force request");
+        assert!(
+            app.tabs[i].scene.refresh_pending_any(),
+            "REDRAWALL must leave a force request"
+        );
     }
 
     #[test]
@@ -1922,10 +2141,22 @@ mod tests {
         let block_before = app.tabs[i].scene.block_epoch;
         app.tabs[i].dirty = false;
         let _ = app.run_command_line("REGEN");
-        assert_ne!(app.tabs[i].scene.geometry_epoch, geom_before, "REGEN must regenerate geometry");
-        assert_ne!(app.tabs[i].scene.block_epoch, block_before, "REGEN must regenerate block epoch");
-        assert!(!app.tabs[i].dirty, "REGEN must NOT mark the document as modified (no DB change)");
+        assert_ne!(
+            app.tabs[i].scene.geometry_epoch, geom_before,
+            "REGEN must regenerate geometry"
+        );
+        assert_ne!(
+            app.tabs[i].scene.block_epoch, block_before,
+            "REGEN must regenerate block epoch"
+        );
+        assert!(
+            !app.tabs[i].dirty,
+            "REGEN must NOT mark the document as modified (no DB change)"
+        );
         let _ = app.run_command_line("REGENALL");
-        assert!(!app.tabs[i].dirty, "REGENALL must not dirty the document either");
+        assert!(
+            !app.tabs[i].dirty,
+            "REGENALL must not dirty the document either"
+        );
     }
 }

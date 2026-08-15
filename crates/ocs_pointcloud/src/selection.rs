@@ -78,6 +78,10 @@ impl SelectionSet {
             .iter()
             .flat_map(|range| range.first..=range.last)
     }
+
+    pub fn union(&self, name: impl Into<String>, other: &Self) -> Self {
+        Self::from_indices(name, self.iter().chain(other.iter()))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -121,7 +121,7 @@ No installation required — runs directly on any modern Linux distribution.
 
 ### Windows
 
-Download `OpenCADStudio-*-windows-x86_64.exe` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest) and run it directly. Windows SmartScreen may show "Windows protected your PC" because the binary is not yet code-signed — click **More info → Run anyway**.
+Download `OpenCADStudio-*-windows-x86_64-installer.msi` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest) for a normal Start Menu installation and upgrade. The `*-portable.exe` asset runs without installation. Official releases are signed when Azure Trusted Signing credentials are configured; community-fork builds without signing credentials may show a Windows SmartScreen warning.
 
 ### macOS (Apple Silicon)
 

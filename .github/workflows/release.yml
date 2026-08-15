@@ -72,6 +72,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_CERTIFICATE_PROFILE_NAME != '' }}
 
     steps:
       - name: Checkout
@@ -114,6 +116,7 @@ jobs:
           cargo build --release -p dwg-thumbnailer-win
 
       - name: Sign executable (Azure Trusted Signing)
+        if: env.HAS_AZURE_SIGNING == 'true'
         # Sign the bare .exe *before* the MSI is built so the copy packed
         # into the installer carries the signature too. AZURE_CLIENT_SECRET
         # authenticates the App Registration; the remaining AZURE_* secrets
@@ -176,6 +179,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "light failed" }
 
       - name: Sign MSI installer (Azure Trusted Signing)
+        if: env.HAS_AZURE_SIGNING == 'true'
         # The installer itself must be signed separately — light produces a
         # fresh, unsigned .msi even though the .exe inside is already signed.
         uses: azure/artifact-signing-action@v2
