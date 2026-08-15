@@ -596,6 +596,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
 ///
 /// The callback is UI-agnostic and may run from Rayon workers. Callers should
 /// keep it cheap, normally just updating atomics.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn build_derived_caches_with_progress(
     doc: &CadDocument,
     progress: &(dyn Fn(u16) + Sync),
@@ -864,6 +865,7 @@ fn build_derived_caches_impl(
 /// the loader thread. The temporary `Scene` never crosses threads (it contains
 /// `Rc`/`RefCell` state); only its Send-safe document and immutable prepared
 /// geometry are returned.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn prepare_open_geometry(
     doc: CadDocument,
     caches: &DerivedCaches,

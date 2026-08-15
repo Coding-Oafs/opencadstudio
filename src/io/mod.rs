@@ -71,6 +71,7 @@ impl OpenProgressState {
         self.phase.store(phase, Ordering::Release);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_fraction(&self, phase: u8, base: u16, span: u16, completed: usize, total: usize) {
         let denominator = total.max(1) as u64;
         let value = base as u64 + (completed.min(total.max(1)) as u64 * span as u64 / denominator);
@@ -1403,15 +1404,16 @@ mod save_failure_tests {
 
 /// Show a file-open dialog and load the selected CTB or STB file.
 pub async fn pick_plot_style() -> Option<plot_style::PlotStyleTable> {
-    let mut dialog = crate::sys::file_dialog()
+    let dialog = crate::sys::file_dialog()
         .set_title("Load Plot Style Table")
         .add_filter("Plot Style Tables", &["ctb", "CTB"])
         .add_filter("CTB Files", &["ctb", "CTB"])
         .add_filter("All Files", &["*"]);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(dir) = plot_style::ensure_plot_styles_dir() {
-        dialog = dialog.set_directory(dir);
-    }
+    let dialog = match plot_style::ensure_plot_styles_dir() {
+        Ok(dir) => dialog.set_directory(dir),
+        Err(_) => dialog,
+    };
     let handle = dialog.pick_file().await?;
     plot_style::PlotStyleTable::load(&crate::sys::handle_path(&handle)).ok()
 }

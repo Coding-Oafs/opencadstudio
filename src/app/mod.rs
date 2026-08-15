@@ -1694,6 +1694,7 @@ pub enum Message {
     Tick(Instant),
     /// Periodic drain of plugin-to-host requests that arrived outside a host
     /// call (e.g. mutations from the Python REPL).
+    #[cfg(not(target_arch = "wasm32"))]
     DrainPluginRequests,
     /// Web: periodic check for per-script fonts a drawing needs but hasn't
     /// fetched yet (#141). Native: never emitted.
@@ -3483,17 +3484,6 @@ impl OpenCADStudio {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn push_plugin_error(&mut self, msg: &str) {
         self.command_line.push_error(msg);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn command_history_info(&self) -> Vec<String> {
-        use crate::ui::command_line::EntryKind;
-        self.command_line
-            .history
-            .iter()
-            .filter(|e| e.kind == EntryKind::Info)
-            .map(|e| e.text.clone())
-            .collect()
     }
 
     /// Boot function for `iced::daemon`: returns initial state plus a task that

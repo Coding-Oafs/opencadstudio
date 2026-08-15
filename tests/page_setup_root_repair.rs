@@ -2,7 +2,7 @@
 // dictionary pointer unresolvable — it names a handle that never loaded (or a
 // non-dictionary), while the real named-object sub-dictionaries are owned by an
 // unrelated handle. Navigating that root then silently no-ops, so registering a
-// new named-object entry (a page setup, the CTAB current-tab variable, an
+// new named-object entry (a page setup, the variable dictionary, an
 // annotation scale) would vanish instead of persisting.
 //
 // `annotative::root_named_dict_handle` resolves the root robustly and, when it
@@ -121,8 +121,19 @@ fn ctab_is_created_against_a_repaired_root() {
     else {
         panic!("root must be a dictionary");
     };
+    let variable_dictionary = root
+        .entries
+        .iter()
+        .find(|(key, _)| key == "AcDbVariableDictionary")
+        .map(|(_, handle)| *handle)
+        .expect("variable dictionary must be registered in the repaired root NOD");
+    let Some(ObjectType::Dictionary(variable_dictionary)) =
+        scene.document.objects.get(&variable_dictionary)
+    else {
+        panic!("variable dictionary must resolve");
+    };
     assert!(
-        root.entries.iter().any(|(k, _)| k == "CTAB"),
-        "CTAB must be registered in the repaired root NOD"
+        variable_dictionary.entries.iter().any(|(key, _)| key == "CTAB"),
+        "CTAB must be registered in the variable dictionary"
     );
 }

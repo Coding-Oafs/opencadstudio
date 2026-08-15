@@ -6635,16 +6635,17 @@ impl OpenCADStudio {
 
             Message::PlotStylePanelApply => self.on_plot_style_panel_apply(),
 
-            Message::PlotStylePanelSaveDirect => {
-            let Some(table) = self.active_plot_style.as_ref() else {
+        Message::PlotStylePanelSaveDirect => {
+            if self.active_plot_style.is_none() {
                 self.command_line.push_error(
                     crate::t!("No plot style table loaded. Load or create one first.").as_ref(),
                 );
                 return Task::none();
-            };
+            }
 
             #[cfg(not(target_arch = "wasm32"))]
             {
+                let table = self.active_plot_style.as_ref().expect("checked above");
                 let table_name = table.name.clone();
 
                 let result = crate::io::plot_style::ensure_plot_styles_dir().and_then(|dir| {

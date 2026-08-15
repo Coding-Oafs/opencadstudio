@@ -10,7 +10,10 @@
 
 use rustc_hash::FxHashMap as HashMap;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
 pub const DEFAULT_PLOT_STYLE: &str = "ocad.ctb";
 pub const MONOCHROME_PLOT_STYLE: &str = "monochrome.ctb";

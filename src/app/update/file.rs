@@ -4202,15 +4202,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .unwrap_or("export.ctb".into());
                 Task::perform(
                     async move {
-                        let mut dialog = crate::sys::file_dialog()
+                        let dialog = crate::sys::file_dialog()
                             .set_title("Save Plot Style Table")
                             .set_file_name(&default_name)
                             .add_filter("Plot Style Files", &["ctb", "CTB"])
                             .add_filter("All Files", &["*"]);
                         #[cfg(not(target_arch = "wasm32"))]
-                        if let Ok(dir) = crate::io::plot_style::ensure_plot_styles_dir() {
-                            dialog = dialog.set_directory(dir);
-                        }
+                        let dialog = match crate::io::plot_style::ensure_plot_styles_dir() {
+                            Ok(dir) => dialog.set_directory(dir),
+                            Err(_) => dialog,
+                        };
                         dialog.save_file().await
                             .map(|h| crate::sys::handle_path(&h))
                     },

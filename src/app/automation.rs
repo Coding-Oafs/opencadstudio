@@ -549,10 +549,14 @@ mod tests {
                 _ => None,
             })
             .expect("CIRCLE should create one entity");
+        let center = crate::scene::view::transform::ocs_point_to_wcs(
+            (circle.center.x, circle.center.y, circle.center.z),
+            (circle.normal.x, circle.normal.y, circle.normal.z),
+        );
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(circle.center.x, 2.0));
-        assert!(close(circle.center.y, 0.0));
-        assert!(close(circle.center.z, 3.0));
+        assert!(close(center.0, 2.0));
+        assert!(close(center.1, 0.0));
+        assert!(close(center.2, 3.0));
         assert!(close(circle.normal.x, 0.0));
         assert!(close(circle.normal.y, -1.0));
         assert!(close(circle.normal.z, 0.0));
@@ -612,6 +616,10 @@ mod tests {
         use crate::app::Message;
         use crate::modules::ModuleEvent;
 
+        let command_refusal =
+            crate::t!("No drawing open. Use NEW or OPEN to start a drawing.");
+        let tool_refusal = crate::t!("No drawing open — use New or Open first.");
+
         // Fresh app = welcome tab, no drawing.
         let mut app = OpenCADStudio::new_for_test();
         assert!(
@@ -633,7 +641,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            !out.contains("No drawing open"),
+            !out.contains(command_refusal.as_ref()),
             "ABOUT needs no drawing and must not be refused on the welcome page: {out:?}"
         );
 
@@ -649,7 +657,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            out.contains("No drawing open"),
+            out.contains(command_refusal.as_ref()),
             "LINE must still be refused on the welcome page: {out:?}"
         );
         assert!(
@@ -669,7 +677,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            out.contains("No drawing open"),
+            out.contains(tool_refusal.as_ref()),
             "a scene-touching event must stay inert on the welcome page: {out:?}"
         );
 

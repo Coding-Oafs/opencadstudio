@@ -346,26 +346,7 @@ pub struct CurveSnap {
     pub key_vertices: Vec<[f64; 3]>,
 }
 
-/// Every point the entity's own geometry offers to snap to.
-///
-/// The point of routing this through [`entity_curve`] rather than reading the
-/// fields per type: an arc's quadrants, an ellipse's axis ends and a spline's
-/// midpoint are all the same question asked of different shapes, and asking
-/// it once means the answer is exact everywhere. Previously an arc offered no
-/// quadrants at all and a spline's "endpoints" were its control points, which
-/// for a control-point spline are not on the curve.
-///
-/// `None` for anything that is not a planar curve, which keeps the callers
-/// that have their own snap sources — text, blocks, dimensions — untouched.
-pub fn curve_snap(entity: &EntityType) -> Option<CurveSnap> {
-    Some(snap_from(&entity_curve(entity)?))
-}
-
-/// [`curve_snap`] for a caller that already has the curve.
-///
-/// The per-type wire builders take a concrete entity rather than an
-/// [`EntityType`], and wrapping one back up would mean cloning it on the
-/// render path.
+/// Snap candidates for a caller that already has the curve.
 pub fn snap_from(curve: &PlanarCurve) -> CurveSnap {
     // A chain of straight segments is what `key_vertices` means: the snap
     // engine joins consecutive entries and offers the midpoint of each. Only
@@ -632,7 +613,7 @@ mod tests {
         arc.start_angle = 0.0;
         arc.end_angle = PI; // the upper half
         arc.normal = v3(0.0, 0.0, 1.0);
-        let snap = curve_snap(&EntityType::Arc(arc)).unwrap();
+        let snap = snap_from(&entity_curve(&EntityType::Arc(arc)).unwrap());
         let quadrants = hints(&snap, SnapHint::Quadrant);
         // 0° and 90° and 180° are on it; 270° is not.
         assert_eq!(quadrants.len(), 3, "{quadrants:?}");
@@ -655,7 +636,7 @@ mod tests {
             LwVertex::from_coords(10.0, 0.0),
             LwVertex::from_coords(10.0, 5.0),
         ];
-        let snap = curve_snap(&EntityType::LwPolyline(polyline)).unwrap();
+        let snap = snap_from(&entity_curve(&EntityType::LwPolyline(polyline)).unwrap());
         assert_eq!(snap.key_vertices.len(), 3);
         // Midpoints are derived from those by the snap engine, so emitting
         // them here as well would offer every one of them twice.
@@ -667,7 +648,7 @@ mod tests {
         let mut circle = CircleEnt::default();
         circle.radius = 1.0;
         circle.normal = v3(0.0, 0.0, 1.0);
-        let snap = curve_snap(&EntityType::Circle(circle)).unwrap();
+        let snap = snap_from(&entity_curve(&EntityType::Circle(circle)).unwrap());
         assert!(snap.key_vertices.is_empty());
         assert!(hints(&snap, SnapHint::Endpoint).is_empty());
         assert!(hints(&snap, SnapHint::Midpoint).is_empty());

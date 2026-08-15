@@ -76,8 +76,9 @@ fn block_internal_hatch_reaches_export() {
     // A blue hatch, wrapped into a block and inserted in model space — the
     // minimal shape of "coloured fill nested in a block".
     let h = scene.add_entity(EntityType::Hatch(square_hatch(5)));
+    let identity = acadrust::types::Transform::identity();
     scene
-        .create_block_from_entities(&[h], "LOGO", glam::DVec3::ZERO)
+        .create_block_from_entities(&[h], "LOGO", &identity, &identity)
         .expect("wrap hatch into a block + insert");
     scene.populate_hatches_from_document();
 
@@ -239,17 +240,22 @@ fn app_created_hatch_roundtrips_catalog_spacing() {
     let mut scene = Scene::new();
     let boundary: Vec<[f32; 2]> = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
     let model = HatchModel {
+        render_instance: None,
         world_origin: [0.0, 0.0],
         boundary: Arc::new(boundary),
         boundary_wcs: None,
+        boundary_exterior: None,
+        boundary_sources: None,
         pattern: entry.gpu.clone(),
         name: "ANSI31".into(),
         color: [0.75, 0.75, 0.75, 0.85],
+        aci: 0,
+        line_weight_px: 1.0,
         angle_offset: 0.0,
         scale: 1.0,
         draw_depth: 0.0,
     };
-    scene.add_hatch(model);
+    scene.add_hatch(model, None, None);
     scene.populate_hatches_from_document();
 
     let hatches = scene.paper_canvas_hatches();
@@ -288,19 +294,24 @@ fn nested_hatch_serializes_only_outer_as_external() {
     let boundary_f32: Vec<[f32; 2]> = wcs.iter().map(|&[x, y]| [x as f32, y as f32]).collect();
 
     let model = HatchModel {
+        render_instance: None,
         world_origin: [0.0, 0.0],
         boundary: Arc::new(boundary_f32),
         boundary_wcs: Some(Arc::new(wcs)),
+        boundary_exterior: None,
+        boundary_sources: None,
         pattern: HatchPattern::Solid,
         name: "SOLID".into(),
         color: [0.45, 0.45, 0.45, 0.60],
+        aci: 0,
+        line_weight_px: 1.0,
         angle_offset: 0.0,
         scale: 1.0,
         draw_depth: 0.0,
     };
 
     let mut scene = Scene::new();
-    scene.add_hatch(model);
+    scene.add_hatch(model, None, None);
 
     let dxf = scene
         .document

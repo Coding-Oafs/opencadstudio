@@ -111,6 +111,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.pending_close = Some(crate::app::PendingClose::Tab(idx));
                     return self.open_unsaved_dialog_window();
                 }
+                #[cfg(not(target_arch = "wasm32"))]
                 let tab_id = self.tabs.get(idx).map(|t| t.id);
                 // This tab is closing for good — drop its autosave recovery copy.
                 #[cfg(not(target_arch = "wasm32"))]
@@ -135,8 +136,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.sync_ribbon_layers();
                 self.sync_ribbon_styles();
                 self.sync_ribbon_from_selection();
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(tab_id) = tab_id {
-                    #[cfg(not(target_arch = "wasm32"))]
                     v4_support::on_tab_closed(tab_id);
                 }
                 Task::none()

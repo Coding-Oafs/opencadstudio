@@ -400,7 +400,7 @@ mod tests {
         }
 
         let mut got = Vec::new();
-        while let Ok(Some(p)) = rx.try_next() {
+        while let Ok(p) = rx.try_recv() {
             got.push(p.to_string_lossy().into_owned());
         }
         got.sort();

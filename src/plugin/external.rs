@@ -267,7 +267,10 @@ fn parse_string_array(s: &str) -> Vec<String> {
 pub(crate) use loader::{shutdown_plugins, with_manager};
 
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-pub(crate) use loader::{load_at_startup, loaded_ids, remove_plugin};
+pub(crate) use loader::{load_at_startup, loaded_ids};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use loader::remove_plugin;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(test, allow(dead_code))]
