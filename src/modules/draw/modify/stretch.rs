@@ -37,16 +37,14 @@ pub fn tool() -> ToolDef {
 // ── Command implementation ─────────────────────────────────────────────────
 
 enum Step {
-    /// Waiting for the first crossing-window corner.
+    /// Waiting for the first corner of another crossing window.
     WindowCorner1,
-    /// Waiting for the second corner; `c1` is the first corner.
+    /// Waiting for the opposite corner.
     WindowCorner2(DVec3),
-    /// Crossing window defined; waiting for base point.
-    Base { win_min: DVec3, win_max: DVec3 },
-    /// Waiting for target point.
+    /// Selection is complete; waiting for the displacement base point.
+    Base,
+    /// Waiting for the displacement target.
     Target {
-        win_min: DVec3,
-        win_max: DVec3,
         base: DVec3,
     },
 }
@@ -54,6 +52,8 @@ enum Step {
 pub struct StretchCommand {
     handles: Vec<Handle>,
     wire_models: Vec<WireModel>,
+    /// Independent crossing windows accumulated during the selection stage.
+    windows: Vec<(DVec3, DVec3)>,
     step: Step,
 }
 
@@ -62,26 +62,25 @@ impl StretchCommand {
         Self {
             handles,
             wire_models,
+            windows: Vec::new(),
             step: Step::WindowCorner1,
         }
     }
 
-    /// Restart at the base-point step with the window already known — the
-    /// implicit-selection flow: the host resolved which entities the crossing
-    /// window touches and hands them in together with the window. (#338)
-    pub fn with_window(
+    /// Continue gathering crossing windows after the host has resolved the
+    /// entities touched by the latest window.
+    pub fn with_windows(
         handles: Vec<Handle>,
         wire_models: Vec<WireModel>,
-        win_min: DVec3,
-        win_max: DVec3,
+        windows: Vec<(DVec3, DVec3)>,
     ) -> Self {
         Self {
             handles,
             wire_models,
-            step: Step::Base { win_min, win_max },
+            windows,
+            step: Step::WindowCorner1,
         }
     }
-
     /// A window enclosing every vertex of the current selection, or `None`
     /// when nothing is selected. Padded so a vertex exactly on the boundary
     /// counts as inside rather than depending on the comparison's edge.
@@ -127,24 +126,22 @@ impl CadCommand for StretchCommand {
     fn prompt(&self) -> String {
         match &self.step {
             Step::WindowCorner1 => {
-                if self.handles.is_empty() {
-                    // Implicit mode: the window both selects the objects and
-                    // marks which of their points move.
+                if self.windows.is_empty() && self.handles.is_empty() {
                     t!("STRETCH  Specify first corner of crossing window:").into_owned()
                 } else {
-                    // The window narrows a selection that already exists, so
-                    // it is optional — Enter takes the whole of it, the way a
-                    // selection ends in MOVE or COPY. (#676)
                     t!(
-                        "STRETCH  Specify first corner of crossing window, or press Enter to stretch all  [%{count} objects]:",
-                        count = self.handles.len()
+                        "STRETCH  Specify first corner of another crossing window, or press Enter to continue:"
                     )
                     .into_owned()
                 }
             }
-            Step::WindowCorner2(_) => t!("STRETCH  Specify opposite corner:").into_owned(),
-            Step::Base { .. } => t!("STRETCH  Specify base point:").into_owned(),
-            Step::Target { base, .. } => {
+            Step::WindowCorner2(_) => {
+                t!("STRETCH  Specify opposite corner:").into_owned()
+            }
+            Step::Base => {
+                t!("STRETCH  Specify base point:").into_owned()
+            }
+            Step::Target { base } => {
                 let bx = format!("{:.3}", base.x);
                 let bz = format!("{:.3}", base.z);
                 t!(
@@ -163,37 +160,34 @@ impl CadCommand for StretchCommand {
                 self.step = Step::WindowCorner2(pt);
                 CmdResult::NeedPoint
             }
+
             Step::WindowCorner2(c1) => {
                 let win_min = c1.min(pt);
                 let win_max = c1.max(pt);
-                if self.handles.is_empty() {
-                    // Implicit mode: hand the window to the host, which
-                    // resolves the touched entities and restarts the command
-                    // at the base-point step via `with_window`. (#338)
-                    return CmdResult::StretchWindow { win_min, win_max };
+
+                let mut windows = self.windows.clone();
+                windows.push((win_min, win_max));
+
+                // Hand the accumulated selection back to the host. The host resolves
+                // the entities touched by this window and relaunches STRETCH still in
+                // the selection stage, so another crossing window can be drawn.
+                CmdResult::StretchWindow {
+                    handles: self.handles.clone(),
+                    windows,
                 }
-                self.step = Step::Base { win_min, win_max };
+            }
+
+            Step::Base => {
+                self.step = Step::Target { base: pt };
                 CmdResult::NeedPoint
             }
-            Step::Base { win_min, win_max } => {
-                let (wmin, wmax) = (*win_min, *win_max);
-                self.step = Step::Target {
-                    win_min: wmin,
-                    win_max: wmax,
-                    base: pt,
-                };
-                CmdResult::NeedPoint
-            }
-            Step::Target {
-                win_min,
-                win_max,
-                base,
-            } => {
+
+            Step::Target { base } => {
                 let delta = pt - *base;
+
                 CmdResult::StretchEntities {
                     handles: self.handles.clone(),
-                    win_min: *win_min,
-                    win_max: *win_max,
+                    windows: self.windows.clone(),
                     delta,
                 }
             }
@@ -201,17 +195,22 @@ impl CadCommand for StretchCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        // Enter ends the selection stage, as it does in MOVE and COPY. With
-        // objects already picked there is nothing left to choose: a window that
-        // contains all of them stretches every vertex, which is the whole
-        // selection moving — what a pick-selected stretch means. Without a
-        // selection there is nothing to end, so Enter still cancels. (#676)
         if let Step::WindowCorner1 = self.step {
-            if let Some((win_min, win_max)) = self.selection_bounds() {
-                self.step = Step::Base { win_min, win_max };
+            // Preserve the existing preselection behaviour: if STRETCH started
+            // from a selected set and no explicit crossing window was drawn,
+            // treat its complete bounds as the stretch window.
+            if self.windows.is_empty() {
+                if let Some((win_min, win_max)) = self.selection_bounds() {
+                    self.windows.push((win_min, win_max));
+                }
+            }
+
+            if !self.handles.is_empty() && !self.windows.is_empty() {
+                self.step = Step::Base;
                 return CmdResult::NeedPoint;
             }
         }
+
         CmdResult::Cancel
     }
     fn on_escape(&mut self) -> CmdResult {
@@ -239,20 +238,25 @@ impl CadCommand for StretchCommand {
             // marquee by the host (via window_first_corner) so it matches a
             // normal box selection — nothing to draw here. (#291)
             Step::WindowCorner2(_) => vec![],
-            Step::Target {
-                win_min,
-                win_max,
-                base,
-            } => {
+            Step::Target { base } => {
                 let delta = pt - *base;
-                // Live ghost: vertices inside the crossing window follow the
-                // cursor, the rest stay anchored. This is the preview/GPU path,
-                // so downcast to f32 only at the WireModel boundary.
+
+                let windows: Vec<_> = self
+                    .windows
+                    .iter()
+                    .map(|(win_min, win_max)| {
+                        (win_min.as_vec3(), win_max.as_vec3())
+                    })
+                    .collect();
+
                 let mut out: Vec<WireModel> = self
                     .wire_models
                     .iter()
-                    .map(|w| w.stretched((*win_min).as_vec3(), (*win_max).as_vec3(), delta.as_vec3()))
+                    .map(|wire| {
+                        wire.stretched_windows(&windows, delta.as_vec3())
+                    })
                     .collect();
+
                 out.push(WireModel::solid(
                     "rubber_band".into(),
                     vec![
@@ -262,6 +266,7 @@ impl CadCommand for StretchCommand {
                     WireModel::CYAN,
                     false,
                 ));
+
                 out
             }
             _ => vec![],
