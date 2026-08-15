@@ -586,7 +586,7 @@ impl Ribbon {
                         let ts = self.toggle_state(show_block_palette);
                         Panel {
                         id: g.title.to_string(),
-                        full: render_group(
+                        elements: [render_group(
                             false,
                             g,
                             &self.active_tool,
@@ -600,7 +600,7 @@ impl Ribbon {
                             self.active_lineweight,
                             &style_ctx,
                         ),
-                        compact: render_group(
+                        render_group(
                             true,
                             g,
                             &self.active_tool,
@@ -614,7 +614,7 @@ impl Ribbon {
                             self.active_lineweight,
                             &style_ctx,
                         ),
-                        button: collapse_button(
+                        collapse_button(
                             g,
                             self.last_panel_tool.get(g.title).copied(),
                             &self.active_tool,
@@ -629,7 +629,7 @@ impl Ribbon {
                             &style_ctx,
                             false,
                         ),
-                        tight: collapse_button(
+                        collapse_button(
                             g,
                             self.last_panel_tool.get(g.title).copied(),
                             &self.active_tool,
@@ -644,32 +644,7 @@ impl Ribbon {
                             &style_ctx,
                             true,
                         ),
-                        flyout: container(render_group(
-                            false,
-                            g,
-                            &self.active_tool,
-                            &self.open_dropdown,
-                            &self.last_cmd,
-                            ts,
-                            &self.layer_infos,
-                            &self.active_layer,
-                            self.active_color,
-                            &self.active_linetype,
-                            self.active_lineweight,
-                            &style_ctx,
-                        ))
-                        .style(|theme: &Theme| container::Style {
-                            background: Some(Background::Color(
-                                theme.palette().background.weakest.color,
-                            )),
-                            border: Border {
-                                color: theme.palette().background.neutral.color,
-                                width: 1.0,
-                                radius: 0.0.into(),
-                            },
-                            ..Default::default()
-                        })
-                        .into(),
+                        ],
                     }
                     })
                     .collect();
@@ -1577,5 +1552,77 @@ mod tests {
         assert!(is_active_tool("BLOCKPALETTE", &None, &on));
         let off = ribbon.toggle_state(false);
         assert!(!is_active_tool("BLOCKPALETTE", &None, &off));
+    }
+
+    /// Reproducible element-construction benchmark for the ribbon view. Run with:
+    /// `cargo test --lib --release -- --ignored --nocapture bench_ribbon_view_construction`
+    ///
+    /// Times `Ribbon::view()` element construction — the dominant cost in the
+    /// cheap (non-render) part of a ribbon frame, and the thing Mission #4
+    /// reworked. `#[ignore]`d so normal runs stay silent; state is populated so
+    /// Auto-mode panels actually have four densities to build.
+    #[test]
+    #[ignore]
+    fn bench_ribbon_view_construction() {
+        use std::time::Instant;
+        use super::*;
+
+        let mut ribbon = Ribbon::new();
+        ribbon.set_styles(
+            vec![
+                "Standard".to_string(),
+                "Title".to_string(),
+                "Annotative".to_string(),
+            ],
+            "Standard",
+            vec!["Standard".to_string()],
+            "Standard",
+            vec!["Standard".to_string()],
+            "Standard",
+            vec!["Standard".to_string()],
+            "Standard",
+        );
+        ribbon.set_layers(
+            vec![
+                LayerInfo {
+                    name: "0".to_string(),
+                    color: Color::TRANSPARENT,
+                    visible: true,
+                    frozen: false,
+                    locked: false,
+                },
+                LayerInfo {
+                    name: "DRAWING".to_string(),
+                    color: Color::TRANSPARENT,
+                    visible: true,
+                    frozen: false,
+                    locked: false,
+                },
+            ],
+            "0",
+        );
+        ribbon.set_available_linetypes(vec![
+            LinetypeItem {
+                name: "Continuous".to_string(),
+                art: String::new(),
+            },
+            LinetypeItem {
+                name: "DASHED".to_string(),
+                art: String::new(),
+            },
+        ]);
+
+        let n = 200u32;
+        // Warm-up for allocator/tree-slot settling before timing begins.
+        let _ = ribbon.view(false, false, 0, 0, false);
+        let start = Instant::now();
+        for _ in 0..n {
+            let _ = ribbon.view(false, false, 0, 0, false);
+        }
+        let per_frame = start.elapsed() / n;
+        println!(
+            "bench_ribbon_view_construction: {per_frame:?} per `Ribbon::view()` \
+             element build (n = {n}, release measurement recommended)"
+        );
     }
 }
