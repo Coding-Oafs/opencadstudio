@@ -1,6 +1,6 @@
 name: open-cad-studio
 base: core22
-# Overwritten in CI with the release version number (see .github/workflows/snap.yml).
+# Overwritten in CI with the release version number (see .github/workflows/release.yml).
 version: '0.0.0'
 title: Open CAD Studio
 summary: 2D drafting and 3D modeling with native DWG/DXF support
@@ -35,15 +35,34 @@ description: |
 grade: stable
 confinement: strict
 
+plugs:
+  graphics-core22:
+    interface: content
+    target: $SNAP/graphics
+    default-provider: mesa-core22
+
+layout:
+  /usr/share/libdrm:
+    bind: $SNAP/graphics/libdrm
+  /usr/share/drirc.d:
+    symlink: $SNAP/graphics/drirc.d
+  /usr/share/X11/XErrorDB:
+    symlink: $SNAP/graphics/X11/XErrorDB
+  /usr/share/X11/locale:
+    symlink: $SNAP/graphics/X11/locale
+
 apps:
   open-cad-studio:
+    command-chain:
+      - bin/graphics-core22-wrapper
     command: usr/bin/OpenCADStudio
     desktop: usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop
     plugs:
       - home            # open/save/export drawings in the home directory
       - removable-media # same, on external drives / USB
       - network         # license / Patreon check
-      - opengl          # GPU access for wgpu (Vulkan/GL)
+      - opengl
+      - graphics-core22
       - wayland
       - x11
       - desktop
@@ -51,33 +70,24 @@ apps:
 
 parts:
   open-cad-studio:
-    plugin: nil
-    # The CI step copies the published release AppImage to the project root as
-    # `open-cad-studio.AppImage`; we unpack that instead of rebuilding from
-    # source. `--appimage-extract` yields a ready-made AppDir.
-    override-build: |
-      set -eu
-      chmod +x "${CRAFT_PROJECT_DIR}/open-cad-studio.AppImage"
-      "${CRAFT_PROJECT_DIR}/open-cad-studio.AppImage" --appimage-extract
-      mkdir -p "${CRAFT_PART_INSTALL}/usr"
-      cp -r squashfs-root/usr/. "${CRAFT_PART_INSTALL}/usr/"
-    # OCS uses winit (X11/Wayland) + wgpu (Vulkan with a GL fallback), not
-    # GTK/WebKit — so deliberately NO `extensions: [gnome]`.
-    # libvulkan1/mesa-vulkan-drivers are a fallback; real hardware acceleration
-    # goes through the `opengl` plug to the host driver.
+    plugin: dump
+    source: linux-payload.tar.gz
     stage-packages:
-      - libvulkan1
-      - mesa-vulkan-drivers
-      - libgl1
-      - libx11-6
       - libxcursor1
       - libxi6
       - libxrandr2
       - libxinerama1
       - libxkbcommon0
       - libxkbcommon-x11-0
-      - libwayland-client0
-      - libwayland-cursor0
-      - libwayland-egl1
       - libfontconfig1
       - libfreetype6
+
+  graphics-core22:
+    after: [open-cad-studio]
+    source: https://github.com/canonical/gpu-snap.git
+    plugin: dump
+    override-prime: |
+      craftctl default
+      ${CRAFT_PART_SRC}/bin/graphics-core22-cleanup mesa-core22 nvidia-core22
+    prime:
+      - bin/graphics-core22-wrapper
