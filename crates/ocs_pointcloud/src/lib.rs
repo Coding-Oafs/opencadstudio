@@ -26,8 +26,8 @@ pub use selection::{
     select_brush, select_nearest, select_polygon, IndexRange, PointFilter, SelectionSet,
 };
 pub use sidecar::{
-    sidecar_path_for_drawing, AttachmentState, AuditEntry, SidecarError, SidecarResult,
-    SidecarStore, SourceFingerprint,
+    sidecar_path_for_drawing, AttachmentState, AuditEntry, CollectionState, SidecarError,
+    SidecarResult, SidecarStore, SourceFingerprint,
 };
 pub use tile_cache::{
     build_tiled_cache, read_tile, IndexProgress, TileCacheError, TileCacheManifest,
@@ -1015,8 +1015,17 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(2, version);
+        let order_column: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('attachments')
+                 WHERE name = 'order_index'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(3, version, "v1 databases migrate through v2 to v3");
         assert_eq!(1, filter_column);
+        assert_eq!(1, order_column);
     }
 
     #[test]
