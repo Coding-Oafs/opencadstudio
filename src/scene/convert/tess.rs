@@ -530,7 +530,8 @@ pub(crate) fn tessellate_entity(
 
     let (entity_color, pattern_length, pattern, line_weight_px, aci) =
         view::render::render_style_for_viewport(document, e, active_viewport);
-    let entity_color = view::render::adapt_to_bg(entity_color, bg_color);
+    let contrast_bg = convert::tessellate::text_contrast_background(e, bg_color);
+    let entity_color = view::render::adapt_to_bg(entity_color, contrast_bg);
     let entity_color = fade_if_locked(document, e, entity_color, bg_color);
     let lt_scale = document.header.linetype_scale as f32 * e.common().linetype_scale as f32;
     let lt_name = view::render::linetype_name_for_viewport(document, e, active_viewport);
@@ -540,8 +541,7 @@ pub(crate) fn tessellate_entity(
     let pslt_factor = 1.0_f32;
     // ── Proxy entity: draw its cached preview ───────────────────────────────
     //
-    // An entity from an application we have no reader for (e.g. an Autodesk
-    // Raster Design embedded raster image) arrives as `Unknown`. Its own data is
+    // An unsupported application-specific entity arrives as `Unknown`. Its data is
     // a private format we cannot decode — but it usually ships a proxy-graphics
     // blob, the vector preview its author cached for exactly this case. Draw it
     // when the object enabler is missing, so the entity
@@ -738,26 +738,8 @@ pub(crate) fn tessellate_entity(
         }];
     }
 
-    // ── Dimension baked-block fast path ─────────────────────────────────────
-    //
-    // A DIMENSION carries the block "that contains the entities that make up
-    // the dimension picture" (DXF group 2), and that block IS the picture:
-    // AutoCAD requires it and draws it, BricsCAD draws it when present and only
-    // falls back to rendering from the dimension variables when it is missing.
-    // OCS re-derived the picture from DIMVARS every time instead, which means a
-    // drawing whose style disagrees with what it actually drew comes out wrong
-    // — a DIMTXT stored in different units from the DIMSCALE applied to it, or
-    // a per-object override that is already in drawing units, and the text and
-    // extension lines land hundreds of times too large.
-    //
-    // Drawing the block puts OCS on the same footing as the CAD that wrote the
-    // file: it shows what the file says it looks like. Re-deriving stays as the
-    // fallback, for a dimension with no block (one OCS just created, or one
-    // whose block was dropped because it was edited).
-    //
-    // Annotative dimensions keep the old path: their several representations
-    // are separate blocks, and choosing between them is what the annotation
-    // machinery already does. The doctrine above assumes one picture.
+    // Render non-annotative dimensions from their stored picture block.
+    // Rebuild geometry only when no usable block exists.
     if let EntityType::Dimension(dim) = e {
         let baked = Some(dim.base().block_name.trim())
             .filter(|name| !name.is_empty())
@@ -800,7 +782,18 @@ pub(crate) fn tessellate_entity(
                     let color_layer0 = !has_book_color
                         && view::render::is_effective_layer_zero(&sub.common().layer)
                         && sub.common().color == acadrust::types::Color::ByLayer;
+                    let contrast_bg = convert::tessellate::text_contrast_background(sub, bg_color);
+                    let sub_color = view::render::adapt_to_bg(
+                        view::render::render_style_for_viewport(
+                            document,
+                            sub,
+                            active_viewport,
+                        )
+                        .0,
+                        contrast_bg,
+                    );
                     let style = context.style_for(document, sub);
+                    let resolved_color = view::render::adapt_to_bg(style.0, contrast_bg);
                     let mut placed = sub.clone();
                     placed.apply_transform(&context.transform);
                     let sub_wires = tessellate_entity(
@@ -823,8 +816,8 @@ pub(crate) fn tessellate_entity(
                         if sel {
                             wire.selected = true;
                             wire.color = WireModel::SELECTED;
-                        } else if color_byblock || color_layer0 {
-                            wire.color = view::render::adapt_to_bg(style.0, bg_color);
+                        } else if (color_byblock || color_layer0) && wire.color == sub_color {
+                            wire.color = resolved_color;
                             wire.aci = style.4;
                         }
                         wires.push(wire);

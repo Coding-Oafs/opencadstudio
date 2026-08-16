@@ -40,6 +40,68 @@ fn split_ds_xyz(x: f64, y: f64, z: f64) -> ([f32; 3], [f32; 3]) {
     ([xh, yh, zh], [xl, yl, zl])
 }
 
+fn oriented_text_corners(
+    verts: &[crate::scene::pipeline::text_gpu::TextVertex],
+    origin: [f64; 2],
+    rotation: f64,
+    pad: f64,
+) -> [[f64; 2]; 4] {
+    let (sin_r, cos_r) = rotation.sin_cos();
+    let mut bounds = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for vertex in verts {
+        let x = vertex.pos[0] as f64 + vertex.pos_low[0] as f64 - origin[0];
+        let y = vertex.pos[1] as f64 + vertex.pos_low[1] as f64 - origin[1];
+        let local_x = x * cos_r + y * sin_r;
+        let local_y = -x * sin_r + y * cos_r;
+        bounds[0] = bounds[0].min(local_x);
+        bounds[1] = bounds[1].min(local_y);
+        bounds[2] = bounds[2].max(local_x);
+        bounds[3] = bounds[3].max(local_y);
+    }
+    let [left, bottom, right, top] = [
+        bounds[0] - pad,
+        bounds[1] - pad,
+        bounds[2] + pad,
+        bounds[3] + pad,
+    ];
+    let to_world = |x: f64, y: f64| {
+        [
+            origin[0] + x * cos_r - y * sin_r,
+            origin[1] + x * sin_r + y * cos_r,
+        ]
+    };
+    [
+        to_world(left, bottom),
+        to_world(right, bottom),
+        to_world(right, top),
+        to_world(left, top),
+    ]
+}
+
+pub(crate) fn explicit_mtext_background(entity: &EntityType) -> Option<[f32; 4]> {
+    let EntityType::MText(text) = entity else {
+        return None;
+    };
+    if text.background_fill_flags & 0x01 == 0 || text.background_fill_flags & 0x02 != 0 {
+        return None;
+    }
+    text.background_color.rgb().map(|(r, g, b)| {
+        [
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            1.0,
+        ]
+    })
+}
+
+pub(crate) fn text_contrast_background(
+    entity: &EntityType,
+    canvas: [f32; 4],
+) -> [f32; 4] {
+    explicit_mtext_background(entity).unwrap_or(canvas)
+}
+
 /// Split each absolute f64 source point into double-single (high, low) f32
 /// buffers in one pass — the relative-to-eye residual the GPU/CPU reconstruct
 /// to f64 precision at UTM-scale coordinates.
@@ -440,13 +502,7 @@ pub fn tessellate(
                 let entity_zf = entity_z(entity) as f64;
                 let elev_v = entity_zf;
 
-                // Annotation scaling must preserve the entity's geometric attachment point.
-                //
-                // MTEXT's insertion_point is its attachment anchor (TopLeft, TopCenter,
-                // BottomRight, etc.). Scale every laid-out run around that point so the
-                // displayed text remains attached to the same grip at every annotation scale.
-                //
-                // Other text-like entities keep the existing first-run origin behaviour.
+                // Scale MTEXT around its attachment point.
                 let ref_origin = match entity {
                     EntityType::MText(m) => [
                         m.insertion_point.x,
@@ -576,6 +632,10 @@ pub fn tessellate(
                                 .color
                                 .map(|c| [c[0], c[1], c[2], entity_color[3]])
                                 .unwrap_or(entity_color);
+                            let gcolor = crate::scene::view::render::adapt_to_bg(
+                                gcolor,
+                                text_contrast_background(entity, bg_color),
+                            );
                             let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
                                 &mut atlas,
                                 run.height,
@@ -606,14 +666,7 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
 
-                // Pick box straight from the rendered glyph quads — the true
-                // text extent. entity_aabb is unreliable for MTEXT (its box sits
-                // beside the laid-out glyphs), so derive the AABB from
-                // `sdf_verts` (accumulate in f64, reconstruct high+low, then cast
-                // to f32 once) and stop the generic stamp clobbering it (tess.rs
-                // guards on `text_verts`). Computed here so both the bins-empty
-                // and the bins-non-empty (tolerance box + text) paths can stamp
-                // it on the SDF text wire.
+                // Derive the pick box from the rendered glyph quads.
                 let text_aabb = if !sdf_verts.is_empty() {
                     let (mut nx, mut ny, mut xx, mut xy) =
                         (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -636,42 +689,33 @@ pub fn tessellate(
                 // also carries the glyph quads built above.
                 if bins.is_empty() {
                     let mut wires: Vec<WireModel> = Vec::new();
-                    // MTEXT background fill / mask: an opaque rectangle behind
-                    // the glyphs, emitted first so it renders under the text.
-                    // Flag 0x01 → the entity's background-fill colour; 0x02 →
-                    // the drawing-window (canvas) colour, which masks geometry
-                    // behind the text like a wipeout. Box = glyph bounds padded
-                    // by (background_scale - 1) × text height.
+                    // MTEXT background and frame follow the glyph bounds.
                     if text_aabb != WireModel::UNBOUNDED_AABB {
                         if let EntityType::MText(m) = entity {
                             let has_fill = m.background_fill_flags & 0x03 != 0;
                             let has_frame = m.background_fill_flags & 0x10 != 0;
                             if has_fill || has_frame {
-                                // Padded box shared by the fill and the frame.
-                                let th = (m.height * anno) as f32;
-                                let pad = ((m.background_scale as f32) - 1.0).max(0.0) * th;
-                                let [bnx, bny, bxx, bxy] = text_aabb;
-                                let (l, b, r, t) = (
-                                    (bnx - pad) as f64,
-                                    (bny - pad) as f64,
-                                    (bxx + pad) as f64,
-                                    (bxy + pad) as f64,
+                                let text_rotation = stroke_groups
+                                    .iter()
+                                    .find_map(|group| {
+                                        group.run.as_ref().map(|run| run.rotation as f64)
+                                    })
+                                    .unwrap_or(m.rotation);
+                                let text_height = m.height * anno;
+                                let pad = (m.background_scale - 1.0).max(0.0) * text_height;
+                                let corners = oriented_text_corners(
+                                    &sdf_verts,
+                                    [m.insertion_point.x, m.insertion_point.y],
+                                    text_rotation,
+                                    pad,
                                 );
                                 // Fill / mask — two triangles behind the glyphs.
                                 if has_fill {
-                                    // 0x02 (use the drawing-window colour) is a
-                                    // MASK — it wins when set, even alongside
-                                    // 0x01, so text flagged "drawing background"
-                                    // erases what's behind it (a dark box on a
-                                    // dark canvas = no visible colour), instead
-                                    // of painting the stored background_color. A
-                                    // plain 0x01 fill paints that colour.
                                     let fill_color = if m.background_fill_flags & 0x02 != 0 {
                                         bg_color
                                     } else {
                                         color_or_inherit(&m.background_color, bg_color)
                                     };
-                                    let corners = [[l, b], [r, b], [r, t], [l, t]];
                                     let mut ft = Vec::with_capacity(6);
                                     let mut ftl = Vec::with_capacity(6);
                                     for &k in &[0usize, 1, 2, 0, 2, 3] {
@@ -713,8 +757,13 @@ pub fn tessellate(
                                 // Text frame — a closed rectangle in the text
                                 // colour around the same box.
                                 if has_frame {
-                                    let loop_xy =
-                                        [[l, b], [r, b], [r, t], [l, t], [l, b]];
+                                    let loop_xy = [
+                                        corners[0],
+                                        corners[1],
+                                        corners[2],
+                                        corners[3],
+                                        corners[0],
+                                    ];
                                     let mut fp = Vec::with_capacity(5);
                                     let mut fpl = Vec::with_capacity(5);
                                     for &[x, y] in &loop_xy {

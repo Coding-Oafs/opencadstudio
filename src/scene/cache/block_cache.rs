@@ -60,6 +60,9 @@ pub struct LocalWire {
     /// equals the sub-entity's resolved colour. For colour-split MTEXT
     /// (`\C`/`\c` inline overrides) each wire carries its own override colour.
     pub color: [f32; 4],
+    pub contrast_bg: Option<[f32; 4]>,
+    pub preserve_color: bool,
+    pub canvas_color: bool,
     pub aci: u8,
     pub pattern_length: f32,
     pub pattern: [f32; 8],
@@ -752,6 +755,23 @@ fn tessellate_sub_local(
                 .chain(wire.text_verts.iter().map(|v| v.pos)),
         );
         let is_fill_only = wire.points.is_empty() && !wire.fill_tris.is_empty();
+        let mtext_has_background = matches!(
+            sub,
+            EntityType::MText(text) if text.background_fill_flags & 0x03 != 0
+        );
+        let preserve_color = mtext_has_background && is_fill_only;
+        let canvas_color = is_fill_only
+            && matches!(
+                sub,
+                EntityType::MText(text) if text.background_fill_flags & 0x02 != 0
+            );
+        let contrast_bg = if !preserve_color
+            && (!wire.text_verts.is_empty() || !wire.points.is_empty())
+        {
+            tessellate::explicit_mtext_background(sub)
+        } else {
+            None
+        };
         // A wire whose colour differs from the entity's resolved base colour
         // carries an explicit per-segment override (e.g. an MTEXT `\C1;` inline
         // colour). ByBlock / layer-0 inheritance applies only to wires still on
@@ -773,6 +793,9 @@ fn tessellate_sub_local(
             pick_tris: wire.pick_tris,
             pick_tris_low: wire.pick_tris_low,
             color: wire.color,
+            contrast_bg,
+            preserve_color,
+            canvas_color,
             aci,
             pattern_length: pat_len,
             pattern: pat,
@@ -1316,6 +1339,9 @@ pub(crate) fn fade_toward_bg(color: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StyleKey {
     color: [u32; 4],
+    contrast_bg: Option<[u32; 4]>,
+    preserve_color: bool,
+    canvas_color: bool,
     pattern_length: u32,
     pattern: [u32; 8],
     line_weight_px: u32,
@@ -1342,6 +1368,9 @@ struct StyleKey {
 #[derive(Default, Debug)]
 struct BatchEntry {
     color: [f32; 4],
+    contrast_bg: Option<[f32; 4]>,
+    preserve_color: bool,
+    canvas_color: bool,
     pattern_length: f32,
     pattern: [f32; 8],
     line_weight_px: f32,
@@ -1415,6 +1444,9 @@ struct Batches {
 impl BatchEntry {
     fn new(
         color: [f32; 4],
+        contrast_bg: Option<[f32; 4]>,
+        preserve_color: bool,
+        canvas_color: bool,
         pat_len: f32,
         pat: [f32; 8],
         lw_px: f32,
@@ -1431,6 +1463,9 @@ impl BatchEntry {
         // itself — the empty `points` field is enough at finalize time.
         Self {
             color,
+            contrast_bg,
+            preserve_color,
+            canvas_color,
             pattern_length: pat_len,
             pattern: pat,
             line_weight_px: lw_px,
@@ -1454,18 +1489,28 @@ impl Batches {
             .closed
             .into_iter()
             .chain(self.by_style.into_values())
-            .map(|b| {
+            .map(|mut b| {
                 let aabb = if b.min_x.is_infinite() {
                     WireModel::UNBOUNDED_AABB
                 } else {
                     [b.min_x, b.min_y, b.max_x, b.max_y]
                 };
-                // RAW colour came from `tessellate_sub_local` (and from
-                // `expand_defn`'s ByBlock fallbacks); apply `adapt_to_bg`
-                // now so each render against a different bg gets the
-                // right pure-black ↔ pure-white flip without rebuilding
-                // the cached defn.
-                let color = crate::scene::view::render::adapt_to_bg(b.color, bg_color);
+                let contrast_bg = b.contrast_bg.unwrap_or(bg_color);
+                let color = if b.canvas_color {
+                    bg_color
+                } else if b.preserve_color {
+                    b.color
+                } else {
+                    crate::scene::view::render::adapt_to_bg(b.color, contrast_bg)
+                };
+                if !b.preserve_color {
+                    for vertex in &mut b.text_verts {
+                        vertex.color = crate::scene::view::render::adapt_to_bg(
+                            vertex.color,
+                            contrast_bg,
+                        );
+                    }
+                }
                 WireModel {
                     taper_widths: Vec::new(),
                     world_width: b.world_width,
@@ -1510,6 +1555,9 @@ impl Batches {
 
 fn style_key(
     color: [f32; 4],
+    contrast_bg: Option<[f32; 4]>,
+    preserve_color: bool,
+    canvas_color: bool,
     pat_len: f32,
     pat: [f32; 8],
     lw_px: f32,
@@ -1527,6 +1575,9 @@ fn style_key(
             color[2].to_bits(),
             color[3].to_bits(),
         ],
+        contrast_bg: contrast_bg.map(|color| color.map(f32::to_bits)),
+        preserve_color,
+        canvas_color,
         pattern_length: pat_len.to_bits(),
         pattern: [
             pat[0].to_bits(),
@@ -1943,6 +1994,9 @@ fn emit_wire(
 
     let key = style_key(
         final_color,
+        lw.contrast_bg,
+        lw.preserve_color,
+        lw.canvas_color,
         final_pat_len,
         final_pat,
         final_lw_px,
@@ -1966,6 +2020,9 @@ fn emit_wire(
     let entry = out.by_style.entry(key).or_insert_with(|| {
         BatchEntry::new(
             final_color,
+            lw.contrast_bg,
+            lw.preserve_color,
+            lw.canvas_color,
             final_pat_len,
             final_pat,
             final_lw_px,
