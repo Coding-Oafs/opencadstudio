@@ -2651,28 +2651,19 @@ fn start_page_content<'a>(
             })
     };
 
-    // Donate — the prominent call-to-action, using the theme's danger role.
-    let donate_btn = {
-        button(
-            row![
-                crate::ui::icons::themed_danger_text(crate::ui::icons::HEART, 14.0),
-                text(crate::tr!("start", "donate")).size(14),
-            ]
-            .spacing(5)
-            .align_y(iced::Center),
-        )
-        .on_press(Message::RibbonToolClick {
-            tool_id: "DONATE".to_string(),
-            event: crate::modules::ModuleEvent::Command("DONATE".to_string()),
-        })
-        .padding([10, 22])
-        .style(|theme: &Theme, status| start_action_shape(button::danger(theme, status)))
+    // Attach LiDAR — the production entry point. Creates a drawing first
+    // (the welcome tab has no document), then opens the LAS/LAZ picker.
+    let attach_lidar_btn = {
+        button(text(crate::tr!("start", "attach-lidar")).size(14))
+            .on_press(Message::StartAttachPointCloud)
+            .padding([10, 22])
+            .style(|theme: &Theme, status| start_action_shape(button::primary(theme, status)))
     };
 
     let primary_row = WrapFlow::new(vec![
         outline_btn(crate::tr!("start", "new-drawing"), Message::TabNew).into(),
         outline_btn(crate::tr!("start", "open-file"), Message::OpenFile).into(),
-        donate_btn.into(),
+        attach_lidar_btn.into(),
     ])
     .spacing_x(12.0)
     .row_h(48.0)
@@ -2692,44 +2683,42 @@ fn start_page_content<'a>(
     ];
     secondary_items
         .push(outline_btn(crate::tr!("action", "plugins"), Message::PluginManagerOpen).into());
-    // The web build is already in the browser, so only the desktop offers a
-    // link to the web version.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Filled with the active theme's primary colour.
-        secondary_items.push(
-            button(text("OCS Web").size(14))
-                .on_press(Message::RibbonToolClick {
-                    tool_id: "WEBVERSION".to_string(),
-                    event: crate::modules::ModuleEvent::Command("WEBVERSION".to_string()),
-                })
-                .padding([10, 22])
-                .style(|theme: &Theme, status| start_action_shape(button::primary(theme, status)))
-                .into(),
-        );
-    }
     let secondary_row = WrapFlow::new(secondary_items)
         .spacing_x(12.0)
         .row_h(44.0)
         .report_natural_width(action_width_out.clone());
 
-    let sponsors = column![
-        text(crate::tr!("start", "sponsors")).size(15),
-        mouse_area(
-            container(
-                iced::widget::svg(iced::widget::svg::Handle::from_memory(include_bytes!(
-                    "../../../assets/sponsors/openaec-logo-dark-on-light.svg"
-                )))
-                .width(Fill)
-                .height(iced::Length::Fixed(120.0))
-                .content_fit(iced::ContentFit::Contain),
-            )
-            .width(Fill.max(300.0)),
-        )
-        .interaction(iced::mouse::Interaction::Pointer)
-        .on_press(Message::OpenUrl("https://open-aec.com/".to_string())),
+    // Production quick start: the commands a LiDAR session actually needs,
+    // replacing the outbound sponsor links.
+    let quick_start_row = |command: &'static str, hint: String| {
+        row![
+            container(text(command).size(11).font(iced::Font::MONOSPACE))
+                .width(iced::Length::Fixed(230.0)),
+            text(hint).size(11),
+        ]
+        .spacing(8)
+        .align_y(iced::Center)
+    };
+    let lidar_quick_start = column![
+        text(crate::tr!("start", "lidar-quick-start")).size(15),
+        quick_start_row(
+            "POINTCLOUDATTACH",
+            crate::tr!("start", "lidar-qs-attach").to_string(),
+        ),
+        quick_start_row(
+            "POINTCLOUDINDEX",
+            crate::tr!("start", "lidar-qs-index").to_string(),
+        ),
+        quick_start_row(
+            "POINTCLOUDMANAGER",
+            crate::tr!("start", "lidar-qs-manager").to_string(),
+        ),
+        quick_start_row(
+            "POINTCLOUDEXPORT",
+            crate::tr!("start", "lidar-qs-export").to_string(),
+        ),
     ]
-    .spacing(10)
+    .spacing(8)
     .align_x(iced::alignment::Horizontal::Center)
     .width(Fill);
 
@@ -2741,7 +2730,7 @@ fn start_page_content<'a>(
         Space::new().height(iced::Length::Fixed(10.0)),
         container(secondary_row).center_x(Fill),
         Space::new().height(Fill),
-        sponsors,
+        lidar_quick_start,
         Space::new().height(iced::Length::Fixed(52.0)),
     ]
     .spacing(0)
@@ -2969,34 +2958,7 @@ fn start_page_content<'a>(
             };
             list = list.push(text(note).size(12).style(start_muted_style));
         }
-        let open_btn = mouse_area(
-            container(text(crate::tr!("start", "open-discussions")).size(12))
-                .padding([6, 10])
-                .width(Fill)
-                .center_x(Fill)
-                .style(|theme: &Theme| {
-                    let pair = theme.palette().primary.base;
-                    container::Style {
-                        background: Some(Background::Color(pair.color)),
-                        border: Border {
-                            color: Color::TRANSPARENT,
-                            width: 0.0,
-                            radius: 6.0.into(),
-                        },
-                        text_color: Some(pair.text),
-                        ..Default::default()
-                    }
-                }),
-        )
-        .interaction(iced::mouse::Interaction::Pointer)
-        .on_press(Message::OpenUrl(
-            crate::discussions::DISCUSSIONS_URL.to_string(),
-        ));
-        container(column![
-            iced::widget::scrollable(list).height(Fill),
-            Space::new().height(iced::Length::Fixed(12.0)),
-            open_btn,
-        ])
+        container(iced::widget::scrollable(list).height(Fill))
         .width(match start_layout {
             StartLayout::AllPanels | StartLayout::WithoutVideos => iced::Length::Fixed(panel_w),
             StartLayout::WithoutVideosAndDiscussions
@@ -3020,9 +2982,8 @@ fn start_page_content<'a>(
         .into()
     };
 
-    // Right rail: Patreon supporters, fetched at boot. When the list is empty
-    // (no token configured / offline) only the "Support on Patreon" button
-    // shows, so the rail always invites support.
+    // Right rail: Patreon supporters, fetched at boot (empty when no token
+    // is configured or the app is offline).
     let supporters: Element<'a, Message> = {
         let mut list = column![
             text(crate::tr!("start", "supporters")).size(15),
@@ -3046,41 +3007,7 @@ fn start_page_content<'a>(
                 .spacing(6),
             );
         }
-        let support_btn = mouse_area(
-            container(
-                iced::widget::row![
-                    crate::ui::icons::themed_danger_text(crate::ui::icons::HEART, 13.0),
-                    text(crate::tr!("start", "support-on-patreon")).size(12),
-                ]
-                .spacing(6)
-                .align_y(iced::Center),
-            )
-            .padding([6, 10])
-            .width(Fill)
-            .center_x(Fill)
-            .style(|theme: &Theme| {
-                let pair = theme.palette().danger.base;
-                container::Style {
-                    background: Some(Background::Color(pair.color)),
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: 6.0.into(),
-                    },
-                    text_color: Some(pair.text),
-                    ..Default::default()
-                }
-            }),
-        )
-        .interaction(iced::mouse::Interaction::Pointer)
-        .on_press(Message::OpenUrl(
-            "https://patreon.com/HakanSeven12".to_string(),
-        ));
-        container(column![
-            iced::widget::scrollable(list).height(Fill),
-            Space::new().height(iced::Length::Fixed(12.0)),
-            support_btn,
-        ])
+        container(iced::widget::scrollable(list).height(Fill))
         .width(match start_layout {
             StartLayout::AllPanels
             | StartLayout::WithoutVideos

@@ -3004,6 +3004,9 @@ pub enum Message {
     // ── LAS/LAZ point clouds (native) ────────────────────────────────────
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudAttach,
+    /// Start-page action: create a drawing, then open the LAS/LAZ picker.
+    #[cfg(not(target_arch = "wasm32"))]
+    StartAttachPointCloud,
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudPathPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]

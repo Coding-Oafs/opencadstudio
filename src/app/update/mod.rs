@@ -919,6 +919,15 @@ impl OpenCADStudio {
                 Message::PointCloudPathPicked,
             ),
 
+            // The welcome tab has no drawing to attach to, so create one
+            // first; the batched PointCloudAttach then runs against the new
+            // active tab.
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::StartAttachPointCloud => Task::batch([
+                Task::done(Message::TabNew),
+                Task::done(Message::PointCloudAttach),
+            ]),
+
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudPathPicked(Some(path)) => self.start_point_cloud_load(path),
 
