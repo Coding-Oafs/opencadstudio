@@ -54,6 +54,7 @@ layout:
 apps:
   open-cad-studio:
     command-chain:
+      - bin/open-cad-studio-wrapper
       - bin/graphics-core22-wrapper
     command: usr/bin/OpenCADStudio
     desktop: usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop
@@ -74,6 +75,8 @@ parts:
     override-build: |
       mkdir -p "${CRAFT_PART_INSTALL}"
       tar -xzf "${CRAFT_PROJECT_DIR}/linux-payload.tar.gz" -C "${CRAFT_PART_INSTALL}"
+      install -Dm755 "${CRAFT_PROJECT_DIR}/snap/local/open-cad-studio-wrapper" \
+        "${CRAFT_PART_INSTALL}/bin/open-cad-studio-wrapper"
     stage-packages:
       - libxcursor1
       - libxi6
