@@ -1,0 +1,83 @@
+name: open-cad-studio
+base: core22
+# Overwritten in CI with the release version number (see .github/workflows/snap.yml).
+version: '0.0.0'
+title: Open CAD Studio
+summary: 2D drafting and 3D modeling with native DWG/DXF support
+description: |
+  Open CAD Studio (OCS) is a CAD application for 2D drafting and 3D
+  modeling, built in Rust. Reads and writes DWG and DXF files natively
+  (R13 through R2018).
+
+  File formats:
+  - DWG and DXF read/write (R13-R2018)
+  - STL export, STEP AP203 export, OBJ import
+  - PDF export (plot layouts)
+  - WBLOCK, and XREF (attach/reload/auto-resolve external references)
+
+  2D drafting:
+  - Lines, polylines, rectangles, polygons, circles, arcs, ellipses,
+    splines
+  - Hatch fills with pattern, scale, and angle editing
+  - Offset, trim, extend, fillet, break, stretch, lengthen
+  - Array, mirror, move, copy, rotate, scale, explode
+  - Double-click text editing, and area/perimeter/centroid measurement
+
+  3D modeling:
+  - Solid primitives (box, sphere, cylinder), extrude, revolve, loft,
+    sweep, and 3D array
+  - ACIS tessellation for rendering 3DSOLID/REGION/BODY entities
+
+  Open CAD Studio is open source, part of the OpenAEC Foundation family
+  of applications, and rendered with wgpu for GPU-accelerated 2D/3D
+  drawing.
+
+grade: stable
+confinement: strict
+
+apps:
+  open-cad-studio:
+    command: usr/bin/OpenCADStudio
+    desktop: usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop
+    plugs:
+      - home            # open/save/export drawings in the home directory
+      - removable-media # same, on external drives / USB
+      - network         # license / Patreon check
+      - opengl          # GPU access for wgpu (Vulkan/GL)
+      - wayland
+      - x11
+      - desktop
+      - desktop-legacy
+
+parts:
+  open-cad-studio:
+    plugin: nil
+    # The CI step copies the published release AppImage to the project root as
+    # `open-cad-studio.AppImage`; we unpack that instead of rebuilding from
+    # source. `--appimage-extract` yields a ready-made AppDir.
+    override-build: |
+      set -eu
+      chmod +x "${CRAFT_PROJECT_DIR}/open-cad-studio.AppImage"
+      "${CRAFT_PROJECT_DIR}/open-cad-studio.AppImage" --appimage-extract
+      mkdir -p "${CRAFT_PART_INSTALL}/usr"
+      cp -r squashfs-root/usr/. "${CRAFT_PART_INSTALL}/usr/"
+    # OCS uses winit (X11/Wayland) + wgpu (Vulkan with a GL fallback), not
+    # GTK/WebKit — so deliberately NO `extensions: [gnome]`.
+    # libvulkan1/mesa-vulkan-drivers are a fallback; real hardware acceleration
+    # goes through the `opengl` plug to the host driver.
+    stage-packages:
+      - libvulkan1
+      - mesa-vulkan-drivers
+      - libgl1
+      - libx11-6
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      - libxinerama1
+      - libxkbcommon0
+      - libxkbcommon-x11-0
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-egl1
+      - libfontconfig1
+      - libfreetype6
