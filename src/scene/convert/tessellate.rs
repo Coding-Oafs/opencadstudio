@@ -440,12 +440,24 @@ pub fn tessellate(
                 let entity_zf = entity_z(entity) as f64;
                 let elev_v = entity_zf;
 
-                // anno_scale anchors at the first group's origin so multi-line
-                // MText lines spread apart correctly as they grow.
-                let ref_origin = stroke_groups
-                    .first()
-                    .map(|g| g.origin)
-                    .unwrap_or([0.0, 0.0]);
+                // Annotation scaling must preserve the entity's geometric attachment point.
+                //
+                // MTEXT's insertion_point is its attachment anchor (TopLeft, TopCenter,
+                // BottomRight, etc.). Scale every laid-out run around that point so the
+                // displayed text remains attached to the same grip at every annotation scale.
+                //
+                // Other text-like entities keep the existing first-run origin behaviour.
+                let ref_origin = match entity {
+                    EntityType::MText(m) => [
+                        m.insertion_point.x,
+                        m.insertion_point.y,
+                    ],
+                    _ => stroke_groups
+                        .first()
+                        .map(|g| g.origin)
+                        .unwrap_or([0.0, 0.0]),
+                };
+
                 let ref_lx_v = ref_origin[0];
                 let ref_ly_v = ref_origin[1];
 
