@@ -70,8 +70,10 @@ apps:
 
 parts:
   open-cad-studio:
-    plugin: dump
-    source: linux-payload.tar.gz
+    plugin: nil
+    override-build: |
+      mkdir -p "${CRAFT_PART_INSTALL}"
+      tar -xzf "${CRAFT_PROJECT_DIR}/linux-payload.tar.gz" -C "${CRAFT_PART_INSTALL}"
     stage-packages:
       - libxcursor1
       - libxi6

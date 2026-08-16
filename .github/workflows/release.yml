@@ -4,6 +4,15 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      target:
+        description: Build target
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - snap
 
 jobs:
   build-appimage:
@@ -149,6 +158,7 @@ jobs:
           release: edge
 
   build-windows:
+    if: github.event_name == 'release' || inputs.target == 'all'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -291,6 +301,7 @@ jobs:
             --clobber --repo ${{ github.repository }}
 
   build-macos:
+    if: github.event_name == 'release' || inputs.target == 'all'
     runs-on: macos-14    # Apple Silicon (arm64) only
     permissions:
       contents: write
