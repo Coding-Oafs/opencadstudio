@@ -360,8 +360,10 @@ pub struct DecodedImage {
     pub height: u32,
 }
 
-fn image_cache() -> &'static Mutex<HashMap<String, Option<DecodedImage>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<DecodedImage>>>> = OnceLock::new();
+type ImageCacheEntry = Arc<OnceLock<Option<DecodedImage>>>;
+
+fn image_cache() -> &'static Mutex<HashMap<String, ImageCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ImageCacheEntry>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -385,22 +387,20 @@ pub fn resolve_image(path: &str) -> Option<DecodedImage> {
     if path.is_empty() {
         return None;
     }
-    // Cache probe in its own scope so the lock is released before any fetch.
-    {
-        if let Ok(cache) = image_cache().lock() {
-            if let Some(cached) = cache.get(path) {
-                return cached.clone();
-            }
-        }
-    }
-    let decoded = decode_reference(path);
-    if let Ok(mut cache) = image_cache().lock() {
-        cache.insert(path.to_string(), decoded.clone());
-    }
-    decoded
+    let entry = {
+        let mut cache = image_cache()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Arc::clone(
+            cache
+                .entry(path.to_string())
+                .or_insert_with(|| Arc::new(OnceLock::new())),
+        )
+    };
+    entry.get_or_init(|| decode_reference(path)).clone()
 }
 
-/// Decode a reference (local path or remote URL) to downscaled RGBA pixels.
+/// Decode a reference (local path or remote URL) to RGBA pixels.
 fn decode_reference(path: &str) -> Option<DecodedImage> {
     let lower = path.to_ascii_lowercase();
     let img = if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -409,20 +409,7 @@ fn decode_reference(path: &str) -> Option<DecodedImage> {
     } else {
         image::open(Path::new(path)).ok()?
     };
-    // GPUs cap 2-D texture dimensions (8192 with wgpu's default limits).
-    // Downscale oversized images to fit, preserving aspect ratio, so texture
-    // creation can't fail — they're displayed scaled-down anyway.
-    const MAX_DIM: u32 = 8192;
-    let img = if img.width() > MAX_DIM || img.height() > MAX_DIM {
-        let longest = img.width().max(img.height()) as f32;
-        let scale = MAX_DIM as f32 / longest;
-        let nw = ((img.width() as f32 * scale) as u32).clamp(1, MAX_DIM);
-        let nh = ((img.height() as f32 * scale) as u32).clamp(1, MAX_DIM);
-        img.resize(nw, nh, image::imageops::FilterType::Triangle)
-    } else {
-        img
-    };
-    let rgba = img.to_rgba8();
+    let rgba = img.into_rgba8();
     let (width, height) = rgba.dimensions();
     Some(DecodedImage {
         pixels: Arc::new(rgba.into_raw()),
