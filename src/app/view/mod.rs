@@ -2706,6 +2706,10 @@ fn start_page_content<'a>(
             crate::tr!("start", "lidar-qs-attach").to_string(),
         ),
         quick_start_row(
+            "POINTCLOUDATTACHFOLDER",
+            crate::tr!("start", "lidar-qs-attach-folder").to_string(),
+        ),
+        quick_start_row(
             "POINTCLOUDINDEX",
             crate::tr!("start", "lidar-qs-index").to_string(),
         ),

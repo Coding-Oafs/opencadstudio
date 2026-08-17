@@ -65,6 +65,7 @@ start =
     .sponsors = Sponsors
     .lidar-quick-start = LiDAR Quick Start
     .lidar-qs-attach = Attach a LAS/LAZ cloud to the drawing
+    .lidar-qs-attach-folder = Attach every LAS/LAZ in a folder
     .lidar-qs-index = Build disk-backed LOD tiles for dense clouds
     .lidar-qs-manager = Class grid, statistics, CRS checks and export
     .lidar-qs-export = Write a revised LAS/LAZ with pending edits

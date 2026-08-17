@@ -929,6 +929,26 @@ impl OpenCADStudio {
             ]),
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudFolderAttach => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Attach Folder of LAS/LAZ Point Clouds")
+                        .pick_folder()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PointCloudFolderPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudFolderPicked(Some(folder)) => {
+                self.start_point_cloud_folder_load(folder)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudFolderPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudPathPicked(Some(path)) => self.start_point_cloud_load(path),
 
             #[cfg(not(target_arch = "wasm32"))]

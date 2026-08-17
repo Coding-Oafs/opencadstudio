@@ -42,6 +42,7 @@ is created only by **Export LAS/LAZ**.
 | Command | Purpose |
 | --- | --- |
 | `POINTCLOUDATTACH` | Pick a `.las` or `.laz`, inspect it, and attach a bounded initial GPU display sample. |
+| `POINTCLOUDATTACHFOLDER [path]` | Recursively attach every `.las`/`.laz` under a folder (picker, or a path argument). Files attach one at a time so a large folder cannot exhaust memory; already-attached or queued files are skipped, and the folder is recorded as a sidecar collection. |
 | `POINTCLOUDMANAGER` | Open the click-first LiDAR manager. |
 | `POINTCLOUDRESTORE` | Resolve the saved attachment from the drawing sidecar, validating its fingerprint and repairing a moved relative path. |
 | `POINTCLOUDINFO` | Report source path, source/display point counts, sample stride, pending edits, CRS-VLR presence, and VLR/EVLR counts. |

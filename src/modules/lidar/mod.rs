@@ -50,6 +50,12 @@ impl CadModule for LidarModule {
                             ATTACH,
                         )),
                         RibbonItem::LargeTool(tool(
+                            "LIDAR_ATTACH_FOLDER",
+                            "Attach Folder",
+                            "POINTCLOUDATTACHFOLDER",
+                            ATTACH,
+                        )),
+                        RibbonItem::LargeTool(tool(
                             "LIDAR_MANAGER",
                             "Manager",
                             "POINTCLOUDMANAGER",

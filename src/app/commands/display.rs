@@ -1290,6 +1290,19 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDATTACHFOLDER" | "POINTCLOUDATTACHDIR" => {
+                return Some(Task::done(Message::PointCloudFolderAttach));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDATTACHFOLDER ") => {
+                let folder = std::path::PathBuf::from(
+                    cmd.trim_start_matches("POINTCLOUDATTACHFOLDER").trim(),
+                );
+                return Some(self.start_point_cloud_folder_load(folder));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDMANAGER" => {
                 self.active_modal = Some(crate::app::ModalKind::PointCloudManager);
             }

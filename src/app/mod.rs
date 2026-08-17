@@ -332,6 +332,11 @@ pub(super) struct OpenCADStudio {
     discussions: Vec<crate::discussions::DiscussionEntry>,
     /// True while the boot-time Discussions refresh is still in flight.
     discussions_loading: bool,
+    /// Pending LAS/LAZ folder-attach queue: one bounded sample read runs at a
+    /// time per tab so attaching a large folder cannot exhaust memory with
+    /// dozens of concurrent samples.
+    #[cfg(not(target_arch = "wasm32"))]
+    point_cloud_load_queue: Vec<(u64, std::path::PathBuf)>,
     /// Block references whose properties panel shows per-axis Scale X/Y/Z even
     /// though the three factors are currently equal — the user unchecked the
     /// "Uniform scale" box for them (#427). Keyed by entity handle.
@@ -3008,6 +3013,10 @@ pub enum Message {
     #[cfg(not(target_arch = "wasm32"))]
     StartAttachPointCloud,
     #[cfg(not(target_arch = "wasm32"))]
+    PointCloudFolderAttach,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudFolderPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudPathPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudLoaded(
@@ -3124,6 +3133,8 @@ impl OpenCADStudio {
             videos_loading: false,
             discussions: Vec::new(),
             discussions_loading: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            point_cloud_load_queue: Vec::new(),
             props_asym_scale: std::collections::HashSet::new(),
             start_section: StartSection::default(),
             start_action_w: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),

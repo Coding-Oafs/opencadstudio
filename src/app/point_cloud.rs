@@ -330,6 +330,9 @@ pub(super) struct PointCloudDataset {
     pub(super) display: DisplaySettings,
     pub(super) classes: ClassTable,
     pub(super) selection_filter: PointFilter,
+    /// Folder this dataset was attached from, persisted as the sidecar
+    /// collection so a restored dataset knows its origin.
+    pub(super) collection: Option<ocs_pointcloud::CollectionState>,
     display_generation: u64,
     /// Ids of the sources touched by the most recent edit action; undo steps
     /// exactly those sources so one cross-source action is undone as one.
@@ -631,6 +634,143 @@ impl OpenCADStudio {
         )
     }
 
+    /// Attaches every LAS/LAZ file under `folder` (recursively). Loads are
+    /// queued and run one at a time so a large folder cannot exhaust memory
+    /// with dozens of concurrent bounded samples.
+    pub(super) fn start_point_cloud_folder_load(
+        &mut self,
+        folder: PathBuf,
+    ) -> Task<Message> {
+        if !folder.is_dir() {
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDATTACHFOLDER: \"{}\" is not a folder.",
+                    folder.display()
+                )
+                .as_str(),
+            );
+            return Task::none();
+        }
+        let files = scan_lidar_folder(&folder);
+        if files.is_empty() {
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDATTACHFOLDER: no .las/.laz files under \"{}\".",
+                    folder.display()
+                )
+                .as_str(),
+            );
+            return Task::none();
+        }
+        let tab_id = self.tabs[self.active_tab].id;
+        let already_attached: Vec<PathBuf> = self.tabs[self.active_tab]
+            .point_cloud
+            .sources
+            .iter()
+            .map(|source| source.source_path.clone())
+            .collect();
+        let queued_already: usize = self
+            .point_cloud_load_queue
+            .iter()
+            .filter(|(id, _)| *id == tab_id)
+            .count();
+        let mut fresh = Vec::new();
+        for file in files {
+            if already_attached
+                .iter()
+                .any(|attached| path_matches(attached, &file))
+            {
+                continue;
+            }
+            if self
+                .point_cloud_load_queue
+                .iter()
+                .any(|(id, path)| *id == tab_id && path_matches(path, &file))
+            {
+                continue;
+            }
+            fresh.push(file);
+        }
+        let skipped = queued_already;
+        if fresh.is_empty() {
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDATTACHFOLDER: every LAS/LAZ under \"{}\" is already attached or queued.",
+                    folder.display()
+                )
+                .as_str(),
+            );
+            return Task::none();
+        }
+        let count = fresh.len();
+        for file in &fresh {
+            self.point_cloud_load_queue.push((tab_id, file.clone()));
+        }
+        if self.tabs[self.active_tab].point_cloud.collection.is_none() {
+            let display_name = folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("folder")
+                .to_string();
+            self.tabs[self.active_tab].point_cloud.collection =
+                Some(ocs_pointcloud::CollectionState {
+                    id: format!("folder-{tab_id}"),
+                    display_name,
+                    source_folder: Some(folder.to_string_lossy().into_owned()),
+                    created_unix_ms: None,
+                });
+        }
+        self.command_line.push_info(
+            format!(
+                "POINTCLOUDATTACHFOLDER: queued {count} LAS/LAZ file(s) from \"{}\"; {skipped} already queued; attaching one at a time...",
+                folder.display()
+            )
+            .as_str(),
+        );
+        self.start_next_queued_point_cloud(tab_id)
+    }
+
+    /// Starts the next queued folder load for `tab_id`, dropping stale entries
+    /// for closed tabs and skipping files that disappeared.
+    pub(super) fn start_next_queued_point_cloud(&mut self, tab_id: u64) -> Task<Message> {
+        let live_tab_ids: std::collections::HashSet<u64> =
+            self.tabs.iter().map(|tab| tab.id).collect();
+        self.point_cloud_load_queue
+            .retain(|(id, _)| live_tab_ids.contains(id));
+        while let Some((queued_id, path)) = self.point_cloud_load_queue.first().cloned() {
+            self.point_cloud_load_queue.remove(0);
+            if queued_id != tab_id {
+                // Another tab's entry surfaced; requeue it at the back.
+                self.point_cloud_load_queue.push((queued_id, path));
+                if self.point_cloud_load_queue.iter().all(|(id, _)| *id != tab_id) {
+                    return Task::none();
+                }
+                continue;
+            }
+            if !path.is_file() {
+                self.command_line.push_error(
+                    format!(
+                        "POINTCLOUDATTACHFOLDER: skipped \"{}\"; the file is no longer reachable.",
+                        path.display()
+                    )
+                    .as_str(),
+                );
+                continue;
+            }
+            let tab_index = self
+                .tabs
+                .iter()
+                .position(|tab| tab.id == tab_id)
+                .expect("live tab id");
+            let prior_active = self.active_tab;
+            self.active_tab = tab_index;
+            let task = self.start_point_cloud_load(path);
+            self.active_tab = prior_active;
+            return task;
+        }
+        Task::none()
+    }
+
     pub(super) fn install_point_cloud(
         &mut self,
         tab_id: u64,
@@ -640,6 +780,7 @@ impl OpenCADStudio {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
             self.command_line
                 .push_info("POINTCLOUDATTACH: target drawing was closed.");
+            self.point_cloud_load_queue.retain(|(id, _)| *id != tab_id);
             return Task::none();
         };
         let sample = match result {
@@ -647,7 +788,7 @@ impl OpenCADStudio {
             Err(error) => {
                 self.command_line
                     .push_error(format!("POINTCLOUDATTACH: {error}").as_str());
-                return Task::none();
+                return self.start_next_queued_point_cloud(tab_id);
             }
         };
 
@@ -759,7 +900,7 @@ impl OpenCADStudio {
             );
         }
         self.persist_point_cloud(tab_index, "attach", "attached point cloud", &[source_id.clone()]);
-        if self.tabs[tab_index]
+        let stream_task = if self.tabs[tab_index]
             .point_cloud
             .source(&source_id)
             .is_some_and(|source| source.cache_manifest.is_some())
@@ -767,7 +908,9 @@ impl OpenCADStudio {
             self.start_point_cloud_stream(tab_index)
         } else {
             Task::none()
-        }
+        };
+        // Streaming and the next queued folder load can proceed in parallel.
+        Task::batch([stream_task, self.start_next_queued_point_cloud(tab_id)])
     }
 
     pub(super) fn point_cloud_info(&mut self, tab_index: usize) {
@@ -2065,7 +2208,7 @@ impl OpenCADStudio {
             let mut store = SidecarStore::open(sidecar_path_for_drawing(&drawing_path))
                 .map_err(|error| error.to_string())?;
             store
-                .save_dataset(&states, None)
+                .save_dataset(&states, dataset.collection.as_ref())
                 .map_err(|error| error.to_string())?;
             for id in audit_sources {
                 store
@@ -2806,6 +2949,49 @@ fn cache_path_for_source(source: &std::path::Path) -> PathBuf {
     source.with_file_name(format!("{name}.ocstiles"))
 }
 
+/// Guard against pathological scans (junction loops, misdirected roots).
+const MAX_FOLDER_SOURCES: usize = 2_000;
+
+/// Recursively collects the LAS/LAZ files under `folder`, sorted for
+/// deterministic attach order.
+fn scan_lidar_folder(folder: &std::path::Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![folder.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if found.len() + stack.len() < MAX_FOLDER_SOURCES * 4 {
+                    stack.push(path);
+                }
+            } else {
+                let is_lidar = path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        extension.eq_ignore_ascii_case("las")
+                            || extension.eq_ignore_ascii_case("laz")
+                    });
+                if is_lidar {
+                    found.push(path);
+                    if found.len() >= MAX_FOLDER_SOURCES {
+                        found.sort();
+                        return found;
+                    }
+                }
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 fn parse_source_indices(spec: &str, point_count: u64) -> Result<Vec<u64>, String> {
     let mut indices = Vec::new();
     for token in spec
@@ -2975,5 +3161,29 @@ mod tests {
         for id in &touched {
             assert_eq!(0, dataset.source(id).expect("source").edits.len());
         }
+    }
+
+    #[test]
+    fn folder_scan_finds_lidar_files_recursively_and_sorted() {
+        let root = std::env::temp_dir().join(format!(
+            "ocs-folder-scan-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let sub = root.join("tiles").join("north");
+        std::fs::create_dir_all(&sub).expect("mkdir");
+        std::fs::write(root.join("b.las"), b"las").expect("write");
+        std::fs::write(root.join("ignore.txt"), b"no").expect("write");
+        std::fs::write(root.join("a.LAZ"), b"laz").expect("write");
+        std::fs::write(sub.join("c.las"), b"las").expect("write");
+        let files = scan_lidar_folder(&root);
+        let names: Vec<String> = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(vec!["a.LAZ".to_string(), "b.las".to_string(), "c.las".to_string()], names);
+        std::fs::remove_dir_all(&root).ok();
     }
 }
