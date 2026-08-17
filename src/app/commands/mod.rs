@@ -84,18 +84,19 @@ impl OpenCADStudio {
         self.select_remove_mode = false;
         {
             let mut selection = self.tabs[i].scene.selection.borrow_mut();
-            selection.box_crossing_locked = false;
-            // A half-drawn marquee belongs to the press that started it. Left armed, the new
-            // command's first click closes that selection instead of feeding the command, so
-            // the command only really begins on the click after (#732). Clicking the tool on
-            // the ribbon already loses it, because the pointer left the viewport to get there;
-            // typing the verb never did.
+            // Cancel the active selection gesture before the new command starts.
+            selection.left_down = false;
+            selection.left_press_pos = None;
+            selection.left_press_time = None;
+            selection.left_dragging = false;
             selection.box_anchor = None;
-            // Drop the world anchor too, or the next pan/zoom re-projects it back into
-            // `box_anchor` and the cancelled marquee springs back to life.
             selection.box_anchor_world = None;
             selection.box_current = None;
             selection.box_crossing = false;
+            selection.box_crossing_locked = false;
+            selection.poly_active = false;
+            selection.poly_points.clear();
+            selection.poly_crossing = false;
         }
         // Cancel any running command before starting a new one.
         if self.tabs[i].active_cmd.is_some() {
@@ -667,6 +668,7 @@ inventory::submit!(crate::command::CommandRegistration {
 #[cfg(test)]
 mod marquee_cancel_tests {
     use crate::app::OpenCADStudio;
+    use iced::time::Instant;
 
     fn fresh() -> OpenCADStudio {
         let mut app = OpenCADStudio::new_for_test();
@@ -674,21 +676,39 @@ mod marquee_cancel_tests {
         app
     }
 
-    /// Arm a marquee the way a press-drag leaves it: anchored, with a live
-    /// corner following the cursor.
+    /// Arm a held box drag.
     fn arm_marquee(app: &mut OpenCADStudio) {
         let i = app.active_tab;
         let mut sel = app.tabs[i].scene.selection.borrow_mut();
+        sel.left_down = true;
+        sel.left_press_pos = Some(iced::Point::new(10.0, 10.0));
+        sel.left_press_time = Some(Instant::now());
+        sel.left_dragging = true;
         sel.box_anchor = Some(iced::Point::new(10.0, 10.0));
         sel.box_anchor_world = Some(glam::DVec3::new(1.0, 2.0, 0.0));
         sel.box_current = Some(iced::Point::new(40.0, 40.0));
         sel.box_crossing = true;
+        sel.box_crossing_locked = true;
+    }
+
+    /// Arm a held lasso drag.
+    fn arm_lasso(app: &mut OpenCADStudio) {
+        let i = app.active_tab;
+        let mut sel = app.tabs[i].scene.selection.borrow_mut();
+        sel.left_down = true;
+        sel.left_press_pos = Some(iced::Point::new(10.0, 10.0));
+        sel.left_press_time = Some(Instant::now());
+        sel.left_dragging = true;
+        sel.poly_active = true;
+        sel.poly_points = vec![
+            iced::Point::new(10.0, 10.0),
+            iced::Point::new(20.0, 30.0),
+        ];
+        sel.poly_crossing = true;
     }
 
     #[test]
     fn typing_a_command_cancels_a_half_drawn_marquee() {
-        // #732: the marquee stayed armed, so LINE's first click closed the
-        // selection instead of setting the start point.
         let mut app = fresh();
         arm_marquee(&mut app);
         let i = app.active_tab;
@@ -696,24 +716,47 @@ mod marquee_cancel_tests {
         let _ = app.dispatch_command("LINE");
 
         let sel = app.tabs[i].scene.selection.borrow();
-        assert!(sel.box_anchor.is_none(), "the pending marquee must be dropped");
-        assert!(
-            sel.box_anchor_world.is_none(),
-            "the world anchor must go too, or a pan re-projects the marquee back",
-        );
+        assert!(!sel.left_down);
+        assert!(sel.left_press_pos.is_none());
+        assert!(sel.left_press_time.is_none());
+        assert!(!sel.left_dragging);
+        assert!(sel.box_anchor.is_none());
+        assert!(sel.box_anchor_world.is_none());
         assert!(sel.box_current.is_none());
         assert!(!sel.box_crossing);
+        assert!(!sel.box_crossing_locked);
+    }
+
+    #[test]
+    fn typing_a_command_cancels_a_held_lasso() {
+        let mut app = fresh();
+        arm_lasso(&mut app);
+        let i = app.active_tab;
+
+        let _ = app.dispatch_command("LINE");
+
+        let sel = app.tabs[i].scene.selection.borrow();
+        assert!(!sel.left_down);
+        assert!(sel.left_press_pos.is_none());
+        assert!(sel.left_press_time.is_none());
+        assert!(!sel.left_dragging);
+        assert!(!sel.poly_active);
+        assert!(sel.poly_points.is_empty());
+        assert!(!sel.poly_crossing);
     }
 
     #[test]
     fn an_aliased_command_cancels_it_as_well() {
-        // "L" reaches the same dispatch through alias resolution.
         let mut app = fresh();
         arm_marquee(&mut app);
         let i = app.active_tab;
 
         let _ = app.dispatch_command("L");
 
+        assert_eq!(
+            app.tabs[i].active_cmd.as_deref().map(|cmd| cmd.name()),
+            Some("LINE")
+        );
         let sel = app.tabs[i].scene.selection.borrow();
         assert!(sel.box_anchor.is_none());
         assert!(sel.box_anchor_world.is_none());
@@ -721,8 +764,6 @@ mod marquee_cancel_tests {
 
     #[test]
     fn a_transparent_command_leaves_the_marquee_alone() {
-        // A drafting aid only flips a flag; it must not abandon the drag in
-        // progress any more than it abandons a running command.
         let mut app = fresh();
         arm_marquee(&mut app);
         let i = app.active_tab;
@@ -730,9 +771,14 @@ mod marquee_cancel_tests {
         let _ = app.dispatch_command("ORTHO");
 
         let sel = app.tabs[i].scene.selection.borrow();
-        assert!(
-            sel.box_anchor.is_some(),
-            "a transparent command must not cancel the marquee",
-        );
+        assert!(sel.left_down);
+        assert!(sel.left_press_pos.is_some());
+        assert!(sel.left_press_time.is_some());
+        assert!(sel.left_dragging);
+        assert!(sel.box_anchor.is_some());
+        assert!(sel.box_anchor_world.is_some());
+        assert!(sel.box_current.is_some());
+        assert!(sel.box_crossing);
+        assert!(sel.box_crossing_locked);
     }
 }
