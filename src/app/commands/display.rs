@@ -1691,10 +1691,7 @@ impl OpenCADStudio {
 
             #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDSELECTCLEAR" => {
-                self.set_point_cloud_selection(
-                    i,
-                    ocs_pointcloud::SelectionSet::from_indices("active", std::iter::empty::<u64>()),
-                );
+                self.clear_point_cloud_selections(i);
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1702,15 +1699,12 @@ impl OpenCADStudio {
                 let arguments = cmd.trim_start_matches("POINTCLOUDSELECTFILTER").trim();
                 let mut fields = arguments.split_whitespace();
                 let field = fields.next().unwrap_or("");
-                let Some(mut filter) = self.tabs[i]
-                    .point_cloud
-                    .as_ref()
-                    .map(|cloud| cloud.selection_filter.clone())
-                else {
+                if self.tabs[i].point_cloud.is_empty() {
                     self.command_line
                         .push_error("POINTCLOUDSELECTFILTER: attach a LAS/LAZ cloud first.");
                     return Some(Task::none());
-                };
+                }
+                let mut filter = self.tabs[i].point_cloud.selection_filter.clone();
                 let values: Vec<_> = fields.collect();
                 let parse_u8_list = |value: &str| {
                     value

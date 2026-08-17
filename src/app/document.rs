@@ -215,10 +215,11 @@ pub(super) struct DocumentTab {
     /// Interactive ZOOM Dynamic mode. A left drag pans horizontally and zooms
     /// vertically until Escape or another command ends the mode.
     pub(super) zoom_dynamic_mode: bool,
-    /// Session-only LAS/LAZ attachment. The source cloud stays external and
-    /// sparse classification edits are applied only during explicit export.
+    /// Session LAS/LAZ dataset: every attached source plus the shared display
+    /// configuration. Source clouds stay external; sparse classification
+    /// edits are applied only during explicit export.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) point_cloud: Option<super::point_cloud::PointCloudAttachment>,
+    pub(super) point_cloud: super::point_cloud::PointCloudDataset,
     /// Per-plugin document state (`plugin::BuiltinPlugin` manifest id → state).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
@@ -485,7 +486,7 @@ impl DocumentTab {
             orbit_mode: false,
             zoom_dynamic_mode: false,
             #[cfg(not(target_arch = "wasm32"))]
-            point_cloud: None,
+            point_cloud: Default::default(),
             plugin_state: HashMap::new(),
             suspended_cmd: None,
         }

@@ -952,7 +952,7 @@ impl OpenCADStudio {
 
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudExport => {
-                let Some(cloud) = self.tabs[self.active_tab].point_cloud.as_ref() else {
+                let Some(cloud) = self.tabs[self.active_tab].point_cloud.active() else {
                     self.command_line
                         .push_error("POINTCLOUDEXPORT: attach a LAS/LAZ cloud first.");
                     return Task::none();
@@ -987,7 +987,7 @@ impl OpenCADStudio {
 
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudReproject(target_epsg) => {
-                let Some(cloud) = self.tabs[self.active_tab].point_cloud.as_ref() else {
+                let Some(cloud) = self.tabs[self.active_tab].point_cloud.active() else {
                     return Task::none();
                 };
                 let file_name = cloud.suggested_reprojected_name(target_epsg);

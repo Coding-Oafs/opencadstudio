@@ -1,7 +1,10 @@
 //! Native LAS/LAZ attachment and classification workflow.
 //!
-//! A tab owns a bounded display sample and sparse edits. The original source
-//! remains authoritative until the user explicitly exports a new file.
+//! A tab owns a dataset of attached sources. Each source keeps a bounded
+//! display sample and sparse edits; the dataset carries the shared display
+//! configuration (color mode, class table, filters) for the merged view. The
+//! original files remain authoritative until the user explicitly exports a
+//! new file.
 
 use super::{Message, OpenCADStudio};
 use crate::scene::{PointCloudModel, PointCloudPoint};
@@ -28,6 +31,7 @@ const GPU_POINT_BYTES: usize = 48;
 
 #[derive(Clone, Debug)]
 pub struct TileLoadBatch {
+    pub source_id: String,
     pub request_id: u64,
     pub camera_generation: u64,
     pub selected: Vec<ocs_pointcloud::TileKey>,
@@ -50,7 +54,6 @@ struct ProjectedPoint {
 #[derive(Clone, Debug)]
 struct ScreenSpatialIndex {
     camera_generation: u64,
-    display_generation: u64,
     viewport_size: [u32; 2],
     cell_size: f32,
     cells_x: usize,
@@ -100,15 +103,18 @@ impl crate::command::CadCommand for PointCloudScreenPointCommand {
     fn name(&self) -> &'static str {
         "POINTCLOUDSELECTPOINT"
     }
+
     fn prompt(&self) -> String {
         "Select LiDAR point  Click a displayed point:".to_string()
     }
+
     fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
         crate::command::CmdResult::Dispatch(format!(
             "POINTCLOUDSCREENPOINT {:.17} {:.17} {:.17} 10",
             point.x, point.y, point.z
         ))
     }
+
     fn on_enter(&mut self) -> crate::command::CmdResult {
         crate::command::CmdResult::Cancel
     }
@@ -128,6 +134,7 @@ impl crate::command::CadCommand for PointCloudScreenRectangleCommand {
     fn name(&self) -> &'static str {
         "POINTCLOUDSELECTBOX"
     }
+
     fn prompt(&self) -> String {
         if self.first.is_some() {
             "LiDAR screen fence  Click opposite corner:".to_string()
@@ -135,6 +142,7 @@ impl crate::command::CadCommand for PointCloudScreenRectangleCommand {
             "LiDAR screen fence  Click first corner:".to_string()
         }
     }
+
     fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
         if let Some(first) = self.first.take() {
             crate::command::CmdResult::Dispatch(format!(
@@ -146,6 +154,7 @@ impl crate::command::CadCommand for PointCloudScreenRectangleCommand {
             crate::command::CmdResult::NeedPoint
         }
     }
+
     fn on_enter(&mut self) -> crate::command::CmdResult {
         crate::command::CmdResult::Cancel
     }
@@ -165,6 +174,7 @@ impl crate::command::CadCommand for PointCloudScreenFenceCommand {
     fn name(&self) -> &'static str {
         "POINTCLOUDSELECTFENCE"
     }
+
     fn prompt(&self) -> String {
         if self.points.len() < 3 {
             "LiDAR polygon fence  Click at least three vertices:".to_string()
@@ -172,10 +182,12 @@ impl crate::command::CadCommand for PointCloudScreenFenceCommand {
             "LiDAR polygon fence  Click next vertex or Enter to close:".to_string()
         }
     }
+
     fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
         self.points.push(point);
         crate::command::CmdResult::NeedPoint
     }
+
     fn on_enter(&mut self) -> crate::command::CmdResult {
         if self.points.len() < 3 {
             return crate::command::CmdResult::Cancel;
@@ -196,15 +208,18 @@ impl crate::command::CadCommand for PointCloudScreenBrushCommand {
     fn name(&self) -> &'static str {
         "POINTCLOUDSELECTBRUSH"
     }
+
     fn prompt(&self) -> String {
         "LiDAR selection brush (32 px)  Click repeatedly; Enter finishes:".to_string()
     }
+
     fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
         crate::command::CmdResult::Dispatch(format!(
             "POINTCLOUDSCREENBRUSH SELECT {:.17} {:.17} {:.17} 32",
             point.x, point.y, point.z
         ))
     }
+
     fn on_enter(&mut self) -> crate::command::CmdResult {
         crate::command::CmdResult::Cancel
     }
@@ -227,20 +242,20 @@ impl PointCloudJobProgress {
     }
 }
 
+/// One attached LAS/LAZ source: its sample, sparse edits, selections and
+/// streaming state. Display configuration lives on the dataset so the merged
+/// view stays visually consistent across sources.
 #[derive(Clone, Debug)]
 pub(super) struct PointCloudAttachment {
+    pub(super) id: String,
     pub(super) source_path: PathBuf,
     pub(super) sample: PointSample,
     pub(super) edits: EditStore,
-    pub(super) display: DisplaySettings,
-    pub(super) classes: ClassTable,
     pub(super) selection_sets: Vec<SelectionSet>,
-    pub(super) selection_filter: PointFilter,
     pub(super) cache_path: Option<PathBuf>,
     pub(super) cache_manifest: Option<TileCacheManifest>,
     index_cancel: Option<Arc<AtomicBool>>,
     export_job: Option<Arc<PointCloudJobProgress>>,
-    display_generation: u64,
     resident_tiles: BTreeMap<ocs_pointcloud::TileKey, ResidentTile>,
     active_tiles: Vec<ocs_pointcloud::TileKey>,
     stream_request_id: u64,
@@ -251,20 +266,17 @@ pub(super) struct PointCloudAttachment {
 }
 
 impl PointCloudAttachment {
-    pub(super) fn new(source_path: PathBuf, sample: PointSample) -> Self {
+    pub(super) fn new(id: String, source_path: PathBuf, sample: PointSample) -> Self {
         Self {
+            id,
             source_path,
             sample,
             edits: EditStore::default(),
-            display: DisplaySettings::default(),
-            classes: ClassTable::default(),
             selection_sets: Vec::new(),
-            selection_filter: PointFilter::default(),
             cache_path: None,
             cache_manifest: None,
             index_cancel: None,
             export_job: None,
-            display_generation: 1,
             resident_tiles: BTreeMap::new(),
             active_tiles: Vec::new(),
             stream_request_id: 0,
@@ -273,69 +285,6 @@ impl PointCloudAttachment {
             lru_clock: 0,
             screen_index: None,
         }
-    }
-
-    pub(super) fn display_model(&self) -> PointCloudModel {
-        let active_selection = self
-            .selection_sets
-            .iter()
-            .find(|selection| selection.name == "active");
-        let intensity_range = self.display.intensity_range.unwrap_or_else(|| {
-            self.sample
-                .points
-                .iter()
-                .fold([u16::MAX, 0], |range, point| {
-                    [range[0].min(point.intensity), range[1].max(point.intensity)]
-                })
-        });
-        let elevation_range = self.display.elevation_range.unwrap_or([
-            self.sample.metadata.bounds_min[2],
-            self.sample.metadata.bounds_max[2],
-        ]);
-        let points = self
-            .sample
-            .points
-            .iter()
-            .filter_map(|source| {
-                let point = self
-                    .edits
-                    .patch_for(source.source_index)
-                    .map_or_else(|| source.clone(), |patch| source.clone().with_patch(patch));
-                let class_visible = self
-                    .classes
-                    .classes
-                    .get(&point.classification)
-                    .is_none_or(|definition| definition.visible);
-                if !class_visible || self.display.hidden_classes.contains(&point.classification) {
-                    return None;
-                }
-                let mut color = point_color(
-                    &point,
-                    self.display.color_mode,
-                    &self.classes,
-                    intensity_range,
-                    elevation_range,
-                );
-                if active_selection.is_some_and(|selection| selection.contains(point.source_index))
-                {
-                    color = [1.0, 0.82, 0.05, 1.0];
-                }
-                Some(PointCloudPoint {
-                    position: point.position,
-                    color,
-                })
-            })
-            .collect();
-        PointCloudModel {
-            points: Arc::new(points),
-            point_size_px: self.display.point_size_px,
-            generation: self.display_generation,
-        }
-    }
-
-    fn mark_display_changed(&mut self) {
-        self.display_generation = self.display_generation.wrapping_add(1).max(1);
-        self.screen_index = None;
     }
 
     pub(super) fn suggested_export_name(&self) -> String {
@@ -371,93 +320,171 @@ impl PointCloudAttachment {
             .unwrap_or("laz");
         format!("{stem}_epsg{target_epsg}.{extension}")
     }
+}
 
-    fn manager_data(&self) -> crate::ui::window::point_cloud_manager::PointCloudManagerData {
-        let active_selection = self
-            .selection_sets
-            .iter()
-            .find(|selection| selection.name == "active")
-            .map_or(0, SelectionSet::len);
-        let color_mode = match self.display.color_mode {
-            ColorMode::Classification => "Classification",
-            ColorMode::Rgb => "RGB",
-            ColorMode::Intensity => "Intensity",
-            ColorMode::Elevation => "Elevation",
-            ColorMode::ReturnNumber => "Return number",
-            ColorMode::PointSource => "Point source",
-        };
-        let export_progress = self
-            .export_job
-            .as_ref()
-            .map(|job| (job.completed.load(Ordering::Relaxed), job.total));
-        let statistics =
-            classification_statistics(self.sample.points.iter().cloned().map(|point| {
-                self.edits
-                    .patch_for(point.source_index)
-                    .map_or(point.clone(), |patch| point.with_patch(patch))
-            }));
-        let class_rows = self
-            .classes
-            .classes
-            .values()
-            .map(|class| {
-                let stats = statistics.get(&class.code).copied().unwrap_or_default();
-                crate::ui::window::point_cloud_manager::PointCloudClassRow {
-                    code: class.code,
-                    name: class.name.clone(),
-                    color: class.color,
-                    visible: class.visible && !self.display.hidden_classes.contains(&class.code),
-                    locked: class.locked,
-                    total: stats.total,
-                    withheld: stats.withheld,
-                    overlap: stats.overlap,
-                    key_points: stats.key_points,
-                }
-            })
-            .collect();
-        let survey_readiness = ocs_pointcloud::assess_survey_readiness(&self.sample.metadata);
-        crate::ui::window::point_cloud_manager::PointCloudManagerData {
-            attached: true,
-            source: self.source_path.display().to_string(),
-            source_points: self.sample.metadata.point_count,
-            displayed_points: self.sample.points.len(),
-            sample_label: match self.sample.stride {
-                0 => "tiled LOD".to_string(),
-                1 => "full cloud".to_string(),
-                stride => format!("1-in-{stride} sample"),
-            },
-            pending_edits: self.edits.len(),
-            transactions: self.edits.transaction_count(),
-            active_selection,
-            selection_sets: self.selection_sets.len(),
-            class_count: self.classes.classes.len(),
-            color_mode: color_mode.to_string(),
-            point_size_px: self.display.point_size_px,
-            crs_declared: self.sample.metadata.has_crs,
-            indexed: self.cache_manifest.is_some(),
-            index_running: self.index_cancel.is_some(),
-            cache: self.cache_path.as_ref().map_or_else(
-                || "not available".to_string(),
-                |path| path.display().to_string(),
-            ),
-            export_progress,
-            sidecar_available: false,
-            selection_filter: describe_filter(&self.selection_filter),
-            resident_tiles: self.resident_tiles.len(),
-            resident_points: self
-                .resident_tiles
-                .values()
-                .map(|tile| tile.points.len())
-                .sum(),
-            visible_tiles: self.active_tiles.len(),
-            crs_label: if self.sample.metadata.has_crs {
-                self.sample.metadata.crs.label()
+/// The tab's point-cloud session: every attached source plus the shared
+/// display configuration for the merged view.
+#[derive(Clone, Debug, Default)]
+pub(super) struct PointCloudDataset {
+    pub(super) sources: Vec<PointCloudAttachment>,
+    pub(super) display: DisplaySettings,
+    pub(super) classes: ClassTable,
+    pub(super) selection_filter: PointFilter,
+    display_generation: u64,
+    /// Ids of the sources touched by the most recent edit action; undo steps
+    /// exactly those sources so one cross-source action is undone as one.
+    last_edit_sources: Option<Vec<String>>,
+}
+
+impl PointCloudDataset {
+    pub(super) fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// The active (first) source: the target for single-file commands such as
+    /// export, reprojection and index building.
+    pub(super) fn active(&self) -> Option<&PointCloudAttachment> {
+        self.sources.first()
+    }
+
+    pub(super) fn active_mut(&mut self) -> Option<&mut PointCloudAttachment> {
+        self.sources.first_mut()
+    }
+
+    pub(super) fn source(&self, id: &str) -> Option<&PointCloudAttachment> {
+        self.sources.iter().find(|source| source.id == id)
+    }
+
+    pub(super) fn source_mut(&mut self, id: &str) -> Option<&mut PointCloudAttachment> {
+        self.sources.iter_mut().find(|source| source.id == id)
+    }
+
+    /// Generates a stable, collision-free sidecar id for a new source.
+    pub(super) fn next_source_id(&self) -> String {
+        let taken: std::collections::BTreeSet<&str> =
+            self.sources.iter().map(|source| source.id.as_str()).collect();
+        let mut counter = self.sources.len() + 1;
+        loop {
+            let candidate = format!("source-{counter}");
+            if !taken.contains(candidate.as_str()) {
+                return candidate;
+            }
+            counter += 1;
+        }
+    }
+
+    pub(super) fn mark_display_changed(&mut self) {
+        self.display_generation = self.display_generation.wrapping_add(1).max(1);
+        for source in &mut self.sources {
+            source.screen_index = None;
+        }
+    }
+
+    fn note_edit_sources(&mut self, ids: Vec<String>) {
+        self.last_edit_sources = Some(ids);
+    }
+
+    pub(super) fn push_selection(&mut self, id: &str, selection: SelectionSet) {
+        let name = selection.name.clone();
+        if let Some(source) = self.source_mut(id) {
+            if let Some(existing) = source
+                .selection_sets
+                .iter_mut()
+                .find(|candidate| candidate.name == name)
+            {
+                *existing = selection;
             } else {
-                "not declared".to_string()
-            },
-            survey_readiness: survey_readiness.summary(),
-            class_rows,
-            audit_rows: Vec::new(),
+                source.selection_sets.push(selection);
+            }
+        }
+        self.mark_display_changed();
+    }
+
+    fn clear_selections_named(&mut self, name: &str) {
+        for source in &mut self.sources {
+            source.selection_sets.retain(|selection| selection.name != name);
+        }
+        self.mark_display_changed();
+    }
+
+    /// Union of every source's metadata bounds for view fitting.
+    pub(super) fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {
+        let mut bounds: Option<([f64; 3], [f64; 3])> = None;
+        for source in &self.sources {
+            let (min, max) = (
+                source.sample.metadata.bounds_min,
+                source.sample.metadata.bounds_max,
+            );
+            bounds = Some(match bounds {
+                None => (min, max),
+                Some((mut union_min, mut union_max)) => {
+                    for axis in 0..3 {
+                        union_min[axis] = union_min[axis].min(min[axis]);
+                        union_max[axis] = union_max[axis].max(max[axis]);
+                    }
+                    (union_min, union_max)
+                }
+            });
+        }
+        bounds
+    }
+
+    pub(super) fn display_model(&self) -> PointCloudModel {
+        let intensity_range = self.display.intensity_range.unwrap_or_else(|| {
+            self.sources.iter().flat_map(|source| source.sample.points.iter()).fold(
+                [u16::MAX, 0],
+                |range, point| {
+                    [range[0].min(point.intensity), range[1].max(point.intensity)]
+                },
+            )
+        });
+        let elevation_range = self.display.elevation_range.unwrap_or_else(|| {
+            self.bounds().map_or([0.0, 0.0], |(min, max)| [min[2], max[2]])
+        });
+        let mut points = Vec::new();
+        for source in &self.sources {
+            let active_selection = source
+                .selection_sets
+                .iter()
+                .find(|selection| selection.name == "active");
+            for sampled in &source.sample.points {
+                let point = source
+                    .edits
+                    .patch_for(sampled.source_index)
+                    .map_or_else(|| sampled.clone(), |patch| sampled.clone().with_patch(patch));
+                let class_visible = self
+                    .classes
+                    .classes
+                    .get(&point.classification)
+                    .is_none_or(|definition| definition.visible);
+                if !class_visible || self.display.hidden_classes.contains(&point.classification) {
+                    continue;
+                }
+                let mut color = point_color(
+                    &point,
+                    self.display.color_mode,
+                    &self.classes,
+                    intensity_range,
+                    elevation_range,
+                );
+                if active_selection.is_some_and(|selection| selection.contains(point.source_index))
+                {
+                    color = [1.0, 0.82, 0.05, 1.0];
+                }
+                points.push(PointCloudPoint {
+                    position: point.position,
+                    color,
+                });
+            }
+        }
+        PointCloudModel {
+            points: Arc::new(points),
+            point_size_px: self.display.point_size_px,
+            generation: self.display_generation,
         }
     }
 }
@@ -470,30 +497,33 @@ impl OpenCADStudio {
         let mut data = self
             .tabs
             .get(tab_index)
-            .and_then(|tab| tab.point_cloud.as_ref())
-            .map_or_else(Default::default, PointCloudAttachment::manager_data);
+            .map(|tab| tab.point_cloud.manager_data())
+            .unwrap_or_default();
         data.sidecar_available = self
             .tabs
             .get(tab_index)
             .and_then(|tab| tab.current_path.as_ref())
             .is_some_and(|drawing| sidecar_path_for_drawing(drawing).exists());
-        if let Some(drawing) = self
-            .tabs
-            .get(tab_index)
-            .and_then(|tab| tab.current_path.as_ref())
-        {
+        if let (Some(drawing), Some(active_id)) = (
+            self.tabs
+                .get(tab_index)
+                .and_then(|tab| tab.current_path.as_ref()),
+            self.tabs
+                .get(tab_index)
+                .and_then(|tab| tab.point_cloud.active().map(|source| source.id.clone())),
+        ) {
             let sidecar = sidecar_path_for_drawing(drawing);
-            if let Ok(store) = SidecarStore::open(sidecar) {
-                if let Ok(entries) = store.audit_log("primary") {
+            if let Ok(store) = SidecarStore::open(&sidecar) {
+                if let Ok(entries) = store.audit_log(&active_id) {
                     data.audit_rows = entries
                         .into_iter()
-                        .map(
-                            |entry| crate::ui::window::point_cloud_manager::PointCloudAuditRow {
+                        .map(|entry| {
+                            crate::ui::window::point_cloud_manager::PointCloudAuditRow {
                                 created_unix_ms: entry.created_unix_ms,
                                 action: entry.action,
                                 detail: entry.detail,
-                            },
-                        )
+                            }
+                        })
                         .collect();
                 }
             }
@@ -503,7 +533,7 @@ impl OpenCADStudio {
 
     pub(super) fn point_cloud_stream_needed(&self, tab_index: usize) -> bool {
         self.tabs.get(tab_index).is_some_and(|tab| {
-            tab.point_cloud.as_ref().is_some_and(|cloud| {
+            tab.point_cloud.sources.iter().any(|cloud| {
                 cloud.cache_manifest.is_some()
                     && !cloud.stream_in_flight
                     && cloud.stream_camera_generation != tab.scene.camera_generation
@@ -528,34 +558,52 @@ impl OpenCADStudio {
             );
             return Task::none();
         }
-        let source = SidecarStore::open(&sidecar_path)
-            .and_then(|store| store.load_attachment("primary"))
-            .map_err(|error| error.to_string())
-            .and_then(|state| {
-                state
-                    .and_then(|state| state.resolve_source(&drawing_path))
-                    .ok_or_else(|| {
-                        "sidecar has no source whose path and fingerprint can be validated"
-                            .to_string()
-                    })
-            });
-        match source {
-            Ok(source) => {
-                self.command_line.push_output(
-                    format!(
-                        "POINTCLOUDRESTORE: repaired and validated source path \"{}\".",
-                        source.display()
-                    )
-                    .as_str(),
-                );
-                self.start_point_cloud_load(source)
+        let states = SidecarStore::open(&sidecar_path).and_then(|store| store.load_attachments());
+        let states = match states {
+            Ok(states) if states.is_empty() => {
+                self.command_line
+                    .push_error("POINTCLOUDRESTORE: the sidecar has no attachments.");
+                return Task::none();
             }
+            Ok(states) => states,
             Err(error) => {
                 self.command_line
-                    .push_error(format!("POINTCLOUDRESTORE: {error}.").as_str());
-                Task::none()
+                    .push_error(format!("POINTCLOUDRESTORE: {error}").as_str());
+                return Task::none();
+            }
+        };
+        let mut resolved = Vec::new();
+        let mut failed = Vec::new();
+        for state in &states {
+            match state.resolve_source(&drawing_path) {
+                Some(source) => resolved.push(source),
+                None => failed.push(state.source_absolute.display().to_string()),
             }
         }
+        for path in &failed {
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDRESTORE: could not validate \"{}\" by path or fingerprint.",
+                    path
+                )
+                .as_str(),
+            );
+        }
+        if resolved.is_empty() {
+            return Task::none();
+        }
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDRESTORE: repaired and validated {} source path(s).",
+                resolved.len()
+            )
+            .as_str(),
+        );
+        let mut task = Task::none();
+        for source in resolved {
+            task = self.start_point_cloud_load(source);
+        }
+        task
     }
 
     pub(super) fn start_point_cloud_load(&mut self, path: PathBuf) -> Task<Message> {
@@ -603,31 +651,40 @@ impl OpenCADStudio {
             }
         };
 
-        let mut attachment = PointCloudAttachment::new(path.clone(), sample);
+        let id = self.tabs[tab_index].point_cloud.next_source_id();
+        let mut attachment = PointCloudAttachment::new(id, path.clone(), sample);
         let mut restored_sidecar = false;
         if let Some(drawing_path) = self.tabs[tab_index].current_path.as_ref() {
             let sidecar_path = sidecar_path_for_drawing(drawing_path);
             if sidecar_path.exists() {
                 match SidecarStore::open(&sidecar_path)
-                    .and_then(|store| store.load_attachment("primary"))
+                    .and_then(|store| store.load_attachments())
                 {
-                    Ok(Some(mut state)) if state.source_fingerprint.matches_path(&path) => {
-                        state.edits.normalize_after_load();
-                        attachment.edits = state.edits;
-                        attachment.display = state.display;
-                        attachment.classes = state.classes;
-                        attachment.selection_sets = state.selection_sets;
-                        attachment.selection_filter = state.selection_filter;
-                        attachment.cache_path = state
-                            .cache_relative
-                            .and_then(|relative| {
-                                drawing_path.parent().map(|parent| parent.join(relative))
-                            })
-                            .filter(|candidate| candidate.exists());
-                        attachment.mark_display_changed();
-                        restored_sidecar = true;
+                    Ok(states) => {
+                        if let Some(mut state) = states.into_iter().find(|state| {
+                            path_matches(&state.source_absolute, &path)
+                                || state.source_fingerprint.matches_path(&path)
+                        }) {
+                            state.edits.normalize_after_load();
+                            attachment.edits = state.edits;
+                            attachment.selection_sets = state.selection_sets;
+                            attachment.cache_path = state
+                                .cache_relative
+                                .and_then(|relative| {
+                                    drawing_path.parent().map(|parent| parent.join(relative))
+                                })
+                                .filter(|candidate| candidate.exists());
+                            let dataset = &mut self.tabs[tab_index].point_cloud;
+                            if dataset.sources.is_empty() {
+                                // The first restored source also restores the
+                                // dataset-wide display configuration.
+                                dataset.display = state.display;
+                                dataset.classes = state.classes;
+                                dataset.selection_filter = state.selection_filter;
+                            }
+                            restored_sidecar = true;
+                        }
                     }
-                    Ok(_) => {}
                     Err(error) => self.command_line.push_error(
                         format!("POINTCLOUDATTACH: could not read sidecar: {error}").as_str(),
                     ),
@@ -642,17 +699,25 @@ impl OpenCADStudio {
         let compressed = if metadata.compressed { "LAZ" } else { "LAS" };
         let bounds_min = metadata.bounds_min;
         let bounds_max = metadata.bounds_max;
-        let model = attachment.display_model();
+        let source_id = attachment.id.clone();
+        let dataset_had_sources = !self.tabs[tab_index].point_cloud.is_empty();
+        let model = {
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            dataset.sources.push(attachment);
+            dataset.mark_display_changed();
+            dataset.display_model()
+        };
         self.tabs[tab_index].scene.set_point_cloud(model);
-        self.tabs[tab_index].point_cloud = Some(attachment);
-        self.tabs[tab_index]
-            .scene
-            .fit_external_bounds(bounds_min, bounds_max);
+        if let Some((union_min, union_max)) = self.tabs[tab_index].point_cloud.bounds() {
+            self.tabs[tab_index]
+                .scene
+                .fit_external_bounds(union_min, union_max);
+        }
 
         let restored_cache = self.tabs[tab_index]
             .point_cloud
-            .as_ref()
-            .and_then(|cloud| cloud.cache_path.clone())
+            .source(&source_id)
+            .and_then(|source| source.cache_path.clone())
             .and_then(|cache_path| {
                 TileCacheManifest::open(&cache_path)
                     .and_then(|manifest| {
@@ -662,16 +727,22 @@ impl OpenCADStudio {
                     .ok()
             });
         if let Some((cache_path, manifest)) = restored_cache {
-            if let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() {
-                cloud.cache_path = Some(cache_path);
-                cloud.cache_manifest = Some(manifest);
-                cloud.stream_camera_generation = u64::MAX;
+            if let Some(source) = self.tabs[tab_index].point_cloud.source_mut(&source_id) {
+                source.cache_path = Some(cache_path);
+                source.cache_manifest = Some(manifest);
+                source.stream_camera_generation = u64::MAX;
             }
         }
 
+        let source_label = if dataset_had_sources {
+            let count = self.tabs[tab_index].point_cloud.len();
+            format!(" (source {count} in dataset)")
+        } else {
+            String::new()
+        };
         self.command_line.push_output(
             format!(
-                "POINTCLOUDATTACH: {} points ({compressed}, LAS {version}, format {format}); displaying {sampled} sampled points. Bounds [{:.3}, {:.3}, {:.3}] to [{:.3}, {:.3}, {:.3}].",
+                "POINTCLOUDATTACH: {} points ({compressed}, LAS {version}, format {format}); displaying {sampled} sampled points{source_label}. Bounds [{:.3}, {:.3}, {:.3}] to [{:.3}, {:.3}, {:.3}].",
                 point_count,
                 bounds_min[0],
                 bounds_min[1],
@@ -687,11 +758,11 @@ impl OpenCADStudio {
                 "POINTCLOUDATTACH: restored display settings, selections and sparse edits from the drawing sidecar.",
             );
         }
-        self.persist_point_cloud(tab_index, "attach", "attached point cloud");
+        self.persist_point_cloud(tab_index, "attach", "attached point cloud", &[source_id.clone()]);
         if self.tabs[tab_index]
             .point_cloud
-            .as_ref()
-            .is_some_and(|cloud| cloud.cache_manifest.is_some())
+            .source(&source_id)
+            .is_some_and(|source| source.cache_manifest.is_some())
         {
             self.start_point_cloud_stream(tab_index)
         } else {
@@ -700,55 +771,78 @@ impl OpenCADStudio {
     }
 
     pub(super) fn point_cloud_info(&mut self, tab_index: usize) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             self.command_line
                 .push_info("POINTCLOUDINFO: no LAS/LAZ cloud is attached.");
             return;
-        };
-        let metadata = &cloud.sample.metadata;
-        self.command_line.push_output(
-            format!(
-                "POINTCLOUDINFO: \"{}\"; {} source points; {} displayed (stride {}); {} pending classification edits; CRS metadata: {}; VLRs: {}, EVLRs: {}.",
-                cloud.source_path.display(),
-                metadata.point_count,
-                cloud.sample.points.len(),
-                cloud.sample.stride,
-                cloud.edits.len(),
-                if metadata.has_crs { metadata.crs.label() } else { "not declared".to_string() },
-                metadata.vlr_count,
-                metadata.evlr_count,
-            )
-            .as_str(),
-        );
+        }
+        for source in &dataset.sources {
+            let metadata = &source.sample.metadata;
+            self.command_line.push_output(
+                format!(
+                    "POINTCLOUDINFO [{}]: \"{}\"; {} source points; {} displayed (stride {}); {} pending classification edits; CRS metadata: {}; VLRs: {}, EVLRs: {}.",
+                    source.id,
+                    source.source_path.display(),
+                    metadata.point_count,
+                    source.sample.points.len(),
+                    source.sample.stride,
+                    source.edits.len(),
+                    if metadata.has_crs { metadata.crs.label() } else { "not declared".to_string() },
+                    metadata.vlr_count,
+                    metadata.evlr_count,
+                )
+                .as_str(),
+            );
+        }
+        if dataset.len() > 1 {
+            let total: u64 = dataset
+                .sources
+                .iter()
+                .map(|source| source.sample.metadata.point_count)
+                .sum();
+            self.command_line.push_output(
+                format!(
+                    "POINTCLOUDINFO: {} source(s), {} total source points.",
+                    dataset.len(),
+                    total
+                )
+                .as_str(),
+            );
+        }
     }
 
     pub(super) fn point_cloud_crs_info(&mut self, tab_index: usize) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDCRS: attach a LAS/LAZ cloud first.");
             return;
-        };
-        let metadata = &cloud.sample.metadata;
-        let crs = &metadata.crs;
-        let readiness = ocs_pointcloud::assess_survey_readiness(metadata);
-        self.command_line.push_output(
-            format!(
-                "POINTCLOUDCRS: {}; source {}; horizontal {}; vertical {}; survey safeguard {}.",
-                crs.name.as_deref().unwrap_or("unnamed CRS"),
-                crs.source.as_deref().unwrap_or("none"),
-                crs.horizontal_epsg
-                    .map(|code| format!("EPSG:{code}"))
-                    .unwrap_or_else(|| "unresolved".to_string()),
-                crs.vertical_epsg
-                    .map(|code| format!("EPSG:{code}"))
-                    .unwrap_or_else(|| "unresolved (Z units/datum must be verified)".to_string()),
-                readiness.summary(),
-            )
-            .as_str(),
-        );
-        if let Some(warning) = &crs.parse_warning {
-            self.command_line
-                .push_info(format!("POINTCLOUDCRS: {warning}.").as_str());
+        }
+        for source in &dataset.sources {
+            let metadata = &source.sample.metadata;
+            let crs = &metadata.crs;
+            let readiness = ocs_pointcloud::assess_survey_readiness(metadata);
+            self.command_line.push_output(
+                format!(
+                    "POINTCLOUDCRS [{}]: {}; source {}; horizontal {}; vertical {}; survey safeguard {}.",
+                    source.id,
+                    crs.name.as_deref().unwrap_or("unnamed CRS"),
+                    crs.source.as_deref().unwrap_or("none"),
+                    crs.horizontal_epsg
+                        .map(|code| format!("EPSG:{code}"))
+                        .unwrap_or_else(|| "unresolved".to_string()),
+                    crs.vertical_epsg
+                        .map(|code| format!("EPSG:{code}"))
+                        .unwrap_or_else(|| "unresolved (Z units/datum must be verified)".to_string()),
+                    readiness.summary(),
+                )
+                .as_str(),
+            );
+            if let Some(warning) = &crs.parse_warning {
+                self.command_line
+                    .push_info(format!("POINTCLOUDCRS: {warning}.").as_str());
+            }
         }
     }
 
@@ -758,11 +852,14 @@ impl OpenCADStudio {
         classification: u8,
         index_spec: &str,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        let dataset_len = self.tabs[tab_index].point_cloud.len();
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        let Some(cloud) = dataset.active_mut() else {
             self.command_line
                 .push_error("POINTCLOUDCLASSIFY: attach a LAS/LAZ cloud first.");
             return;
         };
+        let source_id = cloud.id.clone();
         let indices = match parse_source_indices(index_spec, cloud.sample.metadata.point_count) {
             Ok(indices) => indices,
             Err(error) => {
@@ -776,67 +873,102 @@ impl OpenCADStudio {
             indices,
             PointPatch::classification(classification),
         );
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        let multi_note = if dataset_len > 1 {
+            format!(" to source {source_id}")
+        } else {
+            String::new()
+        };
+        drop(cloud);
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
         self.command_line.push_output(
             format!(
-                "POINTCLOUDCLASSIFY: queued {changed} point(s) as class {classification}; export to create a revised LAS/LAZ."
+                "POINTCLOUDCLASSIFY: queued {changed} point(s){multi_note} as class {classification}; export to create a revised LAS/LAZ."
             )
             .as_str(),
         );
+        self.tabs[tab_index]
+            .point_cloud
+            .note_edit_sources(vec![source_id.clone()]);
         self.persist_point_cloud(
             tab_index,
             "classification",
             &format!("assigned class {classification} to {changed} points"),
+            &[source_id],
         );
     }
 
     pub(super) fn undo_point_cloud_edit(&mut self, tab_index: usize) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
-            self.command_line
-                .push_info("POINTCLOUDUNDO: no LAS/LAZ cloud is attached.");
-            return;
-        };
-        if cloud.edits.undo().is_some() {
-            cloud.mark_display_changed();
-            let model = cloud.display_model();
-            self.tabs[tab_index].scene.set_point_cloud(model);
-            self.command_line
-                .push_output("POINTCLOUDUNDO: restored the previous classification edit state.");
-            self.persist_point_cloud(tab_index, "undo", "undid point-cloud transaction");
-        } else {
+        let last_edit = self.tabs[tab_index].point_cloud.last_edit_sources.clone();
+        let Some(ids) = last_edit else {
             self.command_line
                 .push_info("POINTCLOUDUNDO: no point-cloud edit to undo.");
+            return;
+        };
+        let mut undone = 0_usize;
+        let mut restored_ids = Vec::new();
+        for id in ids {
+            let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&id) else {
+                continue;
+            };
+            if cloud.edits.undo().is_some() {
+                undone += 1;
+                restored_ids.push(id);
+            }
         }
+        if undone == 0 {
+            self.command_line
+                .push_info("POINTCLOUDUNDO: no point-cloud edit to undo.");
+            return;
+        }
+        self.tabs[tab_index].point_cloud.last_edit_sources = None;
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
+        self.tabs[tab_index].scene.set_point_cloud(model);
+        let detail = if undone == 1 {
+            "restored the previous classification edit state.".to_string()
+        } else {
+            format!("restored the previous edit state across {undone} sources.")
+        };
+        self.command_line
+            .push_output(format!("POINTCLOUDUNDO: {detail}").as_str());
+        self.persist_point_cloud(tab_index, "undo", "undid point-cloud transaction", &restored_ids);
     }
 
     pub(super) fn detach_point_cloud(&mut self, tab_index: usize) {
-        if self.tabs[tab_index].point_cloud.take().is_some() {
-            self.tabs[tab_index]
-                .scene
-                .set_point_cloud(PointCloudModel::default());
-            self.command_line.push_output(
-                "POINTCLOUDDETACH: detached the session cloud; the source file was unchanged.",
-            );
-        } else {
+        let count = self.tabs[tab_index].point_cloud.len();
+        if count == 0 {
             self.command_line
                 .push_info("POINTCLOUDDETACH: no LAS/LAZ cloud is attached.");
+            return;
         }
+        self.tabs[tab_index].point_cloud = PointCloudDataset::default();
+        self.tabs[tab_index]
+            .scene
+            .set_point_cloud(PointCloudModel::default());
+        let detail = if count == 1 {
+            "detached the session cloud; the source file was unchanged.".to_string()
+        } else {
+            format!("detached {count} session sources; the source files were unchanged.")
+        };
+        self.command_line
+            .push_output(format!("POINTCLOUDDETACH: {detail}").as_str());
     }
 
     pub(super) fn start_point_cloud_index(&mut self, tab_index: usize) -> Task<Message> {
         let tab_id = self.tabs[tab_index].id;
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
-            self.command_line
-                .push_error("POINTCLOUDINDEX: attach a LAS/LAZ cloud first.");
-            return Task::none();
-        };
-        if cloud.index_cancel.is_some() {
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        if dataset.sources.iter().any(|source| source.index_cancel.is_some()) {
             self.command_line
                 .push_info("POINTCLOUDINDEX: an index build is already running.");
             return Task::none();
         }
+        let Some(cloud) = dataset.active_mut() else {
+            self.command_line
+                .push_error("POINTCLOUDINDEX: attach a LAS/LAZ cloud first.");
+            return Task::none();
+        };
         let source = cloud.source_path.clone();
         let cache_path = cache_path_for_source(&source);
         if cache_path.exists() {
@@ -874,12 +1006,12 @@ impl OpenCADStudio {
     }
 
     pub(super) fn cancel_point_cloud_index(&mut self, tab_index: usize) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
-            self.command_line
-                .push_info("POINTCLOUDINDEXCANCEL: no point cloud is attached.");
-            return;
-        };
-        if let Some(cancel) = cloud.index_cancel.as_ref() {
+        let cancel = self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter_mut()
+            .find_map(|source| source.index_cancel.as_ref().map(Arc::clone));
+        if let Some(cancel) = cancel {
             cancel.store(true, Ordering::Relaxed);
             self.command_line
                 .push_output("POINTCLOUDINDEXCANCEL: cancellation requested.");
@@ -898,7 +1030,18 @@ impl OpenCADStudio {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
             return Task::none();
         };
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        // The completing build is the source that still holds its cancel
+        // handle; only one index build runs per dataset at a time.
+        let source_id = self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .find(|source| source.index_cancel.is_some())
+            .map(|source| source.id.clone());
+        let Some(source_id) = source_id else {
+            return Task::none();
+        };
+        let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&source_id) else {
             return Task::none();
         };
         cloud.index_cancel = None;
@@ -920,7 +1063,12 @@ impl OpenCADStudio {
             )
             .as_str(),
         );
-        self.persist_point_cloud(tab_index, "index", "built or opened tiled LOD cache");
+        self.persist_point_cloud(
+            tab_index,
+            "index",
+            "built or opened tiled LOD cache",
+            &[source_id],
+        );
         self.start_point_cloud_stream(tab_index)
     }
 
@@ -939,22 +1087,35 @@ impl OpenCADStudio {
         if viewport.width <= 1.0 || viewport.height <= 1.0 {
             return Task::none();
         }
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        // Budgets are cloned before the mutable find so the display settings
+        // stay readable while a source is borrowed for scheduling.
+        let display = self.tabs[tab_index].point_cloud.display.clone();
+        // One source streams per tick; the stream-needed check keeps calling
+        // back until every source has caught up with the camera.
+        let source_count = self.tabs[tab_index].point_cloud.len().max(1);
+        let Some(cloud) = self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter_mut()
+            .find(|cloud| {
+                cloud.cache_manifest.is_some()
+                    && !cloud.stream_in_flight
+                    && cloud.stream_camera_generation != camera_generation
+            })
+        else {
             return Task::none();
         };
-        if cloud.stream_in_flight {
-            return Task::none();
-        }
         let (Some(manifest), Some(cache_path)) =
             (cloud.cache_manifest.as_ref(), cloud.cache_path.as_ref())
         else {
             return Task::none();
         };
-        let memory_point_budget = cloud.display.cpu_budget_bytes
+        let memory_point_budget = display.cpu_budget_bytes
+            / source_count
             / std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
-        let gpu_point_budget = cloud.display.gpu_budget_bytes / GPU_POINT_BYTES;
-        let point_budget = cloud
-            .display
+        let gpu_point_budget =
+            display.gpu_budget_bytes / source_count / GPU_POINT_BYTES;
+        let point_budget = display
             .point_budget
             .min(memory_point_budget)
             .min(gpu_point_budget)
@@ -988,10 +1149,11 @@ impl OpenCADStudio {
             .into_iter()
             .filter(|tile| !cloud.resident_tiles.contains_key(&tile.key))
             .collect();
+        let source_id = cloud.id.clone();
         if missing.is_empty() {
             cloud.active_tiles = selected_keys;
             rebuild_resident_display(cloud);
-            let model = cloud.display_model();
+            let model = self.tabs[tab_index].point_cloud.display_model();
             self.tabs[tab_index].scene.set_point_cloud(model);
             return Task::none();
         }
@@ -1009,6 +1171,7 @@ impl OpenCADStudio {
                     loaded.push((tile.key, points));
                 }
                 Ok(TileLoadBatch {
+                    source_id,
                     request_id,
                     camera_generation,
                     selected: selected_keys,
@@ -1027,8 +1190,25 @@ impl OpenCADStudio {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
             return;
         };
-        let (model, active_tile_count, resident_tile_count, camera_generation) = {
-            let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        let (active_tile_count, resident_tile_count, camera_generation) = {
+            let batch_source = match &result {
+                Ok(batch) => batch.source_id.clone(),
+                Err(_) => {
+                    // Error batches belong to whichever source is in flight.
+                    match self.tabs[tab_index]
+                        .point_cloud
+                        .sources
+                        .iter()
+                        .position(|source| source.stream_in_flight)
+                    {
+                        Some(index) => self.tabs[tab_index].point_cloud.sources[index].id.clone(),
+                        None => return,
+                    }
+                }
+            };
+            let cpu_budget = self.tabs[tab_index].point_cloud.display.cpu_budget_bytes
+                / self.tabs[tab_index].point_cloud.len().max(1);
+            let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&batch_source) else {
                 return;
             };
             cloud.stream_in_flight = false;
@@ -1059,15 +1239,15 @@ impl OpenCADStudio {
                     tile.last_used = cloud.lru_clock;
                 }
             }
-            evict_resident_tiles(cloud);
+            evict_resident_tiles(cloud, cpu_budget);
             rebuild_resident_display(cloud);
             (
-                cloud.display_model(),
                 cloud.active_tiles.len(),
                 cloud.resident_tiles.len(),
                 camera_generation,
             )
         };
+        let model = self.tabs[tab_index].point_cloud.display_model();
         let points = model.points.len();
         self.tabs[tab_index].scene.set_point_cloud(model);
         if camera_generation == self.tabs[tab_index].scene.camera_generation {
@@ -1082,39 +1262,39 @@ impl OpenCADStudio {
     }
 
     pub(super) fn set_point_cloud_color_mode(&mut self, tab_index: usize, mode: ColorMode) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDCOLOR: attach a LAS/LAZ cloud first.");
             return;
-        };
-        cloud.display.color_mode = mode;
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        }
+        self.tabs[tab_index].point_cloud.display.color_mode = mode;
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
         self.command_line
             .push_output(format!("POINTCLOUDCOLOR: mode set to {mode:?}.").as_str());
-        self.persist_point_cloud(tab_index, "display", &format!("color mode {mode:?}"));
+        self.persist_point_cloud(tab_index, "display", &format!("color mode {mode:?}"), &[]);
     }
 
     pub(super) fn set_point_cloud_point_size(&mut self, tab_index: usize, size: f32) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDPOINTSIZE: attach a LAS/LAZ cloud first.");
             return;
-        };
+        }
         if !size.is_finite() || !(1.0..=32.0).contains(&size) {
             self.command_line
                 .push_error("POINTCLOUDPOINTSIZE: size must be between 1 and 32 pixels.");
             return;
         }
-        cloud.display.point_size_px = size;
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        self.tabs[tab_index].point_cloud.display.point_size_px = size;
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
         self.command_line.push_output(
             format!("POINTCLOUDPOINTSIZE: fixed screen size set to {size:.1} px.").as_str(),
         );
-        self.persist_point_cloud(tab_index, "display", &format!("point size {size:.1} px"));
+        self.persist_point_cloud(tab_index, "display", &format!("point size {size:.1} px"), &[]);
     }
 
     pub(super) fn set_point_cloud_class_visible(
@@ -1123,18 +1303,26 @@ impl OpenCADStudio {
         classification: u8,
         visible: bool,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDCLASSVISIBLE: attach a LAS/LAZ cloud first.");
             return;
-        };
-        if visible {
-            cloud.display.hidden_classes.remove(&classification);
-        } else {
-            cloud.display.hidden_classes.insert(classification);
         }
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        if visible {
+            self.tabs[tab_index]
+                .point_cloud
+                .display
+                .hidden_classes
+                .remove(&classification);
+        } else {
+            self.tabs[tab_index]
+                .point_cloud
+                .display
+                .hidden_classes
+                .insert(classification);
+        }
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
         self.command_line.push_output(
             format!(
@@ -1143,7 +1331,7 @@ impl OpenCADStudio {
             )
             .as_str(),
         );
-        self.persist_point_cloud(tab_index, "display", "changed class visibility");
+        self.persist_point_cloud(tab_index, "display", "changed class visibility", &[]);
     }
 
     pub(super) fn update_point_cloud_class(
@@ -1154,10 +1342,11 @@ impl OpenCADStudio {
         visible: Option<bool>,
         locked: Option<bool>,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             return;
-        };
-        let Some(class) = cloud.classes.classes.get_mut(&code) else {
+        }
+        let Some(class) = dataset.classes.classes.get_mut(&code) else {
             return;
         };
         if let Some(name) = name {
@@ -1166,18 +1355,18 @@ impl OpenCADStudio {
         if let Some(visible) = visible {
             class.visible = visible;
             if visible {
-                cloud.display.hidden_classes.remove(&code);
+                dataset.display.hidden_classes.remove(&code);
             } else {
-                cloud.display.hidden_classes.insert(code);
+                dataset.display.hidden_classes.insert(code);
             }
         }
         if let Some(locked) = locked {
             class.locked = locked;
         }
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        dataset.mark_display_changed();
+        let model = dataset.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
-        self.persist_point_cloud(tab_index, "classes", &format!("edited class {code}"));
+        self.persist_point_cloud(tab_index, "classes", &format!("edited class {code}"), &[]);
     }
 
     pub(super) fn update_point_cloud_class_color(
@@ -1187,33 +1376,35 @@ impl OpenCADStudio {
         channel: usize,
         value: u8,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             return;
-        };
-        let Some(class) = cloud.classes.classes.get_mut(&code) else {
+        }
+        let Some(class) = dataset.classes.classes.get_mut(&code) else {
             return;
         };
         let Some(component) = class.color.get_mut(channel) else {
             return;
         };
         *component = value;
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        dataset.mark_display_changed();
+        let model = dataset.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
-        self.persist_point_cloud(tab_index, "classes", &format!("changed class {code} color"));
+        self.persist_point_cloud(tab_index, "classes", &format!("changed class {code} color"), &[]);
     }
 
     pub(super) fn add_point_cloud_class(&mut self, tab_index: usize) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             return;
-        };
-        let Some(code) = (0_u8..=u8::MAX).find(|code| !cloud.classes.classes.contains_key(code))
+        }
+        let Some(code) = (0_u8..=u8::MAX).find(|code| !dataset.classes.classes.contains_key(code))
         else {
             self.command_line
                 .push_error("POINTCLOUDCLASSADD: all class codes are already defined.");
             return;
         };
-        cloud.classes.upsert(ocs_pointcloud::ClassDefinition {
+        dataset.classes.upsert(ocs_pointcloud::ClassDefinition {
             code,
             name: format!("Class {code}"),
             color: categorical(code as u32)
@@ -1223,17 +1414,18 @@ impl OpenCADStudio {
             visible: true,
             locked: false,
         });
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        dataset.mark_display_changed();
+        let model = dataset.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
-        self.persist_point_cloud(tab_index, "classes", &format!("added class {code}"));
+        self.persist_point_cloud(tab_index, "classes", &format!("added class {code}"), &[]);
     }
 
     pub(super) fn remove_point_cloud_class(&mut self, tab_index: usize, code: u8) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             return;
-        };
-        if cloud
+        }
+        if dataset
             .classes
             .classes
             .get(&code)
@@ -1241,27 +1433,30 @@ impl OpenCADStudio {
         {
             return;
         }
-        if cloud.classes.remove(code).is_none() {
+        if dataset.classes.remove(code).is_none() {
             return;
         }
-        cloud.display.hidden_classes.remove(&code);
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        dataset.display.hidden_classes.remove(&code);
+        dataset.mark_display_changed();
+        let model = dataset.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
-        self.persist_point_cloud(tab_index, "classes", &format!("removed class {code}"));
+        self.persist_point_cloud(tab_index, "classes", &format!("removed class {code}"), &[]);
     }
 
     pub(super) fn point_cloud_statistics(&mut self, tab_index: usize) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSTATS: attach a LAS/LAZ cloud first.");
             return;
-        };
-        let points = cloud.sample.points.iter().cloned().map(|point| {
-            cloud
-                .edits
-                .patch_for(point.source_index)
-                .map_or(point.clone(), |patch| point.with_patch(patch))
+        }
+        let points = dataset.sources.iter().flat_map(|source| {
+            source.sample.points.iter().cloned().map(|point| {
+                source
+                    .edits
+                    .patch_for(point.source_index)
+                    .map_or(point.clone(), |patch| point.with_patch(patch))
+            })
         });
         let stats = classification_statistics(points);
         let summary = stats
@@ -1269,8 +1464,15 @@ impl OpenCADStudio {
             .map(|(class, stats)| format!("{class}:{}", stats.total))
             .collect::<Vec<_>>()
             .join(", ");
-        let qualifier = if cloud.sample.stride == 1 {
+        let strides: std::collections::BTreeSet<u64> = dataset
+            .sources
+            .iter()
+            .map(|source| source.sample.stride)
+            .collect();
+        let qualifier = if strides.iter().all(|&stride| stride == 1) {
             "full cloud"
+        } else if dataset.len() == 1 && strides.contains(&0) {
+            "tiled LOD"
         } else {
             "display sample"
         };
@@ -1278,25 +1480,32 @@ impl OpenCADStudio {
             .push_output(format!("POINTCLOUDSTATS ({qualifier}): {summary}.").as_str());
     }
 
-    pub(super) fn set_point_cloud_selection(&mut self, tab_index: usize, selection: SelectionSet) {
-        let count = selection.len();
-        let name = selection.name.clone();
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
-            self.command_line
-                .push_error("POINTCLOUDSELECT: attach a LAS/LAZ cloud first.");
+    /// Replaces the named selection on every source and reports the merged
+    /// count. Each source keeps its own index space.
+    pub(super) fn set_point_cloud_selection(
+        &mut self,
+        tab_index: usize,
+        selections: Vec<(String, SelectionSet)>,
+    ) {
+        let name = selections
+            .first()
+            .map(|(_, selection)| selection.name.clone())
+            .unwrap_or_else(|| "active".to_string());
+        let count = selections
+            .iter()
+            .map(|(_, selection)| selection.len())
+            .sum::<u64>();
+        let ids: Vec<String> = selections.iter().map(|(id, _)| id.clone()).collect();
+        if selections.is_empty() {
+            self.tabs[tab_index]
+                .point_cloud
+                .clear_selections_named(&name);
             return;
-        };
-        if let Some(existing) = cloud
-            .selection_sets
-            .iter_mut()
-            .find(|candidate| candidate.name == name)
-        {
-            *existing = selection;
-        } else {
-            cloud.selection_sets.push(selection);
         }
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        for (id, selection) in selections {
+            self.tabs[tab_index].point_cloud.push_selection(&id, selection);
+        }
+        let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
         self.command_line.push_output(
             format!("POINTCLOUDSELECT: selection set \"{name}\" contains {count} point(s).")
@@ -1306,7 +1515,16 @@ impl OpenCADStudio {
             tab_index,
             "selection",
             &format!("updated {name}: {count} points"),
+            &ids,
         );
+    }
+
+    pub(super) fn clear_point_cloud_selections(&mut self, tab_index: usize) {
+        self.tabs[tab_index]
+            .point_cloud
+            .clear_selections_named("active");
+        let model = self.tabs[tab_index].point_cloud.display_model();
+        self.tabs[tab_index].scene.set_point_cloud(model);
     }
 
     pub(super) fn point_cloud_select_box(
@@ -1315,25 +1533,36 @@ impl OpenCADStudio {
         min: [f64; 3],
         max: [f64; 3],
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSELECTBOX: attach a LAS/LAZ cloud first.");
             return;
-        };
+        }
         let polygon = [
             [min[0], min[1]],
             [max[0], min[1]],
             [max[0], max[1]],
             [min[0], max[1]],
         ];
-        let selection = select_polygon(
-            &cloud.sample.points,
-            &polygon,
-            Some([min[2], max[2]]),
-            &cloud.selection_filter,
-        );
-        let selection = SelectionSet::from_indices("active", selection.iter());
-        self.set_point_cloud_selection(tab_index, selection);
+        let selections = self
+            .tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .map(|cloud| {
+                let indices = select_polygon(
+                    &cloud.sample.points,
+                    &polygon,
+                    Some([min[2], max[2]]),
+                    &self.tabs[tab_index].point_cloud.selection_filter,
+                );
+                (
+                    cloud.id.clone(),
+                    SelectionSet::from_indices("active", indices.iter()),
+                )
+            })
+            .collect();
+        self.set_point_cloud_selection(tab_index, selections);
     }
 
     pub(super) fn point_cloud_select_brush(
@@ -1342,19 +1571,30 @@ impl OpenCADStudio {
         center: [f64; 3],
         radius: f64,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSELECTBRUSH: attach a LAS/LAZ cloud first.");
             return;
-        };
-        let selection = select_brush(
-            &cloud.sample.points,
-            center,
-            radius,
-            &cloud.selection_filter,
-        );
-        let selection = SelectionSet::from_indices("active", selection.iter());
-        self.set_point_cloud_selection(tab_index, selection);
+        }
+        let selections = self
+            .tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .map(|cloud| {
+                let indices = select_brush(
+                    &cloud.sample.points,
+                    center,
+                    radius,
+                    &self.tabs[tab_index].point_cloud.selection_filter,
+                );
+                (
+                    cloud.id.clone(),
+                    SelectionSet::from_indices("active", indices.iter()),
+                )
+            })
+            .collect();
+        self.set_point_cloud_selection(tab_index, selections);
     }
 
     pub(super) fn point_cloud_select_nearest(
@@ -1363,19 +1603,32 @@ impl OpenCADStudio {
         position: [f64; 3],
         radius: f64,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSELECTPOINT: attach a LAS/LAZ cloud first.");
             return;
-        };
-        let selection = select_nearest(
-            &cloud.sample.points,
-            position,
-            radius,
-            &cloud.selection_filter,
-        );
-        let selection = SelectionSet::from_indices("active", selection.iter());
-        self.set_point_cloud_selection(tab_index, selection);
+        }
+        let selections = self
+            .tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .filter_map(|cloud| {
+                let indices = select_nearest(
+                    &cloud.sample.points,
+                    position,
+                    radius,
+                    &self.tabs[tab_index].point_cloud.selection_filter,
+                );
+                (!indices.is_empty()).then(|| {
+                    (
+                        cloud.id.clone(),
+                        SelectionSet::from_indices("active", indices.iter()),
+                    )
+                })
+            })
+            .collect();
+        self.set_point_cloud_selection(tab_index, selections);
     }
 
     fn point_cloud_view_frame(
@@ -1410,41 +1663,56 @@ impl OpenCADStudio {
             return;
         };
         let camera_generation = self.tabs[tab_index].scene.camera_generation;
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSELECTPOINT: attach a LAS/LAZ cloud first.");
             return;
-        };
+        }
         let radius_sq = radius_px.max(1.0).powi(2);
-        ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
-        let candidates = screen_candidates(
-            cloud.screen_index.as_ref().expect("screen index"),
-            [center.x - radius_px, center.y - radius_px],
-            [center.x + radius_px, center.y + radius_px],
-        );
-        let nearest = candidates
-            .into_iter()
-            .filter_map(|projected| {
-                let source = cloud.sample.points.get(projected.sample_index)?;
+        let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
+        let mut nearest: Option<(f32, f64, String, u64)> = None;
+        for cloud in &mut self.tabs[tab_index].point_cloud.sources {
+            ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
+            let candidates = screen_candidates(
+                cloud.screen_index.as_ref().expect("screen index"),
+                [center.x - radius_px, center.y - radius_px],
+                [center.x + radius_px, center.y + radius_px],
+            );
+            for projected in candidates {
+                let Some(source) = cloud.sample.points.get(projected.sample_index) else {
+                    continue;
+                };
                 let point = cloud
                     .edits
                     .patch_for(source.source_index)
                     .map_or_else(|| source.clone(), |patch| source.clone().with_patch(patch));
-                if !cloud.selection_filter.matches(&point) {
-                    return None;
+                if !filter.matches(&point) {
+                    continue;
                 }
                 let dx = projected.screen[0] - center.x;
                 let dy = projected.screen[1] - center.y;
                 let distance_sq = dx * dx + dy * dy;
-                (distance_sq <= radius_sq).then_some((
-                    distance_sq,
-                    projected.depth,
-                    point.source_index,
-                ))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)))
-            .map(|(_, _, index)| index);
-        self.set_point_cloud_selection(tab_index, SelectionSet::from_indices("active", nearest));
+                if distance_sq > radius_sq {
+                    continue;
+                }
+                let closer = nearest.as_ref().is_none_or(|(best_sq, best_depth, _, _)| {
+                    distance_sq < *best_sq
+                        || (distance_sq == *best_sq && projected.depth < *best_depth)
+                });
+                if closer {
+                    nearest = Some((
+                        distance_sq,
+                        projected.depth,
+                        cloud.id.clone(),
+                        point.source_index,
+                    ));
+                }
+            }
+        }
+        let selections = nearest.map_or_else(Vec::new, |(_, _, id, index)| {
+            vec![(id, SelectionSet::from_indices("active", [index].into_iter()))]
+        });
+        self.set_point_cloud_selection(tab_index, selections);
     }
 
     pub(super) fn point_cloud_select_screen_rectangle(
@@ -1500,31 +1768,38 @@ impl OpenCADStudio {
             return;
         }
         let camera_generation = self.tabs[tab_index].scene.camera_generation;
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
+            self.command_line
+                .push_error("POINTCLOUDSELECTFENCE: attach a LAS/LAZ cloud first.");
             return;
-        };
-        ensure_screen_spatial_index(cloud, camera, viewport, camera_generation);
+        }
         let bounds = screen_polygon_bounds(polygon);
-        let candidates = screen_candidates(
-            cloud.screen_index.as_ref().expect("screen index"),
-            bounds.0,
-            bounds.1,
-        );
-        let selection = SelectionSet::from_indices(
-            "active",
-            candidates.into_iter().filter_map(|projected| {
+        let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
+        let mut selections = Vec::new();
+        for cloud in &mut self.tabs[tab_index].point_cloud.sources {
+            ensure_screen_spatial_index(cloud, camera, viewport, camera_generation);
+            let candidates = screen_candidates(
+                cloud.screen_index.as_ref().expect("screen index"),
+                bounds.0,
+                bounds.1,
+            );
+            let indices = candidates.into_iter().filter_map(|projected| {
                 let source = cloud.sample.points.get(projected.sample_index)?;
                 let point = cloud
                     .edits
                     .patch_for(source.source_index)
                     .map_or_else(|| source.clone(), |patch| source.clone().with_patch(patch));
-                if !cloud.selection_filter.matches(&point) {
+                if !filter.matches(&point) {
                     return None;
                 }
                 point_in_screen_polygon(projected.screen, polygon).then_some(point.source_index)
-            }),
-        );
-        self.set_point_cloud_selection(tab_index, selection);
+            });
+            selections.push((
+                cloud.id.clone(),
+                SelectionSet::from_indices("active", indices),
+            ));
+        }
+        self.set_point_cloud_selection(tab_index, selections);
     }
 
     pub(super) fn point_cloud_select_screen_brush(
@@ -1541,41 +1816,44 @@ impl OpenCADStudio {
             return;
         };
         let camera_generation = self.tabs[tab_index].scene.camera_generation;
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             return;
-        };
+        }
         let radius_sq = radius_px.clamp(2.0, 256.0).powi(2);
-        ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
-        let candidates = screen_candidates(
-            cloud.screen_index.as_ref().expect("screen index"),
-            [center.x - radius_px, center.y - radius_px],
-            [center.x + radius_px, center.y + radius_px],
-        );
-        let stroke = SelectionSet::from_indices(
-            "stroke",
-            candidates.into_iter().filter_map(|projected| {
+        let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
+        let mut selections = Vec::new();
+        for cloud in &mut self.tabs[tab_index].point_cloud.sources {
+            ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
+            let candidates = screen_candidates(
+                cloud.screen_index.as_ref().expect("screen index"),
+                [center.x - radius_px, center.y - radius_px],
+                [center.x + radius_px, center.y + radius_px],
+            );
+            let stroke: Vec<u64> = candidates.into_iter().filter_map(|projected| {
                 let source = cloud.sample.points.get(projected.sample_index)?;
                 let point = cloud
                     .edits
                     .patch_for(source.source_index)
                     .map_or_else(|| source.clone(), |patch| source.clone().with_patch(patch));
-                if !cloud.selection_filter.matches(&point) {
+                if !filter.matches(&point) {
                     return None;
                 }
                 let dx = projected.screen[0] - center.x;
                 let dy = projected.screen[1] - center.y;
                 (dx * dx + dy * dy <= radius_sq).then_some(point.source_index)
-            }),
-        );
-        let selection = cloud
-            .selection_sets
-            .iter()
-            .find(|selection| selection.name == "active")
-            .map_or_else(
-                || SelectionSet::from_indices("active", stroke.iter()),
-                |active| active.union("active", &stroke),
-            );
-        self.set_point_cloud_selection(tab_index, selection);
+            }).collect();
+            let stroke_set = SelectionSet::from_indices("stroke", stroke.iter().copied());
+            let unioned = cloud
+                .selection_sets
+                .iter()
+                .find(|selection| selection.name == "active")
+                .map_or_else(
+                    || SelectionSet::from_indices("active", stroke.iter().copied()),
+                    |active| active.union("active", &stroke_set),
+                );
+            selections.push((cloud.id.clone(), unioned));
+        }
+        self.set_point_cloud_selection(tab_index, selections);
         if let Some(classification) = classification {
             self.patch_point_cloud_selection(
                 tab_index,
@@ -1591,22 +1869,29 @@ impl OpenCADStudio {
         low: f64,
         high: f64,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSELECTSLICE: attach a LAS/LAZ cloud first.");
             return;
-        };
+        }
         let bounds = [low.min(high), low.max(high)];
-        let selection = SelectionSet::from_indices(
-            "active",
-            cloud.sample.points.iter().filter_map(|point| {
-                (point.position[2] >= bounds[0]
-                    && point.position[2] <= bounds[1]
-                    && cloud.selection_filter.matches(point))
-                .then_some(point.source_index)
-            }),
-        );
-        self.set_point_cloud_selection(tab_index, selection);
+        let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
+        let selections = self
+            .tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .map(|cloud| {
+                let indices = cloud.sample.points.iter().filter_map(|point| {
+                    (point.position[2] >= bounds[0]
+                        && point.position[2] <= bounds[1]
+                        && filter.matches(point))
+                        .then_some(point.source_index)
+                });
+                (cloud.id.clone(), SelectionSet::from_indices("active", indices))
+            })
+            .collect();
+        self.set_point_cloud_selection(tab_index, selections);
     }
 
     pub(super) fn set_point_cloud_selection_filter(
@@ -1614,16 +1899,16 @@ impl OpenCADStudio {
         tab_index: usize,
         filter: PointFilter,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSELECTFILTER: attach a LAS/LAZ cloud first.");
             return;
-        };
-        cloud.selection_filter = filter;
-        let description = describe_filter(&cloud.selection_filter);
+        }
+        self.tabs[tab_index].point_cloud.selection_filter = filter;
+        let description = describe_filter(&self.tabs[tab_index].point_cloud.selection_filter);
         self.command_line
             .push_output(format!("POINTCLOUDSELECTFILTER: {description}.").as_str());
-        self.persist_point_cloud(tab_index, "selection_filter", &description);
+        self.persist_point_cloud(tab_index, "selection_filter", &description, &[]);
     }
 
     pub(super) fn patch_point_cloud_selection(
@@ -1632,29 +1917,54 @@ impl OpenCADStudio {
         label: &str,
         patch: PointPatch,
     ) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDEDITSELECTION: attach a LAS/LAZ cloud first.");
             return;
-        };
-        let Some(selection) = cloud
-            .selection_sets
-            .iter()
-            .find(|selection| selection.name == "active")
-            .cloned()
-        else {
+        }
+        let mut touched = Vec::new();
+        let mut changed = 0_usize;
+        for cloud in &mut self.tabs[tab_index].point_cloud.sources {
+            let Some(selection) = cloud
+                .selection_sets
+                .iter()
+                .find(|selection| selection.name == "active")
+                .cloned()
+            else {
+                continue;
+            };
+            let count = cloud.edits.apply(label, selection.iter(), patch);
+            if count > 0 {
+                changed += count;
+                touched.push(cloud.id.clone());
+            }
+        }
+        if touched.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDEDITSELECTION: create an active selection first.");
             return;
-        };
-        let changed = cloud.edits.apply(label, selection.iter(), patch);
-        cloud.mark_display_changed();
-        let model = cloud.display_model();
+        }
+        self.tabs[tab_index]
+            .point_cloud
+            .note_edit_sources(touched.clone());
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
+        let source_note = if touched.len() > 1 {
+            format!(" across {} sources", touched.len())
+        } else {
+            String::new()
+        };
         self.command_line.push_output(
-            format!("POINTCLOUDEDITSELECTION: {label}; {changed} point(s) queued.").as_str(),
+            format!("POINTCLOUDEDITSELECTION: {label}; {changed} point(s) queued{source_note}.")
+                .as_str(),
         );
-        self.persist_point_cloud(tab_index, "edit", &format!("{label}: {changed} points"));
+        self.persist_point_cloud(
+            tab_index,
+            "edit",
+            &format!("{label}: {changed} points"),
+            &touched,
+        );
     }
 
     pub(super) fn import_point_cloud_ptc(&mut self, tab_index: usize, path: PathBuf) {
@@ -1664,14 +1974,14 @@ impl OpenCADStudio {
         match result {
             Ok(classes) => {
                 let count = classes.classes.len();
-                let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() else {
+                if self.tabs[tab_index].point_cloud.is_empty() {
                     self.command_line
                         .push_error("POINTCLOUDPTCIMPORT: attach a LAS/LAZ cloud first.");
                     return;
-                };
-                cloud.classes = classes;
-                cloud.mark_display_changed();
-                let model = cloud.display_model();
+                }
+                self.tabs[tab_index].point_cloud.classes = classes;
+                self.tabs[tab_index].point_cloud.mark_display_changed();
+                let model = self.tabs[tab_index].point_cloud.display_model();
                 self.tabs[tab_index].scene.set_point_cloud(model);
                 self.command_line.push_output(
                     format!(
@@ -1680,7 +1990,7 @@ impl OpenCADStudio {
                     )
                     .as_str(),
                 );
-                self.persist_point_cloud(tab_index, "classes", "imported PTC class table");
+                self.persist_point_cloud(tab_index, "classes", "imported PTC class table", &[]);
             }
             Err(error) => self
                 .command_line
@@ -1689,12 +1999,13 @@ impl OpenCADStudio {
     }
 
     pub(super) fn export_point_cloud_ptc(&mut self, tab_index: usize, path: PathBuf) {
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDPTCEXPORT: attach a LAS/LAZ cloud first.");
             return;
-        };
-        match std::fs::write(&path, write_ptc(&cloud.classes)) {
+        }
+        let classes = self.tabs[tab_index].point_cloud.classes.clone();
+        match std::fs::write(&path, write_ptc(&classes)) {
             Ok(()) => self.command_line.push_output(
                 format!("POINTCLOUDPTCEXPORT: wrote \"{}\".", path.display()).as_str(),
             ),
@@ -1704,36 +2015,65 @@ impl OpenCADStudio {
         }
     }
 
-    fn persist_point_cloud(&mut self, tab_index: usize, action: &str, detail: &str) {
+    fn persist_point_cloud(
+        &mut self,
+        tab_index: usize,
+        action: &str,
+        detail: &str,
+        audit_sources: &[String],
+    ) {
         let Some(drawing_path) = self.tabs[tab_index].current_path.clone() else {
             return;
         };
-        let Some(cloud) = self.tabs[tab_index].point_cloud.as_ref() else {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
             return;
+        }
+        let states: Vec<AttachmentState> = match dataset
+            .sources
+            .iter()
+            .map(|cloud| {
+                AttachmentState::new(&cloud.id, &drawing_path, &cloud.source_path).map(|state| {
+                    AttachmentState {
+                        display: dataset.display.clone(),
+                        classes: dataset.classes.clone(),
+                        edits: cloud.edits.clone(),
+                        selection_sets: cloud.selection_sets.clone(),
+                        selection_filter: dataset.selection_filter.clone(),
+                        cache_relative: cloud.cache_path.as_ref().and_then(|cache_path| {
+                            drawing_path
+                                .parent()
+                                .and_then(|parent| cache_path.strip_prefix(parent).ok())
+                                .map(std::path::Path::to_path_buf)
+                        }),
+                        ..state
+                    }
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+        {
+            Ok(states) => states,
+            // A missing source must never prune its sidecar rows; skip the
+            // save and report why.
+            Err(error) => {
+                self.command_line
+                    .push_error(format!("POINTCLOUDSIDECAR: {error}").as_str());
+                return;
+            }
         };
-        let state =
-            AttachmentState::new("primary", &drawing_path, &cloud.source_path).map(|mut state| {
-                state.display = cloud.display.clone();
-                state.classes = cloud.classes.clone();
-                state.edits = cloud.edits.clone();
-                state.selection_sets = cloud.selection_sets.clone();
-                state.selection_filter = cloud.selection_filter.clone();
-                state.cache_relative = cloud.cache_path.as_ref().and_then(|cache_path| {
-                    drawing_path
-                        .parent()
-                        .and_then(|parent| cache_path.strip_prefix(parent).ok())
-                        .map(std::path::Path::to_path_buf)
-                });
-                state
-            });
-        let result = state.map_err(|error| error.to_string()).and_then(|state| {
+        let result = (|| -> std::result::Result<(), String> {
             let mut store = SidecarStore::open(sidecar_path_for_drawing(&drawing_path))
                 .map_err(|error| error.to_string())?;
             store
-                .save_attachment(&state)
-                .and_then(|_| store.append_audit("primary", action, detail))
-                .map_err(|error| error.to_string())
-        });
+                .save_dataset(&states, None)
+                .map_err(|error| error.to_string())?;
+            for id in audit_sources {
+                store
+                    .append_audit(id, action, detail)
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })();
         if let Err(error) = result {
             self.command_line
                 .push_error(format!("POINTCLOUDSIDECAR: {error}").as_str());
@@ -1742,16 +2082,17 @@ impl OpenCADStudio {
 
     pub(super) fn start_point_cloud_export(&mut self, output: PathBuf) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
-        let Some(cloud) = self.tabs[self.active_tab].point_cloud.as_mut() else {
-            self.command_line
-                .push_error("POINTCLOUDEXPORT: attach a LAS/LAZ cloud first.");
-            return Task::none();
-        };
-        if cloud.export_job.is_some() {
+        let dataset = &mut self.tabs[self.active_tab].point_cloud;
+        if dataset.sources.iter().any(|source| source.export_job.is_some()) {
             self.command_line
                 .push_error("POINTCLOUDEXPORT: an export is already running.");
             return Task::none();
         }
+        let Some(cloud) = dataset.active_mut() else {
+            self.command_line
+                .push_error("POINTCLOUDEXPORT: attach a LAS/LAZ cloud first.");
+            return Task::none();
+        };
         let input = cloud.source_path.clone();
         let edits = cloud.edits.clone();
         let progress = Arc::new(PointCloudJobProgress::new(
@@ -1792,14 +2133,15 @@ impl OpenCADStudio {
         target_epsg: u16,
     ) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
-        let Some(cloud) = self.tabs[self.active_tab].point_cloud.as_mut() else {
-            return Task::none();
-        };
-        if cloud.export_job.is_some() {
+        let dataset = &mut self.tabs[self.active_tab].point_cloud;
+        if dataset.sources.iter().any(|source| source.export_job.is_some()) {
             self.command_line
                 .push_error("POINTCLOUDREPROJECT: an export/reprojection job is already running.");
             return Task::none();
         }
+        let Some(cloud) = dataset.active_mut() else {
+            return Task::none();
+        };
         let source_epsg = cloud.sample.metadata.crs.horizontal_epsg;
         if source_epsg.is_none() {
             self.command_line.push_error(
@@ -1849,9 +2191,16 @@ impl OpenCADStudio {
         result: Result<ocs_pointcloud::ReprojectionStats, String>,
     ) {
         let tab_index = self.tabs.iter().position(|tab| tab.id == tab_id);
+        let mut touched = Vec::new();
         if let Some(tab_index) = tab_index {
-            if let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() {
-                cloud.export_job = None;
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            if let Some(source) = dataset
+                .sources
+                .iter_mut()
+                .find(|source| source.export_job.is_some())
+            {
+                source.export_job = None;
+                touched.push(source.id.clone());
             }
         }
         match result {
@@ -1866,14 +2215,14 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(format!("POINTCLOUDREPROJECT: {detail}.").as_str());
                 if let Some(tab_index) = tab_index {
-                    self.persist_point_cloud(tab_index, "reproject", &detail);
+                    self.persist_point_cloud(tab_index, "reproject", &detail, &touched);
                 }
             }
             Err(error) => {
                 self.command_line
                     .push_error(format!("POINTCLOUDREPROJECT: {error}").as_str());
                 if let Some(tab_index) = tab_index {
-                    self.persist_point_cloud(tab_index, "reproject_failed", &error);
+                    self.persist_point_cloud(tab_index, "reproject_failed", &error, &touched);
                 }
             }
         }
@@ -1886,9 +2235,16 @@ impl OpenCADStudio {
         result: Result<ExportStats, String>,
     ) {
         let tab_index = self.tabs.iter().position(|tab| tab.id == tab_id);
+        let mut touched = Vec::new();
         if let Some(tab_index) = tab_index {
-            if let Some(cloud) = self.tabs[tab_index].point_cloud.as_mut() {
-                cloud.export_job = None;
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            if let Some(source) = dataset
+                .sources
+                .iter_mut()
+                .find(|source| source.export_job.is_some())
+            {
+                source.export_job = None;
+                touched.push(source.id.clone());
             }
         } else {
             self.command_line
@@ -1907,14 +2263,14 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(format!("POINTCLOUDEXPORT: {detail}.").as_str());
                 if let Some(tab_index) = tab_index {
-                    self.persist_point_cloud(tab_index, "export", &detail);
+                    self.persist_point_cloud(tab_index, "export", &detail, &touched);
                 }
             }
             Err(error) => {
                 self.command_line
                     .push_error(format!("POINTCLOUDEXPORT: {error}").as_str());
                 if let Some(tab_index) = tab_index {
-                    self.persist_point_cloud(tab_index, "export_failed", &error);
+                    self.persist_point_cloud(tab_index, "export_failed", &error, &touched);
                 }
             }
         }
@@ -1923,8 +2279,11 @@ impl OpenCADStudio {
     pub(super) fn point_cloud_export_status(&mut self, tab_index: usize) {
         let job = self.tabs[tab_index]
             .point_cloud
-            .as_ref()
-            .and_then(|cloud| cloud.export_job.as_ref());
+            .sources
+            .iter()
+            .filter_map(|source| source.export_job.as_ref())
+            .next()
+            .cloned();
         let Some(job) = job else {
             self.command_line
                 .push_info("POINTCLOUDEXPORTSTATUS: no export is running.");
@@ -1948,8 +2307,11 @@ impl OpenCADStudio {
     pub(super) fn cancel_point_cloud_export(&mut self, tab_index: usize) {
         let job = self.tabs[tab_index]
             .point_cloud
-            .as_ref()
-            .and_then(|cloud| cloud.export_job.as_ref());
+            .sources
+            .iter()
+            .filter_map(|source| source.export_job.as_ref())
+            .next()
+            .cloned();
         if let Some(job) = job {
             job.cancel.store(true, Ordering::Relaxed);
             self.command_line
@@ -1957,6 +2319,169 @@ impl OpenCADStudio {
         } else {
             self.command_line
                 .push_info("POINTCLOUDEXPORTCANCEL: no export is running.");
+        }
+    }
+}
+
+impl PointCloudDataset {
+    fn manager_data(&self) -> crate::ui::window::point_cloud_manager::PointCloudManagerData {
+        use crate::ui::window::point_cloud_manager::{PointCloudManagerData, PointCloudClassRow};
+        if self.is_empty() {
+            return PointCloudManagerData::default();
+        }
+        let source = self
+            .active()
+            .expect("non-empty dataset always has an active source");
+        let active_selection: u64 = self
+            .sources
+            .iter()
+            .flat_map(|source| source.selection_sets.iter())
+            .filter(|selection| selection.name == "active")
+            .map(SelectionSet::len)
+            .sum();
+        let color_mode = match self.display.color_mode {
+            ColorMode::Classification => "Classification",
+            ColorMode::Rgb => "RGB",
+            ColorMode::Intensity => "Intensity",
+            ColorMode::Elevation => "Elevation",
+            ColorMode::ReturnNumber => "Return number",
+            ColorMode::PointSource => "Point source",
+        };
+        let export_progress = self
+            .sources
+            .iter()
+            .filter_map(|source| source.export_job.as_ref())
+            .next()
+            .map(|job| (job.completed.load(Ordering::Relaxed), job.total));
+        let points = self.sources.iter().flat_map(|source| {
+            source.sample.points.iter().cloned().map(|point| {
+                source
+                    .edits
+                    .patch_for(point.source_index)
+                    .map_or(point.clone(), |patch| point.with_patch(patch))
+            })
+        });
+        let statistics = classification_statistics(points);
+        let class_rows = self
+            .classes
+            .classes
+            .values()
+            .map(|class| {
+                let stats = statistics.get(&class.code).copied().unwrap_or_default();
+                PointCloudClassRow {
+                    code: class.code,
+                    name: class.name.clone(),
+                    color: class.color,
+                    visible: class.visible && !self.display.hidden_classes.contains(&class.code),
+                    locked: class.locked,
+                    total: stats.total,
+                    withheld: stats.withheld,
+                    overlap: stats.overlap,
+                    key_points: stats.key_points,
+                }
+            })
+            .collect();
+        let survey_readiness = ocs_pointcloud::assess_survey_readiness(&source.sample.metadata);
+        let source_label = if self.len() > 1 {
+            format!(
+                "{} (1 of {})",
+                source.source_path.display(),
+                self.len()
+            )
+        } else {
+            source.source_path.display().to_string()
+        };
+        let sample_label = if self.len() > 1 {
+            "multi-source dataset".to_string()
+        } else {
+            match source.sample.stride {
+                0 => "tiled LOD".to_string(),
+                1 => "full cloud".to_string(),
+                stride => format!("1-in-{stride} sample"),
+            }
+        };
+        let index_running = self.sources.iter().any(|source| source.index_cancel.is_some());
+        let any_crs = self
+            .sources
+            .iter()
+            .all(|source| source.sample.metadata.has_crs);
+        let crs_label = if self.len() > 1 {
+            if any_crs {
+                format!("declared in {} source(s)", self.len())
+            } else {
+                "not declared in every source".to_string()
+            }
+        } else if source.sample.metadata.has_crs {
+            source.sample.metadata.crs.label()
+        } else {
+            "not declared".to_string()
+        };
+        PointCloudManagerData {
+            attached: true,
+            source: source_label,
+            source_points: self
+                .sources
+                .iter()
+                .map(|source| source.sample.metadata.point_count)
+                .sum(),
+            displayed_points: self
+                .sources
+                .iter()
+                .map(|source| source.sample.points.len())
+                .sum(),
+            sample_label,
+            pending_edits: self
+                .sources
+                .iter()
+                .map(|source| source.edits.len())
+                .sum(),
+            transactions: self
+                .sources
+                .iter()
+                .map(|source| source.edits.transaction_count())
+                .sum(),
+            active_selection,
+            selection_sets: self
+                .sources
+                .iter()
+                .map(|source| source.selection_sets.len())
+                .sum(),
+            class_count: self.classes.classes.len(),
+            color_mode: color_mode.to_string(),
+            point_size_px: self.display.point_size_px,
+            crs_declared: any_crs,
+            indexed: self
+                .sources
+                .iter()
+                .all(|source| source.cache_manifest.is_some()),
+            index_running,
+            cache: source.cache_path.as_ref().map_or_else(
+                || "not available".to_string(),
+                |path| path.display().to_string(),
+            ),
+            export_progress,
+            sidecar_available: false,
+            selection_filter: describe_filter(&self.selection_filter),
+            resident_tiles: self
+                .sources
+                .iter()
+                .map(|source| source.resident_tiles.len())
+                .sum(),
+            resident_points: self
+                .sources
+                .iter()
+                .flat_map(|source| source.resident_tiles.values())
+                .map(|tile| tile.points.len())
+                .sum(),
+            visible_tiles: self
+                .sources
+                .iter()
+                .map(|source| source.active_tiles.len())
+                .sum(),
+            crs_label,
+            survey_readiness: survey_readiness.summary(),
+            class_rows,
+            audit_rows: Vec::new(),
         }
     }
 }
@@ -1992,17 +2517,16 @@ fn rebuild_resident_display(cloud: &mut PointCloudAttachment) {
     }
     cloud.sample.points = points;
     cloud.sample.stride = 0;
-    cloud.mark_display_changed();
 }
 
-fn evict_resident_tiles(cloud: &mut PointCloudAttachment) {
+fn evict_resident_tiles(cloud: &mut PointCloudAttachment, cpu_budget_bytes: usize) {
     let point_size = std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
     let mut bytes = cloud
         .resident_tiles
         .values()
         .map(|tile| tile.points.len().saturating_mul(point_size))
         .sum::<usize>();
-    if bytes <= cloud.display.cpu_budget_bytes {
+    if bytes <= cpu_budget_bytes {
         return;
     }
     let mut candidates: Vec<_> = cloud
@@ -2013,12 +2537,26 @@ fn evict_resident_tiles(cloud: &mut PointCloudAttachment) {
         .collect();
     candidates.sort_by_key(|(_, last_used)| *last_used);
     for (key, _) in candidates {
-        if bytes <= cloud.display.cpu_budget_bytes {
+        if bytes <= cpu_budget_bytes {
             break;
         }
         if let Some(tile) = cloud.resident_tiles.remove(&key) {
             bytes = bytes.saturating_sub(tile.points.len().saturating_mul(point_size));
         }
+    }
+}
+
+/// Case-insensitive path equality on Windows, where LAS folders routinely
+/// mix letter case between sessions.
+fn path_matches(left: &std::path::Path, right: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
     }
 }
 
@@ -2129,10 +2667,10 @@ fn ensure_screen_spatial_index(
         viewport.width.max(1.0) as u32,
         viewport.height.max(1.0) as u32,
     ];
+    // Display changes null the whole index (mark_display_changed), so only
+    // camera generation and viewport size can make it stale.
     if cloud.screen_index.as_ref().is_some_and(|index| {
-        index.camera_generation == camera_generation
-            && index.display_generation == cloud.display_generation
-            && index.viewport_size == viewport_size
+        index.camera_generation == camera_generation && index.viewport_size == viewport_size
     }) {
         return;
     }
@@ -2141,7 +2679,6 @@ fn ensure_screen_spatial_index(
     let cells_y = (viewport.height / CELL_SIZE).ceil().max(1.0) as usize;
     let mut index = ScreenSpatialIndex {
         camera_generation,
-        display_generation: cloud.display_generation,
         viewport_size,
         cell_size: CELL_SIZE,
         cells_x,
@@ -2331,5 +2868,112 @@ mod tests {
     fn rejects_reversed_and_out_of_bounds_ranges() {
         assert!(parse_source_indices("5-3", 10).is_err());
         assert!(parse_source_indices("9-10", 10).is_err());
+    }
+
+    fn sample_metadata(point_count: u64, min_z: f64, max_z: f64) -> ocs_pointcloud::CloudMetadata {
+        ocs_pointcloud::CloudMetadata {
+            point_count,
+            version_major: 1,
+            version_minor: 4,
+            point_format: 6,
+            compressed: false,
+            bounds_min: [0.0, 0.0, min_z],
+            bounds_max: [10.0, 10.0, max_z],
+            scales: [0.001, 0.001, 0.001],
+            offsets: [0.0; 3],
+            system_identifier: String::new(),
+            generating_software: String::new(),
+            creation_date: None,
+            file_source_id: 0,
+            has_crs: false,
+            crs: ocs_pointcloud::CrsInfo::default(),
+            vlr_count: 0,
+            evlr_count: 0,
+        }
+    }
+
+    fn sample_point(source_index: u64, x: f64, classification: u8) -> ocs_pointcloud::SamplePoint {
+        ocs_pointcloud::SamplePoint {
+            source_index,
+            position: [x, 0.0, 1.0],
+            intensity: 100,
+            classification,
+            return_number: 1,
+            number_of_returns: 1,
+            scan_angle: 0.0,
+            user_data: 0,
+            point_source_id: 7,
+            gps_time: None,
+            color: None,
+            nir: None,
+            is_synthetic: false,
+            is_key_point: false,
+            is_withheld: false,
+            is_overlap: false,
+        }
+    }
+
+    fn attachment(id: &str, count: u64) -> PointCloudAttachment {
+        PointCloudAttachment::new(
+            id.to_string(),
+            PathBuf::from(format!("C:\\clouds\\{id}.las")),
+            PointSample {
+                metadata: sample_metadata(count, 0.0, 10.0),
+                points: (0..count)
+                    .map(|index| sample_point(index, index as f64, 1))
+                    .collect(),
+                stride: 1,
+                scanned_points: count,
+            },
+        )
+    }
+
+    #[test]
+    fn dataset_generates_unique_source_ids() {
+        let mut dataset = PointCloudDataset::default();
+        dataset.sources.push(attachment("source-2", 1));
+        dataset.sources.push(attachment("source-1", 1));
+        assert_eq!("source-3", dataset.next_source_id());
+        dataset.sources.remove(0);
+        // Freed ids may be reused but never collide with live ones.
+        let id = dataset.next_source_id();
+        assert_ne!("source-1", id);
+    }
+
+    #[test]
+    fn dataset_model_concatenates_every_source() {
+        let mut dataset = PointCloudDataset::default();
+        dataset.sources.push(attachment("a", 3));
+        dataset.sources.push(attachment("b", 2));
+        assert_eq!(5, dataset.display_model().points.len());
+        assert_eq!(Some(([0.0, 0.0, 0.0], [10.0, 10.0, 10.0])), dataset.bounds());
+    }
+
+    #[test]
+    fn dataset_undo_tracks_only_the_last_edit_action() {
+        let mut dataset = PointCloudDataset::default();
+        dataset.sources.push(attachment("a", 4));
+        dataset.sources.push(attachment("b", 4));
+        // One edit action spanning both sources: class change on all points.
+        let touched = vec!["a".to_string(), "b".to_string()];
+        for id in &touched {
+            let source = dataset.source_mut(id).expect("source");
+            source.edits.apply(
+                "Assign class 2",
+                0..4,
+                PointPatch::classification(2),
+            );
+        }
+        dataset.note_edit_sources(touched.clone());
+        for id in &touched {
+            assert_eq!(1, dataset.source(id).expect("source").edits.transaction_count());
+        }
+        // Undo steps exactly the tracked sources.
+        for id in &touched {
+            assert!(dataset.source_mut(id).expect("source").edits.undo().is_some());
+        }
+        for id in &touched {
+            assert_eq!(0, dataset.source(id).expect("source").edits.len());
+        }
     }
 }
