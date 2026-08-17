@@ -22,7 +22,18 @@ pub struct FileFingerprint {
 
 impl FileFingerprint {
     pub fn capture(path: &Path) -> std::io::Result<Self> {
-        let mut file = File::open(path)?;
+        Self::capture_from(&mut File::open(path)?)
+    }
+
+    /// Fingerprint an already-open handle.
+    ///
+    /// A save that targets an existing drawing takes an exclusive lease on it
+    /// first. On Windows `LockFileEx` is mandatory, so re-opening that same path
+    /// to read it fails with `ERROR_LOCK_VIOLATION` against our own lock — the
+    /// lease has to hand its handle over rather than let the fingerprint open a
+    /// second one. On Unix the lock is advisory and a second open would have
+    /// worked, which is why this only ever failed on Windows.
+    pub fn capture_from(file: &mut File) -> std::io::Result<Self> {
         let metadata = file.metadata()?;
         let len = metadata.len();
         let modified_ns = metadata
@@ -153,6 +164,27 @@ impl EditLease {
         self.platform_warning.as_deref()
     }
 
+    /// Fingerprint the leased drawing through the handle this lease already
+    /// holds, so the exclusive Windows lock does not block the read.
+    ///
+    /// `None` when the lease has no drawing handle — the destination did not
+    /// exist, or the platform lock was unavailable — which leaves the caller to
+    /// fall back to [`FileFingerprint::capture`].
+    pub fn fingerprint(&mut self) -> Option<std::io::Result<FileFingerprint>> {
+        self.drawing.as_mut().map(FileFingerprint::capture_from)
+    }
+
+    /// A separate handle onto the leased drawing, for a reader that outlives the
+    /// borrow above — the save re-checks the fingerprint just before it replaces
+    /// the file, on a worker that does not hold the lease.
+    ///
+    /// A duplicate shares the original's lock ownership, so it reads where a
+    /// fresh open of the same path would not. `None` on the same terms as
+    /// [`Self::fingerprint`].
+    pub fn reader(&self) -> Option<File> {
+        self.drawing.as_ref().and_then(|file| file.try_clone().ok())
+    }
+
     /// Atomic save replaces the path with a new file object. Move the platform
     /// lock to that new object; the sidecar remains locked throughout.
     pub fn refresh_drawing_lock(&mut self, path: &Path) -> Result<(), EditLeaseError> {
@@ -251,6 +283,47 @@ mod tests {
         ));
         drop(first);
         assert!(EditLease::acquire(&path).is_ok());
+        let _ = std::fs::remove_file(sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// A save that targets an existing drawing leases it, then fingerprints it to
+    /// check nothing changed underneath. On Windows the drawing lock is mandatory and
+    /// scoped to the handle that took it, so opening the path a second time to read it
+    /// is refused against our own lock — the lease has to answer from the handle it
+    /// already holds. `flock` on Unix is advisory and the second open succeeds, which
+    /// is why the equality below held there and the save path failed only on Windows.
+    #[test]
+    fn a_lease_fingerprints_the_drawing_it_has_locked() {
+        let path = unique_path("leased.dwg");
+        std::fs::write(&path, b"drawing bytes").unwrap();
+        let unlocked = FileFingerprint::capture(&path).unwrap();
+
+        let mut lease = EditLease::acquire(&path).unwrap();
+        let leased = lease
+            .fingerprint()
+            .expect("the lease holds a drawing handle")
+            .expect("the lease can read through its own lock");
+        assert_eq!(unlocked, leased);
+
+        drop(lease);
+        let _ = std::fs::remove_file(sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_lease_lends_a_reader_for_the_drawing_it_has_locked() {
+        let path = unique_path("leased_reader.dwg");
+        std::fs::write(&path, b"drawing bytes").unwrap();
+
+        let lease = EditLease::acquire(&path).unwrap();
+        let mut reader = lease.reader().expect("the lease holds a drawing handle");
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(b"drawing bytes".as_slice(), bytes.as_slice());
+
+        drop(reader);
+        drop(lease);
         let _ = std::fs::remove_file(sidecar_path(&path));
         let _ = std::fs::remove_file(path);
     }

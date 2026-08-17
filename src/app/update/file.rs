@@ -711,6 +711,36 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
     }
 
+    /// Read `path`, going through this session's own edit lease when one covers it.
+    ///
+    /// A leased drawing is locked for writing, and on Windows `LockFileEx` is
+    /// mandatory and scoped to the handle that took it: a plain read of a path this
+    /// editor holds open is refused against our own lock with
+    /// `ERROR_LOCK_VIOLATION`. `flock` on Unix is advisory and the same read
+    /// succeeds, which is why only Windows ever saw it. A duplicate of the lease's
+    /// handle shares its lock ownership and reads normally.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn read_drawing(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let leased = self
+            .tab_showing(path)
+            .and_then(|i| self.tabs[i].edit_lease.as_ref())
+            .and_then(|lease| lease.reader());
+        let Some(mut reader) = leased else {
+            return std::fs::read(path);
+        };
+        // The duplicate shares the original's file pointer, which the lease leaves
+        // wherever its last fingerprint read finished.
+        reader.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
     /// Start the next drawing a second launch handed us, if any.
     ///
     /// Must be called from EVERY path that clears `opening` — completion, error
@@ -851,7 +881,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             ));
         }
 
-        let destination_lease = if path_changed {
+        let mut destination_lease = if path_changed {
             match crate::io::edit_lock::EditLease::acquire(&path) {
                 Ok(lease) => Some(lease),
                 Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => {
@@ -869,7 +899,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
 
         let expected_fingerprint = if path_changed {
-            match crate::io::edit_lock::FileFingerprint::capture(&path) {
+            // Read through the lease's own handle when it has one. Re-opening the
+            // path here would collide with the exclusive lock just taken on it,
+            // which on Windows is mandatory rather than advisory and fails the
+            // whole save with ERROR_LOCK_VIOLATION.
+            let captured = destination_lease
+                .as_mut()
+                .and_then(|lease| lease.fingerprint())
+                .unwrap_or_else(|| crate::io::edit_lock::FileFingerprint::capture(&path));
+
+            match captured {
                 Ok(fingerprint) => Some(fingerprint),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => {
@@ -894,6 +933,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             version,
             self.backup_on_save,
             expected_fingerprint,
+            destination_lease.as_ref().and_then(|lease| lease.reader()),
         )?;
 
         if set_current_path {
@@ -1532,16 +1572,25 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let previous_autosave =
             (purpose != crate::app::SavePurpose::Autosave).then(|| self.autosave_target(i));
         let backup = purpose != crate::app::SavePurpose::Autosave && self.backup_on_save;
+        // Read through the lease taken just above where there is one: its lock is
+        // mandatory on Windows, so opening the same path again would fail against
+        // it instead of reading the bytes we mean to compare.
+        let mut lease = self.pending_save_leases.get_mut(&tab_id);
         let expected_fingerprint =
             if check_external_change && purpose != crate::app::SavePurpose::Autosave {
                 if set_current_path {
-                    crate::io::edit_lock::FileFingerprint::capture(&path).ok()
+                    lease
+                        .as_deref_mut()
+                        .and_then(|lease| lease.fingerprint())
+                        .unwrap_or_else(|| crate::io::edit_lock::FileFingerprint::capture(&path))
+                        .ok()
                 } else {
                     self.tabs[i].disk_fingerprint.clone()
                 }
             } else {
                 None
             };
+        let verify_reader = lease.and_then(|lease| lease.reader());
         let worker_path = path.clone();
 
         Task::perform(
@@ -1572,6 +1621,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         version,
                         backup,
                         expected_fingerprint,
+                        verify_reader,
                     );
                     (result, refreshed_preview)
                 })

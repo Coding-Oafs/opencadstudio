@@ -1437,6 +1437,7 @@ mod save_failure_tests {
             acadrust::DxfVersion::AC1032,
             false,
             Some(expected),
+            None,
         )
         .unwrap_err();
 
@@ -1509,12 +1510,20 @@ pub fn save_owned_as_version_atomic(
     version: acadrust::DxfVersion,
     backup: bool,
     expected_fingerprint: Option<edit_lock::FileFingerprint>,
+    verify_reader: Option<std::fs::File>,
 ) -> Result<(), SaveFailure> {
     save_owned_as_version_inner(doc, path, version, backup, 0.0, move |path| {
         let Some(expected) = expected_fingerprint else {
             return Ok(());
         };
-        match edit_lock::FileFingerprint::capture(path) {
+        // Prefer the caller's handle: it comes from the edit lease that already
+        // locked this path, and a fresh open would collide with that lock rather
+        // than read through it.
+        let current = match verify_reader {
+            Some(mut file) => edit_lock::FileFingerprint::capture_from(&mut file),
+            None => edit_lock::FileFingerprint::capture(path),
+        };
+        match current {
             Ok(current) if current == expected => Ok(()),
             _ => Err(SaveFailure::externally_modified(path)),
         }
