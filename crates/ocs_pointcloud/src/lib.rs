@@ -30,8 +30,9 @@ pub use sidecar::{
     SidecarResult, SidecarStore, SourceFingerprint,
 };
 pub use tile_cache::{
-    build_tiled_cache, read_tile, IndexProgress, TileCacheError, TileCacheManifest,
-    TileCacheOptions, TileCacheResult, TileEntry, TileKey,
+    build_tiled_cache, read_tile, read_tiles_parallel, IndexProgress, TileCacheError,
+    TileCacheManifest, TileCacheOptions, TileCacheResult, TileEntry, TileKey,
+    MAX_TILE_READ_WORKERS,
 };
 
 use las::{point::Classification, Header, Point, Reader, Writer};
@@ -1192,6 +1193,79 @@ mod tests {
             |_| true,
         );
         assert!(matches!(result, Err(Error::OutputExists(_))));
+    }
+
+    #[test]
+    fn parallel_tile_reads_match_sequential_results() {
+        let directory = TestDirectory::new();
+        let input = directory.join("parallel-tiles.las");
+        let cache = directory.join("parallel-tiles.ocstiles");
+        create_cloud(&input, 2_000);
+        let manifest = build_tiled_cache(
+            &input,
+            &cache,
+            TileCacheOptions {
+                target_leaf_points: 8,
+                read_chunk_size: 256,
+                max_depth: 8,
+            },
+            |_| true,
+        )
+        .unwrap();
+        assert!(
+            manifest.tiles.len() > MAX_TILE_READ_WORKERS,
+            "fixture must produce more tiles than workers, got {}",
+            manifest.tiles.len()
+        );
+
+        let sequential: Vec<_> = manifest
+            .tiles
+            .iter()
+            .map(|tile| (tile.key, read_tile(&cache, tile).unwrap()))
+            .collect();
+        let parallel = read_tiles_parallel(&cache, &manifest.tiles, MAX_TILE_READ_WORKERS).unwrap();
+        let mut parallel = parallel;
+        parallel.sort_by_key(|(key, _)| *key);
+        let mut sequential_sorted = sequential;
+        sequential_sorted.sort_by_key(|(key, _)| *key);
+        assert_eq!(sequential_sorted.len(), parallel.len());
+        for ((seq_key, seq_points), (par_key, par_points)) in
+            sequential_sorted.iter().zip(parallel.iter())
+        {
+            assert_eq!(seq_key, par_key);
+            assert_eq!(seq_points.len(), par_points.len());
+            assert!(seq_points.iter().zip(par_points.iter()).all(
+                |(left, right)| left.source_index == right.source_index
+            ));
+        }
+    }
+
+    #[test]
+    fn parallel_tile_reads_clamp_workers_and_handle_empty_and_errors() {
+        let directory = TestDirectory::new();
+        let input = directory.join("clamp-tiles.las");
+        let cache = directory.join("clamp-tiles.ocstiles");
+        create_cloud(&input, 40);
+        let manifest = build_tiled_cache(
+            &input,
+            &cache,
+            TileCacheOptions {
+                target_leaf_points: 8,
+                read_chunk_size: 16,
+                max_depth: 8,
+            },
+            |_| true,
+        )
+        .unwrap();
+        // Empty batches and degenerate worker counts are safe.
+        assert!(read_tiles_parallel(&cache, &[], 0).unwrap().is_empty());
+        let single = read_tiles_parallel(&cache, &manifest.tiles, 99).unwrap();
+        assert_eq!(manifest.tiles.len(), single.len());
+        // A corrupt entry fails the whole batch, like the sequential reader.
+        let mut broken = manifest.tiles[0].clone();
+        broken.file_name = "missing.tile".to_string();
+        let result = read_tiles_parallel(&cache, &[broken], 2);
+        assert!(result.is_err());
     }
 
     #[test]

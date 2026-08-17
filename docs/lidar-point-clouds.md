@@ -95,9 +95,11 @@ The active selection is highlighted amber in the GPU view before editing.
   deterministic coarser levels, caps simultaneously open tile files, and
   rejects a cache when the source fingerprint has changed.
 - Camera-frustum-driven tile selection chooses the finest visible level that
-  fits the point, CPU-memory, and GPU-memory budgets. Missing tiles load on a
-  worker thread; an LRU retains recently used CPU tiles and the GPU model holds
-  only the active visible working set.
+  fits the point, CPU-memory, and GPU-memory budgets. Missing tiles load on
+  worker threads — one source streams at a time (round-robin per camera tick)
+  with up to `min(cores, 8)` parallel tile readers per batch — and an LRU
+  retains recently used CPU tiles; the GPU model holds only the active
+  visible working set.
 - Direct viewport point, window, polygon-fence, and fixed-pixel brush queries
   use a camera-generation-keyed screen spatial grid. Attribute filters and all
   resulting edit transactions retain stable source indices.

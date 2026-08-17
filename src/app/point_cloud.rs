@@ -1307,14 +1307,11 @@ impl OpenCADStudio {
         let request_id = cloud.stream_request_id;
         cloud.stream_in_flight = true;
         let cache_path = cache_path.clone();
+        let tile_workers = tile_read_workers();
         background_task(
             move || {
-                let mut loaded = Vec::with_capacity(missing.len());
-                for tile in missing {
-                    let points = ocs_pointcloud::read_tile(&cache_path, &tile)
-                        .map_err(|error| error.to_string())?;
-                    loaded.push((tile.key, points));
-                }
+                let loaded = ocs_pointcloud::read_tiles_parallel(&cache_path, &missing, tile_workers)
+                    .map_err(|error| error.to_string())?;
                 Ok(TileLoadBatch {
                     source_id,
                     request_id,
@@ -2765,6 +2762,16 @@ where
         async move { receiver.await.expect("point-cloud worker dropped") },
         map,
     )
+}
+
+/// Tile-read parallelism for one streaming batch. Sources stream one batch at
+/// a time (round-robin per tick), so this bounds total reader threads.
+fn tile_read_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .min(ocs_pointcloud::MAX_TILE_READ_WORKERS)
+        .max(1)
 }
 
 fn rebuild_resident_display(cloud: &mut PointCloudAttachment) {

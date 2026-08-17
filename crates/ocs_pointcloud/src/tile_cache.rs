@@ -304,6 +304,56 @@ pub fn read_tile(
     Ok(points)
 }
 
+/// Upper bound on concurrent tile readers: enough to keep fast NVMe busy
+/// without swamping machines with modest page files.
+pub const MAX_TILE_READ_WORKERS: usize = 8;
+
+/// Reads several tiles in parallel across bounded worker threads.
+///
+/// Tiles are assigned round-robin so a batch holding one huge tile next to
+/// many small ones still spreads its work evenly. Any failing tile fails the
+/// whole batch, matching the sequential reader's semantics. `workers` is
+/// clamped to 1..=[`MAX_TILE_READ_WORKERS`] and never exceeds the tile count.
+pub fn read_tiles_parallel(
+    cache_dir: impl AsRef<Path>,
+    tiles: &[TileEntry],
+    workers: usize,
+) -> TileCacheResult<Vec<(TileKey, Vec<SamplePoint>)>> {
+    if tiles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let workers = workers.clamp(1, MAX_TILE_READ_WORKERS).min(tiles.len());
+    let cache_dir = cache_dir.as_ref();
+    let mut shares: Vec<Vec<&TileEntry>> = vec![Vec::new(); workers];
+    for (index, tile) in tiles.iter().enumerate() {
+        shares[index % workers].push(tile);
+    }
+    let mut loaded = Vec::with_capacity(tiles.len());
+    let outcome: TileCacheResult<()> = std::thread::scope(|scope| {
+        let handles: Vec<_> = shares
+            .into_iter()
+            .map(|share| {
+                scope.spawn(move || {
+                    let mut results = Vec::with_capacity(share.len());
+                    for tile in &share {
+                        results.push((tile.key, read_tile(cache_dir, tile)?));
+                    }
+                    Ok::<_, TileCacheError>(results)
+                })
+            })
+            .collect();
+        for handle in handles {
+            let results = handle
+                .join()
+                .map_err(|_| TileCacheError::InvalidCache("tile reader worker panicked".into()))?;
+            loaded.extend(results?);
+        }
+        Ok(())
+    });
+    outcome?;
+    Ok(loaded)
+}
+
 fn leaf_level(point_count: u64, target: u64, max_depth: u8) -> u8 {
     let mut level = 0_u8;
     let mut cells = 1_u64;
