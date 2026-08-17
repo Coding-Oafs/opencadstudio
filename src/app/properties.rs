@@ -3,8 +3,9 @@ use super::{OpenCADStudio, VARIES_LABEL};
 use crate::io::linetypes;
 use crate::scene::view::dispatch;
 use crate::ui;
-use acadrust::{EntityType, Handle};
 use crate::t;
+use acadrust::types::{Transform, Vector3};
+use acadrust::{Entity, EntityType, Handle};
 
 /// Above this many selected objects the Properties panel skips per-entity
 /// property aggregation (which is O(n) per row, plus an O(n²) group filter) and
@@ -959,10 +960,8 @@ impl OpenCADStudio {
                                 .map(|br| br.units)
                                 .unwrap_or(0);
                             set_row(&mut sections, "block_unit", insunits_name(src).to_string());
-                            let host_mm = if host == 0 { 1.0 } else { insunits_to_mm(host) };
-                            let src_mm = if src == 0 { 1.0 } else { insunits_to_mm(src) };
-                            let factor = if host_mm.abs() > 1e-12 { src_mm / host_mm } else { 1.0 };
-                            set_row(&mut sections, "unit_factor", format!("{factor:.4}"));
+                            let factor = insert_unit_scale(host, src).unwrap_or(1.0);
+                            set_row(&mut sections, "unit_factor", format_unit_factor(factor));
 
                             // Name row: editable for regular blocks — pick an
                             // existing definition to re-point this reference, or
@@ -1805,9 +1804,12 @@ impl OpenCADStudio {
                 .map(|br| br.units)
                 .unwrap_or(0);
             if let Some(ratio) = insert_unit_scale(host_units, src_units) {
-                ins.set_x_scale(ratio);
-                ins.set_y_scale(ratio);
-                ins.set_z_scale(ratio);
+                if !apply_insert_unit_scale(ins, ratio) {
+                    self.command_line.push_error(
+                        t!("INSERT unit scale is outside the supported range.").as_ref(),
+                    );
+                    return None;
+                }
             }
         }
 
@@ -2370,60 +2372,89 @@ fn insunits_name(code: i16) -> &'static str {
         19 => "Light Years",
         20 => "Parsecs",
         21 => "US Survey Feet",
-        _ => "Unitless",
+        22 => "US Survey Inches",
+        23 => "US Survey Yards",
+        24 => "US Survey Miles",
+        0 => "Unitless",
+        _ => "Unknown",
     }
 }
 
-/// Unit-conversion scale for a new INSERT, or `None` when the reference should
-/// keep scale 1.
-///
-/// A unitless (0) block carries no length to convert from, and a unitless
-/// drawing none to convert to, so either side being unitless means the
-/// reference is inserted as authored. This matches the `unit_factor` row shown
-/// for the same insert in the properties panel.
+/// Unit-conversion scale for a new INSERT.
 fn insert_unit_scale(host_units: i16, src_units: i16) -> Option<f64> {
-    if host_units == 0 || src_units == 0 || src_units == host_units {
-        return None;
-    }
-    let ratio = insunits_to_mm(src_units) / insunits_to_mm(host_units);
+    let host_mm = insunits_to_mm(host_units)?;
+    let src_mm = insunits_to_mm(src_units)?;
+    let ratio = src_mm / host_mm;
     if !ratio.is_finite() || (ratio - 1.0).abs() <= 1e-9 {
         return None;
     }
     Some(ratio)
 }
 
-/// Convert INSUNITS (DXF group 70) to millimetres.
-/// 0 = unitless / unknown: returns 1.0 so the caller treats it as "do not scale".
-fn insunits_to_mm(code: i16) -> f64 {
-    match code {
-        1 => 25.4,            // Inches
-        2 => 304.8,           // Feet
-        3 => 1_609_344.0,     // Miles
-        4 => 1.0,             // Millimeters
-        5 => 10.0,            // Centimeters
-        6 => 1_000.0,         // Meters
-        7 => 1_000_000.0,     // Kilometers
-        8 => 0.000_025_4,     // Microinches
-        9 => 0.025_4,         // Mils
-        10 => 914.4,          // Yards
-        11 => 1.0e-7,         // Angstroms
-        12 => 1.0e-6,         // Nanometers
-        13 => 0.001,          // Microns
-        14 => 100.0,          // Decimeters
-        15 => 10_000.0,       // Decameters
-        16 => 100_000.0,      // Hectometers
-        17 => 1.0e12,         // Gigameters
-        18 => 1.496e14,       // Astronomical Units
-        19 => 9.461e18,       // Light Years
-        20 => 3.086e19,       // Parsecs
-        21 => 304.800_609_6,  // US Survey Feet
-        _ => 1.0,
+fn format_unit_factor(factor: f64) -> String {
+    let magnitude = factor.abs();
+    if magnitude > 0.0 && !(1.0e-4..1.0e7).contains(&magnitude) {
+        format!("{factor:.4e}")
+    } else {
+        format!("{factor:.4}")
     }
+}
+
+/// Convert INSUNITS (DXF group 70) to millimetres.
+fn insunits_to_mm(code: i16) -> Option<f64> {
+    Some(match code {
+        1 => 25.4,                       // Inches
+        2 => 304.8,                      // Feet
+        3 => 1_609_344.0,                // Miles
+        4 => 1.0,                        // Millimeters
+        5 => 10.0,                       // Centimeters
+        6 => 1_000.0,                    // Meters
+        7 => 1_000_000.0,                // Kilometers
+        8 => 0.000_025_4,                // Microinches
+        9 => 0.025_4,                    // Mils
+        10 => 914.4,                     // Yards
+        11 => 1.0e-7,                    // Angstroms
+        12 => 1.0e-6,                    // Nanometers
+        13 => 0.001,                     // Microns
+        14 => 100.0,                     // Decimeters
+        15 => 10_000.0,                  // Decameters
+        16 => 100_000.0,                 // Hectometers
+        17 => 1.0e12,                    // Gigameters
+        18 => 1.495_978_707e14,          // Astronomical Units
+        19 => 9.460_730_472_580_8e18,    // Light Years
+        20 => 3.085_677_581_491_367_3e19, // Parsecs
+        21 => 1_200_000.0 / 3_937.0,     // US Survey Feet
+        22 => 100_000.0 / 3_937.0,       // US Survey Inches
+        23 => 3_600_000.0 / 3_937.0,     // US Survey Yards
+        24 => 6_336_000_000.0 / 3_937.0, // US Survey Miles
+        _ => return None,
+    })
+}
+
+fn apply_insert_unit_scale(ins: &mut acadrust::entities::Insert, ratio: f64) -> bool {
+    const MIN_INSERT_SCALE: f64 = 1.0e-12;
+    if [ins.x_scale(), ins.y_scale(), ins.z_scale()]
+        .into_iter()
+        .map(|scale| scale * ratio)
+        .any(|scale| !scale.is_finite() || scale.abs() < MIN_INSERT_SCALE)
+    {
+        return false;
+    }
+
+    let origin = ins.get_transform().apply(Vector3::ZERO);
+    ins.apply_transform(&Transform::from_translation(-origin));
+    ins.apply_transform(&Transform::from_scale(ratio));
+    ins.apply_transform(&Transform::from_translation(origin));
+    true
 }
 
 #[cfg(test)]
 mod insert_unit_scale_tests {
-    use super::insert_unit_scale;
+    use super::{
+        apply_insert_unit_scale, format_unit_factor, insert_unit_scale, insunits_to_mm,
+    };
+    use acadrust::entities::{AttributeEntity, Insert};
+    use acadrust::types::Vector3;
 
     const UNITLESS: i16 = 0;
     const INCHES: i16 = 1;
@@ -2452,6 +2483,13 @@ mod insert_unit_scale_tests {
     }
 
     #[test]
+    fn unknown_units_do_not_scale() {
+        assert_eq!(insunits_to_mm(0), None);
+        assert_eq!(insunits_to_mm(25), None);
+        assert_eq!(insert_unit_scale(MILLIMETERS, 25), None);
+    }
+
+    #[test]
     fn differing_units_convert_through_millimetres() {
         let ratio = insert_unit_scale(MILLIMETERS, METERS).expect("metres into mm should scale");
         assert!((ratio - 1000.0).abs() < 1e-9, "got {ratio}");
@@ -2461,5 +2499,73 @@ mod insert_unit_scale_tests {
 
         let ratio = insert_unit_scale(METERS, CENTIMETERS).expect("cm into m should scale");
         assert!((ratio - 0.01).abs() < 1e-12, "got {ratio}");
+    }
+
+    #[test]
+    fn survey_units_have_expected_ratios() {
+        let survey_foot = insunits_to_mm(21).expect("survey feet");
+        let survey_inch = insunits_to_mm(22).expect("survey inches");
+        let survey_yard = insunits_to_mm(23).expect("survey yards");
+        let survey_mile = insunits_to_mm(24).expect("survey miles");
+
+        assert!((survey_foot / survey_inch - 12.0).abs() < 1e-12);
+        assert!((survey_yard / survey_foot - 3.0).abs() < 1e-12);
+        assert!((survey_mile / survey_foot - 5280.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn astronomical_units_use_precise_si_values() {
+        assert_eq!(insunits_to_mm(18), Some(1.495_978_707e14));
+        assert_eq!(insunits_to_mm(19), Some(9.460_730_472_580_8e18));
+        assert_eq!(
+            insunits_to_mm(20),
+            Some(3.085_677_581_491_367_3e19)
+        );
+        assert_ne!(format_unit_factor(1.0e-7), "0.0000");
+    }
+
+    #[test]
+    fn applying_unit_scale_composes_with_insert_transform() {
+        let mut ins = Insert::new("Block", Vector3::new(12.0, -4.0, 3.0));
+        ins.set_x_scale(-2.0);
+        ins.set_y_scale(3.0);
+        ins.set_z_scale(-4.0);
+        ins.rotation = 0.37;
+        let insertion = ins.get_transform().apply(Vector3::ZERO);
+        let attribute_position = insertion + Vector3::new(2.0, -1.0, 0.5);
+        let mut attribute = AttributeEntity::simple("TAG", "Value");
+        attribute.insertion_point = attribute_position;
+        ins.attributes.push(attribute);
+
+        assert!(apply_insert_unit_scale(&mut ins, 25.4));
+
+        let scaled_insertion = ins.get_transform().apply(Vector3::ZERO);
+        let expected_attribute = insertion + (attribute_position - insertion) * 25.4;
+        assert!((scaled_insertion - insertion).length() < 1e-9);
+        assert!((ins.attributes[0].insertion_point - expected_attribute).length() < 1e-9);
+        assert!((ins.x_scale() + 50.8).abs() < 1e-9);
+        assert!((ins.y_scale() - 76.2).abs() < 1e-9);
+        assert!((ins.z_scale() + 101.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn applying_large_unit_scale_keeps_distant_insert_fixed() {
+        let mut ins = Insert::new("Block", Vector3::new(1.0e12, -2.0e12, 3.0e12));
+        let insertion = ins.get_transform().apply(Vector3::ZERO);
+
+        assert!(apply_insert_unit_scale(&mut ins, 1.0e20));
+
+        let scaled_insertion = ins.get_transform().apply(Vector3::ZERO);
+        assert_eq!(scaled_insertion, insertion);
+        assert_eq!(ins.x_scale(), 1.0e20);
+    }
+
+    #[test]
+    fn unsupported_tiny_unit_scale_is_not_applied() {
+        let mut ins = Insert::new("Block", Vector3::new(1.0, 2.0, 3.0));
+        let before = ins.clone();
+
+        assert!(!apply_insert_unit_scale(&mut ins, 1.0e-13));
+        assert_eq!(ins, before);
     }
 }
