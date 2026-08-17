@@ -18,3 +18,16 @@ fn shader_uses_fixed_pixel_quads_and_rte_coordinates() {
     assert!(SHADER.contains("point.position_low.xyz - u.eye_low"));
     assert!(SHADER.contains("discard"));
 }
+
+/// Colorization must come from the style uniform so color mode, class
+/// visibility and class-table edits never rebuild the instance buffer.
+#[test]
+fn shader_colorizes_from_style_uniform() {
+    assert!(SHADER.contains("@group(1) @binding(0) var<uniform> style: Style"));
+    assert!(SHADER.contains("style.class_visible"));
+    assert!(SHADER.contains("style.class_colors"));
+    assert!(SHADER.contains("style.color_mode"));
+    // Hidden classes collapse to a zero-size quad instead of being filtered
+    // out of the point set on the CPU.
+    assert!(SHADER.contains("class_is_visible(classification)"));
+}

@@ -471,7 +471,7 @@ impl shader::Primitive for Primitive {
             let Some(draw_depths) = vp.draw_depths.upgrade() else {
                 continue;
             };
-            inner.point_gpu.upload(device, &vp.point_cloud);
+            inner.point_gpu.upload(device, queue, &vp.point_cloud);
             // Third component is the *selected-set* signature (not
             // selection_generation, which also bumps on hover) so a rollover
             // doesn't re-upload the static hatch / face3d buffers.
@@ -1256,7 +1256,8 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     vp.selection_generation.hash(&mut h);
     vp.selected_sig.hash(&mut h);
     vp.wire_content_id.hash(&mut h);
-    vp.point_cloud.generation.hash(&mut h);
+    vp.point_cloud.geometry_generation.hash(&mut h);
+    vp.point_cloud.style_generation.hash(&mut h);
     vp.point_cloud.point_size_px.to_bits().hash(&mut h);
     (Arc::as_ptr(&vp.point_cloud.points) as usize).hash(&mut h);
     vp.fill_mode.hash(&mut h);

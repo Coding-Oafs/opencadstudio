@@ -7,7 +7,10 @@
 //! new file.
 
 use super::{Message, OpenCADStudio};
-use crate::scene::{PointCloudModel, PointCloudPoint};
+use crate::scene::{
+    PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION, COLOR_MODE_ELEVATION,
+    COLOR_MODE_INTENSITY, COLOR_MODE_RGB, COLOR_MODE_RETURN, COLOR_MODE_SOURCE,
+};
 use iced::Task;
 use ocs_pointcloud::{
     classification_statistics, parse_ptc, select_brush, select_nearest, select_polygon,
@@ -27,7 +30,9 @@ use std::{
 const DISPLAY_POINT_LIMIT: usize = 1_000_000;
 const DISPLAY_READ_CHUNK: usize = 65_536;
 const MAX_COMMAND_EDIT_POINTS: usize = 5_000_000;
-const GPU_POINT_BYTES: usize = 48;
+/// GPU cost of one point instance (two position vec4s + attribute vec4 +
+/// color/flag vec4); drives the display point budget.
+const GPU_POINT_BYTES: usize = crate::scene::pipeline::point_gpu::POINT_INSTANCE_BYTES;
 
 #[derive(Clone, Debug)]
 pub struct TileLoadBatch {
@@ -336,6 +341,13 @@ pub(super) struct PointCloudDataset {
     /// Dataset-wide merge-export job (POINTCLOUDEXPORTALL).
     pub(super) export_all_job: Option<Arc<PointCloudJobProgress>>,
     display_generation: u64,
+    /// Bumps on style-only changes (color mode, class visibility, class
+    /// colors, point size): the GPU rewrites its style uniform, not the
+    /// instance buffer.
+    style_generation: u64,
+    /// Cached sample intensity range for style updates that skip a full
+    /// display rebuild.
+    resolved_intensity_range: Option<[u16; 2]>,
     /// Ids of the sources touched by the most recent edit action; undo steps
     /// exactly those sources so one cross-source action is undone as one.
     last_edit_sources: Option<Vec<String>>,
@@ -389,6 +401,10 @@ impl PointCloudDataset {
         }
     }
 
+    pub(super) fn mark_style_changed(&mut self) {
+        self.style_generation = self.style_generation.wrapping_add(1).max(1);
+    }
+
     fn note_edit_sources(&mut self, ids: Vec<String>) {
         self.last_edit_sources = Some(ids);
     }
@@ -438,19 +454,9 @@ impl PointCloudDataset {
         bounds
     }
 
-    pub(super) fn display_model(&self) -> PointCloudModel {
-        let intensity_range = self.display.intensity_range.unwrap_or_else(|| {
-            self.sources.iter().flat_map(|source| source.sample.points.iter()).fold(
-                [u16::MAX, 0],
-                |range, point| {
-                    [range[0].min(point.intensity), range[1].max(point.intensity)]
-                },
-            )
-        });
-        let elevation_range = self.display.elevation_range.unwrap_or_else(|| {
-            self.bounds().map_or([0.0, 0.0], |(min, max)| [min[2], max[2]])
-        });
+    pub(super) fn display_model(&mut self) -> PointCloudModel {
         let mut points = Vec::new();
+        let mut intensity_range = self.display.intensity_range.unwrap_or([u16::MAX, 0]);
         for source in &self.sources {
             let active_selection = source
                 .selection_sets
@@ -461,35 +467,82 @@ impl PointCloudDataset {
                     .edits
                     .patch_for(sampled.source_index)
                     .map_or_else(|| sampled.clone(), |patch| sampled.clone().with_patch(patch));
-                let class_visible = self
-                    .classes
-                    .classes
-                    .get(&point.classification)
-                    .is_none_or(|definition| definition.visible);
-                if !class_visible || self.display.hidden_classes.contains(&point.classification) {
-                    continue;
+                if self.display.intensity_range.is_none() {
+                    intensity_range[0] = intensity_range[0].min(point.intensity);
+                    intensity_range[1] = intensity_range[1].max(point.intensity);
                 }
-                let mut color = point_color(
-                    &point,
-                    self.display.color_mode,
-                    &self.classes,
-                    intensity_range,
-                    elevation_range,
-                );
-                if active_selection.is_some_and(|selection| selection.contains(point.source_index))
-                {
-                    color = [1.0, 0.82, 0.05, 1.0];
-                }
+                // Class visibility is a shader-side mask, not a filter: hiding
+                // a class must not rebuild the instance buffer.
                 points.push(PointCloudPoint {
                     position: point.position,
-                    color,
+                    classification: point.classification,
+                    intensity: point.intensity,
+                    return_number: point.return_number,
+                    point_source_id: point.point_source_id,
+                    color: point.color,
+                    selected: active_selection
+                        .is_some_and(|selection| selection.contains(point.source_index)),
                 });
             }
         }
+        self.resolved_intensity_range = Some(intensity_range);
         PointCloudModel {
             points: Arc::new(points),
             point_size_px: self.display.point_size_px,
-            generation: self.display_generation,
+            style: self.point_style(),
+            geometry_generation: self.display_generation,
+            style_generation: self.style_generation,
+        }
+    }
+
+    /// The colorization state uploaded to the GPU as one uniform write.
+    pub(super) fn point_style(&self) -> PointStyle {
+        let mut class_visible = [0_u32; 8];
+        for class in 0..u8::MAX as u32 + 1 {
+            let visible = self
+                .classes
+                .classes
+                .get(&(class as u8))
+                .map_or(true, |definition| definition.visible)
+                && !self.display.hidden_classes.contains(&(class as u8));
+            if visible {
+                class_visible[(class / 32) as usize] |= 1 << (class % 32);
+            }
+        }
+        let mut class_colors = [[0.92, 0.92, 0.92, 1.0]; 256];
+        for class in 0..u8::MAX as u32 + 1 {
+            let [red, green, blue] = self.classes.color(class as u8);
+            class_colors[class as usize] = [
+                red as f32 / 255.0,
+                green as f32 / 255.0,
+                blue as f32 / 255.0,
+                1.0,
+            ];
+        }
+        let intensity_range = self
+            .resolved_intensity_range
+            .unwrap_or(self.display.intensity_range.unwrap_or([0, u16::MAX]));
+        let elevation_range = self
+            .display
+            .elevation_range
+            .unwrap_or_else(|| self.bounds().map_or([0.0, 0.0], |(min, max)| [min[2], max[2]]));
+        PointStyle {
+            color_mode: match self.display.color_mode {
+                ColorMode::Classification => COLOR_MODE_CLASSIFICATION,
+                ColorMode::Rgb => COLOR_MODE_RGB,
+                ColorMode::Intensity => COLOR_MODE_INTENSITY,
+                ColorMode::Elevation => COLOR_MODE_ELEVATION,
+                ColorMode::ReturnNumber => COLOR_MODE_RETURN,
+                ColorMode::PointSource => COLOR_MODE_SOURCE,
+            },
+            point_size_px: self.display.point_size_px,
+            class_visible,
+            class_colors,
+            intensity_range: [
+                intensity_range[0] as f32,
+                intensity_range[1] as f32,
+            ],
+            elevation_range: [elevation_range[0] as f32, elevation_range[1] as f32],
         }
     }
 }
@@ -1403,6 +1456,24 @@ impl OpenCADStudio {
         }
     }
 
+    /// Applies a style-only change (color mode, class visibility, class
+    /// colors, point size): shares the resident point data and rewrites just
+    /// the GPU style uniform — no instance-buffer rebuild, no CPU point pass.
+    pub(super) fn restyle_point_cloud(&mut self, tab_index: usize) {
+        let style = self.tabs[tab_index].point_cloud.point_style();
+        let point_size = self.tabs[tab_index].point_cloud.display.point_size_px;
+        self.tabs[tab_index].point_cloud.mark_style_changed();
+        let current = self.tabs[tab_index].scene.point_cloud.clone();
+        let model = PointCloudModel {
+            points: Arc::clone(&current.points),
+            point_size_px: point_size,
+            style,
+            geometry_generation: current.geometry_generation,
+            style_generation: self.tabs[tab_index].point_cloud.style_generation,
+        };
+        self.tabs[tab_index].scene.set_point_cloud(model);
+    }
+
     pub(super) fn set_point_cloud_color_mode(&mut self, tab_index: usize, mode: ColorMode) {
         if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
@@ -1410,9 +1481,7 @@ impl OpenCADStudio {
             return;
         }
         self.tabs[tab_index].point_cloud.display.color_mode = mode;
-        self.tabs[tab_index].point_cloud.mark_display_changed();
-        let model = self.tabs[tab_index].point_cloud.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        self.restyle_point_cloud(tab_index);
         self.command_line
             .push_output(format!("POINTCLOUDCOLOR: mode set to {mode:?}.").as_str());
         self.persist_point_cloud(tab_index, "display", &format!("color mode {mode:?}"), &[]);
@@ -1430,9 +1499,7 @@ impl OpenCADStudio {
             return;
         }
         self.tabs[tab_index].point_cloud.display.point_size_px = size;
-        self.tabs[tab_index].point_cloud.mark_display_changed();
-        let model = self.tabs[tab_index].point_cloud.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        self.restyle_point_cloud(tab_index);
         self.command_line.push_output(
             format!("POINTCLOUDPOINTSIZE: fixed screen size set to {size:.1} px.").as_str(),
         );
@@ -1463,9 +1530,7 @@ impl OpenCADStudio {
                 .hidden_classes
                 .insert(classification);
         }
-        self.tabs[tab_index].point_cloud.mark_display_changed();
-        let model = self.tabs[tab_index].point_cloud.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        self.restyle_point_cloud(tab_index);
         self.command_line.push_output(
             format!(
                 "POINTCLOUDCLASSVISIBLE: class {classification} {}.",
@@ -1505,9 +1570,9 @@ impl OpenCADStudio {
         if let Some(locked) = locked {
             class.locked = locked;
         }
-        dataset.mark_display_changed();
-        let model = dataset.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        drop(class);
+        drop(dataset);
+        self.restyle_point_cloud(tab_index);
         self.persist_point_cloud(tab_index, "classes", &format!("edited class {code}"), &[]);
     }
 
@@ -1529,9 +1594,10 @@ impl OpenCADStudio {
             return;
         };
         *component = value;
-        dataset.mark_display_changed();
-        let model = dataset.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        drop(component);
+        drop(class);
+        drop(dataset);
+        self.restyle_point_cloud(tab_index);
         self.persist_point_cloud(tab_index, "classes", &format!("changed class {code} color"), &[]);
     }
 
@@ -1556,9 +1622,8 @@ impl OpenCADStudio {
             visible: true,
             locked: false,
         });
-        dataset.mark_display_changed();
-        let model = dataset.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        drop(dataset);
+        self.restyle_point_cloud(tab_index);
         self.persist_point_cloud(tab_index, "classes", &format!("added class {code}"), &[]);
     }
 
@@ -1579,9 +1644,8 @@ impl OpenCADStudio {
             return;
         }
         dataset.display.hidden_classes.remove(&code);
-        dataset.mark_display_changed();
-        let model = dataset.display_model();
-        self.tabs[tab_index].scene.set_point_cloud(model);
+        drop(dataset);
+        self.restyle_point_cloud(tab_index);
         self.persist_point_cloud(tab_index, "classes", &format!("removed class {code}"), &[]);
     }
 
@@ -2122,9 +2186,7 @@ impl OpenCADStudio {
                     return;
                 }
                 self.tabs[tab_index].point_cloud.classes = classes;
-                self.tabs[tab_index].point_cloud.mark_display_changed();
-                let model = self.tabs[tab_index].point_cloud.display_model();
-                self.tabs[tab_index].scene.set_point_cloud(model);
+                self.restyle_point_cloud(tab_index);
                 self.command_line.push_output(
                     format!(
                         "POINTCLOUDPTCIMPORT: loaded {count} class definitions from \"{}\".",
@@ -2830,64 +2892,6 @@ fn path_matches(left: &std::path::Path, right: &std::path::Path) -> bool {
     {
         left == right
     }
-}
-
-fn point_color(
-    point: &ocs_pointcloud::SamplePoint,
-    mode: ColorMode,
-    classes: &ClassTable,
-    intensity: [u16; 2],
-    elevation: [f64; 2],
-) -> [f32; 4] {
-    match mode {
-        ColorMode::Classification => rgb8(classes.color(point.classification)),
-        ColorMode::Rgb => point.color.map_or_else(
-            || rgb8(classes.color(point.classification)),
-            |color| {
-                [
-                    color[0] as f32 / 65_535.0,
-                    color[1] as f32 / 65_535.0,
-                    color[2] as f32 / 65_535.0,
-                    1.0,
-                ]
-            },
-        ),
-        ColorMode::Intensity => {
-            let value = normalize(
-                point.intensity as f64,
-                intensity[0] as f64,
-                intensity[1] as f64,
-            );
-            [value, value, value, 1.0]
-        }
-        ColorMode::Elevation => gradient(normalize(point.position[2], elevation[0], elevation[1])),
-        ColorMode::ReturnNumber => categorical(point.return_number as u32),
-        ColorMode::PointSource => categorical(point.point_source_id as u32),
-    }
-}
-
-fn rgb8(color: [u8; 3]) -> [f32; 4] {
-    [
-        color[0] as f32 / 255.0,
-        color[1] as f32 / 255.0,
-        color[2] as f32 / 255.0,
-        1.0,
-    ]
-}
-
-fn normalize(value: f64, low: f64, high: f64) -> f32 {
-    if !value.is_finite() || high <= low {
-        0.5
-    } else {
-        ((value - low) / (high - low)).clamp(0.0, 1.0) as f32
-    }
-}
-
-fn gradient(value: f32) -> [f32; 4] {
-    let red = (value * 1.5).clamp(0.0, 1.0);
-    let blue = ((1.0 - value) * 1.5).clamp(0.0, 1.0);
-    let green = (1.0 - (value - 0.5).abs() * 2.0).clamp(0.0, 1.0);
-    [red, green, blue, 1.0]
 }
 
 fn categorical(value: u32) -> [f32; 4] {

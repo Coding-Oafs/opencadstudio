@@ -88,8 +88,12 @@ The active selection is highlighted amber in the GPU view before editing.
 - Native `wgpu` instanced point quads with depth testing, fixed screen size,
   circular antialiasing, and high/low relative-to-eye coordinates for survey
   coordinate precision.
-- Classification, RGB, intensity, elevation, return-number, and point-source
-  GPU color modes.
+- GPU-side colorization: instances carry source attributes (class, intensity,
+  returns, point source, RGB) and the shader computes classification, RGB,
+  intensity, elevation, return-number and point-source coloring from a style
+  uniform. Changing color mode, class visibility, class colors or point size
+  rewrites only that uniform — the instance buffer is rebuilt solely when the
+  point set or per-point attributes change (tile loads, edits, selections).
 - A versioned, rebuildable tiled LOD cache adjacent to the source:
   `<cloud>.las.ocstiles` or `<cloud>.laz.ocstiles`. It retains full leaf records,
   deterministic coarser levels, caps simultaneously open tile files, and
