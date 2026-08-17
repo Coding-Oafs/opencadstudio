@@ -27,6 +27,8 @@ pub enum Language {
     System,
     #[serde(rename = "en-US")]
     EnUs,
+    #[serde(rename = "bg-BG")]
+    BgBg,
     #[serde(rename = "tr-TR")]
     TrTr,
     #[serde(rename = "nl-NL")]
@@ -66,9 +68,10 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Language; 20] = [
+    pub const ALL: [Language; 21] = [
         Language::System,
         Language::EnUs,
+        Language::BgBg,
         Language::PtBr,
         Language::CsCz,
         Language::NlNl,
@@ -93,6 +96,7 @@ impl Language {
         match self {
             Language::System => system_languages(),
             Language::EnUs => vec!["en-US".parse().expect("valid locale")],
+            Language::BgBg => vec!["bg-BG".parse().expect("valid locale")],
             Language::TrTr => vec!["tr-TR".parse().expect("valid locale")],
             Language::NlNl => vec!["nl-NL".parse().expect("valid locale")],
             Language::FrFr => vec!["fr-FR".parse().expect("valid locale")],
@@ -118,6 +122,7 @@ impl Language {
         match self {
             Language::System => crate::tr!("language", "system"),
             Language::EnUs => crate::tr!("language", "english"),
+            Language::BgBg => crate::tr!("language", "bulgarian"),
             Language::TrTr => crate::tr!("language", "turkish"),
             Language::NlNl => crate::tr!("language", "dutch"),
             Language::FrFr => crate::tr!("language", "french"),

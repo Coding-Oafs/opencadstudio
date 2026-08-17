@@ -19,6 +19,7 @@ language =
     .hungarian = Magyar
     .polish = Polski
     .chinese-traditional = 繁體中文
+    .bulgarian = Български
 
 action =
     .close = Cerrar
