@@ -185,7 +185,25 @@ impl<T: SnapshotData> SharedDocumentReader<T> {
     /// Open the file at `path` read-only and map it. The mapping may initially
     /// contain no valid snapshot; the caller should `refresh()` before use.
     pub fn open(path: &Path) -> io::Result<Self> {
+        const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024; // 1 GiB guard
         let file = OpenOptions::new().read(true).open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("snapshot path is not a regular file: {}", path.display()),
+            ));
+        }
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "snapshot file size {} exceeds maximum {} MiB; refusing to mmap",
+                    metadata.len(),
+                    MAX_FILE_SIZE / 1024 / 1024
+                ),
+            ));
+        }        
         let mmap = unsafe { Mmap::map(&file)? };
         let file_len = mmap.len();
         let segment_size = if file_len > CONTROL_SIZE {
