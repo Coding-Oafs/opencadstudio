@@ -48,6 +48,10 @@ pub trait OcsScriptApi {
     fn cloud_export_all(&mut self, path: &str) -> ScriptValue;
     /// Export/reprojection progress: `{running, completed, total}`.
     fn cloud_export_status(&mut self) -> ScriptValue;
+    /// Detaches every attached source (session only; sources unchanged).
+    fn cloud_detach(&mut self) -> ScriptValue;
+    /// Lists the LAS/LAZ files directly under a folder (not recursive).
+    fn cloud_list_folder(&mut self, path: &str) -> ScriptValue;
     /// Prints a line to the script console.
     fn print(&mut self, message: &str);
 }
@@ -154,6 +158,11 @@ fn dispatch_call(
             Ok(api.cloud_export_all(&path))
         }
         "cloud_export_status" => Ok(api.cloud_export_status()),
+        "cloud_detach" => Ok(api.cloud_detach()),
+        "cloud_list_folder" => {
+            let path: String = arg(args, 0, function)?;
+            Ok(api.cloud_list_folder(&path))
+        }
         other => Err(format!("unknown script function: {other}")),
     }
 }
@@ -239,10 +248,12 @@ pub fn run_rhai(bridge: &ScriptBridge, source: &str) -> Result<ScriptOutcome, St
         [source.clone(), classification.clone(), indices.clone()]
     );
     method!("cloud_export_all", [path], "cloud_export_all", [path.clone()]);
+    method!("cloud_list_folder", [path], "cloud_list_folder", [path.clone()]);
     method!("cloud_sources", [], "cloud_sources", []);
     method!("cloud_stats", [], "cloud_stats", []);
     method!("cloud_select_clear", [], "cloud_select_clear", []);
     method!("cloud_undo", [], "cloud_undo", []);
+    method!("cloud_detach", [], "cloud_detach", []);
     method!("cloud_export_status", [], "cloud_export_status", []);
     let log_for_method = log.clone();
     engine.register_fn(
@@ -393,6 +404,13 @@ mod tests {
         }
         fn cloud_export_status(&mut self) -> ScriptValue {
             json!({ "running": false })
+        }
+        fn cloud_detach(&mut self) -> ScriptValue {
+            self.calls.lock().unwrap().push("detach".into());
+            json!(true)
+        }
+        fn cloud_list_folder(&mut self, path: &str) -> ScriptValue {
+            json!([format!("{path}\\a.laz"), format!("{path}\\b.laz")])
         }
         fn print(&mut self, message: &str) {
             self.calls.lock().unwrap().push(format!("print {message}"));

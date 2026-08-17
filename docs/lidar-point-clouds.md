@@ -61,6 +61,10 @@ is created only by **Export LAS/LAZ**.
 | `POINTCLOUDSELECTCLEAR` | Clear the active highlighted selection without changing saved edits. |
 | `POINTCLOUDBRUSHCLASSIFY <class>` | Function-key-friendly repeating fixed-pixel viewport brush that selects and classifies source points. |
 | `POINTCLOUDCLASSIFYSELECTION <class>` | Reclassify the active selection as one transaction. |
+| `POINTCLOUDGROUND [cell] [distance] [angle]` | Densify bare-earth ground (class 2) over the display working set with a simplified progressive TIN: each grid cell seeds with its lowest point, the surface interpolates from neighbouring-cell triangles, and every iteration accepts the nearest-to-surface candidate under the distance (default 0.75) and angle (default 30°) thresholds. Points far above the surface (roofs) never join. Results are audited, undoable sparse edits. |
+| `POINTCLOUDNOISE <radius> <min-neighbors> [class]` | Flag isolated points with fewer than `min-neighbors` neighbours inside `radius` (voxel-hash k-NN) as noise (default class 7). |
+| `POINTCLOUDRULE <field> <op> <a> [b] <class>` | Rule classification over any attribute (`ELEVATION`, `INTENSITY`, `RETURN`, `SOURCE`) with `LT`, `GT`, `BETWEEN`, or `EQ`. |
+| `POINTCLOUDCONTOUR [interval]` | Build a Delaunay TIN over the class-2 ground points (or every point when no ground exists yet) and write chained contour polylines at `interval` onto the `LIDAR-CONTOURS` layer as CAD entities. |
 | `POINTCLOUDFLAGSELECTION <flag> <ON/OFF>` | Change `WITHHELD`, `OVERLAP`, `KEY`, or `SYNTHETIC` on the active selection. |
 | `POINTCLOUDELEVATIONSELECTION <z>` | Set an elevation patch on the active selection. |
 | `POINTCLOUDUNDO` | Undo the most recent sparse point edit transaction. This is separate from CAD entity undo. |

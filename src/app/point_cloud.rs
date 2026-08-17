@@ -2151,6 +2151,191 @@ impl OpenCADStudio {
         self.persist_point_cloud(tab_index, "selection_filter", &description, &[]);
     }
 
+    /// Runs an automated classifier over every source's display working set
+    /// and commits the sparse patches as audited, undoable transactions.
+    fn apply_classifier(
+        &mut self,
+        tab_index: usize,
+        label: &str,
+        classify: impl Fn(&[ocs_pointcloud::SamplePoint]) -> ocs_pointcloud::ClassifyResult,
+    ) {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
+            self.command_line
+                .push_error(format!("{label}: attach a LAS/LAZ cloud first.").as_str());
+            return;
+        }
+        let sources: Vec<(String, Vec<ocs_pointcloud::SamplePoint>, ocs_pointcloud::EditStore)> =
+            dataset
+                .sources
+                .iter()
+                .map(|source| {
+                    let points: Vec<_> = source
+                        .sample
+                        .points
+                        .iter()
+                        .map(|point| {
+                            source
+                                .edits
+                                .patch_for(point.source_index)
+                                .map_or_else(|| point.clone(), |patch| point.clone().with_patch(patch))
+                        })
+                        .collect();
+                    (source.id.clone(), points, source.edits.clone())
+                })
+                .collect();
+        let mut touched = Vec::new();
+        let mut total = 0_usize;
+        for (id, points, mut edits) in sources {
+            let result = classify(&points);
+            if result.is_empty() {
+                continue;
+            }
+            let changed = result.apply_grouped(&mut edits, label);
+            if changed == 0 {
+                continue;
+            }
+            total += changed;
+            touched.push((id, edits));
+        }
+        if touched.is_empty() {
+            self.command_line
+                .push_info(format!("{label}: no points matched.").as_str());
+            return;
+        }
+        let ids: Vec<String> = touched.iter().map(|(id, _)| id.clone()).collect();
+        {
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            for (id, edits) in touched {
+                if let Some(source) = dataset.source_mut(&id) {
+                    source.edits = edits;
+                }
+            }
+            dataset.note_edit_sources(ids.clone());
+            dataset.mark_display_changed();
+            let model = dataset.display_model();
+            self.tabs[tab_index].scene.set_point_cloud(model);
+        }
+        self.command_line.push_output(
+            format!(
+                "{label}: classified {total} point(s) across {} source(s); export to publish.",
+                ids.len()
+            )
+            .as_str(),
+        );
+        self.persist_point_cloud(tab_index, "classify", &format!("{label}: {total} points"), &ids);
+    }
+
+    pub(super) fn classify_point_cloud_noise(
+        &mut self,
+        tab_index: usize,
+        radius: f64,
+        min_neighbors: usize,
+        noise_class: u8,
+    ) {
+        self.apply_classifier(tab_index, "Auto noise", move |points| {
+            ocs_pointcloud::detect_noise(points, radius, min_neighbors, noise_class)
+        });
+    }
+
+    pub(super) fn classify_point_cloud_ground(&mut self, tab_index: usize, options: ocs_pointcloud::GroundOptions) {
+        self.apply_classifier(tab_index, "Auto ground", move |points| {
+            ocs_pointcloud::classify_ground(points, &options)
+        });
+    }
+
+    pub(super) fn classify_point_cloud_rule(&mut self, tab_index: usize, rule: ocs_pointcloud::ClassifyRule) {
+        self.apply_classifier(tab_index, "Rule classify", move |points| {
+            ocs_pointcloud::classify_by_rules(points, std::slice::from_ref(&rule))
+        });
+    }
+
+    /// Builds a ground TIN over the dataset's class-2 points and writes
+    /// chained contour polylines as CAD entities. When no ground class
+    /// exists yet, it offers to use every point rather than failing.
+    pub(super) fn generate_point_cloud_contours(&mut self, tab_index: usize, interval: f64) {
+        const GROUND_CLASS: u8 = 2;
+        let dataset = &self.tabs[tab_index].point_cloud;
+        if dataset.is_empty() {
+            self.command_line
+                .push_error("POINTCLOUDCONTOUR: attach a LAS/LAZ cloud first.");
+            return;
+        }
+        if !interval.is_finite() || interval <= 0.0 {
+            self.command_line
+                .push_error("POINTCLOUDCONTOUR: interval must be positive.");
+            return;
+        }
+        let patched = |source: &PointCloudAttachment| {
+            source
+                .sample
+                .points
+                .iter()
+                .map(|point| {
+                    source
+                        .edits
+                        .patch_for(point.source_index)
+                        .map_or_else(|| point.clone(), |patch| point.clone().with_patch(patch))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut ground_points: Vec<ocs_pointcloud::SamplePoint> = Vec::new();
+        let mut all_points: Vec<ocs_pointcloud::SamplePoint> = Vec::new();
+        for source in &dataset.sources {
+            let points = patched(source);
+            ground_points.extend(points.iter().filter(|p| p.classification == GROUND_CLASS).cloned());
+            all_points.extend(points);
+        }
+        let (surface_points, label) = if ground_points.len() >= 3 {
+            (ground_points, "ground class")
+        } else {
+            self.command_line.push_info(
+                "POINTCLOUDCONTOUR: fewer than three class-2 points; contouring every point — run POINTCLOUDGROUND first for true bare-earth contours.",
+            );
+            (all_points, "all points")
+        };
+        let Some(tin) = ocs_pointcloud::Tin::from_points(&surface_points, None) else {
+            self.command_line
+                .push_error("POINTCLOUDCONTOUR: not enough points to triangulate.");
+            return;
+        };
+        let triangles = tin.triangle_count();
+        let contours = ocs_pointcloud::generate_contours(&tin, interval, 0.0);
+        if contours.is_empty() {
+            self.command_line.push_output(
+                format!(
+                    "POINTCLOUDCONTOUR: {triangles} triangles over {label}; the elevation range has no full {interval} interval.",
+                )
+                .as_str(),
+            );
+            return;
+        }
+        let layer = "LIDAR-CONTOURS";
+        let mut created = 0_usize;
+        for contour in &contours {
+            let mut polyline = acadrust::entities::Polyline2D::new();
+            polyline.elevation = contour.elevation;
+            polyline.common.layer = layer.to_string();
+            // Contours are open polylines; the default flags already leave
+            // CLOSED unset.
+            for point in &contour.points {
+                polyline.add_vertex(acadrust::entities::Vertex2D::new(acadrust::types::Vector3::new(
+                    point[0],
+                    point[1],
+                    point[2],
+                )));
+            }
+            self.commit_entity(acadrust::EntityType::Polyline2D(polyline));
+            created += 1;
+        }
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDCONTOUR: {created} contour polylines at {interval} intervals from {triangles} triangles over {label}, on layer \"{layer}\".",
+            )
+            .as_str(),
+        );
+    }
+
     pub(super) fn patch_point_cloud_selection(
         &mut self,
         tab_index: usize,

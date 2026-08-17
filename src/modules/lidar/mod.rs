@@ -166,6 +166,10 @@ impl CadModule for LidarModule {
                             ],
                             default: "POINTCLOUDCLASSIFYSELECTION 2",
                         },
+                        tool("LIDAR_AUTO_GROUND", "Auto Ground", "POINTCLOUDGROUND", CLOUD).into(),
+                        tool("LIDAR_AUTO_NOISE", "Auto Noise", "POINTCLOUDNOISE 2.0 4 7", UNDO)
+                            .into(),
+                        tool("LIDAR_CONTOURS", "Contours", "POINTCLOUDCONTOUR 1", CLOUD).into(),
                         RibbonItem::Dropdown {
                             id: "LIDAR_FLAGS",
                             icon: IconKind::Svg(AUDIT),

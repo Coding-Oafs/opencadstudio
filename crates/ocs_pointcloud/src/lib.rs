@@ -4,6 +4,8 @@
 //! viewer can retain only a bounded display sample plus a sparse set of edits,
 //! then stream the original file when it is time to export a revised LAS/LAZ.
 
+mod classify;
+mod dtm;
 mod crs;
 mod display;
 mod edit;
@@ -12,6 +14,11 @@ mod selection;
 mod sidecar;
 mod tile_cache;
 
+pub use dtm::{generate_contours, Contour, Tin};
+pub use classify::{
+    classify_by_rules, classify_ground, detect_noise, ClassifyResult, ClassifyRule, GroundOptions,
+    RuleField, RuleOp,
+};
 pub use crs::{
     assess_survey_readiness, inspect_crs, reproject_with_patches_progress, CrsInfo,
     ReprojectionStats, SurveyReadiness,

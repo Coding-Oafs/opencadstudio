@@ -33,6 +33,8 @@ background jobs and return immediately — scripts observe progress by polling
 | `ocs.cloud_undo()` | undoes the last edit action |
 | `ocs.cloud_export_all(path)` | merged export of every source (queued) |
 | `ocs.cloud_export_status()` | `{running, completed, total}` |
+| `ocs.cloud_detach()` | detaches every source (session only) |
+| `ocs.cloud_list_folder(path)` | LAS/LAZ file paths directly under a folder |
 | `ocs.command("LAYER Walls")` | runs any command-line command |
 | `ocs.log(message)` | prints to the script console |
 
@@ -48,6 +50,9 @@ interactive tools, and undo steps the last action as one transaction.
   wait for the export to complete.
 - `class_report.rhai` — per-source inventory with point counts, pending
   edits, and class totals.
+- `batch_classify.rhai` — batch production over a folder: for each LAS/LAZ,
+  attach, run `POINTCLOUDNOISE` and `POINTCLOUDGROUND`, export a
+  `<name>_classified.laz` beside the source, detach, and continue.
 
 Copy them, edit the constants at the top, and run with `SCRIPT <path>`.
 

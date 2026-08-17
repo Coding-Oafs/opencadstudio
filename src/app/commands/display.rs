@@ -1285,6 +1285,132 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDCONTOUR") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDCONTOUR").trim();
+                let interval = arguments
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .unwrap_or(1.0);
+                self.generate_point_cloud_contours(i, interval);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDNOISE") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDNOISE").trim();
+                let mut fields = arguments.split_whitespace();
+                let radius = fields.next().and_then(|v| v.parse::<f64>().ok());
+                let min_neighbors = fields.next().and_then(|v| v.parse::<usize>().ok());
+                let noise_class = fields
+                    .next()
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .unwrap_or(7);
+                match (radius, min_neighbors) {
+                    (Some(radius), Some(min_neighbors)) if radius > 0.0 && min_neighbors > 0 => {
+                        self.classify_point_cloud_noise(i, radius, min_neighbors, noise_class);
+                    }
+                    _ => {
+                        self.command_line.push_error(
+                            "POINTCLOUDNOISE: usage POINTCLOUDNOISE <radius> <min-neighbors> [class=7].",
+                        );
+                    }
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDGROUND") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDGROUND").trim();
+                let mut fields = arguments.split_whitespace();
+                let cell = fields.next().and_then(|v| v.parse::<f64>().ok());
+                let distance = fields.next().and_then(|v| v.parse::<f64>().ok());
+                let angle = fields.next().and_then(|v| v.parse::<f64>().ok());
+                let mut options = ocs_pointcloud::GroundOptions::default();
+                if let Some(cell) = cell {
+                    if cell <= 0.0 {
+                        self.command_line
+                            .push_error("POINTCLOUDGROUND: cell size must be positive.");
+                        return Some(Task::none());
+                    }
+                    options.cell_size = cell;
+                }
+                if let Some(distance) = distance {
+                    options.max_distance = distance;
+                }
+                if let Some(angle) = angle {
+                    options.max_angle_degrees = angle;
+                }
+                self.classify_point_cloud_ground(i, options);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDRULE ") => {
+                // POINTCLOUDRULE <field> <op> <a> [b] <class>
+                let arguments = cmd.trim_start_matches("POINTCLOUDRULE").trim();
+                let fields: Vec<&str> = arguments.split_whitespace().collect();
+                if fields.len() < 5 {
+                    self.command_line.push_error(
+                        "POINTCLOUDRULE: usage POINTCLOUDRULE <ELEVATION|INTENSITY|RETURN|SOURCE> <LT|GT|BETWEEN|EQ> <a> [b] <class>.",
+                    );
+                    return Some(Task::none());
+                }
+                let field = match fields[0] {
+                    "ELEVATION" | "Z" => Some(ocs_pointcloud::RuleField::Elevation),
+                    "INTENSITY" => Some(ocs_pointcloud::RuleField::Intensity),
+                    "RETURN" => Some(ocs_pointcloud::RuleField::ReturnNumber),
+                    "SOURCE" => Some(ocs_pointcloud::RuleField::PointSource),
+                    _ => None,
+                };
+                let op = match fields[1] {
+                    "LT" | "<" => Some(ocs_pointcloud::RuleOp::Less),
+                    "GT" | ">" => Some(ocs_pointcloud::RuleOp::Greater),
+                    "BETWEEN" | "BW" => Some(ocs_pointcloud::RuleOp::Between),
+                    "EQ" | "=" => Some(ocs_pointcloud::RuleOp::Equals),
+                    _ => None,
+                };
+                let (Some(field), Some(op)) = (field, op) else {
+                    self.command_line
+                        .push_error("POINTCLOUDRULE: unknown field or operation.");
+                    return Some(Task::none());
+                };
+                let parsed = if fields.len() == 5 {
+                    match (
+                        fields[2].parse::<f64>(),
+                        fields[3].parse::<f64>(),
+                        fields[4].parse::<u8>(),
+                    ) {
+                        (Ok(a), Ok(b), Ok(class)) => Some(([a, b], class)),
+                        _ => None,
+                    }
+                } else if fields.len() == 4 {
+                    match (fields[2].parse::<f64>(), fields[3].parse::<u8>()) {
+                        (Ok(a), Ok(class)) => Some(([a, a], class)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                match parsed {
+                    Some((values, class)) => {
+                        self.classify_point_cloud_rule(
+                            i,
+                            ocs_pointcloud::ClassifyRule {
+                                field,
+                                op,
+                                values,
+                                target_class: class,
+                                from_classes: Vec::new(),
+                            },
+                        );
+                    }
+                    None => {
+                        self.command_line.push_error(
+                            "POINTCLOUDRULE: could not parse thresholds and target class.",
+                        );
+                    }
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "SCRIPT" => {
                 return Some(Task::done(Message::ScriptPick));
             }

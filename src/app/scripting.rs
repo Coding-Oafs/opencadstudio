@@ -267,6 +267,32 @@ impl OcsScriptApi for OpenCADStudio {
         }
     }
 
+    fn cloud_detach(&mut self) -> ScriptValue {
+        let tab = self.active_tab;
+        self.detach_point_cloud(tab);
+        json!(true)
+    }
+
+    fn cloud_list_folder(&mut self, path: &str) -> ScriptValue {
+        let mut files: Vec<String> = std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        extension.eq_ignore_ascii_case("las")
+                            || extension.eq_ignore_ascii_case("laz")
+                    })
+            })
+            .map(|path| path.display().to_string())
+            .collect();
+        files.sort();
+        json!(files)
+    }
+
     fn print(&mut self, message: &str) {
         self.command_line
             .push_output(format!("[script] {message}").as_str());
