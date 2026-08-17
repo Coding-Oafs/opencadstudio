@@ -8,6 +8,7 @@ build = "build.rs"
 members = [
     "crates/ocs_plugin_api",
     "crates/ocs_pointcloud",
+    "crates/ocs_scripting",
     "crates/ocs_web_worker",
     "crates/dwg-thumbnailer",
     "crates/dwg-thumbnailer-win",
@@ -73,6 +74,7 @@ iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
 ocs_pointcloud = { path = "crates/ocs_pointcloud" }
+ocs_scripting = { path = "crates/ocs_scripting" }
 i18n-embed = { version = "0.16", features = ["desktop-requester"] }
 rayon = "1"
 open = "5"

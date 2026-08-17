@@ -1285,6 +1285,17 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "SCRIPT" => {
+                return Some(Task::done(Message::ScriptPick));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("SCRIPT ") => {
+                let path = std::path::PathBuf::from(cmd.trim_start_matches("SCRIPT").trim());
+                return Some(self.start_script(path));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDATTACH" | "RECAP" => {
                 return Some(Task::done(Message::PointCloudAttach));
             }

@@ -1,0 +1,11 @@
+[package]
+name = "ocs_scripting"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Engine-agnostic macro scripting host for Open CAD Studio"
+
+[dependencies]
+rhai = "1.19"
+serde = "1"
+serde_json = "1"

@@ -406,7 +406,7 @@ impl PointCloudDataset {
         self.style_generation = self.style_generation.wrapping_add(1).max(1);
     }
 
-    fn note_edit_sources(&mut self, ids: Vec<String>) {
+    pub(super) fn note_edit_sources(&mut self, ids: Vec<String>) {
         self.last_edit_sources = Some(ids);
     }
 
@@ -2631,6 +2631,18 @@ impl OpenCADStudio {
         format!("{stem}_merged.laz")
     }
 
+    /// Live export/reprojection progress for the dataset, if a job runs.
+    pub(super) fn point_cloud_export_progress(&self, tab_index: usize) -> Option<(u64, u64)> {
+        self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .filter_map(|source| source.export_job.as_ref())
+            .next()
+            .or(self.tabs[tab_index].point_cloud.export_all_job.as_ref())
+            .map(|job| (job.completed.load(Ordering::Relaxed), job.total))
+    }
+
     pub(super) fn point_cloud_export_status(&mut self, tab_index: usize) {
         let job = self.tabs[tab_index]
             .point_cloud
@@ -3189,7 +3201,7 @@ fn scan_lidar_folder(folder: &std::path::Path) -> Vec<PathBuf> {
     found
 }
 
-fn parse_source_indices(spec: &str, point_count: u64) -> Result<Vec<u64>, String> {
+pub(super) fn parse_source_indices(spec: &str, point_count: u64) -> Result<Vec<u64>, String> {
     let mut indices = Vec::new();
     for token in spec
         .split(',')

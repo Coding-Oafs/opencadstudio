@@ -1489,7 +1489,7 @@ fn qdim_collect_points(e: &acadrust::EntityType, out: &mut Vec<glam::DVec3>) {
 fn sentence_case(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
+        Some(first) => first.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str(),
         None => String::new(),
     }
 }
@@ -1499,7 +1499,7 @@ fn title_case(s: &str) -> String {
         .map(|w| {
             let mut c = w.chars();
             match c.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str(),
                 None => String::new(),
             }
         })

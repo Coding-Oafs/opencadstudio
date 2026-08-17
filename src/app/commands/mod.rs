@@ -643,6 +643,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "SA",
         "SAVE",
         "SAVEAS",
+        "SCRIPT",
         "SCALETEXT",
         "SELECTALL",
         "SELECTSIMILAR",

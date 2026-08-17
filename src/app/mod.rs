@@ -20,6 +20,7 @@ mod mtext_editor;
 pub mod plugin_host;
 #[cfg(not(target_arch = "wasm32"))]
 mod point_cloud;
+mod scripting;
 mod properties;
 mod recent;
 pub(crate) mod settings;
@@ -337,6 +338,9 @@ pub(super) struct OpenCADStudio {
     /// dozens of concurrent samples.
     #[cfg(not(target_arch = "wasm32"))]
     point_cloud_load_queue: Vec<(u64, std::path::PathBuf)>,
+    /// The running Rhai macro, if any: its request inbox and outcome.
+    #[cfg(not(target_arch = "wasm32"))]
+    script_runner: Option<scripting::ScriptRunner>,
     /// Block references whose properties panel shows per-axis Scale X/Y/Z even
     /// though the three factors are currently equal — the user unchecked the
     /// "Uniform scale" box for them (#427). Keyed by entity handle.
@@ -3017,6 +3021,12 @@ pub enum Message {
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudFolderPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
+    ScriptPick,
+    #[cfg(not(target_arch = "wasm32"))]
+    ScriptPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    ScriptPump,
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudPathPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudLoaded(
@@ -3145,6 +3155,8 @@ impl OpenCADStudio {
             discussions_loading: false,
             #[cfg(not(target_arch = "wasm32"))]
             point_cloud_load_queue: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            script_runner: None,
             props_asym_scale: std::collections::HashSet::new(),
             start_section: StartSection::default(),
             start_action_w: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),

@@ -290,7 +290,7 @@ fn sample_length(state: &State) -> String {
     with_context(state, || {
         crate::entities::common::format_length(1.5)
             + "   "
-            + &crate::entities::common::format_length(33.5)
+            + crate::entities::common::format_length(33.5).as_str()
     })
 }
 

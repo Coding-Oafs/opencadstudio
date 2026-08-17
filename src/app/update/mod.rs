@@ -949,6 +949,28 @@ impl OpenCADStudio {
             Message::PointCloudFolderPicked(None) => Task::none(),
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::ScriptPick => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Run Script")
+                        .add_filter("Rhai Scripts", &["rhai", "rhai"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::ScriptPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ScriptPicked(Some(path)) => self.start_script(path),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ScriptPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::ScriptPump => self.pump_script(),
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudPathPicked(Some(path)) => self.start_point_cloud_load(path),
 
             #[cfg(not(target_arch = "wasm32"))]
