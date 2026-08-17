@@ -1794,29 +1794,20 @@ impl OpenCADStudio {
 
         // INSUNITS: when inserting a block whose BlockRecord.units differ
         // from the host's header.insertion_units, scale the new INSERT so
-        // 1 source-unit equals the matching host length. When either side
-        // is unitless (0) AutoCAD falls back to MEASUREMENT (0 = Imperial /
-        // inches, 1 = Metric / mm); honour the same fallback.
+        // 1 source-unit equals the matching host length.
         if let acadrust::EntityType::Insert(ref mut ins) = entity {
-            let header = &self.tabs[i].scene.document.header;
-            let measurement_fallback = if header.measurement == 1 { 4 } else { 1 };
-            let host_raw = header.insertion_units;
-            let host_units = if host_raw == 0 { measurement_fallback } else { host_raw };
-            let src_raw = self.tabs[i]
+            let host_units = self.tabs[i].scene.document.header.insertion_units;
+            let src_units = self.tabs[i]
                 .scene
                 .document
                 .block_records
                 .get(&ins.block_name)
                 .map(|br| br.units)
                 .unwrap_or(0);
-            let src_units = if src_raw == 0 { measurement_fallback } else { src_raw };
-            if src_units != host_units {
-                let ratio = insunits_to_mm(src_units) / insunits_to_mm(host_units);
-                if ratio.is_finite() && (ratio - 1.0).abs() > 1e-9 {
-                    ins.set_x_scale(ratio);
-                    ins.set_y_scale(ratio);
-                    ins.set_z_scale(ratio);
-                }
+            if let Some(ratio) = insert_unit_scale(host_units, src_units) {
+                ins.set_x_scale(ratio);
+                ins.set_y_scale(ratio);
+                ins.set_z_scale(ratio);
             }
         }
 
@@ -2383,6 +2374,24 @@ fn insunits_name(code: i16) -> &'static str {
     }
 }
 
+/// Unit-conversion scale for a new INSERT, or `None` when the reference should
+/// keep scale 1.
+///
+/// A unitless (0) block carries no length to convert from, and a unitless
+/// drawing none to convert to, so either side being unitless means the
+/// reference is inserted as authored. This matches the `unit_factor` row shown
+/// for the same insert in the properties panel.
+fn insert_unit_scale(host_units: i16, src_units: i16) -> Option<f64> {
+    if host_units == 0 || src_units == 0 || src_units == host_units {
+        return None;
+    }
+    let ratio = insunits_to_mm(src_units) / insunits_to_mm(host_units);
+    if !ratio.is_finite() || (ratio - 1.0).abs() <= 1e-9 {
+        return None;
+    }
+    Some(ratio)
+}
+
 /// Convert INSUNITS (DXF group 70) to millimetres.
 /// 0 = unitless / unknown: returns 1.0 so the caller treats it as "do not scale".
 fn insunits_to_mm(code: i16) -> f64 {
@@ -2409,5 +2418,48 @@ fn insunits_to_mm(code: i16) -> f64 {
         20 => 3.086e19,       // Parsecs
         21 => 304.800_609_6,  // US Survey Feet
         _ => 1.0,
+    }
+}
+
+#[cfg(test)]
+mod insert_unit_scale_tests {
+    use super::insert_unit_scale;
+
+    const UNITLESS: i16 = 0;
+    const INCHES: i16 = 1;
+    const MILLIMETERS: i16 = 4;
+    const CENTIMETERS: i16 = 5;
+    const METERS: i16 = 6;
+
+    #[test]
+    fn unitless_block_is_inserted_as_authored() {
+        // Reported case: a unitless block with a 1000-unit edge inserted into a
+        // millimetre drawing must keep that edge, not gain a conversion factor.
+        assert_eq!(insert_unit_scale(MILLIMETERS, UNITLESS), None);
+        assert_eq!(insert_unit_scale(INCHES, UNITLESS), None);
+    }
+
+    #[test]
+    fn unitless_drawing_does_not_scale_a_measured_block() {
+        assert_eq!(insert_unit_scale(UNITLESS, METERS), None);
+        assert_eq!(insert_unit_scale(UNITLESS, INCHES), None);
+        assert_eq!(insert_unit_scale(UNITLESS, UNITLESS), None);
+    }
+
+    #[test]
+    fn matching_units_do_not_scale() {
+        assert_eq!(insert_unit_scale(METERS, METERS), None);
+    }
+
+    #[test]
+    fn differing_units_convert_through_millimetres() {
+        let ratio = insert_unit_scale(MILLIMETERS, METERS).expect("metres into mm should scale");
+        assert!((ratio - 1000.0).abs() < 1e-9, "got {ratio}");
+
+        let ratio = insert_unit_scale(MILLIMETERS, INCHES).expect("inches into mm should scale");
+        assert!((ratio - 25.4).abs() < 1e-9, "got {ratio}");
+
+        let ratio = insert_unit_scale(METERS, CENTIMETERS).expect("cm into m should scale");
+        assert!((ratio - 0.01).abs() < 1e-12, "got {ratio}");
     }
 }
