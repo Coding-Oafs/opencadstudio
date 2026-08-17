@@ -711,6 +711,30 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
     }
 
+    /// Read through this session's lease when it covers `path`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn read_drawing(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let lease = self
+            .tab_showing(path)
+            .and_then(|i| self.tabs[i].edit_lease.as_ref());
+        let leased = match lease {
+            Some(lease) => lease.reader()?,
+            None => None,
+        };
+        let Some(mut reader) = leased else {
+            return std::fs::read(path);
+        };
+        reader.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
     /// Start the next drawing a second launch handed us, if any.
     ///
     /// Must be called from EVERY path that clears `opening` — completion, error
@@ -851,7 +875,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             ));
         }
 
-        let destination_lease = if path_changed {
+        let mut destination_lease = if path_changed {
             match crate::io::edit_lock::EditLease::acquire(&path) {
                 Ok(lease) => Some(lease),
                 Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => {
@@ -869,21 +893,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
 
         let expected_fingerprint = if path_changed {
-            match crate::io::edit_lock::FileFingerprint::capture(&path) {
-                Ok(fingerprint) => Some(fingerprint),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => {
-                    return Err(crate::io::SaveFailure::other(format!(
-                        "could not verify {} before saving: {error}",
-                        path.display()
-                    )));
-                }
-            }
+            None
         } else {
-            self.tabs[i].disk_fingerprint.clone().or_else(|| {
-                crate::io::edit_lock::FileFingerprint::capture(&path).ok()
-            })
+            self.tabs[i].disk_fingerprint.clone()
         };
+        let lease = if path_changed {
+            destination_lease.as_mut()
+        } else {
+            self.tabs[i].edit_lease.as_mut()
+        };
+        let (expected_fingerprint, verify_reader) =
+            Self::native_save_verification(&path, lease, expected_fingerprint)?;
 
         self.prepare_native_save(i);
         let version = self.tabs[i].scene.document.version;
@@ -894,6 +914,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             version,
             self.backup_on_save,
             expected_fingerprint,
+            verify_reader,
         )?;
 
         if set_current_path {
@@ -1380,6 +1401,57 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.sync_solid_models_to_acis(i);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_save_verification(
+        path: &std::path::Path,
+        mut lease: Option<&mut crate::io::edit_lock::EditLease>,
+        expected: Option<crate::io::edit_lock::FileFingerprint>,
+    ) -> Result<
+        (
+            Option<crate::io::edit_lock::FileFingerprint>,
+            Option<std::fs::File>,
+        ),
+        crate::io::SaveFailure,
+    > {
+        let expected = match expected {
+            Some(expected) => Some(expected),
+            None => {
+                let captured = match lease.as_deref_mut() {
+                    Some(lease) => match lease.fingerprint() {
+                        Ok(Some(fingerprint)) => Ok(fingerprint),
+                        Ok(None) => crate::io::edit_lock::FileFingerprint::capture(path),
+                        Err(error) => Err(error),
+                    },
+                    None => crate::io::edit_lock::FileFingerprint::capture(path),
+                };
+                match captured {
+                    Ok(fingerprint) => Some(fingerprint),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => {
+                        return Err(crate::io::SaveFailure::other(format!(
+                            "could not verify {} before saving: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+        };
+        let reader = if expected.is_some() {
+            match lease.as_deref() {
+                Some(lease) => lease.reader().map_err(|error| {
+                    crate::io::SaveFailure::other(format!(
+                        "could not verify {} before saving: {error}",
+                        path.display()
+                    ))
+                })?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        Ok((expected, reader))
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn stamp_thumbnail(&mut self, i: usize, version: acadrust::DxfVersion) {
         let scene = &self.tabs[i].scene;
@@ -1532,16 +1604,58 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let previous_autosave =
             (purpose != crate::app::SavePurpose::Autosave).then(|| self.autosave_target(i));
         let backup = purpose != crate::app::SavePurpose::Autosave && self.backup_on_save;
-        let expected_fingerprint =
-            if check_external_change && purpose != crate::app::SavePurpose::Autosave {
-                if set_current_path {
-                    crate::io::edit_lock::FileFingerprint::capture(&path).ok()
-                } else {
-                    self.tabs[i].disk_fingerprint.clone()
-                }
-            } else {
+        let verification = if check_external_change
+            && purpose != crate::app::SavePurpose::Autosave
+        {
+            let expected = if set_current_path {
                 None
+            } else {
+                self.tabs[i].disk_fingerprint.clone()
             };
+            if self.pending_save_leases.contains_key(&tab_id) {
+                Self::native_save_verification(
+                    &path,
+                    self.pending_save_leases.get_mut(&tab_id),
+                    expected,
+                )
+            } else if destination_is_current {
+                Self::native_save_verification(
+                    &path,
+                    self.tabs[i].edit_lease.as_mut(),
+                    expected,
+                )
+            } else {
+                Self::native_save_verification(&path, None, expected)
+            }
+        } else {
+            Ok((None, None))
+        };
+        let (expected_fingerprint, verify_reader) = match verification {
+            Ok(verification) => verification,
+            Err(error) => {
+                return Task::perform(
+                    async move {
+                        crate::app::SaveOutcome {
+                            job_id,
+                            tab_id,
+                            epoch,
+                            revision,
+                            camera_generation,
+                            path,
+                            version,
+                            previous_autosave,
+                            set_current_path,
+                            purpose,
+                            continuation,
+                            thumbnail_key,
+                            refreshed_preview: None,
+                            result: Err(error),
+                        }
+                    },
+                    Message::SaveFinished,
+                );
+            }
+        };
         let worker_path = path.clone();
 
         Task::perform(
@@ -1572,6 +1686,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         version,
                         backup,
                         expected_fingerprint,
+                        verify_reader,
                     );
                     (result, refreshed_preview)
                 })

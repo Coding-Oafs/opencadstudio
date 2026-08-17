@@ -1437,6 +1437,41 @@ mod save_failure_tests {
             acadrust::DxfVersion::AC1032,
             false,
             Some(expected),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.externally_modified);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn external_path_replacement_prevents_atomic_replace() {
+        let path = std::env::temp_dir().join(format!(
+            "ocs_external_replace_{}_{}.dwg",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let replacement = path.with_extension("replacement.dwg");
+        std::fs::write(&path, b"old").unwrap();
+        let expected = super::edit_lock::FileFingerprint::capture(&path).unwrap();
+        let reader = std::fs::File::open(&path).unwrap();
+        std::fs::write(&replacement, b"new").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        let error = super::save_owned_as_version_atomic(
+            acadrust::CadDocument::new(),
+            &path,
+            acadrust::DxfVersion::AC1032,
+            false,
+            Some(expected),
+            Some(reader),
         )
         .unwrap_err();
 
@@ -1509,12 +1544,20 @@ pub fn save_owned_as_version_atomic(
     version: acadrust::DxfVersion,
     backup: bool,
     expected_fingerprint: Option<edit_lock::FileFingerprint>,
+    verify_reader: Option<std::fs::File>,
 ) -> Result<(), SaveFailure> {
     save_owned_as_version_inner(doc, path, version, backup, 0.0, move |path| {
         let Some(expected) = expected_fingerprint else {
             return Ok(());
         };
-        match edit_lock::FileFingerprint::capture(path) {
+        let current = match verify_reader {
+            Some(mut file) => match edit_lock::path_matches_file(path, &file) {
+                Ok(true) => edit_lock::FileFingerprint::capture_from(&mut file),
+                Ok(false) | Err(_) => return Err(SaveFailure::externally_modified(path)),
+            },
+            None => edit_lock::FileFingerprint::capture(path),
+        };
+        match current {
             Ok(current) if current == expected => Ok(()),
             _ => Err(SaveFailure::externally_modified(path)),
         }

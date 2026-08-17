@@ -212,7 +212,7 @@ impl OpenCADStudio {
                 let Some(path) = req["path"].as_str() else {
                     return err("open: missing \"path\"");
                 };
-                let bytes = match std::fs::read(path) {
+                let bytes = match self.read_drawing(std::path::Path::new(path)) {
                     Ok(b) => b,
                     Err(e) => return err(format!("open: {e}")),
                 };
@@ -979,6 +979,42 @@ mod tests {
 
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn saving_over_an_existing_drawing_succeeds() {
+        for (label, pre_existing) in [("new path", false), ("existing drawing", true)] {
+            let path = std::env::temp_dir().join(format!(
+                "ocs_save_over_{}_{}.dxf",
+                std::process::id(),
+                pre_existing,
+            ));
+            let _ = std::fs::remove_file(&path);
+            if pre_existing {
+                std::fs::write(&path, b"a previous drawing").unwrap();
+            }
+
+            let mut app = OpenCADStudio::new_for_test();
+            app.automation_op(r#"{"op":"new"}"#);
+            let p = path.to_string_lossy().replace('\\', "\\\\");
+            let saved = app.automation_op(&format!(r#"{{"op":"save","path":"{p}"}}"#));
+            assert_eq!(saved["ok"], true, "{label}: {}", saved["error"]);
+            let saved_again = app.automation_op(r#"{"op":"save"}"#);
+            assert_eq!(
+                saved_again["ok"],
+                true,
+                "normal save: {}",
+                saved_again["error"]
+            );
+
+            drop(app);
+            let sidecar = path.with_file_name(format!(
+                ".{}.ocs.lock",
+                path.file_name().unwrap().to_string_lossy()
+            ));
+            let _ = std::fs::remove_file(sidecar);
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     #[test]
