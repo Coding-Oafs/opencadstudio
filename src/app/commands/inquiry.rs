@@ -991,41 +991,61 @@ impl OpenCADStudio {
             // ── FLATTEN — move selected (or all) entities to Z=0 ─────────────
             "FLATTEN" => {
                 let handles: Vec<acadrust::Handle> = {
+                    let scene = &self.tabs[i].scene;
                     let sel = self.tabs[i].scene.selected_entities();
                     if sel.is_empty() {
-                        // Flatten all entities
-                        self.tabs[i]
-                            .scene
+                        scene
                             .document
                             .entities()
                             .map(|e| e.common().handle)
-                            .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                            .filter(|handle| {
+                                scene.entity_belongs_to_active_space(*handle)
+                                    && !scene.is_layer_locked(*handle)
+                            })
                             .collect()
                     } else {
                         sel.into_iter()
                             .map(|(h, _)| h)
-                            .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                            .filter(|handle| {
+                                scene.entity_belongs_to_active_space(*handle)
+                                    && !scene.is_layer_locked(*handle)
+                            })
                             .collect()
                     }
                 };
                 if handles.is_empty() {
                     self.command_line.push_error(crate::t!("FLATTEN: no entities.").as_ref());
                 } else {
-                    self.push_undo_snapshot(i, "FLATTEN");
-                    let mut moved = 0usize;
-                    for h in &handles {
-                        if let Some(e) = self.tabs[i].scene.document.get_entity_mut(*h) {
-                            if flatten_entity_z(e) {
+                    let candidate_count = handles.len();
+                    let updates: Vec<_> = handles
+                        .iter()
+                        .filter_map(|handle| self.tabs[i].scene.document.get_entity(*handle))
+                        .filter_map(flatten_entity_z)
+                        .collect();
+                    let moved = if updates.is_empty() {
+                        0
+                    } else {
+                        self.push_undo_snapshot(i, "FLATTEN");
+                        let mut moved = 0usize;
+                        for entity in updates {
+                            if self.tabs[i].scene.update_entity(entity) {
                                 moved += 1;
                             }
                         }
-                    }
-                    self.tabs[i].dirty = true;
-                    self.command_line.push_output(crate::tf!(
-                        "FLATTEN: {} entity(ies) moved to Z=0.",
+                        if moved == 0 {
+                            self.discard_last_undo_entry(i);
+                        }
                         moved
+                    };
+                    if moved > 0 {
+                        self.tabs[i].dirty = true;
+                        self.refresh_properties();
+                    }
+                    self.command_line.push_output(crate::tf!(
+                        "FLATTEN: {} entity(ies) moved to Z=0; {} unchanged or unsupported.",
+                        moved,
+                        candidate_count.saturating_sub(moved)
                     ).as_ref());
-                    self.refresh_properties();
                 }
             }
 
@@ -1567,81 +1587,282 @@ fn entity_list_details(entity: &acadrust::EntityType) -> String {
     }
 }
 
-/// Project `entity` onto the Z=0 plane. Returns false when FLATTEN has no
-/// projection for that entity type, so the caller can report how many entities
-/// it actually moved instead of how many it looked at.
-fn flatten_entity_z(entity: &mut acadrust::EntityType) -> bool {
+fn flatten_entity_z(entity: &acadrust::EntityType) -> Option<acadrust::EntityType> {
+    use acadrust::types::Vector3;
+
+    let flattened = match entity {
+        acadrust::EntityType::Circle(_)
+        | acadrust::EntityType::Arc(_)
+        | acadrust::EntityType::Ellipse(_)
+        | acadrust::EntityType::LwPolyline(_)
+        | acadrust::EntityType::Polyline2D(_) => flatten_curve_entity(entity)?,
+        acadrust::EntityType::Line(source) => {
+            let mut line = source.clone();
+            line.start = flatten_point(line.start)?;
+            line.end = flatten_point(line.end)?;
+            line.thickness = 0.0;
+            line.normal = Vector3::UNIT_Z;
+            acadrust::EntityType::Line(line)
+        }
+        acadrust::EntityType::Polyline(source) => {
+            let mut polyline = source.clone();
+            for vertex in &mut polyline.vertices {
+                vertex.location = flatten_point(vertex.location)?;
+            }
+            acadrust::EntityType::Polyline(polyline)
+        }
+        acadrust::EntityType::Polyline3D(source) => {
+            let mut polyline = source.clone();
+            polyline.elevation = 0.0;
+            polyline.normal = Vector3::UNIT_Z;
+            for vertex in &mut polyline.vertices {
+                vertex.position = flatten_point(vertex.position)?;
+            }
+            acadrust::EntityType::Polyline3D(polyline)
+        }
+        acadrust::EntityType::Text(source) if positive_z_normal(source.normal) => {
+            let mut text = source.clone();
+            text.insertion_point = flatten_point(text.insertion_point)?;
+            if let Some(alignment) = text.alignment_point {
+                text.alignment_point = Some(flatten_point(alignment)?);
+            }
+            text.thickness = 0.0;
+            text.normal = Vector3::UNIT_Z;
+            acadrust::EntityType::Text(text)
+        }
+        acadrust::EntityType::MText(source) if positive_z_normal(source.normal) => {
+            let mut text = source.clone();
+            text.insertion_point = flatten_point(text.insertion_point)?;
+            text.normal = Vector3::UNIT_Z;
+            acadrust::EntityType::MText(text)
+        }
+        acadrust::EntityType::Point(source) => {
+            let mut point = source.clone();
+            point.location = flatten_point(point.location)?;
+            point.thickness = 0.0;
+            point.normal = Vector3::UNIT_Z;
+            acadrust::EntityType::Point(point)
+        }
+        acadrust::EntityType::Spline(source) => {
+            let mut spline = source.clone();
+            for point in &mut spline.control_points {
+                *point = flatten_point(*point)?;
+            }
+            for point in &mut spline.fit_points {
+                *point = flatten_point(*point)?;
+            }
+            spline.begin_tangent = flatten_vector(spline.begin_tangent)?;
+            spline.end_tangent = flatten_vector(spline.end_tangent)?;
+            spline.normal = Vector3::UNIT_Z;
+            spline.flags.planar = true;
+            acadrust::EntityType::Spline(spline)
+        }
+        acadrust::EntityType::Solid(source) => {
+            let corners = crate::entities::solid::wcs_corners(source);
+            let mut solid = source.clone();
+            solid.first_corner = flatten_array(corners[0])?;
+            solid.second_corner = flatten_array(corners[1])?;
+            solid.third_corner = flatten_array(corners[2])?;
+            solid.fourth_corner = flatten_array(corners[3])?;
+            solid.normal = Vector3::UNIT_Z;
+            solid.thickness = 0.0;
+            acadrust::EntityType::Solid(solid)
+        }
+        acadrust::EntityType::Face3D(source) => {
+            let mut face = source.clone();
+            face.first_corner = flatten_point(face.first_corner)?;
+            face.second_corner = flatten_point(face.second_corner)?;
+            face.third_corner = flatten_point(face.third_corner)?;
+            face.fourth_corner = flatten_point(face.fourth_corner)?;
+            acadrust::EntityType::Face3D(face)
+        }
+        _ => return None,
+    };
+
+    (flattened != *entity).then_some(flattened)
+}
+
+fn flatten_curve_entity(entity: &acadrust::EntityType) -> Option<acadrust::EntityType> {
+    use acadrust::types::{Vector2, Vector3};
+    use cadkernel::geom2d::Curve;
+
     match entity {
-        acadrust::EntityType::Line(l) => {
-            l.start.z = 0.0;
-            l.end.z = 0.0;
+        acadrust::EntityType::Ellipse(source)
+            if source.center.z == 0.0
+                && source.major_axis.z == 0.0
+                && source.normal == Vector3::UNIT_Z =>
+        {
+            return None;
         }
-        acadrust::EntityType::Circle(c) => {
-            c.center.z = 0.0;
+        acadrust::EntityType::LwPolyline(source)
+            if !z_axis_normal(source.normal)
+                && (source.constant_width != 0.0
+                    || source
+                        .vertices
+                        .iter()
+                        .any(|vertex| vertex.start_width != 0.0 || vertex.end_width != 0.0)) =>
+        {
+            return None;
         }
-        acadrust::EntityType::Arc(a) => {
-            a.center.z = 0.0;
+        acadrust::EntityType::Polyline2D(source)
+            if !z_axis_normal(source.normal)
+                && (source.start_width != 0.0
+                    || source.end_width != 0.0
+                    || source
+                        .vertices
+                        .iter()
+                        .any(|vertex| vertex.start_width != 0.0 || vertex.end_width != 0.0)) =>
+        {
+            return None;
         }
-        acadrust::EntityType::LwPolyline(p) => {
-            p.elevation = 0.0;
-        }
-        // Polyline vertices carry their own Z, so clearing the elevation alone
-        // leaves the geometry where it was.
-        acadrust::EntityType::Polyline(p) => {
-            for v in &mut p.vertices {
-                v.location.z = 0.0;
+        acadrust::EntityType::LwPolyline(source) if source.vertices.len() < 2 => {
+            let plane = crate::entities::curve::ocs_plane(source.normal, source.elevation);
+            let mut polyline = source.clone();
+            for vertex in &mut polyline.vertices {
+                let point = flatten_array(plane.point_at([
+                    vertex.location.x,
+                    vertex.location.y,
+                ]))?;
+                vertex.location = Vector2::new(point.x, point.y);
             }
+            polyline.elevation = 0.0;
+            polyline.thickness = 0.0;
+            polyline.normal = Vector3::UNIT_Z;
+            return Some(acadrust::EntityType::LwPolyline(polyline));
         }
-        acadrust::EntityType::Polyline2D(p) => {
-            p.elevation = 0.0;
-            for v in &mut p.vertices {
-                v.location.z = 0.0;
+        acadrust::EntityType::Polyline2D(source) if source.vertices.len() < 2 => {
+            let plane = crate::entities::curve::ocs_plane(source.normal, source.elevation);
+            let mut polyline = source.clone();
+            for vertex in &mut polyline.vertices {
+                let point = flatten_array(plane.point_at([
+                    vertex.location.x,
+                    vertex.location.y,
+                ]))?;
+                vertex.location = point;
             }
+            polyline.elevation = 0.0;
+            polyline.thickness = 0.0;
+            polyline.normal = Vector3::UNIT_Z;
+            return Some(acadrust::EntityType::Polyline2D(polyline));
         }
-        acadrust::EntityType::Polyline3D(p) => {
-            p.elevation = 0.0;
-            for v in &mut p.vertices {
-                v.position.z = 0.0;
-            }
-        }
-        acadrust::EntityType::Text(t) => {
-            t.insertion_point.z = 0.0;
-        }
-        acadrust::EntityType::MText(t) => {
-            t.insertion_point.z = 0.0;
-        }
-        acadrust::EntityType::Insert(ins) => {
-            ins.insert_point.z = 0.0;
-        }
-        acadrust::EntityType::Point(p) => {
-            p.location.z = 0.0;
-        }
-        acadrust::EntityType::Spline(s) => {
-            for cp in &mut s.control_points {
-                cp.z = 0.0;
-            }
-            for fp in &mut s.fit_points {
-                fp.z = 0.0;
-            }
-        }
-        acadrust::EntityType::Ellipse(e) => {
-            e.center.z = 0.0;
-        }
-        acadrust::EntityType::Solid(s) => {
-            s.first_corner.z = 0.0;
-            s.second_corner.z = 0.0;
-            s.third_corner.z = 0.0;
-            s.fourth_corner.z = 0.0;
-        }
-        acadrust::EntityType::Face3D(f) => {
-            f.first_corner.z = 0.0;
-            f.second_corner.z = 0.0;
-            f.third_corner.z = 0.0;
-            f.fourth_corner.z = 0.0;
-        }
-        _ => return false,
+        _ => {}
     }
-    true
+
+    let curve = crate::entities::curve::entity_curve_xy(entity)?;
+    match (entity, curve) {
+        (acadrust::EntityType::Circle(source), Curve::Circle(curve)) => {
+            let mut circle = source.clone();
+            circle.center = Vector3::new(curve.centre[0], curve.centre[1], 0.0);
+            circle.radius = curve.radius;
+            circle.thickness = 0.0;
+            circle.normal = Vector3::UNIT_Z;
+            Some(acadrust::EntityType::Circle(circle))
+        }
+        (acadrust::EntityType::Arc(source), Curve::Arc(curve)) => {
+            let mut arc = source.clone();
+            arc.center = Vector3::new(curve.centre[0], curve.centre[1], 0.0);
+            arc.radius = curve.radius;
+            arc.start_angle = curve.start_angle;
+            arc.end_angle = curve.end_angle;
+            arc.thickness = 0.0;
+            arc.normal = Vector3::UNIT_Z;
+            Some(acadrust::EntityType::Arc(arc))
+        }
+        (acadrust::EntityType::Circle(source), Curve::Ellipse(curve)) => {
+            flattened_ellipse(source.common.clone(), curve)
+        }
+        (acadrust::EntityType::Arc(source), Curve::Ellipse(curve)) => {
+            flattened_ellipse(source.common.clone(), curve)
+        }
+        (acadrust::EntityType::Ellipse(source), Curve::Ellipse(curve)) => {
+            flattened_ellipse(source.common.clone(), curve)
+        }
+        (acadrust::EntityType::LwPolyline(source), Curve::Polyline(curve)) => {
+            if curve.vertices.len() != source.vertices.len() {
+                return None;
+            }
+            let mut polyline = source.clone();
+            for (target, projected) in polyline.vertices.iter_mut().zip(curve.vertices) {
+                target.location = Vector2::new(projected.position[0], projected.position[1]);
+                target.bulge = projected.bulge;
+            }
+            polyline.elevation = 0.0;
+            polyline.thickness = 0.0;
+            polyline.normal = Vector3::UNIT_Z;
+            Some(acadrust::EntityType::LwPolyline(polyline))
+        }
+        (acadrust::EntityType::Polyline2D(source), Curve::Polyline(curve)) => {
+            if curve.vertices.len() != source.vertices.len() {
+                return None;
+            }
+            let mut polyline = source.clone();
+            for (target, projected) in polyline.vertices.iter_mut().zip(curve.vertices) {
+                target.location =
+                    Vector3::new(projected.position[0], projected.position[1], 0.0);
+                target.bulge = projected.bulge;
+            }
+            polyline.elevation = 0.0;
+            polyline.thickness = 0.0;
+            polyline.normal = Vector3::UNIT_Z;
+            Some(acadrust::EntityType::Polyline2D(polyline))
+        }
+        _ => None,
+    }
+}
+
+fn flattened_ellipse(
+    common: acadrust::entities::EntityCommon,
+    curve: cadkernel::geom2d::EllipseArc,
+) -> Option<acadrust::EntityType> {
+    use acadrust::types::Vector3;
+
+    let geometry = curve.ellipse;
+    if !geometry.major_radius.is_finite() || geometry.major_radius <= 0.0 {
+        return None;
+    }
+    let mut ellipse = acadrust::entities::Ellipse::new();
+    ellipse.common = common;
+    ellipse.center = Vector3::new(geometry.centre[0], geometry.centre[1], 0.0);
+    ellipse.major_axis = Vector3::new(
+        geometry.major_axis[0] * geometry.major_radius,
+        geometry.major_axis[1] * geometry.major_radius,
+        0.0,
+    );
+    ellipse.minor_axis_ratio = geometry.minor_radius / geometry.major_radius;
+    ellipse.start_parameter = curve.start_parameter;
+    ellipse.end_parameter = curve.end_parameter;
+    ellipse.normal = Vector3::UNIT_Z;
+    Some(acadrust::EntityType::Ellipse(ellipse))
+}
+
+fn flatten_point(point: acadrust::types::Vector3) -> Option<acadrust::types::Vector3> {
+    flatten_array([point.x, point.y, point.z])
+}
+
+fn flatten_array(point: [f64; 3]) -> Option<acadrust::types::Vector3> {
+    use cadkernel::space::Plane;
+
+    let point = Plane::XY.point_at(Plane::XY.project(point)?);
+    Some(acadrust::types::Vector3::new(point[0], point[1], point[2]))
+}
+
+fn flatten_vector(vector: acadrust::types::Vector3) -> Option<acadrust::types::Vector3> {
+    use cadkernel::space::Plane;
+
+    let vector = Plane::XY.vector_at(Plane::XY.project_vector([
+        vector.x, vector.y, vector.z,
+    ])?);
+    Some(acadrust::types::Vector3::new(
+        vector[0], vector[1], vector[2],
+    ))
+}
+
+fn positive_z_normal(normal: acadrust::types::Vector3) -> bool {
+    normal.x == 0.0 && normal.y == 0.0 && normal.z > 0.0
+}
+
+fn z_axis_normal(normal: acadrust::types::Vector3) -> bool {
+    normal.x == 0.0 && normal.y == 0.0 && normal.z != 0.0
 }
 
 // ── DATAEXTRACTION ─────────────────────────────────────────────────────────
@@ -1868,10 +2089,12 @@ mod flatten_tests {
         }
         pl.elevation = 5.0;
 
-        let mut entity = EntityType::Polyline3D(pl);
-        assert!(flatten_entity_z(&mut entity));
+        let entity = EntityType::Polyline3D(pl);
+        let entity = flatten_entity_z(&entity).expect("projection");
 
-        let EntityType::Polyline3D(pl) = entity else { panic!("wrong variant") };
+        let EntityType::Polyline3D(pl) = entity else {
+            panic!("wrong variant")
+        };
         assert_eq!(pl.elevation, 0.0);
         assert!(pl.vertices.iter().all(|v| v.position.z == 0.0));
         // X/Y must survive the projection.
@@ -1885,10 +2108,12 @@ mod flatten_tests {
             .push(acadrust::entities::Vertex2D::new(Vector3::new(3.0, 4.0, 9.0)));
         pl.elevation = 9.0;
 
-        let mut entity = EntityType::Polyline2D(pl);
-        assert!(flatten_entity_z(&mut entity));
+        let entity = EntityType::Polyline2D(pl);
+        let entity = flatten_entity_z(&entity).expect("projection");
 
-        let EntityType::Polyline2D(pl) = entity else { panic!("wrong variant") };
+        let EntityType::Polyline2D(pl) = entity else {
+            panic!("wrong variant")
+        };
         assert_eq!(pl.elevation, 0.0);
         assert_eq!(pl.vertices[0].location.z, 0.0);
         assert_eq!(pl.vertices[0].location.x, 3.0);
@@ -1903,10 +2128,12 @@ mod flatten_tests {
             Vector3::new(0.0, 1.0, 4.0),
         );
 
-        let mut entity = EntityType::Solid(solid);
-        assert!(flatten_entity_z(&mut entity));
+        let entity = EntityType::Solid(solid);
+        let entity = flatten_entity_z(&entity).expect("projection");
 
-        let EntityType::Solid(s) = entity else { panic!("wrong variant") };
+        let EntityType::Solid(s) = entity else {
+            panic!("wrong variant")
+        };
         assert_eq!(
             [s.first_corner.z, s.second_corner.z, s.third_corner.z, s.fourth_corner.z],
             [0.0; 4]
@@ -1915,12 +2142,11 @@ mod flatten_tests {
 
     #[test]
     fn reports_unsupported_entities_as_not_moved() {
-        // Ray has no Z projection here; FLATTEN must not count it as moved.
-        let mut entity = EntityType::Ray(acadrust::entities::Ray::new(
+        let entity = EntityType::Ray(acadrust::entities::Ray::new(
             Vector3::new(0.0, 0.0, 5.0),
             Vector3::new(1.0, 0.0, 0.0),
         ));
-        assert!(!flatten_entity_z(&mut entity));
+        assert!(flatten_entity_z(&entity).is_none());
     }
 
     #[test]
@@ -1928,9 +2154,67 @@ mod flatten_tests {
         let mut line = acadrust::entities::Line::new();
         line.start = Vector3::new(0.0, 0.0, 3.0);
         line.end = Vector3::new(1.0, 1.0, 4.0);
-        let mut entity = EntityType::Line(line);
-        assert!(flatten_entity_z(&mut entity));
+        let entity = EntityType::Line(line);
+        let entity = flatten_entity_z(&entity).expect("projection");
         let EntityType::Line(l) = entity else { panic!("wrong variant") };
         assert_eq!((l.start.z, l.end.z), (0.0, 0.0));
+    }
+
+    #[test]
+    fn already_flat_line_is_not_moved() {
+        let mut line = acadrust::entities::Line::new();
+        line.start = Vector3::new(0.0, 0.0, 0.0);
+        line.end = Vector3::new(1.0, 1.0, 0.0);
+        let entity = EntityType::Line(line);
+        assert!(flatten_entity_z(&entity).is_none());
+    }
+
+    #[test]
+    fn tilted_circle_projects_to_ellipse() {
+        let mut circle = acadrust::entities::Circle::from_center_radius(
+            Vector3::new(2.0, 3.0, 4.0),
+            5.0,
+        );
+        circle.normal = Vector3::new(0.0, 0.6, 0.8);
+        circle.thickness = 2.0;
+        let entity = EntityType::Circle(circle);
+
+        let projected = flatten_entity_z(&entity).expect("projection");
+        let EntityType::Ellipse(ellipse) = projected else {
+            panic!("wrong variant")
+        };
+        assert_eq!(ellipse.center.z, 0.0);
+        assert_eq!(ellipse.major_axis.z, 0.0);
+        assert_eq!(ellipse.normal, Vector3::UNIT_Z);
+        assert!(ellipse.minor_axis_ratio < 1.0);
+    }
+
+    #[test]
+    fn tilted_solid_uses_world_projection() {
+        let mut solid = acadrust::entities::Solid::new(
+            Vector3::new(0.0, 0.0, 2.0),
+            Vector3::new(1.0, 0.0, 2.0),
+            Vector3::new(1.0, 1.0, 2.0),
+            Vector3::new(0.0, 1.0, 2.0),
+        );
+        solid.normal = Vector3::new(0.0, 0.6, 0.8);
+        solid.thickness = 3.0;
+        let entity = EntityType::Solid(solid);
+
+        let projected = flatten_entity_z(&entity).expect("projection");
+        let EntityType::Solid(solid) = projected else {
+            panic!("wrong variant")
+        };
+        assert_eq!(solid.normal, Vector3::UNIT_Z);
+        assert_eq!(solid.thickness, 0.0);
+        assert_eq!(
+            [
+                solid.first_corner.z,
+                solid.second_corner.z,
+                solid.third_corner.z,
+                solid.fourth_corner.z,
+            ],
+            [0.0; 4]
+        );
     }
 }
