@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use acadrust::{CadDocument, EntityType, Handle};
-use memmap2::{Mmap, MmapMut};
+use memmap2::{Mmap, MmapMut, MmapOptions};
 use rkyv::{check_archived_root, to_bytes, Archive, Deserialize, Serialize};
 
 use crate::host::{DocumentReader, ReaderEntity, ReaderEntityKind, ReaderPoint};
@@ -27,6 +27,7 @@ const CONTROL_MAGIC: u32 = 0x4F_43_53_44; // "OCSD"
 /// `ControlPage` and aligned to a typical page boundary so the snapshot segments
 /// that follow are naturally aligned for rkyv.
 const CONTROL_SIZE: usize = 4096;
+const MAX_SNAPSHOT_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Information sent to the plugin so it can open the shared mapping.
 #[derive(Debug, Clone)]
@@ -66,7 +67,24 @@ impl<T: SnapshotData> DocumentSnapshotStore<T> {
     /// snapshot buffer; the file is sized to hold two segments plus the control
     /// page.
     pub fn new(tab_id: u64, segment_size: usize) -> io::Result<Self> {
-        let segment_size = segment_size.next_multiple_of(4096);
+        let segment_size = segment_size.checked_next_multiple_of(4096).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "snapshot segment size overflow")
+        })?;
+        let total = segment_size
+            .checked_mul(2)
+            .and_then(|segments| CONTROL_SIZE.checked_add(segments))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "snapshot mapping size overflow")
+            })?;
+        if total > MAX_SNAPSHOT_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "snapshot mapping size {total} exceeds maximum {} MiB",
+                    MAX_SNAPSHOT_SIZE / 1024 / 1024
+                ),
+            ));
+        }
         static STORE_ID: AtomicUsize = AtomicUsize::new(0);
         let id = STORE_ID.fetch_add(1, Ordering::Relaxed);
         let path = Self::temp_path(tab_id, id);
@@ -82,10 +100,9 @@ impl<T: SnapshotData> DocumentSnapshotStore<T> {
             use std::os::unix::fs::PermissionsExt;
             file.set_permissions(Permissions::from_mode(0o600))?;
         }
-        let total = CONTROL_SIZE + 2 * segment_size;
         file.set_len(total as u64)?;
 
-        let mut mmap = unsafe { MmapMut::map_mut(&file)? };
+        let mut mmap = unsafe { MmapOptions::new().len(total).map_mut(&file)? };
         let control = ControlPage::from_bytes_mut(&mut mmap);
         control.magic.store(CONTROL_MAGIC, Ordering::Relaxed);
         control.version.store(0, Ordering::Relaxed);
@@ -186,13 +203,37 @@ impl<T: SnapshotData> SharedDocumentReader<T> {
     /// contain no valid snapshot; the caller should `refresh()` before use.
     pub fn open(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).open(path)?;
-        let mmap = unsafe { Mmap::map(&file)? };
-        let file_len = mmap.len();
-        let segment_size = if file_len > CONTROL_SIZE {
-            (file_len - CONTROL_SIZE) / 2
-        } else {
-            0
-        };
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("snapshot path is not a regular file: {}", path.display()),
+            ));
+        }
+        let file_len = metadata.len();
+        if file_len < CONTROL_SIZE as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "snapshot file size {file_len} is smaller than control region {CONTROL_SIZE}"
+                ),
+            ));
+        }
+        if file_len > MAX_SNAPSHOT_SIZE as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "snapshot file size {} exceeds maximum {} MiB; refusing to mmap",
+                    file_len,
+                    MAX_SNAPSHOT_SIZE / 1024 / 1024
+                ),
+            ));
+        }
+        let file_len = usize::try_from(file_len).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "snapshot file size is unsupported")
+        })?;
+        let mmap = unsafe { MmapOptions::new().len(file_len).map(&file)? };
+        let segment_size = (file_len - CONTROL_SIZE) / 2;
         Ok(Self {
             mmap,
             segment_size,
@@ -219,12 +260,25 @@ impl<T: SnapshotData> SharedDocumentReader<T> {
     fn active_segment_bytes(&self) -> &[u8] {
         let control = ControlPage::from_bytes(&self.mmap);
         let active = control.active_segment.load(Ordering::Acquire) as usize;
-        let len = control.active_len.load(Ordering::Acquire) as usize;
-        let offset = CONTROL_SIZE + active * self.segment_size;
-        if offset + len > self.mmap.len() {
+        if active > 1 {
             return &[];
         }
-        &self.mmap[offset..offset + len]
+        let Ok(len) = usize::try_from(control.active_len.load(Ordering::Acquire)) else {
+            return &[];
+        };
+        let Some(offset) = active
+            .checked_mul(self.segment_size)
+            .and_then(|offset| CONTROL_SIZE.checked_add(offset))
+        else {
+            return &[];
+        };
+        let Some(end) = offset.checked_add(len) else {
+            return &[];
+        };
+        if end > self.mmap.len() {
+            return &[];
+        }
+        &self.mmap[offset..end]
     }
 
     fn archived(&self) -> Option<&T::Archived> {
@@ -519,6 +573,18 @@ mod tests {
     use acadrust::tables::Layer;
     use acadrust::{CadDocument, EntityType};
 
+    fn unique_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ocs_shm_{}_{}_{}",
+            std::process::id(),
+            name,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ))
+    }
+
     fn sample_doc() -> CadDocument {
         let mut doc = CadDocument::new();
         doc.layers.add(Layer::new("SURVEY")).unwrap();
@@ -526,6 +592,47 @@ mod tests {
         point.common.layer = "SURVEY".to_string();
         doc.add_entity(EntityType::Point(point)).unwrap();
         doc
+    }
+
+    #[test]
+    fn reader_rejects_oversized_snapshot() {
+        let path = unique_path("oversized.bin");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(MAX_SNAPSHOT_SIZE as u64 + 1).unwrap();
+
+        let error = match SharedDocumentReader::<DocumentViewData>::open(&path) {
+            Ok(_) => panic!("oversized snapshot was mapped"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reader_rejects_snapshot_without_control_region() {
+        let path = unique_path("undersized.bin");
+        std::fs::write(&path, vec![0; CONTROL_SIZE - 1]).unwrap();
+
+        let error = match SharedDocumentReader::<DocumentViewData>::open(&path) {
+            Ok(_) => panic!("undersized snapshot was mapped"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn store_rejects_oversized_mapping() {
+        let error = match DocumentSnapshotStore::<DocumentViewData>::new(0, MAX_SNAPSHOT_SIZE) {
+            Ok(_) => panic!("oversized snapshot store was mapped"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
