@@ -157,6 +157,67 @@ fn production_folder_pipeline_smoke() {
         .expect("parallel reads of every level");
     assert_eq!(all_levels as usize, everything.iter().map(|(_, p)| p.len()).sum::<usize>());
 
+    // Phase 2 toolset on real data: noise, ground, contours. The noise
+    // radius must match the working set's own spacing — a strided sample is
+    // sparse, so derive the radius from the point density instead of a
+    // fixed survey constant.
+    let bounds = sampled.metadata.clone();
+    let area = (bounds.bounds_max[0] - bounds.bounds_min[0])
+        * (bounds.bounds_max[1] - bounds.bounds_min[1]);
+    let spacing = (area / sampled.points.len().max(1) as f64).sqrt();
+    let noise_radius = (spacing * 3.0).max(0.5);
+    let noise = ocs_pointcloud::detect_noise(&sampled.points, noise_radius, 3, 7);
+    eprintln!(
+        "noise detection at radius {noise_radius:.2} (sample spacing {spacing:.2}): {} of {} sampled points flagged",
+        noise.len(),
+        sampled.points.len(),
+    );
+    assert!(
+        noise.len() * 20 < sampled.points.len(),
+        "a real survey tile cannot be more than 5 percent isolated noise"
+    );
+
+    let ground_options = ocs_pointcloud::GroundOptions::default();
+    let ground = ocs_pointcloud::classify_ground(&sampled.points, &ground_options);
+    eprintln!(
+        "ground classification: {} of {} sampled points accepted ({}%)",
+        ground.len(),
+        sampled.points.len(),
+        ground.len() * 100 / sampled.points.len().max(1)
+    );
+    let ground_share = ground.len() as f64 / sampled.points.len() as f64;
+    assert!(
+        ground_share > 0.10 && ground_share < 0.95,
+        "bare-earth share of an urban tile should sit between 10 and 95 percent, got {ground_share:.3}"
+    );
+
+    let mut ground_points = sampled.points.clone();
+    for point in &mut ground_points {
+        point.classification = 1;
+    }
+    let ground_indexes: std::collections::HashSet<u64> =
+        ground.patches.iter().map(|(index, _)| *index).collect();
+    for point in &mut ground_points {
+        if ground_indexes.contains(&point.source_index) {
+            point.classification = 2;
+        }
+    }
+    let tin = ocs_pointcloud::Tin::from_points(&ground_points, Some(2)).expect("ground tin");
+    let contours = ocs_pointcloud::generate_contours(&tin, 2.0, 0.0);
+    let contour_points: usize = contours.iter().map(|contour| contour.points.len()).sum();
+    eprintln!(
+        "contours: {} polylines ({} vertices) from {} triangles at 2-unit intervals",
+        contours.len(),
+        contour_points,
+        tin.triangle_count()
+    );
+    assert!(!contours.is_empty(), "a real tile must produce contours");
+    for contour in &contours {
+        for point in &contour.points {
+            assert!((point[2] - contour.elevation).abs() < 1e-6);
+        }
+    }
+
     // Sparse per-source edits and the merged two-file export.
     let mut edits = EditStore::default();
     let classify_count = 5_000.min(sampled.points.len() as u64);
