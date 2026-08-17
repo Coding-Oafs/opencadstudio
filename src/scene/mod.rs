@@ -128,8 +128,9 @@ pub use model::hatch_model::HatchModel;
 pub use model::image_model::ImageModel;
 pub use model::mesh_model::MeshLodSet;
 pub use model::point_cloud_model::{
-    PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION, COLOR_MODE_ELEVATION,
-    COLOR_MODE_INTENSITY, COLOR_MODE_RETURN, COLOR_MODE_RGB, COLOR_MODE_SOURCE,
+    PointChunk, PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION,
+    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_RETURN, COLOR_MODE_RGB,
+    COLOR_MODE_SOURCE,
 };
 pub use model::object::{GripApply, GripDef};
 pub use model::wire_model::WireModel;

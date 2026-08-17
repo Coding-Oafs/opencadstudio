@@ -8,8 +8,9 @@
 
 use super::{Message, OpenCADStudio};
 use crate::scene::{
-    PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION, COLOR_MODE_ELEVATION,
-    COLOR_MODE_INTENSITY, COLOR_MODE_RGB, COLOR_MODE_RETURN, COLOR_MODE_SOURCE,
+    PointChunk, PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION,
+    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_RGB, COLOR_MODE_RETURN,
+    COLOR_MODE_SOURCE,
 };
 use iced::Task;
 use ocs_pointcloud::{
@@ -456,12 +457,16 @@ impl PointCloudDataset {
 
     pub(super) fn display_model(&mut self) -> PointCloudModel {
         let mut points = Vec::new();
+        let mut chunks = Vec::new();
+        let mut chunk_offset: u32 = 0;
         let mut intensity_range = self.display.intensity_range.unwrap_or([u16::MAX, 0]);
         for source in &self.sources {
             let active_selection = source
                 .selection_sets
                 .iter()
                 .find(|selection| selection.name == "active");
+            let generation = source_chunk_generation(source);
+            let tiled = source.sample.stride == 0 && !source.active_tiles.is_empty();
             for sampled in &source.sample.points {
                 let point = source
                     .edits
@@ -484,12 +489,40 @@ impl PointCloudDataset {
                         .is_some_and(|selection| selection.contains(point.source_index)),
                 });
             }
+            // Chunk the stream by upload identity: one chunk per streamed
+            // tile, or one per source for a bounded sample. The flat point
+            // order matches active-tile order (rebuild_resident_display), so
+            // chunk ranges align exactly.
+            if tiled {
+                for key in &source.active_tiles {
+                    let len =
+                        source.resident_tiles.get(key).map_or(0, |tile| tile.points.len()) as u32;
+                    chunks.push(PointChunk {
+                        key: tile_chunk_key(&source.id, key),
+                        generation,
+                        offset: chunk_offset,
+                        len,
+                    });
+                    chunk_offset += len;
+                }
+            } else {
+                let len = source.sample.points.len() as u32;
+                chunks.push(PointChunk {
+                    key: tile_chunk_key(&source.id, &SAMPLE_CHUNK_TILE),
+                    generation,
+                    offset: chunk_offset,
+                    len,
+                });
+                chunk_offset += len;
+            }
         }
+        debug_assert_eq!(chunk_offset as usize, points.len());
         self.resolved_intensity_range = Some(intensity_range);
         PointCloudModel {
             points: Arc::new(points),
             point_size_px: self.display.point_size_px,
             style: self.point_style(),
+            chunks,
             geometry_generation: self.display_generation,
             style_generation: self.style_generation,
         }
@@ -1468,6 +1501,7 @@ impl OpenCADStudio {
             points: Arc::clone(&current.points),
             point_size_px: point_size,
             style,
+            chunks: current.chunks.clone(),
             geometry_generation: current.geometry_generation,
             style_generation: self.tabs[tab_index].point_cloud.style_generation,
         };
@@ -2894,6 +2928,36 @@ fn path_matches(left: &std::path::Path, right: &std::path::Path) -> bool {
     }
 }
 
+/// Marker tile for a source's whole bounded sample (non-tiled display).
+const SAMPLE_CHUNK_TILE: ocs_pointcloud::TileKey = ocs_pointcloud::TileKey {
+    level: 0,
+    x: 0,
+    y: 0,
+    z: 0,
+};
+
+/// Stable per-(source, tile) chunk identity for the GPU arena.
+fn tile_chunk_key(source_id: &str, tile: &ocs_pointcloud::TileKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source_id.hash(&mut hasher);
+    (tile.level, tile.x, tile.y, tile.z).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Content revision of one source's rendered points: any edit, undo, or
+/// selection change must produce a different value so its chunks re-upload.
+fn source_chunk_generation(source: &PointCloudAttachment) -> u64 {
+    let selection_len: u64 = source
+        .selection_sets
+        .iter()
+        .find(|selection| selection.name == "active")
+        .map_or(0, SelectionSet::len);
+    (source.edits.transaction_count() as u64) << 44
+        ^ (source.sample.points.len() as u64) << 24
+        ^ selection_len
+}
+
 fn categorical(value: u32) -> [f32; 4] {
     let hash = value.wrapping_mul(0x9e37_79b9).rotate_left(13);
     [
@@ -3266,6 +3330,39 @@ mod tests {
         dataset.sources.push(attachment("b", 2));
         assert_eq!(5, dataset.display_model().points.len());
         assert_eq!(Some(([0.0, 0.0, 0.0], [10.0, 10.0, 10.0])), dataset.bounds());
+    }
+
+    #[test]
+    fn dataset_chunks_cover_the_point_stream_exactly() {
+        let mut dataset = PointCloudDataset::default();
+        dataset.sources.push(attachment("a", 3));
+        dataset.sources.push(attachment("b", 2));
+        // An edit bumps the first source's chunk generation only.
+        dataset.sources[0].edits.apply(
+            "class",
+            [1_u64],
+            PointPatch::classification(6),
+        );
+        let model = dataset.display_model();
+        // Non-tiled sources emit one whole-sample chunk each.
+        assert_eq!(2, model.chunks.len());
+        let covered: u32 = model.chunks.iter().map(|chunk| chunk.len).sum();
+        assert_eq!(model.points.len() as u32, covered);
+        assert_eq!(0, model.chunks[0].offset);
+        assert_eq!(3, model.chunks[0].offset + model.chunks[0].len);
+        assert_eq!(model.chunks[0].len, model.chunks[1].offset);
+        assert_ne!(
+            model.chunks[0].generation, model.chunks[1].generation,
+            "the edited source's chunk generation must differ"
+        );
+        // Chunk keys stay stable across rebuilds while generations track edits.
+        let first_keys: Vec<u64> = model.chunks.iter().map(|chunk| chunk.key).collect();
+        let rebuilt = dataset.display_model();
+        assert_eq!(first_keys, rebuilt.chunks.iter().map(|c| c.key).collect::<Vec<_>>());
+        dataset.sources[0].edits.undo();
+        let bumped = dataset.display_model();
+        assert_ne!(model.chunks[0].generation, bumped.chunks[0].generation);
+        assert_eq!(model.chunks[1].generation, bumped.chunks[1].generation);
     }
 
     #[test]

@@ -1,18 +1,23 @@
 //! Fixed-screen-size, depth-tested LiDAR point renderer.
 //!
 //! Instances carry position plus the attributes the shader colors from; the
-//! colorization state itself lives in a small style uniform. Rebuilding the
-//! instance buffer is reserved for membership and per-point-attribute changes
-//! (tile loads, edits, selections) — color mode, class visibility, and class
-//! table edits rewrite only the style uniform.
+//! colorization state itself lives in a small style uniform. Behind the
+//! `point-arena` feature the instance buffer is a persistent arena paged by
+//! chunk: streamed tiles enter and leave with one ranged write each instead
+//! of rebuilding the whole buffer. The planning core is pure so it is
+//! unit-testable without a device.
 
-use crate::scene::model::point_cloud_model::PointCloudModel;
+use crate::scene::model::point_cloud_model::{PointChunk, PointCloudModel};
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt;
 
 /// Bytes per GPU point instance: two position vec4s (relative-to-eye high and
 /// low) plus one attribute vec4 and one color/flag vec4.
 pub const POINT_INSTANCE_BYTES: usize = 64;
+
+/// Smallest arena capacity (instances) so tiny clouds do not thrash the
+/// buffer between recreations.
+const MIN_ARENA_CAPACITY: u32 = 1 << 16;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,6 +27,36 @@ struct PointInstance {
     attributes: [f32; 4],
     color_selected: [f32; 4],
 }
+
+fn build_instances(
+    points: &[crate::scene::PointCloudPoint],
+    point_size: f32,
+) -> Vec<PointInstance> {
+    points
+        .iter()
+        .map(|point| {
+            let (high, low) = split_f64(point.position);
+            PointInstance {
+                position_high: [high[0], high[1], high[2], point_size],
+                position_low: [low[0], low[1], low[2], point.classification as f32],
+                attributes: [
+                    point.intensity as f32,
+                    point.return_number as f32,
+                    point.point_source_id as f32,
+                    0.0,
+                ],
+                color_selected: [
+                    point.color.map_or(0.0, |color| color[0] as f32 / 65_535.0),
+                    point.color.map_or(0.0, |color| color[1] as f32 / 65_535.0),
+                    point.color.map_or(0.0, |color| color[2] as f32 / 65_535.0),
+                    f32::from(point.selected),
+                ],
+            }
+        })
+        .collect()
+}
+
+// ── Style uniform ──────────────────────────────────────────────────────────
 
 /// CPU mirror of the `Style` uniform in `point_cloud.wgsl`. Layout must match
 /// WGSL uniform rules exactly; `bytemuck` casts it into one buffer write.
@@ -60,6 +95,212 @@ impl StyleUniforms {
     }
 }
 
+// ── Arena planning (pure) ──────────────────────────────────────────────────
+
+/// One live chunk placement inside the arena buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Slot {
+    key: u64,
+    /// Content revision this placement holds; a changed generation reuses
+    /// the range but rewrites its bytes.
+    generation: u64,
+    offset: u32,
+    len: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ArenaUpdate {
+    /// Live placements after this update.
+    slots: Vec<Slot>,
+    /// Free ranges remaining after this update.
+    free: Vec<(u32, u32)>,
+    /// Instance capacity the buffer must have; differing from the current
+    /// capacity means the buffer is recreated (and every chunk is written).
+    capacity: u32,
+    /// `(chunk_index, buffer_offset)` pairs whose bytes must be written.
+    writes: Vec<(usize, u32)>,
+    /// Contiguous instance ranges covering all live slots, for drawing.
+    runs: Vec<(u32, u32)>,
+    /// Total live instances.
+    total: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ArenaState {
+    slots: Vec<Slot>,
+    free: Vec<(u32, u32)>,
+    capacity: u32,
+}
+
+impl ArenaState {
+    fn runs(&self) -> Vec<(u32, u32)> {
+        runs_from_slots(&self.slots)
+    }
+}
+
+fn runs_from_slots(slots: &[Slot]) -> Vec<(u32, u32)> {
+    let mut sorted: Vec<Slot> = slots.to_vec();
+    sorted.sort_by_key(|slot| slot.offset);
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for slot in sorted {
+        match runs.last_mut() {
+            Some(last) if last.0 + last.1 == slot.offset => last.1 += slot.len,
+            _ => runs.push((slot.offset, slot.len)),
+        }
+    }
+    runs
+}
+
+/// Plans the transition from `state` to `chunks`. Chunks whose key, length
+/// and generation all match keep their placement untouched; a generation
+/// change reuses the range and rewrites only its bytes; vanished chunks free
+/// their ranges; the buffer grows when the request does not fit and compacts
+/// when the arena is mostly empty (both recreate with a fresh layout).
+fn plan_arena(state: &ArenaState, chunks: &[PointChunk]) -> ArenaUpdate {
+    let total: u32 = chunks
+        .iter()
+        .map(|chunk| chunk.len as u64)
+        .sum::<u64>()
+        .min(u32::MAX as u64) as u32;
+
+    let recreate =
+        total > state.capacity || (state.capacity > MIN_ARENA_CAPACITY && total * 4 < state.capacity);
+    if recreate {
+        let capacity = total.max(MIN_ARENA_CAPACITY).next_power_of_two();
+        let mut slots = Vec::with_capacity(chunks.len());
+        let mut writes = Vec::with_capacity(chunks.len());
+        let mut offset = 0_u32;
+        for (index, chunk) in chunks.iter().enumerate() {
+            slots.push(Slot {
+                key: chunk.key,
+                generation: chunk.generation,
+                offset,
+                len: chunk.len,
+            });
+            writes.push((index, offset));
+            offset += chunk.len;
+        }
+        return ArenaUpdate {
+            runs: runs_from_slots(&slots),
+            slots,
+            free: Vec::new(),
+            capacity,
+            writes,
+            total,
+        };
+    }
+
+    // Incremental path: match by key, reuse placements whose length still
+    // fits, allocate from the free list first, then from the bump area past
+    // every live slot.
+    let mut slots: Vec<Slot> = Vec::with_capacity(chunks.len());
+    let mut writes = Vec::new();
+    let mut free: Vec<(u32, u32)> = Vec::new();
+    let mut bump = 0_u32;
+    for slot in &state.slots {
+        bump = bump.max(slot.offset + slot.len);
+    }
+    for slot in &state.slots {
+        if !chunks.iter().any(|chunk| chunk.key == slot.key) {
+            free.push((slot.offset, slot.len));
+        }
+    }
+    for (index, chunk) in chunks.iter().enumerate() {
+        let previous = state.slots.iter().find(|slot| slot.key == chunk.key);
+        let mut needs_write = true;
+        let slot = match previous {
+            // Same content, same length: nothing to do at all.
+            Some(slot) if slot.len == chunk.len && slot.generation == chunk.generation => {
+                needs_write = false;
+                *slot
+            }
+            // Same length, new content: reuse the range, rewrite its bytes.
+            Some(slot) if slot.len == chunk.len => Slot {
+                key: chunk.key,
+                generation: chunk.generation,
+                offset: slot.offset,
+                len: chunk.len,
+            },
+            Some(slot) => {
+                free.push((slot.offset, slot.len));
+                allocate_slot(&mut free, &mut bump, chunk)
+            }
+            None => allocate_slot(&mut free, &mut bump, chunk),
+        };
+        if needs_write {
+            writes.push((index, slot.offset));
+        }
+        slots.push(slot);
+    }
+    coalesce_free(&mut free);
+    let capacity = bump.max(total).max(state.capacity);
+    ArenaUpdate {
+        runs: runs_from_slots(&slots),
+        slots,
+        free,
+        capacity,
+        writes,
+        total,
+    }
+}
+
+/// First-fit allocation: the smallest free range that fits, else the bump
+/// area past every live slot.
+fn allocate_slot(
+    free: &mut Vec<(u32, u32)>,
+    bump: &mut u32,
+    chunk: &PointChunk,
+) -> Slot {
+    let mut best: Option<usize> = None;
+    for (index, (offset, len)) in free.iter().enumerate() {
+        if *len >= chunk.len
+            && best.is_none_or(|current| {
+                let (_, current_len) = free[current];
+                *len < current_len
+            })
+        {
+            best = Some(index);
+        }
+    }
+    let offset = match best {
+        Some(index) => {
+            let (offset, len) = free[index];
+            let remainder = len - chunk.len;
+            if remainder > 0 {
+                free[index] = (offset + chunk.len, remainder);
+            } else {
+                free.remove(index);
+            }
+            offset
+        }
+        None => {
+            let offset = *bump;
+            *bump += chunk.len;
+            offset
+        }
+    };
+    Slot {
+        key: chunk.key,
+        generation: chunk.generation,
+        offset,
+        len: chunk.len,
+    }
+}
+
+fn coalesce_free(free: &mut Vec<(u32, u32)>) {
+    free.sort_by_key(|(offset, _)| *offset);
+    let mut coalesced: Vec<(u32, u32)> = Vec::with_capacity(free.len());
+    for (offset, len) in free.drain(..) {
+        match coalesced.last_mut() {
+            Some(last) if last.0 + last.1 == offset => last.1 += len,
+            _ => coalesced.push((offset, len)),
+        }
+    }
+    *free = coalesced;
+}
+
+// ── GPU resources ──────────────────────────────────────────────────────────
+
 pub struct PointGpu {
     pipeline: wgpu::RenderPipeline,
     instances: Option<wgpu::Buffer>,
@@ -69,6 +310,27 @@ pub struct PointGpu {
     style_generation: u64,
     geometry_generation: u64,
     source_id: usize,
+    #[cfg(feature = "point-arena")]
+    arena: ArenaGpu,
+}
+
+/// Persistent paged instance buffer plus its live-slot map.
+#[cfg(feature = "point-arena")]
+struct ArenaGpu {
+    buffer: Option<wgpu::Buffer>,
+    state: ArenaState,
+    runs: Vec<(u32, u32)>,
+}
+
+#[cfg(feature = "point-arena")]
+impl Default for ArenaGpu {
+    fn default() -> Self {
+        Self {
+            buffer: None,
+            state: ArenaState::default(),
+            runs: Vec::new(),
+        }
+    }
 }
 
 impl PointGpu {
@@ -78,6 +340,10 @@ impl PointGpu {
         self.geometry_generation = u64::MAX;
         self.style_generation = u64::MAX;
         self.source_id = 0;
+        #[cfg(feature = "point-arena")]
+        {
+            self.arena = ArenaGpu::default();
+        }
     }
 
     pub fn new(
@@ -101,7 +367,7 @@ impl PointGpu {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(
-                        std::mem::size_of::<StyleUniforms>() as u64
+                        std::mem::size_of::<StyleUniforms>() as u64,
                     ),
                 },
                 count: None,
@@ -209,6 +475,8 @@ impl PointGpu {
             style_generation: u64::MAX,
             geometry_generation: u64::MAX,
             source_id: 0,
+            #[cfg(feature = "point-arena")]
+            arena: ArenaGpu::default(),
         }
     }
 
@@ -231,6 +499,15 @@ impl PointGpu {
             );
             self.style_generation = model.style_generation;
         }
+        #[cfg(feature = "point-arena")]
+        {
+            if !model.chunks.is_empty() {
+                self.upload_arena(device, queue, model);
+                return;
+            }
+            // Models without chunk identity fall back to whole-buffer upload.
+            self.arena = ArenaGpu::default();
+        }
         if self.geometry_generation == model.geometry_generation
             && self.source_id == source_id
             && self.instances.is_some()
@@ -238,30 +515,8 @@ impl PointGpu {
             return;
         }
         let point_size = model.point_size_px.clamp(1.0, 32.0);
-        let instances: Vec<_> = model
-            .points
-            .iter()
-            .take(u32::MAX as usize)
-            .map(|point| {
-                let (high, low) = split_f64(point.position);
-                PointInstance {
-                    position_high: [high[0], high[1], high[2], point_size],
-                    position_low: [low[0], low[1], low[2], point.classification as f32],
-                    attributes: [
-                        point.intensity as f32,
-                        point.return_number as f32,
-                        point.point_source_id as f32,
-                        0.0,
-                    ],
-                    color_selected: [
-                        point.color.map_or(0.0, |color| color[0] as f32 / 65_535.0),
-                        point.color.map_or(0.0, |color| color[1] as f32 / 65_535.0),
-                        point.color.map_or(0.0, |color| color[2] as f32 / 65_535.0),
-                        f32::from(point.selected),
-                    ],
-                }
-            })
-            .collect();
+        let visible = &model.points[..model.points.len().min(u32::MAX as usize)];
+        let instances = build_instances(visible, point_size);
         self.count = instances.len() as u32;
         self.instances = (!instances.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -274,12 +529,86 @@ impl PointGpu {
         self.source_id = source_id;
     }
 
+    /// Pages chunks into the persistent arena: new or generation-changed
+    /// chunks get one ranged write each; untouched chunks cost nothing.
+    #[cfg(feature = "point-arena")]
+    fn upload_arena(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        model: &PointCloudModel,
+    ) {
+        let mut plan = plan_arena(&self.arena.state, &model.chunks);
+        let recreate = self.arena.buffer.is_none() || plan.capacity != self.arena.state.capacity;
+        if recreate {
+            let zeros = vec![
+                PointInstance {
+                    position_high: [0.0; 4],
+                    position_low: [0.0; 4],
+                    attributes: [0.0; 4],
+                    color_selected: [0.0; 4],
+                };
+                plan.capacity as usize
+            ];
+            self.arena.buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("point_cloud.arena"),
+                contents: bytemuck::cast_slice(&zeros),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            }));
+        }
+        let Some(buffer) = self.arena.buffer.clone() else {
+            return;
+        };
+        let point_size = model.point_size_px.clamp(1.0, 32.0);
+        for (chunk_index, offset) in &plan.writes {
+            let chunk = &model.chunks[*chunk_index];
+            let start = chunk.offset as usize;
+            let end = start.saturating_add(chunk.len as usize);
+            let Some(slice) = model.points.get(start..end) else {
+                continue;
+            };
+            let instances = build_instances(slice, point_size);
+            if instances.is_empty() {
+                continue;
+            }
+            queue.write_buffer(
+                &buffer,
+                u64::from(*offset) * POINT_INSTANCE_BYTES as u64,
+                bytemuck::cast_slice(&instances),
+            );
+        }
+        self.arena.state = ArenaState {
+            slots: plan.slots,
+            free: plan.free,
+            capacity: plan.capacity,
+        };
+        self.arena.runs = plan.runs;
+        self.count = plan.total;
+        // The arena path owns drawing while it is active.
+        self.instances = None;
+    }
+
     pub fn draw<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         frame_bind_group: &'a wgpu::BindGroup,
         stencil_reference: u32,
     ) {
+        #[cfg(feature = "point-arena")]
+        if let Some(buffer) = &self.arena.buffer {
+            if self.count == 0 || self.arena.runs.is_empty() {
+                return;
+            }
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, frame_bind_group, &[]);
+            pass.set_bind_group(1, &self.style_bind_group, &[]);
+            pass.set_stencil_reference(stencil_reference);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            for (start, len) in &self.arena.runs {
+                pass.draw(0..6, *start..*start + *len);
+            }
+            return;
+        }
         let Some(instances) = &self.instances else {
             return;
         };
@@ -303,4 +632,136 @@ fn split_f64(position: [f64; 3]) -> ([f32; 3], [f32; 3]) {
         (position[2] - high[2] as f64) as f32,
     ];
     (high, low)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(key: u64, len: u32) -> PointChunk {
+        PointChunk {
+            key,
+            generation: 1,
+            offset: 0,
+            len,
+        }
+    }
+
+    fn chunk_at(key: u64, len: u32, offset: u32, generation: u64) -> PointChunk {
+        PointChunk {
+            key,
+            generation,
+            offset,
+            len,
+        }
+    }
+
+    #[test]
+    fn first_plan_lays_out_chunks_sequentially() {
+        let plan = plan_arena(
+            &ArenaState::default(),
+            &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1), chunk_at(3, 5, 30, 1)],
+        );
+        assert_eq!(MIN_ARENA_CAPACITY, plan.capacity);
+        assert_eq!(35, plan.total);
+        assert_eq!(vec![(0, 35)], plan.runs);
+        assert_eq!(3, plan.writes.len());
+        assert_eq!(
+            vec![(1, 0), (2, 10), (3, 30)],
+            plan.slots
+                .iter()
+                .map(|slot| (slot.key, slot.offset))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unchanged_chunks_keep_placements_and_skip_writes() {
+        let first =
+            plan_arena(&ArenaState::default(), &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        let state = ArenaState {
+            slots: first.slots.clone(),
+            free: first.free.clone(),
+            capacity: first.capacity,
+        };
+        // Same keys, lengths and generations: nothing is written.
+        let again = plan_arena(&state, &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        assert!(again.writes.is_empty(), "identical content must not write");
+        assert_eq!(first.slots, again.slots);
+    }
+
+    #[test]
+    fn generation_change_reuses_range_with_one_write() {
+        let first = plan_arena(&ArenaState::default(), &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        let state = ArenaState {
+            slots: first.slots.clone(),
+            free: first.free.clone(),
+            capacity: first.capacity,
+        };
+        // Chunk 2's content changed (edit/selection); chunk 1 untouched.
+        let second = plan_arena(&state, &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 9)]);
+        assert_eq!(vec![(1, 10)], second.writes);
+        assert_eq!(first.slots[1].offset, second.slots[1].offset);
+    }
+
+    #[test]
+    fn departed_chunks_free_ranges_and_new_chunks_reuse_them() {
+        let first = plan_arena(&ArenaState::default(), &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        let state = ArenaState {
+            slots: first.slots.clone(),
+            free: first.free.clone(),
+            capacity: first.capacity,
+        };
+        // Chunk 2 departs; a smaller chunk 3 arrives and must fit its hole.
+        let second = plan_arena(&state, &[chunk_at(1, 10, 0, 1), chunk_at(3, 8, 10, 1)]);
+        let slot_three = second.slots.iter().find(|slot| slot.key == 3).unwrap();
+        let departed_offset = first.slots.iter().find(|slot| slot.key == 2).unwrap().offset;
+        assert_eq!(departed_offset, slot_three.offset);
+        assert_eq!(18, second.total);
+        assert_eq!(vec![(0, 18)], second.runs);
+    }
+
+    #[test]
+    fn oversized_requests_recreate_with_sequential_layout() {
+        let state = ArenaState {
+            slots: vec![Slot {
+                key: 1,
+                generation: 1,
+                offset: 0,
+                len: MIN_ARENA_CAPACITY,
+            }],
+            free: Vec::new(),
+            capacity: MIN_ARENA_CAPACITY,
+        };
+        let plan = plan_arena(
+            &state,
+            &[chunk_at(1, MIN_ARENA_CAPACITY, 0, 1), chunk_at(2, 100, 0, 1)],
+        );
+        assert!(plan.capacity > MIN_ARENA_CAPACITY);
+        // A recreated buffer writes every chunk, laid out back to back.
+        assert_eq!(2, plan.writes.len());
+        assert_eq!(
+            plan.slots[0].offset + plan.slots[0].len,
+            plan.slots[1].offset
+        );
+        assert!(plan.free.is_empty());
+    }
+
+    #[test]
+    fn mostly_empty_arenas_compact() {
+        let big = MIN_ARENA_CAPACITY * 4;
+        let state = ArenaState {
+            slots: vec![Slot {
+                key: 1,
+                generation: 1,
+                offset: 0,
+                len: 100,
+            }],
+            free: Vec::new(),
+            capacity: big,
+        };
+        let plan = plan_arena(&state, &[chunk_at(1, 100, 0, 1)]);
+        assert!(plan.capacity < big, "arena must shrink when mostly empty");
+        assert_eq!(1, plan.writes.len());
+    }
 }

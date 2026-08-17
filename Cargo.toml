@@ -14,8 +14,12 @@ members = [
 ]
 
 [features]
-default = []
+default = ["point-arena"]
 ifc = ["dep:acadifc"]
+# Persistent paged point instance buffer: streamed tiles upload as ranged
+# writes into stable slots instead of recreating the whole buffer. Build with
+# --no-default-features to fall back to whole-buffer uploads.
+point-arena = []
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

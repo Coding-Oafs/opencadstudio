@@ -30,6 +30,23 @@ pub const COLOR_MODE_SOURCE: u32 = 5;
 
 pub const CLASS_COUNT: usize = 256;
 
+/// One uploadable region of the point stream: a source's tile (or whole
+/// bounded sample) with a stable identity and a content revision. The GPU
+/// arena pages chunks in and out individually instead of rebuilding the
+/// entire instance buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointChunk {
+    /// Stable identity of the content (source id + tile); equal keys mean
+    /// the same region of the same data.
+    pub key: u64,
+    /// Content revision: changes when rendered attributes inside the chunk
+    /// change (edits, selections).
+    pub generation: u64,
+    /// Range within `PointCloudModel::points`.
+    pub offset: u32,
+    pub len: u32,
+}
+
 /// Per-frame colorization state uploaded as one uniform write.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointStyle {
@@ -61,6 +78,9 @@ pub struct PointCloudModel {
     pub points: Arc<Vec<PointCloudPoint>>,
     pub point_size_px: f32,
     pub style: PointStyle,
+    /// Chunked upload plan; empty models or non-tiled paths leave this
+    /// empty, and the renderer falls back to a full instance upload.
+    pub chunks: Vec<PointChunk>,
     /// Bumps when the point set or any per-point attribute changes: the
     /// instance buffer must be rebuilt.
     pub geometry_generation: u64,
@@ -74,6 +94,7 @@ impl Default for PointCloudModel {
             points: Arc::new(Vec::new()),
             point_size_px: 3.0,
             style: PointStyle::default(),
+            chunks: Vec::new(),
             geometry_generation: 0,
             style_generation: 0,
         }
