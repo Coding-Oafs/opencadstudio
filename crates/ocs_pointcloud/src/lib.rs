@@ -54,6 +54,9 @@ pub enum Error {
     SameInputAndOutput(PathBuf),
     Cancelled(&'static str),
     Crs(String),
+    /// The sources of a merged export disagree on LAS version, point format,
+    /// or declared horizontal CRS.
+    MergeIncompatible(String),
 }
 
 impl fmt::Display for Error {
@@ -81,6 +84,9 @@ impl fmt::Display for Error {
             ),
             Self::Cancelled(operation) => write!(f, "{operation} cancelled"),
             Self::Crs(message) => write!(f, "coordinate-reference-system error: {message}"),
+            Self::MergeIncompatible(message) => {
+                write!(f, "cannot merge these sources: {message}")
+            }
         }
     }
 }
@@ -487,6 +493,123 @@ pub fn export_with_patches_progress(
         },
         continue_export,
     )
+}
+
+/// One input of a merged multi-file export.
+#[derive(Clone, Debug, Default)]
+pub struct MergeSource {
+    pub path: PathBuf,
+    pub edits: EditStore,
+}
+
+/// Streams every source into one merged LAS/LAZ in the given order.
+///
+/// The first source's header (LAS version, point format, scales, CRS VLRs,
+/// extra bytes) becomes the output template; every source must match it.
+/// Each point's `point_source_id` is set to its file's ordinal (1..=N) so
+/// tile identity survives the merge, and each source's sparse edits are
+/// applied against its own record indices. Like the single-file export, the
+/// output is written to an adjacent temporary file and renamed only after a
+/// successful close.
+pub fn export_merged_progress(
+    sources: &[MergeSource],
+    output: &Path,
+    mut continue_export: impl FnMut(ExportProgress) -> bool,
+) -> Result<ExportStats> {
+    const CHUNK_SIZE: u64 = 65_536;
+
+    if sources.is_empty() {
+        return Err(Error::InvalidLimit("a merged export needs at least one source"));
+    }
+    for source in sources {
+        validate_output_path(&source.path, output)?;
+    }
+
+    // Compatibility pass: one output point format can only represent sources
+    // that agree on version, format, and horizontal CRS.
+    let template = Reader::from_path(&sources[0].path)?.header().clone();
+    let template_crs = CrsInfo::from_header(&template);
+    let mut total_points = template.number_of_points();
+    for source in &sources[1..] {
+        let header = Reader::from_path(&source.path)?.header().clone();
+        if header.version() != template.version()
+            || header.point_format() != template.point_format()
+        {
+            return Err(Error::MergeIncompatible(format!(
+                "\"{}\" uses LAS {} point format {:?}, but \"{}\" uses LAS {} point format {:?}",
+                sources[0].path.display(),
+                template.version(),
+                template.point_format(),
+                source.path.display(),
+                header.version(),
+                header.point_format(),
+            )));
+        }
+        let crs = CrsInfo::from_header(&header);
+        if crs.horizontal_epsg != template_crs.horizontal_epsg {
+            return Err(Error::MergeIncompatible(format!(
+                "\"{}\" declares horizontal EPSG {:?} but \"{}\" declares {:?}",
+                sources[0].path.display(),
+                template_crs.horizontal_epsg,
+                source.path.display(),
+                crs.horizontal_epsg,
+            )));
+        }
+        total_points += header.number_of_points();
+    }
+
+    let temporary = temporary_output_path(output);
+    let mut temporary_guard = TemporaryOutput::new(temporary.clone());
+    let mut writer = Writer::from_path(&temporary, template)?;
+    let mut stats = ExportStats::default();
+
+    for (ordinal, source) in sources.iter().enumerate() {
+        let source_id = u16::try_from(ordinal + 1).unwrap_or(u16::MAX);
+        let mut reader = Reader::from_path(&source.path)?;
+        let point_count = reader.header().number_of_points();
+        let mut source_index = 0_u64;
+        while source_index < point_count {
+            let point_data =
+                reader.read_points((point_count - source_index).min(CHUNK_SIZE))?;
+            if point_data.is_empty() {
+                break;
+            }
+            for point in point_data.points() {
+                let mut point = point?;
+                if let Some(patch) = source.edits.patch_for(source_index) {
+                    apply_point_patch(&mut point, patch, &mut stats)?;
+                }
+                point.point_source_id = source_id;
+                writer.write_point(point)?;
+                source_index += 1;
+                stats.points_read += 1;
+                stats.points_written += 1;
+            }
+            if !continue_export(ExportProgress {
+                points_read: stats.points_read,
+                total_points,
+            }) {
+                return Err(Error::Cancelled("point-cloud export"));
+            }
+        }
+        // Every source record must be represented; a short read silently
+        // dropping points would corrupt the merged count.
+        if source_index != point_count {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "\"{}\" ended after {source_index} of {point_count} points",
+                    source.path.display()
+                ),
+            )));
+        }
+    }
+
+    writer.close()?;
+    drop(writer);
+    fs::rename(&temporary, output)?;
+    temporary_guard.commit();
+    Ok(stats)
 }
 
 fn export_internal(
@@ -978,6 +1101,97 @@ mod tests {
         assert_eq!(vec![2, 6], loaded.selection_filter.classes);
         assert_eq!(vec![1], loaded.selection_filter.returns);
         assert_eq!(1, store.audit_log("primary").unwrap().len());
+    }
+
+    #[test]
+    fn merged_export_writes_all_sources_with_distinct_point_source_ids() {
+        let directory = TestDirectory::new();
+        let first = directory.join("merge-a.las");
+        let second = directory.join("merge-b.las");
+        create_cloud(&first, 40);
+        create_cloud(&second, 25);
+        // Reclassify one point in each source to prove per-file edit routing.
+        let mut first_edits = EditStore::default();
+        first_edits.apply(
+            "class a",
+            [7_u64],
+            PointPatch::classification(6),
+        );
+        let mut second_edits = EditStore::default();
+        second_edits.apply(
+            "class b",
+            [3_u64],
+            PointPatch::classification(31),
+        );
+        let output = directory.join("merged.las");
+        let stats = export_merged_progress(
+            &[
+                MergeSource {
+                    path: first,
+                    edits: first_edits,
+                },
+                MergeSource {
+                    path: second,
+                    edits: second_edits,
+                },
+            ],
+            &output,
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(65, stats.points_written);
+        assert_eq!(2, stats.points_reclassified);
+        let mut reader = Reader::from_path(&output).unwrap();
+        let total = reader.header().number_of_points();
+        let mut source_ids = std::collections::BTreeSet::new();
+        let mut class_six = 0_u64;
+        let mut class_thirty_one = 0_u64;
+        let mut counts_by_source = std::collections::BTreeMap::new();
+        let mut read = 0_u64;
+        while read < total {
+            let chunk = reader.read_points((total - read).min(65_536)).unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            for point in chunk.points() {
+                let point = point.unwrap();
+                source_ids.insert(point.point_source_id);
+                *counts_by_source.entry(point.point_source_id).or_insert(0_u64) += 1;
+                if u8::from(point.classification) == 6 {
+                    class_six += 1;
+                }
+                if u8::from(point.classification) == 31 {
+                    class_thirty_one += 1;
+                }
+                read += 1;
+            }
+        }
+        // Ordinals 1 and 2 mark which file each point came from; the base
+        // clouds classify by index % 6, so classes 6 and 31 can only come
+        // from the per-source edits.
+        assert_eq!(source_ids, [1, 2].into_iter().collect());
+        assert_eq!(counts_by_source[&1], 40);
+        assert_eq!(counts_by_source[&2], 25);
+        assert_eq!(1, class_six);
+        assert_eq!(1, class_thirty_one);
+    }
+
+    #[test]
+    fn merged_export_refuses_to_overwrite() {
+        let directory = TestDirectory::new();
+        let input = directory.join("merge-single.las");
+        create_cloud(&input, 10);
+        let output = directory.join("exists.las");
+        std::fs::write(&output, b"taken").unwrap();
+        let result = export_merged_progress(
+            &[MergeSource {
+                path: input,
+                edits: EditStore::default(),
+            }],
+            &output,
+            |_| true,
+        );
+        assert!(matches!(result, Err(Error::OutputExists(_))));
     }
 
     #[test]

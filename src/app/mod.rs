@@ -3043,6 +3043,16 @@ pub enum Message {
         Result<ocs_pointcloud::ExportStats, String>,
     ),
     #[cfg(not(target_arch = "wasm32"))]
+    PointCloudExportAll,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudExportAllPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudExportAllFinished(
+        u64,
+        std::path::PathBuf,
+        Result<ocs_pointcloud::ExportStats, String>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudReproject(u16),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudReprojectPathPicked(u16, Option<std::path::PathBuf>),

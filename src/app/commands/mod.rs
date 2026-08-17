@@ -603,6 +603,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDCRS",
         "POINTCLOUDDETACH",
         "POINTCLOUDEXPORT",
+        "POINTCLOUDEXPORTALL",
         "POINTCLOUDEXPORTCANCEL",
         "POINTCLOUDEXPORTSTATUS",
         "POINTCLOUDFLAGSELECTION",

@@ -1295,6 +1295,17 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDEXPORTALL") => {
+                let argument = cmd.trim_start_matches("POINTCLOUDEXPORTALL").trim();
+                if argument.is_empty() {
+                    return Some(Task::done(Message::PointCloudExportAll));
+                }
+                return Some(
+                    self.start_point_cloud_export_all(std::path::PathBuf::from(argument)),
+                );
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDATTACHFOLDER ") => {
                 let folder = std::path::PathBuf::from(
                     cmd.trim_start_matches("POINTCLOUDATTACHFOLDER").trim(),

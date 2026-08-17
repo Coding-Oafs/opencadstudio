@@ -210,6 +210,12 @@ impl CadModule for LidarModule {
                             "POINTCLOUDEXPORT",
                             EXPORT,
                         )),
+                        RibbonItem::LargeTool(tool(
+                            "LIDAR_EXPORT_ALL",
+                            "Export Merged",
+                            "POINTCLOUDEXPORTALL",
+                            EXPORT,
+                        )),
                         tool(
                             "LIDAR_PTC_IMPORT",
                             "Import PTC",

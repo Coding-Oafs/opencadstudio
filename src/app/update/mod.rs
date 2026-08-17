@@ -1006,6 +1006,44 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExportAll => {
+                if self.tabs[self.active_tab].point_cloud.len() < 2 {
+                    self.command_line.push_error(
+                        "POINTCLOUDEXPORTALL: attach at least two sources before merging.",
+                    );
+                    return Task::none();
+                }
+                let file_name = self.suggested_merged_export_name(self.active_tab);
+                Task::perform(
+                    async {
+                        crate::sys::file_dialog()
+                            .set_title("Export Merged Point Cloud")
+                            .set_file_name(file_name)
+                            .add_filter("LAZ Point Cloud", &["laz", "LAZ"])
+                            .add_filter("LAS Point Cloud", &["las", "LAS"])
+                            .save_file()
+                            .await
+                            .map(|handle| crate::sys::handle_path(&handle))
+                    },
+                    Message::PointCloudExportAllPathPicked,
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExportAllPathPicked(Some(path)) => {
+                self.start_point_cloud_export_all(path)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExportAllPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudExportAllFinished(tab_id, path, result) => {
+                self.finish_point_cloud_export_all(tab_id, path, result);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudReproject(target_epsg) => {
                 let Some(cloud) = self.tabs[self.active_tab].point_cloud.active() else {
                     return Task::none();

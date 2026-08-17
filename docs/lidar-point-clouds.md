@@ -70,6 +70,7 @@ is created only by **Export LAS/LAZ**.
 | `POINTCLOUDREPROJECT <EPSG>` | Pick an output LAS/LAZ and stream a reprojected copy. Sparse edits are applied, XY transforms, and Z is deliberately preserved. |
 | `MNUIMPORT` / `MNUEXPORT` | Pick and import/export `$FK5.0$` function-key `.mnu` files. A path argument is also accepted. |
 | `POINTCLOUDEXPORT` | Pick a new `.las`/`.laz` path and stream the full source cloud with pending sparse edits applied. |
+| `POINTCLOUDEXPORTALL [path]` | Stream every attached source into one merged `.las`/`.laz` (picker, or a path argument). Sources must share LAS version, point format and horizontal CRS; each point's `point_source_id` records which file it came from (1..=N). |
 | `POINTCLOUDEXPORTSTATUS` / `POINTCLOUDEXPORTCANCEL` | Report or cancel a background export. |
 | `POINTCLOUDDETACH` | Remove the session attachment without modifying the source file. |
 

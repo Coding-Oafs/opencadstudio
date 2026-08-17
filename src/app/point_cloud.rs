@@ -333,6 +333,8 @@ pub(super) struct PointCloudDataset {
     /// Folder this dataset was attached from, persisted as the sidecar
     /// collection so a restored dataset knows its origin.
     pub(super) collection: Option<ocs_pointcloud::CollectionState>,
+    /// Dataset-wide merge-export job (POINTCLOUDEXPORTALL).
+    pub(super) export_all_job: Option<Arc<PointCloudJobProgress>>,
     display_generation: u64,
     /// Ids of the sources touched by the most recent edit action; undo steps
     /// exactly those sources so one cross-source action is undone as one.
@@ -2419,6 +2421,123 @@ impl OpenCADStudio {
         }
     }
 
+    pub(super) fn start_point_cloud_export_all(&mut self, output: PathBuf) -> Task<Message> {
+        let tab_id = self.tabs[self.active_tab].id;
+        let dataset = &self.tabs[self.active_tab].point_cloud;
+        if dataset.sources.iter().any(|source| source.export_job.is_some())
+            || dataset.export_all_job.is_some()
+        {
+            self.command_line
+                .push_error("POINTCLOUDEXPORTALL: an export is already running.");
+            return Task::none();
+        }
+        if dataset.len() < 2 {
+            self.command_line.push_error(
+                "POINTCLOUDEXPORTALL: attach at least two sources (use POINTCLOUDATTACHFOLDER) before merging.",
+            );
+            return Task::none();
+        }
+        let mut epsgs: Vec<_> = dataset
+            .sources
+            .iter()
+            .map(|source| source.sample.metadata.crs.horizontal_epsg)
+            .collect();
+        epsgs.dedup();
+        if epsgs.len() > 1 {
+            self.command_line.push_error(
+                "POINTCLOUDEXPORTALL: sources declare different horizontal CRS values; reproject or split them before merging.",
+            );
+            return Task::none();
+        }
+        let sources: Vec<ocs_pointcloud::MergeSource> = dataset
+            .sources
+            .iter()
+            .map(|source| ocs_pointcloud::MergeSource {
+                path: source.source_path.clone(),
+                edits: source.edits.clone(),
+            })
+            .collect();
+        let total: u64 = dataset
+            .sources
+            .iter()
+            .map(|source| source.sample.metadata.point_count)
+            .sum();
+        let progress = Arc::new(PointCloudJobProgress::new(total));
+        self.tabs[self.active_tab].point_cloud.export_all_job = Some(Arc::clone(&progress));
+        let worker_output = output.clone();
+        self.command_line.push_info(
+            format!(
+                "POINTCLOUDEXPORTALL: streaming {} source(s), {} points total to \"{}\"; point_source_id records each source file...",
+                sources.len(),
+                total,
+                output.display()
+            )
+            .as_str(),
+        );
+        background_task(
+            move || {
+                ocs_pointcloud::export_merged_progress(&sources, &worker_output, |state| {
+                    progress
+                        .completed
+                        .store(state.points_read, Ordering::Relaxed);
+                    !progress.cancel.load(Ordering::Relaxed)
+                })
+                .map_err(|error| error.to_string())
+            },
+            move |result| Message::PointCloudExportAllFinished(tab_id, output, result),
+        )
+    }
+
+    pub(super) fn finish_point_cloud_export_all(
+        &mut self,
+        tab_id: u64,
+        output: PathBuf,
+        result: Result<ExportStats, String>,
+    ) {
+        let tab_index = self.tabs.iter().position(|tab| tab.id == tab_id);
+        let mut touched = Vec::new();
+        if let Some(tab_index) = tab_index {
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            dataset.export_all_job = None;
+            touched = dataset.sources.iter().map(|source| source.id.clone()).collect();
+        }
+        match result {
+            Ok(stats) => {
+                let detail = format!(
+                    "wrote {} points from {} source(s) to \"{}\"; {} classifications, {} flags and {} elevations changed",
+                    stats.points_written,
+                    touched.len(),
+                    output.display(),
+                    stats.points_reclassified,
+                    stats.point_flags_changed,
+                    stats.elevations_changed,
+                );
+                self.command_line
+                    .push_output(format!("POINTCLOUDEXPORTALL: {detail}.").as_str());
+                if let Some(tab_index) = tab_index {
+                    self.persist_point_cloud(tab_index, "export_all", &detail, &touched);
+                }
+            }
+            Err(error) => {
+                self.command_line
+                    .push_error(format!("POINTCLOUDEXPORTALL: {error}").as_str());
+                if let Some(tab_index) = tab_index {
+                    self.persist_point_cloud(tab_index, "export_all_failed", &error, &touched);
+                }
+            }
+        }
+    }
+
+    pub(super) fn suggested_merged_export_name(&self, tab_index: usize) -> String {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        let stem = dataset
+            .collection
+            .as_ref()
+            .map(|collection| collection.display_name.clone())
+            .unwrap_or_else(|| "point-cloud-dataset".to_string());
+        format!("{stem}_merged.laz")
+    }
+
     pub(super) fn point_cloud_export_status(&mut self, tab_index: usize) {
         let job = self.tabs[tab_index]
             .point_cloud
@@ -2426,7 +2545,8 @@ impl OpenCADStudio {
             .iter()
             .filter_map(|source| source.export_job.as_ref())
             .next()
-            .cloned();
+            .cloned()
+            .or_else(|| self.tabs[tab_index].point_cloud.export_all_job.clone());
         let Some(job) = job else {
             self.command_line
                 .push_info("POINTCLOUDEXPORTSTATUS: no export is running.");
@@ -2454,7 +2574,8 @@ impl OpenCADStudio {
             .iter()
             .filter_map(|source| source.export_job.as_ref())
             .next()
-            .cloned();
+            .cloned()
+            .or_else(|| self.tabs[tab_index].point_cloud.export_all_job.clone());
         if let Some(job) = job {
             job.cancel.store(true, Ordering::Relaxed);
             self.command_line
@@ -2495,6 +2616,7 @@ impl PointCloudDataset {
             .iter()
             .filter_map(|source| source.export_job.as_ref())
             .next()
+            .or(self.export_all_job.as_ref())
             .map(|job| (job.completed.load(Ordering::Relaxed), job.total));
         let points = self.sources.iter().flat_map(|source| {
             source.sample.points.iter().cloned().map(|point| {
