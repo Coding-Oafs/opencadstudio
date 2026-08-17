@@ -1,6 +1,9 @@
 # OpenCADStudio v0.9.7 → v1.0 roadmap: production LiDAR + scripting
 
-Status: draft plan (August 2026)
+Status: Phase 0 complete on `v0.9.7-lidar-platform` (August 2026) —
+multi-source dataset engine, folder ingest, merged export, parallel tile IO,
+shader-side colorization, and the feature-flagged GPU point arena are landed
+and validated against a 418M-point USGS dataset. Next: Phase 1 scripting.
 Baseline: v0.9.6 (`adaptive LiDAR workflows`)
 
 ## Vision
