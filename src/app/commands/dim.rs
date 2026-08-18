@@ -920,30 +920,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            // Bare ZOOM prompts with the mode options as clickable keywords;
-            // the sub-keyword forms (ZOOM EXTENTS / WINDOW / …) run directly.
-            "ZOOM" => {
-                use crate::command::KeywordCommand;
-                let c = KeywordCommand::new(
-                    "ZOOM",
-                    "ZOOM  [Window / Extents / Previous / Object / All / Dynamic / Extents All / In / Out / Scale]:",
-                    vec![
-                        ("Window", "W", None),
-                        ("Extents", "E", None),
-                        ("Previous", "P", None),
-                        ("Object", "O", None),
-                        ("All", "A", None),
-                        ("Dynamic", "D", None),
-                        ("Extents All", "EA", None),
-                        ("In", "I", None),
-                        ("Out", "OUT", None),
-                        ("Scale", "S", Some("ZOOM  scale factor (e.g. 2 or 0.5):")),
-                    ],
-                );
-                self.command_line.push_info(&c.prompt());
-                self.tabs[i].active_cmd = Some(Box::new(c));
-            }
-            "ZOOM WINDOW" | "ZOOM W" | "ZW" => {
+            "ZOOM" | "ZOOM WINDOW" | "ZOOM W" | "ZW" => {
                 use crate::modules::view::zoom_window::ZoomWindowCommand;
                 let new_cmd = ZoomWindowCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
