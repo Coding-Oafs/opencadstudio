@@ -1053,9 +1053,20 @@ impl crate::entities::traits::MassPropsCalc for acadrust::entities::LwPolyline {
                 cy: 0.0,
             };
         }
-        // Shoelace area + perimeter
+        // Measure the actual centreline curve. This includes bulge arcs and
+        // closes open polylines with a straight segment for area, matching the
+        // same kernel-backed rule used by the AREA command. A chord-only
+        // calculation reports zero area for DONUT entities because their two
+        // semicircular vertices lie on one straight line.
+        let curve = crate::entities::curve::lwpolyline_curve(p)
+            .expect("an LwPolyline with at least two vertices has a planar curve");
+        let area = curve.curve.enclosed_area().abs();
+        let perimeter = curve.length();
+
+        // Keep the polygon centroid calculation independent of the exact
+        // curve measurement above. It is used only by the MASSPROP output;
+        // Properties consumes the exact area and perimeter.
         let mut area_sum = 0.0f64;
-        let mut perimeter = 0.0f64;
         let mut cx_sum = 0.0f64;
         let mut cy_sum = 0.0f64;
         let n_segs = if p.is_closed { n } else { n - 1 };
@@ -1067,13 +1078,12 @@ impl crate::entities::traits::MassPropsCalc for acadrust::entities::LwPolyline {
             let x1 = v1.location.x;
             let y1 = v1.location.y;
             area_sum += x0 * y1 - x1 * y0;
-            perimeter += ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
             cx_sum += (x0 + x1) * (x0 * y1 - x1 * y0);
             cy_sum += (y0 + y1) * (x0 * y1 - x1 * y0);
         }
-        let area = (area_sum / 2.0).abs();
-        let (cx, cy) = if area > 1e-12 {
-            (cx_sum / (6.0 * area), cy_sum / (6.0 * area))
+        let polygon_area = (area_sum / 2.0).abs();
+        let (cx, cy) = if polygon_area > 1e-12 {
+            (cx_sum / (6.0 * polygon_area), cy_sum / (6.0 * polygon_area))
         } else {
             let sx: f64 = p.vertices.iter().map(|v| v.location.x).sum::<f64>() / n as f64;
             let sy: f64 = p.vertices.iter().map(|v| v.location.y).sum::<f64>() / n as f64;
