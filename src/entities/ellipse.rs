@@ -114,7 +114,13 @@ fn properties(ell: &Ellipse) -> Vec<PropSection> {
     let minor_vec = v * r_minor;
 
     let start_angle = ell.start_parameter.to_degrees().rem_euclid(360.0);
-    let end_angle = ell.end_parameter.to_degrees().rem_euclid(360.0);
+    let end_angle = if crate::entities::curve::ellipse_curve(ell)
+        .is_some_and(|curve| curve.curve.is_closed())
+    {
+        360.0
+    } else {
+        ell.end_parameter.to_degrees().rem_euclid(360.0)
+    };
 
     let props = ell.mass_props();
 
