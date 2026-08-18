@@ -2,7 +2,7 @@ use acadrust::entities::MLine;
 use crate::t;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{edit_prop as edit, ro_prop as ro, square_grip};
+use crate::entities::common::{edit_prop as edit, square_grip};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, RenderConvertible};
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
@@ -331,43 +331,28 @@ impl PropertyEditable for MLine {
             acadrust::entities::MLineJustification::Zero => "Zero",
             acadrust::entities::MLineJustification::Bottom => "Bottom",
         };
-        let cur = self.vertices.first();
-        let cur_x = cur.map(|v| v.position.x).unwrap_or(0.0);
-        let cur_y = cur.map(|v| v.position.y).unwrap_or(0.0);
-        let cur_z = cur.map(|v| v.position.z).unwrap_or(0.0);
-        vec![
-            PropSection {
-                title: t!("Geometry").into_owned(),
-                props: vec![
-                    ro(t!("Vertex").as_ref(), "ml_vertex", if self.vertices.is_empty() { String::new() } else { "1".to_string() }),
-                    edit(t!("Vertex X").as_ref(), "ml_vertex_x", cur_x),
-                    edit(t!("Vertex Y").as_ref(), "ml_vertex_y", cur_y),
-                    edit(t!("Vertex Z").as_ref(), "ml_vertex_z", cur_z),
-                ],
-            },
-            PropSection {
-                title: t!("Misc").into_owned(),
-                props: vec![
-                    Property {
-                        label: t!("Style").into_owned(),
-                        field: "ml_style",
-                        value: PropValue::EditText(self.style_name.clone()),
+        vec![PropSection {
+            title: t!("Misc").into_owned(),
+            props: vec![
+                Property {
+                    label: t!("Style").into_owned(),
+                    field: "ml_style",
+                    value: PropValue::EditText(self.style_name.clone()),
+                },
+                Property {
+                    label: t!("Style justification").into_owned(),
+                    field: "ml_justification",
+                    value: PropValue::Choice {
+                        selected: just_str.to_string(),
+                        options: ["Top", "Zero", "Bottom"]
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect(),
                     },
-                    Property {
-                        label: t!("Style justification").into_owned(),
-                        field: "ml_justification",
-                        value: PropValue::Choice {
-                            selected: just_str.to_string(),
-                            options: ["Top", "Zero", "Bottom"]
-                                .into_iter()
-                                .map(str::to_string)
-                                .collect(),
-                        },
-                    },
-                    edit(t!("Style scale").as_ref(), "ml_scale", self.scale_factor),
-                ],
-            },
-        ]
+                },
+                edit(t!("Style scale").as_ref(), "ml_scale", self.scale_factor),
+            ],
+        }]
     }
 
     fn apply_geom_prop(&mut self, field: &str, value: &str) {
@@ -401,21 +386,6 @@ impl PropertyEditable for MLine {
         };
         match field {
             "ml_scale" if v != 0.0 => self.scale_factor = v,
-            "ml_vertex_x" => {
-                if let Some(vx) = self.vertices.first_mut() {
-                    vx.position.x = v;
-                }
-            }
-            "ml_vertex_y" => {
-                if let Some(vx) = self.vertices.first_mut() {
-                    vx.position.y = v;
-                }
-            }
-            "ml_vertex_z" => {
-                if let Some(vx) = self.vertices.first_mut() {
-                    vx.position.z = v;
-                }
-            }
             _ => {}
         }
     }
