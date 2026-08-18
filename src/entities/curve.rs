@@ -51,6 +51,27 @@ fn xyz(v: Vector3) -> [f64; 3] {
     [v.x, v.y, v.z]
 }
 
+fn vector3(v: Vec3) -> Vector3 {
+    Vector3::new(v.x, v.y, v.z)
+}
+
+pub(crate) fn point_along(origin: Vector3, direction: Vector3, parameter: f64) -> Vector3 {
+    vector3(Vec3::from(xyz(origin)) + Vec3::from(xyz(direction)) * parameter)
+}
+
+pub(crate) fn unit_direction(from: Vector3, through: Vector3) -> Option<Vector3> {
+    unit_vector3(Vec3::from(xyz(through)) - Vec3::from(xyz(from)))
+}
+
+pub(crate) fn unit_vector(vector: Vector3) -> Option<Vector3> {
+    unit_vector3(Vec3::from(xyz(vector)))
+}
+
+fn unit_vector3(vector: Vec3) -> Option<Vector3> {
+    let unit = vector.normalize()?;
+    (unit.x.is_finite() && unit.y.is_finite() && unit.z.is_finite()).then(|| vector3(unit))
+}
+
 /// How far a point may sit off a candidate plane and still be taken to lie on
 /// it.
 ///
@@ -394,10 +415,7 @@ fn is_default_normal(normal: Vector3) -> bool {
 /// store. Zero would make every axis collapse and put the whole entity at
 /// one point.
 fn normalized(normal: Vector3) -> Vector3 {
-    match Vec3::from(xyz(normal)).normalize() {
-        Some(unit) => Vector3::new(unit.x, unit.y, unit.z),
-        None => Vector3::new(0.0, 0.0, 1.0),
-    }
+    unit_vector(normal).unwrap_or(Vector3::new(0.0, 0.0, 1.0))
 }
 
 #[cfg(test)]
