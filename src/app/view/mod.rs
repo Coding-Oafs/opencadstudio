@@ -846,12 +846,9 @@ impl OpenCADStudio {
             .width(Fill)
             .height(Fill)
         } else if is_paper {
-            // Paper layout: the GPU shader renders everything — the desk is the
-            // container background, the white sheet + paper entities + borders
-            // come from the full-canvas top-locked "sheet" viewport, and the
-            // floating content viewports overlay it (same path as model space).
+            // Keep the grid above the opaque GPU sheet and below interaction UI.
             stack![
-                container(grid_overlay)
+                container(Space::new())
                     .style(move |_: &Theme| container::Style {
                         background: Some(Background::Color(PAPER_SPACE_BACKGROUND)),
                         ..Default::default()
@@ -859,6 +856,7 @@ impl OpenCADStudio {
                     .width(Fill)
                     .height(Fill),
                 viewport_3d,
+                grid_overlay,
                 selection_overlay,
                 viewport_mouse,
             ]
@@ -866,7 +864,7 @@ impl OpenCADStudio {
             .height(Fill)
         } else {
             stack![
-                container(grid_overlay)
+                container(Space::new())
                     .style(move |_: &Theme| container::Style {
                         background: Some(Background::Color(bg_color)),
                         ..Default::default()
@@ -874,6 +872,7 @@ impl OpenCADStudio {
                     .width(Fill)
                     .height(Fill),
                 viewport_3d,
+                grid_overlay,
                 selection_overlay,
             ]
             .width(Fill)
