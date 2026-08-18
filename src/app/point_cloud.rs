@@ -66,6 +66,9 @@ struct ScreenSpatialIndex {
     cells_y: usize,
     points: Vec<ProjectedPoint>,
     cells: Vec<Vec<usize>>,
+    /// Snapshot of the active points this index was built over; `sample_index`
+    /// refers into this, not the (possibly released) `sample.points` buffer.
+    snapshot: Arc<Vec<ocs_pointcloud::SamplePoint>>,
 }
 
 /// Repeating fixed-pixel brush used by imported TerraScan-style function keys.
@@ -326,6 +329,45 @@ impl PointCloudAttachment {
             .unwrap_or("laz");
         format!("{stem}_epsg{target_epsg}.{extension}")
     }
+
+    /// Number of points currently displayed for this source: the streamed
+    /// active tiles when the LOD index is active, otherwise the bounded sample.
+    pub(super) fn displayed_len(&self) -> usize {
+        if self.sample.stride == 0 && !self.active_tiles.is_empty() {
+            self.active_tiles
+                .iter()
+                .filter_map(|key| self.resident_tiles.get(key))
+                .map(|tile| tile.points.len())
+                .sum()
+        } else {
+            self.sample.points.len()
+        }
+    }
+
+    /// A contiguous snapshot of the active working set. Once the LOD index is
+    /// built this flattens the active tiles on demand (and is dropped by the
+    /// caller), so the streamed working set is never duplicated permanently.
+    /// Selection and classification tools take a slice, so they use this
+    /// rather than reaching into the resident tile map directly.
+    pub(super) fn active_points(&self) -> Vec<ocs_pointcloud::SamplePoint> {
+        if self.sample.stride == 0 && !self.active_tiles.is_empty() {
+            let capacity = self
+                .active_tiles
+                .iter()
+                .filter_map(|key| self.resident_tiles.get(key))
+                .map(|tile| tile.points.len())
+                .sum();
+            let mut points = Vec::with_capacity(capacity);
+            for key in &self.active_tiles {
+                if let Some(tile) = self.resident_tiles.get(key) {
+                    points.extend(tile.points.iter().cloned());
+                }
+            }
+            points
+        } else {
+            self.sample.points.clone()
+        }
+    }
 }
 
 /// The tab's point-cloud session: every attached source plus the shared
@@ -467,7 +509,21 @@ impl PointCloudDataset {
                 .find(|selection| selection.name == "active");
             let generation = source_chunk_generation(source);
             let tiled = source.sample.stride == 0 && !source.active_tiles.is_empty();
-            for sampled in &source.sample.points {
+            // A unified view of the source's active points: the streamed
+            // resident tiles when tiled, otherwise the bounded sample. Only
+            // references are collected — the points stay owned by
+            // `resident_tiles` / `sample`, never duplicated here.
+            let active: Vec<&ocs_pointcloud::SamplePoint> = if tiled {
+                source
+                    .active_tiles
+                    .iter()
+                    .filter_map(|key| source.resident_tiles.get(key))
+                    .flat_map(|tile| tile.points.iter())
+                    .collect()
+            } else {
+                source.sample.points.iter().collect()
+            };
+            for sampled in active {
                 let point = source
                     .edits
                     .patch_for(sampled.source_index)
@@ -490,9 +546,8 @@ impl PointCloudDataset {
                 });
             }
             // Chunk the stream by upload identity: one chunk per streamed
-            // tile, or one per source for a bounded sample. The flat point
-            // order matches active-tile order (rebuild_resident_display), so
-            // chunk ranges align exactly.
+            // tile, or one per source for a bounded sample. The point order
+            // built above matches active-tile order, so chunk ranges align.
             if tiled {
                 for key in &source.active_tiles {
                     let len =
@@ -1020,7 +1075,7 @@ impl OpenCADStudio {
                     source.id,
                     source.source_path.display(),
                     metadata.point_count,
-                    source.sample.points.len(),
+                    source.displayed_len(),
                     source.sample.stride,
                     source.edits.len(),
                     if metadata.has_crs { metadata.crs.label() } else { "not declared".to_string() },
@@ -1695,7 +1750,7 @@ impl OpenCADStudio {
             return;
         }
         let points = dataset.sources.iter().flat_map(|source| {
-            source.sample.points.iter().cloned().map(|point| {
+            source.active_points().into_iter().map(|point| {
                 source
                     .edits
                     .patch_for(point.source_index)
@@ -1795,7 +1850,7 @@ impl OpenCADStudio {
             .iter()
             .map(|cloud| {
                 let indices = select_polygon(
-                    &cloud.sample.points,
+                    &cloud.active_points(),
                     &polygon,
                     Some([min[2], max[2]]),
                     &self.tabs[tab_index].point_cloud.selection_filter,
@@ -1827,7 +1882,7 @@ impl OpenCADStudio {
             .iter()
             .map(|cloud| {
                 let indices = select_brush(
-                    &cloud.sample.points,
+                    &cloud.active_points(),
                     center,
                     radius,
                     &self.tabs[tab_index].point_cloud.selection_filter,
@@ -1859,7 +1914,7 @@ impl OpenCADStudio {
             .iter()
             .filter_map(|cloud| {
                 let indices = select_nearest(
-                    &cloud.sample.points,
+                    &cloud.active_points(),
                     position,
                     radius,
                     &self.tabs[tab_index].point_cloud.selection_filter,
@@ -1917,13 +1972,15 @@ impl OpenCADStudio {
         let mut nearest: Option<(f32, f64, String, u64)> = None;
         for cloud in &mut self.tabs[tab_index].point_cloud.sources {
             ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
+            let index = cloud.screen_index.as_ref().expect("screen index");
+            let snapshot = Arc::clone(&index.snapshot);
             let candidates = screen_candidates(
-                cloud.screen_index.as_ref().expect("screen index"),
+                index,
                 [center.x - radius_px, center.y - radius_px],
                 [center.x + radius_px, center.y + radius_px],
             );
             for projected in candidates {
-                let Some(source) = cloud.sample.points.get(projected.sample_index) else {
+                let Some(source) = snapshot.get(projected.sample_index) else {
                     continue;
                 };
                 let point = cloud
@@ -2022,13 +2079,11 @@ impl OpenCADStudio {
         let mut selections = Vec::new();
         for cloud in &mut self.tabs[tab_index].point_cloud.sources {
             ensure_screen_spatial_index(cloud, camera, viewport, camera_generation);
-            let candidates = screen_candidates(
-                cloud.screen_index.as_ref().expect("screen index"),
-                bounds.0,
-                bounds.1,
-            );
+            let index = cloud.screen_index.as_ref().expect("screen index");
+            let snapshot = Arc::clone(&index.snapshot);
+            let candidates = screen_candidates(index, bounds.0, bounds.1);
             let indices = candidates.into_iter().filter_map(|projected| {
-                let source = cloud.sample.points.get(projected.sample_index)?;
+                let source = snapshot.get(projected.sample_index)?;
                 let point = cloud
                     .edits
                     .patch_for(source.source_index)
@@ -2068,13 +2123,15 @@ impl OpenCADStudio {
         let mut selections = Vec::new();
         for cloud in &mut self.tabs[tab_index].point_cloud.sources {
             ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
+            let index = cloud.screen_index.as_ref().expect("screen index");
+            let snapshot = Arc::clone(&index.snapshot);
             let candidates = screen_candidates(
-                cloud.screen_index.as_ref().expect("screen index"),
+                index,
                 [center.x - radius_px, center.y - radius_px],
                 [center.x + radius_px, center.y + radius_px],
             );
             let stroke: Vec<u64> = candidates.into_iter().filter_map(|projected| {
-                let source = cloud.sample.points.get(projected.sample_index)?;
+                let source = snapshot.get(projected.sample_index)?;
                 let point = cloud
                     .edits
                     .patch_for(source.source_index)
@@ -2126,10 +2183,10 @@ impl OpenCADStudio {
             .sources
             .iter()
             .map(|cloud| {
-                let indices = cloud.sample.points.iter().filter_map(|point| {
+                let indices = cloud.active_points().into_iter().filter_map(|point| {
                     (point.position[2] >= bounds[0]
                         && point.position[2] <= bounds[1]
-                        && filter.matches(point))
+                        && filter.matches(&point))
                         .then_some(point.source_index)
                 });
                 (cloud.id.clone(), SelectionSet::from_indices("active", indices))
@@ -2175,9 +2232,8 @@ impl OpenCADStudio {
                 .iter()
                 .map(|source| {
                     let points: Vec<_> = source
-                        .sample
-                        .points
-                        .iter()
+                        .active_points()
+                        .into_iter()
                         .map(|point| {
                             source
                                 .edits
@@ -2272,9 +2328,8 @@ impl OpenCADStudio {
         }
         let patched = |source: &PointCloudAttachment| {
             source
-                .sample
-                .points
-                .iter()
+                .active_points()
+                .into_iter()
                 .map(|point| {
                     source
                         .edits
@@ -2913,7 +2968,7 @@ impl PointCloudDataset {
             .or(self.export_all_job.as_ref())
             .map(|job| (job.completed.load(Ordering::Relaxed), job.total));
         let points = self.sources.iter().flat_map(|source| {
-            source.sample.points.iter().cloned().map(|point| {
+            source.active_points().into_iter().map(|point| {
                 source
                     .edits
                     .patch_for(point.source_index)
@@ -2986,7 +3041,7 @@ impl PointCloudDataset {
             displayed_points: self
                 .sources
                 .iter()
-                .map(|source| source.sample.points.len())
+                .map(|source| source.displayed_len())
                 .sum(),
             sample_label,
             pending_edits: self
@@ -3071,20 +3126,11 @@ fn tile_read_workers() -> usize {
         .max(1)
 }
 
+/// Marks a source as streamed. From here the active working set lives in
+/// `resident_tiles` (keyed by tile), so the bounded sample is released rather
+/// than kept as a second in-memory copy of the same points.
 fn rebuild_resident_display(cloud: &mut PointCloudAttachment) {
-    let capacity = cloud
-        .active_tiles
-        .iter()
-        .filter_map(|key| cloud.resident_tiles.get(key))
-        .map(|tile| tile.points.len())
-        .sum();
-    let mut points = Vec::with_capacity(capacity);
-    for key in &cloud.active_tiles {
-        if let Some(tile) = cloud.resident_tiles.get(key) {
-            points.extend(tile.points.iter().cloned());
-        }
-    }
-    cloud.sample.points = points;
+    cloud.sample.points = Vec::new();
     cloud.sample.stride = 0;
 }
 
@@ -3155,7 +3201,7 @@ fn source_chunk_generation(source: &PointCloudAttachment) -> u64 {
         .find(|selection| selection.name == "active")
         .map_or(0, SelectionSet::len);
     (source.edits.transaction_count() as u64) << 44
-        ^ (source.sample.points.len() as u64) << 24
+        ^ (source.displayed_len() as u64) << 24
         ^ selection_len
 }
 
@@ -3218,18 +3264,22 @@ fn ensure_screen_spatial_index(
     const CELL_SIZE: f32 = 32.0;
     let cells_x = (viewport.width / CELL_SIZE).ceil().max(1.0) as usize;
     let cells_y = (viewport.height / CELL_SIZE).ceil().max(1.0) as usize;
+    // Snapshot the active working set once so the index does not depend on the
+    // (possibly released) `sample.points` buffer for streamed sources.
+    let snapshot: Arc<Vec<ocs_pointcloud::SamplePoint>> = Arc::new(cloud.active_points());
     let mut index = ScreenSpatialIndex {
         camera_generation,
         viewport_size,
         cell_size: CELL_SIZE,
         cells_x,
         cells_y,
-        points: Vec::with_capacity(cloud.sample.points.len()),
+        points: Vec::with_capacity(snapshot.len()),
         cells: vec![Vec::new(); cells_x.saturating_mul(cells_y)],
+        snapshot,
     };
     let eye = camera.eye();
     let forward = (camera.rotation * glam::Vec3::NEG_Z).as_dvec3();
-    for (sample_index, point) in cloud.sample.points.iter().enumerate() {
+    for (sample_index, point) in index.snapshot.iter().enumerate() {
         let position = glam::DVec3::from_array(point.position);
         let depth = (position - eye).dot(forward);
         if depth <= 0.0 {
