@@ -315,9 +315,17 @@ pub struct PointGpu {
 }
 
 /// Persistent paged instance buffer plus its live-slot map.
+///
+/// The logical arena is a single contiguous range of instance slots, but its
+/// storage is sharded across several GPU buffers so no one buffer exceeds the
+/// device's `max_buffer_size` (wgpu's default is 256 MB; a merged folder
+/// working set can need more than that). Shards are indexed by `slot /
+/// shard_instances`; a chunk write or draw run is clipped to shard boundaries.
 #[cfg(feature = "point-arena")]
 struct ArenaGpu {
-    buffer: Option<wgpu::Buffer>,
+    buffers: Vec<wgpu::Buffer>,
+    /// Instance capacity of each full shard (the last shard may be smaller).
+    shard_instances: u32,
     state: ArenaState,
     runs: Vec<(u32, u32)>,
 }
@@ -326,7 +334,8 @@ struct ArenaGpu {
 impl Default for ArenaGpu {
     fn default() -> Self {
         Self {
-            buffer: None,
+            buffers: Vec::new(),
+            shard_instances: 0,
             state: ArenaState::default(),
             runs: Vec::new(),
         }
@@ -344,6 +353,37 @@ impl PointGpu {
         {
             self.arena = ArenaGpu::default();
         }
+    }
+
+    /// Rebuilds the arena shards for `capacity` instance slots, sized so no
+    /// single buffer exceeds the device's `max_buffer_size` (with headroom).
+    /// Returns `false` when even one instance would not fit (pathological:
+    /// `max_buffer_size` < 64 B), leaving an empty arena so nothing is drawn.
+    #[cfg(feature = "point-arena")]
+    fn allocate_arena(&mut self, device: &wgpu::Device, capacity: u32) -> bool {
+        let max_bytes = device.limits().max_buffer_size;
+        let instance_bytes = POINT_INSTANCE_BYTES as u64;
+        let max_instances = (max_bytes / instance_bytes) as u32;
+        if max_instances == 0 || capacity == 0 {
+            self.arena.buffers.clear();
+            self.arena.shard_instances = 0;
+            return false;
+        }
+        let shards = capacity.div_ceil(max_instances) as usize;
+        self.arena.shard_instances = max_instances;
+        self.arena.buffers = (0..shards)
+            .map(|shard| {
+                let len = ((shard as u32 + 1) * max_instances).min(capacity)
+                    - shard as u32 * max_instances;
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("point_cloud.arena"),
+                    size: u64::from(len) * POINT_INSTANCE_BYTES as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
+        true
     }
 
     pub fn new(
@@ -538,28 +578,22 @@ impl PointGpu {
         queue: &wgpu::Queue,
         model: &PointCloudModel,
     ) {
-        let mut plan = plan_arena(&self.arena.state, &model.chunks);
-        let recreate = self.arena.buffer.is_none() || plan.capacity != self.arena.state.capacity;
-        if recreate {
-            let zeros = vec![
-                PointInstance {
-                    position_high: [0.0; 4],
-                    position_low: [0.0; 4],
-                    attributes: [0.0; 4],
-                    color_selected: [0.0; 4],
-                };
-                plan.capacity as usize
-            ];
-            self.arena.buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("point_cloud.arena"),
-                contents: bytemuck::cast_slice(&zeros),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            }));
-        }
-        let Some(buffer) = self.arena.buffer.clone() else {
+        let plan = plan_arena(&self.arena.state, &model.chunks);
+        // Recreate the sharded buffers when the requested capacity changes.
+        let recreate = self.arena.buffers.is_empty()
+            || plan.capacity != self.arena.state.capacity
+            || self.arena.shard_instances == 0;
+        if recreate && !self.allocate_arena(device, plan.capacity) {
+            // Even one instance cannot fit a buffer; clear and fall through to
+            // the whole-buffer upload path in `upload`.
+            self.arena = ArenaGpu::default();
             return;
-        };
+        }
+        if self.arena.buffers.is_empty() {
+            return;
+        }
         let point_size = model.point_size_px.clamp(1.0, 32.0);
+        let shard_instances = self.arena.shard_instances;
         for (chunk_index, offset) in &plan.writes {
             let chunk = &model.chunks[*chunk_index];
             let start = chunk.offset as usize;
@@ -571,11 +605,22 @@ impl PointGpu {
             if instances.is_empty() {
                 continue;
             }
-            queue.write_buffer(
-                &buffer,
-                u64::from(*offset) * POINT_INSTANCE_BYTES as u64,
-                bytemuck::cast_slice(&instances),
-            );
+            // A chunk may straddle a shard boundary; clip the write per shard.
+            let mut written = 0_u32;
+            for (shard, local_start, local_len) in shard_segments(*offset, chunk.len, shard_instances)
+            {
+                let src_start = written as usize;
+                let src_end = src_start + local_len as usize;
+                let Some(buffer) = self.arena.buffers.get(shard) else {
+                    break;
+                };
+                queue.write_buffer(
+                    buffer,
+                    u64::from(local_start) * POINT_INSTANCE_BYTES as u64,
+                    bytemuck::cast_slice(&instances[src_start..src_end]),
+                );
+                written += local_len;
+            }
         }
         self.arena.state = ArenaState {
             slots: plan.slots,
@@ -595,7 +640,7 @@ impl PointGpu {
         stencil_reference: u32,
     ) {
         #[cfg(feature = "point-arena")]
-        if let Some(buffer) = &self.arena.buffer {
+        if !self.arena.buffers.is_empty() {
             if self.count == 0 || self.arena.runs.is_empty() {
                 return;
             }
@@ -603,9 +648,18 @@ impl PointGpu {
             pass.set_bind_group(0, frame_bind_group, &[]);
             pass.set_bind_group(1, &self.style_bind_group, &[]);
             pass.set_stencil_reference(stencil_reference);
-            pass.set_vertex_buffer(0, buffer.slice(..));
+            // Each run lives in the logical slot range, but the storage is
+            // sharded: emit one draw per (shard, run) overlap.
+            let shard_instances = self.arena.shard_instances;
             for (start, len) in &self.arena.runs {
-                pass.draw(0..6, *start..*start + *len);
+                for (shard, local_start, local_len) in shard_segments(*start, *len, shard_instances)
+                {
+                    let Some(buffer) = self.arena.buffers.get(shard) else {
+                        break;
+                    };
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..6, local_start..local_start + local_len);
+                }
             }
             return;
         }
@@ -632,6 +686,30 @@ fn split_f64(position: [f64; 3]) -> ([f32; 3], [f32; 3]) {
         (position[2] - high[2] as f64) as f32,
     ];
     (high, low)
+}
+
+/// Splits a logical slot range `[start, start+len)` into `(shard, local_start,
+/// local_len)` segments at the `shard_instances` boundaries. `shard_instances`
+/// is the instance capacity of each shard; segments never cross a boundary, so
+/// a single write/draw maps into exactly one backing buffer.
+#[cfg(feature = "point-arena")]
+fn shard_segments(start: u32, len: u32, shard_instances: u32) -> Vec<(usize, u32, u32)> {
+    debug_assert!(shard_instances > 0);
+    if len == 0 || shard_instances == 0 {
+        return Vec::new();
+    }
+    let mut segments = Vec::new();
+    let mut done = 0_u32;
+    while done < len {
+        let slot = start + done;
+        let shard = (slot / shard_instances) as usize;
+        let shard_base = shard as u32 * shard_instances;
+        let local_start = slot - shard_base;
+        let local_len = (len - done).min(shard_instances - local_start);
+        segments.push((shard, local_start, local_len));
+        done += local_len;
+    }
+    segments
 }
 
 #[cfg(test)]
@@ -763,5 +841,22 @@ mod tests {
         let plan = plan_arena(&state, &[chunk_at(1, 100, 0, 1)]);
         assert!(plan.capacity < big, "arena must shrink when mostly empty");
         assert_eq!(1, plan.writes.len());
+    }
+
+    #[cfg(feature = "point-arena")]
+    #[test]
+    fn shard_segments_clip_ranges_at_shard_boundaries() {
+        // A range wholly inside one shard stays a single segment.
+        assert_eq!(shard_segments(0, 10, 64), vec![(0, 0, 10)]);
+        // A range straddling a boundary splits exactly at the edge.
+        assert_eq!(shard_segments(60, 8, 64), vec![(0, 60, 4), (1, 0, 4)]);
+        // A range spanning many shards clips each one.
+        assert_eq!(
+            shard_segments(63, 130, 64),
+            vec![(0, 63, 1), (1, 0, 64), (2, 0, 64), (3, 0, 1)]
+        );
+        // Zero length and a degenerate shard size are both safe.
+        assert!(shard_segments(0, 0, 64).is_empty());
+        assert!(shard_segments(0, 10, 0).is_empty());
     }
 }
