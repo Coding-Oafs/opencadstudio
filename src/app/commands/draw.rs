@@ -857,33 +857,21 @@ impl OpenCADStudio {
                 use acadrust::types::Vector3;
                 let mut loops: Vec<Vec<Vector3>> = Vec::new();
                 for (_, e) in self.tabs[i].scene.selected_entities().iter() {
-                    match e {
+                    let supported = matches!(
+                        e,
                         acadrust::EntityType::LwPolyline(pl)
-                            if pl.is_closed && pl.vertices.len() >= 3 =>
-                        {
-                            loops.push(
-                                pl.vertices
-                                    .iter()
-                                    .map(|v| Vector3::new(v.location.x, v.location.y, 0.0))
-                                    .collect(),
-                            );
-                        }
-                        acadrust::EntityType::Circle(c) => {
-                            let n = 64;
-                            loops.push(
-                                (0..n)
-                                    .map(|k| {
-                                        let a = std::f64::consts::TAU * k as f64 / n as f64;
-                                        Vector3::new(
-                                            c.center.x + c.radius * a.cos(),
-                                            c.center.y + c.radius * a.sin(),
-                                            c.center.z,
-                                        )
-                                    })
-                                    .collect(),
-                            );
-                        }
-                        _ => {}
+                            if pl.is_closed && pl.vertices.len() >= 3
+                    ) || matches!(e, acadrust::EntityType::Circle(_));
+                    if supported {
+                        let Some(curve) = crate::entities::curve::entity_curve(e) else {
+                            continue;
+                        };
+                        loops.push(
+                            crate::entities::curve::curve_points(&curve)
+                                .into_iter()
+                                .map(|point| Vector3::new(point[0], point[1], point[2]))
+                                .collect(),
+                        );
                     }
                 }
                 if loops.is_empty() {

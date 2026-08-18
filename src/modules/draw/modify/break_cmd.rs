@@ -41,7 +41,10 @@ pub fn break_entity(entity: &EntityType, p1: DVec3, p2: DVec3) -> Option<Vec<Ent
         EntityType::Line(line) => Some(break_line(line, p1, p2)),
         EntityType::Arc(arc) => Some(break_arc(arc, p1, p2)),
         EntityType::Circle(c) => Some(break_circle(c, p1, p2)),
-        EntityType::LwPolyline(p) => Some(break_lwpolyline(p, p1, p2)),
+        EntityType::LwPolyline(p) => {
+            let p = crate::entities::curve::lwpolyline_world_xy(p)?;
+            Some(break_lwpolyline(&p, p1, p2))
+        }
         EntityType::Ellipse(e) => Some(break_ellipse(e, p1, p2)),
         EntityType::Spline(s) => Some(break_spline(s, p1, p2)),
         _ => None,

@@ -258,31 +258,22 @@ impl super::OpenCADStudio {
     /// reusing the box primitive + the boolean union path.
     pub(super) fn solid_polysolid(&mut self, width: f64, height: f64) -> Task<Message> {
         let i = self.active_tab;
-        let found: Option<(Handle, Vec<[f64; 2]>, bool)> = self.tabs[i]
+        let found: Option<(Handle, Vec<[f64; 3]>)> = self.tabs[i]
             .scene
             .selected_entities()
             .iter()
             .filter(|(h, _)| !self.tabs[i].scene.is_layer_locked(*h))
             .find_map(|(h, e)| match e {
-                EntityType::LwPolyline(pl) => Some((
-                    *h,
-                    pl.vertices
-                        .iter()
-                        .map(|v| [v.location.x, v.location.y])
-                        .collect(),
-                    pl.is_closed,
-                )),
+                EntityType::LwPolyline(_) => crate::entities::curve::entity_curve(e)
+                    .map(|curve| (*h, crate::entities::curve::curve_points(&curve))),
                 _ => None,
             });
-        let Some((handle, pts, closed)) = found else {
+        let Some((handle, pts)) = found else {
             self.command_line
                 .push_error(crate::t!("POLYSOLID: select a polyline first.").as_ref());
             return Task::none();
         };
-        let mut segs: Vec<([f64; 2], [f64; 2])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
-        if closed && pts.len() > 2 {
-            segs.push((pts[pts.len() - 1], pts[0]));
-        }
+        let segs: Vec<([f64; 3], [f64; 3])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
         let mut acc: Option<Body> = None;
         let mut used = 0usize;
         for (a, b) in &segs {
@@ -302,7 +293,7 @@ impl super::OpenCADStudio {
                         [cos, sin, 0.0],
                         [-sin, cos, 0.0],
                         [0.0, 0.0, 1.0],
-                        [a[0], a[1], 0.0],
+                        [a[0], a[1], a[2]],
                     )
                 })
             else {
@@ -570,15 +561,22 @@ impl super::OpenCADStudio {
             .selected_entities()
             .iter()
             .filter(|(h, _)| !self.tabs[i].scene.is_layer_locked(*h))
-            .find_map(|(h, e)| match e {
-                EntityType::LwPolyline(pl) => Some((
+            .find_map(|(h, e)| {
+                let EntityType::LwPolyline(_) = e else {
+                    return None;
+                };
+                let curve = crate::entities::curve::entity_curve(e)?;
+                let cadkernel::geom2d::Curve::Polyline(polyline) = &curve.curve else {
+                    return None;
+                };
+                Some((
                     *h,
-                    pl.vertices
+                    polyline
+                        .vertices
                         .iter()
-                        .map(|v| [v.location.x, v.location.y, 0.0])
+                        .map(|vertex| curve.plane.point_at(vertex.position))
                         .collect(),
-                )),
-                _ => None,
+                ))
             });
         let Some((handle, fit)) = found else {
             self.command_line
@@ -595,7 +593,7 @@ impl super::OpenCADStudio {
         let p = |k: usize| glam::DVec3::new(fit[k][0], fit[k][1], fit[k][2]);
         // Catmull-Rom → cubic Bézier control points: [P0, b1,b2,P1, b1,b2,P2, …].
         let mut ctrl: Vec<Vector3> = Vec::with_capacity(3 * m + 1);
-        ctrl.push(Vector3::new(fit[0][0], fit[0][1], 0.0));
+        ctrl.push(Vector3::new(fit[0][0], fit[0][1], fit[0][2]));
         for seg in 0..m {
             let p0 = p(seg);
             let p1 = p(seg + 1);
@@ -603,9 +601,9 @@ impl super::OpenCADStudio {
             let next = if seg + 2 <= m { p(seg + 2) } else { p1 };
             let b1 = p0 + (p1 - prev) / 6.0;
             let b2 = p1 - (next - p0) / 6.0;
-            ctrl.push(Vector3::new(b1.x, b1.y, 0.0));
-            ctrl.push(Vector3::new(b2.x, b2.y, 0.0));
-            ctrl.push(Vector3::new(p1.x, p1.y, 0.0));
+            ctrl.push(Vector3::new(b1.x, b1.y, b1.z));
+            ctrl.push(Vector3::new(b2.x, b2.y, b2.z));
+            ctrl.push(Vector3::new(p1.x, p1.y, p1.z));
         }
         // Clamped piecewise-Bézier knots (degree 3): len == ctrl.len()+degree+1.
         let mut knots: Vec<f64> = vec![0.0; 4];
@@ -617,7 +615,10 @@ impl super::OpenCADStudio {
         spl.degree = 3;
         spl.control_points = ctrl;
         spl.knots = knots;
-        spl.fit_points = fit.iter().map(|q| Vector3::new(q[0], q[1], 0.0)).collect();
+        spl.fit_points = fit
+            .iter()
+            .map(|q| Vector3::new(q[0], q[1], q[2]))
+            .collect();
         // flags.rational defaults to false (non-rational) — exactly what we want.
         self.push_undo_snapshot(i, "SPLINEFIT");
         self.tabs[i].scene.erase_entities(&[handle]);

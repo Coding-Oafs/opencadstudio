@@ -35,7 +35,7 @@ use cadkernel::geom2d::{
     NurbsCurve, Ray as KernelRay, Tolerance as KernelTolerance, XLine as KernelXLine,
 };
 
-use crate::entities::curve::entity_curve_xy;
+use crate::entities::curve::{entity_curve_xy, entity_with_lwpolyline_world_xy};
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::draw::modify::spline_ops::{
@@ -2171,6 +2171,10 @@ pub struct TrimCommand {
 
 impl TrimCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let all_entities: Vec<EntityType> = all_entities
+            .iter()
+            .map(entity_with_lwpolyline_world_xy)
+            .collect();
         let entity_index = ModifyEntityIndex::build(&all_entities);
         let geos = build_geos(&all_entities);
         Self {
@@ -2907,6 +2911,10 @@ pub struct ExtendCommand {
 
 impl ExtendCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let all_entities: Vec<EntityType> = all_entities
+            .iter()
+            .map(entity_with_lwpolyline_world_xy)
+            .collect();
         let entity_index = ModifyEntityIndex::build(&all_entities);
         let geos = build_geos(&all_entities);
         Self {
@@ -3832,6 +3840,10 @@ pub struct ExtrimCommand {
 
 impl ExtrimCommand {
     pub fn new(all: Vec<(Handle, EntityType)>) -> Self {
+        let all = all
+            .into_iter()
+            .map(|(handle, entity)| (handle, entity_with_lwpolyline_world_xy(&entity)))
+            .collect();
         Self { all, boundary: None, geos: Vec::new() }
     }
 }

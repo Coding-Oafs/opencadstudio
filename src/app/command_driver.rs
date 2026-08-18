@@ -2677,12 +2677,20 @@ impl OpenCADStudio {
                             }
                         }
                         acadrust::EntityType::LwPolyline(p) => {
-                            for v in &mut p.vertices {
+                            let Some(mut world) =
+                                crate::entities::curve::lwpolyline_world_xy(p)
+                            else {
+                                continue;
+                            };
+                            for v in &mut world.vertices {
                                 if in_win(v.location.x, v.location.y) {
                                     v.location.x += dx;
                                     v.location.y += dy;
                                     stretched = true;
                                 }
+                            }
+                            if stretched {
+                                *p = world;
                             }
                         }
                         acadrust::EntityType::Polyline2D(p) => {

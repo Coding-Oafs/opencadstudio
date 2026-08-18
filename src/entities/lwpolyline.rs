@@ -1058,15 +1058,15 @@ impl crate::entities::traits::MassPropsCalc for acadrust::entities::LwPolyline {
             .expect("an LwPolyline with at least two vertices has a planar curve");
         let area = curve.curve.enclosed_area().abs();
         let perimeter = curve.length();
-        let (cx, cy) = curve
+        let center = curve
             .curve
             .enclosed_centroid()
-            .map(|point| (point[0], point[1]))
             .unwrap_or_else(|| {
                 let x = p.vertices.iter().map(|v| v.location.x).sum::<f64>() / n as f64;
                 let y = p.vertices.iter().map(|v| v.location.y).sum::<f64>() / n as f64;
-                (x, y)
+                [x, y]
             });
+        let [cx, cy, _] = curve.plane.point_at(center);
         crate::entities::traits::MassProps {
             area,
             perimeter,

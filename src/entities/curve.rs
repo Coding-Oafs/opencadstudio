@@ -352,6 +352,42 @@ pub fn entity_curve_xy(entity: &EntityType) -> Option<Curve> {
     })
 }
 
+/// Re-expresses an axis-aligned LWPOLYLINE in world XY coordinates.
+pub fn lwpolyline_world_xy(polyline: &LwPolylineEnt) -> Option<LwPolylineEnt> {
+    let normal = normalized(polyline.normal);
+    if normal.x.abs() > 1e-12 || normal.y.abs() > 1e-12 || normal.z.abs() <= 1e-12 {
+        return None;
+    }
+    let Curve::Polyline(curve) = entity_curve_xy(&EntityType::LwPolyline(polyline.clone()))?
+    else {
+        return None;
+    };
+    if curve.vertices.len() != polyline.vertices.len() {
+        return None;
+    }
+
+    let mut world = polyline.clone();
+    for (vertex, kernel) in world.vertices.iter_mut().zip(curve.vertices) {
+        vertex.location.x = kernel.position[0];
+        vertex.location.y = kernel.position[1];
+        vertex.bulge = kernel.bulge;
+    }
+    world.elevation = ocs_plane(polyline.normal, polyline.elevation).origin[2];
+    world.thickness *= normal.z;
+    world.normal = Vector3::new(0.0, 0.0, 1.0);
+    Some(world)
+}
+
+/// Normalizes only LWPOLYLINE entities; other types pass through unchanged.
+pub fn entity_with_lwpolyline_world_xy(entity: &EntityType) -> EntityType {
+    match entity {
+        EntityType::LwPolyline(polyline) => lwpolyline_world_xy(polyline)
+            .map(EntityType::LwPolyline)
+            .unwrap_or_else(|| entity.clone()),
+        _ => entity.clone(),
+    }
+}
+
 /// World-space wire points sampled by the kernel's angular policy.
 pub fn curve_points(curve: &PlanarCurve) -> Vec<[f64; 3]> {
     curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
