@@ -267,14 +267,17 @@ impl PropertyEditable for XLine {
                     self.set_direction(direction);
                 }
             }
-            "xl_dx" => {
-                self.direction.x = v;
-            }
-            "xl_dy" => {
-                self.direction.y = v;
-            }
-            "xl_dz" => {
-                self.direction.z = v;
+            "xl_dx" | "xl_dy" | "xl_dz" => {
+                let mut direction = self.direction;
+                match field {
+                    "xl_dx" => direction.x = v,
+                    "xl_dy" => direction.y = v,
+                    "xl_dz" => direction.z = v,
+                    _ => unreachable!(),
+                }
+                if direction.length_squared() > 1e-18 {
+                    self.set_direction(direction);
+                }
             }
             _ => {}
         }
