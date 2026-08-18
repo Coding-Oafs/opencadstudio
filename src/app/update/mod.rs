@@ -971,6 +971,20 @@ impl OpenCADStudio {
             Message::ScriptPump => self.pump_script(),
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudStreamTick(tab_index) => {
+                if tab_index < self.tabs.len() {
+                    self.start_point_cloud_stream(tab_index)
+                } else {
+                    Task::none()
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudQueuePump(tab_id) => {
+                self.start_next_queued_point_cloud(tab_id)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudPathPicked(Some(path)) => self.start_point_cloud_load(path),
 
             #[cfg(not(target_arch = "wasm32"))]

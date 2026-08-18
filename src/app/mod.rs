@@ -3026,6 +3026,12 @@ pub enum Message {
     ScriptPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
     ScriptPump,
+    /// Deferred continuation: start streaming for a tab (fresh loop turn).
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudStreamTick(usize),
+    /// Deferred continuation: attach the next queued folder file.
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudQueuePump(u64),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudPathPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]

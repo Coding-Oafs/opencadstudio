@@ -18,3 +18,9 @@ rustflags = [
     # WebAssembly stack while developing with `trunk serve`.
     '-Clink-arg=-zstack-size=4194304',
 ]
+
+# The iced/winit event loop dispatches nested follow-on messages on the main
+# thread's stack (a task completing during dispatch re-enters the loop); GUI
+# builds with deep modal/view stacks need more than the 8 MB default.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:67108864"]

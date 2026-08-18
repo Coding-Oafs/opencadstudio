@@ -993,12 +993,16 @@ impl OpenCADStudio {
             .source(&source_id)
             .is_some_and(|source| source.cache_manifest.is_some())
         {
-            self.start_point_cloud_stream(tab_index)
+            deferred_message(Message::PointCloudStreamTick(tab_index))
         } else {
             Task::none()
         };
-        // Streaming and the next queued folder load can proceed in parallel.
-        Task::batch([stream_task, self.start_next_queued_point_cloud(tab_id)])
+        // Both continuations are deferred: completing them inline would nest
+        // event-loop dispatch frames (see deferred_message).
+        Task::batch([
+            stream_task,
+            deferred_message(Message::PointCloudQueuePump(tab_id)),
+        ])
     }
 
     pub(super) fn point_cloud_info(&mut self, tab_index: usize) {
@@ -3613,4 +3617,16 @@ mod tests {
         assert_eq!(vec!["a.LAZ".to_string(), "b.las".to_string(), "c.las".to_string()], names);
         std::fs::remove_dir_all(&root).ok();
     }
+}
+
+/// Delivers `message` on a fresh event-loop turn: a worker thread wakes the
+/// executor ~1 ms later, so a follow-on action never re-enters the current
+/// dispatch on the same stack. Returning chained `Task::done` continuations
+/// from inside an update nests winit dispatch frames and, repeated across a
+/// folder attach, overflows the main thread.
+fn deferred_message(message: Message) -> Task<Message> {
+    background_task(
+        move || std::thread::sleep(std::time::Duration::from_millis(1)),
+        move |_| message,
+    )
 }

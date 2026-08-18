@@ -24,12 +24,19 @@ mod scene;
 mod snap;
 mod ui;
 mod par;
+mod stack_dump;
 mod sys;
 
 fn main() -> iced::Result {
     // Web (wasm) uses the single-window entry; native uses the multi-window
     // daemon. Trunk calls `main` from its generated JS bootstrap. The web build
     // takes no CLI args, so it skips parsing entirely.
+    // Native diagnostics: dump the crashing call stack as module-relative
+    // offsets if a thread overflows, so GUI crashes report where they died.
+    #[cfg(all(windows, debug_assertions))]
+    unsafe {
+        crate::stack_dump::install();
+    }
     #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
