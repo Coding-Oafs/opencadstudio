@@ -229,12 +229,16 @@ impl Grippable for XLine {
 
 impl PropertyEditable for XLine {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
+        let second_point = self.point_at(1.0);
         vec![PropSection {
             title: t!("Geometry").into_owned(),
             props: vec![
                 edit(t!("Base X").as_ref(), "xl_bx", self.base_point.x),
                 edit(t!("Base Y").as_ref(), "xl_by", self.base_point.y),
                 edit(t!("Base Z").as_ref(), "xl_bz", self.base_point.z),
+                edit(t!("Second X").as_ref(), "xl_sx", second_point.x),
+                edit(t!("Second Y").as_ref(), "xl_sy", second_point.y),
+                edit(t!("Second Z").as_ref(), "xl_sz", second_point.z),
                 edit(t!("Direction vector X").as_ref(), "xl_dx", self.direction.x),
                 edit(t!("Direction vector Y").as_ref(), "xl_dy", self.direction.y),
                 edit(t!("Direction vector Z").as_ref(), "xl_dz", self.direction.z),
@@ -250,6 +254,19 @@ impl PropertyEditable for XLine {
             "xl_bx" => self.base_point.x = v,
             "xl_by" => self.base_point.y = v,
             "xl_bz" => self.base_point.z = v,
+            "xl_sx" | "xl_sy" | "xl_sz" => {
+                let mut second_point = self.point_at(1.0);
+                match field {
+                    "xl_sx" => second_point.x = v,
+                    "xl_sy" => second_point.y = v,
+                    "xl_sz" => second_point.z = v,
+                    _ => unreachable!(),
+                }
+                let direction = second_point - self.base_point;
+                if direction.length_squared() > 1e-18 {
+                    self.set_direction(direction);
+                }
+            }
             "xl_dx" => {
                 self.direction.x = v;
             }
