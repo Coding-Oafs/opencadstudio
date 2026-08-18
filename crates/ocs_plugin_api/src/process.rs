@@ -675,6 +675,11 @@ impl PluginProcess {
         }
     }
 
+    /// Whether this plugin process speaks the V4 protocol.
+    pub fn is_v4(&self) -> bool {
+        self.v4.is_some()
+    }
+
     /// Send a best-effort host-to-plugin notification. Requires V4; on V3
     /// processes this returns an error.
     pub fn notify_plugin(

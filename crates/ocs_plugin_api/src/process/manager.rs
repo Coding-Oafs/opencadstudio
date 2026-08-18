@@ -91,6 +91,15 @@ impl PluginManager {
             if !p.process.is_alive() {
                 continue;
             }
+            if !p.process.is_v4() {
+                if crate::process::verbose() {
+                    eprintln!(
+                        "[plugin] skipping notification for {} (not V4)",
+                        p.process.id()
+                    );
+                }
+                continue;
+            }
             if let Err(e) = p.process.notify_plugin(command_id, notification.clone()) {
                 eprintln!(
                     "[plugin] broadcast_notification failed for {}: {e}",
