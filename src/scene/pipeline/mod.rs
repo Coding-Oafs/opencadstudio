@@ -560,14 +560,12 @@ impl Pipeline {
         );
 
         // ── Wire pipeline ──────────────────────────────────────────────────
-        // Select once from actual device limits. Any device whose compositor
-        // exposes the required storage limits uses the storage renderer; all
-        // other devices use the packed/texture compatibility renderer.
+        // Browser shader support can lag behind advertised WebGPU limits.
         let device_caps = DeviceCapabilities::detect(device);
         #[cfg(not(target_arch = "wasm32"))]
         let force_compat_renderer = crate::cli::gui_config().compat_renderer;
         #[cfg(target_arch = "wasm32")]
-        let force_compat_renderer = false;
+        let force_compat_renderer = true;
         let wire_mode =
             wire_gpu::WirePipelineMode::select(device_caps, force_compat_renderer);
         let wire_const_bgl = wire_mode

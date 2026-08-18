@@ -2,9 +2,7 @@ use iced::wgpu;
 
 /// Renderer-relevant limits of the selected GPU device.
 ///
-/// Capabilities, not the compilation target, choose the renderer tier. Browser
-/// WebGPU and native Vulkan/Metal/DX12 can therefore share storage-backed
-/// pipelines, while WebGL2 and weak native adapters use compatibility paths.
+/// Native devices select by limits; browser builds use compatibility paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceCapabilities {
     pub max_storage_buffers_per_shader_stage: u32,
