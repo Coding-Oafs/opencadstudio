@@ -641,10 +641,13 @@ fn ttr_lc_candidates(l: Line2D, cp: DVec3, cr: f64, r: f64) -> Vec<DVec3> {
     let mut out = Vec::new();
     for s1 in [-1.0f64, 1.0] {
         for s2 in [-1.0f64, 1.0] {
-            let rho = cr + s2 * r;
-            if rho < 0.0 {
-                continue;
-            }
+            // Distance from the new center to the circle's center: `cr + r`
+            // for external tangency, `|cr - r|` for internal. Reading that
+            // difference as negative dropped the whole family where the new
+            // circle is the larger one and encloses the existing circle. Only
+            // `rho^2` is used below, so the magnitude is what the algebra
+            // needs — the tan-tan-tan path already takes it that way.
+            let rho = (cr + s2 * r).abs();
             let c_off = l.c + s1 * r;
             // The candidate center (cx, cy) satisfies:
             //   l.a*cx + l.b*cy + c_off = 0
@@ -677,11 +680,11 @@ fn ttr_cc_candidates(c1: DVec3, r1: f64, c2: DVec3, r2: f64, r: f64) -> Vec<DVec
     let mut out = Vec::new();
     for s1 in [-1.0f64, 1.0] {
         for s2 in [-1.0f64, 1.0] {
-            let rho1 = r1 + s1 * r;
-            let rho2 = r2 + s2 * r;
-            if rho1 < 0.0 || rho2 < 0.0 {
-                continue;
-            }
+            // As in `ttr_lc_candidates`: `r_i + r` is external tangency and
+            // `|r_i - r|` internal, so a new circle larger than an existing one
+            // still sits a real distance from it.
+            let rho1 = (r1 + s1 * r).abs();
+            let rho2 = (r2 + s2 * r).abs();
             let ax = c2.x - c1.x;
             let ay = c2.y - c1.y;
             let k = 0.5
@@ -1132,6 +1135,52 @@ inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_TTT"] 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn has_candidate(cands: &[DVec3], want: DVec3) -> bool {
+        cands.iter().any(|c| c.distance(want) < 1e-6)
+    }
+
+    /// #814: tan-tan-radius over two circles must also offer the solutions
+    /// where the new circle is the larger one and encloses an existing circle.
+    /// `|r_i - r|` is a real distance; it used to be read as negative, which
+    /// dropped that family and left only externally tangent results.
+    #[test]
+    fn ttr_two_circles_offers_the_enclosing_solution() {
+        let c1 = TangentObject::Circle { center: DVec3::new(-3.0, 0.0, 0.0), radius: 1.0 };
+        let c2 = TangentObject::Circle { center: DVec3::new(3.0, 0.0, 0.0), radius: 1.0 };
+        let cands = ttr_candidates(c1, c2, 5.0);
+        // |P - Ci| = 5 - 1 = 4 puts both small circles inside the new one.
+        let y = 7.0f64.sqrt();
+        assert!(
+            has_candidate(&cands, DVec3::new(0.0, y, 0.0))
+                && has_candidate(&cands, DVec3::new(0.0, -y, 0.0)),
+            "no enclosing candidate, got {cands:?}"
+        );
+        // The externally tangent family is still produced.
+        assert!(
+            cands.iter().any(|c| {
+                (c.distance(DVec3::new(-3.0, 0.0, 0.0)) - 6.0).abs() < 1e-6
+                    && (c.distance(DVec3::new(3.0, 0.0, 0.0)) - 6.0).abs() < 1e-6
+            }),
+            "external tangency lost, got {cands:?}"
+        );
+    }
+
+    /// Same gap on the line/circle pair: a radius larger than the circle's own
+    /// must still reach the tangent circles that swallow it.
+    #[test]
+    fn ttr_line_and_circle_offers_the_enclosing_solution() {
+        let line = TangentObject::Line { p1: DVec3::ZERO, p2: DVec3::new(10.0, 0.0, 0.0) };
+        let circle = TangentObject::Circle { center: DVec3::new(0.0, 2.0, 0.0), radius: 1.0 };
+        let cands = ttr_candidates(line, circle, 5.0);
+        // Tangent to y = 0 at distance 5, and |P - (0,2)| = 5 - 1 = 4.
+        let x = 7.0f64.sqrt();
+        assert!(
+            has_candidate(&cands, DVec3::new(x, 5.0, 0.0))
+                && has_candidate(&cands, DVec3::new(-x, 5.0, 0.0)),
+            "no enclosing candidate, got {cands:?}"
+        );
+    }
 
     /// #318: concentric ring + a line through the center — the degenerate
     /// circle-pair equation must still yield the annulus circle.
