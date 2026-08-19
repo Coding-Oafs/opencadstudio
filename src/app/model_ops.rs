@@ -17,6 +17,19 @@ use crate::modules::model::boolean_cmd::BoolOp;
 use crate::scene::model::solid_history;
 use crate::scene::model::solid_model::{self, Bool};
 
+/// Put two boolean operands in document order.
+///
+/// `scene.selected` is a `HashSet`, so the order it iterates in is arbitrary
+/// and can differ between runs of the same drawing. UNION and INTERSECT do not
+/// care, but SUBTRACT is `a - b`: taken straight from the set, the same two
+/// selected solids can be subtracted either way round. Sorting by handle makes
+/// the solid created first the body the other is cut out of — the same
+/// canonical order the selection code elsewhere sorts into.
+fn in_document_order(mut handles: Vec<Handle>) -> Vec<Handle> {
+    handles.sort_unstable_by_key(|handle| handle.value());
+    handles
+}
+
 impl super::OpenCADStudio {
     /// Commit a Model-tab solid: add its acadrust entity to the document, then
     /// register the B-rep (caches it for booleans + tessellates it into the
@@ -54,6 +67,7 @@ impl super::OpenCADStudio {
                 .push_error(crate::t!("Boolean: select exactly two solids created this session.").as_ref());
             return Task::none();
         }
+        let handles = in_document_order(handles);
         let a = self.tabs[i].scene.solid_models[&handles[0]].clone();
         let b = self.tabs[i].scene.solid_models[&handles[1]].clone();
         let kind = match op {
@@ -722,5 +736,29 @@ impl super::OpenCADStudio {
         self.command_line
             .push_output(crate::tf!("CONVTOSURFACE: converted {n} solid(s) to surface(s).").as_ref());
         Task::none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SUBTRACT is not commutative, so the operand order must not depend on
+    /// which way the selection set happens to iterate.
+    #[test]
+    fn boolean_operands_ignore_selection_iteration_order() {
+        let older = Handle::new(0x2a);
+        let newer = Handle::new(0x7f);
+
+        assert_eq!(
+            in_document_order(vec![older, newer]),
+            in_document_order(vec![newer, older]),
+            "operand order must not follow the set's iteration order"
+        );
+        assert_eq!(
+            in_document_order(vec![newer, older])[0],
+            older,
+            "the solid created first is the body the other is cut out of"
+        );
     }
 }
