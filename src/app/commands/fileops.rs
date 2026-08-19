@@ -313,6 +313,19 @@ impl OpenCADStudio {
             "PERSP" => return Some(Task::done(Message::SetProjection(false))),
             "LAYERS" => return Some(Task::done(Message::ToggleLayers)),
 
+            // ── BASEMAP — georeferenced imagery underlay ───────────────────
+            // BASEMAP                    — toggle on/off at the stored settings
+            // BASEMAP ARCGIS             — Esri World Imagery
+            // BASEMAP STREETS            — Esri World Street Map
+            // BASEMAP CUSTOM <template>  — custom XYZ template
+            // BASEMAP PROJ <epsg>        — reproject using a chosen EPSG
+            // BASEMAP PROJ LAS           — reproject using the attached LAS CRS
+            // BASEMAP PROJ DEFAULT       — assume Web Mercator
+            // BASEMAP ZOOM <z>           — set slippy zoom (0–22)
+            "BASEMAP" => return Some(self.basemap_toggle()),
+            cmd if cmd.starts_with("BASEMAP ") => return Some(self.basemap_command(cmd)),
+
+
             // SCRIPT <path> — run a command script: each non-blank, non-comment
             // line is fed through the same command path the `--script` startup
             // flag uses, so the behaviour matches headless automation exactly.

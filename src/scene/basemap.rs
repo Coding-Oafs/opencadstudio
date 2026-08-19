@@ -1,0 +1,291 @@
+//! Georeferenced basemap underlay: XYZ slippy-map tiles placed in world space.
+//!
+//! The pure math lives here so it is unit-testable without a GPU or network:
+//! Web-Mercator tile bounds, the tile URL for a provider, and the reprojection
+//! of a source envelope into the drawing's CRS. The renderer only consumes the
+//! resulting world-space quads.
+
+use serde::{Deserialize, Serialize};
+
+/// Runtime + persisted configuration for the basemap underlay.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BasemapSettings {
+    pub provider: BasemapProvider,
+    pub projection: BasemapProjection,
+    /// Source EPSG to reproject from (used when `projection` is `Epsg` or
+    /// `FromLas`; `FromLas` fills this from the attached cloud).
+    pub source_epsg: Option<u16>,
+    /// Custom XYZ template when `provider` is `Custom`.
+    pub custom_template: String,
+    /// Slippy zoom level (0–22).
+    pub zoom: u32,
+    /// Band half-width around the drawing bounds, in meters (or target units),
+    /// used to decide which tiles to fetch. Tiles are clamped to the world.
+    pub opacity: f32,
+}
+
+impl Default for BasemapSettings {
+    fn default() -> Self {
+        Self {
+            provider: BasemapProvider::Off,
+            projection: BasemapProjection::WebMercator,
+            source_epsg: None,
+            custom_template: String::new(),
+            zoom: 16,
+            opacity: 1.0,
+        }
+    }
+}
+
+impl BasemapSettings {
+    /// Normalize the zoom and opacity into safe ranges.
+    pub fn normalized(mut self) -> Self {
+        self.zoom = self.zoom.clamp(0, 22);
+        self.opacity = self.opacity.clamp(0.0, 1.0);
+        self
+    }
+}
+
+/// Which basemap imagery to fetch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BasemapProvider {
+    #[default]
+    Off,
+    /// Esri World Imagery (no key required).
+    ArcGisImagery,
+    /// Esri World Street Map (no key required).
+    ArcGisStreets,
+    /// A user-supplied XYZ template (e.g. Google Hybrid with an API key).
+    Custom,
+}
+
+impl BasemapProvider {
+    /// The XYZ URL template for `z`/`x`/`y` placeholders. `{custom}` is filled
+    /// from the user's stored template string (for `BasemapProvider::Custom`).
+    pub fn url_template(&self) -> &'static str {
+        match self {
+            BasemapProvider::ArcGisImagery => {
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            }
+            BasemapProvider::ArcGisStreets => {
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+            }
+            BasemapProvider::Off | BasemapProvider::Custom => "",
+        }
+    }
+}
+
+/// Projection for the basemap. Tiles are always served in Web Mercator
+/// (EPSG:3857); this chooses how the drawing's coordinates map to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BasemapProjection {
+    /// Assume the drawing is already in Web Mercator (no reprojection).
+    #[default]
+    WebMercator,
+    /// Reproject using the EPSG code taken from the attached LAS cloud.
+    FromLas,
+    /// Reproject using a user-supplied EPSG code.
+    Epsg(u16),
+}
+
+/// A single XYZ tile request: its coordinates plus the world-space (Web
+/// Mercator, EPSG:3857) extent it covers, so the caller can place a fetched
+/// image quad.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tile {
+    pub z: u32,
+    pub x: u32,
+    pub y: u32,
+    /// Web-Mercator meters: [min_x, min_y, max_x, max_y].
+    pub bounds: [f64; 4],
+}
+
+/// Web-Mercator world half-extent in meters (EPSG:3857).
+const MERCATOR_HALF: f64 = 20_037_508.342_789_244;
+
+/// The Web-Mercator bounds of tile (z, x, y).
+pub fn tile_bounds(z: u32, x: u32, y: u32) -> [f64; 4] {
+    let n = (1_u64 << z) as f64;
+    let x = x as f64;
+    let y = y as f64;
+    [
+        x / n * 2.0 * MERCATOR_HALF - MERCATOR_HALF,
+        MERCATOR_HALF - (y + 1.0) / n * 2.0 * MERCATOR_HALF,
+        (x + 1.0) / n * 2.0 * MERCATOR_HALF - MERCATOR_HALF,
+        MERCATOR_HALF - y / n * 2.0 * MERCATOR_HALF,
+    ]
+}
+
+/// The tile URL for a provider at (z, x, y), using `custom_template` when the
+/// provider is `Custom`.
+pub fn tile_url(provider: BasemapProvider, z: u32, x: u32, y: u32, custom_template: &str) -> Option<String> {
+    match provider {
+        BasemapProvider::Off => None,
+        BasemapProvider::Custom if custom_template.is_empty() => None,
+        BasemapProvider::Custom => Some(
+            custom_template
+                .replace("{z}", &z.to_string())
+                .replace("{x}", &x.to_string())
+                .replace("{y}", &y.to_string()),
+        ),
+        other => Some(
+            other
+                .url_template()
+                .replace("{z}", &z.to_string())
+                .replace("{x}", &x.to_string())
+                .replace("{y}", &y.to_string()),
+        ),
+    }
+}
+
+/// Compute the Web-Mercator world bounds of a drawing envelope expressed in
+/// `source_epsg`. Returns `None` on an unavailable projection.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn world_bounds_from_source(min: [f64; 2], max: [f64; 2], source_epsg: u16) -> Option<[f64; 4]> {
+    if source_epsg == 3857 {
+        return Some([min[0], min[1], max[0], max[1]]);
+    }
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    const STEPS: usize = 4;
+    for iy in 0..=STEPS {
+        for ix in 0..=STEPS {
+            let x = min[0] + (max[0] - min[0]) * ix as f64 / STEPS as f64;
+            let y = min[1] + (max[1] - min[1]) * iy as f64 / STEPS as f64;
+            let (tx, ty) = ocs_pointcloud::reproject_xy(source_epsg, 3857, x, y)?;
+            out[0] = out[0].min(tx);
+            out[1] = out[1].min(ty);
+            out[2] = out[2].max(tx);
+            out[3] = out[3].max(ty);
+        }
+    }
+    Some(out)
+}
+
+/// Which tiles at `zoom` cover the Web-Mercator `bounds`, clamped to valid
+/// tile indices. Returns an empty list for a degenerate or out-of-range bound.
+pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
+    let n = (1_u64 << zoom) as f64;
+    if !bounds.iter().all(|v| v.is_finite()) || bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
+        return Vec::new();
+    }
+    let clamp_x = |x: f64| -> u32 {
+        (((x + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n).floor().clamp(0.0, n - 1.0) as u32
+    };
+    let clamp_y = |y: f64| -> u32 {
+        ((1.0 - (y + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n).floor().clamp(0.0, n - 1.0) as u32
+    };
+    let (x0, x1) = (clamp_x(bounds[0]), clamp_x(bounds[2]));
+    let (y0, y1) = (clamp_y(bounds[3]), clamp_y(bounds[1]));
+    let mut tiles = Vec::new();
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            tiles.push(Tile {
+                z: zoom,
+                x,
+                y,
+                bounds: tile_bounds(zoom, x, y),
+            });
+        }
+    }
+    tiles
+}
+
+/// Reproject a Web-Mercator envelope into `target_epsg` (or the same envelope
+/// when `target_epsg == 3857`). Returns the densified target bounds, or `None`
+/// when the projection is unavailable.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reproject_bounds_3857(bounds: [f64; 4], target_epsg: u16) -> Option<[f64; 4]> {
+    if target_epsg == 3857 {
+        return Some(bounds);
+    }
+    let [min_x, min_y, max_x, max_y] = bounds;
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    // Densify the envelope edges so curved projection boundaries are respected.
+    const STEPS: usize = 8;
+    for iy in 0..=STEPS {
+        for ix in 0..=STEPS {
+            if ix != 0 && ix != STEPS && iy != 0 && iy != STEPS {
+                continue;
+            }
+            let x = min_x + (max_x - min_x) * ix as f64 / STEPS as f64;
+            let y = min_y + (max_y - min_y) * iy as f64 / STEPS as f64;
+            let (tx, ty) = ocs_pointcloud::reproject_xy(3857, target_epsg, x, y)?;
+            out[0] = out[0].min(tx);
+            out[1] = out[1].min(ty);
+            out[2] = out[2].max(tx);
+            out[3] = out[3].max(ty);
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tile_0_bounds_cover_the_whole_world() {
+        let b = tile_bounds(0, 0, 0);
+        assert!((b[0] + MERCATOR_HALF).abs() < 1e-6);
+        assert!((b[2] - MERCATOR_HALF).abs() < 1e-6);
+        assert!((b[1] + MERCATOR_HALF).abs() < 1e-6);
+        assert!((b[3] - MERCATOR_HALF).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tile_bounds_are_contiguous_and_quarter_at_z1() {
+        // The four z=1 tiles split the world in half in each axis.
+        let nw = tile_bounds(1, 0, 0);
+        let ne = tile_bounds(1, 1, 0);
+        // x=0 is the z1 seam: west tile's right edge meets east tile's left.
+        assert!((nw[2] - ne[0]).abs() < 1e-6, "west/right edge meets east/left edge");
+        assert!((nw[3] - ne[3]).abs() < 1e-6, "same top edge");
+        assert!(nw[2].abs() < 1e-6 && ne[0].abs() < 1e-6, "x=0 is the z1 seam");
+        // West tile spans the negative half, east the positive half.
+        assert!((nw[0] + MERCATOR_HALF).abs() < 1e-6);
+        assert!((ne[2] - MERCATOR_HALF).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tile_url_supports_builtin_and_custom() {
+        let url = tile_url(BasemapProvider::ArcGisImagery, 3, 2, 1, "").unwrap();
+        assert!(url.contains("/tile/3/1/2"), "url = {url}");
+        let url = tile_url(BasemapProvider::Custom, 3, 2, 1, "https://x/{z}/{x}/{y}?k=a")
+            .unwrap();
+        assert_eq!(url, "https://x/3/2/1?k=a");
+        assert!(tile_url(BasemapProvider::Off, 1, 0, 0, "").is_none());
+        assert!(tile_url(BasemapProvider::Custom, 1, 0, 0, "").is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reproject_3857_to_3857_is_identity() {
+        let b = tile_bounds(1, 0, 0);
+        assert_eq!(reproject_bounds_3857(b, 3857), Some(b));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reproject_to_geographic_lands_in_degrees() {
+        // Web Mercator origin (0,0) is roughly (0°, 0°) in EPSG:4326.
+        let b = tile_bounds(0, 0, 0);
+        let geo = reproject_bounds_3857(b, 4326).unwrap();
+        assert!(geo[0] <= -170.0 && geo[1] <= -80.0, "SW corner in degrees: {geo:?}");
+        assert!(geo[2] >= 170.0 && geo[3] >= 80.0, "NE corner in degrees: {geo:?}");
+    }
+
+    #[test]
+    fn tiles_covering_clamps_to_world() {
+        // The whole world at z=0 is exactly one tile.
+        let world = tile_bounds(0, 0, 0);
+        assert_eq!(tiles_covering(world, 0).len(), 1);
+        // An envelope strictly inside one tile at z=2 maps to just that tile.
+        let b = tile_bounds(2, 1, 1);
+        let interior = [b[0] + 1.0, b[1] + 1.0, b[2] - 1.0, b[3] - 1.0];
+        let covered = tiles_covering(interior, 2);
+        assert_eq!(covered.len(), 1, "interior envelope = one tile: {covered:?}");
+        assert_eq!((covered[0].x, covered[0].y), (1, 1));
+        // A degenerate bound yields nothing.
+        assert!(tiles_covering([1.0, 1.0, 0.0, 0.0], 2).is_empty());
+    }
+}

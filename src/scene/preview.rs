@@ -21,6 +21,11 @@ impl Scene {
         self.point_cloud = std::sync::Arc::new(model);
     }
 
+    /// Replace the session-only georeferenced basemap underlay images.
+    pub fn set_basemap_images(&mut self, images: Vec<ImageModel>) {
+        self.basemap_images = std::sync::Arc::new(images);
+    }
+
     /// Publish all edited hatches as one live fill overlay.
     pub fn set_preview_hatches(&mut self, handles: &[Handle]) {
         let mut models = Vec::new();

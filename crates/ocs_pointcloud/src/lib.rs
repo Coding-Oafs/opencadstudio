@@ -20,7 +20,7 @@ pub use classify::{
     RuleField, RuleOp,
 };
 pub use crs::{
-    assess_survey_readiness, inspect_crs, reproject_with_patches_progress, CrsInfo,
+    assess_survey_readiness, inspect_crs, reproject_with_patches_progress, reproject_xy, CrsInfo,
     ReprojectionStats, SurveyReadiness,
 };
 pub use display::{

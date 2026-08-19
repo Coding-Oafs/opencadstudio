@@ -6,6 +6,7 @@
 //   view    — camera, transforms, viewport, render pipeline driver
 //   cache   — block-definition and property caches
 pub mod annotative;
+pub mod basemap;
 pub mod cache;
 pub mod convert;
 pub mod creation_style;
@@ -125,7 +126,7 @@ fn mesh_interaction_aabb(set: &model::mesh_model::MeshLodSet) -> Option<[f64; 6]
 }
 
 pub use model::hatch_model::HatchModel;
-pub use model::image_model::ImageModel;
+pub use model::image_model::{resolve_image, ImageModel};
 pub use model::mesh_model::MeshLodSet;
 pub use model::point_cloud_model::{
     PointChunk, PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION,
@@ -1491,6 +1492,10 @@ pub struct Scene {
     /// Session-only LAS/LAZ points consumed by the native GPU pipeline. Kept
     /// outside the CAD entity model so drawing undo/save never clones them.
     pub point_cloud: Arc<PointCloudModel>,
+    /// Session-only georeferenced basemap underlay images (XYZ slippy tiles
+    /// placed in world space). Kept outside the CAD entity model, like the
+    /// point cloud, so drawing undo/save never touches them.
+    pub basemap_images: Arc<Vec<ImageModel>>,
     /// Live hatch fill used by interactive edits such as dragging the pattern
     /// origin grip. Kept separate from the resident hatch set so moving one
     /// pattern never re-uploads every hatch in a large drawing.
@@ -1888,6 +1893,7 @@ impl Scene {
             selection_filter: HashSet::default(),
             preview_wires: vec![],
             point_cloud: Arc::new(PointCloudModel::default()),
+            basemap_images: Arc::new(Vec::new()),
             preview_hatches: Arc::new(Vec::new()),
             preview_text: vec![],
             interim_wire: None,

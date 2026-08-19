@@ -6,6 +6,33 @@ use proj4rs::{proj::Proj, transform::transform};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
+/// Reproject a single XY coordinate from `source_epsg` to `target_epsg`.
+/// Returns `None` when either projection is unavailable or the transform fails.
+/// `z` is passed through unchanged.
+pub fn reproject_xy(
+    source_epsg: u16,
+    target_epsg: u16,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    if source_epsg == target_epsg {
+        return Some((x, y));
+    }
+    let source = Proj::from_epsg_code(source_epsg).ok()?;
+    let target = Proj::from_epsg_code(target_epsg).ok()?;
+    let mut coordinate = (x, y, 0.0);
+    if source.is_latlong() {
+        coordinate.0 = coordinate.0.to_radians();
+        coordinate.1 = coordinate.1.to_radians();
+    }
+    transform(&source, &target, &mut coordinate).ok()?;
+    if target.is_latlong() {
+        coordinate.0 = coordinate.0.to_degrees();
+        coordinate.1 = coordinate.1.to_degrees();
+    }
+    Some((coordinate.0, coordinate.1))
+}
+
 /// CRS information recovered from LAS WKT or GeoTIFF (E)VLRs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrsInfo {

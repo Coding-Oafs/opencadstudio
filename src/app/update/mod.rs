@@ -1010,6 +1010,11 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::BasemapLoaded(loaded) => {
+                self.install_basemap(loaded);
+                Task::none()
+            }
+
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudExport => {
                 let Some(cloud) = self.tabs[self.active_tab].point_cloud.active() else {

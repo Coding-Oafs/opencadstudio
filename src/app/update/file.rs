@@ -579,6 +579,7 @@ impl OpenCADStudio {
                     name: "Sheet Set".into(),
                     sheets: Vec::new(),
                 }),
+            basemap: self.basemap.clone(),
         }
     }
 
@@ -627,6 +628,7 @@ impl OpenCADStudio {
             self.tool_palettes.palettes = cfg.tool_palettes;
         }
         self.sheetset.set = Some(cfg.sheet_set);
+        self.basemap = cfg.basemap.normalized();
     }
 
     /// Write the config only when it changed since the last write, so a toggle

@@ -1,6 +1,7 @@
 mod alias;
 #[cfg(not(target_arch = "wasm32"))]
 mod automation;
+pub(crate) mod basemap;
 pub(crate) mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub use automation::{export_headless, serve};
@@ -338,6 +339,8 @@ pub(super) struct OpenCADStudio {
     /// dozens of concurrent samples.
     #[cfg(not(target_arch = "wasm32"))]
     point_cloud_load_queue: Vec<(u64, std::path::PathBuf)>,
+    /// Georeferenced basemap underlay settings (provider, projection, zoom).
+    basemap: crate::scene::basemap::BasemapSettings,
     /// The running Rhai macro, if any: its request inbox and outcome.
     #[cfg(not(target_arch = "wasm32"))]
     script_runner: Option<scripting::ScriptRunner>,
@@ -3067,6 +3070,8 @@ pub enum Message {
     ),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudTilesLoaded(u64, Result<crate::app::point_cloud::TileLoadBatch, String>),
+    /// A background basemap tile fetch finished.
+    BasemapLoaded(crate::app::basemap::BasemapLoaded),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudExport,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3180,6 +3185,7 @@ impl OpenCADStudio {
             discussions_loading: false,
             #[cfg(not(target_arch = "wasm32"))]
             point_cloud_load_queue: Vec::new(),
+            basemap: crate::scene::basemap::BasemapSettings::default(),
             #[cfg(not(target_arch = "wasm32"))]
             script_runner: None,
             props_asym_scale: std::collections::HashSet::new(),

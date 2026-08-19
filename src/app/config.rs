@@ -42,6 +42,8 @@ pub struct AppConfig {
     pub tool_palettes: Vec<crate::ui::window::tool_palettes::Palette>,
     /// The persisted sheet set (empty sheet list by default).
     pub sheet_set: crate::ui::window::sheetset::SheetSet,
+    /// Georeferenced basemap underlay settings.
+    pub basemap: crate::scene::basemap::BasemapSettings,
 }
 
 impl Default for AppConfig {
@@ -62,6 +64,7 @@ impl Default for AppConfig {
                 name: "Sheet Set".into(),
                 sheets: Vec::new(),
             },
+            basemap: crate::scene::basemap::BasemapSettings::default(),
         }
     }
 }

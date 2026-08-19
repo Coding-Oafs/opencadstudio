@@ -292,6 +292,48 @@ impl ImageModel {
 }
 
 impl ImageModel {
+    /// Build a world-space textured quad from decoded pixels and an axis-aligned
+    /// world rectangle `[min_x, min_y, max_x, max_y]` (used by the basemap
+    /// underlay). Texel (0,0) maps to the top-left corner; the quad is placed at
+    /// the given world elevation (default 0) and draw depth.
+    pub fn from_world_quad(
+        label: &str,
+        pixels: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        bounds: [f64; 4],
+        elevation: f64,
+        draw_depth: f32,
+    ) -> Self {
+        let [min_x, min_y, max_x, max_y] = bounds;
+        let z = elevation;
+        let split = |x: f64, y: f64| -> ([f32; 3], [f32; 3]) {
+            let (hx, hy, hz) = (x as f32, y as f32, z as f32);
+            (
+                [hx, hy, hz],
+                [(x - hx as f64) as f32, (y - hy as f64) as f32, (z - hz as f64) as f32],
+            )
+        };
+        let (c0, l0) = split(min_x, min_y); // BL
+        let (c1, l1) = split(max_x, min_y); // BR
+        let (c2, l2) = split(max_x, max_y); // TR
+        let (c3, l3) = split(min_x, max_y); // TL
+        let corners = [c0, c1, c2, c3];
+        let corners_low = [l0, l1, l2, l3];
+        let verts = quad_verts(&corners, &corners_low);
+        Self {
+            file_path: label.to_string(),
+            pixels,
+            width,
+            height,
+            opacity: 1.0,
+            corners,
+            corners_low,
+            draw_depth,
+            verts,
+        }
+    }
+
     /// Build an ImageModel from an OLE2FRAME's embedded presentation.
     /// The blob's compound file is parsed for the native raster or the cached
     /// metafile picture (rasterized by the `gdi` player); returns `None` when
