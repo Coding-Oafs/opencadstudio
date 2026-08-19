@@ -2029,6 +2029,9 @@ pub enum Message {
     CommandHistoryCopy,
     /// Clear every line from the command-line history.
     CommandHistoryClear,
+    /// Copy the world coordinate under the viewport cursor to the clipboard
+    /// (right-click → Copy Coordinates).
+    CopyViewportCoordinate,
     /// Copy every line currently retained by the PERF panel.
     PerfCopy,
     /// Clear the PERF panel's retained trace.

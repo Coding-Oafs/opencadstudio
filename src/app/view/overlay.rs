@@ -1087,6 +1087,11 @@ pub(super) fn viewport_context_menu_overlay(
             t!("Zoom Extents").into_owned(),
             Message::Command("ZOOM EXTENTS".to_string()),
         ));
+        items.push(sep());
+        items.push(item(
+            t!("Copy Coordinates").into_owned(),
+            Message::CopyViewportCoordinate,
+        ));
     }
 
     let menu_col = column(items).spacing(0).width(Length::Fixed(180.0));

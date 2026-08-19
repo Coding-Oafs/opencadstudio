@@ -376,6 +376,48 @@ impl OpenCADStudio {
         }
     }
 
+    /// Compute the world coordinate under the viewport cursor (from the stored
+    /// context-menu click position) and format it as a "X, Y, Z" clipboard
+    /// string. Returns empty when there is no active drawing.
+    pub(in crate::app) fn copy_viewport_coordinate_text(&self) -> String {
+        let i = self.active_tab;
+        if self.tabs[i].is_start {
+            return String::new();
+        }
+        let (click_pos, canvas_sz) = {
+            let sel = self.tabs[i].scene.selection.borrow();
+            (sel.context_menu, sel.vp_size)
+        };
+        let Some(p_full) = click_pos else {
+            return String::new();
+        };
+        // Mirror on_viewport_left_release: map the canvas point into the active
+        // tile, then unproject with that tile's camera.
+        let edit_frame = self.tabs[i].scene.viewport_edit_frame(canvas_sz);
+        let (tile_vw, tile_vh, tile_off) = match &edit_frame {
+            Some((_, full)) => (full.width, full.height, iced::Point::new(full.x, full.y)),
+            None => {
+                let tb = self.tabs[i]
+                    .scene
+                    .active_model_tile_bounds(canvas_sz.0, canvas_sz.1);
+                (tb.width, tb.height, iced::Point::new(tb.x, tb.y))
+            }
+        };
+        let edit_cam = edit_frame.map(|(cam, _)| cam);
+        let p = iced::Point {
+            x: p_full.x - tile_off.x,
+            y: p_full.y - tile_off.y,
+        };
+        let bounds = iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: tile_vw,
+            height: tile_vh,
+        };
+        let world = self.cursor_model_point(i, &edit_cam, p, bounds);
+        format!("{:.6}, {:.6}, {:.6}", world.x, world.y, world.z)
+    }
+
     /// Projection + hit-test wires for the active pane. Inside a floating
     /// viewport (`edit_cam` Some) it returns the viewport camera and the live
     /// **model** wires, so wire / hatch picking lands on the entity under the
