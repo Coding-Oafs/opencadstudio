@@ -1428,6 +1428,16 @@ impl OpenCADStudio {
         // Budgets are cloned before the mutable find so the display settings
         // stay readable while a source is borrowed for scheduling.
         let display = self.tabs[tab_index].point_cloud.display.clone();
+        // The active cross-section band, captured before the mutable find so
+        // the section can steer tile selection while a source is borrowed.
+        let section_band = self.tabs[tab_index].point_cloud.section.map(|section| {
+            let half = section.half_width.max(0.0);
+            let min_x = section.p0[0].min(section.p1[0]) - half;
+            let max_x = section.p0[0].max(section.p1[0]) + half;
+            let min_y = section.p0[1].min(section.p1[1]) - half;
+            let max_y = section.p0[1].max(section.p1[1]) + half;
+            ([min_x, min_y, f64::NEG_INFINITY], [max_x, max_y, f64::INFINITY])
+        });
         // One source streams per tick; the stream-needed check keeps calling
         // back until every source has caught up with the camera.
         let source_count = self.tabs[tab_index].point_cloud.len().max(1);
@@ -1459,20 +1469,45 @@ impl OpenCADStudio {
             .min(gpu_point_budget)
             .max(1) as u64;
         let mut selected = Vec::new();
-        for level in (0..=manifest.leaf_level).rev() {
-            let candidates: Vec<_> = manifest
+        // An active cross-section densifies its band: instead of the camera
+        // frustum LOD, select the FINEST (leaf) tiles intersecting the section
+        // band so the slice shows full-resolution source points (bounded by the
+        // same point budget). Without a section, stream the camera frustum.
+        if let Some((band_min, band_max)) = section_band {
+            // Full-density band: leaf tiles only, still respecting the budget.
+            let leaves: Vec<_> = manifest
                 .tiles
                 .iter()
                 .filter(|tile| {
-                    tile.key.level == level
-                        && camera.aabb_visible(tile.bounds_min, tile.bounds_max, viewport)
+                    tile.key.level == manifest.leaf_level
+                        && tile.intersects(band_min, band_max)
                 })
                 .cloned()
                 .collect();
-            let count = candidates.iter().map(|tile| tile.point_count).sum::<u64>();
-            if count <= point_budget || level == 0 {
-                selected = candidates;
-                break;
+            let count = leaves.iter().map(|tile| tile.point_count).sum::<u64>();
+            if count <= point_budget || manifest.leaf_level == 0 {
+                selected = leaves;
+            } else {
+                // Band too dense for the budget: fall back to `select_tiles`,
+                // which walks down from the root to the finest fitting level.
+                selected = manifest.select_tiles(band_min, band_max, point_budget);
+            }
+        } else {
+            for level in (0..=manifest.leaf_level).rev() {
+                let candidates: Vec<_> = manifest
+                    .tiles
+                    .iter()
+                    .filter(|tile| {
+                        tile.key.level == level
+                            && camera.aabb_visible(tile.bounds_min, tile.bounds_max, viewport)
+                    })
+                    .cloned()
+                    .collect();
+                let count = candidates.iter().map(|tile| tile.point_count).sum::<u64>();
+                if count <= point_budget || level == 0 {
+                    selected = candidates;
+                    break;
+                }
             }
         }
         let selected_keys: Vec<_> = selected.iter().map(|tile| tile.key).collect();
@@ -1638,6 +1673,11 @@ impl OpenCADStudio {
                 mode,
             },
         );
+        // A section change densifies its band: invalidate every source's stream
+        // so the next tick re-selects leaf tiles inside the band.
+        for source in &mut self.tabs[tab_index].point_cloud.sources {
+            source.stream_camera_generation = u64::MAX;
+        }
         self.restyle_point_cloud(tab_index);
     }
 
@@ -1666,6 +1706,9 @@ impl OpenCADStudio {
             ..section
         };
         self.tabs[tab_index].point_cloud.section = Some(moved);
+        for source in &mut self.tabs[tab_index].point_cloud.sources {
+            source.stream_camera_generation = u64::MAX;
+        }
         self.restyle_point_cloud(tab_index);
     }
 
@@ -1683,6 +1726,9 @@ impl OpenCADStudio {
         }
         section.half_width = half_width;
         self.tabs[tab_index].point_cloud.section = Some(section);
+        for source in &mut self.tabs[tab_index].point_cloud.sources {
+            source.stream_camera_generation = u64::MAX;
+        }
         self.restyle_point_cloud(tab_index);
     }
 
@@ -1692,6 +1738,9 @@ impl OpenCADStudio {
             self.command_line
                 .push_info("POINTCLOUDSECTIONCLEAR: no section was active.");
             return;
+        }
+        for source in &mut self.tabs[tab_index].point_cloud.sources {
+            source.stream_camera_generation = u64::MAX;
         }
         self.restyle_point_cloud(tab_index);
     }
