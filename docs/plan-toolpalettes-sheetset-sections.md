@@ -1,11 +1,20 @@
 # Plan: TOOLPALETTES, SHEETSET, and LiDAR cross-sections
 
-Status: **approved & in progress** (2026-08-19). Decisions from the user:
+Status: **first pass landed** (2026-08-19). Decisions from the user:
 
 1. Build **TOOLPALETTES + cross-section together** (one pass), then SHEETSET.
 2. Sheet set persistence = **JSON** (not AutoCAD `.dst`).
 3. Section runs over the **streamed working set** first.
 4. Tool palette = **docked side panel** (like the Properties dock).
+
+Landed in this pass (commits on `v0.9.7-lidar-platform`):
+- `942de8a6` — docked TOOLPALETTES panel with seeded LiDAR/edit palettes.
+- `02bbd02d` — LiDAR vertical cross-section (shader-side band) + `POINTCLOUDSECTION*` commands + section/view presets.
+- `afb9cace` — docked SHEETSET manager (JSON sheet-set model).
+
+**Known follow-ups (not in this pass):** JSON persistence of user-authored
+palette/sheet-set edits; applying a sheet's layout after an async open; and the
+continuous brush / full-density section-tile streaming noted in §3.4.
 
 Two goals from the request:
 
