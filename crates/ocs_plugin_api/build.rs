@@ -47,6 +47,7 @@ fn generate_type_registry(out_dir: &Path) {
         ("Polyline2D", trace::<acadrust::entities::Polyline2D>),
         ("Polyline3D", trace::<acadrust::entities::Polyline3D>),
         ("LwPolyline", trace::<acadrust::LwPolyline>),
+        ("MText", trace::<acadrust::entities::MText>),
         ("Spline", trace::<acadrust::Spline>),
         ("EntityCommon", trace::<acadrust::entities::EntityCommon>),
         ("Handle", trace::<acadrust::Handle>),
