@@ -191,10 +191,14 @@ pub fn tile_url(provider: BasemapProvider, z: u32, x: u32, y: u32, custom_templa
 }
 
 /// Compute the Web-Mercator world bounds of a drawing envelope expressed in
-/// `source_epsg`. Returns `None` on an unavailable projection.
+/// `crs`. Returns `None` on an unavailable projection.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn world_bounds_from_source(min: [f64; 2], max: [f64; 2], source_epsg: u16) -> Option<[f64; 4]> {
-    if source_epsg == 3857 {
+pub fn world_bounds_from_source(
+    min: [f64; 2],
+    max: [f64; 2],
+    crs: &ocs_pointcloud::CrsInfo,
+) -> Option<[f64; 4]> {
+    if crs.horizontal_epsg == Some(3857) && crs.proj4.is_none() {
         return Some([min[0], min[1], max[0], max[1]]);
     }
     let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
@@ -203,7 +207,7 @@ pub fn world_bounds_from_source(min: [f64; 2], max: [f64; 2], source_epsg: u16) 
         for ix in 0..=STEPS {
             let x = min[0] + (max[0] - min[0]) * ix as f64 / STEPS as f64;
             let y = min[1] + (max[1] - min[1]) * iy as f64 / STEPS as f64;
-            let (tx, ty) = ocs_pointcloud::reproject_xy(source_epsg, 3857, x, y)?;
+            let (tx, ty) = ocs_pointcloud::reproject_from_crs(crs, 3857, x, y)?;
             out[0] = out[0].min(tx);
             out[1] = out[1].min(ty);
             out[2] = out[2].max(tx);
@@ -242,12 +246,15 @@ pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
     tiles
 }
 
-/// Reproject a Web-Mercator envelope into `target_epsg` (or the same envelope
-/// when `target_epsg == 3857`). Returns the densified target bounds, or `None`
+/// Reproject a Web-Mercator envelope into `crs` (or the same envelope when the
+/// CRS is already Web Mercator). Returns the densified target bounds, or `None`
 /// when the projection is unavailable.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn reproject_bounds_3857(bounds: [f64; 4], target_epsg: u16) -> Option<[f64; 4]> {
-    if target_epsg == 3857 {
+pub fn reproject_bounds_3857(
+    bounds: [f64; 4],
+    crs: &ocs_pointcloud::CrsInfo,
+) -> Option<[f64; 4]> {
+    if crs.horizontal_epsg == Some(3857) && crs.proj4.is_none() {
         return Some(bounds);
     }
     let [min_x, min_y, max_x, max_y] = bounds;
@@ -261,7 +268,7 @@ pub fn reproject_bounds_3857(bounds: [f64; 4], target_epsg: u16) -> Option<[f64;
             }
             let x = min_x + (max_x - min_x) * ix as f64 / STEPS as f64;
             let y = min_y + (max_y - min_y) * iy as f64 / STEPS as f64;
-            let (tx, ty) = ocs_pointcloud::reproject_xy(3857, target_epsg, x, y)?;
+            let (tx, ty) = ocs_pointcloud::reproject_to_crs(3857, crs, x, y)?;
             out[0] = out[0].min(tx);
             out[1] = out[1].min(ty);
             out[2] = out[2].max(tx);

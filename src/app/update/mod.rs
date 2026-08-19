@@ -999,6 +999,10 @@ impl OpenCADStudio {
                 self.install_point_cloud(tab_id, path, result)
             }
 
+            Message::PointCloudResampled(tab_id, source_id, result) => {
+                self.install_point_cloud_resample(tab_id, source_id, result)
+            }
+
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudIndexed(tab_id, path, result) => {
                 self.finish_point_cloud_index(tab_id, path, result)

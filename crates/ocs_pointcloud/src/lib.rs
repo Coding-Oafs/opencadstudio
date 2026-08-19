@@ -20,11 +20,12 @@ pub use classify::{
     RuleField, RuleOp,
 };
 pub use crs::{
-    assess_survey_readiness, inspect_crs, reproject_with_patches_progress, reproject_xy, CrsInfo,
-    ReprojectionStats, SurveyReadiness,
+    assess_survey_readiness, inspect_crs, reproject_from_crs, reproject_from_proj4,
+    reproject_to_crs, reproject_with_patches_progress, reproject_xy, CrsInfo, ReprojectionStats,
+    SurveyReadiness,
 };
 pub use display::{
-    classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode,
+    classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode, Density,
     DisplaySettings,
 };
 pub use edit::{EditStore, EditTransaction, PointPatch};
@@ -258,6 +259,9 @@ pub struct SampleOptions {
     pub max_points: usize,
     /// Maximum number of source records decoded in one batch.
     pub chunk_size: usize,
+    /// Explicit decimation: keep every `Some(n)`th source point. When `None`,
+    /// the stride is derived from `max_points` (an approximate 1-in-N sample).
+    pub stride: Option<u64>,
 }
 
 impl Default for SampleOptions {
@@ -265,6 +269,7 @@ impl Default for SampleOptions {
         Self {
             max_points: 1_000_000,
             chunk_size: 65_536,
+            stride: None,
         }
     }
 }
@@ -302,12 +307,18 @@ pub fn sample(path: impl AsRef<Path>, options: SampleOptions) -> Result<PointSam
     let mut reader = Reader::from_path(path)?;
     let metadata = CloudMetadata::from_header(reader.header())?;
     let max_points = u64::try_from(options.max_points).unwrap_or(u64::MAX);
-    let stride = metadata.point_count.max(1).div_ceil(max_points).max(1);
-    let mut points = Vec::with_capacity(
-        options
-            .max_points
-            .min(usize::try_from(metadata.point_count).unwrap_or(usize::MAX)),
-    );
+    let stride = match options.stride {
+        Some(n) if n >= 1 => n,
+        _ => metadata.point_count.max(1).div_ceil(max_points).max(1),
+    };
+    // Reserve based on the stride-derived retained count, not the full source
+    // count, so an explicit 1-in-N read doesn't over-allocate for a huge cloud.
+    let retained = metadata
+        .point_count
+        .div_ceil(stride)
+        .min(max_points)
+        .min(u64::try_from(usize::MAX).unwrap_or(u64::MAX));
+    let mut points = Vec::with_capacity(retained as usize);
     let mut source_index = 0_u64;
 
     while source_index < metadata.point_count && points.len() < options.max_points {
@@ -855,6 +866,7 @@ mod tests {
                 SampleOptions {
                     max_points: 10,
                     chunk_size: 7,
+                    stride: None,
                 },
             )
             .unwrap();

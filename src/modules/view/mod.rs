@@ -134,6 +134,94 @@ impl CadModule for ViewModule {
                         RibbonItem::Tool(cascade::tool()),
                     ],
                 },
+                // ── Basemap ───────────────────────────────────────────────────────
+                RibbonGroup {
+                    title: "Basemap",
+                    tools: vec![
+                        RibbonItem::LargeDropdown {
+                            id: "BASEMAP_PROVIDER",
+                            label: "Imagery",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/underlay_layers.svg"
+                            )),
+                            items: vec![
+                                (
+                                    "BASEMAP ARCGIS",
+                                    "World Imagery",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_layers.svg"
+                                    )),
+                                ),
+                                (
+                                    "BASEMAP STREETS",
+                                    "Street Map",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_layers.svg"
+                                    )),
+                                ),
+                                (
+                                    "BASEMAP GOOGLE",
+                                    "Google Hybrid",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_layers.svg"
+                                    )),
+                                ),
+                                (
+                                    "BASEMAP OFF",
+                                    "Off",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_layers.svg"
+                                    )),
+                                ),
+                            ],
+                            default: "BASEMAP ARCGIS",
+                        },
+                        RibbonItem::LargeDropdown {
+                            id: "BASEMAP_PROJECTION",
+                            label: "Projection",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/underlay_frames.svg"
+                            )),
+                            items: vec![
+                                (
+                                    "BASEMAP PROJ LAS",
+                                    "From LAS",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_frames.svg"
+                                    )),
+                                ),
+                                (
+                                    "BASEMAP PROJ DEFAULT",
+                                    "Web Mercator",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_frames.svg"
+                                    )),
+                                ),
+                            ],
+                            default: "BASEMAP PROJ LAS",
+                        },
+                        RibbonItem::Tool(ToolDef {
+                            id: "BASEMAP_ZOOMIN",
+                            label: "Zoom In",
+                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/zoom_in.svg")),
+                            event: ModuleEvent::Command("BASEMAP ZOOMIN".to_string()),
+                        }),
+                        RibbonItem::Tool(ToolDef {
+                            id: "BASEMAP_ZOOMOUT",
+                            label: "Zoom Out",
+                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/zoom_out.svg")),
+                            event: ModuleEvent::Command("BASEMAP ZOOMOUT".to_string()),
+                        }),
+                        RibbonItem::Tool(ToolDef {
+                            id: "BASEMAP",
+                            label: "Basemap",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/snap_underlays.svg"
+                            )),
+                            event: ModuleEvent::Command("BASEMAP".to_string()),
+                        }),
+                    ],
+                },
                 // ── Plot ──────────────────────────────────────────────────────────
                 // Model space has no paper-space side toolbar, so Page Setup
                 // (format/orientation/pick window for PLOTWINDOW) needs an

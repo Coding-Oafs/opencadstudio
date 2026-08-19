@@ -15,6 +15,18 @@ pub enum ColorMode {
     PointSource,
 }
 
+/// How much of a source cloud to load for display.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Density {
+    /// An approximate uniform sample capped by the display point budget.
+    #[default]
+    Auto,
+    /// Keep every Nth source point (an explicit 1-in-N decimation).
+    EveryNth(u64),
+    /// Keep every point (no decimation) — may exceed memory for large clouds.
+    Full,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DisplaySettings {
     pub color_mode: ColorMode,
@@ -26,6 +38,9 @@ pub struct DisplaySettings {
     pub hidden_classes: BTreeSet<u8>,
     pub intensity_range: Option<[u16; 2]>,
     pub elevation_range: Option<[f64; 2]>,
+    /// Load density for the display sample (see [`Density`]).
+    #[serde(default)]
+    pub density: Density,
 }
 
 impl Default for DisplaySettings {
@@ -39,6 +54,7 @@ impl Default for DisplaySettings {
             hidden_classes: BTreeSet::new(),
             intensity_range: None,
             elevation_range: None,
+            density: Density::Auto,
         }
     }
 }

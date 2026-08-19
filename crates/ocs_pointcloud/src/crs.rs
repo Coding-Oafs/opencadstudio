@@ -33,6 +33,58 @@ pub fn reproject_xy(
     Some((coordinate.0, coordinate.1))
 }
 
+/// Reproject a single XY coordinate from a PROJ.4 source string to `target_epsg`.
+/// Used when a projected CRS has no resolvable EPSG code but a parseable WKT.
+pub fn reproject_from_proj4(
+    source_proj4: &str,
+    target_epsg: u16,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    let source = Proj::from_proj_string(source_proj4).ok()?;
+    let target = Proj::from_epsg_code(target_epsg).ok()?;
+    transform_coordinate(&source, &target, (x, y, 0.0))
+        .ok()
+        .map(|c| (c.0, c.1))
+}
+
+/// Reproject a single XY coordinate from a `CrsInfo` source to `target_epsg`,
+/// preferring the PROJ.4 string (accurate for projected CRS whose EPSG code is
+/// only the geographic base) over `horizontal_epsg`.
+pub fn reproject_from_crs(
+    crs: &CrsInfo,
+    target_epsg: u16,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    if let Some(proj4) = crs.proj4.as_deref() {
+        if let Some(out) = reproject_from_proj4(proj4, target_epsg, x, y) {
+            return Some(out);
+        }
+    }
+    crs.horizontal_epsg
+        .and_then(|epsg| reproject_xy(epsg, target_epsg, x, y))
+}
+
+/// Reproject a single XY coordinate from `source_epsg` into a `CrsInfo` target
+/// (the reverse of [`reproject_from_crs`]).
+pub fn reproject_to_crs(
+    source_epsg: u16,
+    crs: &CrsInfo,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    if let Some(proj4) = crs.proj4.as_deref() {
+        let source = Proj::from_epsg_code(source_epsg).ok()?;
+        let target = Proj::from_proj_string(proj4).ok()?;
+        return transform_coordinate(&source, &target, (x, y, 0.0))
+            .ok()
+            .map(|c| (c.0, c.1));
+    }
+    crs.horizontal_epsg
+        .and_then(|epsg| reproject_xy(source_epsg, epsg, x, y))
+}
+
 /// CRS information recovered from LAS WKT or GeoTIFF (E)VLRs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrsInfo {
@@ -40,6 +92,10 @@ pub struct CrsInfo {
     pub vertical_epsg: Option<u16>,
     pub name: Option<String>,
     pub wkt: Option<String>,
+    /// PROJ.4 string derived from the WKT when the projected CRS carries no
+    /// EPSG authority (so `horizontal_epsg` alone would fall back to the
+    /// geographic base CRS and reproject in the wrong units).
+    pub proj4: Option<String>,
     pub source: Option<String>,
     pub parse_warning: Option<String>,
 }
@@ -60,6 +116,7 @@ impl CrsInfo {
             None
         };
         let name = wkt.as_deref().and_then(wkt_name);
+        let proj4 = wkt.as_deref().and_then(proj4_from_wkt);
         let (horizontal_epsg, vertical_epsg, parse_warning) = if let Some(wkt) = wkt.as_deref() {
             let (horizontal, vertical) = epsg_from_wkt(wkt);
             let warning = horizontal
@@ -90,6 +147,7 @@ impl CrsInfo {
             vertical_epsg,
             name,
             wkt,
+            proj4,
             source,
             parse_warning,
         }
@@ -147,6 +205,187 @@ fn epsg_authorities(wkt: &str) -> impl Iterator<Item = u16> + '_ {
         })
         .collect();
     values.into_iter()
+}
+
+/// Build a PROJ.4 string from a projected-CRS WKT. Returns `None` when the WKT
+/// is geographic (no `PROJECTION` element) or uses an unsupported projection.
+///
+/// This covers the common real-world case where a LAS 1.4 WKT names a projected
+/// CRS (e.g. `NAD83(2011) / Massachusetts Mainland (ft)`) but carries no EPSG
+/// authority on the `PROJCS` itself — only on the base `GEOGCS`. Without this,
+/// `epsg_from_wkt` falls back to the geographic code and reprojects feet as
+/// degrees.
+fn proj4_from_wkt(wkt: &str) -> Option<String> {
+    let proj_name = wkt_quoted_after("PROJECTION[", wkt)?;
+    let proj = match proj_name.as_str() {
+        "Lambert_Conformal_Conic_2SP"
+        | "Lambert_Conformal_Conic_1SP"
+        | "Lambert_Conformal_Conic" => "lcc",
+        "Transverse_Mercator" => "tmerc",
+        "Mercator_1SP" | "Mercator_2SP" | "Mercator_Auxiliary_Sphere" => "merc",
+        "Albers_Conic_Equal_Area" => "aea",
+        "Polar_Stereographic" | "Stereographic" => "stere",
+        "Lambert_Azimuthal_Equal_Area" => "laea",
+        "Equidistant_Cylindrical" => "eqc",
+        "Cylindrical_Equal_Area" => "cea",
+        "Hotine_Oblique_Mercator" => "omerc",
+        _ => return None,
+    };
+    let mut parts = vec![format!("+proj={proj}")];
+
+    for (name, value) in wkt_parameters(wkt) {
+        let key = match name.as_str() {
+            "latitude_of_origin" | "latitude_of_center" | "latitude_of_natural_origin" => "lat_0",
+            "central_meridian" | "longitude_of_center" | "longitude_of_natural_origin" => "lon_0",
+            "standard_parallel_1" => "lat_1",
+            "standard_parallel_2" => "lat_2",
+            "false_easting" => "x_0",
+            "false_northing" => "y_0",
+            "scale_factor" | "scale_factor_at_natural_origin" => "k_0",
+            _ => continue,
+        };
+        parts.push(format!("+{key}={value}"));
+    }
+
+    // Horizontal ellipsoid (from the datum's SPHEROID).
+    if let Some((name, a, rf)) = wkt_spheroid(wkt) {
+        match ellipsoid_key(&name) {
+            Some(key) => parts.push(format!("+ellps={key}")),
+            None => {
+                parts.push(format!("+a={a}"));
+                parts.push(format!("+rf={rf}"));
+            }
+        }
+    }
+
+    // Horizontal linear unit: the first non-angular UNIT (skips GEOGCS "degree").
+    if let Some((name, factor)) = wkt_units(wkt)
+        .into_iter()
+        .find(|(n, _)| !n.eq_ignore_ascii_case("degree"))
+    {
+        match unit_key(&name) {
+            Some(key) => parts.push(format!("+units={key}")),
+            None => parts.push(format!("+to_meter={factor}")),
+        }
+    }
+
+    parts.push("+no_defs".to_string());
+    Some(parts.join(" "))
+}
+
+/// The quoted name of the first `KEY["..."]` occurrence after `marker`.
+fn wkt_quoted_after(marker: &str, wkt: &str) -> Option<String> {
+    let pos = wkt.find(marker)? + marker.len();
+    let rest = &wkt[pos..];
+    let start = rest.find('"')? + 1;
+    let name = &rest[start..];
+    let end = name.find('"')?;
+    Some(name[..end].to_string())
+}
+
+/// All `PARAMETER["name", value]` pairs in `wkt`.
+fn wkt_parameters(wkt: &str) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    let mut rest = wkt;
+    while let Some(pos) = rest.find("PARAMETER[") {
+        let after = &rest[pos + "PARAMETER[".len()..];
+        let Some(q) = after.find('"') else { break };
+        let name_seg = &after[q + 1..];
+        let Some(q2) = name_seg.find('"') else { break };
+        let name = name_seg[..q2].to_string();
+        if let Some(value) = wkt_number_after(&name_seg[q2 + 1..]) {
+            out.push((name, value));
+        }
+        rest = after;
+    }
+    out
+}
+
+/// The first `SPHEROID["name", a, rf, ...]` as `(name, semi-major, inv-flattening)`.
+fn wkt_spheroid(wkt: &str) -> Option<(String, f64, f64)> {
+    let pos = wkt.find("SPHEROID[")? + "SPHEROID[".len();
+    let after = &wkt[pos..];
+    let q = after.find('"')?;
+    let name_seg = &after[q + 1..];
+    let q2 = name_seg.find('"')?;
+    let name = name_seg[..q2].to_string();
+    let nums: Vec<f64> = name_seg[q2 + 1..]
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|s| s.trim().parse::<f64>().ok())
+        .take(2)
+        .collect();
+    match nums.as_slice() {
+        [a, rf] => Some((name, *a, *rf)),
+        _ => None,
+    }
+}
+
+/// All `UNIT["name", factor]` pairs in `wkt`.
+fn wkt_units(wkt: &str) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    let mut rest = wkt;
+    while let Some(pos) = rest.find("UNIT[") {
+        let after = &rest[pos + "UNIT[".len()..];
+        let Some(q) = after.find('"') else { break };
+        let name_seg = &after[q + 1..];
+        let Some(q2) = name_seg.find('"') else { break };
+        let name = name_seg[..q2].to_string();
+        if let Some(factor) = wkt_number_after(&name_seg[q2 + 1..]) {
+            out.push((name, factor));
+        }
+        rest = after;
+    }
+    out
+}
+
+/// Parse the leading number of a `", value"` tail.
+fn wkt_number_after(tail: &str) -> Option<f64> {
+    let num: String = tail
+        .trim_start_matches(|c: char| c == ',' || c.is_whitespace())
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))
+        .collect();
+    num.parse::<f64>().ok()
+}
+
+fn ellipsoid_key(name: &str) -> Option<&'static str> {
+    let n = name.to_ascii_lowercase();
+    if n.contains("grs") {
+        return Some("GRS80");
+    }
+    if n.contains("wgs") {
+        return Some("WGS84");
+    }
+    if n.contains("clarke 1866") {
+        return Some("clrk66");
+    }
+    if n.contains("clarke 1880") {
+        return Some("clrk80");
+    }
+    if n.contains("international") || n.contains("hayford") {
+        return Some("intl");
+    }
+    if n.contains("airy") {
+        return Some("airy");
+    }
+    if n.contains("bessel") {
+        return Some("bessel");
+    }
+    None
+}
+
+fn unit_key(name: &str) -> Option<&'static str> {
+    let n = name.to_ascii_lowercase();
+    if n == "metre" || n == "meter" || n == "m" {
+        return Some("m");
+    }
+    if n.contains("us survey") || n == "foot_us" || n == "us-ft" {
+        return Some("us-ft");
+    }
+    if n.contains("foot") || n == "ft" {
+        return Some("ft");
+    }
+    None
 }
 
 pub fn inspect_crs(path: impl AsRef<Path>) -> Result<CrsInfo> {
@@ -459,6 +698,26 @@ mod tests {
     fn extracts_horizontal_and_vertical_epsg_from_wkt() {
         let wkt = "COMPD_CS[\"survey\",PROJCS[\"horizontal\",AUTHORITY[\"EPSG\",\"3435\"]],VERT_CS[\"NAVD88\",AUTHORITY[\"EPSG\",\"5703\"]]]";
         assert_eq!((Some(3435), Some(5703)), epsg_from_wkt(wkt));
+    }
+
+    #[test]
+    fn builds_proj4_from_projected_wkt_without_epsg_authority() {
+        // Boston USGS LiDAR: NAD83(2011) / Massachusetts Mainland (ft), an LCC
+        // state-plane CRS whose PROJCS carries no EPSG authority.
+        let wkt = "COMPD_CS[\"NAD83(2011) / Massachusetts Mainland (ft) + NAVD88 height (ftUS)\",\
+PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATUM[\"NAD83_National_Spatial_Reference_System_2011\",SPHEROID[\"GRS 1980\",6378137,298.257222101,AUTHORITY[\"EPSG\",\"7019\"]],AUTHORITY[\"EPSG\",\"1116\"]],PRIMEM[\"Greenwich\",0],UNIT[\"degree\",0.0174532925199433],AUTHORITY[\"EPSG\",\"6318\"]],PROJECTION[\"Lambert_Conformal_Conic_2SP\"],PARAMETER[\"latitude_of_origin\",41],PARAMETER[\"central_meridian\",-71.5],PARAMETER[\"standard_parallel_1\",42.6833333333333],PARAMETER[\"standard_parallel_2\",41.7166666666667],PARAMETER[\"false_easting\",656167.979002625],PARAMETER[\"false_northing\",2460629.92125984],UNIT[\"International foot\",0.3048]],VERT_CS[\"NAVD88 height (ftUS)\",UNIT[\"US survey foot\",0.304800609601219],AUTHORITY[\"EPSG\",\"6360\"]]]";
+        let proj4 = proj4_from_wkt(wkt).expect("projected WKT should parse");
+        assert!(proj4.starts_with("+proj=lcc"), "got: {proj4}");
+        assert!(proj4.contains("+lat_0=41"), "got: {proj4}");
+        assert!(proj4.contains("+lon_0=-71.5"), "got: {proj4}");
+        assert!(proj4.contains("+ellps=GRS80"), "got: {proj4}");
+        assert!(proj4.contains("+units=ft"), "got: {proj4}");
+    }
+
+    #[test]
+    fn proj4_from_geographic_wkt_is_none() {
+        let wkt = "GEOGCS[\"NAD83\",DATUM[\"North American Datum 1983\",SPHEROID[\"GRS 1980\",6378137,298.257222101]],UNIT[\"degree\",0.0174532925199433],AUTHORITY[\"EPSG\",\"4269\"]]";
+        assert!(proj4_from_wkt(wkt).is_none());
     }
 
     #[test]

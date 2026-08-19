@@ -76,6 +76,7 @@ fn multi_million_point_pipeline_is_bounded() {
         SampleOptions {
             max_points: 500_000,
             chunk_size: 65_536,
+            stride: None,
         },
     )
     .expect("sample");

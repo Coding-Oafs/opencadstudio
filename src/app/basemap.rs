@@ -50,6 +50,7 @@ impl OpenCADStudio {
         } else {
             self.basemap.provider = BasemapProvider::Off;
         }
+        self.sync_basemap_dropdown();
         self.command_line.push_output(
             crate::t!(if self.basemap.provider == BasemapProvider::Off {
                 "Basemap: off."
@@ -74,6 +75,7 @@ impl OpenCADStudio {
         match sub.to_ascii_uppercase().as_str() {
             "OFF" | "NONE" => {
                 self.basemap.provider = BasemapProvider::Off;
+                self.sync_basemap_dropdown();
                 self.command_line.push_output(crate::t!("Basemap: off.").as_ref());
                 self.save_config();
                 self.clear_basemap();
@@ -155,6 +157,12 @@ impl OpenCADStudio {
                     return Task::none();
                 }
             }
+            "ZOOMIN" | "ZOOMOUT" => {
+                let delta: i32 = if sub.eq_ignore_ascii_case("ZOOMIN") { 1 } else { -1 };
+                self.basemap.zoom = (self.basemap.zoom as i32 + delta).clamp(0, 22) as u32;
+                self.command_line
+                    .push_output(crate::tf!("Basemap zoom: {}.", self.basemap.zoom).as_ref());
+            }
             _ => {
                 self.command_line.push_error(
                     "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <d|las|epsg>|ZOOM <z>|OFF].",
@@ -162,8 +170,29 @@ impl OpenCADStudio {
                 return Task::none();
             }
         }
+        self.sync_basemap_dropdown();
         self.save_config();
         self.refresh_basemap(tab_id)
+    }
+
+    /// Keep the ribbon's Basemap dropdowns in sync with `self.basemap` so they
+    /// reflect the persisted state, not just the last clicked item.
+    pub(super) fn sync_basemap_dropdown(&mut self) {
+        use crate::scene::basemap::{BasemapProjection, BasemapProvider};
+        let provider = match self.basemap.provider {
+            BasemapProvider::ArcGisImagery => "BASEMAP ARCGIS",
+            BasemapProvider::ArcGisStreets => "BASEMAP STREETS",
+            BasemapProvider::GoogleHybrid => "BASEMAP GOOGLE",
+            BasemapProvider::Off => "BASEMAP OFF",
+            // Custom has no dropdown entry; show Imagery as the nearest.
+            BasemapProvider::Custom => "BASEMAP ARCGIS",
+        };
+        self.ribbon.select_dropdown_item("BASEMAP_PROVIDER", provider);
+        let projection = match self.basemap.projection {
+            BasemapProjection::FromLas => "BASEMAP PROJ LAS",
+            _ => "BASEMAP PROJ DEFAULT",
+        };
+        self.ribbon.select_dropdown_item("BASEMAP_PROJECTION", projection);
     }
 
     /// Clear the underlay immediately (used by BASEMAP OFF).
@@ -183,16 +212,23 @@ impl OpenCADStudio {
             return Task::none();
         }
 
-        // Resolve the source EPSG used to interpret drawing coordinates.
-        let source_epsg: u16 = match settings.projection {
-            BasemapProjection::WebMercator => 3857,
+        // Resolve the source CRS used to interpret drawing coordinates. A full
+        // `CrsInfo` (not just the EPSG) so a projected WKT without an EPSG
+        // authority can still reproject via its PROJ.4 string.
+        #[cfg(not(target_arch = "wasm32"))]
+        let source_crs: ocs_pointcloud::CrsInfo = match settings.projection {
+            BasemapProjection::WebMercator => ocs_pointcloud::CrsInfo {
+                horizontal_epsg: Some(3857),
+                ..Default::default()
+            },
             BasemapProjection::FromLas => {
-                let cloud = self.tabs[i]
+                let crs = self.tabs[i]
                     .point_cloud
                     .active()
-                    .and_then(|s| s.sample.metadata.crs.horizontal_epsg);
-                match cloud {
-                    Some(epsg) => epsg,
+                    .map(|s| s.sample.metadata.crs.clone())
+                    .filter(|crs| crs.horizontal_epsg.is_some() || crs.proj4.is_some());
+                match crs {
+                    Some(crs) => crs,
                     None => {
                         self.command_line.push_error(
                             "Basemap: no attached LAS cloud provides a CRS; use BASEMAP PROJ <epsg>.",
@@ -201,7 +237,10 @@ impl OpenCADStudio {
                     }
                 }
             }
-            BasemapProjection::Epsg(epsg) => epsg,
+            BasemapProjection::Epsg(epsg) => ocs_pointcloud::CrsInfo {
+                horizontal_epsg: Some(epsg),
+                ..Default::default()
+            },
         };
 
         // Drawing bounds in the source CRS: prefer the attached cloud (f64),
@@ -228,7 +267,7 @@ impl OpenCADStudio {
         let world_bounds = basemap::world_bounds_from_source(
             [min[0], min[1]],
             [max[0], max[1]],
-            source_epsg,
+            &source_crs,
         );
         #[cfg(target_arch = "wasm32")]
         let world_bounds = Some([min[0], min[1], max[0], max[1]]);
@@ -245,7 +284,24 @@ impl OpenCADStudio {
                 .push_error("Basemap: no tiles cover the drawing bounds.");
             return Task::none();
         }
+        // A high zoom over a large envelope would request millions of tiles,
+        // stalling the worker and flooding the network. 16k tiles (a 128×128
+        // grid) is already far more than any single viewport can show.
+        const MAX_BASEMAP_TILES: usize = 16_384;
+        if tiles.len() > MAX_BASEMAP_TILES {
+            self.command_line.push_error(
+                crate::tf!(
+                    "Basemap: zoom {} is too high for the drawing bounds ({} tiles); lower BASEMAP ZOOM.",
+                    settings.zoom,
+                    tiles.len()
+                )
+                .as_ref(),
+            );
+            return Task::none();
+        }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let worker_crs = source_crs.clone();
         let custom = settings.custom_template.clone();
         let provider = settings.provider;
         let worker_tiles: Vec<Tile> = tiles;
@@ -260,12 +316,22 @@ impl OpenCADStudio {
                     let Some(decoded) = resolve_image(&url) else {
                         continue;
                     };
+                    // Each tile is a Web-Mercator quad; place it in the source
+                    // CRS the drawing uses so the underlay lines up with UTM or
+                    // other projected content instead of landing at Mercator
+                    // meters (millions of metres off for non-3857 sources).
+                    // A no-op when the source is already 3857.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let quad_bounds = basemap::reproject_bounds_3857(tile.bounds, &worker_crs)
+                        .unwrap_or(tile.bounds);
+                    #[cfg(target_arch = "wasm32")]
+                    let quad_bounds = tile.bounds;
                     images.push(ImageModel::from_world_quad(
                         &url,
                         decoded.pixels,
                         decoded.width,
                         decoded.height,
-                        tile.bounds,
+                        quad_bounds,
                         0.0,
                         0.0,
                     ));

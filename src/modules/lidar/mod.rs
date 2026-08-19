@@ -55,6 +55,18 @@ impl CadModule for LidarModule {
                             "POINTCLOUDATTACHFOLDER",
                             ATTACH,
                         )),
+                        RibbonItem::Dropdown {
+                            id: "LIDAR_DENSITY",
+                            icon: IconKind::Svg(POINT),
+                            items: vec![
+                                ("POINTCLOUDDENSITY AUTO", "Auto", IconKind::Svg(POINT)),
+                                ("POINTCLOUDDENSITY 2", "1-in-2", IconKind::Svg(POINT)),
+                                ("POINTCLOUDDENSITY 5", "1-in-5", IconKind::Svg(POINT)),
+                                ("POINTCLOUDDENSITY 10", "1-in-10", IconKind::Svg(POINT)),
+                                ("POINTCLOUDDENSITY FULL", "Full", IconKind::Svg(POINT)),
+                            ],
+                            default: "POINTCLOUDDENSITY AUTO",
+                        },
                         RibbonItem::LargeTool(tool(
                             "LIDAR_MANAGER",
                             "Manager",

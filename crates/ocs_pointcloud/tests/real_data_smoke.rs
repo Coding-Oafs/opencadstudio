@@ -96,6 +96,7 @@ fn production_folder_pipeline_smoke() {
         SampleOptions {
             max_points: 250_000,
             chunk_size: 65_536,
+            stride: None,
         },
     )
     .expect("sample real tile");
@@ -264,6 +265,7 @@ fn production_folder_pipeline_smoke() {
     let reimported = sample(&merged, SampleOptions {
         max_points: 100_000,
         chunk_size: 65_536,
+        stride: None,
     }).expect("sample merged output");
     let sources: std::collections::BTreeSet<u16> = reimported
         .points

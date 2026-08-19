@@ -2259,6 +2259,40 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDDENSITY" => {
+                let desc = match self.tabs[i].point_cloud.display.density {
+                    ocs_pointcloud::Density::Auto => "Auto".to_string(),
+                    ocs_pointcloud::Density::EveryNth(n) => format!("1-in-{n}"),
+                    ocs_pointcloud::Density::Full => "Full".to_string(),
+                };
+                self.command_line.push_info(
+                    format!(
+                        "POINTCLOUDDENSITY: current density is {desc}. Usage: POINTCLOUDDENSITY <AUTO|N|FULL>"
+                    )
+                    .as_str(),
+                );
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDDENSITY ") => {
+                let arg = cmd.trim_start_matches("POINTCLOUDDENSITY").trim();
+                let density = match arg.to_ascii_uppercase().as_str() {
+                    "AUTO" | "DEFAULT" => Some(ocs_pointcloud::Density::Auto),
+                    "FULL" | "ALL" => Some(ocs_pointcloud::Density::Full),
+                    _ => arg
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| *n >= 1)
+                        .map(ocs_pointcloud::Density::EveryNth),
+                };
+                if let Some(density) = density {
+                    return Some(self.set_point_cloud_density(i, density));
+                }
+                self.command_line
+                    .push_error("Usage: POINTCLOUDDENSITY <AUTO|N|FULL>");
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDEXPORT" => {
                 return Some(Task::done(Message::PointCloudExport));
             }

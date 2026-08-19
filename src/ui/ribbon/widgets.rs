@@ -464,6 +464,18 @@ pub(super) fn make_tip(tip: String) -> Element<'static, Message> {
     text(tip).size(11).into()
 }
 
+/// The command a tool button runs, for the "Command:" line of its tooltip.
+/// Read from the tool's `event`, not its `id`: the `id` is a UI identifier and
+/// does not always equal the command (the LiDAR tools use `LIDAR_*` ids but
+/// dispatch `POINTCLOUD*` commands). Non-command events have no command string,
+/// so fall back to the id.
+fn tool_command(event: &ModuleEvent, id: &'static str) -> String {
+    match event {
+        ModuleEvent::Command(cmd) => cmd.clone(),
+        _ => id.to_string(),
+    }
+}
+
 pub(super) fn tip_style(theme: &Theme) -> container::Style {
     let palette = theme.palette();
     container::Style {
@@ -495,7 +507,7 @@ pub(super) fn render_small<'a>(
             let active = is_active_tool(t.id, active_tool, &state);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
-            let tip_text = format!("{}\n{} {}", t!(t.label), t!("Command:"), t.id);
+            let tip_text = format!("{}\n{} {}", t!(t.label), t!("Command:"), tool_command(&event, t.id));
             let btn = button(make_icon(t.icon, SMALL_ICON))
                 .on_press(Message::RibbonToolClick { tool_id, event })
                 .style(move |theme: &Theme, status| tool_btn_style(theme, active, status))
@@ -730,7 +742,7 @@ pub(super) fn render_large<'a>(
             let event = t.event.clone();
             let tool_id = t.id.to_string();
             let label = t!(t.label).into_owned();
-            let tip_text = format!("{}\n{} {}", label, t!("Command:"), t.id);
+            let tip_text = format!("{}\n{} {}", label, t!("Command:"), tool_command(&event, t.id));
             let btn = button(
                 column![
                     container(make_icon(t.icon, LARGE_ICON))

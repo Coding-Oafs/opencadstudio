@@ -358,6 +358,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "SHADEMODE",
         // Raster image brightness / contrast / fade.
         "ADJUST",
+        // Georeferenced basemap imagery underlay.
+        "BASEMAP",
         // Block list + block-attribute list (command-line forms).
         "BLOCKPALETTE",
         "BLOCKSPALETTE",
@@ -602,6 +604,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDCOLOR",
         "POINTCLOUDCONTOUR",
         "POINTCLOUDCRS",
+        "POINTCLOUDDENSITY",
         "POINTCLOUDDETACH",
         "POINTCLOUDEXPORT",
         "POINTCLOUDEXPORTALL",

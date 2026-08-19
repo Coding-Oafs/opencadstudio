@@ -15,9 +15,9 @@ use crate::scene::{
 use iced::Task;
 use ocs_pointcloud::{
     classification_statistics, parse_ptc, select_brush, select_nearest, select_polygon,
-    sidecar_path_for_drawing, write_ptc, AttachmentState, ClassTable, ColorMode, DisplaySettings,
-    EditStore, ExportStats, PointFilter, PointPatch, PointSample, SampleOptions, SelectionSet,
-    SidecarStore, TileCacheManifest, TileCacheOptions,
+    sidecar_path_for_drawing, write_ptc, AttachmentState, ClassTable, ColorMode, Density,
+    DisplaySettings, EditStore, ExportStats, PointFilter, PointPatch, PointSample, SampleOptions,
+    SelectionSet, SidecarStore, TileCacheManifest, TileCacheOptions,
 };
 use std::{
     collections::BTreeMap,
@@ -800,29 +800,121 @@ impl OpenCADStudio {
         task
     }
 
+    /// Translate a user-chosen [`Density`] into the sampling options used to
+    /// build the attach-time display sample.
+    fn sample_options_for(density: Density) -> SampleOptions {
+        match density {
+            Density::Auto => SampleOptions {
+                max_points: DISPLAY_POINT_LIMIT,
+                chunk_size: DISPLAY_READ_CHUNK,
+                stride: None,
+            },
+            Density::EveryNth(n) => SampleOptions {
+                max_points: usize::MAX,
+                chunk_size: DISPLAY_READ_CHUNK,
+                stride: Some(n.max(1)),
+            },
+            Density::Full => SampleOptions {
+                max_points: usize::MAX,
+                chunk_size: DISPLAY_READ_CHUNK,
+                stride: Some(1),
+            },
+        }
+    }
+
     pub(super) fn start_point_cloud_load(&mut self, path: PathBuf) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
+        let density = self.tabs[self.active_tab].point_cloud.display.density;
+        let options = Self::sample_options_for(density);
+        let density_desc = match density {
+            Density::Auto => "bounded display sample".to_string(),
+            Density::EveryNth(n) => format!("1-in-{n} display sample"),
+            Density::Full => "full-density display sample".to_string(),
+        };
         self.command_line.push_info(
             format!(
-                "POINTCLOUDATTACH: reading bounded display sample from \"{}\"...",
+                "POINTCLOUDATTACH: reading {density_desc} from \"{}\"...",
                 path.display()
             )
             .as_str(),
         );
         let worker_path = path.clone();
         background_task(
-            move || {
-                ocs_pointcloud::sample(
-                    &worker_path,
-                    SampleOptions {
-                        max_points: DISPLAY_POINT_LIMIT,
-                        chunk_size: DISPLAY_READ_CHUNK,
-                    },
-                )
-                .map_err(|error| error.to_string())
-            },
+            move || ocs_pointcloud::sample(&worker_path, options).map_err(|error| error.to_string()),
             move |result| Message::PointCloudLoaded(tab_id, path, result),
         )
+    }
+
+    /// Change the dataset load density and re-read every attached source at the
+    /// new density. Only the display sample is replaced; sparse edits and
+    /// selections survive.
+    pub(super) fn set_point_cloud_density(&mut self, i: usize, density: Density) -> Task<Message> {
+        self.tabs[i].point_cloud.display.density = density;
+        let tab_id = self.tabs[i].id;
+        let options = Self::sample_options_for(density);
+        let sources: Vec<(String, PathBuf)> = self.tabs[i]
+            .point_cloud
+            .sources
+            .iter()
+            .map(|source| (source.id.clone(), source.source_path.clone()))
+            .collect();
+        let count = sources.len();
+        let desc = match density {
+            Density::Auto => "Auto".to_string(),
+            Density::EveryNth(n) => format!("1-in-{n}"),
+            Density::Full => "Full".to_string(),
+        };
+        self.command_line.push_info(
+            format!("POINTCLOUDDENSITY: density set to {desc}; re-reading {count} source(s)...")
+                .as_str(),
+        );
+        if sources.is_empty() {
+            return Task::none();
+        }
+        let tasks: Vec<Task<Message>> = sources
+            .into_iter()
+            .map(|(source_id, path)| {
+                let worker_path = path.clone();
+                background_task(
+                    move || {
+                        ocs_pointcloud::sample(&worker_path, options).map_err(|e| e.to_string())
+                    },
+                    move |result| Message::PointCloudResampled(tab_id, source_id, result),
+                )
+            })
+            .collect();
+        Task::batch(tasks)
+    }
+
+    /// Swap a freshly re-sampled display sample into an existing source and
+    /// rebuild the merged view.
+    pub(super) fn install_point_cloud_resample(
+        &mut self,
+        tab_id: u64,
+        source_id: String,
+        result: Result<PointSample, String>,
+    ) -> Task<Message> {
+        let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return Task::none();
+        };
+        let sample = match result {
+            Ok(sample) => sample,
+            Err(error) => {
+                self.command_line
+                    .push_error(format!("POINTCLOUDDENSITY: {error}").as_str());
+                return Task::none();
+            }
+        };
+        let model = {
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            if let Some(source) = dataset.source_mut(&source_id) {
+                source.sample = sample;
+            }
+            dataset.mark_display_changed();
+            dataset.display_model()
+        };
+        self.tabs[tab_index].scene.set_point_cloud(model);
+        Task::none()
     }
 
     /// Attaches every LAS/LAZ file under `folder` (recursively). Loads are
@@ -894,6 +986,35 @@ impl OpenCADStudio {
             return Task::none();
         }
         let count = fresh.len();
+        // A full-density read of a large folder can exceed the CPU budget by
+        // an order of magnitude. Estimate the cost up front (header reads are
+        // cheap) and fall back to Auto with a hint, rather than OOMing mid-load.
+        let density = self.tabs[self.active_tab].point_cloud.display.density;
+        if density == Density::Full {
+            let mut total_points: u64 = 0;
+            for file in &fresh {
+                if let Ok(meta) = ocs_pointcloud::inspect(file) {
+                    total_points = total_points.saturating_add(meta.point_count);
+                }
+            }
+            let per_point = std::mem::size_of::<ocs_pointcloud::SamplePoint>() as u64;
+            let est_bytes = total_points.saturating_mul(per_point);
+            let budget = self.tabs[self.active_tab].point_cloud.display.cpu_budget_bytes as u64;
+            if est_bytes > budget {
+                let suggested = (est_bytes as f64 / budget as f64).ceil().max(2.0) as u64;
+                self.tabs[self.active_tab].point_cloud.display.density = Density::Auto;
+                self.command_line.push_error(
+                    format!(
+                        "POINTCLOUDATTACHFOLDER: full density needs ~{} MB for {} points, over the {} MB budget. Falling back to Auto; use POINTCLOUDDENSITY {} to adjust.",
+                        est_bytes / (1024 * 1024),
+                        total_points,
+                        budget / (1024 * 1024),
+                        suggested
+                    )
+                    .as_str(),
+                );
+            }
+        }
         for file in &fresh {
             self.point_cloud_load_queue.push((tab_id, file.clone()));
         }
@@ -1663,6 +1784,11 @@ impl OpenCADStudio {
         if self.tabs[tab_index].point_cloud.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDSECTION: attach a LAS/LAZ cloud first.");
+            return;
+        }
+        if !half_width.is_finite() || half_width <= 0.0 {
+            self.command_line
+                .push_error("POINTCLOUDSECTION: half-width must be positive.");
             return;
         }
         self.tabs[tab_index].point_cloud.section = Some(
