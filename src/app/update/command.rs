@@ -2138,7 +2138,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         (
                                             "current_control_point",
                                             acadrust::EntityType::Spline(spline),
-                                        ) => Some(spline.control_points.len()),
+                                        ) => Some(
+                                            crate::entities::spline::control_vertex_count(spline),
+                                        ),
                                         _ => None,
                                     }
                                 })

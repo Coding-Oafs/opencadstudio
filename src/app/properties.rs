@@ -121,10 +121,12 @@ impl OpenCADStudio {
                     acadrust::EntityType::LwPolyline(polyline) => Some(polyline.vertices.len()),
                     acadrust::EntityType::Polyline2D(polyline) => Some(polyline.vertices.len()),
                     acadrust::EntityType::Leader(leader) => Some(leader.vertices.len()),
-                    acadrust::EntityType::Spline(spline) => Some(if spline.fit_points.is_empty() {
-                        spline.control_points.len()
-                    } else {
+                    acadrust::EntityType::Spline(spline) => Some(if !spline.cv_frame_visible
+                        && !spline.fit_points.is_empty()
+                    {
                         spline.fit_points.len()
+                    } else {
+                        crate::entities::spline::control_vertex_count(spline)
                     }),
                     _ => None,
                 });

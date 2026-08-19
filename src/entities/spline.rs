@@ -575,6 +575,14 @@ fn control_vertices(spline: &Spline) -> Vec<acadrust::types::Vector3> {
         .unwrap_or_default()
 }
 
+pub(crate) fn control_vertex_count(spline: &Spline) -> usize {
+    if spline.control_points.is_empty() {
+        control_vertices(spline).len()
+    } else {
+        spline.control_points.len()
+    }
+}
+
 fn choice_prop(
     label: &str,
     field: &'static str,
@@ -776,7 +784,10 @@ fn grips(spline: &Spline) -> Vec<GripDef> {
 }
 
 fn properties(spline: &Spline) -> Vec<PropSection> {
-    let fit_method = !spline.fit_points.is_empty();
+    // The start-grip selector chooses the active editing page. A fit spline
+    // can expose its derived control polygon without replacing its stored fit
+    // data; the first actual control-point edit materializes that same curve.
+    let fit_method = !spline.cv_frame_visible && !spline.fit_points.is_empty();
     let method = if fit_method { "Fit" } else { "Control Vertices" };
     let closed = spline.flags.closed || spline.flags.periodic;
     let yes_no = |b: bool| if b { "Yes" } else { "No" };
@@ -828,9 +839,10 @@ fn properties(spline: &Spline) -> Vec<PropSection> {
             ),
         ]
     } else {
-        let count = spline.control_points.len();
+        let controls = control_vertices(spline);
+        let count = controls.len();
         let index = current.min(count.saturating_sub(1));
-        let point = spline.control_points.get(index);
+        let point = controls.get(index);
         let weight = spline.weights.get(index).copied().unwrap_or(1.0);
         vec![
             ro(
@@ -950,9 +962,13 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
     match field {
         "spline_method" => {
             if value == "Fit" {
-                convert_to_fit_method(spline);
+                if convert_to_fit_method(spline) {
+                    spline.cv_frame_visible = false;
+                }
             } else if value == "Control Vertices" {
-                convert_to_control_method(spline);
+                if convert_to_control_method(spline) {
+                    spline.cv_frame_visible = true;
+                }
             }
             return;
         }
@@ -988,6 +1004,12 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
             return;
         }
         _ => {}
+    }
+    if matches!(field, "ctrl_pt_x" | "ctrl_pt_y" | "ctrl_pt_z" | "weight")
+        && spline.control_points.is_empty()
+        && !convert_to_control_method(spline)
+    {
+        return;
     }
     let (effective_begin_tangent, effective_end_tangent) = effective_fit_tangents(spline);
     let Some(v) = parse_f64(value) else { return };
