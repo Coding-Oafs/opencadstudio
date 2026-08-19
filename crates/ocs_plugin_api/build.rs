@@ -97,6 +97,23 @@ fn add_enum_samples(tracer: &mut Tracer, samples: &mut Samples) {
     let _ = tracer.trace_value(samples, &acadrust::entities::SmoothSurfaceType::CubicBSpline);
     let _ = tracer.trace_value(samples, &acadrust::entities::SmoothSurfaceType::Bezier);
 
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::TopLeft);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::TopCenter);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::TopRight);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::MiddleLeft);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::MiddleCenter);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::MiddleRight);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::BottomLeft);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::BottomCenter);
+    let _ = tracer.trace_value(samples, &acadrust::entities::AttachmentPoint::BottomRight);
+
+    let _ = tracer.trace_value(samples, &acadrust::entities::DrawingDirection::LeftToRight);
+    let _ = tracer.trace_value(samples, &acadrust::entities::DrawingDirection::TopToBottom);
+    let _ = tracer.trace_value(samples, &acadrust::entities::DrawingDirection::ByStyle);
+
+    let _ = tracer.trace_value(samples, &acadrust::entities::LineSpacingStyle::AtLeast);
+    let _ = tracer.trace_value(samples, &acadrust::entities::LineSpacingStyle::Exactly);
+
     let _ = tracer.trace_value(samples, &acadrust::xdata::XDataValue::String(String::new()));
     let _ = tracer.trace_value(samples, &acadrust::xdata::XDataValue::ControlString(String::new()));
     let _ = tracer.trace_value(samples, &acadrust::xdata::XDataValue::LayerName(String::new()));
