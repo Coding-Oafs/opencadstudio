@@ -137,6 +137,18 @@ pub fn default_palettes() -> Vec<Palette> {
                         tool("Set Overlap", "POINTCLOUDFLAGSELECTION OVERLAP ON"),
                     ],
                 },
+                PaletteGroup {
+                    title: "Section".into(),
+                    tools: vec![
+                        tool("Draw Section", "POINTCLOUDSECTION"),
+                        tool("Section View", "POINTCLOUDSECTIONVIEW"),
+                        tool("Step +1", "POINTCLOUDSECTIONMOVE 1"),
+                        tool("Step -1", "POINTCLOUDSECTIONMOVE -1"),
+                        tool("Wider Band", "POINTCLOUDSECTIONWIDTH 2.0"),
+                        tool("Narrower Band", "POINTCLOUDSECTIONWIDTH 0.5"),
+                        tool("Clear Section", "POINTCLOUDSECTIONCLEAR"),
+                    ],
+                },
             ],
         },
         Palette {

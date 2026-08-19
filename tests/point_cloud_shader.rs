@@ -31,3 +31,12 @@ fn shader_colorizes_from_style_uniform() {
     // out of the point set on the CPU.
     assert!(SHADER.contains("class_is_visible(classification)"));
 }
+
+/// The vertical cross-section must be a shader-side band test (style uniform),
+/// not a CPU point filter, so moving/rotating the section is one uniform write.
+#[test]
+fn shader_sections_clip_from_style_uniform() {
+    assert!(SHADER.contains("section_outside"));
+    assert!(SHADER.contains("style.section_p0"));
+    assert!(SHADER.contains("style.section_params"));
+}

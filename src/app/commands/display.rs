@@ -1707,6 +1707,89 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSECTIONCLEAR" => {
+                self.clear_point_cloud_section(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSECTIONVIEW" => {
+                self.point_cloud_section_view(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSECTIONMOVE ") => {
+                match cmd
+                    .trim_start_matches("POINTCLOUDSECTIONMOVE")
+                    .trim()
+                    .parse::<f64>()
+                {
+                    Ok(delta) => self.move_point_cloud_section(i, delta),
+                    Err(_) => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDSECTIONMOVE <distance>"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSECTIONWIDTH ") => {
+                match cmd
+                    .trim_start_matches("POINTCLOUDSECTIONWIDTH")
+                    .trim()
+                    .parse::<f64>()
+                {
+                    Ok(width) => self.set_point_cloud_section_width(i, width),
+                    Err(_) => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDSECTIONWIDTH <half-width>"),
+                }
+            }
+
+            // POINTCLOUDSECTION x0 y0 x1 y1 [width] — set a vertical section
+            // directly (used by the tool palette and scripts; the interactive
+            // fence flow below feeds the same handler).
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSECTION ") => {
+                let parsed: Result<Vec<f64>, _> = cmd
+                    .trim_start_matches("POINTCLOUDSECTION")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect();
+                match parsed {
+                    Ok(values) => match values.as_slice() {
+                        [x0, y0, x1, y1] => self.set_point_cloud_section(
+                            i,
+                            [*x0, *y0],
+                            [*x1, *y1],
+                            1.0,
+                            crate::scene::model::point_cloud_model::SectionMode::Dim,
+                        ),
+                        [x0, y0, x1, y1, width] => self.set_point_cloud_section(
+                            i,
+                            [*x0, *y0],
+                            [*x1, *y1],
+                            *width,
+                            crate::scene::model::point_cloud_model::SectionMode::Dim,
+                        ),
+                        _ => self.command_line.push_error(
+                            "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]",
+                        ),
+                    },
+                    Err(_) => self.command_line.push_error(
+                        "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]",
+                    ),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSECTION" => {
+                // Interactive: click two points in the active viewport to draw
+                // the section line. Reuses the two-corner screen command.
+                let command = crate::app::point_cloud::PointCloudSectionCommand::new();
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDCOLOR ") => {
                 let value = cmd.trim_start_matches("POINTCLOUDCOLOR").trim();
                 let mode = match value {

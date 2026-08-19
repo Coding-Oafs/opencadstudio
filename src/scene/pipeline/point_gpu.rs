@@ -70,6 +70,15 @@ struct StyleUniforms {
     _pad1: [f32; 2],
     elevation_range: [f32; 2],
     _pad2: [f32; 2],
+    // Cross-section band: p0.xy, p1.xy, and (half_width, mode). mode: 0 =
+    // off, 1 = dim, 2 = discard. `half_width` is in world units; a
+    // degenerate p0==p1 (mode != 0) is treated as "off".
+    section_p0: [f32; 2],
+    _pad3: [f32; 2],
+    section_p1: [f32; 2],
+    _pad4: [f32; 2],
+    section_params: [f32; 2],
+    _pad5: [f32; 2],
     class_visible: [[u32; 4]; 8],
     class_colors: [[f32; 4]; 256],
 }
@@ -81,6 +90,22 @@ impl StyleUniforms {
         for (word_index, word) in style.class_visible.iter().enumerate() {
             class_visible[word_index / 4][word_index % 4] = *word;
         }
+        // Encode the active section (dim or discard). A zero-length segment
+        // degrades to "off" so a half-formed section never blanks the cloud.
+        let (p0, p1, params) = match style.section {
+            Some(section) if section.p0 != section.p1 && section.half_width > 0.0 => (
+                [section.p0[0] as f32, section.p0[1] as f32],
+                [section.p1[0] as f32, section.p1[1] as f32],
+                [
+                    section.half_width as f32,
+                    match section.mode {
+                        crate::scene::model::point_cloud_model::SectionMode::Dim => 1.0,
+                        crate::scene::model::point_cloud_model::SectionMode::Discard => 2.0,
+                    },
+                ],
+            ),
+            _ => ([0.0; 2], [0.0; 2], [0.0; 2]),
+        };
         Self {
             color_mode: style.color_mode,
             point_size: model.point_size_px.clamp(1.0, 32.0),
@@ -89,6 +114,12 @@ impl StyleUniforms {
             _pad1: [0.0; 2],
             elevation_range: style.elevation_range,
             _pad2: [0.0; 2],
+            section_p0: p0,
+            _pad3: [0.0; 2],
+            section_p1: p1,
+            _pad4: [0.0; 2],
+            section_params: params,
+            _pad5: [0.0; 2],
             class_visible,
             class_colors: style.class_colors,
         }
@@ -493,6 +524,12 @@ impl PointGpu {
                 _pad1: [0.0; 2],
                 elevation_range: [0.0, 0.0],
                 _pad2: [0.0; 2],
+                section_p0: [0.0; 2],
+                _pad3: [0.0; 2],
+                section_p1: [0.0; 2],
+                _pad4: [0.0; 2],
+                section_params: [0.0; 2],
+                _pad5: [0.0; 2],
                 class_visible: [[u32::MAX; 4]; 8],
                 class_colors: [[0.92, 0.92, 0.92, 1.0]; 256],
             }),

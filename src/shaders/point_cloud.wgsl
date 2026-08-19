@@ -27,6 +27,12 @@ struct Style {
     _pad1: vec2<f32>,
     elevation_range: vec2<f32>,
     _pad2: vec2<f32>,
+    section_p0: vec2<f32>,
+    _pad3: vec2<f32>,
+    section_p1: vec2<f32>,
+    _pad4: vec2<f32>,
+    section_params: vec2<f32>, // (half_width, mode: 0=off 1=dim 2=discard)
+    _pad5: vec2<f32>,
     class_visible: array<vec4<u32>, 8>,
     class_colors: array<vec4<f32>, 256>,
 }
@@ -78,6 +84,28 @@ fn categorical_hash(value: u32) -> vec4<f32> {
     );
 }
 
+// Returns 0 when the point lies inside the section band (or there is no
+// section), 1 when it lies outside but should be dimmed, and 2 when it lies
+// outside and should be discarded. `position` is the world-space XY.
+fn section_outside(position: vec2<f32>) -> f32 {
+    let mode = style.section_params.y;
+    if (mode <= 0.5) {
+        return 0.0;
+    }
+    let seg = style.section_p1 - style.section_p0;
+    let seg_len_sq = dot(seg, seg);
+    let to_point = position - style.section_p0;
+    // Projection parameter t (0..1) of the nearest point on the segment.
+    let t = clamp(dot(to_point, seg) / seg_len_sq, 0.0, 1.0);
+    let closest = style.section_p0 + seg * t;
+    let dist = length(position - closest);
+    let half = style.section_params.x;
+    if (dist <= half) {
+        return 0.0;
+    }
+    return mode; // 1 = dim, 2 = discard
+}
+
 fn point_color(classification: u32, intensity: f32, return_number: u32,
                source_id: u32, rgb: vec3<f32>, elevation: f32) -> vec4<f32> {
     if (style.color_mode == 0u) {
@@ -126,6 +154,15 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
     );
     if (point.color_selected.w > 0.5) {
         color = vec4<f32>(1.0, 0.82, 0.05, 1.0);
+    }
+    // Cross-section: collapse hidden points to a zero-size quad (no
+    // fragments, no cost) and fade dimmed points into the background.
+    let outside = section_outside(point.position_high_size.xy);
+    if (outside >= 2.0) {
+        half_size_px = 0.0;
+        color.a = 0.0;
+    } else if (outside >= 1.0) {
+        color = vec4<f32>(color.rgb * 0.15, color.a * 0.15);
     }
     output.color = color;
     return output;

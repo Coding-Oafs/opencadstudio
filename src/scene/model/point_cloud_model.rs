@@ -47,6 +47,27 @@ pub struct PointChunk {
     pub len: u32,
 }
 
+/// How the section band treats points outside its half-width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionMode {
+    /// Points outside the band are dimmed (context stays visible).
+    Dim,
+    /// Points outside the band are hidden entirely.
+    Discard,
+}
+
+/// A vertical cross-section: a horizontal cut segment `p0 → p1` (world XY)
+/// plus a `half_width` band on either side. Points outside the band are
+/// dimmed or hidden by the shader, so moving the section is one uniform write
+/// with no instance-buffer rebuild.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Section {
+    pub p0: [f64; 2],
+    pub p1: [f64; 2],
+    pub half_width: f64,
+    pub mode: SectionMode,
+}
+
 /// Per-frame colorization state uploaded as one uniform write.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointStyle {
@@ -58,6 +79,8 @@ pub struct PointStyle {
     pub class_colors: [[f32; 4]; CLASS_COUNT],
     pub intensity_range: [f32; 2],
     pub elevation_range: [f32; 2],
+    /// Active cross-section filter; `None` shows everything.
+    pub section: Option<Section>,
 }
 
 impl Default for PointStyle {
@@ -69,6 +92,7 @@ impl Default for PointStyle {
             class_colors: [[0.92, 0.92, 0.92, 1.0]; CLASS_COUNT],
             intensity_range: [0.0, u16::MAX as f32],
             elevation_range: [0.0, 0.0],
+            section: None,
         }
     }
 }

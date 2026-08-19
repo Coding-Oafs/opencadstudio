@@ -211,6 +211,47 @@ impl crate::command::CadCommand for PointCloudScreenFenceCommand {
     }
 }
 
+pub(super) struct PointCloudSectionCommand {
+    first: Option<glam::DVec3>,
+}
+
+impl PointCloudSectionCommand {
+    pub(super) fn new() -> Self {
+        Self { first: None }
+    }
+}
+
+impl crate::command::CadCommand for PointCloudSectionCommand {
+    fn name(&self) -> &'static str {
+        "POINTCLOUDSECTION"
+    }
+
+    fn prompt(&self) -> String {
+        if self.first.is_some() {
+            "LiDAR section  Click the section end point:".to_string()
+        } else {
+            "LiDAR section  Click the section start point:".to_string()
+        }
+    }
+
+    fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
+        if let Some(first) = self.first.take() {
+            // Use XY only; the section is a vertical plane through two points.
+            crate::command::CmdResult::Dispatch(format!(
+                "POINTCLOUDSECTION {:.17} {:.17} {:.17} {:.17}",
+                first.x, first.y, point.x, point.y
+            ))
+        } else {
+            self.first = Some(point);
+            crate::command::CmdResult::NeedPoint
+        }
+    }
+
+    fn on_enter(&mut self) -> crate::command::CmdResult {
+        crate::command::CmdResult::Cancel
+    }
+}
+
 pub(super) struct PointCloudScreenBrushCommand;
 
 impl crate::command::CadCommand for PointCloudScreenBrushCommand {
@@ -383,6 +424,8 @@ pub(super) struct PointCloudDataset {
     pub(super) collection: Option<ocs_pointcloud::CollectionState>,
     /// Dataset-wide merge-export job (POINTCLOUDEXPORTALL).
     pub(super) export_all_job: Option<Arc<PointCloudJobProgress>>,
+    /// Active vertical cross-section; `None` shows the whole cloud.
+    pub(super) section: Option<crate::scene::model::point_cloud_model::Section>,
     display_generation: u64,
     /// Bumps on style-only changes (color mode, class visibility, class
     /// colors, point size): the GPU rewrites its style uniform, not the
@@ -631,6 +674,7 @@ impl PointCloudDataset {
                 intensity_range[1] as f32,
             ],
             elevation_range: [elevation_range[0] as f32, elevation_range[1] as f32],
+            section: self.section,
         }
     }
 }
@@ -1565,6 +1609,119 @@ impl OpenCADStudio {
             style_generation: self.tabs[tab_index].point_cloud.style_generation,
         };
         self.tabs[tab_index].scene.set_point_cloud(model);
+    }
+
+    /// Set (or replace) the active vertical cross-section. Style-only: the
+    /// shader re-applies the band, so no instance buffer is rebuilt.
+    pub(super) fn set_point_cloud_section(
+        &mut self,
+        tab_index: usize,
+        p0: [f64; 2],
+        p1: [f64; 2],
+        half_width: f64,
+        mode: crate::scene::model::point_cloud_model::SectionMode,
+    ) {
+        if self.tabs[tab_index].point_cloud.is_empty() {
+            self.command_line
+                .push_error("POINTCLOUDSECTION: attach a LAS/LAZ cloud first.");
+            return;
+        }
+        self.tabs[tab_index].point_cloud.section = Some(
+            crate::scene::model::point_cloud_model::Section {
+                p0,
+                p1,
+                half_width,
+                mode,
+            },
+        );
+        self.restyle_point_cloud(tab_index);
+    }
+
+    /// Move the active section by `delta` along its normal (perpendicular to
+    /// the cut), keeping its length and width. Walks a corridor TerraScan-style.
+    pub(super) fn move_point_cloud_section(&mut self, tab_index: usize, delta: f64) {
+        let Some(section) = self.tabs[tab_index].point_cloud.section else {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONMOVE: no section is active.");
+            return;
+        };
+        let seg = [section.p1[0] - section.p0[0], section.p1[1] - section.p0[1]];
+        let len = (seg[0] * seg[0] + seg[1] * seg[1]).sqrt();
+        if len <= f64::EPSILON {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONMOVE: the section line is degenerate.");
+            return;
+        }
+        // Normal is the CCW perpendicular of the cut direction.
+        let nx = -seg[1] / len;
+        let ny = seg[0] / len;
+        let shift = [nx * delta, ny * delta];
+        let moved = crate::scene::model::point_cloud_model::Section {
+            p0: [section.p0[0] + shift[0], section.p0[1] + shift[1]],
+            p1: [section.p1[0] + shift[0], section.p1[1] + shift[1]],
+            ..section
+        };
+        self.tabs[tab_index].point_cloud.section = Some(moved);
+        self.restyle_point_cloud(tab_index);
+    }
+
+    /// Change the active section's band half-width.
+    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, half_width: f64) {
+        let Some(mut section) = self.tabs[tab_index].point_cloud.section else {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONWIDTH: no section is active.");
+            return;
+        };
+        if !half_width.is_finite() || half_width <= 0.0 {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONWIDTH: width must be positive.");
+            return;
+        }
+        section.half_width = half_width;
+        self.tabs[tab_index].point_cloud.section = Some(section);
+        self.restyle_point_cloud(tab_index);
+    }
+
+    /// Remove the active section and show the whole cloud again.
+    pub(super) fn clear_point_cloud_section(&mut self, tab_index: usize) {
+        if self.tabs[tab_index].point_cloud.section.take().is_none() {
+            self.command_line
+                .push_info("POINTCLOUDSECTIONCLEAR: no section was active.");
+            return;
+        }
+        self.restyle_point_cloud(tab_index);
+    }
+
+    /// Snap the active pane's camera to look along the active section line
+    /// (side-on vertical view): gaze runs down the cut, up stays world +Z.
+    pub(super) fn point_cloud_section_view(&mut self, tab_index: usize) {
+        let Some(section) = self.tabs[tab_index].point_cloud.section else {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONVIEW: no section is active.");
+            return;
+        };
+        let seg = [section.p1[0] - section.p0[0], section.p1[1] - section.p0[1]];
+        let len = (seg[0] * seg[0] + seg[1] * seg[1]).sqrt();
+        if len <= f64::EPSILON {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONVIEW: the section line is degenerate.");
+            return;
+        }
+        // Gaze along the cut direction (perpendicular to the vertical plane).
+        let eye_dir = glam::Vec3::new(seg[0] as f32, seg[1] as f32, 0.0);
+        let eye_dir = eye_dir.normalize_or(glam::Vec3::X);
+        // Snapping a floating viewport writes its stored view_direction; the
+        // plain model pane snaps the live camera directly. Mirror the ViewCube
+        // snap, which handles both.
+        if self.tabs[tab_index].scene.active_viewport.is_some() {
+            self.tabs[tab_index]
+                .scene
+                .snap_active_viewport_to_direction(eye_dir, glam::Mat4::IDENTITY);
+        } else {
+            let mut cam = self.tabs[tab_index].scene.camera.borrow_mut();
+            cam.snap_to_direction(eye_dir, glam::Mat4::IDENTITY);
+        }
+        self.tabs[tab_index].scene.camera_generation += 1;
     }
 
     pub(super) fn set_point_cloud_color_mode(&mut self, tab_index: usize, mode: ColorMode) {

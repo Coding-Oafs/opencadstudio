@@ -206,6 +206,47 @@ impl CadModule for LidarModule {
                     ],
                 },
                 RibbonGroup {
+                    title: "Section",
+                    tools: vec![
+                        tool("LIDAR_SECTION", "Draw Section", "POINTCLOUDSECTION", CLOUD).into(),
+                        tool(
+                            "LIDAR_SECTION_VIEW",
+                            "Section View",
+                            "POINTCLOUDSECTIONVIEW",
+                            CLOUD,
+                        )
+                        .into(),
+                        tool(
+                            "LIDAR_SECTION_WIDER",
+                            "Wider Band",
+                            "POINTCLOUDSECTIONWIDTH 2.0",
+                            CLOUD,
+                        )
+                        .into(),
+                        tool(
+                            "LIDAR_SECTION_NARROWER",
+                            "Narrower Band",
+                            "POINTCLOUDSECTIONWIDTH 0.5",
+                            CLOUD,
+                        )
+                        .into(),
+                        tool(
+                            "LIDAR_SECTION_STEP",
+                            "Step +1",
+                            "POINTCLOUDSECTIONMOVE 1",
+                            CLOUD,
+                        )
+                        .into(),
+                        tool(
+                            "LIDAR_SECTION_CLEAR",
+                            "Clear Section",
+                            "POINTCLOUDSECTIONCLEAR",
+                            UNDO,
+                        )
+                        .into(),
+                    ],
+                },
+                RibbonGroup {
                     title: "Interchange",
                     tools: vec![
                         RibbonItem::LargeTool(tool(
