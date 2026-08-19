@@ -1,20 +1,29 @@
 # Plan: TOOLPALETTES, SHEETSET, and LiDAR cross-sections
 
-Status: **first pass landed** (2026-08-19). Decisions from the user:
+Status: **both passes landed** (2026-08-19). Decisions from the user:
 
 1. Build **TOOLPALETTES + cross-section together** (one pass), then SHEETSET.
 2. Sheet set persistence = **JSON** (not AutoCAD `.dst`).
 3. Section runs over the **streamed working set** first.
 4. Tool palette = **docked side panel** (like the Properties dock).
 
-Landed in this pass (commits on `v0.9.7-lidar-platform`):
+Landed (commits on `v0.9.7-lidar-platform`):
+
+**First pass — panels + cross-section:**
 - `942de8a6` — docked TOOLPALETTES panel with seeded LiDAR/edit palettes.
 - `02bbd02d` — LiDAR vertical cross-section (shader-side band) + `POINTCLOUDSECTION*` commands + section/view presets.
 - `afb9cace` — docked SHEETSET manager (JSON sheet-set model).
 
-**Known follow-ups (not in this pass):** JSON persistence of user-authored
-palette/sheet-set edits; applying a sheet's layout after an async open; and the
-continuous brush / full-density section-tile streaming noted in §3.4.
+**Second pass — persistence, basemap, editing, and density:**
+- `a412c32a` — persist tool palettes + sheet set; apply sheet layout after open.
+- `1582bee1` — right-click "Copy Coordinates" in the viewport context menu.
+- `8f7aa172` — continuous press-and-drag LiDAR brush.
+- `55cc6307` — georeferenced basemap underlay (ArcGIS / custom XYZ + projection).
+- `a838073e` — full-density cross-section band tile streaming.
+
+**Remaining follow-ups (explicitly deferred):** sheet-set `.dst` compat;
+full-density section *tiles* beyond the current point budget; Google basemap
+requires the user's own API key (via `BASEMAP CUSTOM`).
 
 Two goals from the request:
 
