@@ -1339,6 +1339,7 @@ draw =
     .solid-specify-second-point = SOLID  İkinci noktayı belirtin:
     .solid-specify-third-point = SOLID  Üçüncü noktayı belirtin:
     .spline-specify-first-control-point = SPLINE  İlk kontrol noktasını belirtin:
+    .spline-specify-first-point = SPLINE  İlk noktayı belirtin:
     .spline-specify-next-point-n-pts = SPLINE  Sonraki noktayı belirtin [__ocs_arg_n__ nokta]:
     .sketch = Serbest Çizim
     .start-center-angle = Başlangıç, Merkez, Açı

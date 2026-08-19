@@ -10,6 +10,19 @@ use crate::scene::model::object::{GripDef, GripShape};
 pub const GRIP_THRESHOLD_PX: f32 = 8.0;
 /// Half-size of the rendered grip square / diamond in pixels.
 pub const GRIP_HALF_PX: f32 = 5.0;
+/// Screen offset for dropdown selectors anchored to a vertex. Keeping this
+/// asymmetric places the arrow below and just to the right of the endpoint,
+/// clear of both the curve and its ordinary edit grip.
+pub const GRIP_DROPDOWN_OFFSET_X_PX: f32 = 24.0;
+pub const GRIP_DROPDOWN_OFFSET_Y_PX: f32 = 27.0;
+
+fn marker_screen_position(mut point: Point, shape: GripShape) -> Point {
+    if shape == GripShape::Dropdown {
+        point.x += GRIP_DROPDOWN_OFFSET_X_PX;
+        point.y += GRIP_DROPDOWN_OFFSET_Y_PX;
+    }
+    point
+}
 
 // ── Active drag state ─────────────────────────────────────────────────────
 
@@ -95,6 +108,7 @@ pub fn grips_to_screen(
                 Some(p) => Point::new(bounds.x + p.x, bounds.y + p.y),
                 None => Point::new(f32::NAN, f32::NAN),
             };
+            let screen = marker_screen_position(screen, g.shape);
             (g.id, screen, g.is_midpoint, g.shape, g.dir)
         })
         .collect()
@@ -113,9 +127,12 @@ pub fn grips_to_screen_paper(
     grips
         .iter()
         .map(|g| {
-            let screen = Point::new(
-                (g.world.x as f32 - tx + half_w) / (2.0 * half_w) * bounds.width,
-                (ty + half_h - g.world.y as f32) / (2.0 * half_h) * bounds.height,
+            let screen = marker_screen_position(
+                Point::new(
+                    (g.world.x as f32 - tx + half_w) / (2.0 * half_w) * bounds.width,
+                    (ty + half_h - g.world.y as f32) / (2.0 * half_h) * bounds.height,
+                ),
+                g.shape,
             );
             (g.id, screen, g.is_midpoint, g.shape, g.dir)
         })
@@ -136,9 +153,12 @@ pub fn find_hit_grip_paper(
     let mut best: Option<(usize, usize, bool, DVec3)> = None;
 
     for (index, g) in grips.iter().enumerate() {
-        let screen = Point::new(
-            (g.world.x as f32 - tx + half_w) / (2.0 * half_w) * bounds.width,
-            (ty + half_h - g.world.y as f32) / (2.0 * half_h) * bounds.height,
+        let screen = marker_screen_position(
+            Point::new(
+                (g.world.x as f32 - tx + half_w) / (2.0 * half_w) * bounds.width,
+                (ty + half_h - g.world.y as f32) / (2.0 * half_h) * bounds.height,
+            ),
+            g.shape,
         );
         let dx = screen.x - cursor.x;
         let dy = screen.y - cursor.y;
@@ -166,7 +186,7 @@ pub fn find_hit_grip(
         let Some(screen) = camera.project(g.world, bounds) else {
             continue;
         };
-        let screen = Point::new(screen.x, screen.y);
+        let screen = marker_screen_position(Point::new(screen.x, screen.y), g.shape);
         let dx = screen.x - cursor.x;
         let dy = screen.y - cursor.y;
         let d = (dx * dx + dy * dy).sqrt();
@@ -211,6 +231,7 @@ pub fn grips_to_screen_rte(
                 Some(p) => Point::new(bounds.x + p.x, bounds.y + p.y),
                 None => Point::new(f32::NAN, f32::NAN),
             };
+            let screen = marker_screen_position(screen, g.shape);
             (g.id, screen, g.is_midpoint, g.shape, g.dir)
         })
         .collect()
@@ -232,6 +253,7 @@ pub fn find_hit_grip_rte(
         let Some(screen) = project_rte(g.world, view_rot, eye, bounds) else {
             continue;
         };
+        let screen = marker_screen_position(Point::new(screen.x, screen.y), g.shape);
         let dx = screen.x - cursor.x;
         let dy = screen.y - cursor.y;
         let d = (dx * dx + dy * dy).sqrt();

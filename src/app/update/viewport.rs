@@ -653,7 +653,9 @@ impl OpenCADStudio {
                         screen: p,
                         started: iced::time::Instant::now(),
                     });
-                    self.grip_popup = None;
+                    if !self.grip_popup.as_ref().is_some_and(|popup| popup.pinned) {
+                        self.grip_popup = None;
+                    }
                 } else if let Some(h) = self.grip_hover.as_mut() {
                     h.screen = p;
                 }
@@ -672,12 +674,17 @@ impl OpenCADStudio {
                         use crate::entities::traits::EntityTypeOps;
                         let items = e.grip_menu(grip_id);
                         if !items.is_empty() {
+                            let selected = items
+                                .iter()
+                                .position(|item| item.label.starts_with('✓'))
+                                .unwrap_or(0);
                             self.grip_popup = Some(crate::app::GripPopup {
                                 handle,
                                 grip_id,
                                 anchor: p,
                                 items,
-                                selected: 0,
+                                selected,
+                                pinned: false,
                             });
                         }
                     }
@@ -685,7 +692,7 @@ impl OpenCADStudio {
             }
             None => {
                 self.grip_hover = None;
-                if let Some(popup) = &self.grip_popup {
+                if let Some(popup) = self.grip_popup.as_ref().filter(|popup| !popup.pinned) {
                     let dx = p.x - popup.anchor.x;
                     let dy = p.y - popup.anchor.y;
                     if (dx * dx + dy * dy).sqrt() > POPUP_DISMISS_PX {
@@ -2736,6 +2743,32 @@ impl OpenCADStudio {
                     let Some(&handle) = self.tabs[i].selected_grip_handles.get(grip_index) else {
                         return Task::none();
                     };
+                    let grip_shape = self.tabs[i].selected_grips[grip_index].shape;
+                    if grip_shape == crate::scene::model::object::GripShape::Dropdown {
+                        use crate::entities::traits::EntityTypeOps;
+                        let items = self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(handle)
+                            .map(|entity| entity.grip_menu(grip_id))
+                            .unwrap_or_default();
+                        if !items.is_empty() {
+                            let selected = items
+                                .iter()
+                                .position(|item| item.label.starts_with('✓'))
+                                .unwrap_or(0);
+                            self.grip_popup = Some(crate::app::GripPopup {
+                                handle,
+                                grip_id,
+                                anchor: p_full,
+                                items,
+                                selected,
+                                pinned: true,
+                            });
+                        }
+                        self.grip_hover = None;
+                        return Task::none();
+                    }
                     // The visibility (lookup) grip opens a state
                     // dropdown instead of starting a stretch drag.
                     if grip_id == crate::app::visibility::VIS_GRIP_ID {

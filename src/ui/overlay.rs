@@ -263,6 +263,7 @@ pub fn selection_overlay<'a>(
     snap_ext_base: Option<Point>,
     snap_ext_base2: Option<Point>,
     grips: Vec<GripMarker>,
+    control_polygon: Option<(Vec<Point>, bool)>,
     grip_clip: Option<iced::Rectangle>,
     ucs_icons: Vec<UcsIconParams>,
     ost_points: Vec<OstTrackPoint>,
@@ -284,6 +285,7 @@ pub fn selection_overlay<'a>(
         snap_ext_base,
         snap_ext_base2,
         grips,
+        control_polygon,
         grip_clip,
         ucs_icons,
         ost_points,
@@ -314,6 +316,8 @@ struct SelectionCanvas {
     /// both crossing extensions stay drawn when the crossing is caught. (#247, #259)
     snap_ext_base2: Option<Point>,
     grips: Vec<GripMarker>,
+    /// Selected spline's screen-space control polygon and whether it closes.
+    control_polygon: Option<(Vec<Point>, bool)>,
     /// Active 3D pane / floating viewport rectangle. Grip markers are clipped
     /// here so orbiting cannot leak them into paper space or adjacent panes.
     grip_clip: Option<iced::Rectangle>,
@@ -392,6 +396,12 @@ fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme)
             b.close();
         }),
         GripShape::Circle => canvas::Path::circle(Point::new(sp.x, sp.y), h),
+        GripShape::Dropdown => canvas::Path::new(|b| {
+            b.move_to(Point::new(sp.x - h, sp.y - h * 0.5));
+            b.line_to(Point::new(sp.x + h, sp.y - h * 0.5));
+            b.line_to(Point::new(sp.x, sp.y + h));
+            b.close();
+        }),
     };
 
     if grip.is_hot {
@@ -410,10 +420,12 @@ fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme)
     } else {
         let palette = theme.palette();
         let color = palette.primary.base.color;
-        frame.fill(
-            &path,
-            palette.background.base.color.scale_alpha(0.7),
-        );
+        let fill = if grip.shape == GripShape::Dropdown {
+            color
+        } else {
+            palette.background.base.color.scale_alpha(0.7)
+        };
+        frame.fill(&path, fill);
         frame.stroke(
             &path,
             canvas::Stroke {
@@ -686,6 +698,31 @@ impl canvas::Program<Message> for SelectionCanvas {
                 height: grip_y1 - grip_y0,
             };
             frame.with_clip(grip_clip, |frame| {
+                if let Some((points, closed)) = &self.control_polygon {
+                    if points.len() >= 2 {
+                        let polygon = canvas::Path::new(|builder| {
+                            builder.move_to(points[0]);
+                            for point in points.iter().skip(1) {
+                                builder.line_to(*point);
+                            }
+                            if *closed {
+                                builder.line_to(points[0]);
+                            }
+                        });
+                        frame.stroke(
+                            &polygon,
+                            canvas::Stroke {
+                                width: 1.0,
+                                style: canvas::Style::Solid(Color::from_rgb(0.72, 0.32, 0.15)),
+                                line_dash: canvas::LineDash {
+                                    segments: &[4.0, 4.0],
+                                    offset: 0,
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
                 for grip in &self.grips {
                     draw_grip_marker(frame, grip, theme);
                 }

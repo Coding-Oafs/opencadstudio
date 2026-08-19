@@ -3,7 +3,9 @@ use crate::t;
 use cadkernel::space::NurbsCurve3;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
+use crate::entities::common::{
+    dropdown_grip, edit_prop as edit, parse_f64, ro_prop as ro, round_grip, square_grip,
+};
 use crate::entities::traits::RenderConvertible;
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
@@ -390,27 +392,60 @@ fn thomas_solve(a: &[f64], b: &[f64], c: &[f64], d: &mut [f64]) {
     }
 }
 
+pub(crate) const SPLINE_MODE_GRIP_ID: usize = usize::MAX - 1;
+
+fn control_vertices(spline: &Spline) -> Vec<acadrust::types::Vector3> {
+    if !spline.control_points.is_empty() {
+        return spline.control_points.clone();
+    }
+    let elevation = spline.fit_points.first().map(|p| p.z).unwrap_or(0.0);
+    crate::modules::draw::modify::spline_ops::spline_control_curve(spline)
+        .map(|curve| {
+            curve
+                .control_points()
+                .iter()
+                .map(|p| acadrust::types::Vector3::new(p[0], p[1], elevation))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn grips(spline: &Spline) -> Vec<GripDef> {
-    // A fit-point spline carries no control points, so its editable points — and
-    // therefore its grips — are the fit points it interpolates. A CV spline
-    // grips its control vertices.
-    let source = if spline.control_points.is_empty() {
-        &spline.fit_points
+    let (source, show_control_vertices) = if spline.cv_frame_visible {
+        (control_vertices(spline), true)
+    } else if !spline.fit_points.is_empty() {
+        (spline.fit_points.clone(), false)
     } else {
-        &spline.control_points
+        (spline.control_points.clone(), true)
     };
-    source
+    let mut grips: Vec<_> = source
         .iter()
         .enumerate()
-        .map(|(i, p)| square_grip(i, glam::DVec3::new(p.x, p.y, p.z)))
-        .collect()
+        .map(|(i, p)| {
+            let world = glam::DVec3::new(p.x, p.y, p.z);
+            if show_control_vertices {
+                round_grip(i, world)
+            } else {
+                square_grip(i, world)
+            }
+        })
+        .collect();
+    if !spline.fit_points.is_empty() {
+        if let Some(first) = source.first() {
+            grips.push(dropdown_grip(
+                SPLINE_MODE_GRIP_ID,
+                glam::DVec3::new(first.x, first.y, first.z),
+            ));
+        }
+    }
+    grips
 }
 
 fn properties(spline: &Spline) -> Vec<PropSection> {
-    let show = if spline.fit_points.is_empty() {
+    let show = if spline.cv_frame_visible || spline.fit_points.is_empty() {
         "Control Vertices"
     } else {
-        "Fit Points"
+        "Fit"
     };
     let cp0 = spline.control_points.first();
     let fp0 = spline.fit_points.first();
@@ -566,13 +601,35 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
 }
 
 fn apply_grip(spline: &mut Spline, grip_id: usize, apply: GripApply) {
-    // Match the grip source: dragging a fit-point spline's grip moves the fit
-    // point (the curve re-fits through it on the next tessellation, keeping the
-    // stored end tangents); a CV spline moves the control vertex.
-    let target = if spline.control_points.is_empty() {
-        spline.fit_points.get_mut(grip_id)
-    } else {
+    if grip_id == SPLINE_MODE_GRIP_ID {
+        return;
+    }
+    // A fit spline can display its derived control polygon without changing
+    // storage. The first actual CV edit converts that exact derived curve to
+    // control-point storage so the dragged vertex remains authoritative when
+    // the drawing is saved.
+    if spline.cv_frame_visible && spline.control_points.is_empty() {
+        let elevation = spline.fit_points.first().map(|p| p.z).unwrap_or(0.0);
+        let Some(curve) = crate::modules::draw::modify::spline_ops::spline_control_curve(spline)
+        else {
+            return;
+        };
+        spline.degree = curve.degree() as i32;
+        spline.knots = curve.knots().to_vec();
+        spline.control_points = curve
+            .control_points()
+            .iter()
+            .map(|p| acadrust::types::Vector3::new(p[0], p[1], elevation))
+            .collect();
+        spline.weights = curve.is_rational().then(|| curve.weights().to_vec()).unwrap_or_default();
+        spline.fit_points.clear();
+        spline.begin_tangent = acadrust::types::Vector3::ZERO;
+        spline.end_tangent = acadrust::types::Vector3::ZERO;
+    }
+    let target = if spline.cv_frame_visible || spline.fit_points.is_empty() {
         spline.control_points.get_mut(grip_id)
+    } else {
+        spline.fit_points.get_mut(grip_id)
     };
     if let Some(cp) = target {
         match apply {
@@ -614,8 +671,33 @@ impl crate::entities::traits::Grippable for Spline {
     fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
         apply_grip(self, grip_id, apply);
     }
-    fn grip_menu(&self, _grip_id: usize) -> Vec<crate::scene::model::object::GripMenuItem> {
+    fn grip_menu(&self, grip_id: usize) -> Vec<crate::scene::model::object::GripMenuItem> {
         use crate::scene::model::object::{GripMenuAction, GripMenuItem};
+        if grip_id == SPLINE_MODE_GRIP_ID {
+            return if self.cv_frame_visible {
+                vec![
+                    GripMenuItem {
+                        label: "Fit",
+                        action: GripMenuAction::ShowFit,
+                    },
+                    GripMenuItem {
+                        label: "✓ Control Vertices",
+                        action: GripMenuAction::ShowControlVertices,
+                    },
+                ]
+            } else {
+                vec![
+                    GripMenuItem {
+                        label: "✓ Fit",
+                        action: GripMenuAction::ShowFit,
+                    },
+                    GripMenuItem {
+                        label: "Control Vertices",
+                        action: GripMenuAction::ShowControlVertices,
+                    },
+                ]
+            };
+        }
         vec![
             GripMenuItem {
                 label: "Stretch",
@@ -641,6 +723,17 @@ impl crate::entities::traits::Grippable for Spline {
         action: crate::scene::model::object::GripMenuAction,
     ) {
         use crate::scene::model::object::GripMenuAction as A;
+        match action {
+            A::ShowFit if !self.fit_points.is_empty() => {
+                self.cv_frame_visible = false;
+                return;
+            }
+            A::ShowControlVertices if control_vertices(self).len() >= 2 => {
+                self.cv_frame_visible = true;
+                return;
+            }
+            _ => {}
+        }
         let n = self.control_points.len();
         let min_cv = (self.degree as usize).saturating_add(1).max(2);
         match action {

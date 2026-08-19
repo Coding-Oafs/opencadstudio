@@ -47,6 +47,185 @@ pub fn spline_to_nurbs(spl: &Spline) -> Option<NurbsCurve> {
     spline_to_nurbs_with(spl, |p| [p.x, p.y], |v| [v.x, v.y])
 }
 
+/// Return the compact control-polygon form of a spline for interactive grips.
+///
+/// The kernel's fit-point interpolator intentionally stores one Bezier span
+/// per fit-point interval. That is exact and convenient for evaluation, but
+/// its repeated internal knots expose three controls per interval to an
+/// editor. An open cubic interpolation has an equivalent simple-knot form
+/// with only `fit point count + 2` controls. Solve that form here so the grip
+/// polygon stays compact without changing the curve or its saved fit points.
+pub fn spline_control_curve(spl: &Spline) -> Option<NurbsCurve> {
+    let exact = spline_to_nurbs(spl)?;
+    if !spl.control_points.is_empty()
+        || spl.flags.closed
+        || spl.flags.periodic
+        || spl.fit_points.len() < 2
+    {
+        return Some(exact);
+    }
+
+    let fit: Vec<[f64; 2]> = spl.fit_points.iter().map(|p| [p.x, p.y]).collect();
+    let parameters = fit_parameters(&fit, spl.knot_parameterization);
+    let control_count = fit.len() + 2;
+    let mut knots = vec![parameters[0]; 4];
+    knots.extend(parameters.iter().take(fit.len() - 1).skip(1).copied());
+    knots.extend([parameters[fit.len() - 1]; 4]);
+
+    let mut matrix = Vec::with_capacity(control_count);
+    let mut right = Vec::with_capacity(control_count);
+    for (&parameter, &point) in parameters.iter().zip(&fit) {
+        matrix.push(bspline_basis(&knots, 3, parameter));
+        right.push(point);
+    }
+
+    // Scaling the derivative equations by the domain width keeps the solve
+    // well conditioned for drawings whose coordinates are very large/small.
+    let (start, end) = exact.domain();
+    let width = (end - start).abs().max(1e-9);
+    matrix.push(
+        bspline_basis_derivative(&knots, 3, parameters[0])
+            .into_iter()
+            .map(|value| value * width)
+            .collect(),
+    );
+    let start_slope = exact.derivative_at_knot(start);
+    right.push([start_slope[0] * width, start_slope[1] * width]);
+    matrix.push(
+        bspline_basis_derivative(&knots, 3, parameters[fit.len() - 1])
+            .into_iter()
+            .map(|value| value * width)
+            .collect(),
+    );
+    let end_slope = exact.derivative_at_knot(end);
+    right.push([end_slope[0] * width, end_slope[1] * width]);
+
+    let controls = solve_control_points(matrix, right)?;
+    NurbsCurve::new(3, controls, knots, None)
+}
+
+fn fit_parameters(points: &[[f64; 2]], parameterization: i32) -> Vec<f64> {
+    let mut parameters = vec![0.0; points.len()];
+    for i in 1..points.len() {
+        let dx = points[i][0] - points[i - 1][0];
+        let dy = points[i][1] - points[i - 1][1];
+        let chord = (dx * dx + dy * dy).sqrt().max(1e-9);
+        let step = match parameterization {
+            2 => 1.0,
+            1 => chord.sqrt(),
+            _ => chord,
+        };
+        parameters[i] = parameters[i - 1] + step;
+    }
+    parameters
+}
+
+fn bspline_basis(knots: &[f64], degree: usize, parameter: f64) -> Vec<f64> {
+    let count = knots.len() - degree - 1;
+    if (parameter - knots[knots.len() - 1]).abs() < 1e-12 {
+        let mut endpoint = vec![0.0; count];
+        let last_span = knots
+            .windows(2)
+            .rposition(|span| span[0] < span[1])
+            .unwrap_or(count - 1);
+        endpoint[last_span.min(count - 1)] = 1.0;
+        return endpoint;
+    }
+
+    let mut values: Vec<f64> = knots
+        .windows(2)
+        .map(|span| {
+            if span[0] <= parameter && parameter < span[1] {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    for order in 1..=degree {
+        let next_count = knots.len() - order - 1;
+        let mut next = vec![0.0; next_count];
+        for i in 0..next_count {
+            let left_span = knots[i + order] - knots[i];
+            let right_span = knots[i + order + 1] - knots[i + 1];
+            let left = if left_span.abs() < 1e-15 {
+                0.0
+            } else {
+                (parameter - knots[i]) / left_span * values[i]
+            };
+            let right = if right_span.abs() < 1e-15 {
+                0.0
+            } else {
+                (knots[i + order + 1] - parameter) / right_span * values[i + 1]
+            };
+            next[i] = left + right;
+        }
+        values = next;
+    }
+    values
+}
+
+fn bspline_basis_derivative(knots: &[f64], degree: usize, parameter: f64) -> Vec<f64> {
+    let lower = bspline_basis(knots, degree - 1, parameter);
+    let count = knots.len() - degree - 1;
+    (0..count)
+        .map(|i| {
+            let left_span = knots[i + degree] - knots[i];
+            let right_span = knots[i + degree + 1] - knots[i + 1];
+            let left = if left_span.abs() < 1e-15 {
+                0.0
+            } else {
+                degree as f64 / left_span * lower[i]
+            };
+            let right = if right_span.abs() < 1e-15 {
+                0.0
+            } else {
+                degree as f64 / right_span * lower[i + 1]
+            };
+            left - right
+        })
+        .collect()
+}
+
+fn solve_control_points(
+    mut matrix: Vec<Vec<f64>>,
+    mut right: Vec<[f64; 2]>,
+) -> Option<Vec<[f64; 2]>> {
+    let count = right.len();
+    for column in 0..count {
+        let pivot = (column..count).max_by(|&a, &b| {
+            matrix[a][column]
+                .abs()
+                .total_cmp(&matrix[b][column].abs())
+        })?;
+        if matrix[pivot][column].abs() < 1e-14 {
+            return None;
+        }
+        matrix.swap(column, pivot);
+        right.swap(column, pivot);
+
+        for row in column + 1..count {
+            let factor = matrix[row][column] / matrix[column][column];
+            for col in column..count {
+                matrix[row][col] -= factor * matrix[column][col];
+            }
+            right[row][0] -= factor * right[column][0];
+            right[row][1] -= factor * right[column][1];
+        }
+    }
+
+    let mut result = vec![[0.0; 2]; count];
+    for row in (0..count).rev() {
+        for axis in 0..2 {
+            let known: f64 = (row + 1..count)
+                .map(|column| matrix[row][column] * result[column][axis])
+                .sum();
+            result[row][axis] = (right[row][axis] - known) / matrix[row][row];
+        }
+    }
+    Some(result)
+}
+
 /// [`spline_to_nurbs`] with the points expressed in `plane`'s coordinates.
 ///
 /// The two differ only for a spline whose extrusion normal is not +Z. Where

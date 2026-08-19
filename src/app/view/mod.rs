@@ -495,6 +495,23 @@ impl OpenCADStudio {
                 } else {
                     vec![]
                 };
+            let control_polygon = tab.selected_handle.and_then(|handle| {
+                let spline = match tab.scene.document.get_entity(handle) {
+                    Some(acadrust::EntityType::Spline(spline)) if spline.cv_frame_visible => spline,
+                    _ => return None,
+                };
+                let points: Vec<_> = grips
+                    .iter()
+                    .filter(|grip| {
+                        grip.shape == crate::scene::model::object::GripShape::Circle
+                    })
+                    .map(|grip| grip.pos)
+                    .collect();
+                (points.len() >= 2).then_some((
+                    points,
+                    spline.flags.closed || spline.flags.periodic,
+                ))
+            });
             let grip_clip = if grips.is_empty() {
                 None
             } else {
@@ -688,6 +705,7 @@ impl OpenCADStudio {
                 snap_ext_base,
                 snap_ext_base2,
                 grips,
+                control_polygon,
                 grip_clip,
                 ucs_icons,
                 ost_points,

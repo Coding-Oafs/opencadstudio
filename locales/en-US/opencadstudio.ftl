@@ -1357,6 +1357,7 @@ draw =
     .solid-specify-second-point = SOLID  Specify second point:
     .solid-specify-third-point = SOLID  Specify third point:
     .spline-specify-first-control-point = SPLINE  Specify first control point:
+    .spline-specify-first-point = SPLINE  Specify first point:
     .spline-specify-next-point-n-pts = SPLINE  Specify next point  [__ocs_arg_n__ pts]:
     .sketch = Sketch
     .start-center-angle = Start, Center, Angle

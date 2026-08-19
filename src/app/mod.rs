@@ -82,6 +82,10 @@ pub struct GripPopup {
     pub anchor: iced::Point,
     pub items: Vec<crate::scene::model::object::GripMenuItem>,
     pub selected: usize,
+    /// Click-opened selectors stay visible while the cursor travels from the
+    /// arrow to the menu. Hover-opened multifunction grips still dismiss by
+    /// distance as before.
+    pub pinned: bool,
 }
 
 /// Pending follow-up value for grip-menu actions that need a number

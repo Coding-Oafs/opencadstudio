@@ -2192,6 +2192,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "SOLID  Specify second point:" => Some(("draw", "solid-specify-second-point")),
         "SOLID  Specify third point:" => Some(("draw", "solid-specify-third-point")),
         "SPLINE  Specify first control point:" => Some(("draw", "spline-specify-first-control-point")),
+        "SPLINE  Specify first point:" => Some(("draw", "spline-specify-first-point")),
         "SPLINE  Specify next point  [%{n} pts]:" => Some(("draw", "spline-specify-next-point-n-pts")),
         "SPLINEDIT  Select spline:" => Some(("modify", "splinedit-select-spline")),
         "SPLINEDIT  [CLOSE/OPEN/REVERSE/EXIT]:" => Some(("modify", "splinedit-close-open-reverse-exit")),

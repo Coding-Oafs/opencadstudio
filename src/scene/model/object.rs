@@ -83,6 +83,9 @@ pub enum GripShape {
     Rectangle,
     Triangle,
     Circle,
+    /// Small down-arrow selector drawn at a fixed screen offset from its
+    /// world anchor. Clicking it opens the grip's choice menu.
+    Dropdown,
 }
 
 /// Describes one grip point for an entity.
@@ -165,6 +168,8 @@ pub enum GripMenuAction {
     RemoveFitPoint,
     Refit,
     RefineVertices,
+    ShowFit,
+    ShowControlVertices,
     MoveWithText,
     StackText,
     UnstackText,
