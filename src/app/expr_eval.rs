@@ -433,6 +433,9 @@ pub fn eval_to_string(input: &str) -> String {
         let mut found = false;
         // Try longest substring first (greedy)
         for end in (i + 1..=len).rev() {
+            if !starts_and_ends_on_word_boundary(&chars, i, end) {
+                continue;
+            }
             let sub: String = chars[i..end].iter().collect();
             if let Some(v) = eval_number(&sub) {
                 result.push_str(&format!("{}", v));
@@ -447,6 +450,47 @@ pub fn eval_to_string(input: &str) -> String {
         }
     }
     result
+}
+
+/// Whether `chars[start..end]` can be treated as a standalone expression
+/// without cutting an identifier out of a surrounding word.
+///
+/// The greedy rescan in [`eval_to_string`] offers up every substring, so a name
+/// the evaluator knows — `pi`, `sqrt`, `abs`, … — is otherwise recognised in the
+/// middle of ordinary text: `ASPIRATORE` contains `PI`, and came back as
+/// `AS3.141592653589793RATORE`. A candidate whose first or last token is an
+/// identifier must therefore start, respectively end, on a word boundary.
+///
+/// Leading and trailing *numbers* are deliberately not restricted, so mixed
+/// input such as `def10*10abc` still evaluates its embedded `10*10`.
+fn starts_and_ends_on_word_boundary(chars: &[char], start: usize, end: usize) -> bool {
+    fn is_word(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+    fn starts_ident(c: char) -> bool {
+        c.is_ascii_alphabetic() || c == '_'
+    }
+
+    // First token is an identifier: a word character just before it means this
+    // is the tail of a longer word rather than a name of its own.
+    if starts_ident(chars[start]) && start > 0 && is_word(chars[start - 1]) {
+        return false;
+    }
+
+    // Last token is an identifier when the trailing run of word characters
+    // begins with a letter or `_`. A word character just after `end` means that
+    // identifier continues past the candidate.
+    if end < chars.len() && is_word(chars[end]) {
+        let mut run = end;
+        while run > start && is_word(chars[run - 1]) {
+            run -= 1;
+        }
+        if run < end && starts_ident(chars[run]) {
+            return false;
+        }
+    }
+
+    true
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -613,6 +657,27 @@ mod tests {
     fn embedded_expr_with_functions() {
         assert_eq!(eval_to_string("sqrt(4),3"), "2,3");
         assert_eq!(eval_to_string("abs(-5),ceil(3.1)"), "5,4");
+    }
+
+    #[test]
+    fn embedded_identifier_inside_a_word_is_left_alone() {
+        // Names are typed into the same fields as distances, so the rescan sees
+        // them. It used to find `pi` inside ordinary words and substitute the
+        // constant: `ASPIRATORE` came back as `AS3.141592653589793RATORE`.
+        assert_eq!(eval_to_string("ASPIRATORE"), "ASPIRATORE");
+        assert_eq!(eval_to_string("PIRATE"), "PIRATE");
+        assert_eq!(eval_to_string("copies"), "copies");
+        assert_eq!(eval_to_string("TOPI"), "TOPI");
+        assert_eq!(eval_to_string("pi_2"), "pi_2");
+        // A standalone `pi`, including one embedded in other text, still is one.
+        assert_eq!(
+            eval_to_string("pipe,pi"),
+            format!("pipe,{}", std::f64::consts::PI)
+        );
+        assert_eq!(
+            eval_to_string("2*pi,0"),
+            format!("{},0", 2.0 * std::f64::consts::PI)
+        );
     }
 
     #[test]
