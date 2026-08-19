@@ -294,18 +294,99 @@ pub fn spline_curve(spline: &SplineEnt) -> Option<PlanarCurve> {
         .copied()
         .collect();
     let first = points.first()?;
+    if !spline_is_planar(spline) {
+        return None;
+    }
     let normal = normalized(spline.normal);
     let elevation = Vec3::from(xyz(*first)).dot(Vec3::from(xyz(normal)));
     let plane = ocs_plane(normal, elevation);
 
-    let tolerance = PLANARITY_TOLERANCE * scale_of(&points);
+    let tolerance = spline_point_tolerance(&points);
     if !points.iter().all(|p| plane.contains(xyz(*p), tolerance)) {
         return None;
+    }
+    if !spline.fit_points.is_empty() {
+        let plane_normal = Vec3::from(plane.normal()?);
+        for tangent in [spline.begin_tangent, spline.end_tangent] {
+            let tangent = Vec3::from(xyz(tangent));
+            if tangent.length_squared() > 1e-18
+                && tangent.dot(plane_normal).abs()
+                    > PLANARITY_TOLERANCE * tangent.length().max(1.0)
+            {
+                return None;
+            }
+        }
     }
     Some(PlanarCurve::new(
         plane,
         Curve::Nurbs(spline_to_nurbs_on(spline, &plane)?),
     ))
+}
+
+/// Whether the actual spline definition fits some plane. Fit-point tangents
+/// participate because coplanar points can still define a spatial curve when
+/// an endpoint derivative leaves their plane.
+pub fn spline_is_planar(spline: &SplineEnt) -> bool {
+    let points = if spline.fit_points.is_empty() {
+        &spline.control_points
+    } else {
+        &spline.fit_points
+    };
+    let Some(origin) = points.first().copied() else {
+        return true;
+    };
+    let origin = Vec3::from(xyz(origin));
+    let mut directions: Vec<Vec3> = points
+        .iter()
+        .skip(1)
+        .map(|point| Vec3::from(xyz(*point)) - origin)
+        .collect();
+    if !spline.fit_points.is_empty() {
+        directions.extend(
+            [spline.begin_tangent, spline.end_tangent]
+                .into_iter()
+                .map(|tangent| Vec3::from(xyz(tangent))),
+        );
+    }
+
+    let extent = directions
+        .iter()
+        .map(|direction| direction.length())
+        .fold(1.0, f64::max);
+    let tolerance = PLANARITY_TOLERANCE * extent
+        + f64::EPSILON * scale_of(points) * 64.0;
+    let Some(axis) = directions
+        .iter()
+        .copied()
+        .find(|direction| direction.length() > tolerance)
+    else {
+        return true;
+    };
+    let Some(normal) = directions.iter().find_map(|direction| {
+        let cross = axis.cross(*direction);
+        if cross.length() > tolerance * axis.length().max(1.0) {
+            cross.normalize()
+        } else {
+            None
+        }
+    }) else {
+        return true;
+    };
+    directions
+        .iter()
+        .all(|direction| direction.dot(normal).abs() <= tolerance)
+}
+
+fn spline_point_tolerance(points: &[Vector3]) -> f64 {
+    let Some(origin) = points.first().copied() else {
+        return PLANARITY_TOLERANCE;
+    };
+    let origin = Vec3::from(xyz(origin));
+    let extent = points
+        .iter()
+        .map(|point| (Vec3::from(xyz(*point)) - origin).length())
+        .fold(1.0, f64::max);
+    PLANARITY_TOLERANCE * extent + f64::EPSILON * scale_of(points) * 64.0
 }
 
 /// The entity's curve in world XY coordinates.

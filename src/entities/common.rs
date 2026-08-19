@@ -524,6 +524,28 @@ pub fn edit_prop(label: &str, field: &'static str, value: f64) -> Property {
     }
 }
 
+/// Editable dimensionless number. Unlike coordinates and distances, vector
+/// components and NURBS weights must stay plain decimal values when the
+/// drawing uses engineering, architectural, or fractional length units.
+pub fn edit_scalar_prop(label: &str, field: &'static str, value: f64) -> Property {
+    let precision = unit_context().luprec.max(0) as usize;
+    let formatted = format!("{:.*}", precision, value);
+    let trimmed = if formatted.contains('.') {
+        formatted.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        formatted.as_str()
+    };
+    Property {
+        label: label.into(),
+        field,
+        value: PropValue::EditText(if trimmed.is_empty() || trimmed == "-0" {
+            "0".to_string()
+        } else {
+            trimmed.to_string()
+        }),
+    }
+}
+
 pub fn ro_prop(label: &str, field: &'static str, value: impl Into<String>) -> Property {
     Property {
         label: label.into(),
@@ -563,8 +585,13 @@ pub fn stepper_prop(
 
 pub fn parse_f64(value: &str) -> Option<f64> {
     let t = value.trim();
-    // Angle rows display via AUNITS (#297) — accept those formats back.
-    t.parse::<f64>().ok().or_else(|| parse_angle_deg(t))
+    // Length rows display via LUNITS and angle rows via AUNITS. Accept both
+    // representations back so a value shown by Properties can always be
+    // committed unchanged.
+    t.parse::<f64>()
+        .ok()
+        .or_else(|| parse_length(t))
+        .or_else(|| parse_angle_deg(t))
 }
 
 /// Parse an angle string the panel displayed via AUNITS back to DEGREES:

@@ -5,7 +5,8 @@ use cadkernel::space::NurbsCurve3;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    dropdown_grip, edit_prop as edit, parse_f64, ro_prop as ro, round_grip, square_grip,
+    dropdown_grip, edit_prop as edit, edit_scalar_prop as edit_scalar, parse_f64,
+    ro_prop as ro, round_grip, square_grip,
 };
 use crate::entities::traits::RenderConvertible;
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
@@ -31,7 +32,8 @@ fn to_render(spl: &Spline) -> RenderEntity {
                 // A fit spline through points in space is not a planar curve,
                 // so the kernel has nothing to say about it and the solve
                 // here remains the only description of its shape.
-                None if spl.flags.closed || spl.flags.periodic => {
+                None if spl.flags.periodic => periodic_fit_spline_polyline(spl),
+                None if spl.flags.closed => {
                     catmull_rom_polyline(&spl.fit_points, true)
                 }
                 None => fit_spline_polyline(spl),
@@ -149,7 +151,9 @@ pub(crate) fn measurement_polyline(spl: &Spline) -> Vec<[f64; 3]> {
         if spl.fit_points.len() < 2 {
             return spl.control_points.iter().map(|p| [p.x, p.y, p.z]).collect();
         }
-        return if spl.flags.closed || spl.flags.periodic {
+        return if spl.flags.periodic {
+            periodic_fit_spline_polyline(spl)
+        } else if spl.flags.closed {
             catmull_rom_polyline(&spl.fit_points, true)
         } else {
             fit_spline_polyline(spl)
@@ -309,6 +313,151 @@ fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
         out.extend(sampled.into_iter().skip(usize::from(i > 0)));
     }
     out
+}
+
+/// Spatial counterpart of the planar periodic interpolator. The cyclic
+/// derivative system gives the seam the same C² continuity as every interior
+/// fit point instead of only drawing a final chord back to the start.
+fn periodic_fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
+    let mut points: Vec<[f64; 3]> = spl
+        .fit_points
+        .iter()
+        .map(|point| [point.x, point.y, point.z])
+        .collect();
+    if points.len() > 1 {
+        let first = points[0];
+        let last = points[points.len() - 1];
+        let distance2: f64 = (0..3).map(|axis| (last[axis] - first[axis]).powi(2)).sum();
+        if distance2 <= 1e-18 {
+            points.pop();
+        }
+    }
+    let count = points.len();
+    if count < 3 {
+        return catmull_rom_polyline(&spl.fit_points, true);
+    }
+
+    let step = |from: [f64; 3], to: [f64; 3]| {
+        let chord = (0..3)
+            .map(|axis| (to[axis] - from[axis]).powi(2))
+            .sum::<f64>()
+            .sqrt()
+            .max(1e-9);
+        match spl.knot_parameterization {
+            2 => 1.0,
+            1 => chord.sqrt(),
+            _ => chord,
+        }
+    };
+    let spans: Vec<f64> = (0..count)
+        .map(|index| step(points[index], points[(index + 1) % count]))
+        .collect();
+    let mut matrix = vec![vec![0.0; count]; count];
+    let mut right = vec![[0.0; 3]; count];
+    for index in 0..count {
+        let previous = (index + count - 1) % count;
+        let next = (index + 1) % count;
+        let before = spans[previous];
+        let after = spans[index];
+        matrix[index][previous] += after;
+        matrix[index][index] += 2.0 * (before + after);
+        matrix[index][next] += before;
+        for axis in 0..3 {
+            let previous_slope = (points[index][axis] - points[previous][axis]) / before;
+            let next_slope = (points[next][axis] - points[index][axis]) / after;
+            right[index][axis] =
+                3.0 * (after * previous_slope + before * next_slope);
+        }
+    }
+    let Some(slopes) = solve_spatial_system(matrix, right) else {
+        return catmull_rom_polyline(&spl.fit_points, true);
+    };
+
+    let mut out = Vec::new();
+    for index in 0..count {
+        let next = (index + 1) % count;
+        let span = spans[index];
+        let point_at = |u: f64| {
+            let (u2, u3) = (u * u, u * u * u);
+            let basis = [
+                2.0 * u3 - 3.0 * u2 + 1.0,
+                u3 - 2.0 * u2 + u,
+                -2.0 * u3 + 3.0 * u2,
+                u3 - u2,
+            ];
+            let mut point = [0.0; 3];
+            for axis in 0..3 {
+                point[axis] = basis[0] * points[index][axis]
+                    + basis[1] * slopes[index][axis] * span
+                    + basis[2] * points[next][axis]
+                    + basis[3] * slopes[next][axis] * span;
+            }
+            point
+        };
+        let tangent_at = |u: f64| {
+            let u2 = u * u;
+            let basis = [
+                6.0 * u2 - 6.0 * u,
+                3.0 * u2 - 4.0 * u + 1.0,
+                -6.0 * u2 + 6.0 * u,
+                3.0 * u2 - 2.0 * u,
+            ];
+            let mut tangent = [0.0; 3];
+            for axis in 0..3 {
+                tangent[axis] = basis[0] * points[index][axis]
+                    + basis[1] * slopes[index][axis] * span
+                    + basis[2] * points[next][axis]
+                    + basis[3] * slopes[next][axis] * span;
+            }
+            tangent
+        };
+        let sampled = cadkernel::tessellation::sample_curve3_angle(
+            point_at,
+            tangent_at,
+            cadkernel::tessellation::DEFAULT_ANGLE,
+        );
+        out.extend(sampled.into_iter().skip(usize::from(index > 0)));
+    }
+    out
+}
+
+fn solve_spatial_system(
+    mut matrix: Vec<Vec<f64>>,
+    mut right: Vec<[f64; 3]>,
+) -> Option<Vec<[f64; 3]>> {
+    let count = right.len();
+    for column in 0..count {
+        let pivot = (column..count).max_by(|&left, &right_index| {
+            matrix[left][column]
+                .abs()
+                .total_cmp(&matrix[right_index][column].abs())
+        })?;
+        if matrix[pivot][column].abs() < 1e-14 {
+            return None;
+        }
+        matrix.swap(column, pivot);
+        right.swap(column, pivot);
+        for row in column + 1..count {
+            let factor = matrix[row][column] / matrix[column][column];
+            for entry in column..count {
+                matrix[row][entry] -= factor * matrix[column][entry];
+            }
+            for axis in 0..3 {
+                right[row][axis] -= factor * right[column][axis];
+            }
+        }
+    }
+
+    let mut result = vec![[0.0; 3]; count];
+    for row in (0..count).rev() {
+        for axis in 0..3 {
+            let known: f64 = (row + 1..count)
+                .map(|column| matrix[row][column] * result[column][axis])
+                .sum();
+            result[row][axis] = (right[row][axis] - known) / matrix[row][row];
+        }
+    }
+    Some(result)
 }
 
 /// Slopes used by the spatial fit-point interpolator. Keeping this solve
@@ -535,49 +684,6 @@ fn convert_to_fit_method(spline: &mut Spline) -> bool {
     true
 }
 
-fn is_planar(spline: &Spline) -> bool {
-    let points = if spline.fit_points.is_empty() {
-        &spline.control_points
-    } else {
-        &spline.fit_points
-    };
-    if points.len() <= 3 {
-        return true;
-    }
-    let origin = points[0];
-    let Some(axis) = points.iter().skip(1).find_map(|point| {
-        let vector = [point.x - origin.x, point.y - origin.y, point.z - origin.z];
-        let length2 = vector.iter().map(|value| value * value).sum::<f64>();
-        (length2 > 1e-18).then_some(vector)
-    }) else {
-        return true;
-    };
-    let Some(normal) = points.iter().skip(1).find_map(|point| {
-        let vector = [point.x - origin.x, point.y - origin.y, point.z - origin.z];
-        let cross = [
-            axis[1] * vector[2] - axis[2] * vector[1],
-            axis[2] * vector[0] - axis[0] * vector[2],
-            axis[0] * vector[1] - axis[1] * vector[0],
-        ];
-        let length2 = cross.iter().map(|value| value * value).sum::<f64>();
-        (length2 > 1e-18).then_some(cross)
-    }) else {
-        return true;
-    };
-    let normal_length = normal.iter().map(|value| value * value).sum::<f64>().sqrt();
-    points.iter().all(|point| {
-        let offset = [point.x - origin.x, point.y - origin.y, point.z - origin.z];
-        let distance = normal
-            .iter()
-            .zip(offset)
-            .map(|(component, value)| component * value)
-            .sum::<f64>()
-            .abs()
-            / normal_length;
-        distance <= 1e-8
-    })
-}
-
 fn tangent_is_set(tangent: &acadrust::types::Vector3) -> bool {
     tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z > 1e-18
 }
@@ -753,7 +859,7 @@ fn properties(spline: &Spline) -> Vec<PropSection> {
                 "ctrl_pt_z",
                 point.map(|value| value.z).unwrap_or(0.0),
             ),
-            edit(t!("Weight").as_ref(), "weight", weight),
+            edit_scalar(t!("Weight").as_ref(), "weight", weight),
         ]
     };
     data_points.push(choice_prop(
@@ -785,37 +891,37 @@ fn properties(spline: &Spline) -> Vec<PropSection> {
         ro(
             t!("Planar").as_ref(),
             "planar",
-            yes_no(is_planar(spline)),
+            yes_no(crate::entities::curve::spline_is_planar(spline)),
         ),
     ];
     if fit_method {
         misc.extend([
-            edit(
+            edit_scalar(
                 t!("Start tangent vector X").as_ref(),
                 "start_tan_x",
                 effective_begin_tangent.x,
             ),
-            edit(
+            edit_scalar(
                 t!("Start tangent vector Y").as_ref(),
                 "start_tan_y",
                 effective_begin_tangent.y,
             ),
-            edit(
+            edit_scalar(
                 t!("Start tangent vector Z").as_ref(),
                 "start_tan_z",
                 effective_begin_tangent.z,
             ),
-            edit(
+            edit_scalar(
                 t!("End tangent vector X").as_ref(),
                 "end_tan_x",
                 effective_end_tangent.x,
             ),
-            edit(
+            edit_scalar(
                 t!("End tangent vector Y").as_ref(),
                 "end_tan_y",
                 effective_end_tangent.y,
             ),
-            edit(
+            edit_scalar(
                 t!("End tangent vector Z").as_ref(),
                 "end_tan_z",
                 effective_end_tangent.z,
@@ -855,7 +961,17 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
                 "Chord" => 0,
                 "Square Root" => 1,
                 "Uniform" => 2,
-                "Custom" => 15,
+                "Custom" => {
+                    // Custom parameterization is an explicit knot/control
+                    // representation, not a fourth automatic spacing rule.
+                    // Materialize the current fit curve before marking it
+                    // custom so rendering and saving cannot silently fall
+                    // back to chord spacing.
+                    if !spline.fit_points.is_empty() && !convert_to_control_method(spline) {
+                        return;
+                    }
+                    15
+                }
                 _ => return,
             };
             return;
@@ -947,7 +1063,7 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
         }
         _ => {}
     }
-    spline.flags.planar = is_planar(spline);
+    spline.flags.planar = crate::entities::curve::spline_is_planar(spline);
 }
 
 fn apply_grip(spline: &mut Spline, grip_id: usize, apply: GripApply) {
@@ -985,6 +1101,21 @@ fn apply_grip(spline: &mut Spline, grip_id: usize, apply: GripApply) {
 }
 
 fn apply_transform(spline: &mut Spline, t: &EntityTransform) {
+    if let EntityTransform::Mirror {
+        p1,
+        p2,
+        working_normal,
+    } = t
+    {
+        let transform = crate::scene::view::transform::reflection_about_working_line(
+            *p1,
+            *p2,
+            *working_normal,
+        );
+        acadrust::Entity::apply_transform(spline, &transform);
+        spline.flags.planar = crate::entities::curve::spline_is_planar(spline);
+        return;
+    }
     crate::scene::view::transform::apply_standard_entity_transform(spline, t, |entity, p1, p2| {
         for cp in &mut entity.control_points {
             crate::scene::view::transform::reflect_xy_point(&mut cp.x, &mut cp.y, p1, p2);
@@ -993,6 +1124,7 @@ fn apply_transform(spline: &mut Spline, t: &EntityTransform) {
             crate::scene::view::transform::reflect_xy_point(&mut fp.x, &mut fp.y, p1, p2);
         }
     });
+    spline.flags.planar = crate::entities::curve::spline_is_planar(spline);
 }
 
 impl RenderConvertible for Spline {

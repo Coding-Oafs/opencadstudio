@@ -227,6 +227,91 @@ fn solve_control_points(
     Some(result)
 }
 
+/// A closed C² cubic through every fit point. The cyclic slope solve makes
+/// the first and last derivatives and accelerations agree at the seam; merely
+/// repeating the first point in the open interpolator only closes the shape
+/// and does not make it periodic.
+fn interpolate_periodic(
+    points: &[[f64; 2]],
+    parameterization: Parameterization,
+) -> Option<NurbsCurve> {
+    let mut points = points.to_vec();
+    if points.len() > 1 {
+        let first = points[0];
+        let last = points[points.len() - 1];
+        let dx = last[0] - first[0];
+        let dy = last[1] - first[1];
+        if dx * dx + dy * dy <= 1e-18 {
+            points.pop();
+        }
+    }
+    let count = points.len();
+    if count < 3 {
+        return None;
+    }
+
+    let step = |from: [f64; 2], to: [f64; 2]| {
+        let dx = to[0] - from[0];
+        let dy = to[1] - from[1];
+        let chord = (dx * dx + dy * dy).sqrt().max(1e-9);
+        match parameterization {
+            Parameterization::Uniform => 1.0,
+            Parameterization::Centripetal => chord.sqrt(),
+            Parameterization::Chord => chord,
+        }
+    };
+    let spans: Vec<f64> = (0..count)
+        .map(|index| step(points[index], points[(index + 1) % count]))
+        .collect();
+
+    let mut matrix = vec![vec![0.0; count]; count];
+    let mut right = vec![[0.0; 2]; count];
+    for index in 0..count {
+        let previous = (index + count - 1) % count;
+        let next = (index + 1) % count;
+        let before = spans[previous];
+        let after = spans[index];
+        matrix[index][previous] += after;
+        matrix[index][index] += 2.0 * (before + after);
+        matrix[index][next] += before;
+        for axis in 0..2 {
+            let previous_slope = (points[index][axis] - points[previous][axis]) / before;
+            let next_slope = (points[next][axis] - points[index][axis]) / after;
+            right[index][axis] =
+                3.0 * (after * previous_slope + before * next_slope);
+        }
+    }
+    let slopes = solve_control_points(matrix, right)?;
+
+    let mut controls = Vec::with_capacity(3 * count + 1);
+    let mut boundaries = Vec::with_capacity(count + 1);
+    controls.push(points[0]);
+    boundaries.push(0.0);
+    let mut parameter = 0.0;
+    for index in 0..count {
+        let next = (index + 1) % count;
+        let span = spans[index];
+        controls.push([
+            points[index][0] + slopes[index][0] * span / 3.0,
+            points[index][1] + slopes[index][1] * span / 3.0,
+        ]);
+        controls.push([
+            points[next][0] - slopes[next][0] * span / 3.0,
+            points[next][1] - slopes[next][1] * span / 3.0,
+        ]);
+        controls.push(points[next]);
+        parameter += span;
+        boundaries.push(parameter);
+    }
+
+    let mut knots = vec![0.0; 4];
+    for boundary in boundaries.iter().take(count).skip(1) {
+        knots.extend([*boundary; 3]);
+    }
+    knots.extend([parameter; 4]);
+    NurbsCurve::new(3, controls, knots, None)
+}
+
 /// [`spline_to_nurbs`] with the points expressed in `plane`'s coordinates.
 ///
 /// The two differ only for a spline whose extrusion normal is not +Z. Where
@@ -259,7 +344,15 @@ fn spline_to_nurbs_with(
 
     // No usable control polygon, so this is a fit-point spline.
     let mut fit: Vec<[f64; 2]> = spl.fit_points.iter().map(&point).collect();
-    if spl.flags.closed || spl.flags.periodic {
+    let parameterization = match spl.knot_parameterization {
+        2 => Parameterization::Uniform,
+        1 => Parameterization::Centripetal,
+        _ => Parameterization::Chord,
+    };
+    if spl.flags.periodic {
+        return interpolate_periodic(&fit, parameterization);
+    }
+    if spl.flags.closed {
         // The interpolation is a clamped solve and does not model a wrap, so
         // a closed spline came back as an open curve that never returned to
         // its start — and a TRIM against it then cut nothing along the seam.
@@ -278,11 +371,6 @@ fn spline_to_nurbs_with(
     };
     let start_tangent = tangent(&spl.begin_tangent);
     let end_tangent = tangent(&spl.end_tangent);
-    let parameterization = match spl.knot_parameterization {
-        2 => Parameterization::Uniform,
-        1 => Parameterization::Centripetal,
-        _ => Parameterization::Chord,
-    };
     if !spl.flags.closed && !spl.flags.periodic && spl.fit_tolerance > 0.0 {
         fit = fit_within_tolerance(
             fit,
