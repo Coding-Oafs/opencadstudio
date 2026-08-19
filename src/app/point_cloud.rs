@@ -101,6 +101,10 @@ impl crate::command::CadCommand for PointCloudBrushClassifyCommand {
         ))
     }
 
+    fn brush_classification(&self) -> Option<u8> {
+        Some(self.classification)
+    }
+
     fn on_enter(&mut self) -> crate::command::CmdResult {
         crate::command::CmdResult::Cancel
     }

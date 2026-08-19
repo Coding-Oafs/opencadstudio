@@ -1662,6 +1662,13 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// The target ASPRS class for a LiDAR classify-brush, if this command is
+    /// one. A plain selection brush returns `None`. Used by the continuous
+    /// (press-and-drag) brush so a stroke reuses the command's own class.
+    fn brush_classification(&self) -> Option<u8> {
+        None
+    }
+
     /// Include filled hatch / DXF SOLID regions in the entity hit-test.
     ///
     /// Most entity-pick commands operate on curve geometry and intentionally

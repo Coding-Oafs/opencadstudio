@@ -384,15 +384,27 @@ impl OpenCADStudio {
         if self.tabs[i].is_start {
             return String::new();
         }
-        let (click_pos, canvas_sz) = {
+        let p_full = {
             let sel = self.tabs[i].scene.selection.borrow();
-            (sel.context_menu, sel.vp_size)
+            sel.context_menu
         };
-        let Some(p_full) = click_pos else {
+        let Some(p_full) = p_full else {
             return String::new();
         };
-        // Mirror on_viewport_left_release: map the canvas point into the active
-        // tile, then unproject with that tile's camera.
+        let Some(world) = self.cursor_world_in_tile(i, p_full) else {
+            return String::new();
+        };
+        format!("{:.6}, {:.6}, {:.6}", world.x, world.y, world.z)
+    }
+
+    /// Unproject a canvas-space cursor point into model space through the
+    /// active tile's camera, mirroring `on_viewport_left_release`'s pick path.
+    pub(in crate::app) fn cursor_world_in_tile(
+        &self,
+        i: usize,
+        p_full: iced::Point,
+    ) -> Option<glam::DVec3> {
+        let canvas_sz = self.tabs[i].scene.selection.borrow().vp_size;
         let edit_frame = self.tabs[i].scene.viewport_edit_frame(canvas_sz);
         let (tile_vw, tile_vh, tile_off) = match &edit_frame {
             Some((_, full)) => (full.width, full.height, iced::Point::new(full.x, full.y)),
@@ -414,8 +426,7 @@ impl OpenCADStudio {
             width: tile_vw,
             height: tile_vh,
         };
-        let world = self.cursor_model_point(i, &edit_cam, p, bounds);
-        format!("{:.6}, {:.6}, {:.6}", world.x, world.y, world.z)
+        Some(self.cursor_model_point(i, &edit_cam, p, bounds))
     }
 
     /// Projection + hit-test wires for the active pane. Inside a floating
@@ -848,6 +859,30 @@ impl OpenCADStudio {
 
         let mut sel = self.tabs[i].scene.selection.borrow_mut();
         sel.last_move_pos = Some(p);
+
+        // Continuous LiDAR brush: while the brush command is active and the
+        // left button is held, stamp a stroke at every moved cursor position.
+        // The existing command is the repeating-click brush; holding the button
+        // turns it into a continuous paint stroke.
+        if sel.left_down
+            && self.tabs[i].active_cmd.as_ref().is_some_and(|c| {
+                matches!(
+                    c.name(),
+                    "POINTCLOUDSELECTBRUSH" | "POINTCLOUDBRUSHCLASSIFY"
+                )
+            })
+        {
+            let classification = self
+                .tabs[i]
+                .active_cmd
+                .as_ref()
+                .and_then(|c| c.brush_classification());
+            drop(sel);
+            if let Some(world) = self.cursor_world_in_tile(i, p) {
+                self.point_cloud_select_screen_brush(i, world, 32.0, classification);
+            }
+            return Task::none();
+        }
 
         if sel.left_down {
             let press = sel.left_press_pos.unwrap_or(p);
