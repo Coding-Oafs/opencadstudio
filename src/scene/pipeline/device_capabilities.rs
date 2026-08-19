@@ -1,8 +1,6 @@
 use iced::wgpu;
 
 /// Renderer-relevant limits of the selected GPU device.
-///
-/// Native devices select by limits; browser builds use compatibility paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceCapabilities {
     pub max_storage_buffers_per_shader_stage: u32,
