@@ -66,11 +66,7 @@ fn to_render(ell: &Ellipse) -> RenderEntity {
 
 fn grips(ell: &Ellipse) -> Vec<GripDef> {
     let ctr = glam::DVec3::new(ell.center.x, ell.center.y, ell.center.z);
-    let maj = glam::DVec3::new(
-        ell.center.x + ell.major_axis.x,
-        ell.center.y + ell.major_axis.y,
-        ell.center.z + ell.major_axis.z,
-    );
+    let major = glam::DVec3::new(ell.major_axis.x, ell.major_axis.y, ell.major_axis.z);
     let major_xy =
         ((ell.major_axis.x * ell.major_axis.x + ell.major_axis.y * ell.major_axis.y) as f64).sqrt();
     let (px, py) = if major_xy > 1e-10 {
@@ -79,12 +75,17 @@ fn grips(ell: &Ellipse) -> Vec<GripDef> {
     } else {
         (0.0, ell.major_axis_length() * ell.minor_axis_ratio)
     };
-    let min = glam::DVec3::new(ell.center.x + px, ell.center.y + py, ell.center.z);
-    vec![
+    let minor = glam::DVec3::new(px, py, 0.0);
+    let mut grips = vec![
         center_grip(0, ctr),
-        square_grip(1, maj),
-        square_grip(2, min),
-    ]
+        square_grip(1, ctr + major),
+        square_grip(2, ctr + minor),
+    ];
+    if ell.is_full() {
+        grips.push(square_grip(3, ctr - major));
+        grips.push(square_grip(4, ctr - minor));
+    }
+    grips
 }
 
 fn properties(ell: &Ellipse) -> Vec<PropSection> {
@@ -200,12 +201,22 @@ fn apply_grip(ell: &mut Ellipse, grip_id: usize, apply: GripApply) {
             ell.center.y = p.y as f64;
             ell.center.z = p.z as f64;
         }
-        (1, GripApply::Absolute(p)) => {
-            ell.major_axis.x = p.x as f64 - ell.center.x;
-            ell.major_axis.y = p.y as f64 - ell.center.y;
-            ell.major_axis.z = p.z as f64 - ell.center.z;
+        (1 | 3, GripApply::Absolute(p)) => {
+            let direction = if grip_id == 1 { 1.0 } else { -1.0 };
+            ell.major_axis.x = (p.x as f64 - ell.center.x) * direction;
+            ell.major_axis.y = (p.y as f64 - ell.center.y) * direction;
+            ell.major_axis.z = (p.z as f64 - ell.center.z) * direction;
         }
-        (2, GripApply::Absolute(p)) => {
+        (2 | 4, GripApply::Absolute(p)) => {
+            let p = if grip_id == 4 {
+                glam::DVec3::new(
+                    2.0 * ell.center.x - p.x,
+                    2.0 * ell.center.y - p.y,
+                    2.0 * ell.center.z - p.z,
+                )
+            } else {
+                p
+            };
             // Minor-axis grip. The two axes are always perpendicular, so this
             // grip stretches one of them along its fixed direction while the
             // other stays put. Work in the ellipse's view plane (XY).
