@@ -462,7 +462,7 @@ pub fn rectangle_grip(id: usize, world: glam::DVec3, dir: [f32; 2]) -> GripDef {
         world,
         is_midpoint: true,
         shape: GripShape::Rectangle,
-        dir: Some(dir),
+        dir: Some(glam::DVec3::new(dir[0] as f64, dir[1] as f64, 0.0)),
         axis: None,
     }
 }
@@ -475,6 +475,18 @@ pub fn triangle_grip(id: usize, world: glam::DVec3) -> GripDef {
         is_midpoint: false,
         shape: GripShape::Triangle,
         dir: None,
+        axis: None,
+    }
+}
+
+/// Triangle grip pointing along a world-space direction.
+pub fn oriented_triangle_grip(id: usize, world: glam::DVec3, dir: glam::DVec3) -> GripDef {
+    GripDef {
+        id,
+        world,
+        is_midpoint: false,
+        shape: GripShape::Triangle,
+        dir: Some(dir),
         axis: None,
     }
 }

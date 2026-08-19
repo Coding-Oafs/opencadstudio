@@ -101,10 +101,8 @@ pub struct GripDef {
     pub is_midpoint: bool,
     /// Visual marker shape for the grip.
     pub shape: GripShape,
-    /// World-XY direction vector used to orient a `Rectangle` grip
-    /// along its segment. `None` for shapes that don't need rotation
-    /// (Square, Triangle in non-directional contexts).
-    pub dir: Option<[f32; 2]>,
+    /// World-space marker direction, projected with the grip position.
+    pub dir: Option<glam::DVec3>,
     /// World-space axis that constrains this grip's drag.
     pub axis: Option<glam::DVec3>,
 }
