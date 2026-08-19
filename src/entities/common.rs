@@ -104,11 +104,16 @@ pub fn format_length(value: f64) -> String {
     match ctx.lunits {
         1 => format!("{:.*e}", prec, value),
         3 => {
-            // Engineering: ft-inches, decimal inches.
+            // Engineering: ft-inches, decimal inches. Round to the shown
+            // precision BEFORE splitting off the feet, so an inch count that
+            // rounds up to twelve carries instead of printing 0'-12.0".
             let sign = if value < 0.0 { "-" } else { "" };
             let abs = value.abs();
-            let feet = (abs / 12.0).trunc();
-            let rem = abs - feet * 12.0;
+            let scale = 10f64.powi(prec.min(15) as i32);
+            let total = (abs * scale).round();
+            let per_foot = 12.0 * scale;
+            let feet = (total / per_foot).trunc();
+            let rem = (total - feet * per_foot) / scale;
             format!("{}{:.0}'-{:.*}\"", sign, feet, prec, rem)
         }
         4 | 5 => {
@@ -117,17 +122,21 @@ pub fn format_length(value: f64) -> String {
             // result reads like 1/64".
             let sign = if value < 0.0 { "-" } else { "" };
             let abs = value.abs();
-            let (feet, in_rem) = if ctx.lunits == 4 {
-                let f = (abs / 12.0).trunc();
-                (Some(f as i64), abs - f * 12.0)
-            } else {
-                (None, abs)
-            };
-            let whole = in_rem.trunc();
-            let frac = in_rem - whole;
             let denom = 64u64;
-            let numer = (frac * denom as f64).round() as i64;
-            let mut n = numer as u64;
+            // Round once, into the smallest unit that will be shown, and
+            // split the feet and whole inches out of the rounded total. A
+            // fraction that rounds up to 64/64 then carries, instead of
+            // reducing to 1/1 and being dropped as "no fraction" — 5.999
+            // read as 5, and 11.999 as 0'-11".
+            let sixtyfourths = (abs * denom as f64).round() as u64;
+            let (feet, rest) = if ctx.lunits == 4 {
+                let per_foot = 12 * denom;
+                (Some((sixtyfourths / per_foot) as i64), sixtyfourths % per_foot)
+            } else {
+                (None, sixtyfourths)
+            };
+            let whole = rest / denom;
+            let mut n = rest % denom;
             let mut d = denom;
             while d > 1 && n % 2 == 0 && d % 2 == 0 {
                 n /= 2;
@@ -140,8 +149,8 @@ pub fn format_length(value: f64) -> String {
             };
             let unit_suffix = if ctx.lunits == 4 { "\"" } else { "" };
             match feet {
-                Some(f) => format!("{}{}'-{:.0}{}{}", sign, f, whole, frac_str, unit_suffix),
-                None => format!("{}{:.0}{}", sign, whole, frac_str),
+                Some(f) => format!("{}{}'-{}{}{}", sign, f, whole, frac_str, unit_suffix),
+                None => format!("{}{}{}", sign, whole, frac_str),
             }
         }
         _ => format!("{:.*}", prec, value),
@@ -789,5 +798,71 @@ pub(crate) fn polyline_segment_fill(
             boundary.push([cx + ri * ang.cos(), cy + ri * ang.sin()]);
         }
         Some(boundary)
+    }
+}
+
+#[cfg(test)]
+mod length_format_tests {
+    use super::*;
+
+    fn with_units(lunits: i16, luprec: i16, value: f64) -> String {
+        let mut ctx = unit_context();
+        ctx.lunits = lunits;
+        ctx.luprec = luprec;
+        set_unit_context(ctx);
+        format_length(value)
+    }
+
+    /// A fraction that rounds up to a whole unit has to carry. It used to
+    /// reduce 64/64 to 1/1, which reads as "no fraction", so the fractional
+    /// part was dropped and the length shown a whole unit short.
+    #[test]
+    fn fractional_carries_a_rounded_up_fraction() {
+        assert_eq!(with_units(5, 4, 5.99), "5 63/64");
+        assert_eq!(with_units(5, 4, 5.995), "6");
+        assert_eq!(with_units(5, 4, 0.995), "1");
+        assert_eq!(with_units(5, 4, 11.999), "12");
+        assert_eq!(with_units(5, 4, -5.995), "-6");
+        // Values that do not round up are unchanged.
+        assert_eq!(with_units(5, 4, 0.5), "0 1/2");
+        assert_eq!(with_units(5, 4, 9.25), "9 1/4");
+    }
+
+    /// The same carry has to reach the feet, or a foot's worth of inches
+    /// stays in the inches column.
+    #[test]
+    fn architectural_carries_into_feet() {
+        assert_eq!(with_units(4, 4, 11.99), "0'-11 63/64\"");
+        assert_eq!(with_units(4, 4, 11.999), "1'-0\"");
+        assert_eq!(with_units(4, 4, 23.999), "2'-0\"");
+        assert_eq!(with_units(4, 4, 66.5), "5'-6 1/2\"");
+        assert_eq!(with_units(4, 4, -11.999), "-1'-0\"");
+    }
+
+    /// Engineering rounds to the shown precision, so twelve inches after
+    /// rounding is a foot. It printed the impossible 0'-12.0".
+    #[test]
+    fn engineering_carries_into_feet() {
+        assert_eq!(with_units(3, 1, 11.94), "0'-11.9\"");
+        assert_eq!(with_units(3, 1, 11.99), "1'-0.0\"");
+        assert_eq!(with_units(3, 1, 23.99), "2'-0.0\"");
+        assert_eq!(with_units(3, 2, 11.999), "1'-0.00\"");
+        assert_eq!(with_units(3, 1, 66.5), "5'-6.5\"");
+    }
+
+    /// Whatever the drawing writes, it must read back the same.
+    #[test]
+    fn formatted_lengths_read_back() {
+        for lunits in [3, 4, 5] {
+            for value in [0.995f64, 5.995, 11.999, 23.999, 66.5, 9.25] {
+                let shown = with_units(lunits, if lunits == 3 { 4 } else { 4 }, value);
+                let read = parse_length(&shown)
+                    .unwrap_or_else(|| panic!("lunits {lunits} wrote {shown:?}, which does not read back"));
+                assert!(
+                    (read - value).abs() < 0.02,
+                    "lunits {lunits}: {value} wrote {shown:?}, read back as {read}"
+                );
+            }
+        }
     }
 }
