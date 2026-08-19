@@ -55,13 +55,18 @@ pub enum BasemapProvider {
     ArcGisImagery,
     /// Esri World Street Map (no key required).
     ArcGisStreets,
-    /// A user-supplied XYZ template (e.g. Google Hybrid with an API key).
+    /// Google Maps Hybrid imagery — requires an API key, resolved from the
+    /// `OCS_GOOGLE_MAPS_KEY` environment variable or the per-user key file
+    /// (`<config>/OpenCADStudio/google_maps_key.txt`), never from source.
+    GoogleHybrid,
+    /// A user-supplied XYZ template (e.g. a different provider).
     Custom,
 }
 
 impl BasemapProvider {
     /// The XYZ URL template for `z`/`x`/`y` placeholders. `{custom}` is filled
-    /// from the user's stored template string (for `BasemapProvider::Custom`).
+    /// from the user's stored template string (for `BasemapProvider::Custom`);
+    /// `{key}` is filled from the resolved Google API key (for `GoogleHybrid`).
     pub fn url_template(&self) -> &'static str {
         match self {
             BasemapProvider::ArcGisImagery => {
@@ -70,9 +75,50 @@ impl BasemapProvider {
             BasemapProvider::ArcGisStreets => {
                 "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
             }
+            BasemapProvider::GoogleHybrid => {
+                "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key={key}"
+            }
             BasemapProvider::Off | BasemapProvider::Custom => "",
         }
     }
+}
+
+/// Resolve the Google Maps API key for the `GoogleHybrid` provider.
+///
+/// The key is a secret and never lives in the repository. It is read from the
+/// `OCS_GOOGLE_MAPS_KEY` environment variable, or — when unset — from a
+/// per-user file `<config>/OpenCADStudio/google_maps_key.txt` (one line, the
+/// key, optionally with surrounding whitespace).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn google_api_key() -> Option<String> {
+    if let Some(key) = std::env::var("OCS_GOOGLE_MAPS_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    {
+        return Some(key);
+    }
+    let path = crate::config::config_dir()?.join("google_maps_key.txt");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn google_api_key() -> Option<String> {
+    None
+}
+
+/// Build the Google Hybrid tile URL for a given key and tile. Pure and
+/// unit-testable so the key-substitution path is verified without a network.
+pub fn google_tile_url(key: &str, z: u32, x: u32, y: u32) -> String {
+    BasemapProvider::GoogleHybrid
+        .url_template()
+        .replace("{z}", &z.to_string())
+        .replace("{x}", &x.to_string())
+        .replace("{y}", &y.to_string())
+        .replace("{key}", key)
 }
 
 /// Projection for the basemap. Tiles are always served in Web Mercator
@@ -117,7 +163,9 @@ pub fn tile_bounds(z: u32, x: u32, y: u32) -> [f64; 4] {
 }
 
 /// The tile URL for a provider at (z, x, y), using `custom_template` when the
-/// provider is `Custom`.
+/// provider is `Custom`, and the resolved API key when the provider is
+/// `GoogleHybrid`. Returns `None` when the provider is off, the custom template
+/// is empty, or the Google key is unavailable.
 pub fn tile_url(provider: BasemapProvider, z: u32, x: u32, y: u32, custom_template: &str) -> Option<String> {
     match provider {
         BasemapProvider::Off => None,
@@ -128,6 +176,10 @@ pub fn tile_url(provider: BasemapProvider, z: u32, x: u32, y: u32, custom_templa
                 .replace("{x}", &x.to_string())
                 .replace("{y}", &y.to_string()),
         ),
+        BasemapProvider::GoogleHybrid => {
+            let key = google_api_key()?;
+            Some(google_tile_url(&key, z, x, y))
+        }
         other => Some(
             other
                 .url_template()
@@ -255,6 +307,16 @@ mod tests {
         assert_eq!(url, "https://x/3/2/1?k=a");
         assert!(tile_url(BasemapProvider::Off, 1, 0, 0, "").is_none());
         assert!(tile_url(BasemapProvider::Custom, 1, 0, 0, "").is_none());
+    }
+
+    #[test]
+    fn google_tile_url_substitutes_key_and_coords() {
+        let url = google_tile_url("SECRET123", 3, 2, 1);
+        assert!(url.contains("lyrs=y"), "url = {url}");
+        assert!(url.contains("x=2"), "url = {url}");
+        assert!(url.contains("y=1"), "url = {url}");
+        assert!(url.contains("z=3"), "url = {url}");
+        assert!(url.contains("key=SECRET123"), "url = {url}");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

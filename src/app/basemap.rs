@@ -89,6 +89,20 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(crate::t!("Basemap: ArcGIS World Street Map.").as_ref());
             }
+            "GOOGLE" | "HYBRID" => {
+                // Google Hybrid needs an API key (never stored in source). If
+                // none is resolvable, tell the user where to put it instead of
+                // silently fetching nothing.
+                if crate::scene::basemap::google_api_key().is_none() {
+                    self.command_line.push_error(
+                        "Basemap: Google Hybrid needs an API key. Set OCS_GOOGLE_MAPS_KEY or write it to the OpenCADStudio config google_maps_key.txt file.",
+                    );
+                    return Task::none();
+                }
+                self.basemap.provider = BasemapProvider::GoogleHybrid;
+                self.command_line
+                    .push_output(crate::t!("Basemap: Google Hybrid.").as_ref());
+            }
             "CUSTOM" => {
                 let template = parts.collect::<Vec<_>>().join(" ");
                 if template.is_empty() {
@@ -143,7 +157,7 @@ impl OpenCADStudio {
             }
             _ => {
                 self.command_line.push_error(
-                    "BASEMAP [ARCGIS|STREETS|CUSTOM <t>|PROJ <d|las|epsg>|ZOOM <z>|OFF].",
+                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <d|las|epsg>|ZOOM <z>|OFF].",
                 );
                 return Task::none();
             }

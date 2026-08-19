@@ -35,3 +35,7 @@ __pycache__/
 
 # Claude Code local preview/dev-server config
 .claude/launch.json
+
+# Per-user API keys (never committed). The Google Maps key is read from
+# <config>/OpenCADStudio/google_maps_key.txt or OCS_GOOGLE_MAPS_KEY.
+google_maps_key.txt
