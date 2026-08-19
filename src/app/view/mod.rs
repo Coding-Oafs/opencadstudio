@@ -1537,6 +1537,26 @@ impl OpenCADStudio {
             Space::new().into()
         };
 
+        // Sheet Set Manager docks on the left too (SHEETSET), after the tool
+        // palettes so the panels stack cleanly without overlapping.
+        let sheetset_el: Element<'_, Message> = if tab.is_start {
+            Space::new().into()
+        } else if self.show_sheetset && !self.clean_screen {
+            if self.sheetset.expanded {
+                crate::ui::window::sheetset::view(&self.sheetset)
+            } else {
+                collapse_bar(
+                    "Sheet Set Manager",
+                    crate::app::config::DockSide::Left,
+                    Message::SheetSet(crate::ui::window::sheetset::SheetSetMsg::ToggleBar),
+                    Message::Noop,
+                    26.0,
+                )
+            }
+        } else {
+            Space::new().into()
+        };
+
         // Command-line sits as a bottom-centre overlay on top of the
         // viewport stack rather than as a separate row in the main
         // column — frees up vertical space when no command is active
@@ -1613,8 +1633,10 @@ impl OpenCADStudio {
                 workspace
             };
         let workspace = row![workspace, block_palette_el].width(Fill).height(Fill);
-        // Tool Palettes sit to the left of everything else.
-        let workspace = row![tool_palettes_el, workspace].width(Fill).height(Fill);
+        // Tool Palettes and Sheet Set Manager sit to the left of everything else.
+        let workspace = row![tool_palettes_el, sheetset_el, workspace]
+            .width(Fill)
+            .height(Fill);
         let command_line = self.command_line.view(
             allow_autocomplete,
             dyn_capturing,

@@ -598,6 +598,93 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         }
     }
 
+    /// Handle an edit from the docked Sheet Set Manager.
+    pub(super) fn on_sheetset(
+        &mut self,
+        m: crate::ui::window::sheetset::SheetSetMsg,
+    ) -> iced::Task<Message> {
+        use crate::ui::window::sheetset::{Sheet, SheetSetMsg};
+        let i = self.active_tab;
+        match m {
+            SheetSetMsg::ToggleBar => {
+                self.sheetset.expanded ^= true;
+                iced::Task::none()
+            }
+            SheetSetMsg::Close => {
+                self.show_sheetset = false;
+                iced::Task::none()
+            }
+            SheetSetMsg::RenameSet(name) => {
+                if let Some(set) = self.sheetset.set.as_mut() {
+                    set.name = name;
+                }
+                iced::Task::none()
+            }
+            SheetSetMsg::AddCurrent(name) => {
+                let drawing = self.tabs[i]
+                    .current_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(unsaved)".to_string());
+                let layout = self.tabs[i].scene.current_layout.clone();
+                let sheet_name = if name.trim().is_empty() {
+                    layout.clone()
+                } else {
+                    name.trim().to_string()
+                };
+                if let Some(set) = self.sheetset.set.as_mut() {
+                    // Replace an existing sheet with the same name+layout.
+                    if !set
+                        .sheets
+                        .iter()
+                        .any(|s| s.name == sheet_name && s.layout == layout)
+                    {
+                        set.sheets.push(Sheet {
+                            name: sheet_name,
+                            drawing,
+                            layout,
+                        });
+                    }
+                }
+                iced::Task::none()
+            }
+            SheetSetMsg::Remove(index) => {
+                if let Some(set) = self.sheetset.set.as_mut() {
+                    if index < set.sheets.len() {
+                        set.sheets.remove(index);
+                    }
+                }
+                iced::Task::none()
+            }
+            SheetSetMsg::Activate(index) => {
+                let Some((drawing, layout)) = self
+                    .sheetset
+                    .set
+                    .as_ref()
+                    .and_then(|set| set.sheets.get(index))
+                    .map(|s| (s.drawing.clone(), s.layout.clone()))
+                else {
+                    return iced::Task::none();
+                };
+                let path = std::path::PathBuf::from(drawing);
+                if let Some(target) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.current_path.as_deref() == Some(path.as_path()))
+                {
+                    // Already open: switch to its tab, then its layout.
+                    self.active_tab = target;
+                    return self.on_layout_switch(layout);
+                }
+                // Not open yet: open it. Applying the sheet's layout once the
+                // drawing finishes opening is a follow-up (the async open path
+                // does not yet carry a "switch to layout" continuation); the
+                // sheet is still recorded and becomes one-click once open.
+                iced::Task::done(Message::OpenExternal(path))
+            }
+        }
+    }
+
     /// Start placing `name` through the INSERT command, skipping the name prompt.
     fn start_block_placement(&mut self, name: &str) {
         let i = self.active_tab;

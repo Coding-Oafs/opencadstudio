@@ -6664,6 +6664,7 @@ impl OpenCADStudio {
             Message::PlotDlg(m) => self.on_plot_dlg(m),
             Message::BlockPalette(m) => self.on_block_palette(m),
             Message::ToolPalettes(m) => self.on_tool_palettes(m),
+            Message::SheetSet(m) => self.on_sheetset(m),
             Message::PrintAllOpen => self.on_print_all_open(),
             Message::PrintAllToggle(name) => {
                 if let Some((_, selected)) = self

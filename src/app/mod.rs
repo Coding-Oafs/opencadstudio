@@ -605,6 +605,10 @@ pub(super) struct OpenCADStudio {
     pub(crate) show_tool_palettes: bool,
     /// Docked Tool Palettes panel state (selected tab, search, seeded palettes).
     pub(crate) tool_palettes: crate::ui::window::tool_palettes::ToolPalettes,
+    /// Docked Sheet Set Manager visibility.
+    pub(crate) show_sheetset: bool,
+    /// Docked Sheet Set Manager state.
+    pub(crate) sheetset: crate::ui::window::sheetset::SheetSetState,
     /// Whether the document file tabs are shown at the top (FILETAB).
     show_file_tabs: bool,
     /// Whether the layout/paper-space tabs are shown at the bottom (LAYOUTTAB).
@@ -2741,6 +2745,8 @@ pub enum Message {
     BlockPalette(crate::ui::window::block_palette::BlockPaletteMsg),
     /// An edit inside the docked Tool Palettes panel.
     ToolPalettes(crate::ui::window::tool_palettes::ToolPalettesMsg),
+    /// An edit inside the docked Sheet Set Manager.
+    SheetSet(crate::ui::window::sheetset::SheetSetMsg),
     /// Open the paper-layout batch output dialog.
     PrintAllOpen,
     /// Toggle one paper layout in the batch.
@@ -3275,6 +3281,14 @@ impl OpenCADStudio {
             show_tool_palettes: false,
             tool_palettes: crate::ui::window::tool_palettes::ToolPalettes {
                 palettes: crate::ui::window::tool_palettes::default_palettes(),
+                ..Default::default()
+            },
+            show_sheetset: false,
+            sheetset: crate::ui::window::sheetset::SheetSetState {
+                set: Some(crate::ui::window::sheetset::SheetSet {
+                    name: "Sheet Set".into(),
+                    sheets: Vec::new(),
+                }),
                 ..Default::default()
             },
             show_file_tabs: true,

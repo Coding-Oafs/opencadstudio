@@ -352,11 +352,21 @@ impl OpenCADStudio {
                 self.command_line.push_output(crate::t!(message).as_ref());
             }
 
-            // ── SHEETSET — not yet implemented ───────────────────────────────────
-            "SHEETSET" => {
-                self.command_line.push_info(
-                    crate::t!("SHEETSET: Sheet Set Manager not yet implemented.").as_ref(),
-                );
+            // ── SHEETSET — toggle the docked Sheet Set Manager ───────────────────
+            "SHEETSET" | "SSM" => {
+                self.show_sheetset = !self.show_sheetset;
+                if self.show_sheetset && self.sheetset.set.is_none() {
+                    self.sheetset.set = Some(crate::ui::window::sheetset::SheetSet {
+                        name: "Sheet Set".into(),
+                        sheets: Vec::new(),
+                    });
+                }
+                let message = if self.show_sheetset {
+                    "Sheet Set Manager: shown."
+                } else {
+                    "Sheet Set Manager: hidden."
+                };
+                self.command_line.push_output(crate::t!(message).as_ref());
             }
 
             // ── XDATA — read/write extended entity data ──────────────────────────
