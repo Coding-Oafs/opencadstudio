@@ -2099,6 +2099,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                     self.invalidate_property_targets(i, &handles);
                     self.tabs[i].dirty = true;
+                    if field == "spline_method" {
+                        self.tabs[i].properties.prop_vertex = 0;
+                        self.tabs[i].properties.prop_vertex_indicator_active = false;
+                    }
                     self.refresh_properties();
                 }
                 Task::none()
@@ -2121,6 +2125,35 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         } else {
                             crate::app::expr_eval::eval_to_string(&raw_val)
                         };
+                        if matches!(field, "current_fit_point" | "current_control_point") {
+                            let count = handles
+                                .iter()
+                                .filter_map(|handle| {
+                                    let entity = self.tabs[i].scene.document.get_entity(*handle)?;
+                                    match (field, entity) {
+                                        (
+                                            "current_fit_point",
+                                            acadrust::EntityType::Spline(spline),
+                                        ) => Some(spline.fit_points.len()),
+                                        (
+                                            "current_control_point",
+                                            acadrust::EntityType::Spline(spline),
+                                        ) => Some(spline.control_points.len()),
+                                        _ => None,
+                                    }
+                                })
+                                .min()
+                                .unwrap_or(0);
+                            if let Ok(requested) = val.trim().parse::<usize>() {
+                                if count > 0 {
+                                    let next = requested.clamp(1, count) - 1;
+                                    self.tabs[i].properties.prop_vertex = next;
+                                    self.tabs[i].properties.prop_vertex_indicator_active = true;
+                                }
+                            }
+                            self.refresh_properties();
+                            return Task::none();
+                        }
                         self.push_undo_snapshot(i, "CHPROP");
                         if field == "block" {
                             // Name row on a block reference: an existing name

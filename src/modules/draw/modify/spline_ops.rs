@@ -60,6 +60,7 @@ pub fn spline_control_curve(spl: &Spline) -> Option<NurbsCurve> {
     if !spl.control_points.is_empty()
         || spl.flags.closed
         || spl.flags.periodic
+        || spl.fit_tolerance > 0.0
         || spl.fit_points.len() < 2
     {
         return Some(exact);
@@ -275,16 +276,79 @@ fn spline_to_nurbs_with(
         let flat = vector(v);
         (flat[0] * flat[0] + flat[1] * flat[1] > 1e-18).then_some(flat)
     };
+    let start_tangent = tangent(&spl.begin_tangent);
+    let end_tangent = tangent(&spl.end_tangent);
+    let parameterization = match spl.knot_parameterization {
+        2 => Parameterization::Uniform,
+        1 => Parameterization::Centripetal,
+        _ => Parameterization::Chord,
+    };
+    if !spl.flags.closed && !spl.flags.periodic && spl.fit_tolerance > 0.0 {
+        fit = fit_within_tolerance(
+            fit,
+            start_tangent,
+            end_tangent,
+            parameterization,
+            spl.fit_tolerance,
+        );
+    }
     NurbsCurve::interpolate(
         &fit,
-        tangent(&spl.begin_tangent),
-        tangent(&spl.end_tangent),
-        match spl.knot_parameterization {
-            2 => Parameterization::Uniform,
-            1 => Parameterization::Centripetal,
-            _ => Parameterization::Chord,
-        },
+        start_tangent,
+        end_tangent,
+        parameterization,
     )
+}
+
+/// Reduce an exact fit-point set to the smallest progressively-refined subset
+/// whose interpolated curve stays within the requested distance of every
+/// original point. A zero tolerance bypasses this path and still interpolates
+/// every point exactly.
+fn fit_within_tolerance(
+    points: Vec<[f64; 2]>,
+    start_tangent: Option<[f64; 2]>,
+    end_tangent: Option<[f64; 2]>,
+    parameterization: Parameterization,
+    tolerance: f64,
+) -> Vec<[f64; 2]> {
+    if points.len() <= 2 || tolerance <= 0.0 {
+        return points;
+    }
+    let mut selected = vec![0, points.len() - 1];
+    loop {
+        let subset: Vec<_> = selected.iter().map(|index| points[*index]).collect();
+        let Some(curve) = NurbsCurve::interpolate(
+            &subset,
+            start_tangent,
+            end_tangent,
+            parameterization,
+        ) else {
+            return points;
+        };
+        let mut worst = None;
+        let mut worst_distance = tolerance;
+        for (index, point) in points.iter().enumerate() {
+            if selected.contains(&index) {
+                continue;
+            }
+            let nearest = curve.point_at(curve.parameter_at(*point));
+            let dx = nearest[0] - point[0];
+            let dy = nearest[1] - point[1];
+            let distance = (dx * dx + dy * dy).sqrt();
+            if distance > worst_distance {
+                worst = Some(index);
+                worst_distance = distance;
+            }
+        }
+        let Some(index) = worst else {
+            return subset;
+        };
+        selected.push(index);
+        selected.sort_unstable();
+        if selected.len() == points.len() {
+            return points;
+        }
+    }
 }
 
 /// Rebuild an acadrust `Spline` from a kernel curve.

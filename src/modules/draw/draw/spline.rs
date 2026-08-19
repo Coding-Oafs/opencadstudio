@@ -48,6 +48,7 @@ impl SplineCommand {
         // Closed splines render with a segment bridging the last point back to
         // the first (tessellation honours `flags.closed`).
         spline.flags.closed = closed;
+        spline.flags.planar = true;
         Some(EntityType::Spline(spline))
     }
 }
