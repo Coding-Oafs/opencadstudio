@@ -571,6 +571,33 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         }
     }
 
+    /// Handle an edit from the docked Tool Palettes panel.
+    pub(super) fn on_tool_palettes(
+        &mut self,
+        m: crate::ui::window::tool_palettes::ToolPalettesMsg,
+    ) -> iced::Task<Message> {
+        use crate::ui::window::tool_palettes::ToolPalettesMsg;
+        match m {
+            ToolPalettesMsg::Select(name) => {
+                self.tool_palettes.selected = Some(name);
+                iced::Task::none()
+            }
+            ToolPalettesMsg::Search(query) => {
+                self.tool_palettes.search = query;
+                iced::Task::none()
+            }
+            ToolPalettesMsg::ToggleBar => {
+                self.tool_palettes.expanded ^= true;
+                iced::Task::none()
+            }
+            ToolPalettesMsg::Close => {
+                self.show_tool_palettes = false;
+                iced::Task::none()
+            }
+            ToolPalettesMsg::Run(command) => iced::Task::done(Message::Command(command)),
+        }
+    }
+
     /// Start placing `name` through the INSERT command, skipping the name prompt.
     fn start_block_placement(&mut self, name: &str) {
         let i = self.active_tab;

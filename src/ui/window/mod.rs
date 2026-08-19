@@ -1,5 +1,6 @@
 pub mod about;
 pub mod block_palette;
+pub mod tool_palettes;
 pub mod layout_manager;
 pub mod layer_state_manager;
 pub mod drawing_units;

@@ -1517,6 +1517,26 @@ impl OpenCADStudio {
             Space::new().into()
         };
 
+        // Tool Palettes dock on the left (TOOLPALETTES), ahead of the
+        // Properties panel so the two side panels stack without overlap.
+        let tool_palettes_el: Element<'_, Message> = if tab.is_start {
+            Space::new().into()
+        } else if self.show_tool_palettes && !self.clean_screen {
+            if self.tool_palettes.expanded {
+                crate::ui::window::tool_palettes::view(&self.tool_palettes)
+            } else {
+                collapse_bar(
+                    "Tool Palettes",
+                    crate::app::config::DockSide::Left,
+                    Message::ToolPalettes(crate::ui::window::tool_palettes::ToolPalettesMsg::ToggleBar),
+                    Message::Noop,
+                    26.0,
+                )
+            }
+        } else {
+            Space::new().into()
+        };
+
         // Command-line sits as a bottom-centre overlay on top of the
         // viewport stack rather than as a separate row in the main
         // column — frees up vertical space when no command is active
@@ -1593,6 +1613,8 @@ impl OpenCADStudio {
                 workspace
             };
         let workspace = row![workspace, block_palette_el].width(Fill).height(Fill);
+        // Tool Palettes sit to the left of everything else.
+        let workspace = row![tool_palettes_el, workspace].width(Fill).height(Fill);
         let command_line = self.command_line.view(
             allow_autocomplete,
             dyn_capturing,

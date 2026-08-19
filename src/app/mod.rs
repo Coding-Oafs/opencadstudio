@@ -601,6 +601,10 @@ pub(super) struct OpenCADStudio {
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
     /// Whether the narrow-window block-palette bar is expanded.
     block_palette_expanded: bool,
+    /// Docked Tool Palettes panel visibility.
+    pub(crate) show_tool_palettes: bool,
+    /// Docked Tool Palettes panel state (selected tab, search, seeded palettes).
+    pub(crate) tool_palettes: crate::ui::window::tool_palettes::ToolPalettes,
     /// Whether the document file tabs are shown at the top (FILETAB).
     show_file_tabs: bool,
     /// Whether the layout/paper-space tabs are shown at the bottom (LAYOUTTAB).
@@ -2735,6 +2739,8 @@ pub enum Message {
     PlotDlg(crate::ui::window::plot::PlotDlgMsg),
     /// An edit inside the docked Insert Block panel.
     BlockPalette(crate::ui::window::block_palette::BlockPaletteMsg),
+    /// An edit inside the docked Tool Palettes panel.
+    ToolPalettes(crate::ui::window::tool_palettes::ToolPalettesMsg),
     /// Open the paper-layout batch output dialog.
     PrintAllOpen,
     /// Toggle one paper layout in the batch.
@@ -3266,6 +3272,11 @@ impl OpenCADStudio {
             show_block_palette: false,
             block_palette: Default::default(),
             block_palette_expanded: false,
+            show_tool_palettes: false,
+            tool_palettes: crate::ui::window::tool_palettes::ToolPalettes {
+                palettes: crate::ui::window::tool_palettes::default_palettes(),
+                ..Default::default()
+            },
             show_file_tabs: true,
             show_layout_tabs: true,
             last_point: None,

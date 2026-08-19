@@ -337,11 +337,19 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::ToggleQuickProperties));
             }
 
-            // ── TOOLPALETTES — not yet implemented ───────────────────────────────
-            "TOOLPALETTES" => {
-                self.command_line.push_info(
-                    crate::t!("TOOLPALETTES: Tool Palettes not yet implemented.").as_ref(),
-                );
+            // ── TOOLPALETTES — toggle the docked tool palette panel ──────────────
+            "TOOLPALETTES" | "TOOLPALETTE" => {
+                self.show_tool_palettes = !self.show_tool_palettes;
+                if self.show_tool_palettes && self.tool_palettes.palettes.is_empty() {
+                    self.tool_palettes.palettes =
+                        crate::ui::window::tool_palettes::default_palettes();
+                }
+                let message = if self.show_tool_palettes {
+                    "Tool Palettes: shown."
+                } else {
+                    "Tool Palettes: hidden."
+                };
+                self.command_line.push_output(crate::t!(message).as_ref());
             }
 
             // ── SHEETSET — not yet implemented ───────────────────────────────────
