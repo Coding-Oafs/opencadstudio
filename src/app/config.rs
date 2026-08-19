@@ -38,6 +38,10 @@ pub struct AppConfig {
     pub plot: PlotDialogState,
     /// Complete editable keyboard shortcut table.
     pub shortcuts: ShortcutConfig,
+    /// User-authored tool palettes (empty = seed defaults on next launch).
+    pub tool_palettes: Vec<crate::ui::window::tool_palettes::Palette>,
+    /// The persisted sheet set (empty sheet list by default).
+    pub sheet_set: crate::ui::window::sheetset::SheetSet,
 }
 
 impl Default for AppConfig {
@@ -53,6 +57,11 @@ impl Default for AppConfig {
             ribbon: RibbonConfig::default(),
             plot: PlotDialogState::default(),
             shortcuts: ShortcutConfig::default(),
+            tool_palettes: Vec::new(),
+            sheet_set: crate::ui::window::sheetset::SheetSet {
+                name: "Sheet Set".into(),
+                sheets: Vec::new(),
+            },
         }
     }
 }

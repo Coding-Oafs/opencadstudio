@@ -752,6 +752,7 @@ impl OpenCADStudio {
                     self.command_line
                         .push_info(crate::tf!("Open cancelled: \"{}\"", p.name).as_ref());
                 }
+                self.pending_layout_after_open = None;
                 self.drain_pending_open()
             }
 
@@ -820,6 +821,9 @@ impl OpenCADStudio {
                 if self.opening.as_ref().map(|opening| opening.id) != Some(open_id) {
                     return Task::none();
                 }
+                // A SHEETSET activate that failed to open its drawing can no
+                // longer apply a layout.
+                self.pending_layout_after_open = None;
                 if e.recovery_available {
                     if let Some(opening) = self.opening.as_mut() {
                         opening.recovery_error = Some(e.message);

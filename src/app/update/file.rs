@@ -570,6 +570,15 @@ impl OpenCADStudio {
                     .map(|(key, command)| (key.clone(), command.clone()))
                     .collect(),
             },
+            tool_palettes: self.tool_palettes.palettes.clone(),
+            sheet_set: self
+                .sheetset
+                .set
+                .clone()
+                .unwrap_or_else(|| crate::ui::window::sheetset::SheetSet {
+                    name: "Sheet Set".into(),
+                    sheets: Vec::new(),
+                }),
         }
     }
 
@@ -609,6 +618,15 @@ impl OpenCADStudio {
         self.shortcut_bindings
             .entry("F5".to_string())
             .or_insert_with(|| "ISOPLANE".to_string());
+        // Tool palettes: an empty saved list means "never authored" → seed the
+        // defaults; a non-empty list is the user's own, restored verbatim.
+        if cfg.tool_palettes.is_empty() {
+            self.tool_palettes.palettes =
+                crate::ui::window::tool_palettes::default_palettes();
+        } else {
+            self.tool_palettes.palettes = cfg.tool_palettes;
+        }
+        self.sheetset.set = Some(cfg.sheet_set);
     }
 
     /// Write the config only when it changed since the last write, so a toggle
@@ -1248,7 +1266,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 } else {
                     self.drain_pending_open()
                 };
-                Task::batch([thumbs_task, pending_open_task, interaction_task])
+                // A SHEETSET activate asked to open a drawing and then switch to
+                // one of its layouts. The opened tab is active here, so apply
+                // the pending layout and clear the request.
+                let layout_task = if let Some((expected, layout)) = self.pending_layout_after_open.take() {
+                    if self.tabs[i]
+                        .current_path
+                        .as_deref()
+                        .is_some_and(|p| native_paths_match(p, &expected))
+                    {
+                        self.on_layout_switch(layout)
+                    } else {
+                        Task::none()
+                    }
+                } else {
+                    Task::none()
+                };
+                Task::batch([thumbs_task, pending_open_task, layout_task, interaction_task])
     }
 
     pub(super) fn on_wblock_save_result_some(&mut self, block_name: String, path: std::path::PathBuf,

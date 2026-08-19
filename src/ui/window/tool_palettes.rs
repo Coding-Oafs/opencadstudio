@@ -11,6 +11,7 @@
 use crate::app::Message;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Background, Border, Color, Element, Fill, Length, Theme};
+use serde::{Deserialize, Serialize};
 
 const PANEL_W: f32 = 232.0;
 const PANEL_BG: Color = Color { r: 0.13, g: 0.13, b: 0.13, a: 1.0 };
@@ -21,20 +22,20 @@ const TEXT: Color = Color { r: 0.88, g: 0.88, b: 0.88, a: 1.0 };
 const DIM: Color = Color { r: 0.62, g: 0.62, b: 0.64, a: 1.0 };
 
 /// One command button inside a palette.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaletteTool {
     pub label: String,
     pub command: String,
 }
 
 /// One named, grouped palette.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Palette {
     pub name: String,
     pub groups: Vec<PaletteGroup>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaletteGroup {
     pub title: String,
     pub tools: Vec<PaletteTool>,

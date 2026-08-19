@@ -676,10 +676,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     self.active_tab = target;
                     return self.on_layout_switch(layout);
                 }
-                // Not open yet: open it. Applying the sheet's layout once the
-                // drawing finishes opening is a follow-up (the async open path
-                // does not yet carry a "switch to layout" continuation); the
-                // sheet is still recorded and becomes one-click once open.
+                // Not open yet: open it, and apply the sheet's layout once the
+                // async open completes.
+                self.pending_layout_after_open = Some((path.clone(), layout));
                 iced::Task::done(Message::OpenExternal(path))
             }
         }

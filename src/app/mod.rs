@@ -976,6 +976,10 @@ pub(super) struct OpenCADStudio {
     /// drawings in a file manager produces exactly that (one process per file,
     /// all arriving at once), which makes this queue load-bearing, not polish.
     pub(super) pending_opens: std::collections::VecDeque<PathBuf>,
+    /// Layout to apply to a sheet once its drawing finishes opening
+    /// (SHEETSET activate). Cleared when the open completes, errors, or is
+    /// cancelled.
+    pending_layout_after_open: Option<(PathBuf, String)>,
     /// One global interaction-index build at a time. Large drawings can each
     /// hold millions of entries, so file-open bursts must not multiply peak
     /// CPU and memory by the number of tabs.
@@ -3371,6 +3375,7 @@ impl OpenCADStudio {
             open_job_serial: 0,
             recovery_report: None,
             pending_opens: std::collections::VecDeque::new(),
+            pending_layout_after_open: None,
             active_interaction_index: None,
             queued_interaction_indices: std::collections::VecDeque::new(),
             pending_close: None,
