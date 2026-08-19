@@ -1,5 +1,6 @@
 use acadrust::entities::Spline;
 use crate::t;
+use cadkernel::geom2d::Curve as KernelCurve;
 use cadkernel::space::NurbsCurve3;
 
 use crate::command::EntityTransform;
@@ -263,6 +264,62 @@ fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
         return p;
     }
 
+    let Some((h, slopes)) = fit_spline_slopes(spl, &p) else {
+        return p;
+    };
+
+    // Evaluate each segment as a cubic Hermite (dP/du = slope · h_i).
+    let mut out = Vec::new();
+    for i in 0..n - 1 {
+        let point_at = |u: f64| {
+            let (u2, u3) = (u * u, u * u * u);
+            let h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+            let h10 = u3 - 2.0 * u2 + u;
+            let h01 = -2.0 * u3 + 3.0 * u2;
+            let h11 = u3 - u2;
+            let mut q = [0.0f64; 3];
+            for k in 0..3 {
+                let m0 = slopes[k][i] * h[i];
+                let m1 = slopes[k][i + 1] * h[i];
+                q[k] = h00 * p[i][k] + h10 * m0 + h01 * p[i + 1][k] + h11 * m1;
+            }
+            q
+        };
+        let tangent_at = |u: f64| {
+            let u2 = u * u;
+            let (h00, h10, h01, h11) = (
+                6.0 * u2 - 6.0 * u,
+                3.0 * u2 - 4.0 * u + 1.0,
+                -6.0 * u2 + 6.0 * u,
+                3.0 * u2 - 2.0 * u,
+            );
+            let mut q = [0.0; 3];
+            for k in 0..3 {
+                let m0 = slopes[k][i] * h[i];
+                let m1 = slopes[k][i + 1] * h[i];
+                q[k] = h00 * p[i][k] + h10 * m0 + h01 * p[i + 1][k] + h11 * m1;
+            }
+            q
+        };
+        let sampled = cadkernel::tessellation::sample_curve3_angle(
+            point_at,
+            tangent_at,
+            cadkernel::tessellation::DEFAULT_ANGLE,
+        );
+        out.extend(sampled.into_iter().skip(usize::from(i > 0)));
+    }
+    out
+}
+
+/// Slopes used by the spatial fit-point interpolator. Keeping this solve
+/// shared lets Properties report the same effective end tangents that the
+/// renderer uses when the stored tangent fields mean "automatic".
+fn fit_spline_slopes(spl: &Spline, p: &[[f64; 3]]) -> Option<(Vec<f64>, [Vec<f64>; 3])> {
+    let n = p.len();
+    if n < 2 {
+        return None;
+    }
+
     // Parameterise the fit points (unnormalised, so a unit end tangent — how the
     // tangents are stored — is a consistent dP/dt). Match the spline's knot
     // parameterisation: 2 = uniform, 1 = centripetal (√chord), else chord.
@@ -331,48 +388,7 @@ fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
         thomas_solve(&a, &b, &c, &mut d);
         slopes[k] = d;
     }
-
-    // Evaluate each segment as a cubic Hermite (dP/du = slope · h_i).
-    let mut out = Vec::new();
-    for i in 0..n - 1 {
-        let point_at = |u: f64| {
-            let (u2, u3) = (u * u, u * u * u);
-            let h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
-            let h10 = u3 - 2.0 * u2 + u;
-            let h01 = -2.0 * u3 + 3.0 * u2;
-            let h11 = u3 - u2;
-            let mut q = [0.0f64; 3];
-            for k in 0..3 {
-                let m0 = slopes[k][i] * h[i];
-                let m1 = slopes[k][i + 1] * h[i];
-                q[k] = h00 * p[i][k] + h10 * m0 + h01 * p[i + 1][k] + h11 * m1;
-            }
-            q
-        };
-        let tangent_at = |u: f64| {
-            let u2 = u * u;
-            let (h00, h10, h01, h11) = (
-                6.0 * u2 - 6.0 * u,
-                3.0 * u2 - 4.0 * u + 1.0,
-                -6.0 * u2 + 6.0 * u,
-                3.0 * u2 - 2.0 * u,
-            );
-            let mut q = [0.0; 3];
-            for k in 0..3 {
-                let m0 = slopes[k][i] * h[i];
-                let m1 = slopes[k][i + 1] * h[i];
-                q[k] = h00 * p[i][k] + h10 * m0 + h01 * p[i + 1][k] + h11 * m1;
-            }
-            q
-        };
-        let sampled = cadkernel::tessellation::sample_curve3_angle(
-            point_at,
-            tangent_at,
-            cadkernel::tessellation::DEFAULT_ANGLE,
-        );
-        out.extend(sampled.into_iter().skip(usize::from(i > 0)));
-    }
-    out
+    Some((h, slopes))
 }
 
 /// In-place Thomas solve for a tridiagonal system (`a` sub-, `b` main-, `c`
@@ -562,6 +578,68 @@ fn is_planar(spline: &Spline) -> bool {
     })
 }
 
+fn tangent_is_set(tangent: &acadrust::types::Vector3) -> bool {
+    tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z > 1e-18
+}
+
+/// The end tangents that currently define the fit curve. A zero stored vector
+/// means "automatic", not an actual zero derivative, so derive that end from
+/// the same interpolated curve used for drawing. Explicit values remain
+/// authoritative and are returned unchanged.
+fn effective_fit_tangents(
+    spline: &Spline,
+) -> (acadrust::types::Vector3, acadrust::types::Vector3) {
+    let begin_set = tangent_is_set(&spline.begin_tangent);
+    let end_set = tangent_is_set(&spline.end_tangent);
+    if begin_set && end_set {
+        return (spline.begin_tangent, spline.end_tangent);
+    }
+
+    let derived = crate::entities::curve::spline_curve(spline)
+        .and_then(|planar| {
+            let KernelCurve::Nurbs(curve) = &planar.curve else {
+                return None;
+            };
+            let (start, end) = curve.domain();
+            Some((
+                planar.plane.vector_at(curve.derivative_at_knot(start)),
+                planar.plane.vector_at(curve.derivative_at_knot(end)),
+            ))
+        })
+        .or_else(|| {
+            let points: Vec<[f64; 3]> = spline
+                .fit_points
+                .iter()
+                .map(|point| [point.x, point.y, point.z])
+                .collect();
+            let (_, slopes) = fit_spline_slopes(spline, &points)?;
+            let last = points.len() - 1;
+            Some((
+                [slopes[0][0], slopes[1][0], slopes[2][0]],
+                [slopes[0][last], slopes[1][last], slopes[2][last]],
+            ))
+        });
+
+    let Some((derived_begin, derived_end)) = derived else {
+        return (spline.begin_tangent, spline.end_tangent);
+    };
+    let vector = |value: [f64; 3]| {
+        acadrust::types::Vector3::new(value[0], value[1], value[2])
+    };
+    (
+        if begin_set {
+            spline.begin_tangent
+        } else {
+            vector(derived_begin)
+        },
+        if end_set {
+            spline.end_tangent
+        } else {
+            vector(derived_end)
+        },
+    )
+}
+
 fn grips(spline: &Spline) -> Vec<GripDef> {
     let (source, show_control_vertices) = if spline.cv_frame_visible {
         (control_vertices(spline), true)
@@ -604,6 +682,7 @@ fn properties(spline: &Spline) -> Vec<PropSection> {
         _ => "Custom",
     };
     let current = crate::scene::view::dispatch::prop_current_vertex();
+    let (effective_begin_tangent, effective_end_tangent) = effective_fit_tangents(spline);
     let mut data_points = if fit_method {
         let count = spline.fit_points.len();
         let index = current.min(count.saturating_sub(1));
@@ -714,32 +793,32 @@ fn properties(spline: &Spline) -> Vec<PropSection> {
             edit(
                 t!("Start tangent vector X").as_ref(),
                 "start_tan_x",
-                spline.begin_tangent.x,
+                effective_begin_tangent.x,
             ),
             edit(
                 t!("Start tangent vector Y").as_ref(),
                 "start_tan_y",
-                spline.begin_tangent.y,
+                effective_begin_tangent.y,
             ),
             edit(
                 t!("Start tangent vector Z").as_ref(),
                 "start_tan_z",
-                spline.begin_tangent.z,
+                effective_begin_tangent.z,
             ),
             edit(
                 t!("End tangent vector X").as_ref(),
                 "end_tan_x",
-                spline.end_tangent.x,
+                effective_end_tangent.x,
             ),
             edit(
                 t!("End tangent vector Y").as_ref(),
                 "end_tan_y",
-                spline.end_tangent.y,
+                effective_end_tangent.y,
             ),
             edit(
                 t!("End tangent vector Z").as_ref(),
                 "end_tan_z",
-                spline.end_tangent.z,
+                effective_end_tangent.z,
             ),
             edit(
                 t!("Fit tolerance").as_ref(),
@@ -794,6 +873,7 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
         }
         _ => {}
     }
+    let (effective_begin_tangent, effective_end_tangent) = effective_fit_tangents(spline);
     let Some(v) = parse_f64(value) else { return };
     let control_index = crate::scene::view::dispatch::prop_current_vertex()
         .min(spline.control_points.len().saturating_sub(1));
@@ -843,12 +923,28 @@ fn apply_geom_prop(spline: &mut Spline, field: &str, value: &str) {
             }
         }
         "fit_tolerance" if v >= 0.0 => spline.fit_tolerance = v,
-        "start_tan_x" => spline.begin_tangent.x = v,
-        "start_tan_y" => spline.begin_tangent.y = v,
-        "start_tan_z" => spline.begin_tangent.z = v,
-        "end_tan_x" => spline.end_tangent.x = v,
-        "end_tan_y" => spline.end_tangent.y = v,
-        "end_tan_z" => spline.end_tangent.z = v,
+        "start_tan_x" | "start_tan_y" | "start_tan_z" => {
+            if !tangent_is_set(&spline.begin_tangent) {
+                spline.begin_tangent = effective_begin_tangent;
+            }
+            match field {
+                "start_tan_x" => spline.begin_tangent.x = v,
+                "start_tan_y" => spline.begin_tangent.y = v,
+                "start_tan_z" => spline.begin_tangent.z = v,
+                _ => {}
+            }
+        }
+        "end_tan_x" | "end_tan_y" | "end_tan_z" => {
+            if !tangent_is_set(&spline.end_tangent) {
+                spline.end_tangent = effective_end_tangent;
+            }
+            match field {
+                "end_tan_x" => spline.end_tangent.x = v,
+                "end_tan_y" => spline.end_tangent.y = v,
+                "end_tan_z" => spline.end_tangent.z = v,
+                _ => {}
+            }
+        }
         _ => {}
     }
     spline.flags.planar = is_planar(spline);
