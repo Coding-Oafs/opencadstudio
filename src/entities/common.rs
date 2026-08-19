@@ -453,6 +453,30 @@ pub fn circle_grip(id: usize, world: glam::DVec3) -> GripDef {
     }
 }
 
+/// Round grip that edits one vertex.
+pub fn round_grip(id: usize, world: glam::DVec3) -> GripDef {
+    GripDef {
+        id,
+        world,
+        is_midpoint: false,
+        shape: GripShape::Circle,
+        dir: None,
+        axis: None,
+    }
+}
+
+/// Screen-offset down-arrow that opens a choice menu for an entity.
+pub fn dropdown_grip(id: usize, world: glam::DVec3) -> GripDef {
+    GripDef {
+        id,
+        world,
+        is_midpoint: false,
+        shape: GripShape::Dropdown,
+        dir: None,
+        axis: None,
+    }
+}
+
 /// Mid-segment stretch grip oriented along `dir` (the segment's in-plane
 /// world-XY direction). Drawn as a small rectangle elongated along the
 /// segment so the affordance reads as "stretch perpendicular".

@@ -287,12 +287,12 @@ pub fn polyline2d_curve(polyline: &Polyline2D) -> Option<PlanarCurve> {
 /// plane the normal describes. A spline that genuinely wanders in space gets
 /// `None`, which is honest: flattening it to XY would move it.
 pub fn spline_curve(spline: &SplineEnt) -> Option<PlanarCurve> {
-    let points: Vec<Vector3> = spline
-        .control_points
-        .iter()
-        .chain(spline.fit_points.iter())
-        .copied()
-        .collect();
+    let source = if crate::entities::spline::uses_fit_method(spline) {
+        &spline.fit_points
+    } else {
+        &spline.control_points
+    };
+    let points: Vec<Vector3> = source.to_vec();
     let first = points.first()?;
     let normal = normalized(spline.normal);
     let elevation = Vec3::from(xyz(*first)).dot(Vec3::from(xyz(normal)));

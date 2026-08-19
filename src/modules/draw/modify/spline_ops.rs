@@ -96,15 +96,18 @@ fn spline_to_nurbs_with(
         let flat = vector(v);
         (flat[0] * flat[0] + flat[1] * flat[1] > 1e-18).then_some(flat)
     };
+    let start_tangent = tangent(&spl.begin_tangent);
+    let end_tangent = tangent(&spl.end_tangent);
+    let parameterization = match spl.knot_parameterization {
+        2 => Parameterization::Uniform,
+        1 => Parameterization::Centripetal,
+        _ => Parameterization::Chord,
+    };
     NurbsCurve::interpolate(
         &fit,
-        tangent(&spl.begin_tangent),
-        tangent(&spl.end_tangent),
-        match spl.knot_parameterization {
-            2 => Parameterization::Uniform,
-            1 => Parameterization::Centripetal,
-            _ => Parameterization::Chord,
-        },
+        start_tangent,
+        end_tangent,
+        parameterization,
     )
 }
 

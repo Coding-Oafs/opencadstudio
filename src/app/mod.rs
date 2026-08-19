@@ -82,6 +82,8 @@ pub struct GripPopup {
     pub anchor: iced::Point,
     pub items: Vec<crate::scene::model::object::GripMenuItem>,
     pub selected: usize,
+    /// Whether a click-opened menu stays visible away from its grip.
+    pub pinned: bool,
 }
 
 /// Pending follow-up value for grip-menu actions that need a number

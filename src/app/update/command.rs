@@ -1322,6 +1322,27 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                 }
                 // One-shot action — apply immediately.
+                let unchanged = self.tabs[i]
+                    .scene
+                    .document
+                    .get_entity(popup.handle)
+                    .is_some_and(|entity| match (item.action, entity) {
+                        (GripMenuAction::ShowFit, acadrust::EntityType::Spline(spline)) => {
+                            !spline.cv_frame_visible
+                                && crate::entities::spline::uses_fit_method(spline)
+                        }
+                        (
+                            GripMenuAction::ShowControlVertices,
+                            acadrust::EntityType::Spline(spline),
+                        ) => {
+                            spline.cv_frame_visible
+                                || !crate::entities::spline::uses_fit_method(spline)
+                        }
+                        _ => false,
+                    });
+                if unchanged {
+                    return Task::none();
+                }
                 self.push_undo_snapshot(i, item.label);
                 // For Add Leader, the new arrow becomes the last grip; remember
                 // its id so we can grab it for placement right after.
@@ -1728,6 +1749,40 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
         let handles = self.property_target_handles(i);
 
         if !handles.is_empty() {
+            if matches!(field, "spline_method" | "knot_param" | "cv_frame") {
+                let unchanged = handles.iter().all(|handle| {
+                    let Some(acadrust::EntityType::Spline(spline)) =
+                        self.tabs[i].scene.document.get_entity(*handle)
+                    else {
+                        return false;
+                    };
+                    match field {
+                        "spline_method" => {
+                            value == if crate::entities::spline::uses_fit_method(spline) {
+                                "Fit"
+                            } else {
+                                "Control Vertices"
+                            }
+                        }
+                        "knot_param" => {
+                            let current = match spline.knot_parameterization {
+                                0 => "Chord",
+                                1 => "Square Root",
+                                2 => "Uniform",
+                                _ => "Custom",
+                            };
+                            value == current
+                        }
+                        "cv_frame" => {
+                            value == if spline.cv_frame_visible { "Show" } else { "Hide" }
+                        }
+                        _ => false,
+                    }
+                });
+                if unchanged {
+                    return Task::none();
+                }
+            }
             self.push_undo_snapshot(i, "CHPROP");
 
             if field == "vscale_std" {
@@ -2099,6 +2154,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                     self.invalidate_property_targets(i, &handles);
                     self.tabs[i].dirty = true;
+                    if field == "spline_method" {
+                        self.tabs[i].properties.prop_vertex = 0;
+                        self.tabs[i].properties.prop_vertex_indicator_active = false;
+                    }
                     self.refresh_properties();
                 }
                 Task::none()
@@ -2121,6 +2180,35 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         } else {
                             crate::app::expr_eval::eval_to_string(&raw_val)
                         };
+                        if matches!(field, "current_fit_point" | "current_control_point") {
+                            let count = handles
+                                .iter()
+                                .filter_map(|handle| {
+                                    let entity = self.tabs[i].scene.document.get_entity(*handle)?;
+                                    match (field, entity) {
+                                        (
+                                            "current_fit_point",
+                                            acadrust::EntityType::Spline(spline),
+                                        ) => Some(spline.fit_points.len()),
+                                        (
+                                            "current_control_point",
+                                            acadrust::EntityType::Spline(spline),
+                                        ) => Some(spline.control_points.len()),
+                                        _ => None,
+                                    }
+                                })
+                                .min()
+                                .unwrap_or(0);
+                            if let Ok(requested) = val.trim().parse::<usize>() {
+                                if count > 0 {
+                                    let next = requested.clamp(1, count) - 1;
+                                    self.tabs[i].properties.prop_vertex = next;
+                                    self.tabs[i].properties.prop_vertex_indicator_active = true;
+                                }
+                            }
+                            self.refresh_properties();
+                            return Task::none();
+                        }
                         self.push_undo_snapshot(i, "CHPROP");
                         if field == "block" {
                             // Name row on a block reference: an existing name

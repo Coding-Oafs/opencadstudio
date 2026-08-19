@@ -414,22 +414,24 @@ impl OpenCADStudio {
                         None => tab.scene.active_model_tile_bounds(vw, vh),
                     };
                     let sel_h = tab.selected_handle;
-                    // The Current Vertex the Properties panel is focused on:
-                    // mark that grip hot so the navigated vertex is visible in
-                    // the drawing. Only for a single selected polyline, whose
-                    // vertex grips are ids 0..n. (Properties vertex stepper)
+                    // Mark the Properties panel's current point grip hot.
                     let current_vertex_grip: Option<usize> = tab
                         .properties
                         .prop_vertex_indicator_active
                         .then(|| sel_h)
                         .flatten()
                         .and_then(|h| {
-                        matches!(
-                            tab.scene.document.get_entity(h),
-                            Some(acadrust::EntityType::LwPolyline(_))
-                                | Some(acadrust::EntityType::Polyline2D(_))
-                        )
-                        .then_some(tab.properties.prop_vertex)
+                            let indexed = match tab.scene.document.get_entity(h) {
+                                Some(acadrust::EntityType::LwPolyline(_))
+                                | Some(acadrust::EntityType::Polyline2D(_)) => true,
+                                Some(acadrust::EntityType::Spline(spline)) => {
+                                    !crate::entities::spline::uses_fit_method(spline)
+                                        || !spline.cv_frame_visible
+                                        || crate::entities::curve::spline_curve(spline).is_none()
+                                }
+                                _ => false,
+                            };
+                            indexed.then_some(tab.properties.prop_vertex)
                         });
                     // In-viewport grips are model-space; project them with the
                     // viewport camera so they sit on the wire the GPU draws.
@@ -495,6 +497,30 @@ impl OpenCADStudio {
                 } else {
                     vec![]
                 };
+            let control_polygon = tab.selected_handle.and_then(|handle| {
+                let spline = match tab.scene.document.get_entity(handle) {
+                    Some(acadrust::EntityType::Spline(spline)) if spline.cv_frame_visible => spline,
+                    _ => return None,
+                };
+                if tab
+                    .selected_grip_handles
+                    .iter()
+                    .any(|owner| *owner != handle)
+                {
+                    return None;
+                }
+                let points: Vec<_> = grips
+                    .iter()
+                    .filter(|grip| {
+                        grip.shape == crate::scene::model::object::GripShape::Circle
+                    })
+                    .map(|grip| grip.pos)
+                    .collect();
+                (points.len() >= 2).then_some((
+                    points,
+                    spline.flags.closed || spline.flags.periodic,
+                ))
+            });
             let grip_clip = if grips.is_empty() {
                 None
             } else {
@@ -688,6 +714,7 @@ impl OpenCADStudio {
                 snap_ext_base,
                 snap_ext_base2,
                 grips,
+                control_polygon,
                 grip_clip,
                 ucs_icons,
                 ost_points,
@@ -1092,26 +1119,28 @@ impl OpenCADStudio {
             }
         }
 
-        // Multi-functional grip popup (Phase 2). One bordered container
-        // wraps a column of borderless item buttons so the popup reads
-        // as a single widget instead of stacked tiles.
         if let Some(popup) = self.grip_popup.as_ref() {
             if !tab.is_start {
-                // Size the row to the widest label so the selection
-                // highlight fills the whole row instead of just the
-                // text glyphs. ~7 px per character at size 12 + the
-                // horizontal padding (10 + 10).
-                let max_len = popup
+                let labels: Vec<String> = popup
                     .items
                     .iter()
-                    .map(|i| i.label.chars().count())
+                    .map(|item| {
+                        let (mark, raw) = item
+                            .label
+                            .strip_prefix("✓ ")
+                            .map_or(("", item.label), |raw| ("✓ ", raw));
+                        format!("{mark}{}", crate::i18n::translate(raw))
+                    })
+                    .collect();
+                let max_len = labels
+                    .iter()
+                    .map(|label| label.chars().count())
                     .max()
                     .unwrap_or(8) as f32;
                 let row_w = max_len * 7.0 + 24.0;
                 let mut col = column![].spacing(0).width(iced::Length::Fixed(row_w));
-                for (idx, item) in popup.items.iter().enumerate() {
+                for (idx, label) in labels.into_iter().enumerate() {
                     let is_sel = idx == popup.selected;
-                    let label = item.label;
                     let btn = button(text(label).size(12))
                         .on_press(Message::GripMenuPick(idx))
                         .padding([3, 10])

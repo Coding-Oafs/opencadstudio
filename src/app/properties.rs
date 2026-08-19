@@ -121,6 +121,13 @@ impl OpenCADStudio {
                     acadrust::EntityType::LwPolyline(polyline) => Some(polyline.vertices.len()),
                     acadrust::EntityType::Polyline2D(polyline) => Some(polyline.vertices.len()),
                     acadrust::EntityType::Leader(leader) => Some(leader.vertices.len()),
+                    acadrust::EntityType::Spline(spline) => Some(
+                        if crate::entities::spline::uses_fit_method(spline) {
+                            spline.fit_points.len()
+                        } else {
+                            spline.control_points.len()
+                        },
+                    ),
                     _ => None,
                 });
             vertex_count.map_or(prop_vertex, |count| prop_vertex.min(count.saturating_sub(1)))
