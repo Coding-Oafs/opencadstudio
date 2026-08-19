@@ -5,7 +5,8 @@ use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    center_grip, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
+    center_grip, edit_prop as edit, oriented_triangle_grip, parse_f64, ro_prop as ro,
+    square_grip,
 };
 use crate::entities::traits::RenderConvertible;
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
@@ -64,26 +65,72 @@ fn to_render(ell: &Ellipse) -> RenderEntity {
 /// hand-built sampling produced, without restating how a B-spline is put
 /// together at each site.
 
-fn grips(ell: &Ellipse) -> Vec<GripDef> {
+fn axis_vectors(ell: &Ellipse) -> (glam::DVec3, glam::DVec3, glam::DVec3) {
     let ctr = glam::DVec3::new(ell.center.x, ell.center.y, ell.center.z);
     let major = glam::DVec3::new(ell.major_axis.x, ell.major_axis.y, ell.major_axis.z);
-    let major_xy =
-        ((ell.major_axis.x * ell.major_axis.x + ell.major_axis.y * ell.major_axis.y) as f64).sqrt();
-    let (px, py) = if major_xy > 1e-10 {
-        let s = ell.major_axis_length() * ell.minor_axis_ratio / major_xy;
-        (-ell.major_axis.y * s, ell.major_axis.x * s)
-    } else {
-        (0.0, ell.major_axis_length() * ell.minor_axis_ratio)
-    };
-    let minor = glam::DVec3::new(px, py, 0.0);
+    let major_dir = major.normalize_or(glam::DVec3::X);
+    let normal = glam::DVec3::new(ell.normal.x, ell.normal.y, ell.normal.z)
+        .normalize_or(glam::DVec3::Z);
+    let fallback_minor = glam::DVec3::Z
+        .cross(major_dir)
+        .normalize_or(glam::DVec3::Y);
+    let minor_dir = normal.cross(major_dir).normalize_or(fallback_minor);
+    let minor = minor_dir * ell.minor_axis_length();
+    (ctr, major, minor)
+}
+
+fn ellipse_point(
+    ctr: glam::DVec3,
+    major: glam::DVec3,
+    minor: glam::DVec3,
+    t: f64,
+) -> glam::DVec3 {
+    ctr + major * t.cos() + minor * t.sin()
+}
+
+fn is_closed(ell: &Ellipse) -> bool {
+    crate::entities::curve::ellipse_curve(ell).is_some_and(|curve| curve.curve.is_closed())
+}
+
+fn parameter_at_point(ell: &Ellipse, point: glam::DVec3) -> Option<f64> {
+    let (ctr, major, minor) = axis_vectors(ell);
+    let major_len = major.length();
+    let minor_len = minor.length();
+    if major_len <= 1e-10 || minor_len <= 1e-10 {
+        return None;
+    }
+    let delta = point - ctr;
+    let along_major = delta.dot(major / major_len) / major_len;
+    let along_minor = delta.dot(minor / minor_len) / minor_len;
+    Some(along_minor.atan2(along_major).rem_euclid(std::f64::consts::TAU))
+}
+
+fn grips(ell: &Ellipse) -> Vec<GripDef> {
+    let (ctr, major, minor) = axis_vectors(ell);
     let mut grips = vec![
         center_grip(0, ctr),
         square_grip(1, ctr + major),
         square_grip(2, ctr + minor),
+        square_grip(3, ctr - major),
+        square_grip(4, ctr - minor),
     ];
-    if ell.is_full() {
-        grips.push(square_grip(3, ctr - major));
-        grips.push(square_grip(4, ctr - minor));
+    if !is_closed(ell) {
+        let start_t = ell.start_parameter;
+        let end_t = ell.end_parameter;
+        let start = ellipse_point(ctr, major, minor, start_t);
+        let end = ellipse_point(ctr, major, minor, end_t);
+        let start_outward = major * start_t.sin() - minor * start_t.cos();
+        let end_outward = -major * end_t.sin() + minor * end_t.cos();
+        grips.push(oriented_triangle_grip(
+            5,
+            start,
+            [start_outward.x as f32, start_outward.y as f32],
+        ));
+        grips.push(oriented_triangle_grip(
+            6,
+            end,
+            [end_outward.x as f32, end_outward.y as f32],
+        ));
     }
     grips
 }
@@ -115,9 +162,7 @@ fn properties(ell: &Ellipse) -> Vec<PropSection> {
     let minor_vec = v * r_minor;
 
     let start_angle = ell.start_parameter.to_degrees().rem_euclid(360.0);
-    let end_angle = if crate::entities::curve::ellipse_curve(ell)
-        .is_some_and(|curve| curve.curve.is_closed())
-    {
+    let end_angle = if is_closed(ell) {
         360.0
     } else {
         ell.end_parameter.to_degrees().rem_euclid(360.0)
@@ -259,6 +304,16 @@ fn apply_grip(ell: &mut Ellipse, grip_id: usize, apply: GripApply) {
                 ell.major_axis.x = fixed_dir.0 * fixed_len;
                 ell.major_axis.y = fixed_dir.1 * fixed_len;
                 ell.minor_axis_ratio = (dragged_len / fixed_len).clamp(0.001, 1.0);
+            }
+        }
+        (5 | 6, GripApply::Absolute(p)) => {
+            let Some(parameter) = parameter_at_point(ell, p) else {
+                return;
+            };
+            if grip_id == 5 {
+                ell.start_parameter = parameter;
+            } else {
+                ell.end_parameter = parameter;
             }
         }
         _ => {}

@@ -386,9 +386,20 @@ fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme)
             })
         }
         GripShape::Triangle => canvas::Path::new(|b| {
-            b.move_to(Point::new(sp.x, sp.y - h));
-            b.line_to(Point::new(sp.x + h, sp.y + h));
-            b.line_to(Point::new(sp.x - h, sp.y + h));
+            let (forward_x, forward_y) = match grip.dir {
+                Some([dx, dy]) if (dx * dx + dy * dy) > 1e-12 => {
+                    let length = (dx * dx + dy * dy).sqrt();
+                    (dx / length, -dy / length)
+                }
+                _ => (0.0, -1.0),
+            };
+            let side_x = -forward_y;
+            let side_y = forward_x;
+            let tip = Point::new(sp.x + forward_x * h, sp.y + forward_y * h);
+            let base = Point::new(sp.x - forward_x * h, sp.y - forward_y * h);
+            b.move_to(tip);
+            b.line_to(Point::new(base.x + side_x * h, base.y + side_y * h));
+            b.line_to(Point::new(base.x - side_x * h, base.y - side_y * h));
             b.close();
         }),
         GripShape::Circle => canvas::Path::circle(Point::new(sp.x, sp.y), h),

@@ -479,6 +479,20 @@ pub fn triangle_grip(id: usize, world: glam::DVec3) -> GripDef {
     }
 }
 
+/// Directional triangle grip. `dir` is a world-XY direction and points toward
+/// the triangle tip. Existing non-directional triangle grips keep their
+/// screen-up orientation through [`triangle_grip`].
+pub fn oriented_triangle_grip(id: usize, world: glam::DVec3, dir: [f32; 2]) -> GripDef {
+    GripDef {
+        id,
+        world,
+        is_midpoint: false,
+        shape: GripShape::Triangle,
+        dir: Some(dir),
+        axis: None,
+    }
+}
+
 /// Editable ANGLE row: displays via AUNITS/AUPREC. Angle rows used the
 /// LINEAR formatter, so LUNITS=Architectural showed a block rotation as
 /// feet-and-inches and the string wouldn't parse back (#297). Value in
