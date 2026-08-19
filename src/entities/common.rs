@@ -178,10 +178,17 @@ pub fn format_angle(value_rad: f64) -> String {
 fn dms(degrees: f64, prec: usize) -> String {
     let sign = if degrees < 0.0 { "-" } else { "" };
     let a = degrees.abs();
-    let d = a.floor();
-    let m_full = (a - d) * 60.0;
-    let m = m_full.floor();
-    let s = (m_full - m) * 60.0;
+    // Round once, into the smallest unit that will be shown, so seconds that
+    // round up carry into the minutes and degrees. Rounding the seconds after
+    // the split wrote the impossible 45d59'60".
+    let scale = 10f64.powi(prec.min(15) as i32);
+    let per_minute = 60.0 * scale;
+    let per_degree = 60.0 * per_minute;
+    let ticks = (a * per_degree).round();
+    let d = (ticks / per_degree).trunc();
+    let rest = ticks - d * per_degree;
+    let m = (rest / per_minute).trunc();
+    let s = (rest - m * per_minute) / scale;
     format!("{}{:.0}d{:.0}'{:.*}\"", sign, d, m, prec, s)
 }
 
@@ -192,7 +199,12 @@ fn dms(degrees: f64, prec: usize) -> String {
 /// the single letter, which is also what keeps a 90° angle from reading as the
 /// contradictory `N 90d0'0" E`.
 fn surveyor(value_rad: f64, prec: usize) -> String {
-    let deg = value_rad.to_degrees().rem_euclid(360.0);
+    // Snap to the resolution that will be shown before deciding anything, so
+    // a direction that rounds onto a cardinal is written as one -- and so the
+    // bearing handed to `dms` can no longer round up to the quarter turn that
+    // would read as the contradictory `N 90d0'0\" E`.
+    let scale = 3600.0 * 10f64.powi(prec.min(15) as i32);
+    let deg = ((value_rad.to_degrees().rem_euclid(360.0) * scale).round() / scale).rem_euclid(360.0);
     let near = |target: f64| (deg - target).abs() < 1e-9;
     if near(0.0) {
         return "E".into();
@@ -862,6 +874,74 @@ mod length_format_tests {
                     (read - value).abs() < 0.02,
                     "lunits {lunits}: {value} wrote {shown:?}, read back as {read}"
                 );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod angle_format_tests {
+    use super::*;
+
+    fn shown(aunits: i16, auprec: i16, degrees: f64) -> String {
+        let mut ctx = unit_context();
+        ctx.aunits = aunits;
+        ctx.auprec = auprec;
+        set_unit_context(ctx);
+        format_angle(degrees.to_radians())
+    }
+
+    /// Seconds that round up are a minute, and sixty minutes are a degree.
+    /// Rounding after the split wrote 45d59'60\", which no drawing produces.
+    #[test]
+    fn degrees_minutes_seconds_carry() {
+        assert_eq!(shown(1, 0, 45.9999), "46d0'0\"");
+        assert_eq!(shown(1, 0, 89.99999), "90d0'0\"");
+        assert_eq!(shown(1, 0, 0.99999), "1d0'0\"");
+        // Values that do not round up are unchanged.
+        assert_eq!(shown(1, 0, 45.5), "45d30'0\"");
+        assert_eq!(shown(1, 2, 45.9999), "45d59'59.64\"");
+        assert_eq!(shown(1, 2, 45.5), "45d30'0.00\"");
+    }
+
+    /// A bearing that rounds onto a cardinal is that cardinal — the quarter
+    /// turn must never be written as `S 90d0'0\" E`.
+    #[test]
+    fn surveyor_bearings_stay_inside_a_quadrant() {
+        assert_eq!(shown(4, 0, 359.99999), "E");
+        assert_eq!(shown(4, 0, 89.99999), "N");
+        assert_eq!(shown(4, 0, 45.0), "N 45d0'0\" E");
+        assert_eq!(shown(4, 0, 180.0), "W");
+        for prec in [0, 2] {
+            for deg in [0.99999f64, 45.9999, 89.99999, 179.99999, 269.99999, 359.99999] {
+                let text = shown(4, prec, deg);
+                assert!(
+                    !text.contains("90d"),
+                    "prec {prec}: {deg} wrote {text:?}, a quarter turn inside a quadrant"
+                );
+            }
+        }
+    }
+
+    /// Whatever the readout shows must still read straight back.
+    #[test]
+    fn formatted_angles_read_back() {
+        for aunits in [0, 1, 4] {
+            for prec in [0, 2] {
+                for deg in [0.99999f64, 45.5, 45.9999, 89.99999, 200.25, 359.99999] {
+                    let text = shown(aunits, prec, deg);
+                    let read = parse_angle(&text).unwrap_or_else(|| {
+                        panic!("aunits {aunits} prec {prec} wrote {text:?}, which does not read back")
+                    });
+                    let delta = (read.to_degrees().rem_euclid(360.0) - deg.rem_euclid(360.0))
+                        .rem_euclid(360.0);
+                    let delta = delta.min(360.0 - delta);
+                    assert!(
+                        delta < 1.0,
+                        "aunits {aunits} prec {prec}: {deg} wrote {text:?}, read back as {}",
+                        read.to_degrees()
+                    );
+                }
             }
         }
     }
