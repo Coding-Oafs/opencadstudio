@@ -1559,17 +1559,39 @@ impl OpenCADStudio {
                 ))
             }
 
-            Message::CommandLineArrowProbe { direction } => {
+            Message::CommandLineArrowProbe {
+                direction,
+                extend_selection,
+            } => {
                 iced::widget::operation::is_focused(iced::widget::Id::new(
                     crate::ui::command_line::CMD_INPUT_ID,
                 ))
                 .map(move |focused| Message::CommandLineArrowResolved {
                     direction,
                     focused,
+                    extend_selection,
                 })
             }
 
-            Message::CommandLineArrowResolved { direction, focused } => {
+            Message::CommandLineArrowResolved {
+                direction,
+                focused,
+                extend_selection,
+            } => {
+                // The MText editor paints its own caret and is not a focusable
+                // widget, so the command input keeps widget focus behind the
+                // dialog and captures Up / Down itself. Walking command history
+                // from under an open editor is never what the key meant: while the
+                // editor is up the arrow belongs to its caret, exactly as it does
+                // on the ArrowKeyPressed path.
+                if self.mtext_editor.is_some() {
+                    match direction {
+                        ArrowKey::Up => self.mtext_caret_move_vertical(1, extend_selection),
+                        ArrowKey::Down => self.mtext_caret_move_vertical(-1, extend_selection),
+                        ArrowKey::Left | ArrowKey::Right => {}
+                    }
+                    return Task::none();
+                }
                 if !focused {
                     return Task::none();
                 }

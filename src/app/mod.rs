@@ -1970,9 +1970,9 @@ pub enum Message {
     },
     /// A widget captured Up/Down; resolve it only if the command input owns
     /// keyboard focus.
-    CommandLineArrowProbe { direction: ArrowKey },
+    CommandLineArrowProbe { direction: ArrowKey, extend_selection: bool },
     /// Result of the command-input focus query for a captured Up/Down key.
-    CommandLineArrowResolved { direction: ArrowKey, focused: bool },
+    CommandLineArrowResolved { direction: ArrowKey, focused: bool, extend_selection: bool },
     /// Toggle the dropdown listing the full command-line history.
     CommandHistoryToggle,
     /// Grab/move/release the expanded history panel's top resize edge.

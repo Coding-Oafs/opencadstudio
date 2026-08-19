@@ -2241,6 +2241,7 @@ impl OpenCADStudio {
                         {
                             return Some(Message::CommandLineArrowProbe {
                                 direction: arrow?,
+                                extend_selection: modifiers.shift(),
                             });
                         }
                         // A focused web text field needs the browser clipboard;
