@@ -1581,11 +1581,32 @@ fn replace_save_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
             std::ptr::null(),
         )
     };
-    if ok == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
+    if ok != 0 {
+        return Ok(());
     }
+    let error = std::io::Error::last_os_error();
+    // ReplaceFileW can intermittently fail with ERROR_UNABLE_TO_REMOVE_REPLACED
+    // (1175) when the destination cannot be swapped atomically — e.g. a
+    // transient lock from antivirus/indexing, or a filesystem that does not
+    // support the underlying rename semantics. Retry as an explicit
+    // remove-then-rename: the replacement file is already fully written, so
+    // this is still non-truncating, just not atomic. Most frequent for the
+    // fixed-name `.sv$` autosave file, which is rewritten every SAVETIME tick.
+    if !matches!(error.raw_os_error(), Some(1175)) {
+        return Err(error);
+    }
+    // The lock is often gone within a few hundred milliseconds (indexer / AV).
+    // A bounded retry avoids dropping a completed save on a transient hold.
+    for _ in 0..5 {
+        match std::fs::remove_file(path) {
+            Ok(()) => return std::fs::rename(temp_path, path),
+            Err(remove_error) if remove_error.raw_os_error() == Some(1175) => {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+            }
+            Err(remove_error) => return Err(remove_error),
+        }
+    }
+    Err(error)
 }
 
 /// Save using the document's existing version.
