@@ -82,7 +82,7 @@ pub fn relative_render(
         return None;
     };
     let pdsize = document.header.point_display_size;
-    let pdmode = document.header.point_display_mode;
+    let pdmode = effective_pdmode(pt, document.header.point_display_mode);
     if pdsize > 0.0 || pdmode == 0 {
         return None;
     }
@@ -173,8 +173,26 @@ fn point_glyph(cx: f64, cy: f64, z: f64, pdmode: i16, s_half: f64) -> Vec<[f64; 
     pts
 }
 
+/// Layer AutoCAD writes dimension definition points to.
+const DEFPOINTS_LAYER: &str = "DEFPOINTS";
+
+/// PDMODE as it applies to `pt`.
+///
+/// Definition points are ordinary POINT entities on the Defpoints layer, but
+/// they are a dimension's bookkeeping rather than draughting the user placed.
+/// Letting DDPTYPE stamp its glyph on them buries a drawing imported from other
+/// software under crosses and circles at every dimension end, so they stay the
+/// pixel-sized dot whatever the header says. (#378, #790)
+fn effective_pdmode(pt: &Point, pdmode: i16) -> i16 {
+    if pt.common.layer.eq_ignore_ascii_case(DEFPOINTS_LAYER) {
+        0
+    } else {
+        pdmode
+    }
+}
+
 fn to_render(pt: &Point, document: &acadrust::CadDocument) -> RenderEntity {
-    let pdmode = document.header.point_display_mode;
+    let pdmode = effective_pdmode(pt, document.header.point_display_mode);
     let s = pdsize_world(document.header.point_display_size) * 0.5;
     point_render(pt, pdmode, s)
 }
@@ -240,3 +258,60 @@ impl RenderConvertible for Point {
 }
 
 crate::impl_entity_basics!(Point);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point_on(layer: &str) -> Point {
+        let mut pt = Point::default();
+        pt.common.layer = layer.to_string();
+        pt.location = acadrust::types::Vector3::new(1.0, 2.0, 0.0);
+        pt
+    }
+
+    /// #378 / #790: DDPTYPE must not reach a dimension's definition points.
+    #[test]
+    fn definition_points_ignore_the_point_style() {
+        let mut doc = acadrust::CadDocument::new();
+        // Circle-enclosed cross: the style that made imported drawings unreadable.
+        doc.header.point_display_mode = 34;
+        doc.header.point_display_size = 2.0;
+
+        let drawn = to_render(&point_on("0"), &doc);
+        assert!(
+            matches!(drawn.object, RenderObject::Lines(ref pts) if !pts.is_empty()),
+            "a point the user placed still follows PDMODE"
+        );
+
+        for layer in ["Defpoints", "DEFPOINTS", "defpoints"] {
+            let defpoint = to_render(&point_on(layer), &doc);
+            assert!(
+                matches!(defpoint.object, RenderObject::Dot(_)),
+                "a definition point on {layer} must stay a dot"
+            );
+        }
+    }
+
+    /// The relative-PDSIZE path hands the glyph a viewport size; it must make
+    /// the same call, or a definition point would come back as a sized cross.
+    #[test]
+    fn definition_points_ignore_the_point_style_at_relative_pdsize() {
+        let mut doc = acadrust::CadDocument::new();
+        doc.header.point_display_mode = 34;
+        doc.header.point_display_size = -5.0;
+
+        let drawn = relative_render(&EntityType::Point(point_on("0")), &doc, Some(0.01));
+        assert!(drawn.is_some(), "a user point still takes the viewport-aware path");
+
+        let defpoint = relative_render(
+            &EntityType::Point(point_on("Defpoints")),
+            &doc,
+            Some(0.01),
+        );
+        assert!(
+            defpoint.is_none(),
+            "a definition point falls through to the dot instead of a sized glyph"
+        );
+    }
+}
