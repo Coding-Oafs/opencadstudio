@@ -1156,7 +1156,8 @@ pub fn tessellate(
                 // its face fill into the 2-D buffer, so it drew in wireframe too.
                 let fill_is_3d = matches!(
                     entity,
-                    EntityType::PolyfaceMesh(_)
+                    EntityType::Face3D(_)
+                        | EntityType::PolyfaceMesh(_)
                         | EntityType::PolygonMesh(_)
                         | EntityType::Mesh(_)
                 );
@@ -1213,7 +1214,7 @@ pub fn tessellate(
                         taper_widths: Vec::new(),
                         world_width: polyline_band_width(entity),
                         depth_override: None,
-                        fill_is_3d: false,
+                        fill_is_3d,
                         fill_is_2d_solid: false,
                         render_instance: None,
                         pick_tris,

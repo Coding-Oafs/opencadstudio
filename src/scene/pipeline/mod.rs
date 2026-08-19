@@ -2359,19 +2359,7 @@ impl Pipeline {
         // and alpha blending both depend on it. Scissor and mesh-edge stay
         // grouping keys because the draw loop sets one scissor per batch and
         // skips whole mesh-edge batches in shaded modes.
-        // A 3D mesh entity (PolyfaceMesh / PolygonMesh) emits its face fill and
-        // its outline edges as *separate* WireModels sharing the entity handle
-        // (`name`): the fill carries `fill_tris` + a non-empty `fill_tris_low`
-        // (real 3D depth, same test face3d uses); the edge carries `points`.
-        // Flag the edge wire as `is_3d_mesh_edge` so the draw loop can hide it in
-        // clean-shaded modes and draw it black in filled-with-edges modes.
-        let mesh_names: rustc_hash::FxHashSet<&str> = wires
-            .iter()
-            .filter(|w| !w.fill_tris.is_empty() && !w.fill_tris_low.is_empty())
-            .map(|w| w.name.as_str())
-            .collect();
-        let is_mesh_edge =
-            |w: &WireModel| !w.points.is_empty() && mesh_names.contains(w.name.as_str());
+        let is_mesh_edge = |w: &WireModel| !w.points.is_empty() && w.fill_is_3d;
         let mut batches: Vec<WireGpu> = Vec::new();
         let mut block_wires: Vec<&WireModel> = Vec::new();
         let mut i = 0;
@@ -2403,7 +2391,6 @@ impl Pipeline {
             device,
             &block_wires,
             depth_map,
-            &mesh_names,
             None,
             &self.block_wire_const_bgl,
         );
@@ -2516,12 +2503,10 @@ impl Pipeline {
             self.wire_const_bgl.as_ref(),
         ));
         self.gpu_selected_wires = gpu;
-        let mesh_names = rustc_hash::FxHashSet::default();
         let mut block_gpu = BlockWireGpu::from_wires(
             device,
             &selected_blocks,
             depth_map,
-            &mesh_names,
             Some(WireModel::SELECTED),
             &self.block_wire_const_bgl,
         );
@@ -2529,7 +2514,6 @@ impl Pipeline {
             device,
             &hover_blocks,
             depth_map,
-            &mesh_names,
             Some(WireModel::HOVER),
             &self.block_wire_const_bgl,
         ));
@@ -4046,7 +4030,11 @@ impl Pipeline {
         // pipeline in HiddenLine so wires hidden behind them disappear.
         // 2D fills (text greek, MultiLeader bg) always draw with colour.
         if let Some(ref fill) = self.gpu_face3d_fill {
-            if !fill.chunks_3d.is_empty() || !fill.chunks_2d.is_empty() {
+            if !fill.chunks_3d.is_empty()
+                || !fill.chunks_2d.is_empty()
+                || !fill.block_chunks_3d.is_empty()
+                || !fill.block_chunks_2d.is_empty()
+            {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("face3d.render_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {

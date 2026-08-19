@@ -133,8 +133,7 @@ pub struct Face3DGpu {
 impl Face3DGpu {
     /// Build a batched GPU buffer from Face3D wire models and mesh fill_tris.
     ///
-    /// - `face3d_wires`: Face3D entities — `key_vertices` holds 4 quad corners;
-    ///   emits 2 triangles per face into the 3D buffer.
+    /// - `face3d_wires`: kernel-triangulated Face3D entities.
     /// - `all_wires`: all entity wires — `fill_tris` holds pre-triangulated
     ///   fill data. Fills with a non-empty `fill_tris_low` residual (real 3-D
     ///   surfaces — PolyfaceMesh / PolygonMesh) feed the 3D buffer at their
@@ -157,43 +156,26 @@ impl Face3DGpu {
         let mut verts_3d: Vec<Face3DVertex> = Vec::with_capacity(face3d_wires.len() * 6);
         let mut verts_2d: Vec<Face3DVertex> = Vec::new();
 
-        // Face3D quads (4 key_vertices → 2 triangles) — only when 3D
-        // fills are wanted.
+        // Face3D kernel triangles — only when 3D fills are wanted.
         if keep_3d_mesh_fills {
             for wire in face3d_wires {
-                if wire.key_vertices.len() < 4 {
+                if wire.fill_tris.is_empty() {
                     continue;
                 }
                 let [r, g, b, a] = wire.color;
                 let fill_color = [r * 0.45, g * 0.45, b * 0.45, a];
-                let p = &wire.key_vertices;
-                // key_vertices are f64 (offset-relative); split into the
-                // double-single (high, low) pair the face3d shader expects.
-                let v = |i: usize| {
-                    let [x, y, z] = p[i];
-                    let h = [x as f32, y as f32, z as f32];
-                    Face3DVertex {
-                        position: h,
+                for (index, &position) in wire.fill_tris.iter().enumerate() {
+                    verts_3d.push(Face3DVertex {
+                        position,
                         color: fill_color,
-                        // A 3DFACE is genuine 3D geometry: keep its real depth
-                        // (no draw-order bias), matching the PolyfaceMesh /
-                        // PolygonMesh path below. A non-zero draw-order rank
-                        // here yanked 3DFACEs toward the camera so they drew in
-                        // front of solids (which carry no such bias).
                         draw_depth: 0.0,
-                        position_low: [
-                            (x - h[0] as f64) as f32,
-                            (y - h[1] as f64) as f32,
-                            (z - h[2] as f64) as f32,
-                        ],
-                    }
-                };
-                verts_3d.push(v(0));
-                verts_3d.push(v(1));
-                verts_3d.push(v(2));
-                verts_3d.push(v(0));
-                verts_3d.push(v(2));
-                verts_3d.push(v(3));
+                        position_low: wire
+                            .fill_tris_low
+                            .get(index)
+                            .copied()
+                            .unwrap_or([0.0; 3]),
+                    });
+                }
             }
         }
 
