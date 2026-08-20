@@ -1422,6 +1422,7 @@ pub struct Scene {
     lighting_cache: RefCell<HashMap<(Handle, u64), Vec<SceneLight>>>,
     /// Currently selected entity handles.
     pub selected: HashSet<Handle>,
+    selected_order: Vec<Handle>,
     /// Session-only ISOLATEOBJECTS / HIDEOBJECTS state. Never written to DWG/DXF.
     pub object_isolation: ObjectIsolationState,
     /// Entity handles temporarily removed from the base render while an
@@ -1841,6 +1842,7 @@ impl Scene {
             object_data_cache: crate::entities::object_data::ObjectDataCache::default(),
             lighting_cache: RefCell::new(HashMap::default()),
             selected: HashSet::default(),
+            selected_order: Vec::new(),
             object_isolation: ObjectIsolationState::default(),
             preview_hidden: HashSet::default(),
             command_preview_hidden: HashSet::default(),
@@ -4377,6 +4379,7 @@ impl Scene {
             .hidden
             .extend(self.selected.iter().copied());
         self.selected.clear();
+        self.selected_order.clear();
         self.bump_entities(&changes);
     }
 

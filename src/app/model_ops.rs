@@ -43,9 +43,8 @@ impl super::OpenCADStudio {
         // Selected entities that have a cached B-rep.
         let handles: Vec<Handle> = self.tabs[i]
             .scene
-            .selected
-            .iter()
-            .copied()
+            .selected_handles_in_order()
+            .into_iter()
             .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
