@@ -798,7 +798,11 @@ fn make_revcloud(
     if area.abs() <= f64::EPSILON {
         return None;
     }
-    let outward = if area > 0.0 { -1.0 } else { 1.0 };
+    // A positive bulge bows to the right of the directed chord in the
+    // lightweight-polyline convention used by the renderer.  A
+    // counter-clockwise guide therefore needs positive bulges for the bumps
+    // to remain outside the enclosed boundary (and vice versa).
+    let outward = if area > 0.0 { 1.0 } else { -1.0 };
     let bulge = BUMP_BULGE * outward * if reverse { -1.0 } else { 1.0 };
     let mut vertices = Vec::new();
     for index in 0..points.len() {

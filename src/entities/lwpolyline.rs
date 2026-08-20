@@ -597,6 +597,186 @@ fn grips(pline: &LwPolyline) -> Vec<GripDef> {
     out
 }
 
+/// Revision clouds are persisted as closed lightweight polylines.  Their
+/// segments all carry similarly sized, consistently directed bulges; keeping
+/// recognition geometric also identifies clouds loaded from ordinary drawing
+/// files without requiring application-specific metadata.
+pub(crate) fn is_revision_cloud(pline: &LwPolyline) -> bool {
+    if !pline.is_closed || pline.vertices.len() < 3 {
+        return false;
+    }
+    let mut sign = 0.0_f64;
+    let mut magnitudes = Vec::with_capacity(pline.vertices.len());
+    for vertex in &pline.vertices {
+        let bulge = vertex.bulge;
+        if !bulge.is_finite() || bulge.abs() < 1.0e-9 {
+            return false;
+        }
+        if sign == 0.0 {
+            sign = bulge.signum();
+        } else if bulge.signum() != sign {
+            return false;
+        }
+        magnitudes.push(bulge.abs());
+    }
+    magnitudes.sort_by(f64::total_cmp);
+    let median = magnitudes[magnitudes.len() / 2];
+    (0.35..=0.65).contains(&median)
+        && magnitudes
+            .iter()
+            .filter(|value| (**value - median).abs() <= 0.15)
+            .count()
+            * 5
+            >= magnitudes.len() * 4
+}
+
+fn revision_cloud_arc_length(pline: &LwPolyline) -> Option<f64> {
+    if !is_revision_cloud(pline) {
+        return None;
+    }
+    let n = pline.vertices.len();
+    let total = (0..n)
+        .map(|index| {
+            let a = &pline.vertices[index].location;
+            let b = &pline.vertices[(index + 1) % n].location;
+            (b.x - a.x).hypot(b.y - a.y)
+        })
+        .sum::<f64>();
+    (total.is_finite() && total > 0.0).then_some(total / n as f64)
+}
+
+fn point_at_closed_distance(points: &[[f64; 2]], cumulative: &[f64], distance: f64) -> [f64; 2] {
+    let perimeter = *cumulative.last().unwrap_or(&0.0);
+    if perimeter <= 0.0 {
+        return points[0];
+    }
+    let distance = distance.rem_euclid(perimeter);
+    let segment = cumulative
+        .windows(2)
+        .position(|range| distance <= range[1])
+        .unwrap_or(points.len() - 1);
+    let start = cumulative[segment];
+    let length = cumulative[segment + 1] - start;
+    if length <= 1.0e-12 {
+        return points[segment];
+    }
+    let t = (distance - start) / length;
+    let a = points[segment];
+    let b = points[(segment + 1) % points.len()];
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
+
+/// Redistribute the cloud's arc chords while retaining its guide outline.
+/// Pronounced corners remain exact anchors; smooth and freehand portions are
+/// sampled uniformly between them.
+fn set_revision_cloud_arc_length(pline: &mut LwPolyline, requested: f64) {
+    if !is_revision_cloud(pline) || !requested.is_finite() || requested <= 1.0e-9 {
+        return;
+    }
+    let n = pline.vertices.len();
+    let points: Vec<[f64; 2]> = pline
+        .vertices
+        .iter()
+        .map(|vertex| [vertex.location.x, vertex.location.y])
+        .collect();
+    let mut cumulative = Vec::with_capacity(n + 1);
+    cumulative.push(0.0);
+    for index in 0..n {
+        let a = points[index];
+        let b = points[(index + 1) % n];
+        let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+        cumulative.push(cumulative.last().copied().unwrap_or(0.0) + length);
+    }
+    let perimeter = *cumulative.last().unwrap_or(&0.0);
+    if !perimeter.is_finite() || perimeter <= 1.0e-9 {
+        return;
+    }
+
+    // Corners sharper than 30 degrees delimit independent resampling runs.
+    // This preserves rectangular/polygonal corners while allowing round and
+    // freehand guides to change their chord density smoothly.
+    let mut anchors = Vec::new();
+    for index in 0..n {
+        let prev = points[(index + n - 1) % n];
+        let here = points[index];
+        let next = points[(index + 1) % n];
+        let incoming = [here[0] - prev[0], here[1] - prev[1]];
+        let outgoing = [next[0] - here[0], next[1] - here[1]];
+        let incoming_len = incoming[0].hypot(incoming[1]);
+        let outgoing_len = outgoing[0].hypot(outgoing[1]);
+        if incoming_len <= 1.0e-12 || outgoing_len <= 1.0e-12 {
+            continue;
+        }
+        let cosine = ((incoming[0] * outgoing[0] + incoming[1] * outgoing[1])
+            / (incoming_len * outgoing_len))
+            .clamp(-1.0, 1.0);
+        if cosine < (30.0_f64.to_radians()).cos() {
+            anchors.push(cumulative[index]);
+        }
+    }
+    if anchors.is_empty() {
+        anchors.push(0.0);
+    }
+
+    let mut redistributed = Vec::new();
+    for index in 0..anchors.len() {
+        let start = anchors[index];
+        let mut end = anchors[(index + 1) % anchors.len()];
+        if end <= start {
+            end += perimeter;
+        }
+        let span = end - start;
+        let count = (span / requested).round().max(1.0) as usize;
+        for step in 0..count {
+            redistributed.push(point_at_closed_distance(
+                &points,
+                &cumulative,
+                start + span * step as f64 / count as f64,
+            ));
+        }
+    }
+    if redistributed.len() < 3 {
+        return;
+    }
+
+    let bulge = pline.vertices.iter().map(|vertex| vertex.bulge).sum::<f64>() / n as f64;
+    let mut start_ratio = 0.0;
+    let mut end_ratio = 0.0;
+    let mut width_samples = 0_usize;
+    for index in 0..n {
+        let chord = cumulative[index + 1] - cumulative[index];
+        if chord > 1.0e-12 {
+            let vertex = &pline.vertices[index];
+            if vertex.start_width > 0.0 || vertex.end_width > 0.0 {
+                start_ratio += vertex.start_width / chord;
+                end_ratio += vertex.end_width / chord;
+                width_samples += 1;
+            }
+        }
+    }
+    if width_samples > 0 {
+        start_ratio /= width_samples as f64;
+        end_ratio /= width_samples as f64;
+    }
+
+    let count = redistributed.len();
+    pline.vertices = redistributed
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let next = redistributed[(index + 1) % count];
+            let chord = (next[0] - point[0]).hypot(next[1] - point[1]);
+            let mut vertex = LwVertex::from_coords(point[0], point[1]);
+            vertex.bulge = bulge;
+            if width_samples > 0 {
+                vertex.start_width = start_ratio * chord;
+                vertex.end_width = end_ratio * chord;
+            }
+            vertex
+        })
+        .collect();
+}
+
 fn properties(pline: &LwPolyline) -> Vec<PropSection> {
     let n = pline.vertices.len();
     // The panel's Current Vertex focus, clamped to this polyline's range.
@@ -611,11 +791,39 @@ fn properties(pline: &LwPolyline) -> Vec<PropSection> {
     let start_w = v.map_or(0.0, |v| v.start_width);
     let end_w = v.map_or(0.0, |v| v.end_width);
     let mp = <LwPolyline as crate::entities::traits::MassPropsCalc>::mass_props(pline);
+    let cloud_arc_length = revision_cloud_arc_length(pline);
     let vertex_label = if n == 0 {
         "—".to_string()
+    } else if cloud_arc_length.is_some() {
+        format!("{}", vi + 1)
     } else {
         format!("{} / {}", vi + 1, n)
     };
+    let mut misc_props = vec![
+        Property {
+            label: t!("Closed").into_owned(),
+            field: "closed",
+            value: PropValue::BoolToggle {
+                field: "closed",
+                value: pline.is_closed,
+            },
+        },
+        Property {
+            label: t!("Linetype generation").into_owned(),
+            field: "plinegen",
+            value: PropValue::BoolToggle {
+                field: "plinegen",
+                value: pline.plinegen,
+            },
+        },
+    ];
+    if let Some(arc_length) = cloud_arc_length {
+        misc_props.push(edit(
+            t!("Arc length").as_ref(),
+            "revcloud_arc_length",
+            arc_length,
+        ));
+    }
     vec![
         PropSection {
             title: t!("Geometry").into_owned(),
@@ -633,30 +841,19 @@ fn properties(pline: &LwPolyline) -> Vec<PropSection> {
         },
         PropSection {
             title: t!("Misc").into_owned(),
-            props: vec![
-                Property {
-                    label: t!("Closed").into_owned(),
-                    field: "closed",
-                    value: PropValue::BoolToggle {
-                        field: "closed",
-                        value: pline.is_closed,
-                    },
-                },
-                Property {
-                    label: t!("Linetype generation").into_owned(),
-                    field: "plinegen",
-                    value: PropValue::BoolToggle {
-                        field: "plinegen",
-                        value: pline.plinegen,
-                    },
-                },
-            ],
+            props: misc_props,
         },
     ]
 }
 
 fn apply_geom_prop(pline: &mut LwPolyline, field: &str, value: &str) {
     match field {
+        "revcloud_arc_length" => {
+            if let Some(value) = parse_f64(value) {
+                set_revision_cloud_arc_length(pline, value);
+            }
+            return;
+        }
         "closed" => {
             pline.is_closed = if value == "toggle" {
                 !pline.is_closed
