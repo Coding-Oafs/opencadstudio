@@ -10,6 +10,10 @@
 
 use acadrust::types::Vector3;
 use acadrust::{Circle, EntityType};
+use cadkernel::geom2d::{
+    fillets_between, Circle as KernelCircle, Curve as KernelCurve, Line as KernelLine,
+    Tolerance,
+};
 use crate::t;
 
 use crate::command::{CadCommand, CmdResult, DynField, TangentObject, WorkingPlane};
@@ -544,16 +548,6 @@ impl Line2D {
     }
 }
 
-fn line_line_isect(l1: Line2D, l2: Line2D) -> Option<DVec3> {
-    let det = l1.a * l2.b - l2.a * l1.b;
-    if det.abs() < 1e-9 {
-        return None;
-    }
-    let x = (-l1.c * l2.b + l2.c * l1.b) / det;
-    let y = (-l1.a * l2.c + l2.a * l1.c) / det;
-    Some(DVec3::new(x, y, 0.0))
-}
-
 fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
     if a.abs() < 1e-9 {
         if b.abs() < 1e-9 {
@@ -589,143 +583,26 @@ fn best_circle_of(candidates: &[(DVec3, f64)], hint: DVec3) -> Option<(DVec3, f6
         })
 }
 
-/// All candidate circle centers tangent to two objects with radius r.
-fn ttr_candidates(obj1: TangentObject, obj2: TangentObject, r: f64) -> Vec<DVec3> {
-    match (obj1, obj2) {
-        (TangentObject::Line { p1: a, p2: b }, TangentObject::Line { p1: c, p2: d }) => {
-            let l1 = Line2D::from_obj(a, b);
-            let l2 = Line2D::from_obj(c, d);
-            let mut out = Vec::new();
-            for s1 in [-r, r] {
-                for s2 in [-r, r] {
-                    let ol1 = Line2D { c: l1.c + s1, ..l1 };
-                    let ol2 = Line2D { c: l2.c + s2, ..l2 };
-                    if let Some(pt) = line_line_isect(ol1, ol2) {
-                        out.push(pt);
-                    }
-                }
-            }
-            out
-        }
-        (
-            TangentObject::Line { p1, p2 },
-            TangentObject::Circle {
-                center: cp,
-                radius: cr,
-            },
-        )
-        | (
-            TangentObject::Circle {
-                center: cp,
-                radius: cr,
-            },
-            TangentObject::Line { p1, p2 },
-        ) => {
-            let l = Line2D::from_obj(p1, p2);
-            ttr_lc_candidates(l, cp, cr, r)
-        }
-        (
-            TangentObject::Circle {
-                center: c1,
-                radius: r1,
-            },
-            TangentObject::Circle {
-                center: c2,
-                radius: r2,
-            },
-        ) => ttr_cc_candidates(c1, r1, c2, r2, r),
+fn tangent_curve(object: TangentObject) -> KernelCurve {
+    match object {
+        TangentObject::Line { p1, p2 } => KernelCurve::Line(KernelLine {
+            start: [p1.x, p1.y],
+            end: [p2.x, p2.y],
+        }),
+        TangentObject::Circle { center, radius } => KernelCurve::Circle(KernelCircle {
+            centre: [center.x, center.y],
+            radius,
+        }),
     }
 }
 
-fn ttr_lc_candidates(l: Line2D, cp: DVec3, cr: f64, r: f64) -> Vec<DVec3> {
-    let mut out = Vec::new();
-    for s1 in [-1.0f64, 1.0] {
-        for s2 in [-1.0f64, 1.0] {
-            let rho = cr + s2 * r;
-            if rho < 0.0 {
-                continue;
-            }
-            let c_off = l.c + s1 * r;
-            // The candidate center (cx, cy) satisfies:
-            //   l.a*cx + l.b*cy + c_off = 0
-            //   (cx - cp.x)^2 + (cy - cp.y)^2 = rho^2
-            // Parameterise cx = -l.b*t - l.a*c_off, cy = l.a*t - l.b*c_off
-            // where t is the free parameter along the offset line.
-            // Substituting into the circle equation:
-            //   (-l.b*t - l.a*c_off - cp.x)^2 + (l.a*t - l.b*c_off - cp.y)^2 = rho^2
-            // Let alpha = l.a*c_off + cp.x, beta = l.b*c_off + cp.y (using sign convention)
-            // Actually: u = -l.a*c_off - cp.x, v = -l.b*c_off - cp.y
-            let u = -(l.a * c_off) - cp.x;
-            let v = -(l.b * c_off) - cp.y;
-            // (-l.b*t + u)^2 + (l.a*t + v)^2 = rho^2
-            // (l.b^2 + l.a^2)*t^2 + 2*(-l.b*u + l.a*v)*t + (u^2 + v^2 - rho^2) = 0
-            // Since a^2 + b^2 = 1:
-            let qa = 1.0f64;
-            let qb = 2.0 * (-l.b * u + l.a * v);
-            let qc = u * u + v * v - rho * rho;
-            for t in solve_quadratic(qa, qb, qc) {
-                let cx = -l.b * t - l.a * c_off;
-                let cy = l.a * t - l.b * c_off;
-                out.push(DVec3::new(cx, cy, 0.0));
-            }
-        }
-    }
-    out
-}
-
-fn ttr_cc_candidates(c1: DVec3, r1: f64, c2: DVec3, r2: f64, r: f64) -> Vec<DVec3> {
-    let mut out = Vec::new();
-    for s1 in [-1.0f64, 1.0] {
-        for s2 in [-1.0f64, 1.0] {
-            let rho1 = r1 + s1 * r;
-            let rho2 = r2 + s2 * r;
-            if rho1 < 0.0 || rho2 < 0.0 {
-                continue;
-            }
-            let ax = c2.x - c1.x;
-            let ay = c2.y - c1.y;
-            let k = 0.5
-                * (rho1 * rho1 - rho2 * rho2 + c2.x * c2.x + c2.y * c2.y
-                    - c1.x * c1.x
-                    - c1.y * c1.y);
-            let a2 = ax * ax + ay * ay;
-            if a2 < 1e-12 {
-                continue;
-            }
-            if ay.abs() >= ax.abs() {
-                let iy = 1.0 / ay;
-                let qa = 1.0 + ax * ax * iy * iy;
-                let p = k * iy - c1.y;
-                let qb = -2.0 * (c1.x + ax * iy * p);
-                let qc = c1.x * c1.x + p * p - rho1 * rho1;
-                let disc = qb * qb - 4.0 * qa * qc;
-                if disc < 0.0 {
-                    continue;
-                }
-                for sign in [-1.0f64, 1.0] {
-                    let cx = (-qb + sign * disc.sqrt()) / (2.0 * qa);
-                    let cy = (k - ax * cx) * iy;
-                    out.push(DVec3::new(cx, cy, 0.0));
-                }
-            } else {
-                let ix = 1.0 / ax;
-                let qa = ay * ay * ix * ix + 1.0;
-                let p = k * ix - c1.x;
-                let qb = -2.0 * (ay * ix * p + c1.y);
-                let qc = p * p + c1.y * c1.y - rho1 * rho1;
-                let disc = qb * qb - 4.0 * qa * qc;
-                if disc < 0.0 {
-                    continue;
-                }
-                for sign in [-1.0f64, 1.0] {
-                    let cy = (-qb + sign * disc.sqrt()) / (2.0 * qa);
-                    let cx = (k - ay * cy) * ix;
-                    out.push(DVec3::new(cx, cy, 0.0));
-                }
-            }
-        }
-    }
-    out
+fn ttr_candidates(first: TangentObject, second: TangentObject, radius: f64) -> Vec<DVec3> {
+    let first = tangent_curve(first);
+    let second = tangent_curve(second);
+    fillets_between(&first, &second, radius, Tolerance::default())
+        .into_iter()
+        .map(|fillet| DVec3::new(fillet.centre[0], fillet.centre[1], 0.0))
+        .collect()
 }
 
 /// Unified TTT solver: circle tangent to three objects. Returns all (center, radius) candidates.
@@ -1132,6 +1009,60 @@ inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_TTT"] 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn has_candidate(cands: &[DVec3], want: DVec3) -> bool {
+        cands.iter().any(|c| c.distance(want) < 1e-6)
+    }
+
+    /// #814: include circles that enclose both tangent objects.
+    #[test]
+    fn ttr_two_circles_offers_the_enclosing_solution() {
+        let c1 = TangentObject::Circle {
+            center: DVec3::new(-3.0, 0.0, 0.0),
+            radius: 1.0,
+        };
+        let c2 = TangentObject::Circle {
+            center: DVec3::new(3.0, 0.0, 0.0),
+            radius: 1.0,
+        };
+        let cands = ttr_candidates(c1, c2, 5.0);
+        // |P - Ci| = 5 - 1 = 4 puts both small circles inside the new one.
+        let y = 7.0f64.sqrt();
+        assert!(
+            has_candidate(&cands, DVec3::new(0.0, y, 0.0))
+                && has_candidate(&cands, DVec3::new(0.0, -y, 0.0)),
+            "no enclosing candidate, got {cands:?}"
+        );
+        // The externally tangent family is still produced.
+        assert!(
+            cands.iter().any(|c| {
+                (c.distance(DVec3::new(-3.0, 0.0, 0.0)) - 6.0).abs() < 1e-6
+                    && (c.distance(DVec3::new(3.0, 0.0, 0.0)) - 6.0).abs() < 1e-6
+            }),
+            "external tangency lost, got {cands:?}"
+        );
+    }
+
+    /// Include line-circle solutions that enclose the circle.
+    #[test]
+    fn ttr_line_and_circle_offers_the_enclosing_solution() {
+        let line = TangentObject::Line {
+            p1: DVec3::ZERO,
+            p2: DVec3::new(10.0, 0.0, 0.0),
+        };
+        let circle = TangentObject::Circle {
+            center: DVec3::new(0.0, 2.0, 0.0),
+            radius: 1.0,
+        };
+        let cands = ttr_candidates(line, circle, 5.0);
+        // Tangent to y = 0 at distance 5, and |P - (0,2)| = 5 - 1 = 4.
+        let x = 7.0f64.sqrt();
+        assert!(
+            has_candidate(&cands, DVec3::new(x, 5.0, 0.0))
+                && has_candidate(&cands, DVec3::new(-x, 5.0, 0.0)),
+            "no enclosing candidate, got {cands:?}"
+        );
+    }
 
     /// #318: concentric ring + a line through the center — the degenerate
     /// circle-pair equation must still yield the annulus circle.
