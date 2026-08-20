@@ -350,7 +350,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(command));
             }
             cmd if cmd.starts_with("CRS ") => {
-                self.drawing_crs_command(cmd.trim_start_matches("CRS"))
+                return Some(self.drawing_crs_command(cmd.trim_start_matches("CRS")));
             }
             "WORKINGUNITS" | "WUNITS" => {
                 use crate::command::ValuePromptCommand;
@@ -366,7 +366,7 @@ impl OpenCADStudio {
                 self.working_units_command(argument);
             }
             "SPATIALINFO" => {
-                self.drawing_crs_command("STATUS");
+                let _ = self.drawing_crs_command("STATUS");
                 if let Some(bounds) = self.tabs[i].spatial.basemap_bounds {
                     self.command_line.push_output(
                         format!(

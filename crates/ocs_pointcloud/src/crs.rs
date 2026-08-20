@@ -37,6 +37,48 @@ pub fn epsg_horizontal_unit(epsg: u16) -> Option<&'static str> {
         .map(|projection| projection.units())
 }
 
+/// Geographic area of use for an EPSG definition as
+/// `[west_longitude, south_latitude, east_longitude, north_latitude]`.
+///
+/// The bundled WKT2 definitions carry EPSG `BBOX[south,west,north,east]`
+/// metadata for projected CRSs. Global Web Mercator and WGS 84 are handled
+/// explicitly because their compact WKT definitions do not include a BBOX.
+pub fn epsg_area_of_use(epsg: u16) -> Option<[f64; 4]> {
+    const MERCATOR_LATITUDE_LIMIT: f64 = 85.051_128_779_806_6;
+    if matches!(epsg, 3857 | 4326) {
+        return Some([
+            -180.0,
+            -MERCATOR_LATITUDE_LIMIT,
+            180.0,
+            MERCATOR_LATITUDE_LIMIT,
+        ]);
+    }
+
+    let definition = crs_definitions::from_code(epsg)?;
+    let marker = definition.wkt.rfind("BBOX[")? + "BBOX[".len();
+    let end = definition.wkt[marker..].find(']')? + marker;
+    let values = definition.wkt[marker..end]
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<f64>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    let [south, west, north, east] = values.as_slice() else {
+        return None;
+    };
+    if !values.iter().all(|value| value.is_finite())
+        || west >= east
+        || south >= north
+        || *west < -180.0
+        || *east > 180.0
+        || *south < -90.0
+        || *north > 90.0
+    {
+        return None;
+    }
+    Some([*west, *south, *east, *north])
+}
+
 /// Reproject a single XY coordinate from a PROJ.4 source string to `target_epsg`.
 /// Used when a projected CRS has no resolvable EPSG code but a parseable WKT.
 pub fn reproject_from_proj4(
@@ -712,6 +754,17 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
     fn proj4_from_geographic_wkt_is_none() {
         let wkt = "GEOGCS[\"NAD83\",DATUM[\"North American Datum 1983\",SPHEROID[\"GRS 1980\",6378137,298.257222101]],UNIT[\"degree\",0.0174532925199433],AUTHORITY[\"EPSG\",\"4269\"]]";
         assert!(proj4_from_wkt(wkt).is_none());
+    }
+
+    #[test]
+    fn epsg_area_of_use_reads_projected_bbox_and_global_fallbacks() {
+        let new_york = epsg_area_of_use(2263).expect("New York State Plane area");
+        assert!(new_york[0] < -74.0 && new_york[2] > -72.0, "{new_york:?}");
+        assert!(new_york[1] < 40.8 && new_york[3] > 41.0, "{new_york:?}");
+        assert_eq!(
+            epsg_area_of_use(3857),
+            Some([-180.0, -85.051_128_779_806_6, 180.0, 85.051_128_779_806_6,])
+        );
     }
 
     #[test]

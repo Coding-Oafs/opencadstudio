@@ -245,6 +245,72 @@ pub fn world_bounds_from_source(
     Some(out)
 }
 
+/// Reproject a WGS 84 longitude/latitude envelope into drawing coordinates.
+/// The edges are densified because state-plane and other projected CRS edges
+/// are generally curved in geographic space.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn source_bounds_from_wgs84_area(
+    area: [f64; 4],
+    crs: &ocs_pointcloud::CrsInfo,
+) -> Option<[f64; 4]> {
+    let [west, south, east, north] = area;
+    if !area.iter().all(|value| value.is_finite())
+        || west >= east
+        || south >= north
+        || west < -180.0
+        || east > 180.0
+        || south < -90.0
+        || north > 90.0
+    {
+        return None;
+    }
+    let mut out = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    const STEPS: usize = 8;
+    for iy in 0..=STEPS {
+        for ix in 0..=STEPS {
+            if ix != 0 && ix != STEPS && iy != 0 && iy != STEPS {
+                continue;
+            }
+            let longitude = west + (east - west) * ix as f64 / STEPS as f64;
+            let latitude = south + (north - south) * iy as f64 / STEPS as f64;
+            let (x, y) = ocs_pointcloud::reproject_to_crs(4326, crs, longitude, latitude)?;
+            out[0] = out[0].min(x);
+            out[1] = out[1].min(y);
+            out[2] = out[2].max(x);
+            out[3] = out[3].max(y);
+        }
+    }
+    (out.iter().all(|value| value.is_finite()) && out[0] < out[2] && out[1] < out[3]).then_some(out)
+}
+
+/// Build a WGS 84 envelope around a longitude/latitude site center. `radius_km`
+/// is approximate ground distance and is intended for initial basemap framing,
+/// not survey measurement.
+pub fn wgs84_radius_area(longitude: f64, latitude: f64, radius_km: f64) -> Option<[f64; 4]> {
+    if !longitude.is_finite()
+        || !latitude.is_finite()
+        || !radius_km.is_finite()
+        || !(-180.0..=180.0).contains(&longitude)
+        || !(-85.0..=85.0).contains(&latitude)
+        || radius_km <= 0.0
+    {
+        return None;
+    }
+    let latitude_delta = radius_km / 111.32;
+    let longitude_scale = (latitude.to_radians().cos().abs() * 111.32).max(1.0);
+    let longitude_delta = radius_km / longitude_scale;
+    let west = (longitude - longitude_delta).max(-180.0);
+    let east = (longitude + longitude_delta).min(180.0);
+    let south = (latitude - latitude_delta).max(-85.051_128_779_806_6);
+    let north = (latitude + latitude_delta).min(85.051_128_779_806_6);
+    (west < east && south < north).then_some([west, south, east, north])
+}
+
 /// Which tiles at `zoom` cover the Web-Mercator `bounds`, clamped to valid
 /// tile indices. Returns an empty list for a degenerate or out-of-range bound.
 pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
@@ -360,6 +426,28 @@ mod tests {
         assert_eq!(url, "https://x/3/2/1?k=a");
         assert!(tile_url(BasemapProvider::Off, 1, 0, 0, "").is_none());
         assert!(tile_url(BasemapProvider::Custom, 1, 0, 0, "").is_none());
+    }
+
+    #[test]
+    fn site_radius_and_crs_area_bootstrap_empty_drawings() {
+        let site = wgs84_radius_area(-71.0589, 42.3601, 5.0).expect("Boston site");
+        assert!(site[0] < -71.0589 && site[2] > -71.0589);
+        assert!(site[1] < 42.3601 && site[3] > 42.3601);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let crs = ocs_pointcloud::CrsInfo {
+                horizontal_epsg: Some(3857),
+                ..Default::default()
+            };
+            let bounds = source_bounds_from_wgs84_area(site, &crs).expect("Web Mercator");
+            assert!(bounds[0] < bounds[2] && bounds[1] < bounds[3]);
+            let round_trip =
+                world_bounds_from_source([bounds[0], bounds[1]], [bounds[2], bounds[3]], &crs)
+                    .expect("round trip");
+            assert!((round_trip[0] - bounds[0]).abs() < 1e-6);
+            assert!((round_trip[3] - bounds[3]).abs() < 1e-6);
+        }
     }
 
     #[test]

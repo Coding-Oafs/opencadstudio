@@ -19,9 +19,9 @@ pub use classify::{
     RuleField, RuleOp,
 };
 pub use crs::{
-    assess_survey_readiness, epsg_horizontal_unit, inspect_crs, reproject_from_crs,
-    reproject_from_proj4, reproject_to_crs, reproject_with_patches_progress, reproject_xy, CrsInfo,
-    ReprojectionStats, SurveyReadiness,
+    assess_survey_readiness, epsg_area_of_use, epsg_horizontal_unit, inspect_crs,
+    reproject_from_crs, reproject_from_proj4, reproject_to_crs, reproject_with_patches_progress,
+    reproject_xy, CrsInfo, ReprojectionStats, SurveyReadiness,
 };
 pub use display::{
     classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode, Density,

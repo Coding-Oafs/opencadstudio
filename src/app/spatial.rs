@@ -4,7 +4,8 @@
 //! insertion-scaling role. These settings describe the coordinate space used
 //! by GIS underlays and the unit displayed by survey/inquiry tools.
 
-use super::OpenCADStudio;
+use super::{Message, OpenCADStudio};
+use iced::Task;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,8 +164,9 @@ impl DrawingSpatialSettings {
 }
 
 impl OpenCADStudio {
-    pub(super) fn drawing_crs_command(&mut self, argument: &str) {
+    pub(super) fn drawing_crs_command(&mut self, argument: &str) -> Task<Message> {
         let i = self.active_tab;
+        let tab_id = self.tabs[i].id;
         let argument = argument.trim();
         if argument.is_empty() || argument.eq_ignore_ascii_case("STATUS") {
             let spatial = &self.tabs[i].spatial;
@@ -180,7 +182,7 @@ impl OpenCADStudio {
                 )
                 .as_str(),
             );
-            return;
+            return Task::none();
         }
         if matches!(
             argument.to_ascii_uppercase().as_str(),
@@ -196,7 +198,7 @@ impl OpenCADStudio {
                 )
                 .as_str(),
             );
-            return;
+            return self.refresh_basemap(tab_id);
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -224,17 +226,24 @@ impl OpenCADStudio {
         let Some(epsg) = epsg else {
             self.command_line
                 .push_error("CRS <EPSG code|LAS|UNSET> (example: CRS 32615).");
-            return;
+            return Task::none();
         };
         let crs = match DrawingCrs::from_epsg(epsg) {
             Ok(crs) => crs,
             Err(error) => {
                 self.command_line.push_error(&error);
-                return;
+                return Task::none();
             }
         };
         let unit = crs.coordinate_unit.required_working_unit();
         let label = crs.label();
+        let previous_epsg = self.tabs[i]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(|current| current.epsg);
+        let cleared_stale_bounds = previous_epsg.is_some_and(|current| current != epsg)
+            && self.tabs[i].spatial.basemap_bounds.take().is_some();
         self.tabs[i].spatial.drawing_crs = Some(crs);
         self.tabs[i].spatial.working_unit = unit;
         self.basemap.projection = crate::scene::basemap::BasemapProjection::FromDrawing;
@@ -247,6 +256,12 @@ impl OpenCADStudio {
             )
             .as_str(),
         );
+        if cleared_stale_bounds {
+            self.command_line.push_info(
+                "Basemap: cleared the previous manual extent because drawing coordinates changed CRS; use Set Location to choose the site again.",
+            );
+        }
+        self.refresh_basemap(tab_id)
     }
 
     pub(super) fn working_units_command(&mut self, argument: &str) {

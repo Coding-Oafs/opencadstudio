@@ -102,3 +102,19 @@ features were accidentally coupled to point-cloud attachment state.
   trust a stale sidecar to keep an incompatible unit/CRS pair.
 - Keep INSUNITS for DWG insertion scaling. Drawing working units are the user-facing survey/query
   contract and must not silently rescale geometry.
+
+## A CRS is not a drawing extent
+
+**What happened:** The first v1 release candidate allowed a drawing-owned CRS
+but still rejected an empty drawing with “no bounds to place the underlay.” A
+CRS defines how coordinates are interpreted; it does not say which project site
+the user wants to see.
+
+**How to apply:**
+- Treat an empty spatial document as a supported bootstrap state, not an error.
+- Use a low-cost world overview before CRS selection and the EPSG definition's
+  area of use afterward, with a strict tile ceiling.
+- Provide a location-first control that accepts familiar longitude/latitude and
+  transforms a small site envelope into drawing coordinates.
+- Clear manual bounds when changing between CRSs so stale coordinates cannot be
+  silently interpreted in a different reference system.

@@ -227,6 +227,12 @@ impl CadModule for ViewModule {
                             )),
                             event: ModuleEvent::Command("CRS".to_string()),
                         }),
+                        RibbonItem::Tool(ToolDef {
+                            id: "BASEMAP_CENTER",
+                            label: "Set Location",
+                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/ui/pin.svg")),
+                            event: ModuleEvent::Command("BASEMAP CENTER".to_string()),
+                        }),
                         RibbonItem::LargeDropdown {
                             id: "WORKING_UNITS",
                             label: "Working Units",

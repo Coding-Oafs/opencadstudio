@@ -37,10 +37,14 @@ and detach. `POINTCLOUDMANAGER` opens it from the command line or a function key
 The source LAS/LAZ is read-only during attachment and editing. A revised cloud
 is created only by **Export LAS/LAZ**.
 
-Drawing CRS and working units no longer depend on a LiDAR attachment. Use
-`CRS <EPSG>`, `WORKINGUNITS <unit>`, and `BASEMAP BOUNDS <minx> <miny> <maxx>
-<maxy>` on an ordinary saved DWG/DXF; the drawing-owned values persist in the
-same adjacent `.ocspc` sidecar.
+Drawing CRS and working units no longer depend on a LiDAR attachment. On an
+empty drawing, turning on a basemap shows a small Web Mercator world overview;
+`CRS <EPSG>` immediately replaces it with the CRS area-of-use overview. Use the
+View ribbon's **Set Location** tool (or `BASEMAP CENTER <longitude> <latitude>
+[radius-km]`) to choose the project site without loading LAS or CAD geometry.
+`BASEMAP BOUNDS <minx> <miny> <maxx> <maxy>` remains available for an exact
+drawing-coordinate envelope. Drawing-owned values persist in the adjacent
+`.ocspc` sidecar for a saved DWG/DXF.
 
 ## Commands
 

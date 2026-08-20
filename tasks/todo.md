@@ -26,6 +26,7 @@
 
 - [x] Bounded-parallel cached basemap jobs with progress and cancellation
 - [x] Empty-drawing `BASEMAP BOUNDS` and first-load auto-fit
+- [x] Empty-drawing world/CRS-area bootstrap and `BASEMAP CENTER` site workflow
 - [x] Drawing-owned CRS and compatible working units in sidecar schema v4
 - [x] Dedicated Select and ArcGIS-style Navigator tools
 - [x] Length, area, closed-mesh volume, and point-cloud distance tools
@@ -36,10 +37,12 @@
 - [x] `cargo check --all-targets`
 - [x] Full test suite and release build
 - [x] Rebuild/install MSI (WiX candle/light), validate 1.0.0
-- [ ] Fast-forward default branch, tag, push, and publish GitHub release
+- [x] Fast-forward default branch and push the release commit
+- [ ] Move the unpublished tag to the verified basemap fix and publish GitHub release
 - [x] Record durable prevention lessons in `tasks/lessons.md`
 
 ## Verification
 - [x] Reprojection unit test passes
 - [ ] Basemap places for Boston LAS (no "cannot reproject")
+- [x] Empty drawing loads a bounded overview and accepts a CRS/site center without LAS
 - [ ] Density re-sample + folder warning
