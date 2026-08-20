@@ -1749,33 +1749,84 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
         let handles = self.property_target_handles(i);
 
         if !handles.is_empty() {
-            if matches!(field, "spline_method" | "knot_param" | "cv_frame") {
+            if matches!(
+                field,
+                "spline_method"
+                    | "knot_param"
+                    | "cv_frame"
+                    | "fill_type"
+                    | "gradient_type"
+                    | "style"
+                    | "pattern_type_label"
+            ) {
                 let unchanged = handles.iter().all(|handle| {
-                    let Some(acadrust::EntityType::Spline(spline)) =
-                        self.tabs[i].scene.document.get_entity(*handle)
-                    else {
-                        return false;
-                    };
-                    match field {
-                        "spline_method" => {
-                            value == if crate::entities::spline::shows_fit_points(spline) {
-                                "Fit"
-                            } else {
-                                "Control Vertices"
+                    match self.tabs[i].scene.document.get_entity(*handle) {
+                        Some(acadrust::EntityType::Spline(spline)) => match field {
+                            "spline_method" => {
+                                value
+                                    == if crate::entities::spline::shows_fit_points(spline) {
+                                        "Fit"
+                                    } else {
+                                        "Control Vertices"
+                                    }
                             }
-                        }
-                        "knot_param" => {
-                            let current = match spline.knot_parameterization {
-                                0 => "Chord",
-                                1 => "Square Root",
-                                2 => "Uniform",
-                                _ => "Custom",
-                            };
-                            value == current
-                        }
-                        "cv_frame" => {
-                            value == if spline.cv_frame_visible { "Show" } else { "Hide" }
-                        }
+                            "knot_param" => {
+                                let current = match spline.knot_parameterization {
+                                    0 => "Chord",
+                                    1 => "Square Root",
+                                    2 => "Uniform",
+                                    _ => "Custom",
+                                };
+                                value == current
+                            }
+                            "cv_frame" => {
+                                value
+                                    == if spline.cv_frame_visible {
+                                        "Show"
+                                    } else {
+                                        "Hide"
+                                    }
+                            }
+                            _ => false,
+                        },
+                        Some(acadrust::EntityType::Hatch(hatch)) => match field {
+                            "fill_type" => {
+                                value
+                                    == if hatch.gradient_color.is_single_color {
+                                        "One color"
+                                    } else {
+                                        "Two color"
+                                    }
+                            }
+                            "gradient_type" => {
+                                let (kind, inverted) =
+                                    crate::scene::model::hatch_model::GradientKind::from_name(
+                                        &hatch.gradient_color.name,
+                                    );
+                                value == kind.choice_label(inverted)
+                            }
+                            "style" => {
+                                value
+                                    == match hatch.style {
+                                        acadrust::entities::HatchStyleType::Normal => "Normal",
+                                        acadrust::entities::HatchStyleType::Outer => "Outer",
+                                        acadrust::entities::HatchStyleType::Ignore => "Ignore",
+                                    }
+                            }
+                            "pattern_type_label" => {
+                                value
+                                    == match hatch.pattern_type {
+                                        acadrust::entities::HatchPatternType::Predefined => {
+                                            "Predefined"
+                                        }
+                                        acadrust::entities::HatchPatternType::UserDefined => {
+                                            "User Defined"
+                                        }
+                                        acadrust::entities::HatchPatternType::Custom => "Custom",
+                                    }
+                            }
+                            _ => false,
+                        },
                         _ => false,
                     }
                 });

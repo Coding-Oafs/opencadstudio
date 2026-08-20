@@ -1345,6 +1345,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
                 color2,
                 kind,
                 invert,
+                shift,
             } => {
                 2_u8.hash(&mut h);
                 angle_deg.to_bits().hash(&mut h);
@@ -1353,6 +1354,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
                 }
                 kind.shader_kind().hash(&mut h);
                 invert.hash(&mut h);
+                shift.to_bits().hash(&mut h);
             }
         }
     }

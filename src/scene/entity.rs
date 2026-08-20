@@ -90,6 +90,36 @@ fn family_from_stored_line(
     }
 }
 
+/// Preserve the selected hue while moving its HSL lightness towards the
+/// persisted one-colour tint/shade target (0 = black, 1 = white).
+fn gradient_tint_color(base: [f32; 4], target: f32) -> [f32; 4] {
+    let max = base[0].max(base[1]).max(base[2]);
+    let min = base[0].min(base[1]).min(base[2]);
+    let lightness = (max + min) * 0.5;
+    let target = target.clamp(0.0, 1.0);
+    let mut result = base;
+    if target <= lightness {
+        let factor = if lightness > 1.0e-6 {
+            target / lightness
+        } else {
+            0.0
+        };
+        for channel in &mut result[..3] {
+            *channel *= factor;
+        }
+    } else {
+        let factor = if lightness < 1.0 - 1.0e-6 {
+            (target - lightness) / (1.0 - lightness)
+        } else {
+            1.0
+        };
+        for channel in &mut result[..3] {
+            *channel += (1.0 - *channel) * factor;
+        }
+    }
+    result
+}
+
 impl Scene {
     // ── Entity management ─────────────────────────────────────────────────
 
@@ -1041,8 +1071,13 @@ impl Scene {
                                 m.angle_offset = dxf.pattern_angle as f32;
                                 m.scale = dxf.pattern_scale as f32;
                             }
-                            model::hatch_model::HatchPattern::Gradient { angle_deg, .. } => {
-                                *angle_deg = dxf.pattern_angle.to_degrees() as f32;
+                            model::hatch_model::HatchPattern::Gradient {
+                                angle_deg,
+                                shift,
+                                ..
+                            } => {
+                                *angle_deg = dxf.gradient_color.angle.to_degrees() as f32;
+                                *shift = dxf.gradient_color.shift as f32;
                             }
                             model::hatch_model::HatchPattern::Pattern(_)
                             | model::hatch_model::HatchPattern::Solid => {}
@@ -1520,8 +1555,8 @@ impl Scene {
             return None;
         }
 
-        let mut boundary: Vec<[f64; 2]> = Vec::new();
-        let mut boundary_exterior = Vec::new();
+        let mut rings = Vec::new();
+        let mut ring_sources = Vec::new();
 
         for path in &dxf.paths {
             // Skip TEXTBOX boundary paths (flag bit 3). These are text
@@ -1531,12 +1566,6 @@ impl Scene {
             if path.flags.bits() & 8 != 0 {
                 continue;
             }
-            let before_path = boundary.len();
-            if !boundary.is_empty() {
-                boundary.push([f64::NAN, f64::NAN]);
-            }
-            let path_start = boundary.len();
-
             let mut edge_polys: Vec<Vec<[f64; 2]>> = Vec::new();
             for edge in &path.edges {
                 if let Some(curve) = crate::entities::hatch::edge_curve(edge) {
@@ -1549,29 +1578,44 @@ impl Scene {
                     );
                 }
             }
-            boundary.extend(chain_path_edges(edge_polys));
-
-            if boundary.len() == path_start {
-                boundary.truncate(before_path);
+            let mut ring = chain_path_edges(edge_polys);
+            if ring.is_empty() {
                 continue;
             }
-            boundary_exterior.push(path.flags.is_external() || path.flags.is_outermost());
-            if boundary.len() >= path_start + 3 {
-                let first = boundary[path_start];
-                let last = *boundary.last().unwrap();
+            if ring.len() >= 3 {
+                let first = ring[0];
+                let last = *ring.last().unwrap();
                 if (first[0] - last[0]).abs() > 1e-5 || (first[1] - last[1]).abs() > 1e-5 {
-                    boundary.push(first);
+                    ring.push(first);
                 }
             }
+            rings.push(ring);
+            ring_sources.push(path.boundary_handles.clone());
         }
 
-        if boundary.is_empty() {
+        if rings.is_empty() {
             return None;
         }
-        if !boundary_exterior.iter().any(|role| *role) {
-            if let Some(first) = boundary_exterior.first_mut() {
-                *first = true;
+
+        let depths = cadkernel::geom2d::ring_nesting_depths(&rings);
+        let mut boundary = Vec::new();
+        let mut boundary_exterior = Vec::new();
+        let mut boundary_sources = Vec::new();
+        for ((ring, sources), depth) in rings.into_iter().zip(ring_sources).zip(depths) {
+            let keep = match dxf.style {
+                acadrust::entities::HatchStyleType::Normal => true,
+                acadrust::entities::HatchStyleType::Outer => depth <= 1,
+                acadrust::entities::HatchStyleType::Ignore => depth == 0,
+            };
+            if !keep {
+                continue;
             }
+            if !boundary.is_empty() {
+                boundary.push([f64::NAN, f64::NAN]);
+            }
+            boundary.extend(ring);
+            boundary_exterior.push(depth == 0);
+            boundary_sources.push(sources);
         }
         // The batched hatch renderer keeps boundaries in a GPU storage
         // buffer (no fixed length), so a hatch with many island loops must
@@ -1618,8 +1662,13 @@ impl Scene {
                 )
             };
             gradient_color1 = stop(0);
-            let color2 = stop(1).unwrap_or(color);
-            let angle_deg = dxf.pattern_angle.to_degrees() as f32;
+            let color1 = gradient_color1.unwrap_or(color);
+            let color2 = if dxf.gradient_color.is_single_color {
+                gradient_tint_color(color1, dxf.gradient_color.color_tint as f32)
+            } else {
+                stop(1).unwrap_or(color)
+            };
+            let angle_deg = dxf.gradient_color.angle.to_degrees() as f32;
             let (kind, invert) =
                 model::hatch_model::GradientKind::from_name(&dxf.gradient_color.name);
             model::hatch_model::HatchPattern::Gradient {
@@ -1627,6 +1676,7 @@ impl Scene {
                 color2,
                 kind,
                 invert,
+                shift: dxf.gradient_color.shift as f32,
             }
         } else if dxf.is_solid {
             model::hatch_model::HatchPattern::Solid
@@ -1768,13 +1818,7 @@ impl Scene {
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
             boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
-            boundary_sources: Some(std::sync::Arc::new(
-                dxf.paths
-                    .iter()
-                    .filter(|path| path.flags.bits() & 8 == 0)
-                    .map(|path| path.boundary_handles.clone())
-                    .collect(),
-            )),
+            boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
             pattern,
             name,
             // A gradient starts from its first stop; other fills use the
@@ -2144,27 +2188,28 @@ impl Scene {
         let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool, index: usize| {
             if !r.is_empty() {
                 let edge = PolylineEdge::new(std::mem::take(r), true);
-                let mut path = if is_outer {
-                    let mut p = BoundaryPath::external();
-                    p.flags = acadrust::entities::hatch::BoundaryPathFlags::from_bits(
-                        p.flags.bits()
-                            | acadrust::entities::hatch::BoundaryPathFlags::OUTERMOST.bits(),
-                    );
-                    p
-                } else {
-                    BoundaryPath::new()
-                };
-                path.add_edge(BoundaryEdge::Polyline(edge));
-                if let Some(handles) = model
+                let handles: Vec<_> = model
                     .boundary_sources
                     .as_deref()
                     .and_then(|sources| sources.get(index))
-                {
-                    for &handle in handles {
-                        if handle.is_valid() {
-                            path.add_boundary_handle(handle);
-                        }
-                    }
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|handle| handle.is_valid())
+                    .collect();
+                let mut bits = 0;
+                if is_outer {
+                    bits |= acadrust::entities::hatch::BoundaryPathFlags::OUTERMOST.bits();
+                }
+                if !handles.is_empty() {
+                    bits |= acadrust::entities::hatch::BoundaryPathFlags::EXTERNAL.bits();
+                }
+                let mut path = BoundaryPath::with_flags(
+                    acadrust::entities::hatch::BoundaryPathFlags::from_bits(bits),
+                );
+                path.add_edge(BoundaryEdge::Polyline(edge));
+                for handle in handles {
+                    path.add_boundary_handle(handle);
                 }
                 dxf.paths.push(path);
             }
@@ -2254,6 +2299,7 @@ impl Scene {
             color2,
             kind,
             invert,
+            shift,
         } = &model.pattern
         {
             let to_color = |c: [f32; 4]| acadrust::types::Color::Rgb {
@@ -2264,10 +2310,10 @@ impl Scene {
             dxf.is_solid = true;
             dxf.gradient_color.enabled = true;
             dxf.gradient_color.name = kind.dxf_name(*invert).to_string();
-            // The render model reads the gradient angle from pattern_angle
-            // (radians); the gradient record keeps its own copy for the file.
+            // Keep both persisted angle fields aligned.
             dxf.pattern_angle = (*angle_deg as f64).to_radians();
             dxf.gradient_color.angle = (*angle_deg as f64).to_radians();
+            dxf.gradient_color.shift = *shift as f64;
             dxf.gradient_color.is_single_color = false;
             // Linear has no INV name in the standard set: persist an inverted
             // linear by swapping the colour stops instead.

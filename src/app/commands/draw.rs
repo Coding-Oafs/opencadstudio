@@ -676,8 +676,9 @@ impl OpenCADStudio {
 
             "GRADIENT" => {
                 use crate::modules::draw::draw::hatch::GradientCommand;
-                let outlines = self.tabs[i].scene.closed_outlines();
-                let new_cmd = GradientCommand::new(outlines);
+                let outlines = self.tabs[i].scene.hatch_boundary_outlines();
+                let boundary_sources = self.tabs[i].scene.hatch_boundary_sources();
+                let new_cmd = GradientCommand::new(outlines, boundary_sources);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
