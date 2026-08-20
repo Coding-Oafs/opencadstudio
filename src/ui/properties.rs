@@ -314,7 +314,9 @@ pub fn build_field_key_map(
     for section in sections {
         for prop in &section.props {
             let key = match &prop.value {
-                PropValue::EditText(_) => Some(FieldKey::Geom(prop.field)),
+                PropValue::EditText(_) | PropValue::PlainText(_) => {
+                    Some(FieldKey::Geom(prop.field))
+                }
                 PropValue::AttrText { tag, .. } => Some(FieldKey::Attr(tag.clone())),
                 _ => None,
             };
@@ -765,7 +767,9 @@ impl PropertiesPanel {
             }
             PropValue::BoolToggle { field, value } => render_bool_row(label, *field, *value),
             PropValue::Stepper { display, .. } => render_stepper_row(label, display),
-            PropValue::EditText(val) => self.render_edit_row(label, prop.field, val),
+            PropValue::EditText(val) | PropValue::PlainText(val) => {
+                self.render_edit_row(label, prop.field, val)
+            }
             PropValue::ReadOnly(val) if prop.field == "annotative_scale" => {
                 render_annotative_scale_row(label, val)
             }

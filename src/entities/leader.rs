@@ -291,7 +291,7 @@ fn properties(leader: &Leader) -> Vec<PropSection> {
         Property {
             label: t!("Dim style").into_owned(),
             field: "dimension_style",
-            value: PropValue::EditText(leader.dimension_style.clone()),
+            value: PropValue::PlainText(leader.dimension_style.clone()),
         },
         choice_prop(
             t!("Type").as_ref(),

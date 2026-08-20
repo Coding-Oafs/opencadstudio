@@ -417,6 +417,7 @@ impl Scene {
                             ])
                         } else {
                             match prop.value {
+                                PropValue::PlainText(_) => QSelectValueEditor::Text,
                                 PropValue::ReadOnly(ref value)
                                 | PropValue::EditText(ref value) => {
                                     let field = prop.field.to_ascii_lowercase();
@@ -614,7 +615,9 @@ impl Scene {
                     .flat_map(|s| s.props)
                     .find(|p| p.field == field)?;
                 Some(match prop.value {
-                    PropValue::ReadOnly(s) | PropValue::EditText(s) => s,
+                    PropValue::ReadOnly(s)
+                    | PropValue::EditText(s)
+                    | PropValue::PlainText(s) => s,
                     PropValue::LayerChoice(s) => s,
                     PropValue::Choice { selected, .. } => selected,
                     PropValue::EditChoice { value, .. } => value,

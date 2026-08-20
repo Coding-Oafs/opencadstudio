@@ -837,7 +837,7 @@ impl OpenCADStudio {
                             geom.props.push(crate::scene::model::object::Property {
                                 label: t!("Frozen Layers").into_owned(),
                                 field: "frozen_layers",
-                                value: crate::scene::model::object::PropValue::EditText(
+                                value: crate::scene::model::object::PropValue::PlainText(
                                     frozen_names.join(", "),
                                 ),
                             });
@@ -903,15 +903,17 @@ impl OpenCADStudio {
                             .filter(|n| !n.is_empty())
                             .collect();
                         if !dim_style_names.is_empty() {
-                            // Current style is already shown as EditText in the geom section;
+                            // Current style is already shown as text in the geom section;
                             // replace/upgrade it to a Choice if we have a list.
                             if let Some(geom) = sections.last_mut() {
-                                // Find and replace the style_name EditText with a Choice.
+                                // Replace the style name with a choice.
                                 if let Some(prop) =
                                     geom.props.iter_mut().find(|p| p.field == "style_name")
                                 {
                                     let current = match &prop.value {
-                                        crate::scene::model::object::PropValue::EditText(s) => s.clone(),
+                                        crate::scene::model::object::PropValue::PlainText(s) => {
+                                            s.clone()
+                                        }
                                         _ => String::new(),
                                     };
                                     prop.value = crate::scene::model::object::PropValue::Choice {
@@ -1044,7 +1046,7 @@ impl OpenCADStudio {
                                         .find(|p| p.field == "dimension_style")
                                     {
                                         let cur = match &p.value {
-                                            crate::scene::model::object::PropValue::EditText(s) => {
+                                            crate::scene::model::object::PropValue::PlainText(s) => {
                                                 s.clone()
                                             }
                                             _ => ld.dimension_style.clone(),
@@ -1979,6 +1981,7 @@ fn make_sections_read_only(
         let text = match &property.value {
             PropValue::ReadOnly(value)
             | PropValue::EditText(value)
+            | PropValue::PlainText(value)
             | PropValue::LayerChoice(value)
             | PropValue::LinetypeChoice(value)
             | PropValue::HatchPatternChoice(value) => value.clone(),
@@ -2158,6 +2161,9 @@ fn merge_prop_value(
         },
         (PropValue::EditText(_), PropValue::EditText(_)) => {
             PropValue::EditText(VARIES_LABEL.into())
+        }
+        (PropValue::PlainText(_), PropValue::PlainText(_)) => {
+            PropValue::PlainText(VARIES_LABEL.into())
         }
         (PropValue::ReadOnly(_), PropValue::ReadOnly(_)) => {
             PropValue::ReadOnly(VARIES_LABEL.into())

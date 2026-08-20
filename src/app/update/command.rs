@@ -14,7 +14,7 @@ use crate::scene::pick::grip::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::plugin::v4_support;
-use crate::scene::model::object::GripApply;
+use crate::scene::model::object::{GripApply, PropValue};
 use crate::scene::{
     self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
 };
@@ -2168,17 +2168,24 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.tabs[i].properties.active_field = None;
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
+                    let evaluates_expression = self.tabs[i]
+                        .properties
+                        .sections
+                        .iter()
+                        .flat_map(|section| section.props.iter())
+                        .find(|property| property.field == field)
+                        .is_some_and(|property| {
+                            matches!(property.value, PropValue::EditText(_))
+                        });
                     if let Some(raw_val) = self.tabs[i]
                         .properties
                         .edit_buf
                         .remove(&crate::ui::properties::FieldKey::Geom(field))
                     {
-                        // Block names are free-form text — a name like "10-5"
-                        // must not be arithmetic-evaluated.
-                        let val = if field == "block" {
-                            raw_val
-                        } else {
+                        let val = if evaluates_expression {
                             crate::app::expr_eval::eval_to_string(&raw_val)
+                        } else {
+                            raw_val
                         };
                         if matches!(field, "current_fit_point" | "current_control_point") {
                             let count = handles

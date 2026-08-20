@@ -337,7 +337,7 @@ impl PropertyEditable for MLine {
                 Property {
                     label: t!("Style").into_owned(),
                     field: "ml_style",
-                    value: PropValue::EditText(self.style_name.clone()),
+                    value: PropValue::PlainText(self.style_name.clone()),
                 },
                 Property {
                     label: t!("Style justification").into_owned(),

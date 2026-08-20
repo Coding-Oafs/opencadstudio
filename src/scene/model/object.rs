@@ -8,8 +8,10 @@ use glam::DVec3;
 pub enum PropValue {
     /// Read-only display text.
     ReadOnly(String),
-    /// Editable numeric/text field.
+    /// Editable numeric field.
     EditText(String),
+    /// Editable text that must not be expression-evaluated.
+    PlainText(String),
     /// Layer name — rendered as a combo_box.
     LayerChoice(String),
     /// Generic string choice rendered as a combo_box.

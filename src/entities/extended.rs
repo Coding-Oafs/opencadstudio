@@ -34,7 +34,7 @@ fn text_prop(label: &str, field: &'static str, value: &str) -> Property {
     Property {
         label: label.into(),
         field,
-        value: PropValue::EditText(value.to_string()),
+        value: PropValue::PlainText(value.to_string()),
     }
 }
 

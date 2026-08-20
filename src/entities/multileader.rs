@@ -715,7 +715,7 @@ fn properties(ml: &MultiLeader) -> Vec<PropSection> {
             Property {
                 label: t!("Contents").into_owned(),
                 field: "text_string",
-                value: PropValue::EditText(ctx.text_string.clone()),
+                value: PropValue::PlainText(ctx.text_string.clone()),
             },
             // Text-style name resolved from text_style_handle by the panel builder.
             ro(t!("Text style").as_ref(), "text_style_handle", "Standard"),
