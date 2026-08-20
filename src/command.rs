@@ -1297,7 +1297,11 @@ pub enum CmdResult {
         boundary_handle: Handle,
     },
     /// Create a wipeout from an existing closed polyline in the active space.
-    WipeoutFromPolyline(Handle),
+    /// `erase_source` controls whether the source boundary is consumed.
+    WipeoutFromPolyline {
+        handle: Handle,
+        erase_source: bool,
+    },
     /// Temporarily switch between paper and Model while MVIEW defines a new
     /// model-space window, keeping the command active.
     MviewSwitchLayout(String),

@@ -1,8 +1,9 @@
 // WIPEOUT command — draw a polygonal mask or derive one from a closed polyline.
 
 use acadrust::entities::{Wipeout, WipeoutClipType};
+use acadrust::objects::{ObjectType, WipeoutVariables};
 use acadrust::types::{Vector2, Vector3};
-use acadrust::{EntityType, Handle};
+use acadrust::{CadDocument, EntityType, Handle};
 use glam::DVec3;
 use crate::t;
 
@@ -26,6 +27,8 @@ pub struct WipeoutCommand {
     first: Option<DVec3>,
     points: Vec<DVec3>,
     plane: WorkingPlane,
+    selected_polyline: Option<Handle>,
+    frame_mode: i16,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -33,15 +36,19 @@ enum WipeoutMode {
     Draw,
     Polyline,
     Rectangular,
+    Frames,
+    ErasePolyline,
 }
 
 impl WipeoutCommand {
-    pub fn new_polygonal() -> Self {
+    pub fn new_polygonal(frame_mode: i16) -> Self {
         Self {
             mode: WipeoutMode::Draw,
             first: None,
             points: Vec::new(),
             plane: WorkingPlane::default(),
+            selected_polyline: None,
+            frame_mode: frame_mode.clamp(0, 2),
         }
     }
 
@@ -51,6 +58,8 @@ impl WipeoutCommand {
             first: None,
             points: Vec::new(),
             plane: WorkingPlane::default(),
+            selected_polyline: None,
+            frame_mode: 1,
         }
     }
 
@@ -61,6 +70,8 @@ impl WipeoutCommand {
             first: None,
             points: Vec::new(),
             plane: WorkingPlane::default(),
+            selected_polyline: None,
+            frame_mode: 1,
         }
     }
 
@@ -94,7 +105,7 @@ impl CadCommand for WipeoutCommand {
     fn prompt(&self) -> String {
         match self.mode {
             WipeoutMode::Draw if self.points.is_empty() => {
-                t!("WIPEOUT  Specify first point or [Polyline]:").into_owned()
+                t!("WIPEOUT  Specify first point or [Frames/Polyline] <Polyline>:").into_owned()
             }
             WipeoutMode::Draw => {
                 let n = self.points.len();
@@ -113,17 +124,37 @@ impl CadCommand for WipeoutCommand {
             WipeoutMode::Rectangular => {
                 t!("WIPEOUT Rectangular  Specify opposite corner:").into_owned()
             }
+            WipeoutMode::Frames => t!(
+                "WIPEOUT Frames  Enter frame mode [Off/On/DisplayButNotPlot] <%{mode}>:",
+                mode = self.frame_mode
+            )
+            .into_owned(),
+            WipeoutMode::ErasePolyline => {
+                t!("WIPEOUT Polyline  Erase source polyline? [Yes/No] <No>:").into_owned()
+            }
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         match self.mode {
             WipeoutMode::Draw if self.points.is_empty() => {
-                vec![CmdOption::new(t!("Polyline").as_ref(), "P")]
+                vec![
+                    CmdOption::new(t!("Frames").as_ref(), "F"),
+                    CmdOption::new(t!("Polyline").as_ref(), "P"),
+                ]
             }
             WipeoutMode::Draw => vec![
                 CmdOption::new(t!("Undo").as_ref(), "U"),
                 CmdOption::new(t!("Close").as_ref(), "C"),
+            ],
+            WipeoutMode::Frames => vec![
+                CmdOption::new(t!("Off").as_ref(), "OFF"),
+                CmdOption::new(t!("On").as_ref(), "ON"),
+                CmdOption::new(t!("Display but not plot").as_ref(), "D"),
+            ],
+            WipeoutMode::ErasePolyline => vec![
+                CmdOption::new(t!("Yes").as_ref(), "Y"),
+                CmdOption::new(t!("No").as_ref(), "N"),
             ],
             _ => Vec::new(),
         }
@@ -154,13 +185,23 @@ impl CadCommand for WipeoutCommand {
                     CmdResult::NeedPoint
                 }
             }
-            WipeoutMode::Polyline => CmdResult::NeedPoint,
+            WipeoutMode::Polyline | WipeoutMode::Frames | WipeoutMode::ErasePolyline => {
+                CmdResult::NeedPoint
+            }
         }
     }
 
     fn on_enter(&mut self) -> CmdResult {
         match self.mode {
+            WipeoutMode::Draw if self.points.is_empty() => {
+                self.mode = WipeoutMode::Polyline;
+                CmdResult::NeedPoint
+            }
             WipeoutMode::Draw if self.points.len() >= 3 => self.finish_draw(),
+            WipeoutMode::Frames => {
+                CmdResult::Dispatch(format!("WIPEOUTFRAME {}", self.frame_mode))
+            }
+            WipeoutMode::ErasePolyline => self.finish_polyline(false),
             _ => CmdResult::Cancel,
         }
     }
@@ -177,33 +218,55 @@ impl CadCommand for WipeoutCommand {
         if handle.is_null() {
             CmdResult::NeedPoint
         } else {
-            CmdResult::WipeoutFromPolyline(handle)
+            self.selected_polyline = Some(handle);
+            self.mode = WipeoutMode::ErasePolyline;
+            CmdResult::NeedPoint
         }
     }
 
     fn wants_text_input(&self) -> bool {
-        self.mode == WipeoutMode::Draw
+        matches!(
+            self.mode,
+            WipeoutMode::Draw | WipeoutMode::Frames | WipeoutMode::ErasePolyline
+        )
     }
 
     fn point_step_accepts_keywords(&self) -> bool {
-        self.mode == WipeoutMode::Draw
+        matches!(
+            self.mode,
+            WipeoutMode::Draw | WipeoutMode::Frames | WipeoutMode::ErasePolyline
+        )
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        if self.mode != WipeoutMode::Draw {
-            return None;
-        }
-        match text.trim().to_ascii_uppercase().as_str() {
-            "P" | "POLYLINE" if self.points.is_empty() => {
-                self.mode = WipeoutMode::Polyline;
-                Some(CmdResult::NeedPoint)
-            }
-            "U" | "UNDO" if !self.points.is_empty() => {
-                Some(self.undo_point())
-            }
-            "C" | "CLOSE" if self.points.len() >= 3 => {
-                Some(self.finish_draw())
-            }
+        let text = text.trim().to_ascii_uppercase();
+        match self.mode {
+            WipeoutMode::Draw => match text.as_str() {
+                "F" | "FRAMES" if self.points.is_empty() => {
+                    self.mode = WipeoutMode::Frames;
+                    Some(CmdResult::NeedPoint)
+                }
+                "P" | "POLYLINE" if self.points.is_empty() => {
+                    self.mode = WipeoutMode::Polyline;
+                    Some(CmdResult::NeedPoint)
+                }
+                "U" | "UNDO" if !self.points.is_empty() => Some(self.undo_point()),
+                "C" | "CLOSE" if self.points.len() >= 3 => Some(self.finish_draw()),
+                _ => None,
+            },
+            WipeoutMode::Frames => match text.as_str() {
+                "0" | "OFF" => Some(CmdResult::Dispatch("WIPEOUTFRAME 0".into())),
+                "1" | "ON" => Some(CmdResult::Dispatch("WIPEOUTFRAME 1".into())),
+                "2" | "D" | "DISPLAYBUTNOTPLOT" => {
+                    Some(CmdResult::Dispatch("WIPEOUTFRAME 2".into()))
+                }
+                _ => None,
+            },
+            WipeoutMode::ErasePolyline => match text.as_str() {
+                "Y" | "YES" => Some(self.finish_polyline(true)),
+                "N" | "NO" => Some(self.finish_polyline(false)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -264,8 +327,58 @@ impl CadCommand for WipeoutCommand {
                     false,
                 ))
             }
-            WipeoutMode::Polyline => None,
+            WipeoutMode::Polyline | WipeoutMode::Frames | WipeoutMode::ErasePolyline => None,
         }
+    }
+}
+
+impl WipeoutCommand {
+    fn finish_polyline(&self, erase_source: bool) -> CmdResult {
+        self.selected_polyline.map_or(CmdResult::Cancel, |handle| {
+            CmdResult::WipeoutFromPolyline {
+                handle,
+                erase_source,
+            }
+        })
+    }
+}
+
+pub(crate) fn wipeout_frame_mode(document: &CadDocument) -> i16 {
+    document
+        .objects
+        .values()
+        .find_map(|object| match object {
+            ObjectType::WipeoutVariables(value) => Some(value.display_frame),
+            _ => None,
+        })
+        .unwrap_or(1)
+        .clamp(0, 2)
+}
+
+pub(crate) fn set_wipeout_frame_mode(document: &mut CadDocument, mode: i16) {
+    let mode = mode.clamp(0, 2);
+    if let Some(value) = document.objects.values_mut().find_map(|object| match object {
+        ObjectType::WipeoutVariables(value) => Some(value),
+        _ => None,
+    }) {
+        value.display_frame = mode;
+        return;
+    }
+
+    let owner = crate::scene::annotative::root_named_dict_handle(document);
+    let handle = document.allocate_handle();
+    let mut value = WipeoutVariables::new();
+    value.handle = handle;
+    value.owner = owner;
+    value.display_frame = mode;
+    document
+        .objects
+        .insert(handle, ObjectType::WipeoutVariables(value));
+    if let Some(ObjectType::Dictionary(dictionary)) = document.objects.get_mut(&owner) {
+        dictionary
+            .entries
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("ACAD_WIPEOUT_VARS"));
+        dictionary.add_entry("ACAD_WIPEOUT_VARS", handle);
     }
 }
 
@@ -300,9 +413,62 @@ fn clean_boundary(points: &[DVec3]) -> Vec<DVec3> {
     clean
 }
 
+fn boundary_is_simple(points: &[DVec3]) -> bool {
+    fn orient(a: DVec3, b: DVec3, c: DVec3) -> f64 {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+    fn on_segment(a: DVec3, b: DVec3, p: DVec3) -> bool {
+        let eps = 1e-9;
+        orient(a, b, p).abs() <= eps
+            && p.x >= a.x.min(b.x) - eps
+            && p.x <= a.x.max(b.x) + eps
+            && p.y >= a.y.min(b.y) - eps
+            && p.y <= a.y.max(b.y) + eps
+    }
+    fn intersects(a: DVec3, b: DVec3, c: DVec3, d: DVec3) -> bool {
+        let ab_c = orient(a, b, c);
+        let ab_d = orient(a, b, d);
+        let cd_a = orient(c, d, a);
+        let cd_b = orient(c, d, b);
+        ((ab_c > 0.0 && ab_d < 0.0) || (ab_c < 0.0 && ab_d > 0.0))
+            && ((cd_a > 0.0 && cd_b < 0.0) || (cd_a < 0.0 && cd_b > 0.0))
+            || on_segment(a, b, c)
+            || on_segment(a, b, d)
+            || on_segment(c, d, a)
+            || on_segment(c, d, b)
+    }
+
+    let count = points.len();
+    for first in 0..count {
+        let first_next = (first + 1) % count;
+        for second in first + 1..count {
+            let second_next = (second + 1) % count;
+            if first == second
+                || first_next == second
+                || second_next == first
+                || (first == 0 && second_next == 0)
+            {
+                continue;
+            }
+            if intersects(
+                points[first],
+                points[first_next],
+                points[second],
+                points[second_next],
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn make_poly_wipeout(points: &[DVec3]) -> Option<EntityType> {
     let points = clean_boundary(points);
     if points.len() < 3 {
+        return None;
+    }
+    if !boundary_is_simple(&points) {
         return None;
     }
     let z = points[0].z;
@@ -364,50 +530,27 @@ fn explicitly_closed(points: &[DVec3]) -> bool {
     points.len() >= 4 && same_point(points[0], *points.last().unwrap())
 }
 
-fn sample_2d_polyline(
-    vertices: &[([f64; 2], f64)],
-    elevation: f64,
-    normal: (f64, f64, f64),
-) -> Vec<DVec3> {
-    if vertices.len() < 3 {
-        return Vec::new();
-    }
-    let to_wcs = |point: [f64; 2]| {
-        let point = crate::scene::view::transform::ocs_point_to_wcs(
-            (point[0], point[1], elevation),
-            normal,
-        );
-        DVec3::new(point.0, point.1, point.2)
-    };
-    let mut points = vec![to_wcs(vertices[0].0)];
-    for index in 0..vertices.len() {
-        let (start, bulge) = vertices[index];
-        let end_index = (index + 1) % vertices.len();
-        let end = vertices[end_index].0;
-        if let Some(arc) =
-            crate::entities::common::BulgeArc::from_bulge(start, end, bulge)
-        {
-            let steps = ((arc.sweep.abs() / std::f64::consts::TAU * 64.0).ceil()
-                as usize)
-                .clamp(4, 64);
-            for step in 1..=steps {
-                if end_index == 0 && step == steps {
-                    break;
-                }
-                points.push(to_wcs(arc.sample(step as f64 / steps as f64)));
-            }
-        } else if end_index != 0 {
-            points.push(to_wcs(end));
-        }
-    }
-    points
-}
-
 /// Build a wipeout boundary from a picked closed polyline without consuming
-/// the source entity. Bulged 2D segments are sampled into the polygonal mask.
+/// the source entity. Only straight, closed 2D polygonal boundaries qualify.
 pub(crate) fn wipeout_from_polyline(entity: &EntityType) -> Option<EntityType> {
-    let points = match entity {
+    fn from_ocs(points: &[DVec3], normal: (f64, f64, f64)) -> Option<EntityType> {
+        let origin = crate::scene::view::transform::ocs_point_to_wcs((0.0, 0.0, 0.0), normal);
+        let x = crate::scene::view::transform::ocs_point_to_wcs((1.0, 0.0, 0.0), normal);
+        let y = crate::scene::view::transform::ocs_point_to_wcs((0.0, 1.0, 0.0), normal);
+        let origin = DVec3::new(origin.0, origin.1, origin.2);
+        let plane = WorkingPlane::new(
+            origin,
+            DVec3::new(x.0, x.1, x.2) - origin,
+            DVec3::new(y.0, y.1, y.2) - origin,
+        );
+        make_poly_wipeout(points).map(|entity| plane.place_entity(entity))
+    }
+
+    match entity {
         EntityType::LwPolyline(polyline) => {
+            if polyline.vertices.iter().any(|vertex| vertex.bulge.abs() > 1e-12) {
+                return None;
+            }
             let raw: Vec<DVec3> = polyline
                 .vertices
                 .iter()
@@ -416,27 +559,15 @@ pub(crate) fn wipeout_from_polyline(entity: &EntityType) -> Option<EntityType> {
             if !polyline.is_closed && !explicitly_closed(&raw) {
                 return None;
             }
-            let vertices: Vec<([f64; 2], f64)> = polyline
-                .vertices
-                .iter()
-                .map(|vertex| {
-                    (
-                        [vertex.location.x, vertex.location.y],
-                        vertex.bulge,
-                    )
-                })
-                .collect();
-            sample_2d_polyline(
-                &vertices,
-                polyline.elevation,
-                (
-                    polyline.normal.x,
-                    polyline.normal.y,
-                    polyline.normal.z,
-                ),
+            from_ocs(
+                &raw,
+                (polyline.normal.x, polyline.normal.y, polyline.normal.z),
             )
         }
         EntityType::Polyline2D(polyline) => {
+            if polyline.vertices.iter().any(|vertex| vertex.bulge.abs() > 1e-12) {
+                return None;
+            }
             let raw: Vec<DVec3> = polyline
                 .vertices
                 .iter()
@@ -451,63 +582,13 @@ pub(crate) fn wipeout_from_polyline(entity: &EntityType) -> Option<EntityType> {
             if !polyline.is_closed() && !explicitly_closed(&raw) {
                 return None;
             }
-            let vertices: Vec<([f64; 2], f64)> = polyline
-                .vertices
-                .iter()
-                .map(|vertex| {
-                    (
-                        [vertex.location.x, vertex.location.y],
-                        vertex.bulge,
-                    )
-                })
-                .collect();
-            sample_2d_polyline(
-                &vertices,
-                polyline.elevation,
-                (
-                    polyline.normal.x,
-                    polyline.normal.y,
-                    polyline.normal.z,
-                ),
+            from_ocs(
+                &raw,
+                (polyline.normal.x, polyline.normal.y, polyline.normal.z),
             )
         }
-        EntityType::Polyline(polyline) => {
-            let points: Vec<DVec3> = polyline
-                .vertices
-                .iter()
-                .map(|vertex| {
-                    DVec3::new(
-                        vertex.location.x,
-                        vertex.location.y,
-                        vertex.location.z,
-                    )
-                })
-                .collect();
-            if !polyline.is_closed() && !explicitly_closed(&points) {
-                return None;
-            }
-            points
-        }
-        EntityType::Polyline3D(polyline) => {
-            let points: Vec<DVec3> = polyline
-                .vertices
-                .iter()
-                .map(|vertex| {
-                    DVec3::new(
-                        vertex.position.x,
-                        vertex.position.y,
-                        vertex.position.z,
-                    )
-                })
-                .collect();
-            if !polyline.flags.closed && !explicitly_closed(&points) {
-                return None;
-            }
-            points
-        }
         _ => return None,
-    };
-    make_poly_wipeout(&points)
+    }
 }
 
 // ── Autocomplete registry ─────────────────────────────────

@@ -48,7 +48,11 @@ impl OpenCADStudio {
                 let wo_cmd = match args.as_str() {
                     "P" | "POLYLINE" => WipeoutCommand::new_polyline(),
                     "R" | "RECTANGULAR" => WipeoutCommand::new_rectangular(),
-                    _ => WipeoutCommand::new_polygonal(),
+                    _ => WipeoutCommand::new_polygonal(
+                        crate::modules::draw::draw::wipeout::wipeout_frame_mode(
+                            &self.tabs[i].scene.document,
+                        ),
+                    ),
                 };
                 self.command_line.push_info(&wo_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(wo_cmd));

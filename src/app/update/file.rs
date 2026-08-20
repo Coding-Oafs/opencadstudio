@@ -168,7 +168,21 @@ fn plot_scene_content(
     Vec<crate::scene::model::hatch_model::HatchModel>,
     crate::io::pdf_export::PlotGroupSplits,
 ) {
-    let (paper_wires, model_wires) = scene.plot_wire_groups(render_mode_override);
+    let (mut paper_wires, mut model_wires) = scene.plot_wire_groups(render_mode_override);
+    let hide_mask_frames =
+        crate::modules::draw::draw::wipeout::wipeout_frame_mode(&scene.document) == 2;
+    if hide_mask_frames {
+        let mask_handles: std::collections::HashSet<String> = scene
+            .document
+            .entities()
+            .filter_map(|entity| {
+                matches!(entity, acadrust::EntityType::Wipeout(_))
+                    .then_some(entity.common().handle.value().to_string())
+            })
+            .collect();
+        paper_wires.retain(|wire| !mask_handles.contains(&wire.name));
+        model_wires.retain(|wire| !mask_handles.contains(&wire.name));
+    }
     let paper_hatches = scene.paper_canvas_hatches().as_ref().clone();
     let paper_wipeouts = scene.paper_canvas_wipeouts().as_ref().clone();
     if scene.current_layout == "Model" {
@@ -184,8 +198,19 @@ fn plot_scene_content(
             splits,
         );
     }
-    let (model_pattern_wires, model_hatches, model_wipeouts) =
+    let (mut model_pattern_wires, model_hatches, model_wipeouts) =
         scene.viewport_plot_fills();
+    if hide_mask_frames {
+        let mask_handles: std::collections::HashSet<String> = scene
+            .document
+            .entities()
+            .filter_map(|entity| {
+                matches!(entity, acadrust::EntityType::Wipeout(_))
+                    .then_some(entity.common().handle.value().to_string())
+            })
+            .collect();
+        model_pattern_wires.retain(|wire| !mask_handles.contains(&wire.name));
+    }
 
     let (wires, hatches, wipeouts, splits) = if paper_space_last {
         let splits = crate::io::pdf_export::PlotGroupSplits {

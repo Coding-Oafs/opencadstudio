@@ -1208,6 +1208,22 @@ pub(crate) fn tessellate_entity(
         if b.text_verts.is_empty() {
             set_wire_aabb(b, aabb);
         }
+        if matches!(e, EntityType::Wipeout(_)) {
+            b.depth_override = Some(0.5);
+        }
+    }
+
+    // A hidden mask frame remains selectable and appears while selected, but
+    // contributes no visible line work during normal display. The interior
+    // pick triangles remain intact.
+    if matches!(e, EntityType::Wipeout(_))
+        && crate::modules::draw::draw::wipeout::wipeout_frame_mode(document) == 0
+        && !sel
+    {
+        for base in &mut bases {
+            base.points.clear();
+            base.points_low.clear();
+        }
     }
 
     // Complex linetypes (with embedded shapes / text) expand the *base*
