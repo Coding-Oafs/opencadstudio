@@ -9,12 +9,7 @@ use std::{fs, path::Path};
 /// Reproject a single XY coordinate from `source_epsg` to `target_epsg`.
 /// Returns `None` when either projection is unavailable or the transform fails.
 /// `z` is passed through unchanged.
-pub fn reproject_xy(
-    source_epsg: u16,
-    target_epsg: u16,
-    x: f64,
-    y: f64,
-) -> Option<(f64, f64)> {
+pub fn reproject_xy(source_epsg: u16, target_epsg: u16, x: f64, y: f64) -> Option<(f64, f64)> {
     if source_epsg == target_epsg {
         return Some((x, y));
     }
@@ -31,6 +26,15 @@ pub fn reproject_xy(
         coordinate.1 = coordinate.1.to_degrees();
     }
     Some((coordinate.0, coordinate.1))
+}
+
+/// Horizontal unit reported by an EPSG definition (for example `m`, `ft`,
+/// `us-ft`, or `degrees`). Drawing spatial settings use this to keep the
+/// working unit compatible with the coordinate system.
+pub fn epsg_horizontal_unit(epsg: u16) -> Option<&'static str> {
+    Proj::from_epsg_code(epsg)
+        .ok()
+        .map(|projection| projection.units())
 }
 
 /// Reproject a single XY coordinate from a PROJ.4 source string to `target_epsg`.
@@ -51,12 +55,7 @@ pub fn reproject_from_proj4(
 /// Reproject a single XY coordinate from a `CrsInfo` source to `target_epsg`,
 /// preferring the PROJ.4 string (accurate for projected CRS whose EPSG code is
 /// only the geographic base) over `horizontal_epsg`.
-pub fn reproject_from_crs(
-    crs: &CrsInfo,
-    target_epsg: u16,
-    x: f64,
-    y: f64,
-) -> Option<(f64, f64)> {
+pub fn reproject_from_crs(crs: &CrsInfo, target_epsg: u16, x: f64, y: f64) -> Option<(f64, f64)> {
     if let Some(proj4) = crs.proj4.as_deref() {
         if let Some(out) = reproject_from_proj4(proj4, target_epsg, x, y) {
             return Some(out);
@@ -68,12 +67,7 @@ pub fn reproject_from_crs(
 
 /// Reproject a single XY coordinate from `source_epsg` into a `CrsInfo` target
 /// (the reverse of [`reproject_from_crs`]).
-pub fn reproject_to_crs(
-    source_epsg: u16,
-    crs: &CrsInfo,
-    x: f64,
-    y: f64,
-) -> Option<(f64, f64)> {
+pub fn reproject_to_crs(source_epsg: u16, crs: &CrsInfo, x: f64, y: f64) -> Option<(f64, f64)> {
     if let Some(proj4) = crs.proj4.as_deref() {
         let source = Proj::from_epsg_code(source_epsg).ok()?;
         let target = Proj::from_proj_string(proj4).ok()?;

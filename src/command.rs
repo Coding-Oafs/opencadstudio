@@ -77,8 +77,7 @@ impl WorkingPlane {
 
     pub fn angle(self, from: DVec3, to: DVec3) -> Option<f64> {
         let direction = self.vector_to_local(to - from);
-        (direction.x.hypot(direction.y) > f64::EPSILON)
-            .then(|| direction.y.atan2(direction.x))
+        (direction.x.hypot(direction.y) > f64::EPSILON).then(|| direction.y.atan2(direction.x))
     }
 
     pub fn to_world_transform(self) -> acadrust::types::Transform {
@@ -436,16 +435,18 @@ impl CadCommand for UserRegCommand {
 
     fn prompt(&self) -> String {
         match self.slot {
-            None => crate::t!("%{name}  which register?  [1-5]:", name = self.name)
-                .into_owned(),
-            Some(n) => crate::t!("%{name}%{slot}  new value:", name = self.name, slot = n)
-                .into_owned(),
+            None => crate::t!("%{name}  which register?  [1-5]:", name = self.name).into_owned(),
+            Some(n) => {
+                crate::t!("%{name}%{slot}  new value:", name = self.name, slot = n).into_owned()
+            }
         }
     }
 
     fn options(&self) -> Vec<CmdOption> {
         match self.slot {
-            None => (1..=5).map(|n| CmdOption::new(&n.to_string(), &n.to_string())).collect(),
+            None => (1..=5)
+                .map(|n| CmdOption::new(&n.to_string(), &n.to_string()))
+                .collect(),
             Some(_) => Vec::new(),
         }
     }
@@ -568,8 +569,7 @@ impl CadCommand for KeywordCommand {
                 let up = t.to_uppercase();
                 let Some((_, keyword, value_prompt)) = self.options.iter().find(|(label, k, _)| {
                     k.eq_ignore_ascii_case(&up) || label.eq_ignore_ascii_case(t)
-                })
-                else {
+                }) else {
                     // Unknown verb — keep prompting rather than dispatch garbage.
                     return Some(CmdResult::NeedPoint);
                 };
@@ -770,8 +770,10 @@ impl CadCommand for SelectThenKeywordCommand {
             Some((keyword, _)) => Some(CmdResult::Dispatch(format!("{} {keyword} {t}", self.name))),
             None => {
                 let up = t.to_uppercase();
-                let Some((_, keyword, value_prompt)) =
-                    self.options.iter().find(|(_, k, _)| k.eq_ignore_ascii_case(&up))
+                let Some((_, keyword, value_prompt)) = self
+                    .options
+                    .iter()
+                    .find(|(_, k, _)| k.eq_ignore_ascii_case(&up))
                 else {
                     // Unknown verb — consumed, keep prompting (`None` would
                     // feed the same text to the command a second time).
@@ -1215,13 +1217,24 @@ pub enum CmdResult {
     /// `Relaunch` it does not touch the selection.
     Dispatch(String),
     /// Move `dest` entities to the layer of the `src` entity; end command.
-    MatchEntityLayer { dest: Vec<Handle>, src: Handle },
+    MatchEntityLayer {
+        dest: Vec<Handle>,
+        src: Handle,
+    },
     /// Copy all visual properties (layer/color/linetype/lineweight) from `src` to `dest`; end command.
-    MatchProperties { dest: Vec<Handle>, src: Handle },
+    MatchProperties {
+        dest: Vec<Handle>,
+        src: Handle,
+    },
     /// Create a named group from the given entity handles; end command.
-    CreateGroup { handles: Vec<Handle>, name: String },
+    CreateGroup {
+        handles: Vec<Handle>,
+        name: String,
+    },
     /// Dissolve all groups that contain any of the given handles; end command.
-    DeleteGroups { handles: Vec<Handle> },
+    DeleteGroups {
+        handles: Vec<Handle>,
+    },
     /// Freeze or thaw layers by name in the given viewport; command stays active.
     VpLayerUpdate {
         vp_handle: Handle,
@@ -1229,9 +1242,14 @@ pub enum CmdResult {
         thaw: Vec<String>,
     },
     /// Paste clipboard entities translated so their centroid lands at `base_pt`; end command.
-    PasteClipboard { base_pt: DVec3 },
+    PasteClipboard {
+        base_pt: DVec3,
+    },
     /// Zoom the model-space camera to fit the given corner points; end command.
-    ZoomToWindow { p1: DVec3, p2: DVec3 },
+    ZoomToWindow {
+        p1: DVec3,
+        p2: DVec3,
+    },
     /// Print a measurement result to the command line and end the command.
     Measurement(String),
     /// Print a measurement result and keep the command active.
@@ -1241,7 +1259,11 @@ pub enum CmdResult {
     /// Clear the current selection and keep the command active at its updated step.
     DeselectAndContinue,
     /// Break `handle` at points `p1` and `p2`; replace with computed fragments.
-    BreakEntity { handle: Handle, p1: DVec3, p2: DVec3 },
+    BreakEntity {
+        handle: Handle,
+        p1: DVec3,
+        p2: DVec3,
+    },
     /// Attempt to join the given entities into fewer merged entities.
     JoinEntities(Vec<Handle>),
     /// Apply a polyline-edit operation to one entity; keep command active.
@@ -1250,9 +1272,15 @@ pub enum CmdResult {
         op: crate::modules::draw::modify::pedit::PeditOp,
     },
     /// Place Point entities at N equal intervals along the entity.
-    DivideEntity { handle: Handle, n: usize },
+    DivideEntity {
+        handle: Handle,
+        n: usize,
+    },
     /// Place Point entities at `segment_length` intervals along the entity.
-    MeasureEntity { handle: Handle, segment_length: f64 },
+    MeasureEntity {
+        handle: Handle,
+        segment_length: f64,
+    },
     /// Extend/trim a Line or Arc by the given mode; end command.
     LengthenEntity {
         handle: Handle,
@@ -1268,7 +1296,10 @@ pub enum CmdResult {
         scale: f64,
     },
     /// Set the plot window on the active layout's PlotSettings.
-    SetPlotWindow { p1: DVec3, p2: DVec3 },
+    SetPlotWindow {
+        p1: DVec3,
+        p2: DVec3,
+    },
     /// Create a paper-space viewport. `preserve_view` keeps an explicitly
     /// selected/defined view instead of applying the normal model-extents fit.
     MviewCreate {
@@ -1291,10 +1322,15 @@ pub enum CmdResult {
     /// Quick-print the bounding box of the given selected entities to a PDF.
     QuickPrint(Vec<Handle>),
     /// Replace the text content of a Text/MText entity in-place.
-    DdeditEntity { handle: Handle, new_text: String },
+    DdeditEntity {
+        handle: Handle,
+        new_text: String,
+    },
     /// Open the in-place editor (plain box or rich MText editor, per type) for
     /// a text-bearing entity picked by a command such as DDEDIT.
-    EditTextEntity { handle: Handle },
+    EditTextEntity {
+        handle: Handle,
+    },
     /// Open the in-place MText editor (formatting toolbar + multi-line text
     /// area with live viewport preview). `handle` is `Some` when editing an
     /// existing MText, `None` when creating a new one at `pos`.
@@ -1323,7 +1359,10 @@ pub enum CmdResult {
     /// Implicit STRETCH selection: the crossing window was drawn with no prior
     /// selection, so the host resolves which entities it touches and restarts
     /// the command at the base-point step with them. (#338)
-    StretchWindow { win_min: DVec3, win_max: DVec3 },
+    StretchWindow {
+        win_min: DVec3,
+        win_max: DVec3,
+    },
     /// Stretch entities: move only vertices/endpoints inside the crossing window.
     StretchEntities {
         handles: Vec<Handle>,
@@ -1337,7 +1376,8 @@ pub enum CmdResult {
     /// Create a Solid3D placeholder entity + associated MeshModel.
     /// `mesh_fn` is called with the entity's handle string to build the mesh.
     CommitSolid3D {
-        mesh_fn: Box<dyn FnOnce(String) -> Option<crate::scene::model::mesh_model::MeshModel> + Send>,
+        mesh_fn:
+            Box<dyn FnOnce(String) -> Option<crate::scene::model::mesh_model::MeshModel> + Send>,
     },
     /// Extrude the profile entity `handle` by `height` along Z.
     ExtrudeEntity {
@@ -1367,7 +1407,9 @@ pub enum CmdResult {
     /// INSERT landed on a block that has AttributeDefinitions.
     /// The host should look up the attdefs for `block_name` from the document
     /// and call `attreq_set_attdefs()` on the command, then loop on text input.
-    AttreqNeeded { block_name: String },
+    AttreqNeeded {
+        block_name: String,
+    },
     /// Add a command-owned "live" entity to the document mid-command and hand
     /// its assigned handle back to the active command via `set_live_handle()`.
     /// One undo snapshot is pushed here, so the whole in-progress object reverts
@@ -1391,7 +1433,9 @@ pub enum CmdResult {
     /// PLINE's Undo popping back below the two vertices an entity needs.
     RemoveLiveEntity(Handle),
     /// Suspends command execution, moves it to suspended_cmd, and opens the text editor for the given handle.
-    SuspendForTextEdit { handle: Handle },
+    SuspendForTextEdit {
+        handle: Handle,
+    },
     /// Requests a standard document-level undo while keeping the command active.
     UndoDocument,
     /// Sets the TEXTEDITMODE system variable and ends the command.
@@ -1609,6 +1653,10 @@ pub trait CadCommand: Send {
     /// use it for plane-local construction; inquiry and modify commands use it
     /// for local deltas, angles and transformation axes.
     fn set_working_plane(&mut self, _plane: WorkingPlane) {}
+
+    /// Unit suffix for inquiry readouts. Geometry remains unscaled; this is
+    /// the drawing-owned working unit rather than DWG INSUNITS.
+    fn set_measurement_unit(&mut self, _unit: &str) {}
 
     /// Push the live Ctrl-key state into the command before each preview/commit
     /// dispatch. Commands that offer a Ctrl toggle (e.g. arc-direction flip on

@@ -30,7 +30,8 @@ impl OpenCADStudio {
 
             "DESELECT" | "DESELALL" => {
                 self.tabs[i].scene.deselect_all();
-                self.command_line.push_output(crate::t!("Deselected.").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Deselected.").as_ref());
                 self.refresh_properties();
             }
 
@@ -65,14 +66,21 @@ impl OpenCADStudio {
                 || cmd.starts_with("QUICKCALC ")
                 || cmd.starts_with("QC ") =>
             {
-                let expr = cmd.splitn(2, char::is_whitespace).nth(1).unwrap_or("").trim();
+                let expr = cmd
+                    .splitn(2, char::is_whitespace)
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
                 if expr.is_empty() {
-                    self.command_line
-                        .push_info(crate::t!("Usage: CAL <expression>   e.g. CAL (2+3)*4").as_ref());
+                    self.command_line.push_info(
+                        crate::t!("Usage: CAL <expression>   e.g. CAL (2+3)*4").as_ref(),
+                    );
                 } else {
                     match arith_eval(expr) {
                         Ok(v) => self.command_line.push_output(crate::tf!("= {v}").as_ref()),
-                        Err(e) => self.command_line.push_error(crate::tf!("CAL: {e}").as_ref()),
+                        Err(e) => self
+                            .command_line
+                            .push_error(crate::tf!("CAL: {e}").as_ref()),
                     }
                 }
             }
@@ -81,8 +89,9 @@ impl OpenCADStudio {
             "LIST" => {
                 let selected: Vec<_> = self.tabs[i].scene.selected_entities();
                 if selected.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("LIST: no entities selected. Select entities first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("LIST: no entities selected. Select entities first.").as_ref(),
+                    );
                 } else {
                     for (handle, _) in &selected {
                         if let Some(entity) = self.tabs[i].scene.document.get_entity(*handle) {
@@ -101,18 +110,21 @@ impl OpenCADStudio {
                                 };
                             // Entity-specific details
                             let details = entity_list_details(entity);
-                            self.command_line.push_output(crate::tf!(
-                                "{type_name}  Handle:{:X}  Layer:{}  Color:{}  LT:{}{}",
-                                handle.value(),
-                                common.layer,
-                                color_str,
-                                linetype,
-                                if details.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!("\n    {details}")
-                                }
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!(
+                                    "{type_name}  Handle:{:X}  Layer:{}  Color:{}  LT:{}{}",
+                                    handle.value(),
+                                    common.layer,
+                                    color_str,
+                                    linetype,
+                                    if details.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("\n    {details}")
+                                    }
+                                )
+                                .as_ref(),
+                            );
                         }
                     }
                 }
@@ -126,8 +138,10 @@ impl OpenCADStudio {
                 let scene = &self.tabs[i].scene;
                 let selected = scene.selected_entities();
                 if selected.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("SELHANDLES: no entities selected. Select entities first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("SELHANDLES: no entities selected. Select entities first.")
+                            .as_ref(),
+                    );
                 } else {
                     use std::collections::BTreeMap;
                     let space = if scene.current_layout == "Model" {
@@ -148,8 +162,10 @@ impl OpenCADStudio {
                         }
                     }
                     handles.sort_unstable();
-                    let types: Vec<String> =
-                        type_counts.iter().map(|(t, n)| format!("{t}×{n}")).collect();
+                    let types: Vec<String> = type_counts
+                        .iter()
+                        .map(|(t, n)| format!("{t}×{n}"))
+                        .collect();
                     let list: Vec<String> = handles.iter().map(|h| format!("{:X}", h)).collect();
                     let mut msg = format!(
                         "SELHANDLES: {} selected in {}\n  Types: {}",
@@ -158,8 +174,10 @@ impl OpenCADStudio {
                         types.join(", ")
                     );
                     if !block_counts.is_empty() {
-                        let blocks: Vec<String> =
-                            block_counts.iter().map(|(b, n)| format!("{b}×{n}")).collect();
+                        let blocks: Vec<String> = block_counts
+                            .iter()
+                            .map(|(b, n)| format!("{b}×{n}"))
+                            .collect();
                         msg.push_str(&format!("\n  Blocks: {}", blocks.join(", ")));
                     }
                     msg.push_str(&format!("\n  Handles: {}", list.join(",")));
@@ -266,15 +284,13 @@ impl OpenCADStudio {
                                     convertible: false,
                                 },
                             )),
-                            acadrust::EntityType::Line(_) | acadrust::EntityType::Arc(_) => {
-                                Some((
-                                    h,
-                                    PeditTarget {
-                                        is_poly: false,
-                                        convertible: true,
-                                    },
-                                ))
-                            }
+                            acadrust::EntityType::Line(_) | acadrust::EntityType::Arc(_) => Some((
+                                h,
+                                PeditTarget {
+                                    is_poly: false,
+                                    convertible: true,
+                                },
+                            )),
                             _ => None,
                         }
                     })
@@ -308,8 +324,10 @@ impl OpenCADStudio {
                 use crate::modules::draw::modify::refedit::RefEditPickCommand;
                 // If a session is already active, tell the user.
                 if self.tabs[i].refedit_session.is_some() {
-                    self.command_line
-                        .push_error(crate::t!("REFEDIT: a session is already active. Use REFCLOSE first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("REFEDIT: a session is already active. Use REFCLOSE first.")
+                            .as_ref(),
+                    );
                 } else {
                     // Check if a single INSERT is already selected.
                     let selected: Vec<_> =
@@ -334,8 +352,9 @@ impl OpenCADStudio {
             "BEDIT" => {
                 use crate::modules::draw::modify::block_edit::BlockEditPickCommand;
                 if self.tabs[i].refedit_session.is_some() {
-                    self.command_line
-                        .push_error(crate::t!("BEDIT: finish the active REFEDIT (REFCLOSE) first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("BEDIT: finish the active REFEDIT (REFCLOSE) first.").as_ref(),
+                    );
                 } else {
                     // Jump straight to begin when a single INSERT is preselected.
                     let selected: Vec<_> =
@@ -366,8 +385,9 @@ impl OpenCADStudio {
                 let insert = match self.tabs[i].scene.document.get_entity(insert_handle) {
                     Some(acadrust::EntityType::Insert(ins)) => ins.clone(),
                     _ => {
-                        self.command_line
-                            .push_error(crate::t!("BEDIT: selected object is not a block reference.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("BEDIT: selected object is not a block reference.").as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -381,16 +401,17 @@ impl OpenCADStudio {
                 {
                     Some(br) => (br.handle, br.flags.is_xref),
                     None => {
-                        self.command_line.push_error(crate::tf!(
-                            "BEDIT: block \"{}\" not found.",
-                            insert.block_name
-                        ).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!("BEDIT: block \"{}\" not found.", insert.block_name)
+                                .as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
                 if is_xref {
-                    self.command_line
-                        .push_error(crate::t!("BEDIT: cannot edit an external reference (xref).").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("BEDIT: cannot edit an external reference (xref).").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 if self.tabs[i]
@@ -422,9 +443,7 @@ impl OpenCADStudio {
                     .scene
                     .block_definition_dependent_handles(br_handle)
                     .into_iter()
-                    .filter_map(|handle| {
-                        self.tabs[i].scene.document.get_entity_arc(handle)
-                    })
+                    .filter_map(|handle| self.tabs[i].scene.document.get_entity_arc(handle))
                     .collect();
                 let reference_attributes: Vec<_> = self.tabs[i]
                     .scene
@@ -432,13 +451,12 @@ impl OpenCADStudio {
                     .entities()
                     .filter_map(|entity| match entity {
                         acadrust::EntityType::Insert(reference)
-                            if reference.block_name.eq_ignore_ascii_case(&insert.block_name)
+                            if reference
+                                .block_name
+                                .eq_ignore_ascii_case(&insert.block_name)
                                 && !reference.attributes.is_empty() =>
                         {
-                            Some((
-                                reference.common.handle,
-                                reference.attributes.clone(),
-                            ))
+                            Some((reference.common.handle, reference.attributes.clone()))
                         }
                         _ => None,
                     })
@@ -517,10 +535,13 @@ impl OpenCADStudio {
                 self.refresh_properties();
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].dirty = true;
-                self.command_line.push_info(crate::tf!(
-                    "BEDIT: Editing block \"{}\". Use Save Block or Discard to finish.",
-                    insert.block_name
-                ).as_ref());
+                self.command_line.push_info(
+                    crate::tf!(
+                        "BEDIT: Editing block \"{}\". Use Save Block or Discard to finish.",
+                        insert.block_name
+                    )
+                    .as_ref(),
+                );
             }
 
             "BEDIT_SAVE" => {
@@ -534,8 +555,9 @@ impl OpenCADStudio {
                         return Some(Task::none());
                     }
                     Some(_) => {
-                        self.command_line
-                            .push_error(crate::t!("BEDIT_SAVE: invalid block editor state.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("BEDIT_SAVE: invalid block editor state.").as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -547,10 +569,13 @@ impl OpenCADStudio {
                     &session.return_camera,
                 );
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(crate::tf!(
-                    "BEDIT: Block \"{}\" saved. All references updated.",
-                    session.block_name
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!(
+                        "BEDIT: Block \"{}\" saved. All references updated.",
+                        session.block_name
+                    )
+                    .as_ref(),
+                );
             }
 
             "BEDIT_DISCARD" => {
@@ -559,13 +584,15 @@ impl OpenCADStudio {
                         self.tabs[i].block_edits.remove(index)
                     }
                     None => {
-                        self.command_line
-                            .push_error(crate::t!("BEDIT_DISCARD: no block editor is open.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("BEDIT_DISCARD: no block editor is open.").as_ref(),
+                        );
                         return Some(Task::none());
                     }
                     Some(_) => {
-                        self.command_line
-                            .push_error(crate::t!("BEDIT_DISCARD: invalid block editor state.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("BEDIT_DISCARD: invalid block editor state.").as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -623,10 +650,9 @@ impl OpenCADStudio {
                     &return_camera,
                 );
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(crate::tf!(
-                    "BEDIT: Block \"{}\" edit discarded.",
-                    block_name
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!("BEDIT: Block \"{}\" edit discarded.", block_name).as_ref(),
+                );
             }
 
             cmd if cmd.starts_with("REFEDIT_BEGIN:") => {
@@ -642,8 +668,9 @@ impl OpenCADStudio {
                 let insert = match self.tabs[i].scene.document.get_entity(insert_handle) {
                     Some(acadrust::EntityType::Insert(ins)) => ins.clone(),
                     _ => {
-                        self.command_line
-                            .push_error(crate::t!("REFEDIT: selected object is not an INSERT.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("REFEDIT: selected object is not an INSERT.").as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -679,10 +706,10 @@ impl OpenCADStudio {
                 {
                     Some(br) => br.handle,
                     None => {
-                        self.command_line.push_error(crate::tf!(
-                            "REFEDIT: block \"{}\" not found.",
-                            insert.block_name
-                        ).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!("REFEDIT: block \"{}\" not found.", insert.block_name)
+                                .as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -710,7 +737,8 @@ impl OpenCADStudio {
                 };
 
                 if block_entities.is_empty() {
-                    self.command_line.push_error(crate::t!("REFEDIT: block is empty.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("REFEDIT: block is empty.").as_ref());
                     return Some(Task::none());
                 }
 
@@ -721,8 +749,7 @@ impl OpenCADStudio {
                     forward,
                     inverse,
                     // Everything allocated from here on is part of the session.
-                    handle_watermark: self
-                        .tabs[i]
+                    handle_watermark: self.tabs[i]
                         .scene
                         .document
                         .next_handle()
@@ -864,10 +891,13 @@ impl OpenCADStudio {
                 }
 
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(crate::tf!(
-                    "REFCLOSE: Block \"{}\" saved. All references updated.",
-                    session.block_name
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!(
+                        "REFCLOSE: Block \"{}\" saved. All references updated.",
+                        session.block_name
+                    )
+                    .as_ref(),
+                );
                 // End the edit fade before rebuilding, so the restored geometry
                 // recolours bright. (#136)
                 self.tabs[i].scene.set_refedit_keep(None);
@@ -959,25 +989,66 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
+            // ── VOLUME — closed rendered solids / meshes ─────────────────
+            "VOLUME" => {
+                let handles: Vec<_> = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .map(|(handle, _)| handle)
+                    .collect();
+                if handles.is_empty() {
+                    use crate::modules::draw::select::SelectObjectsCommand;
+                    let command = SelectObjectsCommand::new("VOLUME");
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                } else {
+                    let volumes = handles
+                        .iter()
+                        .filter_map(|handle| self.tabs[i].scene.meshes.get(handle))
+                        .filter(|mesh| mesh.complete && mesh.metrics.volume.is_finite())
+                        .map(|mesh| mesh.metrics.volume)
+                        .filter(|volume| *volume > 0.0)
+                        .collect::<Vec<_>>();
+                    if volumes.is_empty() {
+                        self.command_line.push_error(
+                            "VOLUME: selection contains no closed solid or watertight mesh.",
+                        );
+                    } else {
+                        let total: f64 = volumes.iter().sum();
+                        let unit = self.tabs[i].spatial.working_unit.short();
+                        self.command_line.push_output(
+                            format!("Volume = {total:.4} {unit}³ ({} object(s)).", volumes.len())
+                                .as_str(),
+                        );
+                    }
+                }
+            }
+
             // ── MASSPROP — area, perimeter, centroid of selected entities ────
             "MASSPROP" => {
                 let selected = self.tabs[i].scene.selected_entities();
                 if selected.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("MASSPROP: no entities selected. Select entities first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("MASSPROP: no entities selected. Select entities first.")
+                            .as_ref(),
+                    );
                 } else {
                     for (handle, _) in &selected {
                         if let Some(entity) = self.tabs[i].scene.document.get_entity(*handle) {
                             use crate::entities::traits::EntityTypeOps;
                             if let Some(props) = entity.mass_props() {
-                                self.command_line.push_output(crate::tf!(
-                                    "{}  Area={:.4}  Perimeter={:.4}  Centroid=({:.4},{:.4})",
-                                    crate::entities::names::dxf_name(entity),
-                                    props.area,
-                                    props.perimeter,
-                                    props.cx,
-                                    props.cy,
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!(
+                                        "{}  Area={:.4}  Perimeter={:.4}  Centroid=({:.4},{:.4})",
+                                        crate::entities::names::dxf_name(entity),
+                                        props.area,
+                                        props.perimeter,
+                                        props.cx,
+                                        props.cy,
+                                    )
+                                    .as_ref(),
+                                );
                             }
                         }
                     }
@@ -1001,7 +1072,8 @@ impl OpenCADStudio {
                     }
                 };
                 if handles.is_empty() {
-                    self.command_line.push_error(crate::t!("FLATTEN: no entities.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("FLATTEN: no entities.").as_ref());
                 } else {
                     self.push_undo_snapshot(i, "FLATTEN");
                     for h in &handles {
@@ -1010,10 +1082,9 @@ impl OpenCADStudio {
                         }
                     }
                     self.tabs[i].dirty = true;
-                    self.command_line.push_output(crate::tf!(
-                        "FLATTEN: {} entity(ies) moved to Z=0.",
-                        handles.len()
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!("FLATTEN: {} entity(ies) moved to Z=0.", handles.len()).as_ref(),
+                    );
                     self.refresh_properties();
                 }
             }
@@ -1051,8 +1122,9 @@ impl OpenCADStudio {
                     .collect();
 
                 if prop.is_empty() {
-                    self.command_line
-                        .push_info(crate::t!("Usage: QSELECT TYPE|LAYER|COLOR|LINETYPE <value>").as_ref());
+                    self.command_line.push_info(
+                        crate::t!("Usage: QSELECT TYPE|LAYER|COLOR|LINETYPE <value>").as_ref(),
+                    );
                 } else if matched.is_empty() {
                     self.command_line
                         .push_output(crate::t!("QSELECT: no matching entities.").as_ref());
@@ -1061,8 +1133,9 @@ impl OpenCADStudio {
                     for h in &matched {
                         self.tabs[i].scene.select_entity(*h, false);
                     }
-                    self.command_line
-                        .push_output(crate::tf!("QSELECT: {} entity(ies) selected.", matched.len()).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!("QSELECT: {} entity(ies) selected.", matched.len()).as_ref(),
+                    );
                     self.refresh_properties();
                 }
             }
@@ -1100,7 +1173,8 @@ impl OpenCADStudio {
                 }
                 let total: usize = counts.values().sum();
                 for (k, n) in &counts {
-                    self.command_line.push_output(crate::tf!("  {k}: {n}").as_ref());
+                    self.command_line
+                        .push_output(crate::tf!("  {k}: {n}").as_ref());
                 }
                 self.command_line
                     .push_output(crate::tf!("COUNT: {total} entity(ies) total.").as_ref());
@@ -1140,7 +1214,8 @@ impl OpenCADStudio {
                 };
 
                 if search.is_empty() {
-                    self.command_line.push_error(crate::t!("FIND: specify search text.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("FIND: specify search text.").as_ref());
                 } else {
                     let search_lc = search.to_lowercase();
                     let mut count = 0usize;
@@ -1167,8 +1242,9 @@ impl OpenCADStudio {
                             handles.iter().copied().take(1).collect()
                         };
                         if targets.is_empty() {
-                            self.command_line
-                                .push_output(crate::tf!("FIND: \"{}\" not found.", search).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!("FIND: \"{}\" not found.", search).as_ref(),
+                            );
                         } else {
                             self.push_undo_snapshot(i, "FIND/REPLACE");
                             for h in &targets {
@@ -1180,34 +1256,38 @@ impl OpenCADStudio {
                                 }
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::tf!(
-                                "FIND/REPLACE: replaced {} occurrence(s) of \"{}\" → \"{}\".",
-                                count, search, rep
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!(
+                                    "FIND/REPLACE: replaced {} occurrence(s) of \"{}\" → \"{}\".",
+                                    count,
+                                    search,
+                                    rep
+                                )
+                                .as_ref(),
+                            );
                             self.refresh_properties();
                         }
                     } else {
                         // List mode
                         if handles.is_empty() {
-                            self.command_line
-                                .push_output(crate::tf!("FIND: \"{}\" not found.", search).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!("FIND: \"{}\" not found.", search).as_ref(),
+                            );
                         } else {
                             for h in &handles {
                                 if let Some(e) = self.tabs[i].scene.document.get_entity(*h) {
                                     use crate::entities::traits::EntityTypeOps;
                                     let txt = e.text_content().unwrap_or_default();
-                                    self.command_line.push_output(crate::tf!(
-                                        "  Handle {:X}: \"{}\"",
-                                        h.value(),
-                                        txt
-                                    ).as_ref());
+                                    self.command_line.push_output(
+                                        crate::tf!("  Handle {:X}: \"{}\"", h.value(), txt)
+                                            .as_ref(),
+                                    );
                                 }
                             }
-                            self.command_line.push_output(crate::tf!(
-                                "FIND: {} match(es) for \"{}\".",
-                                handles.len(),
-                                search
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!("FIND: {} match(es) for \"{}\".", handles.len(), search)
+                                    .as_ref(),
+                            );
                         }
                     }
                 }
@@ -1311,8 +1391,9 @@ impl OpenCADStudio {
             return Task::none();
         };
         let Some(verb) = verb else {
-            self.command_line
-                .push_error(crate::tf!("ADDSELECTED: creating a new {kind} is not supported.").as_ref());
+            self.command_line.push_error(
+                crate::tf!("ADDSELECTED: creating a new {kind} is not supported.").as_ref(),
+            );
             return Task::none();
         };
 
@@ -1325,14 +1406,33 @@ impl OpenCADStudio {
         // template's properties for the new object without permanently changing
         // CLAYER / CECOLOR / CELTYPE / CELWEIGHT (issue #239).
         let restore = crate::app::AddSelectedRestore {
-            layer_name: self.tabs[i].scene.document.header.current_layer_name.clone(),
+            layer_name: self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_layer_name
+                .clone(),
             layer_handle: self.tabs[i].scene.document.header.current_layer_handle,
             color: self.tabs[i].scene.document.header.current_entity_color,
-            linetype_name: self.tabs[i].scene.document.header.current_linetype_name.clone(),
+            linetype_name: self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_linetype_name
+                .clone(),
             linetype_handle: self.tabs[i].scene.document.header.current_linetype_handle,
             line_weight: self.tabs[i].scene.document.header.current_line_weight,
-            lt_scale: self.tabs[i].scene.document.header.current_entity_linetype_scale,
-            dimstyle_name: self.tabs[i].scene.document.header.current_dimstyle_name.clone(),
+            lt_scale: self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_entity_linetype_scale,
+            dimstyle_name: self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_dimstyle_name
+                .clone(),
             dimstyle_handle: self.tabs[i].scene.document.header.current_dimstyle_handle,
             tab_active_layer: self.tabs[i].active_layer.clone(),
             tab_layers_current: self.tabs[i].layers.current_layer.clone(),
@@ -1397,9 +1497,9 @@ impl OpenCADStudio {
         self.ribbon.active_lineweight = lw;
         self.refresh_properties();
 
-        self.command_line.push_output(crate::tf!(
-            "Add Selected: drawing a new {kind} on layer \"{layer}\"."
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!("Add Selected: drawing a new {kind} on layer \"{layer}\".").as_ref(),
+        );
         // Launch the matching draw command (installs its interactive step).
         self.dispatch_command(verb)
     }

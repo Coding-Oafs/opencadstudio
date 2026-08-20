@@ -28,7 +28,7 @@ impl Default for BasemapSettings {
     fn default() -> Self {
         Self {
             provider: BasemapProvider::Off,
-            projection: BasemapProjection::WebMercator,
+            projection: BasemapProjection::FromDrawing,
             source_epsg: None,
             custom_template: String::new(),
             zoom: 16,
@@ -64,6 +64,21 @@ pub enum BasemapProvider {
 }
 
 impl BasemapProvider {
+    pub fn cache_namespace(self, custom_template: &str) -> String {
+        match self {
+            Self::ArcGisImagery => "arcgis-imagery".to_string(),
+            Self::ArcGisStreets => "arcgis-streets".to_string(),
+            Self::GoogleHybrid => "google-hybrid".to_string(),
+            Self::Off => "off".to_string(),
+            Self::Custom => {
+                use sha2::{Digest, Sha256};
+                let digest = Sha256::digest(custom_template.as_bytes());
+                let hex = format!("{digest:x}");
+                format!("custom-{}", &hex[..16])
+            }
+        }
+    }
+
     /// The XYZ URL template for `z`/`x`/`y` placeholders. `{custom}` is filled
     /// from the user's stored template string (for `BasemapProvider::Custom`);
     /// `{key}` is filled from the resolved Google API key (for `GoogleHybrid`).
@@ -125,8 +140,10 @@ pub fn google_tile_url(key: &str, z: u32, x: u32, y: u32) -> String {
 /// (EPSG:3857); this chooses how the drawing's coordinates map to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BasemapProjection {
-    /// Assume the drawing is already in Web Mercator (no reprojection).
+    /// Reproject using the CRS stored on the drawing, independent of LiDAR.
     #[default]
+    FromDrawing,
+    /// Assume the drawing is already in Web Mercator (no reprojection).
     WebMercator,
     /// Reproject using the EPSG code taken from the attached LAS cloud.
     FromLas,
@@ -166,7 +183,13 @@ pub fn tile_bounds(z: u32, x: u32, y: u32) -> [f64; 4] {
 /// provider is `Custom`, and the resolved API key when the provider is
 /// `GoogleHybrid`. Returns `None` when the provider is off, the custom template
 /// is empty, or the Google key is unavailable.
-pub fn tile_url(provider: BasemapProvider, z: u32, x: u32, y: u32, custom_template: &str) -> Option<String> {
+pub fn tile_url(
+    provider: BasemapProvider,
+    z: u32,
+    x: u32,
+    y: u32,
+    custom_template: &str,
+) -> Option<String> {
     match provider {
         BasemapProvider::Off => None,
         BasemapProvider::Custom if custom_template.is_empty() => None,
@@ -201,7 +224,12 @@ pub fn world_bounds_from_source(
     if crs.horizontal_epsg == Some(3857) && crs.proj4.is_none() {
         return Some([min[0], min[1], max[0], max[1]]);
     }
-    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut out = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
     const STEPS: usize = 4;
     for iy in 0..=STEPS {
         for ix in 0..=STEPS {
@@ -225,10 +253,14 @@ pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
         return Vec::new();
     }
     let clamp_x = |x: f64| -> u32 {
-        (((x + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n).floor().clamp(0.0, n - 1.0) as u32
+        (((x + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n)
+            .floor()
+            .clamp(0.0, n - 1.0) as u32
     };
     let clamp_y = |y: f64| -> u32 {
-        ((1.0 - (y + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n).floor().clamp(0.0, n - 1.0) as u32
+        ((1.0 - (y + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n)
+            .floor()
+            .clamp(0.0, n - 1.0) as u32
     };
     let (x0, x1) = (clamp_x(bounds[0]), clamp_x(bounds[2]));
     let (y0, y1) = (clamp_y(bounds[3]), clamp_y(bounds[1]));
@@ -250,15 +282,17 @@ pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
 /// CRS is already Web Mercator). Returns the densified target bounds, or `None`
 /// when the projection is unavailable.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn reproject_bounds_3857(
-    bounds: [f64; 4],
-    crs: &ocs_pointcloud::CrsInfo,
-) -> Option<[f64; 4]> {
+pub fn reproject_bounds_3857(bounds: [f64; 4], crs: &ocs_pointcloud::CrsInfo) -> Option<[f64; 4]> {
     if crs.horizontal_epsg == Some(3857) && crs.proj4.is_none() {
         return Some(bounds);
     }
     let [min_x, min_y, max_x, max_y] = bounds;
-    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut out = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
     // Densify the envelope edges so curved projection boundaries are respected.
     const STEPS: usize = 8;
     for iy in 0..=STEPS {
@@ -297,9 +331,15 @@ mod tests {
         let nw = tile_bounds(1, 0, 0);
         let ne = tile_bounds(1, 1, 0);
         // x=0 is the z1 seam: west tile's right edge meets east tile's left.
-        assert!((nw[2] - ne[0]).abs() < 1e-6, "west/right edge meets east/left edge");
+        assert!(
+            (nw[2] - ne[0]).abs() < 1e-6,
+            "west/right edge meets east/left edge"
+        );
         assert!((nw[3] - ne[3]).abs() < 1e-6, "same top edge");
-        assert!(nw[2].abs() < 1e-6 && ne[0].abs() < 1e-6, "x=0 is the z1 seam");
+        assert!(
+            nw[2].abs() < 1e-6 && ne[0].abs() < 1e-6,
+            "x=0 is the z1 seam"
+        );
         // West tile spans the negative half, east the positive half.
         assert!((nw[0] + MERCATOR_HALF).abs() < 1e-6);
         assert!((ne[2] - MERCATOR_HALF).abs() < 1e-6);
@@ -309,8 +349,14 @@ mod tests {
     fn tile_url_supports_builtin_and_custom() {
         let url = tile_url(BasemapProvider::ArcGisImagery, 3, 2, 1, "").unwrap();
         assert!(url.contains("/tile/3/1/2"), "url = {url}");
-        let url = tile_url(BasemapProvider::Custom, 3, 2, 1, "https://x/{z}/{x}/{y}?k=a")
-            .unwrap();
+        let url = tile_url(
+            BasemapProvider::Custom,
+            3,
+            2,
+            1,
+            "https://x/{z}/{x}/{y}?k=a",
+        )
+        .unwrap();
         assert_eq!(url, "https://x/3/2/1?k=a");
         assert!(tile_url(BasemapProvider::Off, 1, 0, 0, "").is_none());
         assert!(tile_url(BasemapProvider::Custom, 1, 0, 0, "").is_none());
@@ -330,7 +376,11 @@ mod tests {
     #[test]
     fn reproject_3857_to_3857_is_identity() {
         let b = tile_bounds(1, 0, 0);
-        assert_eq!(reproject_bounds_3857(b, 3857), Some(b));
+        let crs = ocs_pointcloud::CrsInfo {
+            horizontal_epsg: Some(3857),
+            ..Default::default()
+        };
+        assert_eq!(reproject_bounds_3857(b, &crs), Some(b));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -338,9 +388,19 @@ mod tests {
     fn reproject_to_geographic_lands_in_degrees() {
         // Web Mercator origin (0,0) is roughly (0°, 0°) in EPSG:4326.
         let b = tile_bounds(0, 0, 0);
-        let geo = reproject_bounds_3857(b, 4326).unwrap();
-        assert!(geo[0] <= -170.0 && geo[1] <= -80.0, "SW corner in degrees: {geo:?}");
-        assert!(geo[2] >= 170.0 && geo[3] >= 80.0, "NE corner in degrees: {geo:?}");
+        let crs = ocs_pointcloud::CrsInfo {
+            horizontal_epsg: Some(4326),
+            ..Default::default()
+        };
+        let geo = reproject_bounds_3857(b, &crs).unwrap();
+        assert!(
+            geo[0] <= -170.0 && geo[1] <= -80.0,
+            "SW corner in degrees: {geo:?}"
+        );
+        assert!(
+            geo[2] >= 170.0 && geo[3] >= 80.0,
+            "NE corner in degrees: {geo:?}"
+        );
     }
 
     #[test]
@@ -352,7 +412,11 @@ mod tests {
         let b = tile_bounds(2, 1, 1);
         let interior = [b[0] + 1.0, b[1] + 1.0, b[2] - 1.0, b[3] - 1.0];
         let covered = tiles_covering(interior, 2);
-        assert_eq!(covered.len(), 1, "interior envelope = one tile: {covered:?}");
+        assert_eq!(
+            covered.len(),
+            1,
+            "interior envelope = one tile: {covered:?}"
+        );
         assert_eq!((covered[0].x, covered[0].y), (1, 1));
         // A degenerate bound yields nothing.
         assert!(tiles_covering([1.0, 1.0, 0.0, 0.0], 2).is_empty());

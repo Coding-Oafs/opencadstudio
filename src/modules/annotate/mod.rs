@@ -189,6 +189,55 @@ impl CadModule for AnnotateModule {
                         RibbonItem::LargeTool(revcloud::tool()),
                     ],
                 },
+                // ── Measurement ─────────────────────────────────────────────
+                RibbonGroup {
+                    title: "Measure",
+                    tools: vec![RibbonItem::LargeDropdown {
+                        id: "MEASURE_TOOLS",
+                        label: "Measure",
+                        icon: crate::modules::IconKind::Svg(include_bytes!(
+                            "../../../assets/icons/dim_linear.svg"
+                        )),
+                        items: vec![
+                            (
+                                "DIST",
+                                "Distance",
+                                crate::modules::IconKind::Svg(include_bytes!(
+                                    "../../../assets/icons/dim_linear.svg"
+                                )),
+                            ),
+                            (
+                                "AREA",
+                                "Area",
+                                crate::modules::IconKind::Svg(include_bytes!(
+                                    "../../../assets/icons/hatch/hatch_boundary.svg"
+                                )),
+                            ),
+                            (
+                                "VOLUME",
+                                "Volume",
+                                crate::modules::IconKind::Svg(include_bytes!(
+                                    "../../../assets/icons/box3d.svg"
+                                )),
+                            ),
+                            (
+                                "MEASUREGEOM",
+                                "Geometry",
+                                crate::modules::IconKind::Svg(include_bytes!(
+                                    "../../../assets/icons/dim_aligned.svg"
+                                )),
+                            ),
+                            (
+                                "POINTCLOUDMEASURE",
+                                "LiDAR Points",
+                                crate::modules::IconKind::Svg(include_bytes!(
+                                    "../../../assets/icons/point.svg"
+                                )),
+                            ),
+                        ],
+                        default: "DIST",
+                    }],
+                },
                 // ── Annotation Scaling ───────────────────────────────────────
                 RibbonGroup {
                     title: "Annotation Scaling",

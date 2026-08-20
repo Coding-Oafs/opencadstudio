@@ -21,13 +21,69 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 const TOL: f64 = 1e-9;
 
 fn tessellation(body: &Body) -> brep::mesh::BodyMesh {
-    brep::mesh::tessellate(
+    let mut tessellation = brep::mesh::tessellate(
         body,
-        brep::mesh::TessellationTolerance::new(
-            cadkernel::tessellation::DEFAULT_ANGLE,
-            TOL,
-        ),
-    )
+        brep::mesh::TessellationTolerance::new(cadkernel::tessellation::DEFAULT_ANGLE, TOL),
+    );
+    if tessellation.mesh.is_empty() {
+        sphere_mesh_fallback(body, &mut tessellation);
+    }
+    tessellation
+}
+
+/// The kernel's seam-bounded sphere occasionally refuses adaptive face
+/// tessellation. Keep the analytic B-rep for editing and provide a stable UV
+/// mesh for rendering and measurements instead of returning an invisible
+/// primitive.
+fn sphere_mesh_fallback(body: &Body, output: &mut brep::mesh::BodyMesh) {
+    use cadkernel::brep::geometry::Surface;
+    use std::f64::consts::{FRAC_PI_2, TAU};
+
+    if body.surfaces.len() != 1 || body.faces.len() != 1 {
+        return;
+    }
+    let Some((_, surface @ Surface::Sphere(_))) = body.surfaces.iter().next() else {
+        return;
+    };
+    let Some(face) = body.face_keys().next() else {
+        return;
+    };
+
+    const LONGITUDE_CELLS: usize = 48;
+    const LATITUDE_CELLS: usize = 24;
+    let row = LONGITUDE_CELLS + 1;
+    let mut mesh = brep::mesh::Mesh::default();
+    mesh.positions.reserve((LATITUDE_CELLS + 1) * row);
+    mesh.normals.reserve((LATITUDE_CELLS + 1) * row);
+
+    for latitude in 0..=LATITUDE_CELLS {
+        let v = -FRAC_PI_2 + std::f64::consts::PI * latitude as f64 / LATITUDE_CELLS as f64;
+        for longitude in 0..=LONGITUDE_CELLS {
+            let u = TAU * longitude as f64 / LONGITUDE_CELLS as f64;
+            mesh.positions.push(surface.point_at(u, v));
+            mesh.normals.push(surface.normal_at(u, v).unwrap_or([0.0, 0.0, 1.0]));
+        }
+    }
+
+    for latitude in 0..LATITUDE_CELLS {
+        for longitude in 0..LONGITUDE_CELLS {
+            let a = latitude * row + longitude;
+            let b = a + 1;
+            let c = a + row;
+            let d = c + 1;
+            if latitude > 0 {
+                mesh.triangles.push([a, b, d]);
+            }
+            if latitude + 1 < LATITUDE_CELLS {
+                mesh.triangles.push([a, d, c]);
+            }
+        }
+    }
+
+    output.triangle_faces = std::iter::repeat(face).take(mesh.triangles.len()).collect();
+    output.mesh = mesh;
+    output.missing_faces.clear();
+    output.precision = TOL;
 }
 
 /// Axis-aligned box from its center and full extents.
@@ -309,7 +365,8 @@ pub fn mesh_from_solid(body: &Body, color: [f32; 4]) -> Option<MeshLodSet> {
         }
     }
     set.complete = tessellation.missing_faces.is_empty();
-    set.curved_gens.push(super::mesh_model::CurvedGen { source: silhouette });
+    set.curved_gens
+        .push(super::mesh_model::CurvedGen { source: silhouette });
     Some(set)
 }
 
@@ -377,13 +434,25 @@ mod tests {
     #[test]
     fn all_primitives_triangulate() {
         let c = [0.0, 0.0, 0.0];
-        assert!(tri_count(&box_solid(c, 10.0, 10.0, 10.0).unwrap()) >= 12, "box");
-        assert!(tri_count(&wedge_solid(c, 10.0, 10.0, 10.0).unwrap()) >= 6, "wedge");
-        assert!(tri_count(&cylinder_solid(c, 5.0, 12.0).unwrap()) > 20, "cylinder");
+        assert!(
+            tri_count(&box_solid(c, 10.0, 10.0, 10.0).unwrap()) >= 12,
+            "box"
+        );
+        assert!(
+            tri_count(&wedge_solid(c, 10.0, 10.0, 10.0).unwrap()) >= 6,
+            "wedge"
+        );
+        assert!(
+            tri_count(&cylinder_solid(c, 5.0, 12.0).unwrap()) > 20,
+            "cylinder"
+        );
         assert!(tri_count(&cone_solid(c, 5.0, 12.0).unwrap()) > 10, "cone");
         assert!(tri_count(&sphere_solid(c, 5.0).unwrap()) > 50, "sphere");
         assert!(tri_count(&torus_solid(c, 8.0, 2.0).unwrap()) > 50, "torus");
-        assert!(tri_count(&pyramid_solid(c, 5.0, 9.0, 6).unwrap()) >= 8, "pyramid");
+        assert!(
+            tri_count(&pyramid_solid(c, 5.0, 9.0, 6).unwrap()) >= 8,
+            "pyramid"
+        );
     }
 
     #[test]

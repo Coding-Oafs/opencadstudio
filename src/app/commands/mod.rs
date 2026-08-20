@@ -97,6 +97,7 @@ impl OpenCADStudio {
         self.tabs[i].pan_mode = false;
         self.tabs[i].orbit_mode = false;
         self.tabs[i].zoom_dynamic_mode = false;
+        self.tabs[i].selection_tool_mode = false;
         // Reset the last committed point so the first click of the new command
         // is not constrained by ortho/polar relative to a previous command's endpoint.
         self.last_point = None;
@@ -360,6 +361,13 @@ inventory::submit!(crate::command::CommandRegistration {
         "ADJUST",
         // Georeferenced basemap imagery underlay.
         "BASEMAP",
+        "CRS",
+        "SPATIALINFO",
+        "WORKINGUNITS",
+        "WUNITS",
+        "NAVIGATOR",
+        "SELECTTOOL",
+        "VOLUME",
         // Block list + block-attribute list (command-line forms).
         "BLOCKPALETTE",
         "BLOCKSPALETTE",
@@ -618,6 +626,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDINDEX",
         "POINTCLOUDINDEXCANCEL",
         "POINTCLOUDMANAGER",
+        "POINTCLOUDMEASURE",
         "POINTCLOUDPOINTSIZE",
         "POINTCLOUDPTCEXPORT",
         "POINTCLOUDPTCIMPORT",

@@ -9,7 +9,7 @@
 use super::{Message, OpenCADStudio};
 use crate::scene::{
     PointChunk, PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION,
-    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_RGB, COLOR_MODE_RETURN,
+    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_RETURN, COLOR_MODE_RGB,
     COLOR_MODE_SOURCE,
 };
 use iced::Task;
@@ -126,6 +126,49 @@ impl crate::command::CadCommand for PointCloudScreenPointCommand {
             "POINTCLOUDSCREENPOINT {:.17} {:.17} {:.17} 10",
             point.x, point.y, point.z
         ))
+    }
+
+    fn on_enter(&mut self) -> crate::command::CmdResult {
+        crate::command::CmdResult::Cancel
+    }
+}
+
+/// Pick two displayed LiDAR points and report their true 3D separation. The
+/// viewport clicks are only screen anchors; the dispatch handler snaps each to
+/// the nearest resident point so Z comes from the cloud, not the drawing plane.
+pub(super) struct PointCloudMeasureCommand {
+    first: Option<glam::DVec3>,
+}
+
+impl PointCloudMeasureCommand {
+    pub(super) fn new() -> Self {
+        Self { first: None }
+    }
+}
+
+impl crate::command::CadCommand for PointCloudMeasureCommand {
+    fn name(&self) -> &'static str {
+        "POINTCLOUDMEASURE"
+    }
+
+    fn prompt(&self) -> String {
+        if self.first.is_some() {
+            "LiDAR distance  Click the second displayed point:".to_string()
+        } else {
+            "LiDAR distance  Click the first displayed point:".to_string()
+        }
+    }
+
+    fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
+        if let Some(first) = self.first.take() {
+            crate::command::CmdResult::Dispatch(format!(
+                "POINTCLOUDSCREENMEASURE {:.17} {:.17} {:.17} {:.17} {:.17} {:.17} 10",
+                first.x, first.y, first.z, point.x, point.y, point.z
+            ))
+        } else {
+            self.first = Some(point);
+            crate::command::CmdResult::NeedPoint
+        }
     }
 
     fn on_enter(&mut self) -> crate::command::CmdResult {
@@ -472,8 +515,11 @@ impl PointCloudDataset {
 
     /// Generates a stable, collision-free sidecar id for a new source.
     pub(super) fn next_source_id(&self) -> String {
-        let taken: std::collections::BTreeSet<&str> =
-            self.sources.iter().map(|source| source.id.as_str()).collect();
+        let taken: std::collections::BTreeSet<&str> = self
+            .sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .collect();
         let mut counter = self.sources.len() + 1;
         loop {
             let candidate = format!("source-{counter}");
@@ -517,7 +563,9 @@ impl PointCloudDataset {
 
     fn clear_selections_named(&mut self, name: &str) {
         for source in &mut self.sources {
-            source.selection_sets.retain(|selection| selection.name != name);
+            source
+                .selection_sets
+                .retain(|selection| selection.name != name);
         }
         self.mark_display_changed();
     }
@@ -571,10 +619,10 @@ impl PointCloudDataset {
                 source.sample.points.iter().collect()
             };
             for sampled in active {
-                let point = source
-                    .edits
-                    .patch_for(sampled.source_index)
-                    .map_or_else(|| sampled.clone(), |patch| sampled.clone().with_patch(patch));
+                let point = source.edits.patch_for(sampled.source_index).map_or_else(
+                    || sampled.clone(),
+                    |patch| sampled.clone().with_patch(patch),
+                );
                 if self.display.intensity_range.is_none() {
                     intensity_range[0] = intensity_range[0].min(point.intensity);
                     intensity_range[1] = intensity_range[1].max(point.intensity);
@@ -597,8 +645,10 @@ impl PointCloudDataset {
             // built above matches active-tile order, so chunk ranges align.
             if tiled {
                 for key in &source.active_tiles {
-                    let len =
-                        source.resident_tiles.get(key).map_or(0, |tile| tile.points.len()) as u32;
+                    let len = source
+                        .resident_tiles
+                        .get(key)
+                        .map_or(0, |tile| tile.points.len()) as u32;
                     chunks.push(PointChunk {
                         key: tile_chunk_key(&source.id, key),
                         generation,
@@ -657,10 +707,10 @@ impl PointCloudDataset {
         let intensity_range = self
             .resolved_intensity_range
             .unwrap_or(self.display.intensity_range.unwrap_or([0, u16::MAX]));
-        let elevation_range = self
-            .display
-            .elevation_range
-            .unwrap_or_else(|| self.bounds().map_or([0.0, 0.0], |(min, max)| [min[2], max[2]]));
+        let elevation_range = self.display.elevation_range.unwrap_or_else(|| {
+            self.bounds()
+                .map_or([0.0, 0.0], |(min, max)| [min[2], max[2]])
+        });
         PointStyle {
             color_mode: match self.display.color_mode {
                 ColorMode::Classification => COLOR_MODE_CLASSIFICATION,
@@ -673,10 +723,7 @@ impl PointCloudDataset {
             point_size_px: self.display.point_size_px,
             class_visible,
             class_colors,
-            intensity_range: [
-                intensity_range[0] as f32,
-                intensity_range[1] as f32,
-            ],
+            intensity_range: [intensity_range[0] as f32, intensity_range[1] as f32],
             elevation_range: [elevation_range[0] as f32, elevation_range[1] as f32],
             section: self.section,
         }
@@ -711,13 +758,13 @@ impl OpenCADStudio {
                 if let Ok(entries) = store.audit_log(&active_id) {
                     data.audit_rows = entries
                         .into_iter()
-                        .map(|entry| {
-                            crate::ui::window::point_cloud_manager::PointCloudAuditRow {
+                        .map(
+                            |entry| crate::ui::window::point_cloud_manager::PointCloudAuditRow {
                                 created_unix_ms: entry.created_unix_ms,
                                 action: entry.action,
                                 detail: entry.detail,
-                            }
-                        })
+                            },
+                        )
                         .collect();
                 }
             }
@@ -840,7 +887,9 @@ impl OpenCADStudio {
         );
         let worker_path = path.clone();
         background_task(
-            move || ocs_pointcloud::sample(&worker_path, options).map_err(|error| error.to_string()),
+            move || {
+                ocs_pointcloud::sample(&worker_path, options).map_err(|error| error.to_string())
+            },
             move |result| Message::PointCloudLoaded(tab_id, path, result),
         )
     }
@@ -920,10 +969,7 @@ impl OpenCADStudio {
     /// Attaches every LAS/LAZ file under `folder` (recursively). Loads are
     /// queued and run one at a time so a large folder cannot exhaust memory
     /// with dozens of concurrent bounded samples.
-    pub(super) fn start_point_cloud_folder_load(
-        &mut self,
-        folder: PathBuf,
-    ) -> Task<Message> {
+    pub(super) fn start_point_cloud_folder_load(&mut self, folder: PathBuf) -> Task<Message> {
         if !folder.is_dir() {
             self.command_line.push_error(
                 format!(
@@ -999,7 +1045,10 @@ impl OpenCADStudio {
             }
             let per_point = std::mem::size_of::<ocs_pointcloud::SamplePoint>() as u64;
             let est_bytes = total_points.saturating_mul(per_point);
-            let budget = self.tabs[self.active_tab].point_cloud.display.cpu_budget_bytes as u64;
+            let budget = self.tabs[self.active_tab]
+                .point_cloud
+                .display
+                .cpu_budget_bytes as u64;
             if est_bytes > budget {
                 let suggested = (est_bytes as f64 / budget as f64).ceil().max(2.0) as u64;
                 self.tabs[self.active_tab].point_cloud.display.density = Density::Auto;
@@ -1054,7 +1103,11 @@ impl OpenCADStudio {
             if queued_id != tab_id {
                 // Another tab's entry surfaced; requeue it at the back.
                 self.point_cloud_load_queue.push((queued_id, path));
-                if self.point_cloud_load_queue.iter().all(|(id, _)| *id != tab_id) {
+                if self
+                    .point_cloud_load_queue
+                    .iter()
+                    .all(|(id, _)| *id != tab_id)
+                {
                     return Task::none();
                 }
                 continue;
@@ -1110,9 +1163,7 @@ impl OpenCADStudio {
         if let Some(drawing_path) = self.tabs[tab_index].current_path.as_ref() {
             let sidecar_path = sidecar_path_for_drawing(drawing_path);
             if sidecar_path.exists() {
-                match SidecarStore::open(&sidecar_path)
-                    .and_then(|store| store.load_attachments())
-                {
+                match SidecarStore::open(&sidecar_path).and_then(|store| store.load_attachments()) {
                     Ok(states) => {
                         if let Some(mut state) = states.into_iter().find(|state| {
                             path_matches(&state.source_absolute, &path)
@@ -1211,7 +1262,12 @@ impl OpenCADStudio {
                 "POINTCLOUDATTACH: restored display settings, selections and sparse edits from the drawing sidecar.",
             );
         }
-        self.persist_point_cloud(tab_index, "attach", "attached point cloud", &[source_id.clone()]);
+        self.persist_point_cloud(
+            tab_index,
+            "attach",
+            "attached point cloud",
+            &[source_id.clone()],
+        );
         let stream_task = if self.tabs[tab_index]
             .point_cloud
             .source(&source_id)
@@ -1392,7 +1448,12 @@ impl OpenCADStudio {
         };
         self.command_line
             .push_output(format!("POINTCLOUDUNDO: {detail}").as_str());
-        self.persist_point_cloud(tab_index, "undo", "undid point-cloud transaction", &restored_ids);
+        self.persist_point_cloud(
+            tab_index,
+            "undo",
+            "undid point-cloud transaction",
+            &restored_ids,
+        );
     }
 
     pub(super) fn detach_point_cloud(&mut self, tab_index: usize) {
@@ -1418,7 +1479,11 @@ impl OpenCADStudio {
     pub(super) fn start_point_cloud_index(&mut self, tab_index: usize) -> Task<Message> {
         let tab_id = self.tabs[tab_index].id;
         let dataset = &mut self.tabs[tab_index].point_cloud;
-        if dataset.sources.iter().any(|source| source.index_cancel.is_some()) {
+        if dataset
+            .sources
+            .iter()
+            .any(|source| source.index_cancel.is_some())
+        {
             self.command_line
                 .push_info("POINTCLOUDINDEX: an index build is already running.");
             return Task::none();
@@ -1557,7 +1622,10 @@ impl OpenCADStudio {
             let max_x = section.p0[0].max(section.p1[0]) + half;
             let min_y = section.p0[1].min(section.p1[1]) - half;
             let max_y = section.p0[1].max(section.p1[1]) + half;
-            ([min_x, min_y, f64::NEG_INFINITY], [max_x, max_y, f64::INFINITY])
+            (
+                [min_x, min_y, f64::NEG_INFINITY],
+                [max_x, max_y, f64::INFINITY],
+            )
         });
         // One source streams per tick; the stream-needed check keeps calling
         // back until every source has caught up with the camera.
@@ -1582,8 +1650,7 @@ impl OpenCADStudio {
         let memory_point_budget = display.cpu_budget_bytes
             / source_count
             / std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
-        let gpu_point_budget =
-            display.gpu_budget_bytes / source_count / GPU_POINT_BYTES;
+        let gpu_point_budget = display.gpu_budget_bytes / source_count / GPU_POINT_BYTES;
         let point_budget = display
             .point_budget
             .min(memory_point_budget)
@@ -1600,8 +1667,7 @@ impl OpenCADStudio {
                 .tiles
                 .iter()
                 .filter(|tile| {
-                    tile.key.level == manifest.leaf_level
-                        && tile.intersects(band_min, band_max)
+                    tile.key.level == manifest.leaf_level && tile.intersects(band_min, band_max)
                 })
                 .cloned()
                 .collect();
@@ -1659,8 +1725,9 @@ impl OpenCADStudio {
         let tile_workers = tile_read_workers();
         background_task(
             move || {
-                let loaded = ocs_pointcloud::read_tiles_parallel(&cache_path, &missing, tile_workers)
-                    .map_err(|error| error.to_string())?;
+                let loaded =
+                    ocs_pointcloud::read_tiles_parallel(&cache_path, &missing, tile_workers)
+                        .map_err(|error| error.to_string())?;
                 Ok(TileLoadBatch {
                     source_id,
                     request_id,
@@ -1791,14 +1858,13 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSECTION: half-width must be positive.");
             return;
         }
-        self.tabs[tab_index].point_cloud.section = Some(
-            crate::scene::model::point_cloud_model::Section {
+        self.tabs[tab_index].point_cloud.section =
+            Some(crate::scene::model::point_cloud_model::Section {
                 p0,
                 p1,
                 half_width,
                 mode,
-            },
-        );
+            });
         // A section change densifies its band: invalidate every source's stream
         // so the next tick re-selects leaf tiles inside the band.
         for source in &mut self.tabs[tab_index].point_cloud.sources {
@@ -1932,7 +1998,12 @@ impl OpenCADStudio {
         self.command_line.push_output(
             format!("POINTCLOUDPOINTSIZE: fixed screen size set to {size:.1} px.").as_str(),
         );
-        self.persist_point_cloud(tab_index, "display", &format!("point size {size:.1} px"), &[]);
+        self.persist_point_cloud(
+            tab_index,
+            "display",
+            &format!("point size {size:.1} px"),
+            &[],
+        );
     }
 
     pub(super) fn set_point_cloud_class_visible(
@@ -2027,7 +2098,12 @@ impl OpenCADStudio {
         drop(class);
         drop(dataset);
         self.restyle_point_cloud(tab_index);
-        self.persist_point_cloud(tab_index, "classes", &format!("changed class {code} color"), &[]);
+        self.persist_point_cloud(
+            tab_index,
+            "classes",
+            &format!("changed class {code} color"),
+            &[],
+        );
     }
 
     pub(super) fn add_point_cloud_class(&mut self, tab_index: usize) {
@@ -2138,7 +2214,9 @@ impl OpenCADStudio {
             return;
         }
         for (id, selection) in selections {
-            self.tabs[tab_index].point_cloud.push_selection(&id, selection);
+            self.tabs[tab_index]
+                .point_cloud
+                .push_selection(&id, selection);
         }
         let model = self.tabs[tab_index].point_cloud.display_model();
         self.tabs[tab_index].scene.set_point_cloud(model);
@@ -2179,8 +2257,7 @@ impl OpenCADStudio {
             [max[0], max[1]],
             [min[0], max[1]],
         ];
-        let selections = self
-            .tabs[tab_index]
+        let selections = self.tabs[tab_index]
             .point_cloud
             .sources
             .iter()
@@ -2211,8 +2288,7 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSELECTBRUSH: attach a LAS/LAZ cloud first.");
             return;
         }
-        let selections = self
-            .tabs[tab_index]
+        let selections = self.tabs[tab_index]
             .point_cloud
             .sources
             .iter()
@@ -2243,8 +2319,7 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSELECTPOINT: attach a LAS/LAZ cloud first.");
             return;
         }
-        let selections = self
-            .tabs[tab_index]
+        let selections = self.tabs[tab_index]
             .point_cloud
             .sources
             .iter()
@@ -2289,23 +2364,41 @@ impl OpenCADStudio {
         anchor: glam::DVec3,
         radius_px: f32,
     ) {
+        let nearest = match self.point_cloud_nearest_screen_point(tab_index, anchor, radius_px) {
+            Ok(nearest) => nearest,
+            Err(error) => {
+                self.command_line.push_error(error);
+                return;
+            }
+        };
+        let selections = nearest.map_or_else(Vec::new, |(id, point)| {
+            vec![(
+                id,
+                SelectionSet::from_indices("active", [point.source_index].into_iter()),
+            )]
+        });
+        self.set_point_cloud_selection(tab_index, selections);
+    }
+
+    fn point_cloud_nearest_screen_point(
+        &mut self,
+        tab_index: usize,
+        anchor: glam::DVec3,
+        radius_px: f32,
+    ) -> Result<Option<(String, ocs_pointcloud::SamplePoint)>, &'static str> {
         let Some((camera, viewport)) = self.point_cloud_view_frame(tab_index) else {
-            self.command_line
-                .push_error("POINTCLOUDSELECTPOINT: viewport size is unavailable.");
-            return;
+            return Err("POINTCLOUDMEASURE: viewport size is unavailable.");
         };
         let Some(center) = camera.project(anchor, viewport) else {
-            return;
+            return Ok(None);
         };
         let camera_generation = self.tabs[tab_index].scene.camera_generation;
         if self.tabs[tab_index].point_cloud.is_empty() {
-            self.command_line
-                .push_error("POINTCLOUDSELECTPOINT: attach a LAS/LAZ cloud first.");
-            return;
+            return Err("POINTCLOUDMEASURE: attach a LAS/LAZ cloud first.");
         }
         let radius_sq = radius_px.max(1.0).powi(2);
         let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
-        let mut nearest: Option<(f32, f64, String, u64)> = None;
+        let mut nearest: Option<(f32, f64, String, ocs_pointcloud::SamplePoint)> = None;
         for cloud in &mut self.tabs[tab_index].point_cloud.sources {
             ensure_screen_spatial_index(cloud, &camera, viewport, camera_generation);
             let index = cloud.screen_index.as_ref().expect("screen index");
@@ -2337,19 +2430,77 @@ impl OpenCADStudio {
                         || (distance_sq == *best_sq && projected.depth < *best_depth)
                 });
                 if closer {
-                    nearest = Some((
-                        distance_sq,
-                        projected.depth,
-                        cloud.id.clone(),
-                        point.source_index,
-                    ));
+                    nearest = Some((distance_sq, projected.depth, cloud.id.clone(), point));
                 }
             }
         }
-        let selections = nearest.map_or_else(Vec::new, |(_, _, id, index)| {
-            vec![(id, SelectionSet::from_indices("active", [index].into_iter()))]
-        });
+        Ok(nearest.map(|(_, _, id, point)| (id, point)))
+    }
+
+    pub(super) fn point_cloud_measure_screen(
+        &mut self,
+        tab_index: usize,
+        first: glam::DVec3,
+        second: glam::DVec3,
+        radius_px: f32,
+    ) {
+        let first = match self.point_cloud_nearest_screen_point(tab_index, first, radius_px) {
+            Ok(Some(point)) => point,
+            Ok(None) => {
+                self.command_line
+                    .push_error("POINTCLOUDMEASURE: no displayed point near the first pick.");
+                return;
+            }
+            Err(error) => {
+                self.command_line.push_error(error);
+                return;
+            }
+        };
+        let second = match self.point_cloud_nearest_screen_point(tab_index, second, radius_px) {
+            Ok(Some(point)) => point,
+            Ok(None) => {
+                self.command_line
+                    .push_error("POINTCLOUDMEASURE: no displayed point near the second pick.");
+                return;
+            }
+            Err(error) => {
+                self.command_line.push_error(error);
+                return;
+            }
+        };
+        let a = glam::DVec3::from_array(first.1.position);
+        let b = glam::DVec3::from_array(second.1.position);
+        let delta = b - a;
+        let horizontal = delta.x.hypot(delta.y);
+        let distance = delta.length();
+        let unit = self.tabs[tab_index].spatial.working_unit.short();
+
+        let mut by_source: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        by_source
+            .entry(first.0)
+            .or_default()
+            .push(first.1.source_index);
+        by_source
+            .entry(second.0)
+            .or_default()
+            .push(second.1.source_index);
+        let selections = by_source
+            .into_iter()
+            .map(|(id, indices)| {
+                (
+                    id,
+                    SelectionSet::from_indices("active", indices.into_iter()),
+                )
+            })
+            .collect();
         self.set_point_cloud_selection(tab_index, selections);
+        self.command_line.push_output(
+            format!(
+                "LiDAR distance = {distance:.4} {unit}; horizontal = {horizontal:.4} {unit}; ΔX = {:.4}, ΔY = {:.4}, ΔZ = {:.4} {unit}.",
+                delta.x, delta.y, delta.z
+            )
+            .as_str(),
+        );
     }
 
     pub(super) fn point_cloud_select_screen_rectangle(
@@ -2466,19 +2617,22 @@ impl OpenCADStudio {
                 [center.x - radius_px, center.y - radius_px],
                 [center.x + radius_px, center.y + radius_px],
             );
-            let stroke: Vec<u64> = candidates.into_iter().filter_map(|projected| {
-                let source = snapshot.get(projected.sample_index)?;
-                let point = cloud
-                    .edits
-                    .patch_for(source.source_index)
-                    .map_or_else(|| source.clone(), |patch| source.clone().with_patch(patch));
-                if !filter.matches(&point) {
-                    return None;
-                }
-                let dx = projected.screen[0] - center.x;
-                let dy = projected.screen[1] - center.y;
-                (dx * dx + dy * dy <= radius_sq).then_some(point.source_index)
-            }).collect();
+            let stroke: Vec<u64> = candidates
+                .into_iter()
+                .filter_map(|projected| {
+                    let source = snapshot.get(projected.sample_index)?;
+                    let point = cloud
+                        .edits
+                        .patch_for(source.source_index)
+                        .map_or_else(|| source.clone(), |patch| source.clone().with_patch(patch));
+                    if !filter.matches(&point) {
+                        return None;
+                    }
+                    let dx = projected.screen[0] - center.x;
+                    let dy = projected.screen[1] - center.y;
+                    (dx * dx + dy * dy <= radius_sq).then_some(point.source_index)
+                })
+                .collect();
             let stroke_set = SelectionSet::from_indices("stroke", stroke.iter().copied());
             let unioned = cloud
                 .selection_sets
@@ -2513,8 +2667,7 @@ impl OpenCADStudio {
         }
         let bounds = [low.min(high), low.max(high)];
         let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
-        let selections = self
-            .tabs[tab_index]
+        let selections = self.tabs[tab_index]
             .point_cloud
             .sources
             .iter()
@@ -2523,9 +2676,12 @@ impl OpenCADStudio {
                     (point.position[2] >= bounds[0]
                         && point.position[2] <= bounds[1]
                         && filter.matches(&point))
-                        .then_some(point.source_index)
+                    .then_some(point.source_index)
                 });
-                (cloud.id.clone(), SelectionSet::from_indices("active", indices))
+                (
+                    cloud.id.clone(),
+                    SelectionSet::from_indices("active", indices),
+                )
             })
             .collect();
         self.set_point_cloud_selection(tab_index, selections);
@@ -2562,24 +2718,27 @@ impl OpenCADStudio {
                 .push_error(format!("{label}: attach a LAS/LAZ cloud first.").as_str());
             return;
         }
-        let sources: Vec<(String, Vec<ocs_pointcloud::SamplePoint>, ocs_pointcloud::EditStore)> =
-            dataset
-                .sources
-                .iter()
-                .map(|source| {
-                    let points: Vec<_> = source
-                        .active_points()
-                        .into_iter()
-                        .map(|point| {
-                            source
-                                .edits
-                                .patch_for(point.source_index)
-                                .map_or_else(|| point.clone(), |patch| point.clone().with_patch(patch))
-                        })
-                        .collect();
-                    (source.id.clone(), points, source.edits.clone())
-                })
-                .collect();
+        let sources: Vec<(
+            String,
+            Vec<ocs_pointcloud::SamplePoint>,
+            ocs_pointcloud::EditStore,
+        )> = dataset
+            .sources
+            .iter()
+            .map(|source| {
+                let points: Vec<_> = source
+                    .active_points()
+                    .into_iter()
+                    .map(|point| {
+                        source
+                            .edits
+                            .patch_for(point.source_index)
+                            .map_or_else(|| point.clone(), |patch| point.clone().with_patch(patch))
+                    })
+                    .collect();
+                (source.id.clone(), points, source.edits.clone())
+            })
+            .collect();
         let mut touched = Vec::new();
         let mut total = 0_usize;
         for (id, points, mut edits) in sources {
@@ -2619,7 +2778,12 @@ impl OpenCADStudio {
             )
             .as_str(),
         );
-        self.persist_point_cloud(tab_index, "classify", &format!("{label}: {total} points"), &ids);
+        self.persist_point_cloud(
+            tab_index,
+            "classify",
+            &format!("{label}: {total} points"),
+            &ids,
+        );
     }
 
     pub(super) fn classify_point_cloud_noise(
@@ -2634,13 +2798,21 @@ impl OpenCADStudio {
         });
     }
 
-    pub(super) fn classify_point_cloud_ground(&mut self, tab_index: usize, options: ocs_pointcloud::GroundOptions) {
+    pub(super) fn classify_point_cloud_ground(
+        &mut self,
+        tab_index: usize,
+        options: ocs_pointcloud::GroundOptions,
+    ) {
         self.apply_classifier(tab_index, "Auto ground", move |points| {
             ocs_pointcloud::classify_ground(points, &options)
         });
     }
 
-    pub(super) fn classify_point_cloud_rule(&mut self, tab_index: usize, rule: ocs_pointcloud::ClassifyRule) {
+    pub(super) fn classify_point_cloud_rule(
+        &mut self,
+        tab_index: usize,
+        rule: ocs_pointcloud::ClassifyRule,
+    ) {
         self.apply_classifier(tab_index, "Rule classify", move |points| {
             ocs_pointcloud::classify_by_rules(points, std::slice::from_ref(&rule))
         });
@@ -2678,7 +2850,12 @@ impl OpenCADStudio {
         let mut all_points: Vec<ocs_pointcloud::SamplePoint> = Vec::new();
         for source in &dataset.sources {
             let points = patched(source);
-            ground_points.extend(points.iter().filter(|p| p.classification == GROUND_CLASS).cloned());
+            ground_points.extend(
+                points
+                    .iter()
+                    .filter(|p| p.classification == GROUND_CLASS)
+                    .cloned(),
+            );
             all_points.extend(points);
         }
         let (surface_points, label) = if ground_points.len() >= 3 {
@@ -2714,11 +2891,9 @@ impl OpenCADStudio {
             // Contours are open polylines; the default flags already leave
             // CLOSED unset.
             for point in &contour.points {
-                polyline.add_vertex(acadrust::entities::Vertex2D::new(acadrust::types::Vector3::new(
-                    point[0],
-                    point[1],
-                    point[2],
-                )));
+                polyline.add_vertex(acadrust::entities::Vertex2D::new(
+                    acadrust::types::Vector3::new(point[0], point[1], point[2]),
+                ));
             }
             self.commit_entity(acadrust::EntityType::Polyline2D(polyline));
             created += 1;
@@ -2901,7 +3076,11 @@ impl OpenCADStudio {
     pub(super) fn start_point_cloud_export(&mut self, output: PathBuf) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
         let dataset = &mut self.tabs[self.active_tab].point_cloud;
-        if dataset.sources.iter().any(|source| source.export_job.is_some()) {
+        if dataset
+            .sources
+            .iter()
+            .any(|source| source.export_job.is_some())
+        {
             self.command_line
                 .push_error("POINTCLOUDEXPORT: an export is already running.");
             return Task::none();
@@ -2952,7 +3131,11 @@ impl OpenCADStudio {
     ) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
         let dataset = &mut self.tabs[self.active_tab].point_cloud;
-        if dataset.sources.iter().any(|source| source.export_job.is_some()) {
+        if dataset
+            .sources
+            .iter()
+            .any(|source| source.export_job.is_some())
+        {
             self.command_line
                 .push_error("POINTCLOUDREPROJECT: an export/reprojection job is already running.");
             return Task::none();
@@ -3097,7 +3280,10 @@ impl OpenCADStudio {
     pub(super) fn start_point_cloud_export_all(&mut self, output: PathBuf) -> Task<Message> {
         let tab_id = self.tabs[self.active_tab].id;
         let dataset = &self.tabs[self.active_tab].point_cloud;
-        if dataset.sources.iter().any(|source| source.export_job.is_some())
+        if dataset
+            .sources
+            .iter()
+            .any(|source| source.export_job.is_some())
             || dataset.export_all_job.is_some()
         {
             self.command_line
@@ -3172,7 +3358,11 @@ impl OpenCADStudio {
         if let Some(tab_index) = tab_index {
             let dataset = &mut self.tabs[tab_index].point_cloud;
             dataset.export_all_job = None;
-            touched = dataset.sources.iter().map(|source| source.id.clone()).collect();
+            touched = dataset
+                .sources
+                .iter()
+                .map(|source| source.id.clone())
+                .collect();
         }
         match result {
             Ok(stats) => {
@@ -3274,7 +3464,7 @@ impl OpenCADStudio {
 
 impl PointCloudDataset {
     fn manager_data(&self) -> crate::ui::window::point_cloud_manager::PointCloudManagerData {
-        use crate::ui::window::point_cloud_manager::{PointCloudManagerData, PointCloudClassRow};
+        use crate::ui::window::point_cloud_manager::{PointCloudClassRow, PointCloudManagerData};
         if self.is_empty() {
             return PointCloudManagerData::default();
         }
@@ -3333,11 +3523,7 @@ impl PointCloudDataset {
             .collect();
         let survey_readiness = ocs_pointcloud::assess_survey_readiness(&source.sample.metadata);
         let source_label = if self.len() > 1 {
-            format!(
-                "{} (1 of {})",
-                source.source_path.display(),
-                self.len()
-            )
+            format!("{} (1 of {})", source.source_path.display(), self.len())
         } else {
             source.source_path.display().to_string()
         };
@@ -3350,7 +3536,10 @@ impl PointCloudDataset {
                 stride => format!("1-in-{stride} sample"),
             }
         };
-        let index_running = self.sources.iter().any(|source| source.index_cancel.is_some());
+        let index_running = self
+            .sources
+            .iter()
+            .any(|source| source.index_cancel.is_some());
         let any_crs = self
             .sources
             .iter()
@@ -3380,11 +3569,7 @@ impl PointCloudDataset {
                 .map(|source| source.displayed_len())
                 .sum(),
             sample_label,
-            pending_edits: self
-                .sources
-                .iter()
-                .map(|source| source.edits.len())
-                .sum(),
+            pending_edits: self.sources.iter().map(|source| source.edits.len()).sum(),
             transactions: self
                 .sources
                 .iter()
@@ -3916,7 +4101,10 @@ mod tests {
         dataset.sources.push(attachment("a", 3));
         dataset.sources.push(attachment("b", 2));
         assert_eq!(5, dataset.display_model().points.len());
-        assert_eq!(Some(([0.0, 0.0, 0.0], [10.0, 10.0, 10.0])), dataset.bounds());
+        assert_eq!(
+            Some(([0.0, 0.0, 0.0], [10.0, 10.0, 10.0])),
+            dataset.bounds()
+        );
     }
 
     #[test]
@@ -3925,11 +4113,9 @@ mod tests {
         dataset.sources.push(attachment("a", 3));
         dataset.sources.push(attachment("b", 2));
         // An edit bumps the first source's chunk generation only.
-        dataset.sources[0].edits.apply(
-            "class",
-            [1_u64],
-            PointPatch::classification(6),
-        );
+        dataset.sources[0]
+            .edits
+            .apply("class", [1_u64], PointPatch::classification(6));
         let model = dataset.display_model();
         // Non-tiled sources emit one whole-sample chunk each.
         assert_eq!(2, model.chunks.len());
@@ -3945,7 +4131,10 @@ mod tests {
         // Chunk keys stay stable across rebuilds while generations track edits.
         let first_keys: Vec<u64> = model.chunks.iter().map(|chunk| chunk.key).collect();
         let rebuilt = dataset.display_model();
-        assert_eq!(first_keys, rebuilt.chunks.iter().map(|c| c.key).collect::<Vec<_>>());
+        assert_eq!(
+            first_keys,
+            rebuilt.chunks.iter().map(|c| c.key).collect::<Vec<_>>()
+        );
         dataset.sources[0].edits.undo();
         let bumped = dataset.display_model();
         assert_ne!(model.chunks[0].generation, bumped.chunks[0].generation);
@@ -3961,19 +4150,29 @@ mod tests {
         let touched = vec!["a".to_string(), "b".to_string()];
         for id in &touched {
             let source = dataset.source_mut(id).expect("source");
-            source.edits.apply(
-                "Assign class 2",
-                0..4,
-                PointPatch::classification(2),
-            );
+            source
+                .edits
+                .apply("Assign class 2", 0..4, PointPatch::classification(2));
         }
         dataset.note_edit_sources(touched.clone());
         for id in &touched {
-            assert_eq!(1, dataset.source(id).expect("source").edits.transaction_count());
+            assert_eq!(
+                1,
+                dataset
+                    .source(id)
+                    .expect("source")
+                    .edits
+                    .transaction_count()
+            );
         }
         // Undo steps exactly the tracked sources.
         for id in &touched {
-            assert!(dataset.source_mut(id).expect("source").edits.undo().is_some());
+            assert!(dataset
+                .source_mut(id)
+                .expect("source")
+                .edits
+                .undo()
+                .is_some());
         }
         for id in &touched {
             assert_eq!(0, dataset.source(id).expect("source").edits.len());
@@ -4000,7 +4199,14 @@ mod tests {
             .iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(vec!["a.LAZ".to_string(), "b.las".to_string(), "c.las".to_string()], names);
+        assert_eq!(
+            vec![
+                "a.LAZ".to_string(),
+                "b.las".to_string(),
+                "c.las".to_string()
+            ],
+            names
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

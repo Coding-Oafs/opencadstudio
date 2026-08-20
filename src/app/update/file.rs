@@ -4,13 +4,12 @@
 use super::util::*;
 use super::{format_size, VIEWCUBE_HIT_SIZE};
 use crate::app::helpers::{
-    parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
-    CoordKind,
+    parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis, CoordKind,
 };
 use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
-use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
 use crate::scene::model::object::GripApply;
+use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
 use crate::scene::{
     self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
 };
@@ -59,9 +58,7 @@ fn plot_dialog_scale_factor(d: &crate::ui::window::plot::PlotDialogState) -> f64
 fn scale_name_for_factor(scales: &[(String, f64)], factor: f64) -> Option<String> {
     scales
         .iter()
-        .find(|(_, candidate)| {
-            (*candidate - factor).abs() <= 1e-6 * factor.abs().max(1.0)
-        })
+        .find(|(_, candidate)| (*candidate - factor).abs() <= 1e-6 * factor.abs().max(1.0))
         .map(|(name, _)| name.clone())
 }
 
@@ -83,10 +80,7 @@ fn plot_render_mode_override(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
-    match (
-        std::fs::canonicalize(left),
-        std::fs::canonicalize(right),
-    ) {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }
@@ -146,7 +140,10 @@ fn plot_content_extents(
     }
     for hatch in wipeouts.iter().chain(hatches.iter()) {
         for &[x, y] in hatch.boundary.iter() {
-            include(hatch.world_origin[0] + x as f64, hatch.world_origin[1] + y as f64);
+            include(
+                hatch.world_origin[0] + x as f64,
+                hatch.world_origin[1] + y as f64,
+            );
         }
     }
     (bounds.0.is_finite()
@@ -184,8 +181,7 @@ fn plot_scene_content(
             splits,
         );
     }
-    let (model_pattern_wires, model_hatches, model_wipeouts) =
-        scene.viewport_plot_fills();
+    let (model_pattern_wires, model_hatches, model_wipeouts) = scene.viewport_plot_fills();
 
     let (wires, hatches, wipeouts, splits) = if paper_space_last {
         let splits = crate::io::pdf_export::PlotGroupSplits {
@@ -450,8 +446,7 @@ impl OpenCADStudio {
     /// Rebuild the ribbon's tab list from the registry, dropping the tabs of any
     /// disabled plugins. Call after `disabled_plugins` changes.
     pub(in crate::app) fn rebuild_ribbon_modules(&mut self) {
-        let modules =
-            crate::plugin::ribbon_modules_enabled(&self.disabled_plugins);
+        let modules = crate::plugin::ribbon_modules_enabled(&self.disabled_plugins);
         self.ribbon.set_modules(modules);
         // Refresh the command-line autocomplete pool so a newly enabled plugin's
         // commands become typeable (and a disabled one's drop out). This runs on
@@ -571,14 +566,12 @@ impl OpenCADStudio {
                     .collect(),
             },
             tool_palettes: self.tool_palettes.palettes.clone(),
-            sheet_set: self
-                .sheetset
-                .set
-                .clone()
-                .unwrap_or_else(|| crate::ui::window::sheetset::SheetSet {
+            sheet_set: self.sheetset.set.clone().unwrap_or_else(|| {
+                crate::ui::window::sheetset::SheetSet {
                     name: "Sheet Set".into(),
                     sheets: Vec::new(),
-                }),
+                }
+            }),
             basemap: self.basemap.clone(),
         }
     }
@@ -595,10 +588,10 @@ impl OpenCADStudio {
             .iter()
             .map(std::path::PathBuf::from)
             .collect();
-        self.recent_limit = cfg
-            .recent
-            .limit
-            .clamp(crate::app::recent::RECENT_MIN, crate::app::recent::RECENT_MAX);
+        self.recent_limit = cfg.recent.limit.clamp(
+            crate::app::recent::RECENT_MIN,
+            crate::app::recent::RECENT_MAX,
+        );
         self.recent_files.truncate(self.recent_limit);
         self.recent_limit_input = self.recent_limit.to_string();
         // Thumbnails are decoded by a background task queued at boot
@@ -622,8 +615,7 @@ impl OpenCADStudio {
         // Tool palettes: an empty saved list means "never authored" → seed the
         // defaults; a non-empty list is the user's own, restored verbatim.
         if cfg.tool_palettes.is_empty() {
-            self.tool_palettes.palettes =
-                crate::ui::window::tool_palettes::default_palettes();
+            self.tool_palettes.palettes = crate::ui::window::tool_palettes::default_palettes();
         } else {
             self.tool_palettes.palettes = cfg.tool_palettes;
         }
@@ -657,39 +649,39 @@ impl OpenCADStudio {
         self.persist_settings_if_changed();
     }
 
-pub(super) fn on_open_file(&mut self) -> Task<Message> {
-                // Native: pick a path, then load on a worker thread. Web: the
-                // browser hands back bytes, so pick + parse in one step and feed
-                // the shared `FileOpened` handler directly.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    Task::perform(crate::io::pick_open_path(), Message::OpenPathPicked)
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    // `FileOpened` only installs the result when an open is in
-                    // progress, so mark one. The browser picker + parse happen
-                    // inside `pick_and_load_web`; the real name is unknown until
-                    // then, so show a generic label meanwhile.
+    pub(super) fn on_open_file(&mut self) -> Task<Message> {
+        // Native: pick a path, then load on a worker thread. Web: the
+        // browser hands back bytes, so pick + parse in one step and feed
+        // the shared `FileOpened` handler directly.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Task::perform(crate::io::pick_open_path(), Message::OpenPathPicked)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // `FileOpened` only installs the result when an open is in
+            // progress, so mark one. The browser picker + parse happen
+            // inside `pick_and_load_web`; the real name is unknown until
+            // then, so show a generic label meanwhile.
             let state = std::sync::Arc::new(crate::io::OpenProgressState::new(
                 crate::app::OPEN_PHASE_READING,
             ));
-                    let open_id = self.next_open_id();
-                    self.opening = Some(crate::app::OpenProgress {
-                        id: open_id,
-                        name: "Opening…".into(),
-                        source_path: None,
-                        size_bytes: 0,
-                        state: state.clone(),
-                        started: Instant::now(),
-                        recovery_error: None,
-                        recovery_read_stats: None,
-                        recovery_bytes: None,
-                    });
-                    Task::perform(crate::io::pick_and_load_web(state), move |outcome| {
-                        Message::WebFileOpened(open_id, outcome)
-                    })
-                }
+            let open_id = self.next_open_id();
+            self.opening = Some(crate::app::OpenProgress {
+                id: open_id,
+                name: "Opening…".into(),
+                source_path: None,
+                size_bytes: 0,
+                state: state.clone(),
+                started: Instant::now(),
+                recovery_error: None,
+                recovery_read_stats: None,
+                recovery_bytes: None,
+            });
+            Task::perform(crate::io::pick_and_load_web(state), move |outcome| {
+                Message::WebFileOpened(open_id, outcome)
+            })
+        }
     }
 
     pub(in crate::app) fn next_open_id(&mut self) -> u64 {
@@ -744,8 +736,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         path: &std::path::Path,
         loaded_fingerprint: Option<crate::io::edit_lock::FileFingerprint>,
     ) {
-        let current_fingerprint =
-            crate::io::edit_lock::FileFingerprint::capture(path).ok();
+        let current_fingerprint = crate::io::edit_lock::FileFingerprint::capture(path).ok();
         if loaded_fingerprint
             .as_ref()
             .zip(current_fingerprint.as_ref())
@@ -758,14 +749,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .as_ref(),
             );
         }
-        self.tabs[i].disk_fingerprint =
-            loaded_fingerprint.or(current_fingerprint);
+        self.tabs[i].disk_fingerprint = loaded_fingerprint.or(current_fingerprint);
         match crate::io::edit_lock::EditLease::acquire(path) {
             Ok(lease) => {
                 if let Some(warning) = lease.platform_warning() {
-                    self.command_line.push_info(crate::tf!(
-                        "Edit lease active; {warning}. External-change checks remain active."
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!(
+                            "Edit lease active; {warning}. External-change checks remain active."
+                        )
+                        .as_ref(),
+                    );
                 }
                 self.tabs[i].edit_lease = Some(lease);
                 self.tabs[i].edit_lock_conflict = false;
@@ -773,16 +766,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => {
                 self.tabs[i].edit_lease = None;
                 self.tabs[i].edit_lock_conflict = true;
-                self.command_line.push_error_once(crate::tf!(
-                    "Opened read-only against other editors: {error}"
-                ).as_ref());
+                self.command_line.push_error_once(
+                    crate::tf!("Opened read-only against other editors: {error}").as_ref(),
+                );
             }
             Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
                 self.tabs[i].edit_lease = None;
                 self.tabs[i].edit_lock_conflict = false;
-                self.command_line.push_info(crate::tf!(
-                    "{error}. External-change checks remain active."
-                ).as_ref());
+                self.command_line.push_info(
+                    crate::tf!("{error}. External-change checks remain active.").as_ref(),
+                );
             }
         }
     }
@@ -814,27 +807,29 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Some(Ok(warning)) => {
                 self.tabs[i].edit_lock_conflict = false;
                 if let Some(warning) = warning {
-                    self.command_line.push_info(crate::tf!(
-                        "{warning}. External-change checks remain active."
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("{warning}. External-change checks remain active.").as_ref(),
+                    );
                 }
             }
             Some(Err(crate::io::edit_lock::EditLeaseError::Locked(error))) => {
                 self.tabs[i].edit_lock_conflict = true;
-                self.command_line.push_error_once(crate::tf!(
-                    "Saved, but the refreshed drawing is locked by another editor: {error}"
-                ).as_ref());
+                self.command_line.push_error_once(
+                    crate::tf!(
+                        "Saved, but the refreshed drawing is locked by another editor: {error}"
+                    )
+                    .as_ref(),
+                );
             }
             Some(Err(crate::io::edit_lock::EditLeaseError::Unavailable(error))) => {
                 self.tabs[i].edit_lock_conflict = false;
-                self.command_line.push_info(crate::tf!(
-                    "{error}. External-change checks remain active."
-                ).as_ref());
+                self.command_line.push_info(
+                    crate::tf!("{error}. External-change checks remain active.").as_ref(),
+                );
             }
             None => self.install_native_edit_guard(i, path, None),
         }
-        self.tabs[i].disk_fingerprint =
-            crate::io::edit_lock::FileFingerprint::capture(path).ok();
+        self.tabs[i].disk_fingerprint = crate::io::edit_lock::FileFingerprint::capture(path).ok();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -872,9 +867,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Err(crate::io::SaveFailure::file_in_use(error));
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
-                    self.command_line.push_info(crate::tf!(
-                        "{error}. External-change checks remain active."
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("{error}. External-change checks remain active.").as_ref(),
+                    );
                     None
                 }
             }
@@ -894,9 +889,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 }
             }
         } else {
-            self.tabs[i].disk_fingerprint.clone().or_else(|| {
-                crate::io::edit_lock::FileFingerprint::capture(&path).ok()
-            })
+            self.tabs[i]
+                .disk_fingerprint
+                .clone()
+                .or_else(|| crate::io::edit_lock::FileFingerprint::capture(&path).ok())
         };
 
         self.prepare_native_save(i);
@@ -913,13 +909,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         if set_current_path {
             self.tabs[i].current_path = Some(path.clone());
         }
-        self.refresh_native_edit_guard_after_save(
-            i,
-            &path,
-            path_changed,
-            destination_lease,
-        );
+        self.refresh_native_edit_guard_after_save(i, &path, path_changed, destination_lease);
         self.tabs[i].dirty = false;
+        self.persist_spatial_settings(i);
         if set_current_path {
             self.tabs[i].recovery_save_as_required = false;
         }
@@ -928,20 +920,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn retry_native_edit_guard(
-        &mut self,
-        i: usize,
-        path: &std::path::Path,
-    ) -> Result<(), String> {
+    fn retry_native_edit_guard(&mut self, i: usize, path: &std::path::Path) -> Result<(), String> {
         if let Some(lease) = self.tabs[i].edit_lease.as_mut() {
             match lease.refresh_drawing_lock(path) {
                 Ok(()) => {
                     let warning = lease.platform_warning().map(str::to_owned);
                     self.tabs[i].edit_lock_conflict = false;
                     if let Some(warning) = warning {
-                        self.command_line.push_info(crate::tf!(
-                            "{warning}. External-change checks remain active."
-                        ).as_ref());
+                        self.command_line.push_info(
+                            crate::tf!("{warning}. External-change checks remain active.").as_ref(),
+                        );
                     }
                     return Ok(());
                 }
@@ -950,9 +938,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
                     self.tabs[i].edit_lock_conflict = false;
-                    self.command_line.push_info(crate::tf!(
-                        "{error}. External-change checks remain active."
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("{error}. External-change checks remain active.").as_ref(),
+                    );
                     return Ok(());
                 }
             }
@@ -964,75 +952,84 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].edit_lease = Some(lease);
                 self.tabs[i].edit_lock_conflict = false;
                 if let Some(warning) = warning {
-                    self.command_line.push_info(crate::tf!(
-                        "{warning}. External-change checks remain active."
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("{warning}. External-change checks remain active.").as_ref(),
+                    );
                 }
                 Ok(())
             }
             Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => Err(error),
             Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
                 self.tabs[i].edit_lock_conflict = false;
-                self.command_line.push_info(crate::tf!(
-                    "{error}. External-change checks remain active."
-                ).as_ref());
+                self.command_line.push_info(
+                    crate::tf!("{error}. External-change checks remain active.").as_ref(),
+                );
                 Ok(())
             }
         }
     }
 
-    pub(super) fn on_file_opened(&mut self, name: String, path: std::path::PathBuf, doc: acadrust::CadDocument,
+    pub(super) fn on_file_opened(
+        &mut self,
+        name: String,
+        path: std::path::PathBuf,
+        doc: acadrust::CadDocument,
         mut caches: crate::scene::DerivedCaches,
     ) -> Task<Message> {
-                // If the user clicked Cancel while the parser was running, the
-                // overlay state was cleared and we silently drop the result.
-                if self.opening.is_none() {
-                    return Task::none();
-                }
-                let open_started = self.opening.as_ref().map(|p| p.started);
-                let size_bytes = self
-                    .opening
-                    .as_ref()
-                    .map(|progress| progress.size_bytes)
-                    .unwrap_or(0);
-                let timings = caches.timings;
-                let entity_count = doc.entities().count();
-                let parser_errors_recovered = caches.read_stats.as_ref().is_some_and(|stats| {
-                    stats.recovered()
-                        || stats.skipped_source_records > 0
-                        || !stats.stream_completed
-                }) || doc.notifications.iter().any(|item| {
-                    item.notification_type == acadrust::notification::NotificationType::Error
-                });
-                let reference_recovered = caches
-                    .xrefs
-                    .iter()
-                    .any(|item| item.status == crate::io::xref::XrefStatus::Recovered);
-                let reference_failed = caches
-                    .xrefs
-                    .iter()
-                    .any(|item| item.status == crate::io::xref::XrefStatus::Failed);
-                let document_repaired = parser_errors_recovered
-                    || reference_recovered
-                    || caches.corrupt_dropped > 0
-                    || caches.xref_dropped > 0;
-                let recovery_needed = document_repaired || reference_failed;
-                let total_ms = open_started
-                    .map(|started| started.elapsed().as_millis() as u32)
-                    .unwrap_or(0);
-                self.command_line
-                    .push_output(crate::tf!("Opened \"{name}\" — {entity_count} entities").as_ref());
-                if caches.corrupt_dropped > 0 {
-                    self.command_line.push_error(crate::tf!(
-                        "Warning: {} corrupt entities dropped (parser junk — bad normals / counts)",
-                        caches.corrupt_dropped
-                    ).as_ref());
-                }
+        // If the user clicked Cancel while the parser was running, the
+        // overlay state was cleared and we silently drop the result.
+        if self.opening.is_none() {
+            return Task::none();
+        }
+        let open_started = self.opening.as_ref().map(|p| p.started);
+        let size_bytes = self
+            .opening
+            .as_ref()
+            .map(|progress| progress.size_bytes)
+            .unwrap_or(0);
+        let timings = caches.timings;
+        let entity_count = doc.entities().count();
+        let parser_errors_recovered = caches.read_stats.as_ref().is_some_and(|stats| {
+            stats.recovered() || stats.skipped_source_records > 0 || !stats.stream_completed
+        }) || doc
+            .notifications
+            .iter()
+            .any(|item| item.notification_type == acadrust::notification::NotificationType::Error);
+        let reference_recovered = caches
+            .xrefs
+            .iter()
+            .any(|item| item.status == crate::io::xref::XrefStatus::Recovered);
+        let reference_failed = caches
+            .xrefs
+            .iter()
+            .any(|item| item.status == crate::io::xref::XrefStatus::Failed);
+        let document_repaired = parser_errors_recovered
+            || reference_recovered
+            || caches.corrupt_dropped > 0
+            || caches.xref_dropped > 0;
+        let recovery_needed = document_repaired || reference_failed;
+        let total_ms = open_started
+            .map(|started| started.elapsed().as_millis() as u32)
+            .unwrap_or(0);
+        self.command_line
+            .push_output(crate::tf!("Opened \"{name}\" — {entity_count} entities").as_ref());
+        if caches.corrupt_dropped > 0 {
+            self.command_line.push_error(
+                crate::tf!(
+                    "Warning: {} corrupt entities dropped (parser junk — bad normals / counts)",
+                    caches.corrupt_dropped
+                )
+                .as_ref(),
+            );
+        }
         if caches.xref_dropped > 0 {
-            self.command_line.push_error(crate::tf!(
-                "Warning: {} corrupt xref entities dropped",
-                caches.xref_dropped
-            ).as_ref());
+            self.command_line.push_error(
+                crate::tf!(
+                    "Warning: {} corrupt xref entities dropped",
+                    caches.xref_dropped
+                )
+                .as_ref(),
+            );
         }
         for info in &caches.xrefs {
             match info.status {
@@ -1041,328 +1038,337 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         .push_output(crate::tf!("XREF  Loaded \"{}\"", info.name).as_ref());
                 }
                 crate::io::xref::XrefStatus::Recovered => {
-                    self.command_line.push_error(crate::tf!(
-                        "XREF  Recovered with warnings: \"{}\"",
-                        info.name
-                    ).as_ref());
+                    self.command_line.push_error(
+                        crate::tf!("XREF  Recovered with warnings: \"{}\"", info.name).as_ref(),
+                    );
                 }
                 crate::io::xref::XrefStatus::NotFound => {
-                    self.command_line.push_error(crate::tf!(
-                        "XREF  Not found: \"{}\" ({})",
-                        info.name, info.path
-                    ).as_ref());
+                    self.command_line.push_error(
+                        crate::tf!("XREF  Not found: \"{}\" ({})", info.name, info.path).as_ref(),
+                    );
                 }
                 crate::io::xref::XrefStatus::Failed => {
-                    self.command_line.push_error(crate::tf!(
-                        "XREF  Recovery failed: \"{}\" ({})",
-                        info.name, info.path
-                    ).as_ref());
+                    self.command_line.push_error(
+                        crate::tf!("XREF  Recovery failed: \"{}\" ({})", info.name, info.path)
+                            .as_ref(),
+                    );
                 }
                 crate::io::xref::XrefStatus::Unloaded => {
-                    self.command_line
-                        .push_info(crate::tf!("XREF  Unloaded (skipped): \"{}\"", info.name).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("XREF  Unloaded (skipped): \"{}\"", info.name).as_ref(),
+                    );
                 }
             }
         }
-                #[cfg(not(target_arch = "wasm32"))]
-                let thumbs_task = self.push_recent(path.clone());
-                #[cfg(target_arch = "wasm32")]
-                let thumbs_task = Task::none();
+        #[cfg(not(target_arch = "wasm32"))]
+        let thumbs_task = self.push_recent(path.clone());
+        #[cfg(target_arch = "wasm32")]
+        let thumbs_task = Task::none();
 
-                let current_is_empty = {
-                    let t = &self.tabs[self.active_tab];
-                    !t.is_start
-                        && t.current_path.is_none()
-                        && !t.dirty
-                        && self.tabs[self.active_tab].scene.document.entities().count() == 0
-                };
-                let i = if current_is_empty {
-                    self.active_tab
-                } else {
-                    self.tab_counter += 1;
-                    let new_tab = crate::app::document::DocumentTab::new_drawing(self.tab_counter);
-                    self.tabs.push(new_tab);
-                    let idx = self.tabs.len() - 1;
-                    self.active_tab = idx;
-                    self.apply_bg_default(idx);
-                    idx
-                };
+        let current_is_empty = {
+            let t = &self.tabs[self.active_tab];
+            !t.is_start
+                && t.current_path.is_none()
+                && !t.dirty
+                && self.tabs[self.active_tab].scene.document.entities().count() == 0
+        };
+        let i = if current_is_empty {
+            self.active_tab
+        } else {
+            self.tab_counter += 1;
+            let new_tab = crate::app::document::DocumentTab::new_drawing(self.tab_counter);
+            self.tabs.push(new_tab);
+            let idx = self.tabs.len() - 1;
+            self.active_tab = idx;
+            self.apply_bg_default(idx);
+            idx
+        };
 
-                let mut recovery_report = recovery_needed.then(|| {
-                    crate::io::recovery::RecoveryReport::recovered(
-                        self.tabs[i].id,
-                        &path,
-                        size_bytes,
-                        caches.source_sha256.clone(),
-                        caches.read_stats.clone(),
-                        entity_count.saturating_add(caches.corrupt_dropped),
-                        caches.corrupt_dropped,
-                        caches.xref_dropped,
-                        &caches.xrefs,
-                        &doc.notifications,
-                        document_repaired,
-                        timings,
-                        total_ms,
-                    )
-                });
-                if let Some(report) = recovery_report.as_mut() {
-                    report.persist();
-                }
+        let mut recovery_report = recovery_needed.then(|| {
+            crate::io::recovery::RecoveryReport::recovered(
+                self.tabs[i].id,
+                &path,
+                size_bytes,
+                caches.source_sha256.clone(),
+                caches.read_stats.clone(),
+                entity_count.saturating_add(caches.corrupt_dropped),
+                caches.corrupt_dropped,
+                caches.xref_dropped,
+                &caches.xrefs,
+                &doc.notifications,
+                document_repaired,
+                timings,
+                total_ms,
+            )
+        });
+        if let Some(report) = recovery_report.as_mut() {
+            report.persist();
+        }
 
-                #[cfg(not(target_arch = "wasm32"))]
-                let opened_fingerprint = self
-                    .opening
-                    .as_ref()
-                    .and_then(|opening| opening.fingerprint.clone());
-                self.tabs[i].current_path = Some(path.clone());
-                #[cfg(not(target_arch = "wasm32"))]
-                self.install_native_edit_guard(i, &path, opened_fingerprint);
-                self.tabs[i].scene.material_base_dir =
-                    path.parent().map(std::path::Path::to_path_buf);
-                self.tabs[i].scene.document = doc;
-                // A file saved without the built-in Standard styles (foreign
-                // or damaged) gets them re-seeded so nothing dangles (#366).
-                crate::app::style_ops::ensure_standard_styles(
-                    &mut self.tabs[i].scene.document,
-                );
-                // Follow the file's saved current UCS from the moment it opens.
-                self.tabs[i].adopt_active_ucs_from_header();
-                // Adopt the drawing's own Ortho ($ORTHOMODE) and running OSNAP
-                // ($OSMODE) so each file keeps its own state.
-                self.adopt_header_sysvars(i);
-                // Route shared CJK ideographs to the language matching this
-                // drawing's code page (web per-language font split). Drop the
-                // glyph cache if it changed so Han re-resolves to the new
-                // language's font; geometry is (re)built below regardless. (#141)
-                if crate::scene::text::web_font::set_cjk_lang_from_codepage(
-                    &self.tabs[i].scene.document.header.code_page,
-                ) {
-                    crate::scene::text::ttf_glyph::clear_fallback_cache();
-                }
-                // Current model-space annotation scale comes from the drawing's
-                // CANNOSCALEVALUE (paper/drawing factor); the multiplier we use
-                // for text/dim sizing is its inverse (1:50 -> 0.02 -> 50.0).
-                let cannoscale_value = self.tabs[i].scene.document.header.annotation_scale_value;
-                self.tabs[i].scene.annotation_scale = if cannoscale_value > 1e-9 {
-                    (1.0 / cannoscale_value) as f32
-                } else {
-                    1.0
-                };
+        #[cfg(not(target_arch = "wasm32"))]
+        let opened_fingerprint = self
+            .opening
+            .as_ref()
+            .and_then(|opening| opening.fingerprint.clone());
+        self.tabs[i].current_path = Some(path.clone());
+        self.load_spatial_settings(i);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.install_native_edit_guard(i, &path, opened_fingerprint);
+        self.tabs[i].scene.material_base_dir = path.parent().map(std::path::Path::to_path_buf);
+        self.tabs[i].scene.document = doc;
+        // A file saved without the built-in Standard styles (foreign
+        // or damaged) gets them re-seeded so nothing dangles (#366).
+        crate::app::style_ops::ensure_standard_styles(&mut self.tabs[i].scene.document);
+        // Follow the file's saved current UCS from the moment it opens.
+        self.tabs[i].adopt_active_ucs_from_header();
+        // Adopt the drawing's own Ortho ($ORTHOMODE) and running OSNAP
+        // ($OSMODE) so each file keeps its own state.
+        self.adopt_header_sysvars(i);
+        // Route shared CJK ideographs to the language matching this
+        // drawing's code page (web per-language font split). Drop the
+        // glyph cache if it changed so Han re-resolves to the new
+        // language's font; geometry is (re)built below regardless. (#141)
+        if crate::scene::text::web_font::set_cjk_lang_from_codepage(
+            &self.tabs[i].scene.document.header.code_page,
+        ) {
+            crate::scene::text::ttf_glyph::clear_fallback_cache();
+        }
+        // Current model-space annotation scale comes from the drawing's
+        // CANNOSCALEVALUE (paper/drawing factor); the multiplier we use
+        // for text/dim sizing is its inverse (1:50 -> 0.02 -> 50.0).
+        let cannoscale_value = self.tabs[i].scene.document.header.annotation_scale_value;
+        self.tabs[i].scene.annotation_scale = if cannoscale_value > 1e-9 {
+            (1.0 / cannoscale_value) as f32
+        } else {
+            1.0
+        };
 
-                // Open-time breakdown so regressions are visible immediately.
-                // `total` is wall time from the Open click to here (post-xref,
-                // pre-first-frame); the phase figures are the background-thread
-                // parse/purge/cache spans plus the UI-thread xref resolve.
-                self.command_line.push_info(crate::tf!(
-                    "  parse {}ms · purge {}ms · caches {}ms · xref {}ms · total {}ms",
-                    timings.parse_ms, timings.purge_ms, timings.caches_ms, timings.xref_ms, total_ms
-                ).as_ref());
+        // Open-time breakdown so regressions are visible immediately.
+        // `total` is wall time from the Open click to here (post-xref,
+        // pre-first-frame); the phase figures are the background-thread
+        // parse/purge/cache spans plus the UI-thread xref resolve.
+        self.command_line.push_info(
+            crate::tf!(
+                "  parse {}ms · purge {}ms · caches {}ms · xref {}ms · total {}ms",
+                timings.parse_ms,
+                timings.purge_ms,
+                timings.caches_ms,
+                timings.xref_ms,
+                total_ms
+            )
+            .as_ref(),
+        );
 
-                // Caches were built on the background thread inside open_path().
-                self.tabs[i].scene.local_extent_max = caches.local_extent_max;
-                self.tabs[i].scene.local_center = caches.local_center;
-                self.tabs[i].scene.hatches = caches.hatches;
-                self.tabs[i].scene.images = caches.images;
-                self.tabs[i].scene.meshes = caches.meshes;
-                self.tabs[i].scene.block_meshes = caches.block_meshes;
-                self.tabs[i].scene.object_data_cache = caches.object_data;
+        // Caches were built on the background thread inside open_path().
+        self.tabs[i].scene.local_extent_max = caches.local_extent_max;
+        self.tabs[i].scene.local_center = caches.local_center;
+        self.tabs[i].scene.hatches = caches.hatches;
+        self.tabs[i].scene.images = caches.images;
+        self.tabs[i].scene.meshes = caches.meshes;
+        self.tabs[i].scene.block_meshes = caches.block_meshes;
+        self.tabs[i].scene.object_data_cache = caches.object_data;
         let prepared_geometry = caches.prepared_geometry.take();
-                // Invalidate the wire cache so the new document is tessellated.
-                self.tabs[i].scene.bump_geometry();
-                if let Some(prepared) = prepared_geometry {
-                    self.tabs[i].scene.install_prepared_open_geometry(prepared);
-                }
-                self.tabs[i]
-                    .scene
-                    .replace_selection(rustc_hash::FxHashSet::default());
-                self.tabs[i].scene.preview_wires = vec![];
-                // Reopen in whichever space the file was saved in — the CTAB
-                // tab name when recorded, else the $TILEMODE model/paper flag —
-                // instead of always landing in Model.
-                {
-                    let names = self.tabs[i].scene.layout_names();
-                    let saved = crate::io::saved_active_layout(&self.tabs[i].scene.document)
-                        .and_then(|n| {
-                            names.iter().find(|x| x.eq_ignore_ascii_case(&n)).cloned()
-                        });
-                    self.tabs[i].scene.current_layout = match saved {
-                        Some(n) => n,
-                        None if self.tabs[i].scene.document.header.show_model_space => {
-                            "Model".to_string()
-                        }
-                        // Paper was active but no CTAB — fall back to the first
-                        // paper layout (names[0] is always "Model").
-                        None => names
-                            .into_iter()
-                            .nth(1)
-                            .unwrap_or_else(|| "Model".to_string()),
-                    };
-                }
-                // Object isolation is session-only. A newly opened drawing must
-                // not inherit the previous tab's filter, and persisted entity
-                // visibility remains independent (not an isolation session).
-                self.tabs[i].scene.reset_transient_visibility();
-                crate::io::linetypes::populate_document(&mut self.tabs[i].scene.document);
-                self.tabs[i].properties = PropertiesPanel::empty();
-                // Seed the current table / multileader style from the file's
-                // header so the ✓ marks the right one (text/dim/mline come from
-                // the document header directly). DXF provides these via
-                // $CTABLESTYLE / $CMLEADERSTYLE; DWG leaves them at "Standard".
-                self.ribbon.active_table_style = self.tabs[i]
-                    .scene
-                    .document
-                    .header
-                    .current_table_style_name
-                    .clone();
-                self.tabs[i].active_mleader_style = self.tabs[i]
-                    .scene
-                    .document
-                    .header
-                    .current_mleader_style_name
-                    .clone();
-                let doc_layers = self.tabs[i].scene.document.layers.clone();
-                let vp_info = self.tabs[i].scene.viewport_list();
-                self.tabs[i]
-                    .layers
-                    .sync_with_viewports(&doc_layers, vp_info);
-                self.sync_ribbon_layers();
-                // Load the Annotate-ribbon style dropdowns (text / dimension /
-                // multileader / table) from the opened document instead of
-                // leaving them on the hard-coded "Standard" default.
-                self.sync_ribbon_styles();
-                // Reset the Home-ribbon Color / Linetype / Lineweight chips
-                // to the newly opened document's CECOLOR / CELTYPE / CELWEIGHT
-                // defaults (or to ByLayer when the file leaves them empty).
-                // Without this they stick to whatever the prior tab had
-                // selected — see #21.
-                self.sync_ribbon_from_selection();
-                self.tabs[i].scene.restore_saved_camera();
-                // Grid/snap are per-drawing view settings — adopt the opened
-                // file's active viewport state rather than a global preference.
-                self.adopt_view_display(i);
-                self.sync_render_mode_to_active_tile(i);
-                self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
-                self.tabs[i].dirty = document_repaired;
-                self.tabs[i].recovery_save_as_required = document_repaired;
-                self.tabs[i].history = crate::app::document::HistoryState::default();
-                self.refresh_properties();
-                #[cfg(not(target_arch = "wasm32"))]
-                let interaction_task = {
-                    let wires = self.tabs[i].scene.hit_test_wires();
-                    let screen_height = self.tabs[i].scene.selection.borrow().vp_size.1;
-                    self.prepare_interaction_index_task(i, wires, screen_height)
-                        .unwrap_or_else(Task::none)
-                };
-                #[cfg(target_arch = "wasm32")]
-                let interaction_task = Task::none();
+        // Invalidate the wire cache so the new document is tessellated.
+        self.tabs[i].scene.bump_geometry();
+        if let Some(prepared) = prepared_geometry {
+            self.tabs[i].scene.install_prepared_open_geometry(prepared);
+        }
+        self.tabs[i]
+            .scene
+            .replace_selection(rustc_hash::FxHashSet::default());
+        self.tabs[i].scene.preview_wires = vec![];
+        // Reopen in whichever space the file was saved in — the CTAB
+        // tab name when recorded, else the $TILEMODE model/paper flag —
+        // instead of always landing in Model.
+        {
+            let names = self.tabs[i].scene.layout_names();
+            let saved = crate::io::saved_active_layout(&self.tabs[i].scene.document)
+                .and_then(|n| names.iter().find(|x| x.eq_ignore_ascii_case(&n)).cloned());
+            self.tabs[i].scene.current_layout = match saved {
+                Some(n) => n,
+                None if self.tabs[i].scene.document.header.show_model_space => "Model".to_string(),
+                // Paper was active but no CTAB — fall back to the first
+                // paper layout (names[0] is always "Model").
+                None => names
+                    .into_iter()
+                    .nth(1)
+                    .unwrap_or_else(|| "Model".to_string()),
+            };
+        }
+        // Object isolation is session-only. A newly opened drawing must
+        // not inherit the previous tab's filter, and persisted entity
+        // visibility remains independent (not an isolation session).
+        self.tabs[i].scene.reset_transient_visibility();
+        crate::io::linetypes::populate_document(&mut self.tabs[i].scene.document);
+        self.tabs[i].properties = PropertiesPanel::empty();
+        // Seed the current table / multileader style from the file's
+        // header so the ✓ marks the right one (text/dim/mline come from
+        // the document header directly). DXF provides these via
+        // $CTABLESTYLE / $CMLEADERSTYLE; DWG leaves them at "Standard".
+        self.ribbon.active_table_style = self.tabs[i]
+            .scene
+            .document
+            .header
+            .current_table_style_name
+            .clone();
+        self.tabs[i].active_mleader_style = self.tabs[i]
+            .scene
+            .document
+            .header
+            .current_mleader_style_name
+            .clone();
+        let doc_layers = self.tabs[i].scene.document.layers.clone();
+        let vp_info = self.tabs[i].scene.viewport_list();
+        self.tabs[i]
+            .layers
+            .sync_with_viewports(&doc_layers, vp_info);
+        self.sync_ribbon_layers();
+        // Load the Annotate-ribbon style dropdowns (text / dimension /
+        // multileader / table) from the opened document instead of
+        // leaving them on the hard-coded "Standard" default.
+        self.sync_ribbon_styles();
+        // Reset the Home-ribbon Color / Linetype / Lineweight chips
+        // to the newly opened document's CECOLOR / CELTYPE / CELWEIGHT
+        // defaults (or to ByLayer when the file leaves them empty).
+        // Without this they stick to whatever the prior tab had
+        // selected — see #21.
+        self.sync_ribbon_from_selection();
+        self.tabs[i].scene.restore_saved_camera();
+        // Grid/snap are per-drawing view settings — adopt the opened
+        // file's active viewport state rather than a global preference.
+        self.adopt_view_display(i);
+        self.sync_render_mode_to_active_tile(i);
+        self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+        self.tabs[i].dirty = document_repaired;
+        self.tabs[i].recovery_save_as_required = document_repaired;
+        self.tabs[i].history = crate::app::document::HistoryState::default();
+        self.refresh_properties();
+        #[cfg(not(target_arch = "wasm32"))]
+        let interaction_task = {
+            let wires = self.tabs[i].scene.hit_test_wires();
+            let screen_height = self.tabs[i].scene.selection.borrow().vp_size.1;
+            self.prepare_interaction_index_task(i, wires, screen_height)
+                .unwrap_or_else(Task::none)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let interaction_task = Task::none();
         if let Some(opening) = &self.opening {
             opening
                 .state
                 .set(crate::app::OPEN_PHASE_FINALIZING, 10000, 1, 1);
         }
         self.opening.take();
-                let pending_open_task = if let Some(report) = recovery_report {
-                    self.recovery_report = Some(report);
-                    self.active_modal = Some(crate::app::ModalKind::Recovery);
-                    Task::none()
-                } else {
-                    self.drain_pending_open()
-                };
-                // A SHEETSET activate asked to open a drawing and then switch to
-                // one of its layouts. The opened tab is active here, so apply
-                // the pending layout and clear the request.
-                let layout_task = if let Some((expected, layout)) = self.pending_layout_after_open.take() {
-                    if self.tabs[i]
-                        .current_path
-                        .as_deref()
-                        .is_some_and(|p| native_paths_match(p, &expected))
-                    {
-                        self.on_layout_switch(layout)
-                    } else {
-                        Task::none()
-                    }
-                } else {
-                    Task::none()
-                };
-                Task::batch([thumbs_task, pending_open_task, layout_task, interaction_task])
+        let pending_open_task = if let Some(report) = recovery_report {
+            self.recovery_report = Some(report);
+            self.active_modal = Some(crate::app::ModalKind::Recovery);
+            Task::none()
+        } else {
+            self.drain_pending_open()
+        };
+        // A SHEETSET activate asked to open a drawing and then switch to
+        // one of its layouts. The opened tab is active here, so apply
+        // the pending layout and clear the request.
+        let layout_task = if let Some((expected, layout)) = self.pending_layout_after_open.take() {
+            if self.tabs[i]
+                .current_path
+                .as_deref()
+                .is_some_and(|p| native_paths_match(p, &expected))
+            {
+                self.on_layout_switch(layout)
+            } else {
+                Task::none()
+            }
+        } else {
+            Task::none()
+        };
+        Task::batch([
+            thumbs_task,
+            pending_open_task,
+            layout_task,
+            interaction_task,
+        ])
     }
 
-    pub(super) fn on_wblock_save_result_some(&mut self, block_name: String, path: std::path::PathBuf,
+    pub(super) fn on_wblock_save_result_some(
+        &mut self,
+        block_name: String,
+        path: std::path::PathBuf,
     ) -> Task<Message> {
-                let i = self.active_tab;
-                let document = self.tabs[i].scene.document.clone();
-                    let handles: Vec<_> = self.tabs[i].scene.selected.iter().copied().collect();
+        let i = self.active_tab;
+        let document = self.tabs[i].scene.document.clone();
+        let handles: Vec<_> = self.tabs[i].scene.selected.iter().copied().collect();
         let worker_name = block_name.clone();
         let worker_path = path.clone();
         background_task(
             move || {
                 let document = if worker_name == "*" {
-                    crate::modules::insert::wblock::extract_entities_to_doc(
-                        &document,
-                        &handles,
-                    )
+                    crate::modules::insert::wblock::extract_entities_to_doc(&document, &handles)
                 } else {
-                    crate::modules::insert::wblock::extract_block_to_doc(
-                        &document,
-                        &worker_name)
+                    crate::modules::insert::wblock::extract_block_to_doc(&document, &worker_name)
                 }
-                .map_err(|e| e.to_string())?; crate::io::save(&document, &worker_path).map_err(|e| e.to_string())
-                    },
-            move |result| Message::WblockWriteFinished(block_name, path, result),)
+                .map_err(|e| e.to_string())?;
+                crate::io::save(&document, &worker_path).map_err(|e| e.to_string())
+            },
+            move |result| Message::WblockWriteFinished(block_name, path, result),
+        )
     }
 
     pub(super) fn on_stl_export_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
-                // Re-build STL bytes (we can't easily pass them through the message).
-                let i = self.active_tab;
-                // STL gets the highest-resolution LOD (slot 0) so the
-                // exported geometry isn't downgraded by the view-dependent
-                // mesh LOD ladder used for rendering.
-                let meshes: Vec<crate::scene::model::mesh_model::MeshModel> = self.tabs[i]
-                    .scene
-                    .meshes
-                    .values()
-                    .filter_map(|s| s.lods.first().cloned())
-                    .collect();
-                let worker_path = path.clone();
+        // Re-build STL bytes (we can't easily pass them through the message).
+        let i = self.active_tab;
+        // STL gets the highest-resolution LOD (slot 0) so the
+        // exported geometry isn't downgraded by the view-dependent
+        // mesh LOD ladder used for rendering.
+        let meshes: Vec<crate::scene::model::mesh_model::MeshModel> = self.tabs[i]
+            .scene
+            .meshes
+            .values()
+            .filter_map(|s| s.lods.first().cloned())
+            .collect();
+        let worker_path = path.clone();
         background_task(
             move || {
                 let mesh_refs: Vec<_> = meshes.iter().collect();
                 let bytes = crate::io::stl::build_stl(&mesh_refs)
                     .ok_or_else(|| "no mesh data to export".to_string())?;
                 std::fs::write(&worker_path, bytes).map_err(|e| e.to_string())
-                    },
-            move |result| Message::StlExportFinished(path, result),)
+            },
+            move |result| Message::StlExportFinished(path, result),
+        )
     }
 
     pub(super) fn on_step_export_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
-                let i = self.active_tab;
-                // Export uses LOD 0 (full resolution); see StlExportPath above.
-                let meshes: Vec<crate::scene::model::mesh_model::MeshModel> = self.tabs[i]
-                    .scene
-                    .meshes
-                    .values()
-                    .filter_map(|s| s.lods.first().cloned())
-                    .collect();
-                let worker_path = path.clone();
+        let i = self.active_tab;
+        // Export uses LOD 0 (full resolution); see StlExportPath above.
+        let meshes: Vec<crate::scene::model::mesh_model::MeshModel> = self.tabs[i]
+            .scene
+            .meshes
+            .values()
+            .filter_map(|s| s.lods.first().cloned())
+            .collect();
+        let worker_path = path.clone();
         background_task(
             move || {
                 let mesh_refs: Vec<_> = meshes.iter().collect();
                 let text = crate::io::step::build_step(&mesh_refs)
                     .ok_or_else(|| "no mesh data to export".to_string())?;
                 std::fs::write(&worker_path, text.as_bytes()).map_err(|e| e.to_string())
-                    },
-            move |result| Message::StepExportFinished(path, result),)
+            },
+            move |result| Message::StepExportFinished(path, result),
+        )
     }
 
     pub(super) fn on_obj_import_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
-                let tab_id = self.tabs[self.active_tab].id;
+        let tab_id = self.tabs[self.active_tab].id;
         let worker_path = path.clone();
         background_task(
             move || {
-                let src = std::fs::read_to_string(&worker_path).map_err(|e| e.to_string())?; crate::io::obj::parse_obj(&src, [0.7, 0.7, 0.85, 1.0])
-                            .ok_or_else(|| "no usable geometry in file".to_string())
+                let src = std::fs::read_to_string(&worker_path).map_err(|e| e.to_string())?;
+                crate::io::obj::parse_obj(&src, [0.7, 0.7, 0.85, 1.0])
+                    .ok_or_else(|| "no usable geometry in file".to_string())
             },
-            move |result| Message::ObjImportFinished(tab_id, path, result),)
+            move |result| Message::ObjImportFinished(tab_id, path, result),
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1370,8 +1376,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.sync_vport_display(i);
         sync_annotation_scale_header(&mut self.tabs[i].scene);
         self.stamp_header_sysvars(i);
-        self.tabs[i].scene.document.header.user_real1 =
-            self.tabs[i].scene.annotation_scale as f64;
+        self.tabs[i].scene.document.header.user_real1 = self.tabs[i].scene.annotation_scale as f64;
         self.sync_solid_models_to_acis(i);
     }
 
@@ -1415,13 +1420,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             && self.tabs[i].recovery_save_as_required
             && destination_is_current
         {
-            self.command_line.push_error_once(
-                crate::tr!("recovery", "save-new-file-required").as_ref(),
-            );
+            self.command_line
+                .push_error_once(crate::tr!("recovery", "save-new-file-required").as_ref());
             self.restore_failed_save_continuation(continuation, i);
             self.active_tab = i;
-            self.save_dialog_for_unsaved =
-                continuation != crate::app::SaveContinuation::None;
+            self.save_dialog_for_unsaved = continuation != crate::app::SaveContinuation::None;
             return self.open_save_dialog_window(i);
         }
         if purpose != crate::app::SavePurpose::Autosave
@@ -1429,12 +1432,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             && self.tabs[i].edit_lock_conflict
         {
             let error = "Drawing edit lock is held by another editor.".to_string();
-            self.command_line.push_error_once(crate::tf!(
-                "Unable to save \"{}\": {error}",
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.display().to_string())
-            ).as_ref());
+            self.command_line.push_error_once(
+                crate::tf!(
+                    "Unable to save \"{}\": {error}",
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string())
+                )
+                .as_ref(),
+            );
             self.pending_save_failure = Some(crate::app::PendingSaveFailure {
                 tab_id,
                 path,
@@ -1455,12 +1461,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.pending_save_leases.insert(tab_id, lease);
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Locked(error)) => {
-                    self.command_line.push_error_once(crate::tf!(
-                        "Unable to save \"{}\": {error}",
-                        path.file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| path.display().to_string())
-                    ).as_ref());
+                    self.command_line.push_error_once(
+                        crate::tf!(
+                            "Unable to save \"{}\": {error}",
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| path.display().to_string())
+                        )
+                        .as_ref(),
+                    );
                     self.pending_save_failure = Some(crate::app::PendingSaveFailure {
                         tab_id,
                         path,
@@ -1475,9 +1484,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 }
                 Err(crate::io::edit_lock::EditLeaseError::Unavailable(error)) => {
-                    self.command_line.push_info(crate::tf!(
-                        "{error}. External-change checks remain active."
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("{error}. External-change checks remain active.").as_ref(),
+                    );
                 }
             }
         }
@@ -1546,11 +1555,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     if let Some((wires, camera, bg_color, png, viewport)) = thumbnail {
                         let started = iced::time::Instant::now();
                         snapshot.preview = crate::io::thumbnail::from_snapshot(
-                            &wires,
-                            &camera,
-                            bg_color,
-                            png,
-                            viewport,
+                            &wires, &camera, bg_color, png, viewport,
                         );
                         if crate::perf::enabled() {
                             crate::perf_record!(
@@ -1599,12 +1604,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn on_save_finished(
-        &mut self,
-        outcome: crate::app::SaveOutcome,
-    ) -> Task<Message> {
-        let latest = self.active_save_jobs.get(&outcome.tab_id).copied()
-            == Some(outcome.job_id);
+    pub(super) fn on_save_finished(&mut self, outcome: crate::app::SaveOutcome) -> Task<Message> {
+        let latest = self.active_save_jobs.get(&outcome.tab_id).copied() == Some(outcome.job_id);
         if latest {
             self.active_save_jobs.remove(&outcome.tab_id);
         }
@@ -1624,17 +1625,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
 
         if let Err(error) = &outcome.result {
-            if error.externally_modified
-                && outcome.purpose != crate::app::SavePurpose::Autosave
-            {
+            if error.externally_modified && outcome.purpose != crate::app::SavePurpose::Autosave {
                 let file_name = outcome
                     .path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| outcome.path.display().to_string());
-                self.command_line.push_error_once(crate::tf!(
-                    "Save stopped: \"{file_name}\" changed outside Open CAD Studio."
-                ).as_ref());
+                self.command_line.push_error_once(
+                    crate::tf!("Save stopped: \"{file_name}\" changed outside Open CAD Studio.")
+                        .as_ref(),
+                );
                 self.pending_external_change = Some(crate::app::PendingExternalChange {
                     tab_id: outcome.tab_id,
                     path: outcome.path.clone(),
@@ -1653,9 +1653,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| outcome.path.display().to_string());
-                self.command_line.push_error_once(crate::tf!(
-                    "Unable to save \"{file_name}\": file is in use by another application."
-                ).as_ref());
+                self.command_line.push_error_once(
+                    crate::tf!(
+                        "Unable to save \"{file_name}\": file is in use by another application."
+                    )
+                    .as_ref(),
+                );
                 self.pending_save_failure = Some(crate::app::PendingSaveFailure {
                     tab_id: outcome.tab_id,
                     path: outcome.path.clone(),
@@ -1704,16 +1707,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
         match outcome.purpose {
             crate::app::SavePurpose::Autosave => {
-                self.command_line.push_output(crate::t!("Autosaved 1 drawing").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Autosaved 1 drawing").as_ref());
             }
             crate::app::SavePurpose::Manual | crate::app::SavePurpose::SaveAs => {
                 let path_changed = outcome.set_current_path
                     && self.tabs[i]
                         .current_path
                         .as_deref()
-                        .is_none_or(|current| {
-                            !native_paths_match(current, &outcome.path)
-                        });
+                        .is_none_or(|current| !native_paths_match(current, &outcome.path));
                 self.command_line
                     .push_output(crate::tf!("Saved: {}", outcome.path.display()).as_ref());
                 self.recent_thumbs.remove(&outcome.path);
@@ -1736,6 +1738,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     path_changed,
                     destination_lease,
                 );
+                self.persist_spatial_settings(i);
                 if snapshot_is_current {
                     self.tabs[i].dirty = false;
                 }
@@ -1780,9 +1783,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     ) {
         self.pending_close = match continuation {
             crate::app::SaveContinuation::None => None,
-            crate::app::SaveContinuation::CloseTab => {
-                Some(crate::app::PendingClose::Tab(tab_idx))
-            }
+            crate::app::SaveContinuation::CloseTab => Some(crate::app::PendingClose::Tab(tab_idx)),
             crate::app::SaveContinuation::Quit => Some(crate::app::PendingClose::Quit),
         };
     }
@@ -1837,8 +1838,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.close_active_modal();
         self.restore_failed_save_continuation(failure.continuation, i);
         self.active_tab = i;
-        self.save_dialog_for_unsaved =
-            failure.continuation != crate::app::SaveContinuation::None;
+        self.save_dialog_for_unsaved = failure.continuation != crate::app::SaveContinuation::None;
         self.open_save_dialog_window(i)
     }
 
@@ -1880,8 +1880,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.close_active_modal();
         self.restore_failed_save_continuation(conflict.continuation, i);
         self.active_tab = i;
-        self.save_dialog_for_unsaved =
-            conflict.continuation != crate::app::SaveContinuation::None;
+        self.save_dialog_for_unsaved = conflict.continuation != crate::app::SaveContinuation::None;
         self.open_save_dialog_window(i)
     }
 
@@ -1917,40 +1916,41 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     pub(super) fn on_save_file(&mut self) -> Task<Message> {
-                if self.read_only {
-                    self.command_line
-                        .push_error(crate::t!("Read-only session (--read-only): saving is disabled.").as_ref());
-                    return Task::none();
-                }
-                let i = self.active_tab;
-                // Web serializes immediately below. Native preparation happens
-                // once after the destination/version is known.
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.sync_vport_display(i);
-                    self.stamp_header_sysvars(i);
-                }
-                // Native: save straight to the known path. Web has no path
-                // (downloads instead), so always go through the Save dialog.
-                #[cfg(not(target_arch = "wasm32"))]
-                if !self.tabs[i].recovery_save_as_required {
-                    if let Some(path) = self.tabs[i].current_path.clone() {
-                        // A direct Save preserves the document's current version.
-                        let ver = self.tabs[i].scene.document.version;
-                        self.prepare_native_save(i);
-                        return self.queue_native_save(
-                            i,
-                            path,
-                            ver,
-                            crate::app::SavePurpose::Manual,
-                            crate::app::SaveContinuation::None,
-                            false,
-                            true,
-                        );
-                    }
-                }
-                self.save_dialog_for_unsaved = false;
-                self.save_with_default_format(i)
+        if self.read_only {
+            self.command_line.push_error(
+                crate::t!("Read-only session (--read-only): saving is disabled.").as_ref(),
+            );
+            return Task::none();
+        }
+        let i = self.active_tab;
+        // Web serializes immediately below. Native preparation happens
+        // once after the destination/version is known.
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.sync_vport_display(i);
+            self.stamp_header_sysvars(i);
+        }
+        // Native: save straight to the known path. Web has no path
+        // (downloads instead), so always go through the Save dialog.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.tabs[i].recovery_save_as_required {
+            if let Some(path) = self.tabs[i].current_path.clone() {
+                // A direct Save preserves the document's current version.
+                let ver = self.tabs[i].scene.document.version;
+                self.prepare_native_save(i);
+                return self.queue_native_save(
+                    i,
+                    path,
+                    ver,
+                    crate::app::SavePurpose::Manual,
+                    crate::app::SaveContinuation::None,
+                    false,
+                    true,
+                );
+            }
+        }
+        self.save_dialog_for_unsaved = false;
+        self.save_with_default_format(i)
     }
 
     /// Save without the version picker: use the configured default and go straight to
@@ -1961,10 +1961,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.active_tab = tab_idx;
         self.save_dialog_format = if self.tabs[tab_idx].recovery_save_as_required {
             let document = &self.tabs[tab_idx].scene.document;
-            let is_dxf = crate::io::source_is_dxf(
-                self.tabs[tab_idx].current_path.as_deref(),
-                document,
-            );
+            let is_dxf =
+                crate::io::source_is_dxf(self.tabs[tab_idx].current_path.as_deref(), document);
             let version = if is_dxf {
                 document.version
             } else {
@@ -1994,131 +1992,123 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     pub(super) fn on_save_dialog_confirm(&mut self) -> Task<Message> {
-                let (ext, version) = crate::io::parse_save_format(&self.save_dialog_format);
-                // Warn before a lossy Save-As that would drop unsupported
-                // (AEC / application) objects kept only as verbatim
-                // source-version bytes — let the user keep them by saving in the
-                // source version, or proceed and drop them.
-                if !self.aec_drop_acknowledged {
-                    let is_dxf = ext.eq_ignore_ascii_case("dxf");
-                    let n = crate::io::dropped_on_save_count(
-                        &self.tabs[self.active_tab].scene.document,
-                        version,
-                        is_dxf,
-                    );
-                    if n > 0 {
-                        self.aec_drop_count = n;
-                        self.active_modal = Some(crate::app::ModalKind::AecDropWarning);
-                        return Task::none();
-                    }
-                }
-                // The user need not type an extension: append the selected
-                // format's one when the entered name carries none.
-                let name = self.save_dialog_filename.trim();
-                let filename = if name.is_empty() {
-                    format!("drawing.{ext}")
-                } else if std::path::Path::new(name).extension().is_none() {
-                    format!("{name}.{ext}")
-                } else {
-                    name.to_string()
-                };
-                self.save_dialog_filename = filename.clone();
-                let i = self.active_tab;
+        let (ext, version) = crate::io::parse_save_format(&self.save_dialog_format);
+        // Warn before a lossy Save-As that would drop unsupported
+        // (AEC / application) objects kept only as verbatim
+        // source-version bytes — let the user keep them by saving in the
+        // source version, or proceed and drop them.
+        if !self.aec_drop_acknowledged {
+            let is_dxf = ext.eq_ignore_ascii_case("dxf");
+            let n = crate::io::dropped_on_save_count(
+                &self.tabs[self.active_tab].scene.document,
+                version,
+                is_dxf,
+            );
+            if n > 0 {
+                self.aec_drop_count = n;
+                self.active_modal = Some(crate::app::ModalKind::AecDropWarning);
+                return Task::none();
+            }
+        }
+        // The user need not type an extension: append the selected
+        // format's one when the entered name carries none.
+        let name = self.save_dialog_filename.trim();
+        let filename = if name.is_empty() {
+            format!("drawing.{ext}")
+        } else if std::path::Path::new(name).extension().is_none() {
+            format!("{name}.{ext}")
+        } else {
+            name.to_string()
+        };
+        self.save_dialog_filename = filename.clone();
+        let i = self.active_tab;
 
-                // Native: hand the destination choice to the OS save dialog —
-                // it provides folder browsing and overwrite confirmation. The
-                // chosen version rides in `save_dialog_format` and the write
-                // happens in `on_save_dialog_path_picked` once a path returns.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let seed_dir = self.tabs[i]
-                        .current_path
-                        .as_ref()
-                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-                    let default_name = filename;
-                    let (filter_label, filter_ext): (&str, &str) =
-                        if ext.eq_ignore_ascii_case("dxf") {
-                            ("DXF Files", "dxf")
-                        } else {
-                            ("DWG Files", "dwg")
-                        };
-                    let close = self.close_save_dialog_window();
-                    let pick = Task::perform(
-                        async move {
-                            let mut dlg = crate::sys::file_dialog()
-                                .set_title("Save Drawing As")
-                                .set_file_name(default_name)
-                                .add_filter(filter_label, &[filter_ext]);
-                            if let Some(dir) = seed_dir {
-                                dlg = dlg.set_directory(dir);
-                            }
-                            dlg.save_file().await.map(|h| crate::sys::handle_path(&h))
-                        },
-                        Message::SaveDialogPathPicked,
-                    );
-                    Task::batch([close, pick])
-                }
-                // Web: no filesystem — serialize and hand the browser a download.
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let close = self.close_save_dialog_window();
-                    sync_annotation_scale_header(&mut self.tabs[i].scene);
-                    self.stamp_header_sysvars(i);
-                    self.sync_solid_models_to_acis(i);
-                    self.stamp_thumbnail(i, version);
-                    let mut recent_task = Task::none();
-                    let saved = match crate::io::save_to_bytes(
-                        &self.tabs[i].scene.document,
-                        ext,
-                        version,
-                    ) {
-                        Ok(bytes) => {
-                            crate::sys::download_bytes(&filename, &bytes);
-                            let cache_name = std::path::Path::new(&filename)
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| filename.clone());
-                            let path = std::path::PathBuf::from(cache_name);
-                            self.tabs[i].current_path = Some(path.clone());
-                            self.tabs[i].scene.document.version = version;
-                            self.tabs[i].dirty = false;
-                            self.tabs[i].recovery_save_as_required = false;
-                            recent_task = Task::perform(
-                                async move {
-                                    crate::io::web_recent::store(
-                                        &path.to_string_lossy(),
-                                        &bytes,
-                                    )
-                                    .await
-                                    .map(|_| path)
-                                },
-                                Message::WebRecentStored,
-                            );
-                            self.command_line.push_output(crate::tf!("Saved: {filename}").as_ref());
-                            true
-                        }
-                        Err(e) => {
-                            self.command_line.push_error(crate::tf!("Save failed: {e}").as_ref());
-                            false
-                        }
-                    };
-                    // Continue a pending tab close.
-                    if self.save_dialog_for_unsaved {
-                        if saved {
-                            if let Some(crate::app::PendingClose::Tab(idx)) =
-                                self.pending_close.take()
-                            {
-                                let cont = self.update(Message::TabClose(idx));
-                                let rest = self.continue_tab_close_queue();
-                                return Task::batch([close, recent_task, cont, rest]);
-                            }
-                        } else if self.pending_close.is_some() {
-                            let retry = self.open_unsaved_dialog_window();
-                            return Task::batch([close, recent_task, retry]);
-                        }
+        // Native: hand the destination choice to the OS save dialog —
+        // it provides folder browsing and overwrite confirmation. The
+        // chosen version rides in `save_dialog_format` and the write
+        // happens in `on_save_dialog_path_picked` once a path returns.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let seed_dir = self.tabs[i]
+                .current_path
+                .as_ref()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+            let default_name = filename;
+            let (filter_label, filter_ext): (&str, &str) = if ext.eq_ignore_ascii_case("dxf") {
+                ("DXF Files", "dxf")
+            } else {
+                ("DWG Files", "dwg")
+            };
+            let close = self.close_save_dialog_window();
+            let pick = Task::perform(
+                async move {
+                    let mut dlg = crate::sys::file_dialog()
+                        .set_title("Save Drawing As")
+                        .set_file_name(default_name)
+                        .add_filter(filter_label, &[filter_ext]);
+                    if let Some(dir) = seed_dir {
+                        dlg = dlg.set_directory(dir);
                     }
-                    Task::batch([close, recent_task])
+                    dlg.save_file().await.map(|h| crate::sys::handle_path(&h))
+                },
+                Message::SaveDialogPathPicked,
+            );
+            Task::batch([close, pick])
+        }
+        // Web: no filesystem — serialize and hand the browser a download.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let close = self.close_save_dialog_window();
+            sync_annotation_scale_header(&mut self.tabs[i].scene);
+            self.stamp_header_sysvars(i);
+            self.sync_solid_models_to_acis(i);
+            self.stamp_thumbnail(i, version);
+            let mut recent_task = Task::none();
+            let saved = match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
+                Ok(bytes) => {
+                    crate::sys::download_bytes(&filename, &bytes);
+                    let cache_name = std::path::Path::new(&filename)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| filename.clone());
+                    let path = std::path::PathBuf::from(cache_name);
+                    self.tabs[i].current_path = Some(path.clone());
+                    self.tabs[i].scene.document.version = version;
+                    self.tabs[i].dirty = false;
+                    self.tabs[i].recovery_save_as_required = false;
+                    recent_task = Task::perform(
+                        async move {
+                            crate::io::web_recent::store(&path.to_string_lossy(), &bytes)
+                                .await
+                                .map(|_| path)
+                        },
+                        Message::WebRecentStored,
+                    );
+                    self.command_line
+                        .push_output(crate::tf!("Saved: {filename}").as_ref());
+                    true
                 }
+                Err(e) => {
+                    self.command_line
+                        .push_error(crate::tf!("Save failed: {e}").as_ref());
+                    false
+                }
+            };
+            // Continue a pending tab close.
+            if self.save_dialog_for_unsaved {
+                if saved {
+                    if let Some(crate::app::PendingClose::Tab(idx)) = self.pending_close.take() {
+                        let cont = self.update(Message::TabClose(idx));
+                        let rest = self.continue_tab_close_queue();
+                        return Task::batch([close, recent_task, cont, rest]);
+                    }
+                } else if self.pending_close.is_some() {
+                    let retry = self.open_unsaved_dialog_window();
+                    return Task::batch([close, recent_task, retry]);
+                }
+            }
+            Task::batch([close, recent_task])
+        }
     }
 
     /// Native: a destination path came back from the OS save dialog — write the
@@ -2207,10 +2197,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .chars()
                     .map(|c| if c.is_alphanumeric() { c } else { '_' })
                     .collect();
-                std::env::temp_dir().join(format!(
-                    "OpenCADStudio_{safe}_{}.sv$",
-                    self.tabs[i].id
-                ))
+                std::env::temp_dir().join(format!("OpenCADStudio_{safe}_{}.sv$", self.tabs[i].id))
             }
         }
     }
@@ -2223,9 +2210,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     pub(super) fn on_autosave(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
         for i in 0..self.tabs.len() {
-            if !self.tabs[i].dirty
-                || self.active_save_jobs.contains_key(&self.tabs[i].id)
-            {
+            if !self.tabs[i].dirty || self.active_save_jobs.contains_key(&self.tabs[i].id) {
                 continue;
             }
             let version = self.tabs[i].scene.document.version;
@@ -2399,10 +2384,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
             self.tabs[i].dirty = true;
             self.tabs[i].scene.bump_geometry_no_blocks();
-            self.command_line.push_info(crate::tf!(
-                "Page setup: {w:.1}×{h:.1} mm  area={plot_area}  \
+            self.command_line.push_info(
+                crate::tf!(
+                    "Page setup: {w:.1}×{h:.1} mm  area={plot_area}  \
                  center={center}  rot={rotation}°"
-            ).as_ref());
+                )
+                .as_ref(),
+            );
         }
     }
 
@@ -2410,11 +2398,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         &mut self,
         path: std::path::PathBuf,
     ) -> Task<Message> {
-        let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
-            self.direct_plot_params()
+        let Some((
+            wires,
+            hatches,
+            wipeouts,
+            group_splits,
+            page_w,
+            page_h,
+            ox,
+            oy,
+            rotation,
+            scale,
+            clip,
+        )) = self.direct_plot_params()
         else {
-            self.command_line
-                .push_error(crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref());
+            self.command_line.push_error(
+                crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref(),
+            );
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
@@ -2422,22 +2422,22 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let worker_path = path.clone();
         let work = move || {
             crate::io::pdf_export::export_pdf(
-                    &wires,
-                    &hatches,
-                    &wipeouts,
-                    page_w,
-                    page_h,
-                    ox,
-                    oy,
-                    rotation,
-                    scale,
-                    clip,
-                    &worker_path,
-                    plot_style.as_ref(),
-                    render_options,
-                )
-                .map(|_| format!("Exported: {}", worker_path.display()))
-                .map_err(|e| format!("Export failed: {e}"))
+                &wires,
+                &hatches,
+                &wipeouts,
+                page_w,
+                page_h,
+                ox,
+                oy,
+                rotation,
+                scale,
+                clip,
+                &worker_path,
+                plot_style.as_ref(),
+                render_options,
+            )
+            .map(|_| format!("Exported: {}", worker_path.display()))
+            .map_err(|e| format!("Export failed: {e}"))
         };
         self.run_plot_work(self.plot_dialog.background, false, work)
     }
@@ -2453,8 +2453,19 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             "Extents" => self.extents_plot_job(),
             _ => self.window_plot_job(),
         };
-        let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
-            job
+        let Some((
+            wires,
+            hatches,
+            wipeouts,
+            group_splits,
+            page_w,
+            page_h,
+            ox,
+            oy,
+            rotation,
+            scale,
+            clip,
+        )) = job
         else {
             self.command_line
                 .push_error(crate::t!("Plot area is empty. Pick a larger window.").as_ref());
@@ -2466,35 +2477,35 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.close_active_modal();
         let work = move || {
             crate::io::pdf_export::export_pdf(
-                    &wires,
-                    &hatches,
-                    &wipeouts,
-                    page_w,
-                    page_h,
-                    ox,
-                    oy,
-                    rotation,
-                    scale,
-                    clip,
-                    &worker_path,
-                    plot_style.as_ref(),
-                    render_options,
+                &wires,
+                &hatches,
+                &wipeouts,
+                page_w,
+                page_h,
+                ox,
+                oy,
+                rotation,
+                scale,
+                clip,
+                &worker_path,
+                plot_style.as_ref(),
+                render_options,
+            )
+            .map(|_| {
+                format!(
+                    "Plotted window to {}",
+                    worker_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
                 )
-                .map(|_| {format!(
-                            "Plotted window to {}",
-                        worker_path
-                            .file_name().unwrap_or_default().to_string_lossy()
-                        )
-                }).map_err(|e| format!("Plot failed: {e}"))
+            })
+            .map_err(|e| format!("Plot failed: {e}"))
         };
         self.run_plot_work(self.plot_dialog.background, false, work)
     }
 
-    pub(super) fn report_plot_result(
-        &mut self,
-        result: Result<String, String>,
-        reopen_plot: bool,
-    ) {
+    pub(super) fn report_plot_result(&mut self, result: Result<String, String>, reopen_plot: bool) {
         match result {
             Ok(message) => self.command_line.push_info(&message),
             Err(error) => self.command_line.push_error(&error),
@@ -2589,16 +2600,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         Ok(pages)
     }
 
-    pub(super) fn on_print_all_pdf_path_some(
-        &mut self,
-        path: std::path::PathBuf,
-    ) -> Task<Message> {
+    pub(super) fn on_print_all_pdf_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
         let dialog = self.plot_dialog.clone();
         if dialog.style_missing {
-            self.command_line.push_error(crate::tf!(
-                "Plot style table '{}' is not loaded.",
-                dialog.style_name
-            ).as_ref());
+            self.command_line.push_error(
+                crate::tf!("Plot style table '{}' is not loaded.", dialog.style_name).as_ref(),
+            );
             return Task::none();
         }
         let pages = match self.print_all_pages() {
@@ -2613,13 +2620,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.save_config();
         self.close_active_modal();
         let work = move || {
-            crate::io::pdf_export::export_pdf_pages(
-                &pages,
-                &worker_path,
-                plot_style.as_ref(),
-            )
-            .map(|_| format!("Exported {} layouts to {}", pages.len(), worker_path.display()))
-            .map_err(|error| format!("Export failed: {error}"))
+            crate::io::pdf_export::export_pdf_pages(&pages, &worker_path, plot_style.as_ref())
+                .map(|_| {
+                    format!(
+                        "Exported {} layouts to {}",
+                        pages.len(),
+                        worker_path.display()
+                    )
+                })
+                .map_err(|error| format!("Export failed: {error}"))
         };
         self.run_print_all_work(dialog.background, work)
     }
@@ -2627,19 +2636,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     pub(super) fn on_print_all_print(&mut self) -> Task<Message> {
         #[cfg(target_arch = "wasm32")]
         {
-            self.command_line.push_error(
-                crate::t!("Printing is not available in the web version.").as_ref(),
-            );
+            self.command_line
+                .push_error(crate::t!("Printing is not available in the web version.").as_ref());
             Task::none()
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let dialog = self.plot_dialog.clone();
             if dialog.style_missing {
-                self.command_line.push_error(crate::tf!(
-                    "Plot style table '{}' is not loaded.",
-                    dialog.style_name
-                ).as_ref());
+                self.command_line.push_error(
+                    crate::tf!("Plot style table '{}' is not loaded.", dialog.style_name).as_ref(),
+                );
                 return Task::none();
             }
             let pages = match self.print_all_pages() {
@@ -2655,25 +2662,19 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_nanos())
                 .unwrap_or(0);
-            let temp_path = std::env::temp_dir().join(format!(
-                "open_cad_studio_print_all_{stamp}.pdf"
-            ));
+            let temp_path =
+                std::env::temp_dir().join(format!("open_cad_studio_print_all_{stamp}.pdf"));
             self.save_config();
             self.close_active_modal();
-            self.command_line.push_info(
-                crate::t!("Sending selected layouts to the system printer…").as_ref(),
-            );
+            self.command_line
+                .push_info(crate::t!("Sending selected layouts to the system printer…").as_ref());
             let work = move || {
-                crate::io::pdf_export::export_pdf_pages(
-                    &pages,
-                    &temp_path,
-                    plot_style.as_ref(),
-                )
-                .and_then(|_| {
-                    crate::io::print_to_printer::print_existing_pdf(&temp_path, &options)
-                })
-                .map(|printer| format!("Sent {} layouts to printer: {printer}", pages.len()))
-                .map_err(|error| format!("Print failed: {error}"))
+                crate::io::pdf_export::export_pdf_pages(&pages, &temp_path, plot_style.as_ref())
+                    .and_then(|_| {
+                        crate::io::print_to_printer::print_existing_pdf(&temp_path, &options)
+                    })
+                    .map(|printer| format!("Sent {} layouts to printer: {printer}", pages.len()))
+                    .map_err(|error| format!("Print failed: {error}"))
             };
             self.run_print_all_work(dialog.background, work)
         }
@@ -2690,12 +2691,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
     }
 
-    fn run_plot_work<F>(
-        &mut self,
-        background: bool,
-        reopen_plot: bool,
-        work: F,
-    ) -> Task<Message>
+    fn run_plot_work<F>(&mut self, background: bool, reopen_plot: bool, work: F) -> Task<Message>
     where
         F: FnOnce() -> Result<String, String> + Send + 'static,
     {
@@ -2736,12 +2732,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Orientation::Landscape
         };
         let selected_sheet = sheet_mm(selected_paper, selected_orientation);
-        let (source_wires, hatches, wipeouts, mut group_splits) =
-            plot_scene_content(
-                scene,
-                self.plot_dialog.paperspace_last,
-                plot_render_mode_override(&self.plot_dialog),
-            );
+        let (source_wires, hatches, wipeouts, mut group_splits) = plot_scene_content(
+            scene,
+            self.plot_dialog.paperspace_last,
+            plot_render_mode_override(&self.plot_dialog),
+        );
         // The printable-area rectangle is an on-screen guide, not drawing
         // content. It used to leak into every paper-space PDF/preview/print.
         let wires = if paper_space {
@@ -2778,21 +2773,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             // Only the explicit upside-down choice rotates layout content here.
             let rotation = dialog_rotation;
             let centered = self.plot_dialog.center;
-            let origin_x = self
-                .plot_dialog
-                .offset_x
-                .parse::<f64>()
-                .unwrap_or(0.0);
-            let origin_y = self
-                .plot_dialog
-                .offset_y
-                .parse::<f64>()
-                .unwrap_or(0.0);
+            let origin_x = self.plot_dialog.offset_x.parse::<f64>().unwrap_or(0.0);
+            let origin_y = self.plot_dialog.offset_y.parse::<f64>().unwrap_or(0.0);
 
             let (scale, offset_x, offset_y) = if plot_extents {
                 let (min_x, min_y, max_x, max_y) =
-                    plot_content_extents(&wires, &hatches, &wipeouts)
-                        .unwrap_or((x0, y0, x1, y1));
+                    plot_content_extents(&wires, &hatches, &wipeouts).unwrap_or((x0, y0, x1, y1));
                 let content_w = (max_x - min_x).max(1e-9);
                 let content_h = (max_y - min_y).max(1e-9);
                 let scale = if self.plot_dialog.fit_to_paper {
@@ -2813,11 +2799,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 } else {
                     origin_y
                 };
-                (
-                    scale,
-                    target_x / scale - min_x,
-                    target_y / scale - min_y,
-                )
+                (scale, target_x / scale - min_x, target_y / scale - min_y)
             } else if plot_layout {
                 // Map the complete paper-space sheet to the physical paper
                 // selected in the dialog. Layout bounds can be stored in mm,
@@ -2832,11 +2814,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     .max(1e-9);
                 let target_x = (selected_sheet.0 - bounds_w * scale) * 0.5;
                 let target_y = (selected_sheet.1 - bounds_h * scale) * 0.5;
-                (
-                    scale,
-                    target_x / scale - x0,
-                    target_y / scale - y0,
-                )
+                (scale, target_x / scale - x0, target_y / scale - y0)
             } else {
                 // Legacy direct callers still get dialog positioning. Normal
                 // Display/Window paths use `area_plot_job` instead.
@@ -2866,14 +2844,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             // ink is restricted to the device's printable rectangle. Extents
             // has its own fitted area and must not inherit this paper clip.
             let clip = if plot_layout {
-                scene.printable_area_limits().map(|((px0, py0), (px1, py1))| {
-                    (
-                        (px0 + offset_x) as f32,
-                        (py0 + offset_y) as f32,
-                        (px1 - px0) as f32,
-                        (py1 - py0) as f32,
-                    )
-                })
+                scene
+                    .printable_area_limits()
+                    .map(|((px0, py0), (px1, py1))| {
+                        (
+                            (px0 + offset_x) as f32,
+                            (py0 + offset_y) as f32,
+                            (px1 - px0) as f32,
+                            (py1 - py0) as f32,
+                        )
+                    })
             } else {
                 None
             };
@@ -2951,20 +2931,32 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
-        let Some((wires, hatches, wipeouts, group_splits, page_w, page_h, ox, oy, rotation, scale, clip)) =
-            self.direct_plot_params()
+        let Some((
+            wires,
+            hatches,
+            wipeouts,
+            group_splits,
+            page_w,
+            page_h,
+            ox,
+            oy,
+            rotation,
+            scale,
+            clip,
+        )) = self.direct_plot_params()
         else {
-            self.command_line
-                .push_error(crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref());
+            self.command_line.push_error(
+                crate::t!("Nothing to plot: model space contains no printable geometry.").as_ref(),
+            );
             return Task::none();
         };
         let plot_style = self.dialog_plot_style(&self.plot_dialog);
         let options = self.plot_print_options(&self.plot_dialog, group_splits);
-        self.command_line.push_info(crate::t!("Sending to system printer…").as_ref());
+        self.command_line
+            .push_info(crate::t!("Sending to system printer…").as_ref());
         background_task(
             move || {
-                iced::futures::executor::block_on(
-                crate::io::print_to_printer::print_wires_with(
+                iced::futures::executor::block_on(crate::io::print_to_printer::print_wires_with(
                     wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
                     plot_style, options,
                 ))
@@ -3208,7 +3200,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 match crate::io::print_to_printer::open_printer_properties(
                     self.plot_dialog.printer.as_deref(),
                 ) {
-                    Ok(()) => self.command_line.push_info(crate::t!("Opened printer properties.").as_ref()),
+                    Ok(()) => self
+                        .command_line
+                        .push_info(crate::t!("Opened printer properties.").as_ref()),
                     Err(error) => self.command_line.push_error(&error),
                 }
                 Task::none()
@@ -3238,11 +3232,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.plot_dialog.offset_x = "0.0".into();
                     self.plot_dialog.offset_y = "0.0".into();
                     self.plot_dialog.fit_to_paper = false;
-                    self.plot_dialog.scale = scale_name_for_factor(
-                        &self.plot_dialog.scales,
-                        1.0,
-                    )
-                    .unwrap_or_else(|| "1:1".into());
+                    self.plot_dialog.scale = scale_name_for_factor(&self.plot_dialog.scales, 1.0)
+                        .unwrap_or_else(|| "1:1".into());
                 }
                 self.plot_dialog.area = s;
                 Task::none()
@@ -3285,9 +3276,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         }
                     }
                     PlotFlag::Center if d.area != "Layout" => d.center = !d.center,
-                    PlotFlag::ScaleLw if !d.fit_to_paper => {
-                        d.scale_lw = !d.scale_lw
-                    }
+                    PlotFlag::ScaleLw if !d.fit_to_paper => d.scale_lw = !d.scale_lw,
                     PlotFlag::UpsideDown => {
                         d.upside_down = !d.upside_down;
                     }
@@ -3359,7 +3348,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 }
                 self.apply_dialog_to_layout();
-                self.command_line.push_info(crate::t!("Page setup applied to the layout.").as_ref());
+                self.command_line
+                    .push_info(crate::t!("Page setup applied to the layout.").as_ref());
                 Task::none()
             }
             M::NewSetup => {
@@ -3442,7 +3432,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     if !name.is_empty() {
                         if self.plot_dialog.name_rename {
                             let old = self.plot_dialog.selected_setup.clone();
-                            self.tabs[self.active_tab].scene.page_setup_rename(&old, &name);
+                            self.tabs[self.active_tab]
+                                .scene
+                                .page_setup_rename(&old, &name);
                         } else {
                             let ps = self.dialog_to_plotsettings();
                             self.tabs[self.active_tab].scene.page_setup_save(&name, ps);
@@ -3464,10 +3456,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             M::Preview => self.on_plot_dlg_commit(true),
             M::Commit if self.print_all_options => {
                 if self.plot_dialog.style_missing {
-                    self.command_line.push_error(crate::tf!(
-                        "Plot style table '{}' is not loaded.",
-                        self.plot_dialog.style_name
-                    ).as_ref());
+                    self.command_line.push_error(
+                        crate::tf!(
+                            "Plot style table '{}' is not loaded.",
+                            self.plot_dialog.style_name
+                        )
+                        .as_ref(),
+                    );
                     return Task::none();
                 }
                 self.plot_dialog.paper_space = true;
@@ -3511,7 +3506,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             d.to_file = true;
             d.paper = "A4".into();
             d.orientation = "Landscape".into();
-            d.area = if is_model { "Window".into() } else { "Layout".into() };
+            d.area = if is_model {
+                "Window".into()
+            } else {
+                "Layout".into()
+            };
             d.center = true;
             d.offset_x = "0.0".into();
             d.offset_y = "0.0".into();
@@ -3526,8 +3525,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.plot_dialog.copy_settings_from(&prev);
             }
         } else if is_layout_entry(name) {
-            if let Some(ps) = self
-                .tabs[self.active_tab]
+            if let Some(ps) = self.tabs[self.active_tab]
                 .scene
                 .plot_settings_for(layout_entry_name(name))
             {
@@ -3554,11 +3552,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// Build a `PlotSettings` from the current dialog fields (for saving a named
     /// page setup).
     fn dialog_to_plotsettings(&self) -> acadrust::objects::PlotSettings {
+        use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
         use acadrust::objects::{
             PlotPaperUnits, PlotRotation, PlotSettings, PlotType, ScaledType, ShadePlotMode,
             ShadePlotResolutionLevel,
         };
-        use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
         let d = &self.plot_dialog;
         let paper = match d.paper.as_str() {
             "A3" => PaperSize::A3,
@@ -3645,9 +3643,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
     /// Load a `PlotSettings` into the dialog editor fields.
     fn load_plotsettings_into_dialog(&mut self, ps: &acadrust::objects::PlotSettings) {
-        use acadrust::objects::{
-            PlotType, ShadePlotMode, ShadePlotResolutionLevel,
-        };
+        use acadrust::objects::{PlotType, ShadePlotMode, ShadePlotResolutionLevel};
         if matches!(ps.plot_type, PlotType::Window) && !ps.plot_window.is_empty() {
             self.plot_window = Some((
                 ps.plot_window.lower_left_x,
@@ -3658,17 +3654,20 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
         if !ps.current_style_sheet.is_empty()
             && self
-            .active_plot_style
-            .as_ref()
-            .is_none_or(|table| !table.name.eq_ignore_ascii_case(&ps.current_style_sheet))
+                .active_plot_style
+                .as_ref()
+                .is_none_or(|table| !table.name.eq_ignore_ascii_case(&ps.current_style_sheet))
         {
-            if let Ok(table) = crate::io::plot_style::PlotStyleTable::load_named(
-                &ps.current_style_sheet,
-            ) {
+            if let Ok(table) =
+                crate::io::plot_style::PlotStyleTable::load_named(&ps.current_style_sheet)
+            {
                 self.active_plot_style = Some(table);
             }
         }
-        let active_style_name = self.active_plot_style.as_ref().map(|table| table.name.clone());
+        let active_style_name = self
+            .active_plot_style
+            .as_ref()
+            .map(|table| table.name.clone());
         let style_name = if ps.current_style_sheet.is_empty() {
             active_style_name.clone().unwrap_or_default()
         } else if active_style_name
@@ -3782,25 +3781,16 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let rotation: i16 = if d.upside_down { 180 } else { 0 };
         let off_x = d.offset_x.parse::<f64>().unwrap_or(0.0);
         let off_y = d.offset_y.parse::<f64>().unwrap_or(0.0);
-        self.apply_plot_page_settings(
-            sheet_w,
-            sheet_h,
-            &d.area,
-            d.center,
-            off_x,
-            off_y,
-            rotation,
-        );
+        self.apply_plot_page_settings(sheet_w, sheet_h, &d.area, d.center, off_x, off_y, rotation);
     }
 
     /// Open a preview PDF, export a PDF, or send the job to the chosen printer.
     fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
         let d = self.plot_dialog.clone();
         if d.style_missing {
-            self.command_line.push_error(crate::tf!(
-                "Plot style table '{}' is not loaded.",
-                d.style_name
-            ).as_ref());
+            self.command_line.push_error(
+                crate::tf!("Plot style table '{}' is not loaded.", d.style_name).as_ref(),
+            );
             return Task::none();
         }
         // Remember the user's print preferences across sessions.
@@ -3846,11 +3836,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let render_options = Self::pdf_plot_options(&d, wgroup_splits);
                 let work = move || {
                     crate::io::pdf_export::export_pdf(
-                    &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, wrotation, wscale, wclip, &tmp,
-                    plot_style.as_ref(),
-                    render_options,
-                ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
-                        .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
+                        &w_wires,
+                        &w_hatches,
+                        &w_wipeouts,
+                        sw,
+                        sh,
+                        wox,
+                        woy,
+                        wrotation,
+                        wscale,
+                        wclip,
+                        &tmp,
+                        plot_style.as_ref(),
+                        render_options,
+                    )
+                    .and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
+                    .map(|_| "Opened plot preview.".to_string())
+                    .map_err(|e| format!("Preview failed: {e}"))
                 };
                 return self.run_plot_work(d.background, true, work);
             }
@@ -3863,12 +3865,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             let opts = self.plot_print_options(&d, wgroup_splits);
             let work = move || {
                 crate::io::pdf_export::export_pdf(
-                &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, wrotation, wscale, wclip, &tmp,
-                plot_style.as_ref(),
-                render_options,
-            ).and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
-                    .map(|printer| format!("Sent to printer: {printer}"))
-                    .map_err(|e| format!("Print failed: {e}"))
+                    &w_wires,
+                    &w_hatches,
+                    &w_wipeouts,
+                    sw,
+                    sh,
+                    wox,
+                    woy,
+                    wrotation,
+                    wscale,
+                    wclip,
+                    &tmp,
+                    plot_style.as_ref(),
+                    render_options,
+                )
+                .and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
+                .map(|printer| format!("Sent to printer: {printer}"))
+                .map_err(|e| format!("Print failed: {e}"))
             };
             return self.run_plot_work(d.background, false, work);
         }
@@ -3881,21 +3894,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             let render_options = Self::pdf_plot_options(&d, group_splits);
             let work = move || {
                 crate::io::pdf_export::export_pdf(
-                &wires,
-                &hatches,
-                &wipeouts,
-                page_w,
-                page_h,
-                ox,
-                oy,
-                rotation,
-                scale,
-                clip,
-                &tmp,
-                plot_style.as_ref(),
-                render_options,
-            ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
-                    .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
+                    &wires,
+                    &hatches,
+                    &wipeouts,
+                    page_w,
+                    page_h,
+                    ox,
+                    oy,
+                    rotation,
+                    scale,
+                    clip,
+                    &tmp,
+                    plot_style.as_ref(),
+                    render_options,
+                )
+                .and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
+                .map(|_| "Opened plot preview.".to_string())
+                .map_err(|e| format!("Preview failed: {e}"))
             };
             return self.run_plot_work(d.background, true, work);
         }
@@ -3906,15 +3921,15 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         }
 
         let opts = self.plot_print_options(&d, group_splits);
-        self.command_line.push_info(crate::t!("Sending to system printer…").as_ref());
+        self.command_line
+            .push_info(crate::t!("Sending to system printer…").as_ref());
         let work = move || {
-            iced::futures::executor::block_on(
-                    crate::io::print_to_printer::print_wires_with(
-                    wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
-                    plot_style, opts,
-                ))
-                .map(|printer| format!("Sent to printer: {printer}"))
-                .map_err(|error| format!("Print failed: {error}"))
+            iced::futures::executor::block_on(crate::io::print_to_printer::print_wires_with(
+                wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
+                plot_style, opts,
+            ))
+            .map(|printer| format!("Sent to printer: {printer}"))
+            .map_err(|error| format!("Print failed: {error}"))
         };
         self.run_plot_work(d.background, false, work)
     }
@@ -3973,19 +3988,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let scene = &self.tabs[self.active_tab].scene;
         if scene.current_layout == "Model" {
             let (min, max) = scene.model_space_extents()?;
-            return self.area_plot_job((
-                min.x as f64,
-                min.y as f64,
-                max.x as f64,
-                max.y as f64,
-            ));
+            return self.area_plot_job((min.x as f64, min.y as f64, max.x as f64, max.y as f64));
         }
-        let (wires, hatches, wipeouts, _) =
-            plot_scene_content(
-                scene,
-                self.plot_dialog.paperspace_last,
-                plot_render_mode_override(&self.plot_dialog),
-            );
+        let (wires, hatches, wipeouts, _) = plot_scene_content(
+            scene,
+            self.plot_dialog.paperspace_last,
+            plot_render_mode_override(&self.plot_dialog),
+        );
         let extents = plot_content_extents(
             &wires
                 .iter()
@@ -4034,12 +4043,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             iced::Point::new(bounds.width, bounds.height),
             iced::Point::new(0.0, bounds.height),
         ] {
-            let world = camera.unproject_on_plane(
-                point,
-                bounds,
-                glam::Vec3::Z,
-                glam::DVec3::ZERO,
-            );
+            let world = camera.unproject_on_plane(point, bounds, glam::Vec3::Z, glam::DVec3::ZERO);
             x0 = x0.min(world.x);
             y0 = y0.min(world.y);
             x1 = x1.max(world.x);
@@ -4095,21 +4099,24 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         };
         let scene = &self.tabs[i].scene;
         let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
-        let (all_wires, hatches, wipeouts, mut group_splits) =
-            plot_scene_content(
-                scene,
-                self.plot_dialog.paperspace_last,
-                plot_render_mode_override(&self.plot_dialog),
-            );
+        let (all_wires, hatches, wipeouts, mut group_splits) = plot_scene_content(
+            scene,
+            self.plot_dialog.paperspace_last,
+            plot_render_mode_override(&self.plot_dialog),
+        );
         let first_wire_count = all_wires[..group_splits.wires.min(all_wires.len())]
             .iter()
             .filter(|w| w.name != "paper_printable_area")
-            .filter(|w| w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0)
+            .filter(|w| {
+                w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0
+            })
             .count();
         let wires: Vec<_> = all_wires
             .iter()
             .filter(|w| w.name != "paper_printable_area")
-            .filter(|w| w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0)
+            .filter(|w| {
+                w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0
+            })
             .cloned()
             .collect();
         group_splits.wires = first_wire_count;
@@ -4142,78 +4149,80 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     }
 
     pub(super) fn on_plot_style_panel_apply(&mut self) -> Task<Message> {
-                let aci = self.plotstyle_panel_aci as usize;
-                if let Some(table) = self.active_plot_style.as_mut() {
-                    if let Some(entry) = table.aci_entries.get_mut(aci) {
-                        // Parse color.
-                        let color_str = self.ps_color_buf.trim();
-                        if color_str.is_empty() {
-                            entry.color = None;
-                        } else if color_str.starts_with('#') && color_str.len() == 7 {
-                            let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(0);
-                            let g = u8::from_str_radix(&color_str[3..5], 16).unwrap_or(0);
-                            let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(0);
-                            entry.color = Some([r, g, b]);
-                        }
-                        if let Ok(lw) = self.ps_lineweight_buf.trim().parse::<u8>() {
-                            entry.lineweight = lw;
-                        }
-                        if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
-                            entry.screening = sc.min(100);
-                        }
-
-                    }
-                } else {
-                    // No table loaded: create an identity table and apply.
-                    let mut table = crate::io::plot_style::PlotStyleTable::identity("Custom.ctb");
-                    if let Some(entry) = table.aci_entries.get_mut(aci) {
-                        let color_str = self.ps_color_buf.trim();
-                        if color_str.starts_with('#') && color_str.len() == 7 {
-                            let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(0);
-                            let g = u8::from_str_radix(&color_str[3..5], 16).unwrap_or(0);
-                            let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(0);
-                            entry.color = Some([r, g, b]);
-                        }
-                        if let Ok(lw) = self.ps_lineweight_buf.trim().parse::<u8>() {
-                            entry.lineweight = lw;
-                        }
-                        if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
-                            entry.screening = sc.min(100);
-                        }
-                    }
-                    self.active_plot_style = Some(table);
-                    self.command_line
-                        .push_output(crate::tf!("Created new CTB table, ACI {aci} updated.").as_ref());
+        let aci = self.plotstyle_panel_aci as usize;
+        if let Some(table) = self.active_plot_style.as_mut() {
+            if let Some(entry) = table.aci_entries.get_mut(aci) {
+                // Parse color.
+                let color_str = self.ps_color_buf.trim();
+                if color_str.is_empty() {
+                    entry.color = None;
+                } else if color_str.starts_with('#') && color_str.len() == 7 {
+                    let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(0);
+                    let g = u8::from_str_radix(&color_str[3..5], 16).unwrap_or(0);
+                    let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(0);
+                    entry.color = Some([r, g, b]);
                 }
-                Task::none()
+                if let Ok(lw) = self.ps_lineweight_buf.trim().parse::<u8>() {
+                    entry.lineweight = lw;
+                }
+                if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
+                    entry.screening = sc.min(100);
+                }
+            }
+        } else {
+            // No table loaded: create an identity table and apply.
+            let mut table = crate::io::plot_style::PlotStyleTable::identity("Custom.ctb");
+            if let Some(entry) = table.aci_entries.get_mut(aci) {
+                let color_str = self.ps_color_buf.trim();
+                if color_str.starts_with('#') && color_str.len() == 7 {
+                    let r = u8::from_str_radix(&color_str[1..3], 16).unwrap_or(0);
+                    let g = u8::from_str_radix(&color_str[3..5], 16).unwrap_or(0);
+                    let b = u8::from_str_radix(&color_str[5..7], 16).unwrap_or(0);
+                    entry.color = Some([r, g, b]);
+                }
+                if let Ok(lw) = self.ps_lineweight_buf.trim().parse::<u8>() {
+                    entry.lineweight = lw;
+                }
+                if let Ok(sc) = self.ps_screening_buf.trim().parse::<u8>() {
+                    entry.screening = sc.min(100);
+                }
+            }
+            self.active_plot_style = Some(table);
+            self.command_line
+                .push_output(crate::tf!("Created new CTB table, ACI {aci} updated.").as_ref());
+        }
+        Task::none()
     }
 
     pub(super) fn on_plot_style_panel_save(&mut self) -> Task<Message> {
-                if self.active_plot_style.is_none() {
-                    self.command_line
-                        .push_error(crate::t!("No plot style table loaded. Load or create one first.").as_ref());
-                    return Task::none();
+        if self.active_plot_style.is_none() {
+            self.command_line.push_error(
+                crate::t!("No plot style table loaded. Load or create one first.").as_ref(),
+            );
+            return Task::none();
+        }
+        let default_name = self
+            .active_plot_style
+            .as_ref()
+            .map(|t| t.name.clone())
+            .unwrap_or("export.ctb".into());
+        Task::perform(
+            async move {
+                let mut dialog = crate::sys::file_dialog()
+                    .set_title("Save Plot Style Table")
+                    .set_file_name(&default_name)
+                    .add_filter("Plot Style Files", &["ctb", "CTB"])
+                    .add_filter("All Files", &["*"]);
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Ok(dir) = crate::io::plot_style::ensure_plot_styles_dir() {
+                    dialog = dialog.set_directory(dir);
                 }
-                let default_name = self
-                    .active_plot_style
-                    .as_ref()
-                    .map(|t| t.name.clone())
-                    .unwrap_or("export.ctb".into());
-                Task::perform(
-                    async move {
-                        let mut dialog = crate::sys::file_dialog()
-                            .set_title("Save Plot Style Table")
-                            .set_file_name(&default_name)
-                            .add_filter("Plot Style Files", &["ctb", "CTB"])
-                            .add_filter("All Files", &["*"]);
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if let Ok(dir) = crate::io::plot_style::ensure_plot_styles_dir() {
-                            dialog = dialog.set_directory(dir);
-                        }
-                        dialog.save_file().await
-                            .map(|h| crate::sys::handle_path(&h))
-                    },
-                    Message::PlotStylePanelSavePath,
-                )
+                dialog
+                    .save_file()
+                    .await
+                    .map(|h| crate::sys::handle_path(&h))
+            },
+            Message::PlotStylePanelSavePath,
+        )
     }
 }

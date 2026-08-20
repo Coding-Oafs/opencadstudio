@@ -2,7 +2,7 @@
 
 use crate::{ClassTable, DisplaySettings, EditStore, PointFilter, SelectionSet};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     error, fmt,
@@ -12,7 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const FINGERPRINT_SAMPLE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
@@ -198,6 +198,34 @@ impl SidecarStore {
         &self.path
     }
 
+    /// Persist drawing-owned spatial metadata independently of LAS/LAZ
+    /// attachments. A plain CAD drawing can therefore retain its CRS,
+    /// working units, and manual basemap bounds.
+    pub fn save_drawing_settings<T: Serialize>(&self, settings: &T) -> SidecarResult<()> {
+        self.connection.execute(
+            "INSERT INTO drawing_settings (id, payload_json) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
+            params![serde_json::to_string(settings)?],
+        )?;
+        Ok(())
+    }
+
+    /// Load drawing-owned spatial metadata. Older sidecars return `None`
+    /// after migration creates the v4 table.
+    pub fn load_drawing_settings<T: DeserializeOwned>(&self) -> SidecarResult<Option<T>> {
+        let payload: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT payload_json FROM drawing_settings WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        payload
+            .map(|value| serde_json::from_str(&value).map_err(SidecarError::from))
+            .transpose()
+    }
+
     pub fn save_attachment(&mut self, attachment: &AttachmentState) -> SidecarResult<()> {
         let tx = self.connection.transaction()?;
         // Order index 0 keeps single-attachment sidecars stable while leaving
@@ -333,8 +361,9 @@ impl SidecarStore {
 
     /// Returns persisted attachment ids in dataset order.
     pub fn attachment_ids(&self) -> SidecarResult<Vec<String>> {
-        let mut statement =
-            self.connection.prepare("SELECT id FROM attachments ORDER BY order_index, id")?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM attachments ORDER BY order_index, id")?;
         let ids = statement
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -399,12 +428,14 @@ impl SidecarStore {
                 },
             )
             .optional()?;
-        Ok(row.map(|(display_name, source_folder, created)| CollectionState {
-            id: id.to_owned(),
-            display_name,
-            source_folder,
-            created_unix_ms: Some(created.unsigned_abs()),
-        }))
+        Ok(
+            row.map(|(display_name, source_folder, created)| CollectionState {
+                id: id.to_owned(),
+                display_name,
+                source_folder,
+                created_unix_ms: Some(created.unsigned_abs()),
+            }),
+        )
     }
 
     fn selection_sets_for(&self, id: &str) -> SidecarResult<Vec<SelectionSet>> {
@@ -585,7 +616,11 @@ impl SidecarStore {
                     total_points INTEGER NOT NULL DEFAULT 0,
                     error TEXT
                  );
-                 PRAGMA user_version = 3;
+                 CREATE TABLE drawing_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    payload_json TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 4;
                  COMMIT;",
             )?;
         }
@@ -611,6 +646,19 @@ impl SidecarStore {
                  ALTER TABLE attachments ADD COLUMN collection_id TEXT REFERENCES collections(id) ON DELETE SET NULL;
                  ALTER TABLE attachments ADD COLUMN order_index INTEGER NOT NULL DEFAULT 0;
                  PRAGMA user_version = 3;
+                 COMMIT;",
+            )?;
+        }
+        // Schema v4 makes CRS and units drawing-owned rather than a
+        // by-product of having a point-cloud attachment.
+        if (1..=3).contains(&version) {
+            self.connection.execute_batch(
+                "BEGIN;
+                 CREATE TABLE IF NOT EXISTS drawing_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    payload_json TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 4;
                  COMMIT;",
             )?;
         }
@@ -730,6 +778,43 @@ mod tests {
         AttachmentState::new(id, drawing, scratch_source(tag)).expect("attachment state")
     }
 
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct TestDrawingSettings {
+        epsg: Option<u16>,
+        unit: String,
+        bounds: Option<[f64; 4]>,
+    }
+
+    #[test]
+    fn drawing_settings_round_trip_without_any_lidar_attachment() {
+        let sidecar = scratch_sidecar("drawing-settings");
+        let _ = fs::remove_file(&sidecar);
+        let expected = TestDrawingSettings {
+            epsg: Some(26918),
+            unit: "meters".to_string(),
+            bounds: Some([500_000.0, 4_400_000.0, 501_000.0, 4_401_000.0]),
+        };
+        {
+            let store = SidecarStore::open(&sidecar).expect("open");
+            assert!(store
+                .load_drawing_settings::<TestDrawingSettings>()
+                .expect("empty load")
+                .is_none());
+            store
+                .save_drawing_settings(&expected)
+                .expect("save drawing settings");
+        }
+        let store = SidecarStore::open(&sidecar).expect("reopen");
+        assert_eq!(
+            store
+                .load_drawing_settings::<TestDrawingSettings>()
+                .expect("load drawing settings"),
+            Some(expected)
+        );
+        assert!(store.attachment_ids().expect("attachment ids").is_empty());
+        let _ = fs::remove_file(&sidecar);
+    }
+
     #[test]
     fn save_dataset_round_trips_multiple_attachments_in_order() {
         let sidecar = scratch_sidecar("roundtrip");
@@ -822,7 +907,8 @@ mod tests {
     }
 
     /// Builds a hand-rolled schema-v2 database, the way v0.9.6 wrote it, and
-    /// verifies the upgrade path to the v3 multi-source schema.
+    /// verifies the upgrade path through the v3 multi-source schema to v4
+    /// drawing-owned spatial settings.
     #[test]
     fn migrates_v2_sidecar_to_v3() {
         let sidecar = scratch_sidecar("migrate-v2");
@@ -893,7 +979,7 @@ mod tests {
             )
             .expect("legacy audit");
         }
-        // Opening performs the v3 migration and preserves the legacy row.
+        // Opening performs the v3/v4 migrations and preserves the legacy row.
         let mut store = SidecarStore::open(&sidecar).expect("migrated open");
         assert_eq!(
             store.attachment_ids().expect("ids"),
@@ -907,6 +993,10 @@ mod tests {
             1,
             "legacy audit history must survive the migration"
         );
+        assert!(store
+            .load_drawing_settings::<TestDrawingSettings>()
+            .expect("empty drawing settings after migration")
+            .is_none());
         // The migrated store accepts new multi-source writes.
         let extra = state("added", "added", &drawing);
         store

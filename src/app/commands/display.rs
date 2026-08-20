@@ -13,6 +13,27 @@ impl OpenCADStudio {
                 );
             }
 
+            // ArcGIS-style combined navigation: left-drag pans, Shift+left-
+            // drag uses the existing orbit path, and the wheel keeps zooming.
+            "NAVIGATOR" => {
+                self.tabs[i].pan_mode = true;
+                self.clear_navigation_hover(i);
+                self.command_line.push_output(
+                    "Navigator: drag to pan, Shift+drag to orbit, and use the wheel to zoom. Press Esc to exit.",
+                );
+            }
+
+            // Dedicated selection affordance. Normal viewport selection code
+            // is already the default; arming it explicitly exits navigation
+            // and keeps the ribbon tool highlighted.
+            "SELECTTOOL" => {
+                self.tabs[i].selection_tool_mode = true;
+                self.clear_navigation_hover(i);
+                self.command_line.push_output(
+                    "Selection tool active: click, window, crossing, or lasso to select features.",
+                );
+            }
+
             // ── TABLE cell editing ─────────────────────────────────────────────
             // TABLE CELL <row> <col> <text> — set text for a cell in the selected Table
             cmd if cmd.starts_with("TABLE ") => {
@@ -1455,9 +1476,7 @@ impl OpenCADStudio {
                 if argument.is_empty() {
                     return Some(Task::done(Message::PointCloudExportAll));
                 }
-                return Some(
-                    self.start_point_cloud_export_all(std::path::PathBuf::from(argument)),
-                );
+                return Some(self.start_point_cloud_export_all(std::path::PathBuf::from(argument)));
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1598,6 +1617,37 @@ impl OpenCADStudio {
                 let command = crate::app::point_cloud::PointCloudScreenBrushCommand;
                 self.command_line.push_info(&command.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDMEASURE" => {
+                if self.active_modal == Some(crate::app::ModalKind::PointCloudManager) {
+                    self.active_modal = None;
+                    self.reset_modal_geometry();
+                }
+                let command = crate::app::point_cloud::PointCloudMeasureCommand::new();
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDSCREENMEASURE ") => {
+                let values = cmd
+                    .trim_start_matches("POINTCLOUDSCREENMEASURE")
+                    .split_whitespace()
+                    .map(str::parse::<f64>)
+                    .collect::<Result<Vec<_>, _>>();
+                match values {
+                    Ok(values) if values.len() == 7 => self.point_cloud_measure_screen(
+                        i,
+                        glam::dvec3(values[0], values[1], values[2]),
+                        glam::dvec3(values[3], values[4], values[5]),
+                        values[6] as f32,
+                    ),
+                    _ => self
+                        .command_line
+                        .push_error("POINTCLOUDSCREENMEASURE: invalid gesture."),
+                }
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1784,9 +1834,9 @@ impl OpenCADStudio {
                             "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]",
                         ),
                     },
-                    Err(_) => self.command_line.push_error(
-                        "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]",
-                    ),
+                    Err(_) => self
+                        .command_line
+                        .push_error("Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]"),
                 }
             }
 

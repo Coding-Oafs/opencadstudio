@@ -6,11 +6,11 @@ use crate::scene::pick::grip::GripEdit;
 use crate::scene::GripDef;
 use crate::scene::{ObjectIsolationState, Scene};
 use crate::snap::SnapResult;
+use crate::t;
 use crate::ui::{LayerPanel, PropertiesPanel};
 use acadrust::tables::Ucs;
 use acadrust::{CadDocument, EntityType, Handle};
 use iced;
-use crate::t;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -215,6 +215,13 @@ pub(super) struct DocumentTab {
     /// Interactive ZOOM Dynamic mode. A left drag pans horizontally and zooms
     /// vertically until Escape or another command ends the mode.
     pub(super) zoom_dynamic_mode: bool,
+    /// Explicit Select tool state. Selection itself remains the CAD default;
+    /// this flag keeps the dedicated ribbon tool visibly armed until another
+    /// command/tool takes control.
+    pub(super) selection_tool_mode: bool,
+    /// Drawing-owned CRS, working units, and optional manual basemap bounds.
+    /// Persisted independently of LAS/LAZ attachments in the drawing sidecar.
+    pub(super) spatial: super::spatial::DrawingSpatialSettings,
     /// Session LAS/LAZ dataset: every attached source plus the shared display
     /// configuration. Source clouds stay external; sparse classification
     /// edits are applied only during explicit export.
@@ -278,8 +285,7 @@ impl DocumentTab {
         u.origin = h.model_space_ucs_origin;
         u.x_axis = h.model_space_ucs_x_axis;
         u.y_axis = h.model_space_ucs_y_axis;
-        if h.model_space_ucs_name.is_empty()
-            && super::helpers::UcsXform::from_ucs(&u).is_identity()
+        if h.model_space_ucs_name.is_empty() && super::helpers::UcsXform::from_ucs(&u).is_identity()
         {
             None
         } else {
@@ -485,6 +491,8 @@ impl DocumentTab {
             pan_mode: false,
             orbit_mode: false,
             zoom_dynamic_mode: false,
+            selection_tool_mode: false,
+            spatial: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             point_cloud: Default::default(),
             plugin_state: HashMap::new(),
@@ -558,19 +566,9 @@ impl HistorySnapshot {
                 .before
                 .hidden
                 .len()
-                .saturating_add(
-                    v.before
-                        .keep
-                        .as_ref()
-                        .map_or(0, rustc_hash::FxHashSet::len),
-                )
+                .saturating_add(v.before.keep.as_ref().map_or(0, rustc_hash::FxHashSet::len))
                 .saturating_add(v.after.hidden.len())
-                .saturating_add(
-                    v.after
-                        .keep
-                        .as_ref()
-                        .map_or(0, rustc_hash::FxHashSet::len),
-                )
+                .saturating_add(v.after.keep.as_ref().map_or(0, rustc_hash::FxHashSet::len))
                 .saturating_add(v.selected_before.len())
                 .saturating_add(v.selected_after.len())
                 .saturating_mul(16)

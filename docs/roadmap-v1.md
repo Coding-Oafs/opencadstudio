@@ -1,5 +1,25 @@
 # OpenCADStudio v0.9.7 → v1.0 roadmap: production LiDAR + scripting
 
+## v1.0 implementation update — 20 August 2026
+
+The original phase estimates below are retained as historical planning context.
+The v1 hardening pass is now implemented on `v0.9.7-lidar-platform`:
+
+- basemap requests use bounded parallel workers, cancellation/stale-job guards,
+  a persistent provider/XYZ disk cache, visible progress/failure counts, manual
+  empty-drawing bounds, and first-load auto-fit;
+- drawing-owned `CRS`, `WORKINGUNITS`, and basemap bounds persist in sidecar
+  schema v4 without requiring LAS/LAZ;
+- View/Annotate/LiDAR/tool-palette entries expose Select, Navigator, distance,
+  area, closed-mesh volume, and snapped point-cloud distance;
+- the v0.9.7 point-arena zero-shard assertion and seam-bounded sphere
+  tessellation release blockers are fixed and regression-tested;
+- remaining release work is versioning, full verification, fast-forwarding the
+  default branch, producing/installing the WiX MSI, and publishing `v1.0.0`.
+
+See `docs/v1.0-release-plan.md` for the reviewed implementation record and
+release acceptance gates.
+
 Status: Phases 0–2 complete on `v0.9.7-lidar-platform` (August 2026) —
 the multi-source dataset engine, folder ingest, merged export, parallel
 tile IO, shader-side colorization, GPU point arena, Rhai macro scripting

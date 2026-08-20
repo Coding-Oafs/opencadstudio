@@ -1,13 +1,11 @@
 //! Bottom status bar — Model/Layout tabs + OSNAP toggle + status info
 
+pub mod status_menu;
 pub mod statusbar_config;
 pub mod statusbar_menu;
-pub mod status_menu;
 
 use iced::widget::tooltip::Position as TipPos;
-use iced::widget::{
-    button, column, container, mouse_area, row, text, text_input, tooltip,
-};
+use iced::widget::{button, column, container, mouse_area, row, text, text_input, tooltip};
 use iced::{Background, Border, Color, Element, Length, Theme};
 use iced_aw::ContextMenu;
 use std::sync::Arc;
@@ -23,10 +21,10 @@ pub const LAYOUT_RENAME_INPUT_ID: &str = "layout_rename_input";
 
 use crate::app::Message;
 use crate::snap::Snapper;
-use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
-use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
-use crate::ui::wrap_bar::WrapBar;
 use crate::t;
+use crate::ui::statusbar::status_menu::Entry as StatusMenuEntry;
+use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
+use crate::ui::wrap_bar::WrapBar;
 
 /// Height of one status-bar row. Matches the drawing-tab strip above it so the
 /// three horizontal strips — tabs, status bar, command line — line up, and it
@@ -112,6 +110,11 @@ impl StatusBar {
         clean_screen: bool,
         // LUNITS — how lengths are written, for the units pill.
         linear_format: i16,
+        // Drawing-owned GIS/survey coordinate context.
+        drawing_crs_label: String,
+        working_unit_label: String,
+        // Basemap tile progress: completed, total, failed.
+        basemap_progress: Option<(usize, usize, usize)>,
         // True when objects are hidden by Isolate / Hide.
         isolation_active: bool,
         // Whether entity transparency is shown (Transparency pill state).
@@ -145,9 +148,7 @@ impl StatusBar {
         } else {
             crate::ui::icons::themed_secondary(crate::ui::icons::MENU, 16.0)
         };
-        let menu_button = button(menu_icon)
-            .style(button::subtle)
-            .padding([4, 8]);
+        let menu_button = button(menu_icon).style(button::subtle).padding([4, 8]);
         let menu_btn = if is_start {
             tip(
                 menu_button.into(),
@@ -233,6 +234,42 @@ impl StatusBar {
         // when the width can't hold them all on one line.
         let vis = |p: StatusPill| config.is_visible(p);
         let mut pills: Vec<Element<'_, Message>> = Vec::new();
+        if !is_start {
+            pills.push(
+                tip(
+                    action_pill(
+                        format!("CRS: {drawing_crs_label}"),
+                        Message::Command("CRS".to_string()),
+                    ),
+                    t!("Drawing Coordinate Reference System\nClick to inspect or set"),
+                )
+                .into(),
+            );
+            pills.push(
+                tip(
+                    action_pill(
+                        working_unit_label,
+                        Message::Command("WORKINGUNITS".to_string()),
+                    ),
+                    t!("Working Units\nIndependent of INSUNITS; constrained by drawing CRS"),
+                )
+                .into(),
+            );
+        }
+        if let Some((completed, total, failed)) = basemap_progress {
+            let failure = if failed > 0 {
+                format!(" · {failed} failed")
+            } else {
+                String::new()
+            };
+            pills.push(
+                tip(
+                    status_pill(format!("Basemap {completed}/{total}{failure}")),
+                    t!("Loading cached/network basemap tiles"),
+                )
+                .into(),
+            );
+        }
         if vis(StatusPill::Coords) {
             let coords_label = format_coords(cursor_world, last_point, coords_mode, picking);
             pills.push(
@@ -255,7 +292,11 @@ impl StatusBar {
         if vis(StatusPill::Lwt) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_LWT, lineweight_display, Message::ToggleLineweightDisplay),
+                    toggle_pill(
+                        crate::ui::icons::ST_LWT,
+                        lineweight_display,
+                        Message::ToggleLineweightDisplay,
+                    ),
                     t!("Show Lineweight\nLWDISPLAY"),
                 )
                 .into(),
@@ -402,10 +443,7 @@ impl StatusBar {
                         t!("Isolate Objects\nClick for Isolate / Hide / End"),
                         tooltip_hidden,
                     ),
-                    crate::ui::popup::isolate_popup::menu_entries(
-                        has_selection,
-                        isolation_active,
-                    ),
+                    crate::ui::popup::isolate_popup::menu_entries(has_selection, isolation_active),
                     160.0,
                 )
                 .into(),
@@ -414,7 +452,11 @@ impl StatusBar {
         if vis(StatusPill::QuickProps) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_QUICKPROPS, quick_properties, Message::ToggleQuickProperties),
+                    toggle_pill(
+                        crate::ui::icons::ST_QUICKPROPS,
+                        quick_properties,
+                        Message::ToggleQuickProperties,
+                    ),
                     t!("Quick Properties\nFloating panel on selection"),
                 )
                 .into(),
@@ -444,7 +486,11 @@ impl StatusBar {
         if vis(StatusPill::SelCycle) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_SELCYCLE, selection_cycling, Message::ToggleSelectionCycling),
+                    toggle_pill(
+                        crate::ui::icons::ST_SELCYCLE,
+                        selection_cycling,
+                        Message::ToggleSelectionCycling,
+                    ),
                     t!("Selection Cycling\nRepeat-click to step through overlapping objects"),
                 )
                 .into(),
@@ -462,7 +508,11 @@ impl StatusBar {
         if vis(StatusPill::CleanScreen) {
             pills.push(
                 tip(
-                    toggle_pill(crate::ui::icons::ST_CLEANSCREEN, clean_screen, Message::ToggleCleanScreen),
+                    toggle_pill(
+                        crate::ui::icons::ST_CLEANSCREEN,
+                        clean_screen,
+                        Message::ToggleCleanScreen,
+                    ),
                     t!("Clean Screen\nHide ribbon and panels"),
                 )
                 .into(),
@@ -547,13 +597,13 @@ impl StatusBar {
             .style(|theme: &Theme| {
                 let palette = theme.palette();
                 container::Style {
-                background: Some(Background::Color(palette.background.base.color)),
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
+                    background: Some(Background::Color(palette.background.base.color)),
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Default::default()
                 }
             })
             .width(Length::Fill)
@@ -574,7 +624,12 @@ impl StatusBar {
 /// drawing set to architectural units read its coordinates in decimals, and one
 /// asking for two places got four. `format_length` is the same helper the
 /// properties panel formats through, so both now say a length the same way.
-fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, picking: bool) -> String {
+fn format_coords(
+    cursor: glam::DVec3,
+    last: Option<glam::DVec3>,
+    mode: i16,
+    picking: bool,
+) -> String {
     use crate::entities::common::format_length as len;
     let abs = |p: glam::DVec3| format!("{}, {}, {}", len(p.x), len(p.y), len(p.z));
     match mode {
@@ -606,11 +661,14 @@ fn format_coords(cursor: glam::DVec3, last: Option<glam::DVec3>, mode: i16, pick
 // ── Customization handle ──────────────────────────────────────────────────
 
 fn customize_btn() -> Element<'static, Message> {
-    button(crate::ui::icons::themed_secondary(crate::ui::icons::MENU, 16.0))
-        .on_press(Message::StatusMenuTooltipHidden(true))
-        .style(button::subtle)
-        .padding([4, 8])
-        .into()
+    button(crate::ui::icons::themed_secondary(
+        crate::ui::icons::MENU,
+        16.0,
+    ))
+    .on_press(Message::StatusMenuTooltipHidden(true))
+    .style(button::subtle)
+    .padding([4, 8])
+    .into()
 }
 
 // ── Tooltip helper ────────────────────────────────────────────────────────
@@ -629,11 +687,7 @@ fn menu_tip<'a>(
     label: std::borrow::Cow<'static, str>,
     hidden: bool,
 ) -> Element<'a, Message> {
-    let content = if hidden {
-        content
-    } else {
-        tip(content, label)
-    };
+    let content = if hidden { content } else { tip(content, label) };
 
     mouse_area(content)
         .on_exit(Message::StatusMenuTooltipHidden(false))
@@ -703,21 +757,21 @@ fn split_pill<'a>(
         .style(move |theme: &Theme| {
             let palette = theme.palette();
             container::Style {
-            background: Some(Background::Color(if active {
-                palette.primary.weak.color
-            } else {
-                palette.background.weakest.color
-            })),
-            border: Border {
-                color: if active {
-                    palette.primary.base.color
+                background: Some(Background::Color(if active {
+                    palette.primary.weak.color
                 } else {
-                    palette.background.neutral.color
+                    palette.background.weakest.color
+                })),
+                border: Border {
+                    color: if active {
+                        palette.primary.base.color
+                    } else {
+                        palette.background.neutral.color
+                    },
+                    width: 1.0,
+                    radius: 2.0.into(),
                 },
-                width: 1.0,
-                radius: 2.0.into(),
-            },
-            ..Default::default()
+                ..Default::default()
             }
         })
         .padding([4, 6])
@@ -820,8 +874,8 @@ fn osnap_btn<'a>(
     };
     let main = tip(
         mouse_area(snap_icon)
-        .on_press(Message::ToggleSnapEnabled)
-        .into(),
+            .on_press(Message::ToggleSnapEnabled)
+            .into(),
         t!("Object Snap: toggle on/off\nF3"),
     );
 
@@ -955,12 +1009,7 @@ fn space_tab<'a>(
         let report_key = format!("{report_key_prefix}:{label}");
         let tab = mouse_area(display).on_press(switch_msg);
         let tab: Element<'a, Message> = if has_context_menu {
-            crate::ui::wrap_bar::ReorderTab::layout(
-                label.clone(),
-                reorderable_layouts,
-                tab,
-            )
-            .into()
+            crate::ui::wrap_bar::ReorderTab::layout(label.clone(), reorderable_layouts, tab).into()
         } else {
             tab.into()
         };
@@ -970,11 +1019,7 @@ fn space_tab<'a>(
         } else {
             tab
         };
-        crate::ui::wrap_bar::PosReport::owned(
-            report_key,
-            tab,
-        )
-        .into()
+        crate::ui::wrap_bar::PosReport::owned(report_key, tab).into()
     }
 }
 
@@ -1024,9 +1069,9 @@ fn space_mode_btn(current_layout: &str, in_mspace: bool) -> Element<'static, Mes
 
 fn status_pill(label: impl Into<String>) -> Element<'static, Message> {
     container(text(label.into()).size(12))
-    .style(container::bordered_box)
-    .padding([4, 8])
-    .into()
+        .style(container::bordered_box)
+        .padding([4, 8])
+        .into()
 }
 
 // ── Scale popup button ────────────────────────────────────────────────────
@@ -1039,10 +1084,10 @@ fn popup_pill(label: impl Into<String>) -> Element<'static, Message> {
 fn action_pill(label: impl Into<String>, msg: Message) -> Element<'static, Message> {
     let label = label.into();
     button(text(label).size(12))
-    .on_press(msg)
-    .style(button::subtle)
-    .padding([4, 7])
-    .into()
+        .on_press(msg)
+        .style(button::subtle)
+        .padding([4, 7])
+        .into()
 }
 
 // ── Scale display ─────────────────────────────────────────────────────────
@@ -1094,13 +1139,10 @@ fn active_scale_label(
         .iter()
         .find(|(_, anno_scale, vp_scale)| {
             if is_model {
-                (annotation_scale - *anno_scale).abs()
-                    < 0.001 * annotation_scale.max(0.001)
+                (annotation_scale - *anno_scale).abs() < 0.001 * annotation_scale.max(0.001)
             } else {
                 viewport_scale
-                    .map(|current| {
-                        (current - *vp_scale).abs() < 0.001 * vp_scale.max(0.001)
-                    })
+                    .map(|current| (current - *vp_scale).abs() < 0.001 * vp_scale.max(0.001))
                     .unwrap_or(false)
             }
         })

@@ -37,6 +37,11 @@ and detach. `POINTCLOUDMANAGER` opens it from the command line or a function key
 The source LAS/LAZ is read-only during attachment and editing. A revised cloud
 is created only by **Export LAS/LAZ**.
 
+Drawing CRS and working units no longer depend on a LiDAR attachment. Use
+`CRS <EPSG>`, `WORKINGUNITS <unit>`, and `BASEMAP BOUNDS <minx> <miny> <maxx>
+<maxy>` on an ordinary saved DWG/DXF; the drawing-owned values persist in the
+same adjacent `.ocspc` sidecar.
+
 ## Commands
 
 | Command | Purpose |
@@ -53,6 +58,7 @@ is created only by **Export LAS/LAZ**.
 | `POINTCLOUDSTATS` | Report per-class counts for the current full/sample/LOD working set. |
 | `POINTCLOUDCLASSIFY <class> <indices>` | Queue an ASPRS class for source indices. Indices accept comma-separated values and inclusive ranges, for example `POINTCLOUDCLASSIFY 2 10-25,40`. |
 | `POINTCLOUDSELECTPOINT` | Pick the nearest displayed point within a fixed screen-pixel aperture. |
+| `POINTCLOUDMEASURE` | Pick two displayed cloud points and report snapped 3D distance, horizontal distance, and elevation delta in the drawing working unit. |
 | `POINTCLOUDSELECTBOX` | Pick two viewport corners for a screen-space window selection. Coordinate arguments remain available for scripts. |
 | `POINTCLOUDSELECTFENCE` | Click a screen-space polygon fence and press Enter to close it. |
 | `POINTCLOUDSELECTBRUSH` | Apply a repeating 32-pixel viewport selection brush; press Enter to finish. Coordinate arguments remain available for scripts. |
@@ -115,8 +121,10 @@ The active selection is highlighted amber in the GPU view before editing.
   selection ranges rather than an in-memory copy of every edited source point.
 - A versioned SQLite sidecar adjacent to a saved drawing: `<drawing>.ocspc`.
   It stores the attachment fingerprint/path, display settings, class table,
-  sparse edits, selection sets, audit log, and job schema. Relative-path repair
-  allows a drawing, source, cache, and sidecar to move together.
+  sparse edits, selection sets, audit log, job schema, drawing CRS, working
+  units, and manual basemap bounds. Spatial settings exist without a point-cloud
+  attachment. Relative-path repair allows a drawing, source, cache, and sidecar
+  to move together.
 - LAS class 12 overlap handling using the LAS 1.4 overlap flag convention.
 - Streaming export preserves the source header, CRS VLRs, point format,
   coordinate transforms, extra bytes, GPS time, color, intensity, returns, and
@@ -144,29 +152,32 @@ complete TerraScan replacement.
 - LOD adapts by visible tile count and configured memory/point budgets. It does
   not yet use per-tile projected spacing/error metrics or direct COPC HTTP range
   streaming.
-- The fixed-pixel brush is a repeating click brush in v0.9.6; a continuous
-  mouse-down paint stroke and freehand lasso overlay are future refinements.
+- Viewport point, box, fence, lasso, and continuous mouse-down brush selection
+  operate on the resident LOD working set; queries against unloaded points
+  require loading denser tiles first.
 - Saved drawings persist sidecars automatically. An unsaved drawing cannot have
   an adjacent durable sidecar until it is first saved.
-- There is no automatic ground/building/vegetation classification, noise
-  detection, flight-line processing, tiling, thinning, or batch macro engine.
+- Ground, isolated-noise, attribute-rule classification, and DTM contours are
+  available. Building/vegetation classifiers, flight-line processing,
+  thinning, and a watched-folder production queue remain future work.
 - Horizontal reprojection supports EPSG definitions available in the bundled
   pure-Rust database. Grid-based and orthometric vertical datum transformations
   require a separately validated geodetic backend; v0.9.6 preserves Z and says
   so in the UI and audit log.
-- COPC, E57, PTS/PTX, raster surfaces, contours, and point-cloud-to-CAD feature
+- COPC, E57, PTS/PTX, raster surface export, and point-cloud-to-CAD feature
   extraction are not implemented.
 
 ## Next production increments
 
 1. Add projected-spacing screen-error refinement and native COPC/E57 readers.
-2. Add continuous mouse-down brush painting, a freehand lasso overlay, and a
-   named selection-set organizer.
-3. Add continuously updating in-modal job progress bars and export queueing.
+2. Add a named selection-set organizer and point-to-plane/cloud-to-cloud
+   measurement modes.
+3. Add watched-folder processing, continuously updating in-modal job progress
+   bars, and export queueing.
 4. Compatibility-test `.ptc` and `.mnu` parsing against representative files
    from the user's MicroStation/TerraScan production environment.
-5. Add validated surface generation, contours, breaklines, and automated
-   classifiers; every entry point must pass the v0.9.6 survey-readiness gate.
+5. Add validated raster surface export, breaklines, and specialized automated
+   classifiers; every entry point must pass the survey-readiness gate.
 
 The `ocs_pointcloud` workspace crate is intentionally UI-independent so these
 increments can be tested against real LAS/LAZ fixtures without loading the CAD

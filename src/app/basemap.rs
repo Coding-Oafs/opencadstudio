@@ -5,9 +5,46 @@
 //! them as session-only `ImageModel`s in world space, drawn behind content.
 
 use super::{Message, OpenCADStudio};
-use crate::scene::basemap::{self, BasemapProvider, BasemapProjection, Tile};
+use crate::scene::basemap::{self, BasemapProjection, BasemapProvider, Tile};
 use crate::scene::{resolve_image, ImageModel};
 use iced::Task;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Arc,
+};
+
+static NEXT_BASEMAP_JOB: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
+pub(super) struct BasemapJob {
+    pub id: u64,
+    pub tab_id: u64,
+    pub total: usize,
+    pub completed: Arc<AtomicUsize>,
+    pub failed: Arc<AtomicUsize>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+impl BasemapJob {
+    fn new(tab_id: u64, total: usize) -> Self {
+        Self {
+            id: NEXT_BASEMAP_JOB.fetch_add(1, Ordering::Relaxed),
+            tab_id,
+            total,
+            completed: Arc::new(AtomicUsize::new(0)),
+            failed: Arc::new(AtomicUsize::new(0)),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn snapshot(&self) -> (usize, usize, usize) {
+        (
+            self.completed.load(Ordering::Relaxed).min(self.total),
+            self.total,
+            self.failed.load(Ordering::Relaxed),
+        )
+    }
+}
 
 /// Offload a closure to a worker thread and map its result to a `Message`.
 fn background_task<T, F, M>(work: F, map: M) -> Task<Message>
@@ -36,8 +73,14 @@ where
 /// The result of a background tile fetch: the tile list + decoded quads.
 #[derive(Debug, Clone)]
 pub struct BasemapLoaded {
+    pub job_id: u64,
     pub tab_id: u64,
     pub images: Vec<ImageModel>,
+    pub requested: usize,
+    pub failed: usize,
+    /// Fit only when a manual envelope is the sole spatial extent in an empty
+    /// drawing; normal drawings retain the user's current view.
+    pub fit_bounds: Option<[f64; 4]>,
 }
 
 impl OpenCADStudio {
@@ -76,7 +119,8 @@ impl OpenCADStudio {
             "OFF" | "NONE" => {
                 self.basemap.provider = BasemapProvider::Off;
                 self.sync_basemap_dropdown();
-                self.command_line.push_output(crate::t!("Basemap: off.").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Basemap: off.").as_ref());
                 self.save_config();
                 self.clear_basemap();
                 return Task::none();
@@ -108,8 +152,9 @@ impl OpenCADStudio {
             "CUSTOM" => {
                 let template = parts.collect::<Vec<_>>().join(" ");
                 if template.is_empty() {
-                    self.command_line
-                        .push_error("BASEMAP CUSTOM <template> — an XYZ template with {z} {x} {y}.");
+                    self.command_line.push_error(
+                        "BASEMAP CUSTOM <template> — an XYZ template with {z} {x} {y}.",
+                    );
                     return Task::none();
                 }
                 self.basemap.provider = BasemapProvider::Custom;
@@ -120,27 +165,35 @@ impl OpenCADStudio {
             "PROJ" | "PROJECTION" => {
                 let arg = parts.next().unwrap_or("").to_ascii_uppercase();
                 match arg.as_str() {
+                    "DRAWING" | "CRS" => {
+                        self.basemap.projection = BasemapProjection::FromDrawing;
+                        self.command_line.push_output(
+                            crate::t!("Basemap projection: from drawing CRS.").as_ref(),
+                        );
+                    }
                     "DEFAULT" | "3857" | "WEBMERCATOR" | "MERCATOR" => {
                         self.basemap.projection = BasemapProjection::WebMercator;
                         self.basemap.source_epsg = None;
-                        self.command_line
-                            .push_output(crate::t!("Basemap projection: default (Web Mercator).").as_ref());
+                        self.command_line.push_output(
+                            crate::t!("Basemap projection: default (Web Mercator).").as_ref(),
+                        );
                     }
                     "LAS" | "CLOUD" | "POINTCLOUD" => {
                         self.basemap.projection = BasemapProjection::FromLas;
-                        self.command_line
-                            .push_output(crate::t!("Basemap projection: from the attached LAS cloud.").as_ref());
+                        self.command_line.push_output(
+                            crate::t!("Basemap projection: from the attached LAS cloud.").as_ref(),
+                        );
                     }
                     other => {
                         if let Ok(epsg) = other.parse::<u16>() {
                             self.basemap.projection = BasemapProjection::Epsg(epsg);
                             self.basemap.source_epsg = Some(epsg);
-                            self.command_line
-                                .push_output(crate::tf!("Basemap projection: EPSG:{epsg}.").as_ref());
-                        } else {
-                            self.command_line.push_error(
-                                "BASEMAP PROJ <DEFAULT|LAS|<epsg>>.",
+                            self.command_line.push_output(
+                                crate::tf!("Basemap projection: EPSG:{epsg}.").as_ref(),
                             );
+                        } else {
+                            self.command_line
+                                .push_error("BASEMAP PROJ <DRAWING|DEFAULT|LAS|<epsg>>.");
                             return Task::none();
                         }
                     }
@@ -152,20 +205,59 @@ impl OpenCADStudio {
                     self.command_line
                         .push_output(crate::tf!("Basemap zoom: {}.", self.basemap.zoom).as_ref());
                 } else {
-                    self.command_line
-                        .push_error("BASEMAP ZOOM <0-22>.");
+                    self.command_line.push_error("BASEMAP ZOOM <0-22>.");
                     return Task::none();
                 }
             }
             "ZOOMIN" | "ZOOMOUT" => {
-                let delta: i32 = if sub.eq_ignore_ascii_case("ZOOMIN") { 1 } else { -1 };
+                let delta: i32 = if sub.eq_ignore_ascii_case("ZOOMIN") {
+                    1
+                } else {
+                    -1
+                };
                 self.basemap.zoom = (self.basemap.zoom as i32 + delta).clamp(0, 22) as u32;
                 self.command_line
                     .push_output(crate::tf!("Basemap zoom: {}.", self.basemap.zoom).as_ref());
             }
+            "BOUNDS" => {
+                let values = parts.collect::<Vec<_>>();
+                if values.len() == 1
+                    && matches!(values[0].to_ascii_uppercase().as_str(), "CLEAR" | "UNSET")
+                {
+                    self.tabs[i].spatial.basemap_bounds = None;
+                    self.persist_spatial_settings(i);
+                    self.command_line
+                        .push_output("Basemap: manual drawing bounds cleared.");
+                    return Task::none();
+                }
+                let parsed = values
+                    .iter()
+                    .map(|value| value.parse::<f64>())
+                    .collect::<Result<Vec<_>, _>>();
+                let Ok(values) = parsed else {
+                    self.command_line.push_error(
+                        "BASEMAP BOUNDS <min-x> <min-y> <max-x> <max-y> (drawing CRS coordinates).",
+                    );
+                    return Task::none();
+                };
+                if values.len() != 4
+                    || values.iter().any(|value| !value.is_finite())
+                    || values[0] >= values[2]
+                    || values[1] >= values[3]
+                {
+                    self.command_line
+                        .push_error("BASEMAP BOUNDS requires four finite values with min < max.");
+                    return Task::none();
+                }
+                self.tabs[i].spatial.basemap_bounds =
+                    Some([values[0], values[1], values[2], values[3]]);
+                self.persist_spatial_settings(i);
+                self.command_line
+                    .push_output("Basemap: manual bounds stored on the drawing; loading imagery.");
+            }
             _ => {
                 self.command_line.push_error(
-                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <d|las|epsg>|ZOOM <z>|OFF].",
+                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <drawing|default|las|epsg>|BOUNDS <minx miny maxx maxy>|ZOOM <z>|OFF].",
                 );
                 return Task::none();
             }
@@ -187,16 +279,33 @@ impl OpenCADStudio {
             // Custom has no dropdown entry; show Imagery as the nearest.
             BasemapProvider::Custom => "BASEMAP ARCGIS",
         };
-        self.ribbon.select_dropdown_item("BASEMAP_PROVIDER", provider);
+        self.ribbon
+            .select_dropdown_item("BASEMAP_PROVIDER", provider);
         let projection = match self.basemap.projection {
+            BasemapProjection::FromDrawing => "BASEMAP PROJ DRAWING",
             BasemapProjection::FromLas => "BASEMAP PROJ LAS",
             _ => "BASEMAP PROJ DEFAULT",
         };
-        self.ribbon.select_dropdown_item("BASEMAP_PROJECTION", projection);
+        self.ribbon
+            .select_dropdown_item("BASEMAP_PROJECTION", projection);
+        let working_units = match self.tabs[self.active_tab].spatial.working_unit {
+            super::spatial::WorkingUnit::Meters => "WORKINGUNITS METERS",
+            super::spatial::WorkingUnit::Centimeters => "WORKINGUNITS CENTIMETERS",
+            super::spatial::WorkingUnit::Feet => "WORKINGUNITS FEET",
+            super::spatial::WorkingUnit::Inches => "WORKINGUNITS INCHES",
+            // Geographic CRSs lock to degrees, which is intentionally absent
+            // from the CRS-free length-unit picker.
+            super::spatial::WorkingUnit::Degrees => "WORKINGUNITS METERS",
+        };
+        self.ribbon
+            .select_dropdown_item("WORKING_UNITS", working_units);
     }
 
     /// Clear the underlay immediately (used by BASEMAP OFF).
     pub(super) fn clear_basemap(&mut self) {
+        if let Some(job) = self.basemap_job.take() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
         let i = self.active_tab;
         self.tabs[i].scene.set_basemap_images(Vec::new());
     }
@@ -217,6 +326,18 @@ impl OpenCADStudio {
         // authority can still reproject via its PROJ.4 string.
         #[cfg(not(target_arch = "wasm32"))]
         let source_crs: ocs_pointcloud::CrsInfo = match settings.projection {
+            BasemapProjection::FromDrawing => {
+                let Some(crs) = self.tabs[i].spatial.drawing_crs.as_ref() else {
+                    self.command_line.push_error(
+                        "Basemap: drawing CRS is unset; use CRS <epsg> or BASEMAP PROJ LAS.",
+                    );
+                    return Task::none();
+                };
+                ocs_pointcloud::CrsInfo {
+                    horizontal_epsg: Some(crs.epsg),
+                    ..Default::default()
+                }
+            }
             BasemapProjection::WebMercator => ocs_pointcloud::CrsInfo {
                 horizontal_epsg: Some(3857),
                 ..Default::default()
@@ -245,17 +366,21 @@ impl OpenCADStudio {
 
         // Drawing bounds in the source CRS: prefer the attached cloud (f64),
         // else the model-space extents (f32, widened to f64).
-        let bounds: Option<([f64; 3], [f64; 3])> = self.tabs[i]
-            .point_cloud
-            .bounds()
-            .or_else(|| {
-                self.tabs[i].scene.model_space_extents().map(|(min, max)| {
-                    (
-                        [min.x as f64, min.y as f64, min.z as f64],
-                        [max.x as f64, max.y as f64, max.z as f64],
-                    )
-                })
-            });
+        let manual_bounds = self.tabs[i]
+            .spatial
+            .basemap_bounds
+            .map(|bounds| ([bounds[0], bounds[1], 0.0], [bounds[2], bounds[3], 0.0]));
+        let drawing_bounds = self.tabs[i].scene.model_space_extents().map(|(min, max)| {
+            (
+                [min.x as f64, min.y as f64, min.z as f64],
+                [max.x as f64, max.y as f64, max.z as f64],
+            )
+        });
+        let cloud_bounds = self.tabs[i].point_cloud.bounds();
+        let bounds: Option<([f64; 3], [f64; 3])> = match settings.projection {
+            BasemapProjection::FromLas => cloud_bounds.or(manual_bounds).or(drawing_bounds),
+            _ => manual_bounds.or(drawing_bounds).or(cloud_bounds),
+        };
         let Some((min, max)) = bounds else {
             self.command_line
                 .push_error("Basemap: the drawing has no bounds to place the underlay.");
@@ -264,11 +389,8 @@ impl OpenCADStudio {
 
         // World bounds (Web Mercator meters) for the drawing envelope.
         #[cfg(not(target_arch = "wasm32"))]
-        let world_bounds = basemap::world_bounds_from_source(
-            [min[0], min[1]],
-            [max[0], max[1]],
-            &source_crs,
-        );
+        let world_bounds =
+            basemap::world_bounds_from_source([min[0], min[1]], [max[0], max[1]], &source_crs);
         #[cfg(target_arch = "wasm32")]
         let world_bounds = Some([min[0], min[1], max[0], max[1]]);
 
@@ -305,16 +427,60 @@ impl OpenCADStudio {
         let custom = settings.custom_template.clone();
         let provider = settings.provider;
         let worker_tiles: Vec<Tile> = tiles;
+        let requested = worker_tiles.len();
+        let fit_bounds =
+            (manual_bounds.is_some() && drawing_bounds.is_none() && cloud_bounds.is_none())
+                .then_some([min[0], min[1], max[0], max[1]]);
+        if let Some(previous) = self.basemap_job.take() {
+            previous.cancel.store(true, Ordering::Relaxed);
+        }
+        let job = BasemapJob::new(tab_id, requested);
+        let job_id = job.id;
+        let completed = Arc::clone(&job.completed);
+        let failed = Arc::clone(&job.failed);
+        let failed_for_result = Arc::clone(&job.failed);
+        let cancel = Arc::clone(&job.cancel);
+        self.basemap_job = Some(job);
+        self.command_line.push_info(
+            format!(
+                "Basemap: loading {requested} tile(s) at zoom {} (parallel workers + disk cache)...",
+                settings.zoom
+            )
+            .as_str(),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let cache_root = crate::config::config_dir().map(|path| path.join("basemap_cache"));
+        let cache_namespace = provider.cache_namespace(&custom);
         background_task(
             move || {
-                let mut images = Vec::new();
-                for tile in &worker_tiles {
+                let fetch = |tile: &Tile| -> Option<ImageModel> {
+                    if cancel.load(Ordering::Relaxed) {
+                        return None;
+                    }
                     let Some(url) = basemap::tile_url(provider, tile.z, tile.x, tile.y, &custom)
                     else {
-                        continue;
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        completed.fetch_add(1, Ordering::Relaxed);
+                        return None;
                     };
-                    let Some(decoded) = resolve_image(&url) else {
-                        continue;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let decoded = cache_root
+                        .as_ref()
+                        .and_then(|root| {
+                            let path = root
+                                .join(&cache_namespace)
+                                .join(tile.z.to_string())
+                                .join(tile.x.to_string())
+                                .join(format!("{}.img", tile.y));
+                            crate::scene::resolve_remote_image_cached(&url, &path)
+                        })
+                        .or_else(|| resolve_image(&url));
+                    #[cfg(target_arch = "wasm32")]
+                    let decoded = resolve_image(&url);
+                    let Some(decoded) = decoded else {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        completed.fetch_add(1, Ordering::Relaxed);
+                        return None;
                     };
                     // Each tile is a Web-Mercator quad; place it in the source
                     // CRS the drawing uses so the underlay lines up with UTM or
@@ -326,7 +492,7 @@ impl OpenCADStudio {
                         .unwrap_or(tile.bounds);
                     #[cfg(target_arch = "wasm32")]
                     let quad_bounds = tile.bounds;
-                    images.push(ImageModel::from_world_quad(
+                    let image = ImageModel::from_world_quad(
                         &url,
                         decoded.pixels,
                         decoded.width,
@@ -334,14 +500,46 @@ impl OpenCADStudio {
                         quad_bounds,
                         0.0,
                         0.0,
-                    ));
+                    );
+                    completed.fetch_add(1, Ordering::Relaxed);
+                    Some(image)
+                };
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use rayon::prelude::*;
+                    let worker_count = std::thread::available_parallelism()
+                        .map(usize::from)
+                        .unwrap_or(4)
+                        .clamp(2, 8)
+                        .min(worker_tiles.len().max(1));
+                    match rayon::ThreadPoolBuilder::new()
+                        .num_threads(worker_count)
+                        .thread_name(|index| format!("ocs-basemap-{index}"))
+                        .build()
+                    {
+                        Ok(pool) => pool.install(|| {
+                            worker_tiles
+                                .par_iter()
+                                .filter_map(fetch)
+                                .collect::<Vec<_>>()
+                        }),
+                        Err(_) => worker_tiles.iter().filter_map(fetch).collect(),
+                    }
                 }
-                images
+                #[cfg(target_arch = "wasm32")]
+                {
+                    worker_tiles.iter().filter_map(fetch).collect::<Vec<_>>()
+                }
             },
             move |images| {
                 Message::BasemapLoaded(BasemapLoaded {
+                    job_id,
                     tab_id,
                     images,
+                    requested,
+                    failed: failed_for_result.load(Ordering::Relaxed),
+                    fit_bounds,
                 })
             },
         )
@@ -349,6 +547,14 @@ impl OpenCADStudio {
 
     /// Install the fetched basemap quads on the active tab.
     pub(super) fn install_basemap(&mut self, loaded: BasemapLoaded) {
+        if self
+            .basemap_job
+            .as_ref()
+            .is_none_or(|job| job.id != loaded.job_id || job.tab_id != loaded.tab_id)
+        {
+            return;
+        }
+        self.basemap_job = None;
         let Some(i) = self.tabs.iter().position(|tab| tab.id == loaded.tab_id) else {
             return;
         };
@@ -360,7 +566,32 @@ impl OpenCADStudio {
             image.opacity = opacity;
         }
         self.tabs[i].scene.set_basemap_images(images);
-        self.command_line
-            .push_output(crate::tf!("Basemap: {count} tile(s) placed.").as_ref());
+        if let Some(bounds) = loaded.fit_bounds {
+            self.tabs[i]
+                .scene
+                .fit_external_bounds([bounds[0], bounds[1], 0.0], [bounds[2], bounds[3], 0.0]);
+        }
+        if count == 0 {
+            self.command_line.push_error(
+                format!(
+                    "Basemap: all {} tile requests failed; check the network/provider and try again.",
+                    loaded.requested
+                )
+                .as_str(),
+            );
+        } else {
+            self.command_line.push_output(
+                format!(
+                    "Basemap: {count}/{} tile(s) placed{}.",
+                    loaded.requested,
+                    if loaded.failed > 0 {
+                        format!("; {} failed", loaded.failed)
+                    } else {
+                        String::new()
+                    }
+                )
+                .as_str(),
+            );
+        }
     }
 }

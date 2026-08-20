@@ -5,29 +5,29 @@
 //! then stream the original file when it is time to export a revised LAS/LAZ.
 
 mod classify;
-mod dtm;
 mod crs;
 mod display;
+mod dtm;
 mod edit;
 mod ptc;
 mod selection;
 mod sidecar;
 mod tile_cache;
 
-pub use dtm::{generate_contours, Contour, Tin};
 pub use classify::{
     classify_by_rules, classify_ground, detect_noise, ClassifyResult, ClassifyRule, GroundOptions,
     RuleField, RuleOp,
 };
 pub use crs::{
-    assess_survey_readiness, inspect_crs, reproject_from_crs, reproject_from_proj4,
-    reproject_to_crs, reproject_with_patches_progress, reproject_xy, CrsInfo, ReprojectionStats,
-    SurveyReadiness,
+    assess_survey_readiness, epsg_horizontal_unit, inspect_crs, reproject_from_crs,
+    reproject_from_proj4, reproject_to_crs, reproject_with_patches_progress, reproject_xy, CrsInfo,
+    ReprojectionStats, SurveyReadiness,
 };
 pub use display::{
     classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode, Density,
     DisplaySettings,
 };
+pub use dtm::{generate_contours, Contour, Tin};
 pub use edit::{EditStore, EditTransaction, PointPatch};
 pub use ptc::{parse_ptc, write_ptc, PtcError};
 pub use selection::{
@@ -538,7 +538,9 @@ pub fn export_merged_progress(
     const CHUNK_SIZE: u64 = 65_536;
 
     if sources.is_empty() {
-        return Err(Error::InvalidLimit("a merged export needs at least one source"));
+        return Err(Error::InvalidLimit(
+            "a merged export needs at least one source",
+        ));
     }
     for source in sources {
         validate_output_path(&source.path, output)?;
@@ -588,8 +590,7 @@ pub fn export_merged_progress(
         let point_count = reader.header().number_of_points();
         let mut source_index = 0_u64;
         while source_index < point_count {
-            let point_data =
-                reader.read_points((point_count - source_index).min(CHUNK_SIZE))?;
+            let point_data = reader.read_points((point_count - source_index).min(CHUNK_SIZE))?;
             if point_data.is_empty() {
                 break;
             }
@@ -1132,17 +1133,9 @@ mod tests {
         create_cloud(&second, 25);
         // Reclassify one point in each source to prove per-file edit routing.
         let mut first_edits = EditStore::default();
-        first_edits.apply(
-            "class a",
-            [7_u64],
-            PointPatch::classification(6),
-        );
+        first_edits.apply("class a", [7_u64], PointPatch::classification(6));
         let mut second_edits = EditStore::default();
-        second_edits.apply(
-            "class b",
-            [3_u64],
-            PointPatch::classification(31),
-        );
+        second_edits.apply("class b", [3_u64], PointPatch::classification(31));
         let output = directory.join("merged.las");
         let stats = export_merged_progress(
             &[
@@ -1176,7 +1169,9 @@ mod tests {
             for point in chunk.points() {
                 let point = point.unwrap();
                 source_ids.insert(point.point_source_id);
-                *counts_by_source.entry(point.point_source_id).or_insert(0_u64) += 1;
+                *counts_by_source
+                    .entry(point.point_source_id)
+                    .or_insert(0_u64) += 1;
                 if u8::from(point.classification) == 6 {
                     class_six += 1;
                 }
@@ -1253,9 +1248,10 @@ mod tests {
         {
             assert_eq!(seq_key, par_key);
             assert_eq!(seq_points.len(), par_points.len());
-            assert!(seq_points.iter().zip(par_points.iter()).all(
-                |(left, right)| left.source_index == right.source_index
-            ));
+            assert!(seq_points
+                .iter()
+                .zip(par_points.iter())
+                .all(|(left, right)| left.source_index == right.source_index));
         }
     }
 
@@ -1330,7 +1326,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(3, version, "v1 databases migrate through v2 to v3");
+        assert_eq!(4, version, "v1 databases migrate through every schema revision");
         assert_eq!(1, filter_column);
         assert_eq!(1, order_column);
     }

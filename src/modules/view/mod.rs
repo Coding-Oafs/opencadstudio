@@ -9,12 +9,11 @@ mod ortho;
 mod pan;
 mod persp;
 pub mod plot_window;
-pub mod quick_print;
 mod properties_palette;
+pub mod quick_print;
 mod sheetset;
 mod tile_horiz;
 mod tile_vert;
-pub mod visual_style;
 mod tool_palettes;
 pub mod ucs_cmd;
 mod ucs_icon;
@@ -23,6 +22,7 @@ mod view_iso;
 mod view_right;
 mod view_top;
 mod viewcube;
+pub mod visual_style;
 mod vports_config;
 mod vports_join;
 mod vports_named;
@@ -60,6 +60,18 @@ impl CadModule for ViewModule {
                 RibbonGroup {
                     title: "Navigate",
                     tools: vec![
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "SELECTTOOL",
+                            label: "Select",
+                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/point.svg")),
+                            event: ModuleEvent::Command("SELECTTOOL".to_string()),
+                        }),
+                        RibbonItem::LargeTool(ToolDef {
+                            id: "NAVIGATOR",
+                            label: "Navigator",
+                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/pan.svg")),
+                            event: ModuleEvent::Command("NAVIGATOR".to_string()),
+                        }),
                         RibbonItem::LargeTool(zoom_ext::tool()),
                         RibbonItem::Tool(zoom_window::tool()),
                         RibbonItem::Tool(zoom_in::tool()),
@@ -184,6 +196,13 @@ impl CadModule for ViewModule {
                             )),
                             items: vec![
                                 (
+                                    "BASEMAP PROJ DRAWING",
+                                    "From Drawing",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/underlay_frames.svg"
+                                    )),
+                                ),
+                                (
                                     "BASEMAP PROJ LAS",
                                     "From LAS",
                                     IconKind::Svg(include_bytes!(
@@ -198,18 +217,68 @@ impl CadModule for ViewModule {
                                     )),
                                 ),
                             ],
-                            default: "BASEMAP PROJ LAS",
+                            default: "BASEMAP PROJ DRAWING",
+                        },
+                        RibbonItem::Tool(ToolDef {
+                            id: "CRS",
+                            label: "Drawing CRS",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/underlay_frames.svg"
+                            )),
+                            event: ModuleEvent::Command("CRS".to_string()),
+                        }),
+                        RibbonItem::LargeDropdown {
+                            id: "WORKING_UNITS",
+                            label: "Working Units",
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/dim_linear.svg"
+                            )),
+                            items: vec![
+                                (
+                                    "WORKINGUNITS METERS",
+                                    "Meters",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/dim_linear.svg"
+                                    )),
+                                ),
+                                (
+                                    "WORKINGUNITS CENTIMETERS",
+                                    "Centimeters",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/dim_linear.svg"
+                                    )),
+                                ),
+                                (
+                                    "WORKINGUNITS FEET",
+                                    "Feet",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/dim_linear.svg"
+                                    )),
+                                ),
+                                (
+                                    "WORKINGUNITS INCHES",
+                                    "Inches",
+                                    IconKind::Svg(include_bytes!(
+                                        "../../../assets/icons/dim_linear.svg"
+                                    )),
+                                ),
+                            ],
+                            default: "WORKINGUNITS METERS",
                         },
                         RibbonItem::Tool(ToolDef {
                             id: "BASEMAP_ZOOMIN",
                             label: "Zoom In",
-                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/zoom_in.svg")),
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/zoom_in.svg"
+                            )),
                             event: ModuleEvent::Command("BASEMAP ZOOMIN".to_string()),
                         }),
                         RibbonItem::Tool(ToolDef {
                             id: "BASEMAP_ZOOMOUT",
                             label: "Zoom Out",
-                            icon: IconKind::Svg(include_bytes!("../../../assets/icons/zoom_out.svg")),
+                            icon: IconKind::Svg(include_bytes!(
+                                "../../../assets/icons/zoom_out.svg"
+                            )),
                             event: ModuleEvent::Command("BASEMAP ZOOMOUT".to_string()),
                         }),
                         RibbonItem::Tool(ToolDef {

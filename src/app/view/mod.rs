@@ -1528,7 +1528,9 @@ impl OpenCADStudio {
                 collapse_bar(
                     "Tool Palettes",
                     crate::app::config::DockSide::Left,
-                    Message::ToolPalettes(crate::ui::window::tool_palettes::ToolPalettesMsg::ToggleBar),
+                    Message::ToolPalettes(
+                        crate::ui::window::tool_palettes::ToolPalettesMsg::ToggleBar,
+                    ),
                     Message::Noop,
                     26.0,
                 )
@@ -1767,6 +1769,18 @@ impl OpenCADStudio {
                         selection_filter: &tab.scene.selection_filter,
                         tooltip_hidden: self.status_menu_tooltip_hidden,
                     };
+                    let drawing_crs_label = tab
+                        .spatial
+                        .drawing_crs
+                        .as_ref()
+                        .map(|crs| format!("EPSG:{}", crs.epsg))
+                        .unwrap_or_else(|| "Unset".to_string());
+                    let working_unit_label = tab.spatial.working_unit.short().to_string();
+                    let basemap_progress = self
+                        .basemap_job
+                        .as_ref()
+                        .filter(|job| job.tab_id == tab.id)
+                        .map(|job| job.snapshot());
                     self.status_bar.view(
                         &self.snapper,
                         self.ortho_mode,
@@ -1799,6 +1813,9 @@ impl OpenCADStudio {
                         picking,
                         self.clean_screen,
                         tab.scene.document.header.linear_unit_format,
+                        drawing_crs_label,
+                        working_unit_label,
+                        basemap_progress,
                         tab.scene.is_isolation_active(),
                         tab.scene.transparency_display,
                         self.quick_properties,
@@ -2029,6 +2046,12 @@ impl OpenCADStudio {
         } else {
             Subscription::none()
         };
+        let basemap_progress = if self.basemap_job.is_some() {
+            iced::time::every(std::time::Duration::from_millis(200))
+                .map(|_| Message::BasemapProgressTick)
+        } else {
+            Subscription::none()
+        };
         // Web: poll for per-script fonts that a drawing's text needs but hasn't
         // fetched yet. Cheap — `PollWebFonts` is a no-op when nothing is
         // pending. Native has system fonts, so no polling. (#141)
@@ -2071,6 +2094,7 @@ impl OpenCADStudio {
             hover_dwell,
             nav_settle,
             caret_blink,
+            basemap_progress,
             web_fonts,
             autosave,
             single_instance,
@@ -3007,27 +3031,27 @@ fn start_page_content<'a>(
             list = list.push(text(note).size(12).style(start_muted_style));
         }
         container(iced::widget::scrollable(list).height(Fill))
-        .width(match start_layout {
-            StartLayout::AllPanels | StartLayout::WithoutVideos => iced::Length::Fixed(panel_w),
-            StartLayout::WithoutVideosAndDiscussions
-            | StartLayout::RecentAndWelcome
-            | StartLayout::Compact => iced::Length::Fill,
-        })
-        .height(Fill)
-        .padding(16)
-        .style(|theme: &Theme| {
-            let palette = theme.palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.weak.color)),
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..Default::default()
-            }
-        })
-        .into()
+            .width(match start_layout {
+                StartLayout::AllPanels | StartLayout::WithoutVideos => iced::Length::Fixed(panel_w),
+                StartLayout::WithoutVideosAndDiscussions
+                | StartLayout::RecentAndWelcome
+                | StartLayout::Compact => iced::Length::Fill,
+            })
+            .height(Fill)
+            .padding(16)
+            .style(|theme: &Theme| {
+                let palette = theme.palette();
+                container::Style {
+                    background: Some(Background::Color(palette.background.weak.color)),
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
     };
 
     // Right rail: Patreon supporters, fetched at boot (empty when no token
@@ -3056,27 +3080,27 @@ fn start_page_content<'a>(
             );
         }
         container(iced::widget::scrollable(list).height(Fill))
-        .width(match start_layout {
-            StartLayout::AllPanels
-            | StartLayout::WithoutVideos
-            | StartLayout::WithoutVideosAndDiscussions => iced::Length::Fixed(panel_w),
-            StartLayout::RecentAndWelcome | StartLayout::Compact => iced::Length::Fill,
-        })
-        .height(Fill)
-        .padding(20)
-        .style(|theme: &Theme| {
-            let palette = theme.palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.weak.color)),
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..Default::default()
-            }
-        })
-        .into()
+            .width(match start_layout {
+                StartLayout::AllPanels
+                | StartLayout::WithoutVideos
+                | StartLayout::WithoutVideosAndDiscussions => iced::Length::Fixed(panel_w),
+                StartLayout::RecentAndWelcome | StartLayout::Compact => iced::Length::Fill,
+            })
+            .height(Fill)
+            .padding(20)
+            .style(|theme: &Theme| {
+                let palette = theme.palette();
+                container::Style {
+                    background: Some(Background::Color(palette.background.weak.color)),
+                    border: Border {
+                        color: palette.background.neutral.color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
     };
 
     let body: Element<'a, Message> = match start_layout {

@@ -14,9 +14,9 @@
 // All arithmetic is kept in f64 (picked points stay full precision; downcasting
 // to f32 loses several hundredths of a unit at survey-scale coordinates).
 
+use crate::t;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
-use crate::t;
 
 use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
@@ -55,6 +55,7 @@ pub struct MeasureGeomCommand {
     /// The picked entity for RADIUS, injected before `on_entity_pick`.
     picked: Option<EntityType>,
     plane: WorkingPlane,
+    unit: String,
 }
 
 impl MeasureGeomCommand {
@@ -64,6 +65,7 @@ impl MeasureGeomCommand {
             points: vec![],
             picked: None,
             plane: WorkingPlane::default(),
+            unit: String::new(),
         }
     }
 
@@ -109,7 +111,7 @@ impl MeasureGeomCommand {
     }
 
     /// DISTANCE readout for the two collected points.
-    fn distance_msg(plane: WorkingPlane, p1: DVec3, p2: DVec3) -> String {
+    fn distance_msg(plane: WorkingPlane, unit: &str, p1: DVec3, p2: DVec3) -> String {
         let p1 = plane.to_local(p1);
         let p2 = plane.to_local(p2);
         let delta = p2 - p1;
@@ -118,11 +120,14 @@ impl MeasureGeomCommand {
         let dy = delta.y;
         let dz = delta.z;
         let angle_xy = dy.atan2(dx).to_degrees();
-        let dist_s = format!("{dist:.4}");
+        let suffix = (!unit.is_empty())
+            .then(|| format!(" {unit}"))
+            .unwrap_or_default();
+        let dist_s = format!("{dist:.4}{suffix}");
         let angle_xy_s = format!("{angle_xy:.4}");
-        let dx_s = format!("{dx:.4}");
-        let dy_s = format!("{dy:.4}");
-        let dz_s = format!("{dz:.4}");
+        let dx_s = format!("{dx:.4}{suffix}");
+        let dy_s = format!("{dy:.4}{suffix}");
+        let dz_s = format!("{dz:.4}{suffix}");
         t!(
             "Distance = %{dist},  Angle in XY Plane = %{angle_xy}°\n  Delta X = %{dx},  Delta Y = %{dy},  Delta Z = %{dz}",
             dist = dist_s,
@@ -135,8 +140,11 @@ impl MeasureGeomCommand {
     }
 
     /// AREA readout: shoelace area (f64, relative to first vertex) + perimeter.
-    fn area_msg(plane: WorkingPlane, points: &[DVec3]) -> String {
-        let points = points.iter().map(|point| plane.to_local(*point)).collect::<Vec<_>>();
+    fn area_msg(plane: WorkingPlane, unit: &str, points: &[DVec3]) -> String {
+        let points = points
+            .iter()
+            .map(|point| plane.to_local(*point))
+            .collect::<Vec<_>>();
         let n = points.len();
         let origin = points[0];
         let mut area_sum = 0.0f64;
@@ -148,8 +156,16 @@ impl MeasureGeomCommand {
             perimeter += (points[(idx + 1) % n] - points[idx]).length();
         }
         let area = (area_sum * 0.5).abs();
-        let area_s = format!("{area:.4}");
-        let perimeter_s = format!("{perimeter:.4}");
+        let area_s = if unit.is_empty() {
+            format!("{area:.4}")
+        } else {
+            format!("{area:.4} {unit}²")
+        };
+        let perimeter_s = if unit.is_empty() {
+            format!("{perimeter:.4}")
+        } else {
+            format!("{perimeter:.4} {unit}")
+        };
         t!(
             "Area = %{area},  Perimeter = %{perimeter}",
             area = area_s,
@@ -216,6 +232,10 @@ impl CadCommand for MeasureGeomCommand {
         self.plane = plane;
     }
 
+    fn set_measurement_unit(&mut self, unit: &str) {
+        self.unit = unit.to_string();
+    }
+
     fn wants_text_input(&self) -> bool {
         // Only the opening mode-keyword step reads a typed token.
         self.mode == Mode::Choose
@@ -255,8 +275,11 @@ impl CadCommand for MeasureGeomCommand {
         match self.picked.as_ref().and_then(Self::radius_of) {
             Some(radius) => {
                 let diameter = radius * 2.0;
-                let radius_s = format!("{radius:.4}");
-                let diameter_s = format!("{diameter:.4}");
+                let suffix = (!self.unit.is_empty())
+                    .then(|| format!(" {}", self.unit))
+                    .unwrap_or_default();
+                let radius_s = format!("{radius:.4}{suffix}");
+                let diameter_s = format!("{diameter:.4}{suffix}");
                 CmdResult::Measurement(
                     t!(
                         "Radius = %{radius},  Diameter = %{diameter}",
@@ -278,6 +301,7 @@ impl CadCommand for MeasureGeomCommand {
                 if self.points.len() == 2 {
                     CmdResult::Measurement(Self::distance_msg(
                         self.plane,
+                        &self.unit,
                         self.points[0],
                         self.points[1],
                     ))
@@ -312,7 +336,7 @@ impl CadCommand for MeasureGeomCommand {
                 if self.points.len() < 3 {
                     CmdResult::Cancel
                 } else {
-                    CmdResult::Measurement(Self::area_msg(self.plane, &self.points))
+                    CmdResult::Measurement(Self::area_msg(self.plane, &self.unit, &self.points))
                 }
             }
             _ => CmdResult::Cancel,

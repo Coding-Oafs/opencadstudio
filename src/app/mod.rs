@@ -21,11 +21,12 @@ mod mtext_editor;
 pub mod plugin_host;
 #[cfg(not(target_arch = "wasm32"))]
 mod point_cloud;
-mod scripting;
 mod properties;
 mod recent;
+mod scripting;
 pub(crate) mod settings;
 mod shortcuts;
+mod spatial;
 mod style_ops;
 mod text_inline;
 mod update;
@@ -341,6 +342,9 @@ pub(super) struct OpenCADStudio {
     point_cloud_load_queue: Vec<(u64, std::path::PathBuf)>,
     /// Georeferenced basemap underlay settings (provider, projection, zoom).
     basemap: crate::scene::basemap::BasemapSettings,
+    /// Active cancellable tile job. Atomics drive a lightweight status-bar
+    /// progress readout without sending one UI message per tile.
+    basemap_job: Option<crate::app::basemap::BasemapJob>,
     /// The running Rhai macro, if any: its request inbox and outcome.
     #[cfg(not(target_arch = "wasm32"))]
     script_runner: Option<scripting::ScriptRunner>,
@@ -3062,11 +3066,7 @@ pub enum Message {
         std::path::PathBuf,
         Result<ocs_pointcloud::PointSample, String>,
     ),
-    PointCloudResampled(
-        u64,
-        String,
-        Result<ocs_pointcloud::PointSample, String>,
-    ),
+    PointCloudResampled(u64, String, Result<ocs_pointcloud::PointSample, String>),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudIndexed(
         u64,
@@ -3077,6 +3077,8 @@ pub enum Message {
     PointCloudTilesLoaded(u64, Result<crate::app::point_cloud::TileLoadBatch, String>),
     /// A background basemap tile fetch finished.
     BasemapLoaded(crate::app::basemap::BasemapLoaded),
+    /// Periodic redraw while a basemap job updates its atomic progress.
+    BasemapProgressTick,
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudExport,
     #[cfg(not(target_arch = "wasm32"))]
@@ -3191,6 +3193,7 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             point_cloud_load_queue: Vec::new(),
             basemap: crate::scene::basemap::BasemapSettings::default(),
+            basemap_job: None,
             #[cfg(not(target_arch = "wasm32"))]
             script_runner: None,
             props_asym_scale: std::collections::HashSet::new(),

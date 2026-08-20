@@ -22,12 +22,36 @@ fn quad_verts(corners: &[[f32; 3]; 4], corners_low: &[[f32; 3]; 4]) -> Vec<Image
     let [p0, p1, p2, p3] = *corners;
     let [l0, l1, l2, l3] = *corners_low;
     vec![
-        ImageQuadVertex { pos: p0, uv: [0.0, 1.0], pos_low: l0 },
-        ImageQuadVertex { pos: p1, uv: [1.0, 1.0], pos_low: l1 },
-        ImageQuadVertex { pos: p2, uv: [1.0, 0.0], pos_low: l2 },
-        ImageQuadVertex { pos: p0, uv: [0.0, 1.0], pos_low: l0 },
-        ImageQuadVertex { pos: p2, uv: [1.0, 0.0], pos_low: l2 },
-        ImageQuadVertex { pos: p3, uv: [0.0, 0.0], pos_low: l3 },
+        ImageQuadVertex {
+            pos: p0,
+            uv: [0.0, 1.0],
+            pos_low: l0,
+        },
+        ImageQuadVertex {
+            pos: p1,
+            uv: [1.0, 1.0],
+            pos_low: l1,
+        },
+        ImageQuadVertex {
+            pos: p2,
+            uv: [1.0, 0.0],
+            pos_low: l2,
+        },
+        ImageQuadVertex {
+            pos: p0,
+            uv: [0.0, 1.0],
+            pos_low: l0,
+        },
+        ImageQuadVertex {
+            pos: p2,
+            uv: [1.0, 0.0],
+            pos_low: l2,
+        },
+        ImageQuadVertex {
+            pos: p3,
+            uv: [0.0, 0.0],
+            pos_low: l3,
+        },
     ]
 }
 
@@ -39,12 +63,7 @@ fn clip_triangles_px(img: &acadrust::entities::RasterImage) -> Vec<[f64; 2]> {
     use acadrust::entities::{ClipMode, ClipType};
     let w = img.size.x;
     let h = img.size.y;
-    let quad = || {
-        vec![
-            [0.0, 0.0], [w, 0.0], [w, h],
-            [0.0, 0.0], [w, h], [0.0, h],
-        ]
-    };
+    let quad = || vec![[0.0, 0.0], [w, 0.0], [w, h], [0.0, 0.0], [w, h], [0.0, h]];
     if !img.clipping_enabled {
         return quad();
     }
@@ -113,9 +132,7 @@ pub struct ImageModel {
 impl ImageModel {
     /// Build an ImageModel from a DXF RasterImage entity.
     /// Returns `None` if the image file cannot be opened or decoded.
-    pub fn from_raster_image(
-        img: &acadrust::entities::RasterImage,
-    ) -> Option<Self> {
+    pub fn from_raster_image(img: &acadrust::entities::RasterImage) -> Option<Self> {
         let w = img.size.x;
         let h = img.size.y;
         // Model-space geometry is drawn in (WCS - world_offset) so large UTM-
@@ -159,7 +176,11 @@ impl ImageModel {
                 let fu = (px / w) as f32;
                 let fv = (py / h) as f32;
                 ImageQuadVertex {
-                    pos: [ox + ux * fu + vx * fv, oy + uy * fu + vy * fv, oz + uz * fu + vz * fv],
+                    pos: [
+                        ox + ux * fu + vx * fv,
+                        oy + uy * fu + vy * fv,
+                        oz + uz * fu + vz * fv,
+                    ],
                     uv: [fu, 1.0 - fv],
                     pos_low: [oxl, oyl, ozl],
                 }
@@ -311,7 +332,11 @@ impl ImageModel {
             let (hx, hy, hz) = (x as f32, y as f32, z as f32);
             (
                 [hx, hy, hz],
-                [(x - hx as f64) as f32, (y - hy as f64) as f32, (z - hz as f64) as f32],
+                [
+                    (x - hx as f64) as f32,
+                    (y - hy as f64) as f32,
+                    (z - hz as f64) as f32,
+                ],
             )
         };
         let (c0, l0) = split(min_x, min_y); // BL
@@ -445,8 +470,17 @@ fn decode_reference(path: &str) -> Option<DecodedImage> {
         let bytes = fetch_remote(path)?;
         image::load_from_memory(&bytes).ok()?
     } else {
-        image::open(Path::new(path)).ok()?
+        image::ImageReader::open(Path::new(path))
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .decode()
+            .ok()?
     };
+    decode_dynamic_image(img)
+}
+
+fn decode_dynamic_image(img: image::DynamicImage) -> Option<DecodedImage> {
     // GPUs cap 2-D texture dimensions (8192 with wgpu's default limits).
     // Downscale oversized images to fit, preserving aspect ratio, so texture
     // creation can't fail — they're displayed scaled-down anyway.
@@ -467,6 +501,43 @@ fn decode_reference(path: &str) -> Option<DecodedImage> {
         width,
         height,
     })
+}
+
+/// Resolve a remote tile through a persistent on-disk cache. Cache entries are
+/// decoded by file signature rather than extension, so providers may return
+/// JPEG, PNG, or WebP from the same XYZ template. Failed or partial downloads
+/// never replace a valid cache entry.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve_remote_image_cached(url: &str, cache_path: &Path) -> Option<DecodedImage> {
+    if cache_path.is_file() {
+        if let Some(decoded) = resolve_image(&cache_path.to_string_lossy()) {
+            return Some(decoded);
+        }
+        // A corrupt cache entry should not become a permanent offline result.
+        if let Ok(mut cache) = image_cache().lock() {
+            cache.remove(cache_path.to_string_lossy().as_ref());
+        }
+    }
+
+    let bytes = fetch_remote(url)?;
+    let decoded = decode_dynamic_image(image::load_from_memory(&bytes).ok()?)?;
+    if let Some(parent) = cache_path.parent() {
+        if std::fs::create_dir_all(parent).is_ok() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT_CACHE_WRITE: AtomicU64 = AtomicU64::new(1);
+            let id = NEXT_CACHE_WRITE.fetch_add(1, Ordering::Relaxed);
+            let mut temporary = cache_path.as_os_str().to_owned();
+            temporary.push(format!(".tmp-{}-{id}", std::process::id()));
+            let temporary = std::path::PathBuf::from(temporary);
+            if std::fs::write(&temporary, &bytes).is_ok() {
+                if std::fs::rename(&temporary, cache_path).is_err() {
+                    // Another worker/job may have won the same cache key.
+                    let _ = std::fs::remove_file(&temporary);
+                }
+            }
+        }
+    }
+    Some(decoded)
 }
 
 /// Fetch a remote image reference. `http`/`https` only (the caller checks the
@@ -496,4 +567,52 @@ fn fetch_remote(url: &str) -> Option<Vec<u8>> {
 #[cfg(target_arch = "wasm32")]
 fn fetch_remote(_url: &str) -> Option<Vec<u8>> {
     None
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod cache_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn remote_tile_is_reused_from_disk_after_the_server_is_gone() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 3)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("encode test tile");
+        let png = png.into_inner();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("test listener");
+        let address = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("tile request");
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                png.len()
+            );
+            stream.write_all(header.as_bytes()).expect("response header");
+            stream.write_all(&png).expect("response body");
+        });
+
+        let cache = std::env::temp_dir().join(format!(
+            "ocs-basemap-cache-test-{}-{}.img",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&cache);
+        let url = format!("http://{address}/tile.png");
+        let first = resolve_remote_image_cached(&url, &cache).expect("cold tile load");
+        assert_eq!((first.width, first.height), (2, 3));
+        server.join().expect("server thread");
+        assert!(cache.is_file());
+
+        let second = resolve_remote_image_cached(&url, &cache).expect("warm tile load");
+        assert_eq!((second.width, second.height), (2, 3));
+        let _ = std::fs::remove_file(&cache);
+    }
 }

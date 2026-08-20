@@ -1,7 +1,7 @@
 // DIST command — measure distance and angle between two picked points.
 
-use glam::DVec3;
 use crate::t;
+use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::scene::model::wire_model::WireModel;
@@ -12,6 +12,7 @@ pub struct DistCommand {
     // 5e5), which made snapped-endpoint measurements read off by that much.
     first: Option<DVec3>,
     plane: WorkingPlane,
+    unit: String,
 }
 
 impl DistCommand {
@@ -19,6 +20,7 @@ impl DistCommand {
         Self {
             first: None,
             plane: WorkingPlane::default(),
+            unit: String::new(),
         }
     }
 }
@@ -26,6 +28,10 @@ impl DistCommand {
 impl CadCommand for DistCommand {
     fn set_working_plane(&mut self, plane: WorkingPlane) {
         self.plane = plane;
+    }
+
+    fn set_measurement_unit(&mut self, unit: &str) {
+        self.unit = unit.to_string();
     }
 
     fn name(&self) -> &'static str {
@@ -54,12 +60,15 @@ impl CadCommand for DistCommand {
             let dist_xy = dx.hypot(dy);
             let angle_z = dz.atan2(dist_xy).to_degrees();
 
-            let dist_s = format!("{dist:.4}");
+            let suffix = (!self.unit.is_empty())
+                .then(|| format!(" {}", self.unit))
+                .unwrap_or_default();
+            let dist_s = format!("{dist:.4}{suffix}");
             let angle_xy_s = format!("{angle_xy:.4}");
             let angle_z_s = format!("{angle_z:.4}");
-            let dx_s = format!("{dx:.4}");
-            let dy_s = format!("{dy:.4}");
-            let dz_s = format!("{dz:.4}");
+            let dx_s = format!("{dx:.4}{suffix}");
+            let dy_s = format!("{dy:.4}{suffix}");
+            let dz_s = format!("{dz:.4}{suffix}");
             let msg = t!(
                 "Distance = %{dist},  Angle in XY Plane = %{angle_xy}°,  Angle from XY Plane = %{angle_z}°\n  Delta X = %{dx},  Delta Y = %{dy},  Delta Z = %{dz}",
                 dist = dist_s,
@@ -118,6 +127,5 @@ impl CadCommand for DistCommand {
     }
 }
 
-
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIST"] });  // DistCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIST"] }); // DistCommand

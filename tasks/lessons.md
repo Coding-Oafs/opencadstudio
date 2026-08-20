@@ -75,3 +75,30 @@ mysteriously downstream.
   `crates/ocs_pointcloud/src/crs.rs`.)
 - Prefer the WKT-derived PROJ.4 string over a geographic `horizontal_epsg` fallback whenever both
   are present (`reproject_from_crs` / `reproject_to_crs`).
+
+## Remote map tiles need bounded concurrency, durable caching, and stale-job rejection together
+
+**What happened:** The v0.9.7 basemap loop fetched hundreds of tiles serially, downloaded them
+again on every refresh, and could install the result of an obsolete request after the user had
+changed provider or projection. A correct tile URL was therefore still practically unusable.
+
+**How to apply:**
+- Treat a tiled underlay as a cancellable generation-keyed job, not a loop of blocking requests.
+- Bound parallelism independently of tile count, publish completed/failed counts, and ignore any
+  result whose job id or document tab is no longer active.
+- Decode cache files by signature, write downloads through an adjacent temporary file, and rename
+  only after a complete response so a failed request never poisons future warm loads.
+
+## Drawing CRS belongs to the drawing, not to whichever spatial attachment happens to be loaded
+
+**What happened:** v0.9.7 could infer a coordinate system only from LAS/LAZ. An empty or ordinary
+CAD drawing could not establish its own CRS, working unit, or basemap envelope, so unrelated
+features were accidentally coupled to point-cloud attachment state.
+
+**How to apply:**
+- Persist drawing spatial metadata in its own singleton sidecar record and migrate the schema even
+  when the attachment table is empty.
+- Derive the coordinate unit from the CRS database and normalize saved settings on load; do not
+  trust a stale sidecar to keep an incompatible unit/CRS pair.
+- Keep INSUNITS for DWG insertion scaling. Drawing working units are the user-facing survey/query
+  contract and must not silently rescale geometry.

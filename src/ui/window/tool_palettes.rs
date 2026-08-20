@@ -14,12 +14,42 @@ use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 use serde::{Deserialize, Serialize};
 
 const PANEL_W: f32 = 232.0;
-const PANEL_BG: Color = Color { r: 0.13, g: 0.13, b: 0.13, a: 1.0 };
-const PANEL_BORDER: Color = Color { r: 0.22, g: 0.22, b: 0.24, a: 1.0 };
-const TOOL_BG: Color = Color { r: 0.16, g: 0.16, b: 0.18, a: 1.0 };
-const TOOL_HOVER: Color = Color { r: 0.22, g: 0.30, b: 0.42, a: 1.0 };
-const TEXT: Color = Color { r: 0.88, g: 0.88, b: 0.88, a: 1.0 };
-const DIM: Color = Color { r: 0.62, g: 0.62, b: 0.64, a: 1.0 };
+const PANEL_BG: Color = Color {
+    r: 0.13,
+    g: 0.13,
+    b: 0.13,
+    a: 1.0,
+};
+const PANEL_BORDER: Color = Color {
+    r: 0.22,
+    g: 0.22,
+    b: 0.24,
+    a: 1.0,
+};
+const TOOL_BG: Color = Color {
+    r: 0.16,
+    g: 0.16,
+    b: 0.18,
+    a: 1.0,
+};
+const TOOL_HOVER: Color = Color {
+    r: 0.22,
+    g: 0.30,
+    b: 0.42,
+    a: 1.0,
+};
+const TEXT: Color = Color {
+    r: 0.88,
+    g: 0.88,
+    b: 0.88,
+    a: 1.0,
+};
+const DIM: Color = Color {
+    r: 0.62,
+    g: 0.62,
+    b: 0.64,
+    a: 1.0,
+};
 
 /// One command button inside a palette.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,6 +209,15 @@ pub fn default_palettes() -> Vec<Palette> {
                         tool("Point", "POINT"),
                     ],
                 },
+                PaletteGroup {
+                    title: "Measure".into(),
+                    tools: vec![
+                        tool("Distance", "DIST"),
+                        tool("Area", "AREA"),
+                        tool("Volume", "VOLUME"),
+                        tool("LiDAR Points", "POINTCLOUDMEASURE"),
+                    ],
+                },
             ],
         },
     ]
@@ -232,9 +271,10 @@ pub fn view(state: &ToolPalettes) -> Element<'_, Message> {
         r.into()
     };
 
-    let body: Element<'_, Message> = match selected.as_deref().and_then(|name| {
-        state.palettes.iter().find(|p| p.name == name)
-    }) {
+    let body: Element<'_, Message> = match selected
+        .as_deref()
+        .and_then(|name| state.palettes.iter().find(|p| p.name == name))
+    {
         None => container(text("No palettes").size(12).color(DIM))
             .center_x(Fill)
             .center_y(Fill)
@@ -259,9 +299,7 @@ pub fn view(state: &ToolPalettes) -> Element<'_, Message> {
                             .width(Fill)
                             .style(|_: &Theme, status| button::Style {
                                 background: Some(Background::Color(match status {
-                                    button::Status::Hovered | button::Status::Pressed => {
-                                        TOOL_HOVER
-                                    }
+                                    button::Status::Hovered | button::Status::Pressed => TOOL_HOVER,
                                     _ => TOOL_BG,
                                 })),
                                 border: Border {

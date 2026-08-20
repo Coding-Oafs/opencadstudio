@@ -194,8 +194,8 @@ fn plan_arena(state: &ArenaState, chunks: &[PointChunk]) -> ArenaUpdate {
         .sum::<u64>()
         .min(u32::MAX as u64) as u32;
 
-    let recreate =
-        total > state.capacity || (state.capacity > MIN_ARENA_CAPACITY && total * 4 < state.capacity);
+    let recreate = total > state.capacity
+        || (state.capacity > MIN_ARENA_CAPACITY && total * 4 < state.capacity);
     if recreate {
         let capacity = total.max(MIN_ARENA_CAPACITY).next_power_of_two();
         let mut slots = Vec::with_capacity(chunks.len());
@@ -277,11 +277,7 @@ fn plan_arena(state: &ArenaState, chunks: &[PointChunk]) -> ArenaUpdate {
 
 /// First-fit allocation: the smallest free range that fits, else the bump
 /// area past every live slot.
-fn allocate_slot(
-    free: &mut Vec<(u32, u32)>,
-    bump: &mut u32,
-    chunk: &PointChunk,
-) -> Slot {
+fn allocate_slot(free: &mut Vec<(u32, u32)>, bump: &mut u32, chunk: &PointChunk) -> Slot {
     let mut best: Option<usize> = None;
     for (index, (offset, len)) in free.iter().enumerate() {
         if *len >= chunk.len
@@ -438,7 +434,7 @@ impl PointGpu {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(
-                        std::mem::size_of::<StyleUniforms>() as u64,
+                        std::mem::size_of::<StyleUniforms>() as u64
                     ),
                 },
                 count: None,
@@ -557,18 +553,11 @@ impl PointGpu {
         }
     }
 
-    pub fn upload(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        model: &PointCloudModel,
-    ) {
+    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: &PointCloudModel) {
         let source_id = std::sync::Arc::as_ptr(&model.points) as usize;
         // Style-only changes (color mode, class visibility, class colors)
         // rewrite the uniform and skip the instance buffer entirely.
-        if self.style_generation != model.style_generation
-            || self.geometry_generation == u64::MAX
-        {
+        if self.style_generation != model.style_generation || self.geometry_generation == u64::MAX {
             queue.write_buffer(
                 &self.style_buffer,
                 0,
@@ -644,7 +633,8 @@ impl PointGpu {
             }
             // A chunk may straddle a shard boundary; clip the write per shard.
             let mut written = 0_u32;
-            for (shard, local_start, local_len) in shard_segments(*offset, chunk.len, shard_instances)
+            for (shard, local_start, local_len) in
+                shard_segments(*offset, chunk.len, shard_instances)
             {
                 let src_start = written as usize;
                 let src_end = src_start + local_len as usize;
@@ -731,10 +721,10 @@ fn split_f64(position: [f64; 3]) -> ([f32; 3], [f32; 3]) {
 /// a single write/draw maps into exactly one backing buffer.
 #[cfg(feature = "point-arena")]
 fn shard_segments(start: u32, len: u32, shard_instances: u32) -> Vec<(usize, u32, u32)> {
-    debug_assert!(shard_instances > 0);
     if len == 0 || shard_instances == 0 {
         return Vec::new();
     }
+    debug_assert!(shard_instances > 0);
     let mut segments = Vec::new();
     let mut done = 0_u32;
     while done < len {
@@ -775,7 +765,11 @@ mod tests {
     fn first_plan_lays_out_chunks_sequentially() {
         let plan = plan_arena(
             &ArenaState::default(),
-            &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1), chunk_at(3, 5, 30, 1)],
+            &[
+                chunk_at(1, 10, 0, 1),
+                chunk_at(2, 20, 10, 1),
+                chunk_at(3, 5, 30, 1),
+            ],
         );
         assert_eq!(MIN_ARENA_CAPACITY, plan.capacity);
         assert_eq!(35, plan.total);
@@ -792,8 +786,10 @@ mod tests {
 
     #[test]
     fn unchanged_chunks_keep_placements_and_skip_writes() {
-        let first =
-            plan_arena(&ArenaState::default(), &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        let first = plan_arena(
+            &ArenaState::default(),
+            &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)],
+        );
         let state = ArenaState {
             slots: first.slots.clone(),
             free: first.free.clone(),
@@ -807,7 +803,10 @@ mod tests {
 
     #[test]
     fn generation_change_reuses_range_with_one_write() {
-        let first = plan_arena(&ArenaState::default(), &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        let first = plan_arena(
+            &ArenaState::default(),
+            &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)],
+        );
         let state = ArenaState {
             slots: first.slots.clone(),
             free: first.free.clone(),
@@ -821,7 +820,10 @@ mod tests {
 
     #[test]
     fn departed_chunks_free_ranges_and_new_chunks_reuse_them() {
-        let first = plan_arena(&ArenaState::default(), &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)]);
+        let first = plan_arena(
+            &ArenaState::default(),
+            &[chunk_at(1, 10, 0, 1), chunk_at(2, 20, 10, 1)],
+        );
         let state = ArenaState {
             slots: first.slots.clone(),
             free: first.free.clone(),
@@ -830,7 +832,12 @@ mod tests {
         // Chunk 2 departs; a smaller chunk 3 arrives and must fit its hole.
         let second = plan_arena(&state, &[chunk_at(1, 10, 0, 1), chunk_at(3, 8, 10, 1)]);
         let slot_three = second.slots.iter().find(|slot| slot.key == 3).unwrap();
-        let departed_offset = first.slots.iter().find(|slot| slot.key == 2).unwrap().offset;
+        let departed_offset = first
+            .slots
+            .iter()
+            .find(|slot| slot.key == 2)
+            .unwrap()
+            .offset;
         assert_eq!(departed_offset, slot_three.offset);
         assert_eq!(18, second.total);
         assert_eq!(vec![(0, 18)], second.runs);
@@ -850,7 +857,10 @@ mod tests {
         };
         let plan = plan_arena(
             &state,
-            &[chunk_at(1, MIN_ARENA_CAPACITY, 0, 1), chunk_at(2, 100, 0, 1)],
+            &[
+                chunk_at(1, MIN_ARENA_CAPACITY, 0, 1),
+                chunk_at(2, 100, 0, 1),
+            ],
         );
         assert!(plan.capacity > MIN_ARENA_CAPACITY);
         // A recreated buffer writes every chunk, laid out back to back.

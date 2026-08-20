@@ -1,34 +1,45 @@
-# v0.9.7 — Basemap fix + UI, LAS density controls
+# v1.0 — Basemap, spatial settings, measurement, navigation, and release
 
 ## Part A — CRS reprojection fix
-- [ ] Add `proj4: Option<String>` to `CrsInfo` (crates/ocs_pointcloud/src/crs.rs)
-- [ ] Add `proj4_from_wkt()` WKT→PROJ.4 parser (LCC 2SP, TMerc, geographic)
-- [ ] Add `reproject_from_proj4()` + proj4-preferring wrapper
-- [ ] Thread `CrsInfo` through `world_bounds_from_source` / `reproject_bounds_3857` (src/scene/basemap.rs)
-- [ ] Pass CRS from `refresh_basemap` (src/app/basemap.rs)
-- [ ] Unit test proj4_from_wkt + round-trip
+- [x] Add `proj4: Option<String>` to `CrsInfo` (crates/ocs_pointcloud/src/crs.rs)
+- [x] Add `proj4_from_wkt()` WKT→PROJ.4 parser (LCC 2SP, TMerc, geographic)
+- [x] Add `reproject_from_proj4()` + proj4-preferring wrapper
+- [x] Thread `CrsInfo` through `world_bounds_from_source` / `reproject_bounds_3857` (src/scene/basemap.rs)
+- [x] Pass CRS from `refresh_basemap` (src/app/basemap.rs)
+- [x] Unit test proj4_from_wkt + round-trip
 
 ## Part B — Basemap ribbon controls
-- [ ] Add `BASEMAP ZOOMIN`/`ZOOMOUT` subcommands (src/app/basemap.rs)
-- [ ] Add Basemap group to View tab (src/modules/view/mod.rs)
-- [ ] Register BASEMAP + POINTCLOUDDENSITY in autocomplete (src/app/commands/mod.rs)
-- [ ] Seed ribbon dropdown from persisted basemap state
+- [x] Add `BASEMAP ZOOMIN`/`ZOOMOUT` subcommands (src/app/basemap.rs)
+- [x] Add Basemap group to View tab (src/modules/view/mod.rs)
+- [x] Register BASEMAP + POINTCLOUDDENSITY in autocomplete (src/app/commands/mod.rs)
+- [x] Seed ribbon dropdown from persisted basemap state
 
 ## Part C — LAS density controls
-- [ ] Add `stride: Option<u64>` to SampleOptions (crates/ocs_pointcloud/src/lib.rs)
-- [ ] Add `Density` to DisplaySettings (crates/ocs_pointcloud/src/display.rs)
-- [ ] Map Density → SampleOptions in start_point_cloud_load / folder load (src/app/point_cloud.rs)
-- [ ] Add POINTCLOUDDENSITY dispatch + re-sample path
-- [ ] Folder-too-big warning + fallback
-- [ ] Density dropdown in LiDAR tab (src/modules/lidar/mod.rs)
+- [x] Add `stride: Option<u64>` to SampleOptions (crates/ocs_pointcloud/src/lib.rs)
+- [x] Add `Density` to DisplaySettings (crates/ocs_pointcloud/src/display.rs)
+- [x] Map Density → SampleOptions in start_point_cloud_load / folder load (src/app/point_cloud.rs)
+- [x] Add POINTCLOUDDENSITY dispatch + re-sample path
+- [x] Folder-too-big warning + fallback
+- [x] Density dropdown in LiDAR tab (src/modules/lidar/mod.rs)
+
+## Part D — v1 spatial and interaction hardening
+
+- [x] Bounded-parallel cached basemap jobs with progress and cancellation
+- [x] Empty-drawing `BASEMAP BOUNDS` and first-load auto-fit
+- [x] Drawing-owned CRS and compatible working units in sidecar schema v4
+- [x] Dedicated Select and ArcGIS-style Navigator tools
+- [x] Length, area, closed-mesh volume, and point-cloud distance tools
+- [x] Fix point-arena zero-shard assertion and sphere tessellation fallback
+- [x] Update roadmap and LiDAR workflow documentation
 
 ## Build / ship
-- [ ] cargo check + release build
-- [ ] Rebuild MSI (candle/light), validate 0.9.7
-- [ ] Commit + push on v0.9.7-lidar-platform
-- [ ] Record lesson in tasks/lessons.md
+- [x] `cargo check --all-targets`
+- [x] Full test suite and release build
+- [x] Rebuild/install MSI (WiX candle/light), validate 1.0.0
+- [ ] Fast-forward default branch, tag, push, and publish GitHub release
+- [x] Record durable prevention lessons in `tasks/lessons.md`
 
 ## Verification
-- [ ] Reprojection unit test passes
+- [x] Reprojection unit test passes
 - [ ] Basemap places for Boston LAS (no "cannot reproject")
 - [ ] Density re-sample + folder warning

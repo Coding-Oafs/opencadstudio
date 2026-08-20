@@ -10,8 +10,9 @@ impl OpenCADStudio {
             // Tabs without a path (never saved) are skipped with a note.
             "SAVEALL" => {
                 if self.read_only {
-                    self.command_line
-                        .push_error(crate::t!("Read-only session (--read-only): saving is disabled.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("Read-only session (--read-only): saving is disabled.").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -23,47 +24,46 @@ impl OpenCADStudio {
                             continue;
                         }
                         if let Some(path) = self.tabs[t].current_path.clone() {
-                            if self
-                                .active_save_jobs
-                                .contains_key(&self.tabs[t].id)
-                            {
-                                self.command_line.push_info(crate::tf!(
-                                    "SAVEALL: {} already has a save running",
-                                    path.display()
-                                ).as_ref());
+                            if self.active_save_jobs.contains_key(&self.tabs[t].id) {
+                                self.command_line.push_info(
+                                    crate::tf!(
+                                        "SAVEALL: {} already has a save running",
+                                        path.display()
+                                    )
+                                    .as_ref(),
+                                );
                                 skipped += 1;
                                 continue;
                             }
-                            match self.save_tab_synchronously_protected(
-                                t,
-                                path.clone(),
-                                false,
-                            ) {
+                            match self.save_tab_synchronously_protected(t, path.clone(), false) {
                                 Ok(()) => {
                                     saved += 1;
                                 }
-                                Err(e) => self.command_line.push_error(crate::tf!(
-                                    "SAVEALL: {} failed: {e}",
-                                    path.display()
-                                ).as_ref()),
+                                Err(e) => self.command_line.push_error(
+                                    crate::tf!("SAVEALL: {} failed: {e}", path.display()).as_ref(),
+                                ),
                             }
                         } else {
                             skipped += 1;
                         }
                     }
-                    self.command_line.push_output(crate::tf!(
-                        "SAVEALL: saved {saved} drawing(s){}.",
-                        if skipped > 0 {
-                            format!("; {skipped} need SAVEAS (no file path yet)")
-                        } else {
-                            String::new()
-                        }
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!(
+                            "SAVEALL: saved {saved} drawing(s){}.",
+                            if skipped > 0 {
+                                format!("; {skipped} need SAVEAS (no file path yet)")
+                            } else {
+                                String::new()
+                            }
+                        )
+                        .as_ref(),
+                    );
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    self.command_line
-                        .push_info(crate::t!("SAVEALL: save each tab individually in the web build.").as_ref());
+                    self.command_line.push_info(
+                        crate::t!("SAVEALL: save each tab individually in the web build.").as_ref(),
+                    );
                 }
                 return Some(Task::none());
             }
@@ -87,7 +87,8 @@ impl OpenCADStudio {
             // without undoing any work done since.
             "OOPS" => {
                 if self.oops_cache.is_empty() {
-                    self.command_line.push_info(crate::t!("OOPS: nothing to restore.").as_ref());
+                    self.command_line
+                        .push_info(crate::t!("OOPS: nothing to restore.").as_ref());
                 } else {
                     let restored = std::mem::take(&mut self.oops_cache);
                     let pending = self.begin_undo(i, "OOPS", restored.len(), true);
@@ -129,8 +130,7 @@ impl OpenCADStudio {
                 use crate::modules::view::visual_style;
                 let style = cmd.split_whitespace().nth(1).unwrap_or("");
                 let Some(mode) = visual_style::mode_for_keyword(style) else {
-                    self.command_line
-                        .push_error(visual_style::keyword_prompt());
+                    self.command_line.push_error(visual_style::keyword_prompt());
                     return Some(Task::none());
                 };
                 let label = visual_style::label_for(mode);
@@ -181,7 +181,11 @@ impl OpenCADStudio {
                             }
                             for d in deps {
                                 let dp = PathBuf::from(&d);
-                                let resolved = if dp.is_absolute() { dp } else { parent.join(&dp) };
+                                let resolved = if dp.is_absolute() {
+                                    dp
+                                } else {
+                                    parent.join(&dp)
+                                };
                                 if resolved.exists() {
                                     if let Some(fname) = resolved.file_name() {
                                         if std::fs::copy(&resolved, folder.join(fname)).is_ok() {
@@ -190,18 +194,23 @@ impl OpenCADStudio {
                                     }
                                 }
                             }
-                            self.command_line.push_output(crate::tf!(
-                                "{cmd}: packaged {copied} file(s) into {}",
-                                folder.display()
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!(
+                                    "{cmd}: packaged {copied} file(s) into {}",
+                                    folder.display()
+                                )
+                                .as_ref(),
+                            );
                         }
                         Err(e) => self
                             .command_line
                             .push_error(crate::tf!("{cmd}: cannot create folder ({e}).").as_ref()),
                     }
                 } else {
-                    self.command_line
-                        .push_error(crate::t!("ARCHIVE: save the drawing first (it has no file path yet).").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("ARCHIVE: save the drawing first (it has no file path yet).")
+                            .as_ref(),
+                    );
                 }
             }
 
@@ -262,7 +271,8 @@ impl OpenCADStudio {
                         self.default_paper_bg_color = None;
                     } else {
                         self.tabs[i].bg_color = None;
-                        self.tabs[i].scene.bg_color = [33.0 / 255.0, 40.0 / 255.0, 48.0 / 255.0, 1.0];
+                        self.tabs[i].scene.bg_color =
+                            [33.0 / 255.0, 40.0 / 255.0, 48.0 / 255.0, 1.0];
                         self.default_bg_color = None;
                     }
                     // Wire colour adaptation (`adapt_to_bg`) reads the bg
@@ -290,12 +300,15 @@ impl OpenCADStudio {
                     self.tabs[i].scene.recolor_meshes();
                     self.tabs[i].scene.bump_geometry();
                     let [r, g, b, _] = rgba;
-                    self.command_line.push_output(crate::tf!(
-                        "Background: rgb({}, {}, {})",
-                        (r * 255.0).round() as u8,
-                        (g * 255.0).round() as u8,
-                        (b * 255.0).round() as u8
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!(
+                            "Background: rgb({}, {}, {})",
+                            (r * 255.0).round() as u8,
+                            (g * 255.0).round() as u8,
+                            (b * 255.0).round() as u8
+                        )
+                        .as_ref(),
+                    );
                     // Persisted centrally after this message via
                     // `persist_settings_if_changed()`.
                 } else {
@@ -325,6 +338,45 @@ impl OpenCADStudio {
             "BASEMAP" => return Some(self.basemap_toggle()),
             cmd if cmd.starts_with("BASEMAP ") => return Some(self.basemap_command(cmd)),
 
+            // Drawing-owned spatial reference. Bare commands use the generic
+            // text prompt; inline forms are automation-friendly.
+            "CRS" => {
+                use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "CRS",
+                    "CRS  Enter EPSG code, LAS, UNSET, or press Enter for status:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+            cmd if cmd.starts_with("CRS ") => {
+                self.drawing_crs_command(cmd.trim_start_matches("CRS"))
+            }
+            "WORKINGUNITS" | "WUNITS" => {
+                use crate::command::ValuePromptCommand;
+                let command = ValuePromptCommand::new(
+                    "WORKINGUNITS",
+                    "WORKINGUNITS  Enter METERS, CENTIMETERS, FEET, INCHES, or press Enter for status:",
+                );
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
+            }
+            cmd if cmd.starts_with("WORKINGUNITS ") || cmd.starts_with("WUNITS ") => {
+                let argument = cmd.split_once(' ').map(|(_, value)| value).unwrap_or("");
+                self.working_units_command(argument);
+            }
+            "SPATIALINFO" => {
+                self.drawing_crs_command("STATUS");
+                if let Some(bounds) = self.tabs[i].spatial.basemap_bounds {
+                    self.command_line.push_output(
+                        format!(
+                            "Basemap bounds: {:.4},{:.4} to {:.4},{:.4}.",
+                            bounds[0], bounds[1], bounds[2], bounds[3]
+                        )
+                        .as_str(),
+                    );
+                }
+            }
 
             // SCRIPT <path> — run a command script: each non-blank, non-comment
             // line is fed through the same command path the `--script` startup
@@ -348,10 +400,10 @@ impl OpenCADStudio {
                                 })
                                 .map(|l| Task::done(Message::Command(l.to_string())))
                                 .collect();
-                            self.command_line.push_output(crate::tf!(
-                                "SCRIPT: running {} command(s) from {p}.",
-                                cmds.len()
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!("SCRIPT: running {} command(s) from {p}.", cmds.len())
+                                    .as_ref(),
+                            );
                             return Some(Task::batch(cmds));
                         }
                         Err(e) => {

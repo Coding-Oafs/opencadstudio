@@ -4,13 +4,12 @@
 use super::util::*;
 use super::{format_size, VIEWCUBE_HIT_SIZE};
 use crate::app::helpers::{
-    parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
-    CoordKind,
+    parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis, CoordKind,
 };
 use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
-use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
 use crate::scene::model::object::GripApply;
+use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
 use crate::scene::{
     self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
 };
@@ -19,7 +18,6 @@ use acadrust::types::Color as AcadColor;
 use acadrust::{EntityType as AcadEntityType, Handle};
 use iced::time::Instant;
 use iced::{mouse, Point, Task};
-
 
 impl OpenCADStudio {
     pub(in crate::app) fn active_distance_ray(
@@ -71,9 +69,7 @@ impl OpenCADStudio {
         let grip_origin = self.tabs[i]
             .active_grip
             .as_ref()
-            .filter(|grip| {
-                grip.mode == crate::scene::pick::grip::GripEditMode::Stretch
-            })
+            .filter(|grip| grip.mode == crate::scene::pick::grip::GripEditMode::Stretch)
             .map(|grip| grip.origin_world);
 
         if let Some(origin) = grip_origin {
@@ -85,10 +81,7 @@ impl OpenCADStudio {
                 .collect();
 
             if current.as_slice() != wanted {
-                self.tabs[i].dyn_fields = wanted
-                    .into_iter()
-                    .map(DynFieldEntry::new)
-                    .collect();
+                self.tabs[i].dyn_fields = wanted.into_iter().map(DynFieldEntry::new).collect();
                 self.tabs[i].dyn_active = 0;
             }
 
@@ -210,8 +203,11 @@ impl OpenCADStudio {
         }
         // Derive the guide + anchor for the legacy field set so the overlay
         // draws the right construction without each command opting in.
-        let comps: Vec<DynComponent> =
-            self.tabs[i].dyn_fields.iter().map(|f| f.component).collect();
+        let comps: Vec<DynComponent> = self.tabs[i]
+            .dyn_fields
+            .iter()
+            .map(|f| f.component)
+            .collect();
         self.tabs[i].dyn_guide = match comps.as_slice() {
             [DynComponent::Distance, DynComponent::Angle] | [DynComponent::Angle] => {
                 crate::command::DynGuide::Polar
@@ -229,13 +225,15 @@ impl OpenCADStudio {
 
     pub(in crate::app) fn apply_dyn_spec(&mut self, i: usize, spec: crate::command::DynSpec) {
         use crate::app::document::DynFieldEntry;
-        let new_roles: Vec<crate::command::DynRole> =
-            spec.fields.iter().map(|f| f.role).collect();
+        let new_roles: Vec<crate::command::DynRole> = spec.fields.iter().map(|f| f.role).collect();
         let cur_roles: Vec<crate::command::DynRole> =
             self.tabs[i].dyn_fields.iter().map(|f| f.role).collect();
         if cur_roles != new_roles {
-            self.tabs[i].dyn_fields =
-                spec.fields.iter().map(|f| DynFieldEntry::from_role(f.role)).collect();
+            self.tabs[i].dyn_fields = spec
+                .fields
+                .iter()
+                .map(|f| DynFieldEntry::from_role(f.role))
+                .collect();
             self.tabs[i].dyn_active = 0;
         }
         self.tabs[i].dyn_guide = spec.guide;
@@ -265,8 +263,10 @@ impl OpenCADStudio {
         } else {
             crate::command::WorkingPlane::default()
         };
+        let unit = self.tabs[i].spatial.working_unit.short().to_string();
         if let Some(c) = self.tabs[i].active_cmd.as_mut() {
             c.set_working_plane(plane);
+            c.set_measurement_unit(&unit);
         }
     }
 
@@ -345,12 +345,12 @@ impl OpenCADStudio {
         let dz = d_ucs.z;
         let live_d = (dx * dx + dy * dy).sqrt();
         let live_a = dy.atan2(dx); // radians, in the UCS plane
-        // A typed angle is shown unsigned (0..180); give it the sign of the
-        // cursor's current side so an entry made below the X axis sweeps
-        // downward to match the arc instead of mirroring up. An EXPLICIT
-        // `-`/`+` prefix keeps its literal sign though — "-30" must mean
-        // −30° (= 330°) regardless of where the cursor sits (#417).
-        // Untyped → live.
+                                   // A typed angle is shown unsigned (0..180); give it the sign of the
+                                   // cursor's current side so an entry made below the X axis sweeps
+                                   // downward to match the arc instead of mirroring up. An EXPLICIT
+                                   // `-`/`+` prefix keeps its literal sign though — "-30" must mean
+                                   // −30° (= 330°) regardless of where the cursor sits (#417).
+                                   // Untyped → live.
         let angle_rad = |idx: usize| -> f64 {
             let raw = fields[idx]
                 .buffer
@@ -371,9 +371,7 @@ impl OpenCADStudio {
         // perpendicular through the anchor at that offset; the command projects
         // it. Untyped tracks the cursor's signed offset; typed takes the
         // cursor's side.
-        if let (Some(ref_pt), [DynComponent::Distance]) =
-            (self.tabs[i].dyn_ref, comps.as_slice())
-        {
+        if let (Some(ref_pt), [DynComponent::Distance]) = (self.tabs[i].dyn_ref, comps.as_slice()) {
             let axis = (ref_pt - base).normalize_or_zero();
             let perp = glam::DVec3::new(-axis.y, axis.x, 0.0);
             let signed = (w - base).dot(perp);
@@ -400,22 +398,14 @@ impl OpenCADStudio {
                 Some(rel(glam::DVec3::new(val(0, dx), val(1, dy), 0.0)))
             }
             [DynComponent::X, DynComponent::Y] => {
-                Some(xf.to_wcs(glam::DVec3::new(
-                    val(0, w_ucs.x),
-                    val(1, w_ucs.y),
-                    0.0,
-                )))
+                Some(xf.to_wcs(glam::DVec3::new(val(0, w_ucs.x), val(1, w_ucs.y), 0.0)))
             }
             [DynComponent::X, DynComponent::Y, DynComponent::Z] if relative => {
                 Some(rel(glam::DVec3::new(val(0, dx), val(1, dy), val(2, dz))))
             }
-            [DynComponent::X, DynComponent::Y, DynComponent::Z] => {
-                Some(xf.to_wcs(glam::DVec3::new(
-                    val(0, w_ucs.x),
-                    val(1, w_ucs.y),
-                    val(2, w_ucs.z),
-                )))
-            }
+            [DynComponent::X, DynComponent::Y, DynComponent::Z] => Some(xf.to_wcs(
+                glam::DVec3::new(val(0, w_ucs.x), val(1, w_ucs.y), val(2, w_ucs.z)),
+            )),
             [DynComponent::Distance, DynComponent::Angle] => {
                 let d = val(0, live_d);
                 let a = angle_rad(1);
@@ -432,7 +422,11 @@ impl OpenCADStudio {
                 // magnitude — keep it literal. Only the polar Distance+Angle
                 // pair uses the cursor-signed `angle_rad`.
                 let a = val(0, live_a.to_degrees()).to_radians();
-                Some(rel(glam::DVec3::new(live_d * a.cos(), live_d * a.sin(), 0.0)))
+                Some(rel(glam::DVec3::new(
+                    live_d * a.cos(),
+                    live_d * a.sin(),
+                    0.0,
+                )))
             }
             _ => None,
         }
@@ -588,7 +582,6 @@ impl OpenCADStudio {
         }
     }
 
-
     pub(in crate::app) fn try_dyn_commit(&mut self) -> Option<Task<Message>> {
         let i = self.active_tab;
         if !self.dyn_input
@@ -645,8 +638,7 @@ impl OpenCADStudio {
             .active_cmd
             .as_ref()
             .map(|c| {
-                (c.wants_text_input() && !c.point_step_accepts_keywords())
-                    || c.dyn_commit_as_text()
+                (c.wants_text_input() && !c.point_step_accepts_keywords()) || c.dyn_commit_as_text()
             })
             .unwrap_or(false);
         if wants_text {

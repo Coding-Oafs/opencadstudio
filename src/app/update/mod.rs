@@ -984,9 +984,7 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            Message::PointCloudQueuePump(tab_id) => {
-                self.start_next_queued_point_cloud(tab_id)
-            }
+            Message::PointCloudQueuePump(tab_id) => self.start_next_queued_point_cloud(tab_id),
 
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudPathPicked(Some(path)) => self.start_point_cloud_load(path),
@@ -1018,6 +1016,8 @@ impl OpenCADStudio {
                 self.install_basemap(loaded);
                 Task::none()
             }
+
+            Message::BasemapProgressTick => Task::none(),
 
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudExport => {

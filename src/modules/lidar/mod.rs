@@ -129,6 +129,7 @@ impl CadModule for LidarModule {
                 RibbonGroup {
                     title: "Select",
                     tools: vec![
+                        tool("POINTCLOUDMEASURE", "Measure", "POINTCLOUDMEASURE", POINT).into(),
                         tool("LIDAR_PICK", "Point", "POINTCLOUDSELECTPOINT", POINT).into(),
                         tool("LIDAR_FENCE", "Fence", "POINTCLOUDSELECTBOX", POINT).into(),
                         tool("LIDAR_BRUSH", "Brush", "POINTCLOUDSELECTBRUSH", POINT).into(),
@@ -178,9 +179,20 @@ impl CadModule for LidarModule {
                             ],
                             default: "POINTCLOUDCLASSIFYSELECTION 2",
                         },
-                        tool("LIDAR_AUTO_GROUND", "Auto Ground", "POINTCLOUDGROUND", CLOUD).into(),
-                        tool("LIDAR_AUTO_NOISE", "Auto Noise", "POINTCLOUDNOISE 2.0 4 7", UNDO)
-                            .into(),
+                        tool(
+                            "LIDAR_AUTO_GROUND",
+                            "Auto Ground",
+                            "POINTCLOUDGROUND",
+                            CLOUD,
+                        )
+                        .into(),
+                        tool(
+                            "LIDAR_AUTO_NOISE",
+                            "Auto Noise",
+                            "POINTCLOUDNOISE 2.0 4 7",
+                            UNDO,
+                        )
+                        .into(),
                         tool("LIDAR_CONTOURS", "Contours", "POINTCLOUDCONTOUR 1", CLOUD).into(),
                         RibbonItem::Dropdown {
                             id: "LIDAR_FLAGS",
