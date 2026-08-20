@@ -382,7 +382,24 @@ impl Snapper {
             }
         }
     }
+    /// Immediately acquire an explicit grip origin as a tracking point.
+    ///
+    /// Unlike normal cursor acquisition, a grip was deliberately selected by the
+    /// user, so it should not require OTRACK dwell before Extension/OTRACK can use it.
+    pub fn acquire_grip_tracking_point<W: WireSource + ?Sized>(
+        &mut self,
+        p: DVec3,
+        wires: &W,
+    ) {
+        if !self.tracking_active() {
+            return;
+        }
 
+        // With OTRACK disabled, Extension acquisition must remain endpoint-only.
+        let endpoints_only = !self.otrack_enabled;
+
+        self.acquire_tracking_point(p, wires, endpoints_only);
+    }
     /// Add `p` as a tracking point (capturing its corner edge directions) unless
     /// it is already tracked; drops the oldest when the 4-point cap is reached.
     /// Edge directions are scanned once here, at acquisition, so OTRACK can align
@@ -1255,7 +1272,31 @@ impl Snapper {
                 }
             }
         };
-
+        // Check engaged extension tracking rays against nearby real geometry.
+        // OTRACK can align the cursor to an acquired segment extension even when
+        // Extension OSNAP itself is not the current snap result. Allow Intersection
+        // to stop that active extension ray where it crosses drawing geometry.
+        if self.is_on(SnapType::Intersection) && self.otrack_enabled {
+            for (&origin, dirs) in self.tracking_points.iter().zip(&self.tracking_dirs) {
+                for &dir in dirs {
+                    // Only test the extension ray while the cursor is actually
+                    // engaged with it, so Intersection does not become Nearest.
+                    if extension_snap(
+                        cursor_world,
+                        origin,
+                        dir,
+                        view_rot,
+                        eye,
+                        bounds,
+                        self.osnap_radius_px,
+                    )
+                    .is_some()
+                    {
+                        try_ray_intersections(origin, origin + dir);
+                    }
+                }
+            }
+        }
         if self.is_on(SnapType::Intersection) {
             if let Some((origin, through)) = construction_ray {
                 try_ray_intersections(origin, through);
