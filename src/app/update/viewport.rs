@@ -2141,6 +2141,8 @@ impl OpenCADStudio {
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
+                            display_visible: true,
+                            plot_visible: true,
                             fill_is_3d: false,
                             fill_is_2d_solid: false,
                             render_instance: None,

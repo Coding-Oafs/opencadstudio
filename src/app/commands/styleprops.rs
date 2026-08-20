@@ -3,6 +3,9 @@ use super::*;
 impl OpenCADStudio {
     pub(super) fn dispatch_styleprops(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
+            "FRAMES0" => return self.dispatch_styleprops("SETVAR FRAME 0", i),
+            "FRAMES1" => return self.dispatch_styleprops("SETVAR FRAME 1", i),
+            "FRAMES2" => return self.dispatch_styleprops("SETVAR FRAME 2", i),
             // COLOR <ByLayer|ByBlock|1-255|name> — the colour applied to new
             // objects (CECOLOR). Bare COLOR reports the current value.
             "COLOR" | "COLOUR" | "CECOLOR" | "DDCOLOR" => {
@@ -919,7 +922,12 @@ impl OpenCADStudio {
                     | "CMLJUST"
                     | "TEXTQLTY"
                     | "SORTENTS"
+                    | "FRAME"
+                    | "IMAGEFRAME"
+                    | "PDFFRAME"
+                    | "POINTCLOUDCLIPFRAME"
                     | "XCLIPFRAME"
+                    | "WIPEOUTFRAME"
                     | "HALOGAP"
                     | "TRACEWID"
                     | "SKETCHINC"
@@ -945,9 +953,83 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
+                    let frame_kind = crate::scene::frame::kind_for_name(&name);
+                    if name == "FRAME" || frame_kind.is_some() {
+                        let current = frame_kind.map_or_else(
+                            || crate::scene::frame::master_mode(&self.tabs[i].scene.document),
+                            |kind| crate::scene::frame::mode(&self.tabs[i].scene.document, kind),
+                        );
+                        match &value {
+                            Some(value) => match value.parse::<i16>() {
+                                Ok(mode @ 0..=2) => {
+                                    if current != mode {
+                                        let changed_kinds: Vec<_> = frame_kind.map_or_else(
+                                            || {
+                                                crate::scene::frame::ALL_KINDS
+                                                    .into_iter()
+                                                    .filter(|kind| {
+                                                        crate::scene::frame::mode(
+                                                            &self.tabs[i].scene.document,
+                                                            *kind,
+                                                        ) != mode
+                                                    })
+                                                    .collect()
+                                            },
+                                            |kind| vec![kind],
+                                        );
+                                        self.push_undo_snapshot(i, &name);
+                                        if let Some(kind) = frame_kind {
+                                            crate::scene::frame::set_mode(
+                                                &mut self.tabs[i].scene.document,
+                                                kind,
+                                                mode,
+                                            );
+                                        } else {
+                                            crate::scene::frame::set_master_mode(
+                                                &mut self.tabs[i].scene.document,
+                                                mode,
+                                            );
+                                        }
+                                        let changes: Vec<_> = self.tabs[i]
+                                            .scene
+                                            .document
+                                            .entities()
+                                            .filter_map(|entity| {
+                                                changed_kinds
+                                                    .iter()
+                                                    .any(|kind| {
+                                                        crate::scene::frame::affected(entity, *kind)
+                                                    })
+                                                    .then_some((
+                                                        entity.common().handle,
+                                                        crate::scene::ChangeKind::Modified,
+                                                    ))
+                                            })
+                                            .collect();
+                                        if !changes.is_empty() {
+                                            self.tabs[i].scene.bump_entities(&changes);
+                                        }
+                                        self.tabs[i].dirty = true;
+                                    }
+                                    self.command_line
+                                        .push_output(&format!("{name} = {mode}"));
+                                }
+                                _ => self.command_line.push_error(
+                                    crate::tf!("SETVAR: {name} requires 0, 1, or 2.").as_ref(),
+                                ),
+                            },
+                            None => {
+                                self.command_line.push_output(crate::tf!(
+                                    "Enter new value for {name} <{current}>:"
+                                ).as_ref());
+                                self.pending_setvar = Some(name.clone());
+                            }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
                     // Parse a boolean given as 0/1 or ON/OFF.
                     let parse_bool = |s: &str| match s.to_uppercase().as_str() {
                         "1" | "ON" | "TRUE" => Some(true),
@@ -1596,16 +1678,6 @@ impl OpenCADStudio {
                                     })
                                     .map_err(|_| "SETVAR: integer value required.".into()),
                                 None => Ok((format!("SORTENTS = {}", h.sort_entities), false)),
-                            },
-                            "XCLIPFRAME" => match &value {
-                                Some(v) => v
-                                    .parse::<i16>()
-                                    .map(|x| {
-                                        h.xclip_frame = x;
-                                        (format!("XCLIPFRAME = {x}"), true)
-                                    })
-                                    .map_err(|_| "SETVAR: integer value required.".into()),
-                                None => Ok((format!("XCLIPFRAME = {}", h.xclip_frame), false)),
                             },
                             "HALOGAP" => match &value {
                                 Some(v) => v

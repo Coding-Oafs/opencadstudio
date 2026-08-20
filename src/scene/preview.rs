@@ -158,6 +158,8 @@ impl Scene {
             world_origin: origin,
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
+            fill_plane: None,
+            fill_plane_boundary: None,
             boundary_exterior: None,
             boundary_sources: None,
             pattern: HatchPattern::Solid,

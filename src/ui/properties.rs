@@ -130,6 +130,8 @@ impl canvas::Program<Message> for HatchPatternPreview {
                         [pad, bounds.height - pad],
                     ]),
                     boundary_wcs: None,
+                    fill_plane: None,
+                    fill_plane_boundary: None,
                     boundary_exterior: None,
                     boundary_sources: None,
                     pattern: self.pattern.clone(),

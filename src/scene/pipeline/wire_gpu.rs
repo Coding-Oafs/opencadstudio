@@ -655,6 +655,9 @@ impl BlockWireGpu {
             rustc_hash::FxHashMap::default();
         let mut groups: Vec<(bool, Vec<&WireModel>)> = Vec::new();
         for &wire in wires {
+            if color_override.is_none() && !wire.display_visible {
+                continue;
+            }
             let Some(instance) = wire.render_instance else {
                 continue;
             };

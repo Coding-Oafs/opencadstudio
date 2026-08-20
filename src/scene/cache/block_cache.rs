@@ -73,6 +73,8 @@ pub struct LocalWire {
     /// shader band grows with a scaled insert. `0.0` = a normal wire.
     pub world_width: f32,
     pub plinegen: bool,
+    pub plot_visible: bool,
+    pub hide_unselected: bool,
     /// Set at construction; used to discriminate fill-only GPU batches from
     /// stroke batches in [`StyleKey`]. Derived from
     /// `points.is_empty() && !fill_tris.is_empty()`.
@@ -729,6 +731,8 @@ fn tessellate_sub_local(
         return vec![];
     }
 
+    let frame_mode = crate::scene::frame::entity_kind(sub)
+        .map(|kind| crate::scene::frame::mode(doc, kind));
     let mut result = Vec::with_capacity(wires_out.len());
     for wire in wires_out {
         // Per-wire point-count cap: a single wire that exceeds this is skipped
@@ -804,6 +808,8 @@ fn tessellate_sub_local(
             line_weight_px: lw_px,
             world_width: wire.world_width,
             plinegen: wire.plinegen,
+            plot_visible: frame_mode.is_none_or(|mode| mode == 1),
+            hide_unselected: frame_mode == Some(0),
             is_fill_only,
             color_is_byblock: color_is_byblock && wire_on_base_color,
             lt_is_byblock,
@@ -1362,6 +1368,8 @@ struct StyleKey {
     /// switchable after block geometry is merged by style.
     fill_is_2d_solid: bool,
     fill_is_3d: bool,
+    plot_visible: bool,
+    hide_unselected: bool,
     /// Bit-cast composed block-local depth for band wires (`0` = no override).
     /// Keeps bands of different in-block draw ranks in separate batches so
     /// each finalized WireModel carries one correct `depth_override`.
@@ -1396,6 +1404,8 @@ struct BatchEntry {
     fill_tris_low: Vec<[f32; 3]>,
     fill_is_3d: bool,
     fill_is_2d_solid: bool,
+    plot_visible: bool,
+    hide_unselected: bool,
     /// Accumulated thickness-wall pick geometry, paired high/low like
     /// `fill_tris`. Pick-only — no GPU batch reads this.
     pick_tris: Vec<[f32; 3]>,
@@ -1460,6 +1470,8 @@ impl BatchEntry {
         _is_fill_only: bool,
         fill_is_2d_solid: bool,
         fill_is_3d: bool,
+        plot_visible: bool,
+        hide_unselected: bool,
     ) -> Self {
         // `is_fill_only` is part of the StyleKey hash so greek fills never
         // share a batch with regular wires (otherwise the finalized
@@ -1479,6 +1491,8 @@ impl BatchEntry {
             plinegen,
             fill_is_2d_solid,
             fill_is_3d,
+            plot_visible,
+            hide_unselected,
             min_x: f32::INFINITY,
             min_y: f32::INFINITY,
             max_x: f32::NEG_INFINITY,
@@ -1496,6 +1510,10 @@ impl Batches {
             .into_iter()
             .chain(self.by_style.into_values())
             .map(|mut b| {
+                if b.hide_unselected && !selected {
+                    b.points.clear();
+                    b.points_low.clear();
+                }
                 let aabb = if b.min_x.is_infinite() {
                     WireModel::UNBOUNDED_AABB
                 } else {
@@ -1521,6 +1539,8 @@ impl Batches {
                     taper_widths: Vec::new(),
                     world_width: b.world_width,
                     depth_override: b.local_depth,
+                    display_visible: !b.hide_unselected || selected,
+                    plot_visible: b.plot_visible,
                     fill_is_3d: b.fill_is_3d,
                     fill_is_2d_solid: b.fill_is_2d_solid,
                     render_instance: None,
@@ -1573,6 +1593,8 @@ fn style_key(
     is_fill_only: bool,
     fill_is_2d_solid: bool,
     fill_is_3d: bool,
+    plot_visible: bool,
+    hide_unselected: bool,
     local_depth: Option<f32>,
 ) -> StyleKey {
     StyleKey {
@@ -1603,6 +1625,8 @@ fn style_key(
         is_fill_only,
         fill_is_2d_solid,
         fill_is_3d,
+        plot_visible,
+        hide_unselected,
         depth_bits: local_depth.map_or(0, f32::to_bits),
     }
 }
@@ -2014,6 +2038,8 @@ fn emit_wire(
         lw.is_fill_only,
         lw.fill_is_2d_solid,
         lw.fill_is_3d,
+        lw.plot_visible,
+        lw.hide_unselected,
         local_depth,
     );
 
@@ -2041,6 +2067,8 @@ fn emit_wire(
             lw.is_fill_only,
             lw.fill_is_2d_solid,
             lw.fill_is_3d,
+            lw.plot_visible,
+            lw.hide_unselected,
         )
     });
     entry.local_depth = local_depth;

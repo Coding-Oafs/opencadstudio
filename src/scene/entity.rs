@@ -1393,6 +1393,9 @@ impl Scene {
                     wipeout.v_vector =
                         context.transform.apply_rotation(source.v_vector);
                 }
+                let Some(mut fill_plane) = Self::wipeout_fill_plane(&wipeout) else {
+                    return;
+                };
                 let (world_origin, mut boundary) =
                     Self::wipeout_boundary_2d(&wipeout);
                 for clip in &context.clips {
@@ -1408,6 +1411,16 @@ impl Scene {
                 }
                 if boundary.len() < 3 {
                     return;
+                }
+                if !context.clips.is_empty() {
+                    let Some(local) = Self::wipeout_boundary_at_xy(
+                        fill_plane.0,
+                        world_origin,
+                        &boundary,
+                    ) else {
+                        return;
+                    };
+                    fill_plane.1 = local;
                 }
                 let selection_handle =
                     if tint_insert_selection && context.is_instanced() {
@@ -1446,10 +1459,14 @@ impl Scene {
                 } else {
                     None
                 };
+                let fill_plane_boundary = Some(Arc::new(fill_plane.1));
+                let fill_plane = Some(fill_plane.0);
                 models.push(HatchModel {
                     render_instance,
                     boundary: Arc::new(boundary),
                     boundary_wcs: None,
+                    fill_plane,
+                    fill_plane_boundary,
                     boundary_exterior: None,
                     boundary_sources: None,
                     pattern: model::hatch_model::HatchPattern::Solid,
@@ -1474,66 +1491,113 @@ impl Scene {
     pub(super) fn wipeout_boundary_2d(
         wo: &acadrust::entities::Wipeout,
     ) -> ([f64; 2], Vec<[f32; 2]>) {
-        use acadrust::entities::WipeoutClipType;
-
         let origin = [wo.insertion_point.x, wo.insertion_point.y];
-
-        let is_polygon = wo.clipping_enabled
-            && wo.clip_boundary_vertices.len() >= 3
-            && matches!(wo.clip_type, WipeoutClipType::Polygonal);
-
-        if is_polygon {
-            // DXF clip vertices live in image-pixel space, centred on the
-            // image (range −size/2 … +size/2). Image-bottom-left → insertion,
-            // image-y-axis points DOWN (per the DXF "v_vector points down the
-            // image" convention), so map:
-            //   x_off = (clip.x + size.x/2) × u_vec
-            //   y_off = (size.y/2 − clip.y) × v_vec    ← y flipped
-            // Offsets are relative to `origin` (the insertion point).
-            let cx_of = |v: &acadrust::types::Vector2| v.x + wo.size.x * 0.5;
-            let cy_of = |v: &acadrust::types::Vector2| wo.size.y * 0.5 - v.y;
-            let mut poly: Vec<[f32; 2]> = wo
-                .clip_boundary_vertices
-                .iter()
-                .map(|v| {
-                    let cx = cx_of(v);
-                    let cy = cy_of(v);
-                    let wx = (wo.u_vector.x * cx + wo.v_vector.x * cy) as f32;
-                    let wy = (wo.u_vector.y * cx + wo.v_vector.y * cy) as f32;
-                    [wx, wy]
-                })
-                .collect();
-            // Close the loop: the GPU `in_polygon` ray-cast walks
-            // sequential pairs and doesn't wrap, so without an explicit
-            // closing vertex the last edge (vN-1 → v0) is never tested and
-            // the fill bleeds far past the boundary.
-            if let Some(&first) = poly.first() {
-                if poly.last() != Some(&first) {
-                    poly.push(first);
+        let plane = cadkernel::space::Plane::from_axes(
+            [wo.insertion_point.x, wo.insertion_point.y, wo.insertion_point.z],
+            [wo.u_vector.x, wo.u_vector.y, wo.u_vector.z],
+            [wo.v_vector.x, wo.v_vector.y, wo.v_vector.z],
+        );
+        let boundary = Self::wipeout_local_boundary(wo)
+            .into_iter()
+            .map(|point| {
+                if point[0].is_finite() && point[1].is_finite() {
+                    let offset = plane.vector_at(point);
+                    [offset[0] as f32, offset[1] as f32]
+                } else {
+                    [f32::NAN; 2]
                 }
-            }
-            (origin, poly)
-        } else {
-            // Rectangular boundary from 4 corners, as offsets from `origin`.
-            let ux = (wo.u_vector.x * wo.size.x) as f32;
-            let uy = (wo.u_vector.y * wo.size.x) as f32;
-            let vx = (wo.v_vector.x * wo.size.y) as f32;
-            let vy = (wo.v_vector.y * wo.size.y) as f32;
-            // Close the loop (repeat corner 0): the GPU `in_polygon` ray-cast
-            // walks sequential vertex pairs and never wraps last→first, so an
-            // unclosed quad leaves the v3→v0 edge untested and the solid mask
-            // bleeds past the boundary — same reason the polygon branch closes.
-            (
-                origin,
-                vec![
-                    [0.0, 0.0],
-                    [ux, uy],
-                    [ux + vx, uy + vy],
-                    [vx, vy],
-                    [0.0, 0.0],
-                ],
-            )
+            })
+            .collect();
+        (origin, boundary)
+    }
+
+    fn wipeout_local_boundary(wo: &acadrust::entities::Wipeout) -> Vec<[f64; 2]> {
+        use acadrust::entities::{WipeoutClipMode, WipeoutClipType};
+        let mut outer = vec![
+            [0.0, 0.0],
+            [wo.size.x, 0.0],
+            [wo.size.x, wo.size.y],
+            [0.0, wo.size.y],
+            [0.0, 0.0],
+        ];
+        if !wo.clipping_enabled
+            || wo.clip_boundary_vertices.len() < 3
+            || !matches!(wo.clip_type, WipeoutClipType::Polygonal)
+        {
+            return outer;
         }
+        let mut clip: Vec<[f64; 2]> = wo
+            .clip_boundary_vertices
+            .iter()
+            .map(|point| {
+                [
+                    point.x + wo.size.x * 0.5,
+                    wo.size.y * 0.5 - point.y,
+                ]
+            })
+            .collect();
+        if clip.last() != clip.first() {
+            clip.push(clip[0]);
+        }
+        if matches!(wo.clip_mode, WipeoutClipMode::Inside) {
+            outer.push([f64::NAN; 2]);
+            outer.extend(clip);
+            outer
+        } else {
+            clip
+        }
+    }
+
+    fn wipeout_fill_plane(
+        wipeout: &acadrust::entities::Wipeout,
+    ) -> Option<(model::hatch_model::FillPlane, Vec<[f32; 2]>)> {
+        let origin = [
+            wipeout.insertion_point.x,
+            wipeout.insertion_point.y,
+            wipeout.insertion_point.z,
+        ];
+        let x_axis = [wipeout.u_vector.x, wipeout.u_vector.y, wipeout.u_vector.z];
+        let y_axis = [wipeout.v_vector.x, wipeout.v_vector.y, wipeout.v_vector.z];
+        cadkernel::space::Plane::from_axes(origin, x_axis, y_axis).normal()?;
+        let boundary = Self::wipeout_local_boundary(wipeout)
+            .into_iter()
+            .map(|point| [point[0] as f32, point[1] as f32])
+            .collect();
+        Some((
+            model::hatch_model::FillPlane {
+                origin,
+                x_axis,
+                y_axis,
+            },
+            boundary,
+        ))
+    }
+
+    fn wipeout_boundary_at_xy(
+        plane: model::hatch_model::FillPlane,
+        world_origin: [f64; 2],
+        boundary: &[[f32; 2]],
+    ) -> Option<Vec<[f32; 2]>> {
+        let plane = cadkernel::space::Plane::from_axes(
+            plane.origin,
+            plane.x_axis,
+            plane.y_axis,
+        );
+        boundary
+            .iter()
+            .map(|point| {
+                if point[0].is_finite() && point[1].is_finite() {
+                    plane
+                        .coordinates_at_xy([
+                            world_origin[0] + point[0] as f64,
+                            world_origin[1] + point[1] as f64,
+                        ])
+                        .map(|point| [point[0] as f32, point[1] as f32])
+                } else {
+                    Some([f32::NAN; 2])
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn hatch_model_from_dxf(
@@ -1817,6 +1881,8 @@ impl Scene {
             render_instance: None,
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
+            fill_plane: None,
+            fill_plane_boundary: None,
             boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
             boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
             pattern,
@@ -2133,6 +2199,8 @@ impl Scene {
             render_instance: None,
             boundary: std::sync::Arc::new(boundary),
             boundary_wcs: None,
+            fill_plane: None,
+            fill_plane_boundary: None,
             boundary_exterior: None,
             boundary_sources: None,
             pattern: model::hatch_model::HatchPattern::Solid,

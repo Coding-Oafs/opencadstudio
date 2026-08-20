@@ -711,6 +711,8 @@ pub(crate) fn tessellate_entity(
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,
+            display_visible: true,
+            plot_visible: true,
             fill_is_3d: false,
             fill_is_2d_solid: false,
             render_instance: None,
@@ -1063,6 +1065,8 @@ pub(crate) fn tessellate_entity(
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,
+            display_visible: true,
+            plot_visible: true,
             fill_is_3d: false,
             fill_is_2d_solid: false,
             render_instance: None,
@@ -1148,14 +1152,21 @@ pub(crate) fn tessellate_entity(
                     wire.render_instance = Some(instance);
                 }
             }
-            if document.header.xclip_frame != 0 && polygon.len() >= 3 {
-                wires.push(pick::xclip::frame_wire(
+            let frame_mode = crate::scene::frame::mode(
+                document,
+                crate::scene::frame::FrameKind::Xclip,
+            );
+            if polygon.len() >= 3 {
+                let mut frame = pick::xclip::frame_wire(
                     &polygon,
-                    format!("{}_xclipframe", h.value()),
+                    h.value().to_string(),
                     ins_color,
                     sel,
                     ins_lw_px,
-                ));
+                );
+                frame.display_visible = frame_mode != 0;
+                frame.plot_visible = frame_mode == 1;
+                wires.push(frame);
             }
         }
 
@@ -1200,6 +1211,8 @@ pub(crate) fn tessellate_entity(
         bg_color,
         false,
     );
+    let frame_mode = crate::scene::frame::entity_kind(e)
+        .map(|kind| crate::scene::frame::mode(document, kind));
     for b in &mut bases {
         b.aci = aci;
         // SDF text wires carry a glyph-bounds AABB (the true text extent) set
@@ -1208,8 +1221,18 @@ pub(crate) fn tessellate_entity(
         if b.text_verts.is_empty() {
             set_wire_aabb(b, aabb);
         }
+        if let Some(mode) = frame_mode {
+            b.display_visible = mode != 0;
+            b.plot_visible = mode == 1;
+        }
+        if matches!(e, EntityType::Wipeout(_)) {
+            b.depth_override = Some(0.5);
+        }
     }
 
+    // A hidden mask frame remains selectable and appears while selected, but
+    // contributes no visible line work during normal display. The interior
+    // pick triangles remain intact.
     // Complex linetypes (with embedded shapes / text) expand the *base*
     // polyline along its tangent. Text-type entities never have a complex
     // linetype assigned, so we only consult the first wire here — multi-wire
@@ -1437,6 +1460,8 @@ fn lod_stub_wire(
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
+        display_visible: true,
+        plot_visible: true,
         fill_is_3d: false,
         fill_is_2d_solid: false,
         render_instance: None,
@@ -1528,6 +1553,8 @@ fn lod_stub_wire_3d(
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
+        display_visible: true,
+        plot_visible: true,
         fill_is_3d: false,
         fill_is_2d_solid: false,
         render_instance: None,

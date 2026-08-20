@@ -409,8 +409,8 @@ impl Scene {
             } else {
                 0.0
             };
-            let project = |x: f64, y: f64| -> Option<[f32; 2]> {
-                let delta = glam::DVec3::new(x, y, 0.0) - camera.target;
+            let project_3d = |point: [f64; 3]| -> Option<[f32; 2]> {
+                let delta = glam::DVec3::from(point) - camera.target;
                 let u = delta.dot(view_right.as_dvec3());
                 let v = delta.dot(view_up.as_dvec3());
                 let factor = if perspective {
@@ -427,6 +427,7 @@ impl Scene {
                     (center_y + v * factor * viewport_scale) as f32,
                 ])
             };
+            let project = |x: f64, y: f64| project_3d([x, y, 0.0]);
 
             let frozen: rustc_hash::FxHashSet<Handle> =
                 viewport.frozen_layers.iter().copied().collect();
@@ -481,7 +482,7 @@ impl Scene {
                     continue;
                 }
                 if let Some(hatch) =
-                    project_plot_fill(hatch, &project, xmin, ymin, xmax, ymax)
+                    project_plot_fill(hatch, &project_3d, xmin, ymin, xmax, ymax)
                 {
                     projected_hatches.push(hatch);
                 }
@@ -495,7 +496,7 @@ impl Scene {
                 false,
             ) {
                 if let Some(wipeout) =
-                    project_plot_fill(wipeout, &project, xmin, ymin, xmax, ymax)
+                    project_plot_fill(wipeout, &project_3d, xmin, ymin, xmax, ymax)
                 {
                     projected_wipeouts.push(wipeout);
                 }
@@ -753,7 +754,7 @@ fn project_plot_fill<F>(
     ymax: f32,
 ) -> Option<HatchModel>
 where
-    F: Fn(f64, f64) -> Option<[f32; 2]>,
+    F: Fn([f64; 3]) -> Option<[f32; 2]>,
 {
     let mut output = Vec::new();
     let mut ring = Vec::new();
@@ -778,15 +779,35 @@ where
         }
         output.extend(clipped);
     };
-    for &[x, y] in fill.boundary.iter() {
-        if x.is_nan() || y.is_nan() {
-            flush_ring(&mut ring, &mut output);
-            continue;
+    if let (Some(plane), Some(boundary)) = (fill.fill_plane, fill.fill_plane_boundary.as_deref()) {
+        let plane = cadkernel::space::Plane::from_axes(
+            plane.origin,
+            plane.x_axis,
+            plane.y_axis,
+        );
+        for &[x, y] in boundary {
+            if x.is_nan() || y.is_nan() {
+                flush_ring(&mut ring, &mut output);
+                continue;
+            }
+            let point = plane.point_at([x as f64, y as f64]);
+            if let Some(point) = project(point) {
+                ring.push(point);
+            }
         }
-        let absolute_x = fill.world_origin[0] + x as f64;
-        let absolute_y = fill.world_origin[1] + y as f64;
-        if let Some(point) = project(absolute_x, absolute_y) {
-            ring.push(point);
+    } else {
+        for &[x, y] in fill.boundary.iter() {
+            if x.is_nan() || y.is_nan() {
+                flush_ring(&mut ring, &mut output);
+                continue;
+            }
+            if let Some(point) = project([
+                fill.world_origin[0] + x as f64,
+                fill.world_origin[1] + y as f64,
+                0.0,
+            ]) {
+                ring.push(point);
+            }
         }
     }
     flush_ring(&mut ring, &mut output);
@@ -796,6 +817,8 @@ where
     fill.world_origin = [0.0, 0.0];
     fill.boundary = std::sync::Arc::new(output);
     fill.boundary_wcs = None;
+    fill.fill_plane = None;
+    fill.fill_plane_boundary = None;
     Some(fill)
 }
 

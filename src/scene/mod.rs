@@ -9,6 +9,7 @@ pub mod annotative;
 pub mod cache;
 pub mod convert;
 pub mod creation_style;
+pub(crate) mod frame;
 pub mod model;
 pub mod pick;
 pub mod pipeline;
@@ -3210,6 +3211,8 @@ impl Scene {
             world_origin: [0.0, 0.0],
             boundary: Arc::new(vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]),
             boundary_wcs: None,
+            fill_plane: None,
+            fill_plane_boundary: None,
             boundary_exterior: None,
             boundary_sources: None,
             pattern: crate::scene::model::hatch_model::HatchPattern::Solid,

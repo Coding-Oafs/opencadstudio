@@ -146,6 +146,10 @@ pub struct WireModel {
     /// mirroring how exploded block fills seed their depth, so bands and fills
     /// from the same block interleave by the block's internal draw order.
     pub depth_override: Option<f32>,
+    /// Whether this wire is drawn in the normal viewport pass.
+    pub display_visible: bool,
+    /// Whether this wire is included in plotted output.
+    pub plot_visible: bool,
     /// `true` when [`fill_tris`] is a real 3-D surface (PolyfaceMesh /
     /// PolygonMesh face) that must render with hidden-surface depth and only in
     /// shaded modes. `false` for a flat 2-D overlay fill (SOLID arrowhead,
@@ -208,6 +212,8 @@ impl WireModel {
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,
+            display_visible: true,
+            plot_visible: true,
             fill_is_3d: false,
             fill_is_2d_solid: false,
             render_instance: None,
@@ -502,6 +508,8 @@ impl Default for WireModel {
             fill_tris: Vec::new(),
             fill_tris_low: Vec::new(),
             depth_override: None,
+            display_visible: true,
+            plot_visible: true,
             fill_is_3d: false,
             fill_is_2d_solid: false,
             render_instance: None,

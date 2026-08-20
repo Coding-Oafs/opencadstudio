@@ -1014,7 +1014,10 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pending);
                 }
             }
-            CmdResult::WipeoutFromPolyline(handle) => {
+            CmdResult::WipeoutFromPolyline {
+                handle,
+                erase_source,
+            } => {
                 let wipeout = {
                     let scene = &self.tabs[i].scene;
                     scene
@@ -1026,16 +1029,23 @@ impl OpenCADStudio {
                         )
                 };
                 if let Some(wipeout) = wipeout {
+                    if erase_source {
+                        return self.apply_cmd_result(CmdResult::ReplaceMany(
+                            vec![(handle, Vec::new())],
+                            vec![wipeout],
+                        ));
+                    }
                     return self.apply_cmd_result(CmdResult::CommitAndExit(wipeout));
                 }
                 self.command_line.push_error(
-                    "WIPEOUT Polyline: select a closed planar polyline with at least 3 vertices.",
+                    crate::t!("WIPEOUT Polyline: select a straight, closed, planar 2D polyline with at least 3 non-intersecting vertices.").as_ref(),
                 );
-                if let Some(prompt) =
-                    self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
-                {
-                    self.command_line.push_info(&prompt);
-                }
+                let command =
+                    crate::modules::draw::draw::wipeout::WipeoutCommand::new_polyline();
+                self.command_line.push_info(
+                    &crate::command::CadCommand::prompt(&command),
+                );
+                self.tabs[i].active_cmd = Some(Box::new(command));
             }
             CmdResult::MviewSwitchLayout(layout) => {
                 let task = self.on_layout_switch_preserving_command(layout);

@@ -127,6 +127,75 @@ pub(crate) fn points_to_ds(
     (high, low)
 }
 
+fn point_cloud_wires(
+    document: &CadDocument,
+    handle: Handle,
+    entity: &EntityType,
+    selected: bool,
+    color: [f32; 4],
+    line_weight_px: f32,
+) -> Option<Vec<WireModel>> {
+    let EntityType::Extended(extended) = entity else {
+        return None;
+    };
+    let frame_points = crate::entities::extended::point_cloud_frame_lines(extended)?;
+    let rendered = convert(entity, document)?;
+    let RenderObject::Lines(body_points) = rendered.object else {
+        return None;
+    };
+    let (points, points_low) = points_to_ds(body_points);
+    let mut wires = vec![WireModel {
+        taper_widths: Vec::new(),
+        world_width: 0.0,
+        depth_override: None,
+        display_visible: true,
+        plot_visible: true,
+        fill_is_3d: false,
+        fill_is_2d_solid: false,
+        render_instance: None,
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
+        dash_from_start: false,
+        dash_align_end: None,
+        text_verts: Vec::new(),
+        name: handle.value().to_string(),
+        points,
+        points_low,
+        color,
+        selected,
+        pattern_length: 0.0,
+        pattern: [0.0; 8],
+        line_weight_px,
+        snap_pts: rendered.snap_pts,
+        tangent_geoms: rendered.tangent_geoms,
+        aci: 0,
+        key_vertices: rendered.key_vertices,
+        aabb: WireModel::UNBOUNDED_AABB,
+        plinegen: true,
+        fill_tris: Vec::new(),
+        fill_tris_low: Vec::new(),
+    }];
+    let mode = crate::scene::frame::mode(
+        document,
+        crate::scene::frame::FrameKind::PointCloudClip,
+    );
+    if !frame_points.is_empty() {
+        let (points, points_low) = points_to_ds(frame_points);
+        let mut frame = WireModel::solid(
+            handle.value().to_string(),
+            points,
+            color,
+            selected,
+        );
+        frame.points_low = points_low;
+        frame.line_weight_px = line_weight_px;
+        frame.display_visible = mode != 0;
+        frame.plot_visible = mode == 1;
+        wires.push(frame);
+    }
+    Some(wires)
+}
+
 /// Lift a WireModel built in a local frame (a fixed f64 origin subtracted) back
 /// to absolute world coordinates, re-splitting every position — polyline points
 /// and SDF glyph vertices — into double-single so it stays precise at UTM scale.
@@ -434,6 +503,8 @@ pub fn tessellate(
                     taper_widths: Vec::new(),
                     world_width: 0.0,
                     depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
                     fill_is_3d: false,
                     fill_is_2d_solid: false,
                     render_instance: None,
@@ -480,6 +551,17 @@ pub fn tessellate(
             return vec![];
         }
         return out;
+    }
+
+    if let Some(wires) = point_cloud_wires(
+        document,
+        handle,
+        entity,
+        selected,
+        color,
+        line_weight_px,
+    ) {
+        return wires;
     }
 
     // ── Try the kernel path first ───────────────────────────────────────────
@@ -728,6 +810,8 @@ pub fn tessellate(
                                         taper_widths: Vec::new(),
                                         world_width: 0.0,
                                         depth_override: None,
+                                        display_visible: true,
+                                        plot_visible: true,
                                         fill_is_3d: false,
                                         fill_is_2d_solid: false,
                                         render_instance: None,
@@ -775,6 +859,8 @@ pub fn tessellate(
                                         taper_widths: Vec::new(),
                                         world_width: 0.0,
                                         depth_override: None,
+                                        display_visible: true,
+                                        plot_visible: true,
                                         fill_is_3d: false,
                                         fill_is_2d_solid: false,
                                         render_instance: None,
@@ -824,6 +910,8 @@ pub fn tessellate(
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
+                            display_visible: true,
+                            plot_visible: true,
                             fill_is_3d: false,
                             fill_is_2d_solid: false,
                             render_instance: None,
@@ -854,6 +942,8 @@ pub fn tessellate(
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
+                        display_visible: true,
+                        plot_visible: true,
                         fill_is_3d: false,
                         fill_is_2d_solid: false,
                         render_instance: None,
@@ -914,6 +1004,8 @@ pub fn tessellate(
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
+                            display_visible: true,
+                            plot_visible: true,
                             fill_is_3d: false,
                             fill_is_2d_solid: false,
                             render_instance: None,
@@ -956,6 +1048,8 @@ pub fn tessellate(
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
+                            display_visible: true,
+                            plot_visible: true,
                             fill_is_3d: false,
                             fill_is_2d_solid: false,
                             render_instance: None,
@@ -995,6 +1089,8 @@ pub fn tessellate(
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
+                        display_visible: true,
+                        plot_visible: true,
                         fill_is_3d: false,
                         fill_is_2d_solid: false,
                         render_instance: None,
@@ -1027,6 +1123,8 @@ pub fn tessellate(
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
+                        display_visible: true,
+                        plot_visible: true,
                         fill_is_3d: false,
                         fill_is_2d_solid: false,
                         render_instance: None,
@@ -1093,6 +1191,8 @@ pub fn tessellate(
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
+                            display_visible: true,
+                            plot_visible: true,
                             fill_is_3d: false,
                             fill_is_2d_solid: false,
                             render_instance: None,
@@ -1214,6 +1314,8 @@ pub fn tessellate(
                         taper_widths: Vec::new(),
                         world_width: polyline_band_width(entity),
                         depth_override: None,
+                        display_visible: true,
+                        plot_visible: true,
                         fill_is_3d,
                         fill_is_2d_solid: false,
                         render_instance: None,
@@ -1279,6 +1381,8 @@ pub fn tessellate(
                         fill_is_2d_solid: matches!(entity, EntityType::Solid(_)),
                         render_instance: None,
                         depth_override: None,
+                        display_visible: true,
+                        plot_visible: true,
                     });
                 }
 
@@ -1287,6 +1391,8 @@ pub fn tessellate(
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
+                        display_visible: true,
+                        plot_visible: true,
                         fill_is_3d: false,
                         fill_is_2d_solid: false,
                         render_instance: None,
@@ -1332,6 +1438,8 @@ pub fn tessellate(
                     taper_widths: Vec::new(),
                     world_width: polyline_band_width(entity),
                     depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
                     fill_is_3d: false,
                     fill_is_2d_solid: false,
                     render_instance: None,
@@ -1378,6 +1486,8 @@ pub fn tessellate(
                     taper_widths: widths,
                     world_width,
                     depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
                     fill_is_3d: false,
                     fill_is_2d_solid: false,
                     render_instance: None,
@@ -1497,6 +1607,8 @@ pub fn tessellate(
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
+        display_visible: true,
+        plot_visible: true,
         fill_is_3d: false,
         fill_is_2d_solid: false,
         render_instance: None,

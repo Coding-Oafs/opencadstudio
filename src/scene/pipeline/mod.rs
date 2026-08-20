@@ -948,10 +948,8 @@ impl Pipeline {
         );
 
         // ── Hatch pipeline ─────────────────────────────────────────────────
-        // binding 0 (HatchUniforms) is read by the vertex shader too — it
-        // pulls `origin` to undo the CPU-side hatch-local pre-shift when
-        // computing clip position. bindings 1 (Boundary) and 2
-        // (FamilyBatch) stay fragment-only.
+        // Binding 0 carries the fill plane; boundary and family data are
+        // fragment-only.
         let hatch_entry = |binding: u32, vis: wgpu::ShaderStages| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: vis,
@@ -2364,6 +2362,10 @@ impl Pipeline {
         let mut block_wires: Vec<&WireModel> = Vec::new();
         let mut i = 0;
         while i < wires.len() {
+            if !wires[i].display_visible {
+                i += 1;
+                continue;
+            }
             if wires[i].render_instance.is_some() {
                 block_wires.push(&wires[i]);
                 i += 1;
@@ -2372,6 +2374,7 @@ impl Pipeline {
             let mesh_edge = is_mesh_edge(&wires[i]);
             let mut j = i + 1;
             while j < wires.len()
+                && wires[j].display_visible
                 && wires[j].render_instance.is_none()
                 && is_mesh_edge(&wires[j]) == mesh_edge
             {

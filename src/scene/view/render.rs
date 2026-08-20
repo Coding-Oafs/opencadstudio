@@ -2925,6 +2925,9 @@ impl Scene {
         }
         let mut out: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
         for w in wires {
+            if !w.display_visible {
+                continue;
+            }
             if w.render_instance.is_some() {
                 continue;
             }

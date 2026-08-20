@@ -1814,6 +1814,10 @@ fn vardict_value(doc: &CadDocument, name: &str) -> Option<String> {
     }
 }
 
+pub(crate) fn drawing_variable(doc: &CadDocument, name: &str) -> Option<String> {
+    vardict_value(doc, name)
+}
+
 /// Write a drawing variable, creating the variable dictionary and record when
 /// needed so new drawings preserve the value too.
 pub(crate) fn set_drawing_variable(doc: &mut CadDocument, name: &str, value: &str) {

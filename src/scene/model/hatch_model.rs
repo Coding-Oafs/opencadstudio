@@ -165,6 +165,13 @@ pub enum HatchPattern {
 /// (anchor-relative), so real coordinates never approach it.
 pub const GPU_BOUNDARY_SEP: f32 = 1.0e30;
 
+#[derive(Clone, Copy, Debug)]
+pub struct FillPlane {
+    pub origin: [f64; 3],
+    pub x_axis: [f64; 3],
+    pub y_axis: [f64; 3],
+}
+
 /// A hatched region defined by a closed polygon boundary.
 #[derive(Clone, Debug)]
 pub struct HatchModel {
@@ -196,6 +203,9 @@ pub struct HatchModel {
     /// rebuilt from a DXF entity — `add_hatch` then reconstructs the persisted
     /// vertices from `boundary` + `world_origin` instead.
     pub boundary_wcs: Option<Arc<Vec<[f64; 2]>>>,
+    /// Optional 3-D placement used by wipeout fills.
+    pub fill_plane: Option<FillPlane>,
+    pub fill_plane_boundary: Option<Arc<Vec<[f32; 2]>>>,
     /// Per-ring DXF role, aligned with the NaN-separated boundary paths.
     pub boundary_exterior: Option<Arc<Vec<bool>>>,
     /// Source entity handles for each boundary ring.

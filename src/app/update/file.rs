@@ -168,7 +168,9 @@ fn plot_scene_content(
     Vec<crate::scene::model::hatch_model::HatchModel>,
     crate::io::pdf_export::PlotGroupSplits,
 ) {
-    let (paper_wires, model_wires) = scene.plot_wire_groups(render_mode_override);
+    let (mut paper_wires, mut model_wires) = scene.plot_wire_groups(render_mode_override);
+    paper_wires.retain(|wire| wire.plot_visible);
+    model_wires.retain(|wire| wire.plot_visible);
     let paper_hatches = scene.paper_canvas_hatches().as_ref().clone();
     let paper_wipeouts = scene.paper_canvas_wipeouts().as_ref().clone();
     if scene.current_layout == "Model" {
@@ -184,8 +186,9 @@ fn plot_scene_content(
             splits,
         );
     }
-    let (model_pattern_wires, model_hatches, model_wipeouts) =
+    let (mut model_pattern_wires, model_hatches, model_wipeouts) =
         scene.viewport_plot_fills();
+    model_pattern_wires.retain(|wire| wire.plot_visible);
 
     let (wires, hatches, wipeouts, splits) = if paper_space_last {
         let splits = crate::io::pdf_export::PlotGroupSplits {
