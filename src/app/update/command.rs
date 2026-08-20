@@ -1758,7 +1758,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     };
                     match field {
                         "spline_method" => {
-                            value == if crate::entities::spline::uses_fit_method(spline) {
+                            value == if crate::entities::spline::shows_fit_points(spline) {
                                 "Fit"
                             } else {
                                 "Control Vertices"
@@ -2193,7 +2193,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         (
                                             "current_control_point",
                                             acadrust::EntityType::Spline(spline),
-                                        ) => Some(spline.control_points.len()),
+                                        ) => Some(
+                                            crate::entities::spline::control_vertex_count(spline),
+                                        ),
                                         _ => None,
                                     }
                                 })

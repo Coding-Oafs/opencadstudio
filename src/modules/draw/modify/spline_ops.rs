@@ -10,10 +10,10 @@
 // fine until it is measured.
 
 use acadrust::entities::Spline;
-use cadkernel::geom2d::{NurbsCurve, Parameterization};
-use cadkernel::space::Plane;
 use acadrust::types::Vector3;
 use acadrust::Handle;
+use cadkernel::geom2d::{NurbsCurve, Parameterization};
+use cadkernel::space::Plane;
 
 /// The drawing plane a spline sits on.
 ///
@@ -79,7 +79,15 @@ fn spline_to_nurbs_with(
 
     // No usable control polygon, so this is a fit-point spline.
     let mut fit: Vec<[f64; 2]> = spl.fit_points.iter().map(&point).collect();
-    if spl.flags.closed || spl.flags.periodic {
+    let parameterization = match spl.knot_parameterization {
+        2 => Parameterization::Uniform,
+        1 => Parameterization::Centripetal,
+        _ => Parameterization::Chord,
+    };
+    if spl.flags.periodic {
+        return NurbsCurve::interpolate_periodic(&fit, parameterization);
+    }
+    if spl.flags.closed {
         // The interpolation is a clamped solve and does not model a wrap, so
         // a closed spline came back as an open curve that never returned to
         // its start — and a TRIM against it then cut nothing along the seam.
@@ -98,11 +106,6 @@ fn spline_to_nurbs_with(
     };
     let start_tangent = tangent(&spl.begin_tangent);
     let end_tangent = tangent(&spl.end_tangent);
-    let parameterization = match spl.knot_parameterization {
-        2 => Parameterization::Uniform,
-        1 => Parameterization::Centripetal,
-        _ => Parameterization::Chord,
-    };
     NurbsCurve::interpolate(
         &fit,
         start_tangent,

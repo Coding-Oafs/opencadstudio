@@ -32,13 +32,13 @@ use acadrust::entities::{
     Arc as ArcEnt, Circle as CircleEnt, Ellipse as EllipseEnt, LwPolyline as LwPolylineEnt,
     Polyline2D, Spline as SplineEnt,
 };
+use acadrust::types::Vector3;
+use acadrust::EntityType;
 use cadkernel::geom2d::{
     characteristic_points, Arc, Circle, Curve, Ellipse, EllipseArc, Line, Polyline, PolylineVertex,
     Ray, SnapKind, Transform, XLine,
 };
-use cadkernel::space::{PlanarCurve, Plane, Vec3};
-use acadrust::types::Vector3;
-use acadrust::EntityType;
+use cadkernel::space::{are_coplanar, coplanarity_tolerance, PlanarCurve, Plane, Vec3};
 
 use crate::modules::draw::modify::spline_ops::spline_to_nurbs_on;
 use crate::scene::model::wire_model::SnapHint;
@@ -287,25 +287,59 @@ pub fn polyline2d_curve(polyline: &Polyline2D) -> Option<PlanarCurve> {
 /// plane the normal describes. A spline that genuinely wanders in space gets
 /// `None`, which is honest: flattening it to XY would move it.
 pub fn spline_curve(spline: &SplineEnt) -> Option<PlanarCurve> {
-    let source = if crate::entities::spline::uses_fit_method(spline) {
+    let fit_method = crate::entities::spline::uses_fit_method(spline);
+    let source = if fit_method {
         &spline.fit_points
     } else {
         &spline.control_points
     };
     let points: Vec<Vector3> = source.to_vec();
     let first = points.first()?;
+    if !spline_is_planar(spline) {
+        return None;
+    }
     let normal = normalized(spline.normal);
     let elevation = Vec3::from(xyz(*first)).dot(Vec3::from(xyz(normal)));
     let plane = ocs_plane(normal, elevation);
 
-    let tolerance = PLANARITY_TOLERANCE * scale_of(&points);
+    let point_arrays: Vec<[f64; 3]> = points.iter().copied().map(xyz).collect();
+    let tolerance = coplanarity_tolerance(&point_arrays);
     if !points.iter().all(|p| plane.contains(xyz(*p), tolerance)) {
         return None;
+    }
+    if fit_method && !spline.flags.periodic {
+        let plane_normal = Vec3::from(plane.normal()?);
+        for tangent in [spline.begin_tangent, spline.end_tangent] {
+            let tangent = Vec3::from(xyz(tangent));
+            if tangent.length_squared() > 1e-18
+                && tangent.dot(plane_normal).abs()
+                    > PLANARITY_TOLERANCE * tangent.length().max(1.0)
+            {
+                return None;
+            }
+        }
     }
     Some(PlanarCurve::new(
         plane,
         Curve::Nurbs(spline_to_nurbs_on(spline, &plane)?),
     ))
+}
+
+/// Whether the defining points and active tangents share a plane.
+pub fn spline_is_planar(spline: &SplineEnt) -> bool {
+    let fit_method = crate::entities::spline::uses_fit_method(spline);
+    let points = if fit_method {
+        &spline.fit_points
+    } else {
+        &spline.control_points
+    };
+    let points: Vec<[f64; 3]> = points.iter().copied().map(xyz).collect();
+    let directions: Vec<[f64; 3]> = if fit_method && !spline.flags.periodic {
+        vec![xyz(spline.begin_tangent), xyz(spline.end_tangent)]
+    } else {
+        Vec::new()
+    };
+    are_coplanar(&points, &directions)
 }
 
 /// The entity's curve in world XY coordinates.

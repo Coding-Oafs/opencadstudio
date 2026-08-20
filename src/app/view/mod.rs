@@ -423,12 +423,8 @@ impl OpenCADStudio {
                         .and_then(|h| {
                             let indexed = match tab.scene.document.get_entity(h) {
                                 Some(acadrust::EntityType::LwPolyline(_))
-                                | Some(acadrust::EntityType::Polyline2D(_)) => true,
-                                Some(acadrust::EntityType::Spline(spline)) => {
-                                    !crate::entities::spline::uses_fit_method(spline)
-                                        || !spline.cv_frame_visible
-                                        || crate::entities::curve::spline_curve(spline).is_none()
-                                }
+                                | Some(acadrust::EntityType::Polyline2D(_))
+                                | Some(acadrust::EntityType::Spline(_)) => true,
                                 _ => false,
                             };
                             indexed.then_some(tab.properties.prop_vertex)

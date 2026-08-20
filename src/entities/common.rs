@@ -535,6 +535,16 @@ pub fn edit_prop(label: &str, field: &'static str, value: f64) -> Property {
     }
 }
 
+/// Editable dimensionless value independent of drawing units.
+pub fn edit_scalar_prop(label: &str, field: &'static str, value: f64) -> Property {
+    let value = if value == 0.0 { 0.0 } else { value };
+    Property {
+        label: label.into(),
+        field,
+        value: PropValue::EditText(value.to_string()),
+    }
+}
+
 pub fn ro_prop(label: &str, field: &'static str, value: impl Into<String>) -> Property {
     Property {
         label: label.into(),
@@ -574,8 +584,13 @@ pub fn stepper_prop(
 
 pub fn parse_f64(value: &str) -> Option<f64> {
     let t = value.trim();
-    // Angle rows display via AUNITS (#297) — accept those formats back.
-    t.parse::<f64>().ok().or_else(|| parse_angle_deg(t))
+    // Length rows display via LUNITS and angle rows via AUNITS. Accept both
+    // representations back so a value shown by Properties can always be
+    // committed unchanged.
+    t.parse::<f64>()
+        .ok()
+        .or_else(|| parse_length(t))
+        .or_else(|| parse_angle_deg(t))
 }
 
 /// Parse an angle string the panel displayed via AUNITS back to DEGREES:
