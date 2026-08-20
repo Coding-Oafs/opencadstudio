@@ -1822,6 +1822,11 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// Current drawing-persisted SKETCH settings.
+    fn sketch_settings(&self) -> Option<(i16, f64, f64)> {
+        None
+    }
+
     /// Returns `true` when the active text prompt expects free-form prose
     /// that can legitimately contain whitespace (the body of a TEXT /
     /// MTEXT / DDEDIT entity, an attribute default value, etc.). For

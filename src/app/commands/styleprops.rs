@@ -931,6 +931,8 @@ impl OpenCADStudio {
                     | "HALOGAP"
                     | "TRACEWID"
                     | "SKETCHINC"
+                    | "SKPOLY"
+                    | "SKTOLERANCE"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -953,7 +955,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     let frame_kind = crate::scene::frame::kind_for_name(&name);
@@ -1700,14 +1702,40 @@ impl OpenCADStudio {
                                 None => Ok((format!("TRACEWID = {}", h.trace_width), false)),
                             },
                             "SKETCHINC" => match &value {
-                                Some(v) => v
-                                    .parse::<f64>()
-                                    .map(|x| {
+                                Some(v) => match v.parse::<f64>() {
+                                    Ok(x) if x.is_finite() && x > 0.0 => {
+                                        let changed = h.sketch_increment != x;
                                         h.sketch_increment = x;
-                                        (format!("SKETCHINC = {x}"), true)
-                                    })
-                                    .map_err(|_| "SETVAR: numeric value required.".into()),
+                                        Ok((format!("SKETCHINC = {x}"), changed))
+                                    }
+                                    _ => Err("SETVAR: positive numeric value required.".into()),
+                                },
                                 None => Ok((format!("SKETCHINC = {}", h.sketch_increment), false)),
+                            },
+                            "SKPOLY" => match &value {
+                                Some(v) => match v.parse::<i16>() {
+                                    Ok(x @ 0..=2) => {
+                                        let changed = h.sketch_type != x;
+                                        h.sketch_type = x;
+                                        Ok((format!("SKPOLY = {x}"), changed))
+                                    }
+                                    _ => Err("SETVAR: integer value from 0 to 2 required.".into()),
+                                },
+                                None => Ok((format!("SKPOLY = {}", h.sketch_type), false)),
+                            },
+                            "SKTOLERANCE" => match &value {
+                                Some(v) => match v.parse::<f64>() {
+                                    Ok(x) if x.is_finite() && (0.0..=1.0).contains(&x) => {
+                                        let changed = h.sketch_tolerance != x;
+                                        h.sketch_tolerance = x;
+                                        Ok((format!("SKTOLERANCE = {x}"), changed))
+                                    }
+                                    _ => Err("SETVAR: numeric value from 0 to 1 required.".into()),
+                                },
+                                None => Ok((
+                                    format!("SKTOLERANCE = {}", h.sketch_tolerance),
+                                    false,
+                                )),
                             },
                             "CLAYER" => match &value {
                                 Some(_) => Err(
