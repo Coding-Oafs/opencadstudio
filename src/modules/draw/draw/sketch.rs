@@ -1,6 +1,6 @@
 // Freehand sketch tool — interactive command.
 //
-// A sketch is recorded as equally spaced samples in the active working plane.
+// A sketch is recorded from cursor positions in the active working plane.
 // The persisted SKPOLY setting chooses line segments, a lightweight polyline,
 // or a fit-point spline. Multiple temporary strokes may be recorded while the
 // command remains active; Exit records the remaining strokes and finishes,
@@ -114,25 +114,21 @@ impl SketchCommand {
         self.erase_engaged = false;
     }
 
-    /// Add samples at exact `increment` intervals along the latest pointer
-    /// movement. A sparse stream of mouse events therefore produces the same
-    /// chord density as a dense stream instead of one long segment per event.
+    /// Record the actual pointer position after it has moved by at least the
+    /// configured increment. The increment is a minimum recording distance,
+    /// not a segment length: no synthetic points are inserted between pointer
+    /// events, so every chord ends at a real movement position.
     fn sample_to(&mut self, point: DVec3) {
         let Some(stroke) = self.strokes.last_mut() else {
             return;
         };
-        let Some(mut cursor) = stroke.last().copied() else {
+        let Some(cursor) = stroke.last().copied() else {
             stroke.push(point);
             return;
         };
-        loop {
-            let delta = point - cursor;
-            let distance = delta.length();
-            if !distance.is_finite() || distance + 1.0e-12 < self.increment {
-                break;
-            }
-            cursor += delta / distance * self.increment;
-            stroke.push(cursor);
+        let distance = cursor.distance(point);
+        if distance.is_finite() && distance + 1.0e-12 >= self.increment {
+            stroke.push(point);
         }
     }
 
