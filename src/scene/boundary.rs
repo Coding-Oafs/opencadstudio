@@ -301,8 +301,8 @@ impl Scene {
 
     /// Build closed planar regions from the visible wire geometry.
     ///
-    /// Unlike `closed_outlines()`, the source entities do not need to be closed
-    /// individually. Intersections are inserted as temporary graph vertices and
+    /// Source entities do not need to be closed individually. Intersections are
+    /// inserted as temporary graph vertices and
     /// the bounded faces of that planar graph are returned as hatch candidates.
     ///
     /// Curved entities participate through their already-tessellated WireModel
