@@ -1,12 +1,12 @@
 use acadrust::entities::MLine;
-use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, square_grip};
-use crate::entities::traits::{Grippable, PropertyEditable, Transformable, RenderConvertible};
+use crate::entities::traits::{Grippable, PropertyEditable, RenderConvertible, Transformable};
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
+use crate::t;
 
 /// One drawn line of a multiline: the polyline for a single style element (or
 /// an end cap), tagged with the element's colour and linetype so the
@@ -350,7 +350,7 @@ impl PropertyEditable for MLine {
                             .collect(),
                     },
                 },
-                edit(t!("Style scale").as_ref(), "ml_scale", self.scale_factor),
+                edit(t!("Scale").as_ref(), "ml_scale", self.scale_factor),
             ],
         }]
     }
@@ -384,11 +384,40 @@ impl PropertyEditable for MLine {
         let Ok(v) = value.trim().parse::<f64>() else {
             return;
         };
-        match field {
-            "ml_scale" if v != 0.0 => self.scale_factor = v,
-            _ => {}
+        if field == "ml_scale" {
+            set_mline_scale(self, v);
         }
     }
+}
+
+fn set_mline_scale(mline: &mut MLine, scale: f64) {
+    let old = mline.scale_factor;
+    if !scale.is_finite() || scale == 0.0 || !old.is_finite() || old == 0.0 {
+        return;
+    }
+    let ratio = scale / old;
+    if !ratio.is_finite() {
+        return;
+    }
+    if mline
+        .vertices
+        .iter()
+        .flat_map(|vertex| &vertex.segments)
+        .filter_map(|segment| segment.parameters.first())
+        .any(|offset| !offset.is_finite() || !(offset * ratio).is_finite())
+    {
+        return;
+    }
+    for segment in mline
+        .vertices
+        .iter_mut()
+        .flat_map(|vertex| vertex.segments.iter_mut())
+    {
+        if let Some(offset) = segment.parameters.first_mut() {
+            *offset *= ratio;
+        }
+    }
+    mline.scale_factor = scale;
 }
 
 impl Transformable for MLine {
