@@ -518,6 +518,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "HALOGAP",
         "TRACEWID",
         "SKETCHINC",
+        "SKPOLY",
+        "SKTOLERANCE",
         // Reset selected entities' overrides to follow their layer.
         "SETBYLAYER",
         // Remove duplicate objects; set drawing base point; audit integrity;

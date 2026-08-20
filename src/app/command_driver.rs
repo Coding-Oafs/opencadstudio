@@ -642,6 +642,23 @@ impl OpenCADStudio {
     /// Pure-selection commands (SELECTALL, QSELECT, …) run without an active
     /// command, so `was_active` is false and their selection is preserved.
     pub(super) fn apply_cmd_result(&mut self, result: CmdResult) -> Task<Message> {
+        let settings = self.tabs[self.active_tab]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.sketch_settings());
+        if let Some((sketch_type, increment, tolerance)) = settings {
+            let tab = &mut self.tabs[self.active_tab];
+            let header = &mut tab.scene.document.header;
+            let changed = header.sketch_type != sketch_type
+                || (header.sketch_increment - increment).abs() > f64::EPSILON
+                || (header.sketch_tolerance - tolerance).abs() > f64::EPSILON;
+            if changed {
+                header.sketch_type = sketch_type;
+                header.sketch_increment = increment;
+                header.sketch_tolerance = tolerance;
+                tab.dirty = true;
+            }
+        }
         let was_active = self.tabs[self.active_tab].active_cmd.is_some();
         let preserve_selection =
             matches!(result, CmdResult::Relaunch(..) | CmdResult::Dispatch(..));
@@ -785,6 +802,7 @@ impl OpenCADStudio {
                     self.commit_entity(entity);
                 }
                 self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                 if let Some(p) = prompt {
                     self.command_line.push_info(&p);

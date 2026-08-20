@@ -475,7 +475,12 @@ impl OpenCADStudio {
 
             "SKETCH" => {
                 use crate::modules::draw::draw::sketch::SketchCommand;
-                let new_cmd = SketchCommand::new();
+                let header = &self.tabs[i].scene.document.header;
+                let new_cmd = SketchCommand::new(
+                    header.sketch_type,
+                    header.sketch_increment,
+                    header.sketch_tolerance,
+                );
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }

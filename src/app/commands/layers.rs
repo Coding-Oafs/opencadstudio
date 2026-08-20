@@ -914,6 +914,7 @@ impl OpenCADStudio {
             &mut header.text_height,
             &mut header.trace_width,
             &mut header.sketch_increment,
+            &mut header.sketch_tolerance,
             &mut header.thickness,
             &mut header.polyline_width,
             &mut header.fillet_radius,

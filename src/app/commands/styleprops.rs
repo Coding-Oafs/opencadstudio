@@ -923,6 +923,8 @@ impl OpenCADStudio {
                     | "HALOGAP"
                     | "TRACEWID"
                     | "SKETCHINC"
+                    | "SKPOLY"
+                    | "SKTOLERANCE"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -945,7 +947,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     // Parse a boolean given as 0/1 or ON/OFF.
@@ -1628,14 +1630,37 @@ impl OpenCADStudio {
                                 None => Ok((format!("TRACEWID = {}", h.trace_width), false)),
                             },
                             "SKETCHINC" => match &value {
-                                Some(v) => v
-                                    .parse::<f64>()
-                                    .map(|x| {
+                                Some(v) => match v.parse::<f64>() {
+                                    Ok(x) if x.is_finite() && x > 0.0 => {
                                         h.sketch_increment = x;
-                                        (format!("SKETCHINC = {x}"), true)
-                                    })
-                                    .map_err(|_| "SETVAR: numeric value required.".into()),
+                                        Ok((format!("SKETCHINC = {x}"), true))
+                                    }
+                                    _ => Err("SETVAR: positive numeric value required.".into()),
+                                },
                                 None => Ok((format!("SKETCHINC = {}", h.sketch_increment), false)),
+                            },
+                            "SKPOLY" => match &value {
+                                Some(v) => match v.parse::<i16>() {
+                                    Ok(x @ 0..=2) => {
+                                        h.sketch_type = x;
+                                        Ok((format!("SKPOLY = {x}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer value from 0 to 2 required.".into()),
+                                },
+                                None => Ok((format!("SKPOLY = {}", h.sketch_type), false)),
+                            },
+                            "SKTOLERANCE" => match &value {
+                                Some(v) => match v.parse::<f64>() {
+                                    Ok(x) if x.is_finite() && x >= 0.0 => {
+                                        h.sketch_tolerance = x;
+                                        Ok((format!("SKTOLERANCE = {x}"), true))
+                                    }
+                                    _ => Err("SETVAR: non-negative numeric value required.".into()),
+                                },
+                                None => Ok((
+                                    format!("SKTOLERANCE = {}", h.sketch_tolerance),
+                                    false,
+                                )),
                             },
                             "CLAYER" => match &value {
                                 Some(_) => Err(
