@@ -24,6 +24,10 @@ impl Scene {
     /// Replace the session-only georeferenced basemap underlay images.
     pub fn set_basemap_images(&mut self, images: Vec<ImageModel>) {
         self.basemap_images = std::sync::Arc::new(images);
+        // Basemap tiles are session-only and do not bump the drawing's geometry
+        // epoch. Explicitly invalidate every viewport so the scene-render cache
+        // cannot re-blit the pre-load blank frame and skip the image upload.
+        self.request_refresh(ViewportRefreshScope::All);
     }
 
     /// Publish all edited hatches as one live fill overlay.
@@ -468,5 +472,17 @@ mod tests {
     fn block_preview_wires_empty_for_unknown_block() {
         let s = Scene::new();
         assert!(s.block_preview_wires("Nope").is_empty());
+    }
+
+    #[test]
+    fn replacing_basemap_images_requests_a_renderer_refresh() {
+        let mut scene = Scene::new();
+
+        scene.set_basemap_images(Vec::new());
+
+        assert!(
+            scene.refresh_pending_any(),
+            "a basemap replacement must invalidate the cached viewport frame"
+        );
     }
 }

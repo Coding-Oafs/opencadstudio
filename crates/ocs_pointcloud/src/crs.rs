@@ -269,6 +269,14 @@ fn proj4_from_wkt(wkt: &str) -> Option<String> {
     };
     let mut parts = vec![format!("+proj={proj}")];
 
+    // WKT1 expresses false easting/northing in the projected CRS's declared
+    // linear unit. PROJ.4, however, requires x_0/y_0 in metres even when
+    // `+units=ft` says the input/output coordinates are feet. Keeping the raw
+    // foot values shifts state-plane data by hundreds of kilometres (the
+    // Boston USGS fixture landed in the Atlantic near 27 N, 75 W).
+    let horizontal_unit = horizontal_wkt_unit(wkt);
+    let linear_to_metre = horizontal_unit.as_ref().map_or(1.0, |(_, factor)| *factor);
+
     for (name, value) in wkt_parameters(wkt) {
         let key = match name.as_str() {
             "latitude_of_origin" | "latitude_of_center" | "latitude_of_natural_origin" => "lat_0",
@@ -279,6 +287,11 @@ fn proj4_from_wkt(wkt: &str) -> Option<String> {
             "false_northing" => "y_0",
             "scale_factor" | "scale_factor_at_natural_origin" => "k_0",
             _ => continue,
+        };
+        let value = if matches!(key, "x_0" | "y_0") {
+            value * linear_to_metre
+        } else {
+            value
         };
         parts.push(format!("+{key}={value}"));
     }
@@ -295,10 +308,7 @@ fn proj4_from_wkt(wkt: &str) -> Option<String> {
     }
 
     // Horizontal linear unit: the first non-angular UNIT (skips GEOGCS "degree").
-    if let Some((name, factor)) = wkt_units(wkt)
-        .into_iter()
-        .find(|(n, _)| !n.eq_ignore_ascii_case("degree"))
-    {
+    if let Some((name, factor)) = horizontal_unit {
         match unit_key(&name) {
             Some(key) => parts.push(format!("+units={key}")),
             None => parts.push(format!("+to_meter={factor}")),
@@ -307,6 +317,20 @@ fn proj4_from_wkt(wkt: &str) -> Option<String> {
 
     parts.push("+no_defs".to_string());
     Some(parts.join(" "))
+}
+
+/// Projected horizontal unit, excluding any vertical CRS appended by a
+/// compound WKT. The first non-angular unit in the horizontal component is the
+/// coordinate unit used by WKT1 projection parameters.
+fn horizontal_wkt_unit(wkt: &str) -> Option<(String, f64)> {
+    let vertical_start = ["VERT_CS[", "VERTCRS[", "VERTICALCRS["]
+        .iter()
+        .filter_map(|marker| wkt.find(marker))
+        .min()
+        .unwrap_or(wkt.len());
+    wkt_units(&wkt[..vertical_start])
+        .into_iter()
+        .find(|(name, _)| !name.eq_ignore_ascii_case("degree"))
 }
 
 /// The quoted name of the first `KEY["..."]` occurrence after `marker`.
@@ -746,8 +770,19 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
         assert!(proj4.starts_with("+proj=lcc"), "got: {proj4}");
         assert!(proj4.contains("+lat_0=41"), "got: {proj4}");
         assert!(proj4.contains("+lon_0=-71.5"), "got: {proj4}");
+        assert!(proj4.contains("+x_0=200000"), "got: {proj4}");
+        assert!(proj4.contains("+y_0=749999"), "got: {proj4}");
         assert!(proj4.contains("+ellps=GRS80"), "got: {proj4}");
         assert!(proj4.contains("+units=ft"), "got: {proj4}");
+
+        // Centre of a real Boston USGS tile in the WKT's international-foot
+        // coordinates. This previously transformed to the Atlantic near
+        // (-75.56, 26.98) because the false offsets were treated as metres.
+        let (longitude, latitude) =
+            reproject_from_proj4(&proj4, 4326, 787_148.208, 2_940_613.759)
+                .expect("state-plane coordinate should transform");
+        assert!((-71.1..=-70.8).contains(&longitude), "longitude={longitude}");
+        assert!((42.2..=42.5).contains(&latitude), "latitude={latitude}");
     }
 
     #[test]

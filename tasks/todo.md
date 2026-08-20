@@ -1,5 +1,15 @@
 # v1.0 — Basemap, spatial settings, measurement, navigation, and release
 
+## v1.0.2 basemap imagery/alignment patch
+
+- [x] Reproduce the renderer-cache blank-frame failure
+- [x] Correct foot-unit WKT false easting/northing conversion
+- [x] Verify the Boston LAS center resolves to Boston imagery tiles
+- [x] Add regression coverage for renderer invalidation and CRS conversion
+- [x] Build and validate the v1.0.2 portable executable and WiX MSI
+- [x] Install v1.0.2 and smoke-test the installed binary
+- [x] Receive authorization to commit, push, tag, and publish v1.0.2
+
 ## v1.0.1 urgent basemap crash patch
 
 - [x] Symbolize repeated v1.0.0 Windows crash dumps as Rust OOM aborts
@@ -8,7 +18,7 @@
 - [x] Add full-world zoom-22 no-allocation regression coverage
 - [x] Run full regression suite and release build
 - [x] Build/install/verify the 1.0.1 MSI
-- [ ] Push, tag, and publish v1.0.1 as Latest
+- [x] Push, tag, and publish v1.0.1 as Latest
 
 ## Part A — CRS reprojection fix
 - [x] Add `proj4: Option<String>` to `CrsInfo` (crates/ocs_pointcloud/src/crs.rs)

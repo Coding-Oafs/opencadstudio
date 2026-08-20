@@ -3506,11 +3506,22 @@ impl Scene {
         } else {
             // Model space: drawing images plus the session basemap underlay,
             // drawn behind (lower depth) so content stays on top.
-            let mut base: Vec<ImageModel> =
-                Vec::with_capacity(self.basemap_images.len() + 1);
-            base.extend(self.basemap_images.iter().cloned());
-            base.extend(self.images_for_viewport(inst.handle, &vp_frozen).iter().cloned());
-            Arc::new(base)
+            let drawing_images = self.images_for_viewport(inst.handle, &vp_frozen);
+            if self.basemap_images.is_empty() {
+                drawing_images
+            } else if drawing_images.is_empty() {
+                // Preserve the stable basemap Arc so camera navigation reuses
+                // the resident GPU textures instead of re-uploading every tile
+                // on every pan/zoom frame.
+                Arc::clone(&self.basemap_images)
+            } else {
+                let mut base = Vec::with_capacity(
+                    self.basemap_images.len() + drawing_images.len(),
+                );
+                base.extend(self.basemap_images.iter().cloned());
+                base.extend(drawing_images.iter().cloned());
+                Arc::new(base)
+            }
         };
         // The paper sheet shows the layout's own 2-D content (fills, borders,
         // annotation) — never the model's 3-D solids. Those are drawn inside

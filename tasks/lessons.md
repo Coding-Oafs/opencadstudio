@@ -136,3 +136,10 @@ Rust's native out-of-memory abort (`0xc0000409`).
 - Prefer automatically reducing overview detail to rejecting or attempting an
   impractical request; preserve the user's configured detail level for smaller
   extents.
+- A background download completing successfully is not proof that pixels reached
+  the screen. Session-only render inputs must invalidate the scene-frame cache;
+  otherwise the GPU upload path can be skipped while the UI reports success.
+- WKT1 false easting/northing values use the projected CRS linear unit, while
+  PROJ.4 `x_0`/`y_0` are metre values even when `+units=ft` controls coordinate
+  input/output. Convert only those linear offsets when translating WKT to
+  PROJ.4, and regression-test against a known geographic location.
