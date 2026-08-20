@@ -60,7 +60,15 @@ impl OpenCADStudio {
 
             "REVCLOUD" => {
                 use crate::modules::draw::draw::revcloud::RevCloudCommand;
-                let cmd = RevCloudCommand::new();
+                let view_height = self.tabs[i].scene.camera.borrow().ortho_size() as f64 * 2.0;
+                let default_arc_length = (view_height * 0.0125).max(1.0e-6);
+                let sources = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .map(|entity| (entity.common().handle, entity.clone()))
+                    .collect();
+                let cmd = RevCloudCommand::new(default_arc_length, sources);
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
