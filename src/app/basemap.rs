@@ -500,38 +500,49 @@ impl OpenCADStudio {
             return Task::none();
         };
 
-        let mut effective_zoom = settings.zoom;
-        let mut tiles = basemap::tiles_covering(world_bounds, effective_zoom);
-        if automatic_bootstrap {
-            // An EPSG area of use can span a state, country, or the world. It
-            // is an overview, so lower only the initial fetch zoom until the
-            // request stays small; the configured site zoom remains unchanged
-            // for CENTER/BOUNDS-driven refreshes.
-            const MAX_BOOTSTRAP_TILES: usize = 64;
-            while tiles.len() > MAX_BOOTSTRAP_TILES && effective_zoom > 0 {
-                effective_zoom -= 1;
-                tiles = basemap::tiles_covering(world_bounds, effective_zoom);
+        // Count before allocation. A world envelope at zoom 16 covers more
+        // than four billion tiles; building that Vec first caused the v1.0.0
+        // basemap freeze followed by Rust's native out-of-memory abort.
+        const MAX_BOOTSTRAP_TILES: u64 = 64;
+        const MAX_INTERACTIVE_TILES: u64 = 256;
+        let tile_limit = if automatic_bootstrap {
+            MAX_BOOTSTRAP_TILES
+        } else {
+            MAX_INTERACTIVE_TILES
+        };
+        let Some((effective_zoom, planned_count)) =
+            basemap::zoom_for_tile_limit(world_bounds, settings.zoom, tile_limit)
+        else {
+            self.command_line
+                .push_error("Basemap: no tiles cover the drawing bounds.");
+            return Task::none();
+        };
+        let tiles = match basemap::tiles_covering_bounded(world_bounds, effective_zoom, tile_limit)
+        {
+            Ok(tiles) => tiles,
+            Err(required) => {
+                self.command_line.push_error(
+                    format!(
+                        "Basemap: request needs {required} tiles, above the safe {tile_limit}-tile limit."
+                    )
+                    .as_str(),
+                );
+                return Task::none();
             }
-        }
+        };
         if tiles.is_empty() {
             self.command_line
                 .push_error("Basemap: no tiles cover the drawing bounds.");
             return Task::none();
         }
-        // A high zoom over a large envelope would request millions of tiles,
-        // stalling the worker and flooding the network. 16k tiles (a 128×128
-        // grid) is already far more than any single viewport can show.
-        const MAX_BASEMAP_TILES: usize = 16_384;
-        if tiles.len() > MAX_BASEMAP_TILES {
-            self.command_line.push_error(
-                crate::tf!(
-                    "Basemap: zoom {} is too high for the drawing bounds ({} tiles); lower BASEMAP ZOOM.",
-                    effective_zoom,
-                    tiles.len()
+        if effective_zoom < settings.zoom && !automatic_bootstrap {
+            self.command_line.push_info(
+                format!(
+                    "Basemap: drawing extent is too large for zoom {}; using zoom {effective_zoom} ({planned_count} tiles) to keep the viewport responsive.",
+                    settings.zoom
                 )
-                .as_ref(),
+                .as_str(),
             );
-            return Task::none();
         }
 
         #[cfg(not(target_arch = "wasm32"))]

@@ -118,3 +118,21 @@ the user wants to see.
   transforms a small site envelope into drawing coordinates.
 - Clear manual bounds when changing between CRSs so stale coordinates cannot be
   silently interpreted in a different reference system.
+
+## Enforce cardinality limits before allocation
+
+**What happened:** v1.0.0 computed every XYZ tile into a `Vec` and only then
+checked the 16,384-tile limit. The new empty-drawing world overview at zoom 16
+therefore attempted more than four billion entries, froze the UI, and ended in
+Rust's native out-of-memory abort (`0xc0000409`).
+
+**How to apply:**
+- Compute range cardinality with checked fixed-width arithmetic before creating
+  a collection or starting network work.
+- Make the bounded materializer enforce its own limit so callers cannot bypass
+  the memory boundary accidentally.
+- Test pathological-but-valid inputs (full world at maximum zoom), not only
+  small happy-path tile envelopes.
+- Prefer automatically reducing overview detail to rejecting or attempting an
+  impractical request; preserve the user's configured detail level for smaller
+  extents.

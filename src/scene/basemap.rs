@@ -311,13 +311,16 @@ pub fn wgs84_radius_area(longitude: f64, latitude: f64, radius_km: f64) -> Optio
     (west < east && south < north).then_some([west, south, east, north])
 }
 
-/// Which tiles at `zoom` cover the Web-Mercator `bounds`, clamped to valid
-/// tile indices. Returns an empty list for a degenerate or out-of-range bound.
-pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
-    let n = (1_u64 << zoom) as f64;
-    if !bounds.iter().all(|v| v.is_finite()) || bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
-        return Vec::new();
+/// Inclusive XYZ tile range covering a Web-Mercator envelope.
+fn tile_range(bounds: [f64; 4], zoom: u32) -> Option<(u32, u32, u32, u32)> {
+    if zoom > 22
+        || !bounds.iter().all(|value| value.is_finite())
+        || bounds[2] <= bounds[0]
+        || bounds[3] <= bounds[1]
+    {
+        return None;
     }
+    let n = (1_u64 << zoom) as f64;
     let clamp_x = |x: f64| -> u32 {
         (((x + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n)
             .floor()
@@ -330,7 +333,58 @@ pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
     };
     let (x0, x1) = (clamp_x(bounds[0]), clamp_x(bounds[2]));
     let (y0, y1) = (clamp_y(bounds[3]), clamp_y(bounds[1]));
-    let mut tiles = Vec::new();
+    Some((x0, x1, y0, y1))
+}
+
+/// Number of tiles at `zoom` covering `bounds`, computed without allocating.
+/// A world envelope at zoom 22 covers over 17 trillion tiles, so this count
+/// must always be checked before materializing a request vector.
+pub fn tile_count_covering(bounds: [f64; 4], zoom: u32) -> u64 {
+    let Some((x0, x1, y0, y1)) = tile_range(bounds, zoom) else {
+        return 0;
+    };
+    u64::from(x1 - x0 + 1) * u64::from(y1 - y0 + 1)
+}
+
+/// Lower `requested_zoom` until the envelope fits within `max_tiles`.
+/// Returns the effective zoom and exact tile count without allocating.
+pub fn zoom_for_tile_limit(
+    bounds: [f64; 4],
+    requested_zoom: u32,
+    max_tiles: u64,
+) -> Option<(u32, u64)> {
+    if max_tiles == 0 {
+        return None;
+    }
+    let mut zoom = requested_zoom.min(22);
+    loop {
+        let count = tile_count_covering(bounds, zoom);
+        if count == 0 {
+            return None;
+        }
+        if count <= max_tiles || zoom == 0 {
+            return Some((zoom, count));
+        }
+        zoom -= 1;
+    }
+}
+
+/// Materialize the tiles covering `bounds` only after enforcing `max_tiles`.
+/// Returns the exact required count on overflow and never performs a large
+/// allocation. This is the OOM boundary for every basemap request.
+pub fn tiles_covering_bounded(
+    bounds: [f64; 4],
+    zoom: u32,
+    max_tiles: u64,
+) -> Result<Vec<Tile>, u64> {
+    let Some((x0, x1, y0, y1)) = tile_range(bounds, zoom) else {
+        return Ok(Vec::new());
+    };
+    let count = u64::from(x1 - x0 + 1) * u64::from(y1 - y0 + 1);
+    if count > max_tiles || count > usize::MAX as u64 {
+        return Err(count);
+    }
+    let mut tiles = Vec::with_capacity(count as usize);
     for y in y0..=y1 {
         for x in x0..=x1 {
             tiles.push(Tile {
@@ -341,7 +395,7 @@ pub fn tiles_covering(bounds: [f64; 4], zoom: u32) -> Vec<Tile> {
             });
         }
     }
-    tiles
+    Ok(tiles)
 }
 
 /// Reproject a Web-Mercator envelope into `crs` (or the same envelope when the
@@ -495,11 +549,11 @@ mod tests {
     fn tiles_covering_clamps_to_world() {
         // The whole world at z=0 is exactly one tile.
         let world = tile_bounds(0, 0, 0);
-        assert_eq!(tiles_covering(world, 0).len(), 1);
+        assert_eq!(tiles_covering_bounded(world, 0, 1).unwrap().len(), 1);
         // An envelope strictly inside one tile at z=2 maps to just that tile.
         let b = tile_bounds(2, 1, 1);
         let interior = [b[0] + 1.0, b[1] + 1.0, b[2] - 1.0, b[3] - 1.0];
-        let covered = tiles_covering(interior, 2);
+        let covered = tiles_covering_bounded(interior, 2, 1).unwrap();
         assert_eq!(
             covered.len(),
             1,
@@ -507,6 +561,20 @@ mod tests {
         );
         assert_eq!((covered[0].x, covered[0].y), (1, 1));
         // A degenerate bound yields nothing.
-        assert!(tiles_covering([1.0, 1.0, 0.0, 0.0], 2).is_empty());
+        assert!(tiles_covering_bounded([1.0, 1.0, 0.0, 0.0], 2, 1)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn huge_tile_requests_are_counted_and_bounded_before_allocation() {
+        let world = tile_bounds(0, 0, 0);
+        assert_eq!(tile_count_covering(world, 22), 17_592_186_044_416);
+        assert_eq!(
+            tiles_covering_bounded(world, 22, 256),
+            Err(17_592_186_044_416)
+        );
+        assert_eq!(zoom_for_tile_limit(world, 16, 64), Some((3, 64)));
+        assert_eq!(tiles_covering_bounded(world, 3, 64).unwrap().len(), 64);
     }
 }

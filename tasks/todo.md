@@ -1,5 +1,15 @@
 # v1.0 — Basemap, spatial settings, measurement, navigation, and release
 
+## v1.0.1 urgent basemap crash patch
+
+- [x] Symbolize repeated v1.0.0 Windows crash dumps as Rust OOM aborts
+- [x] Count huge tile coverage before allocation
+- [x] Automatically lower effective zoom to 64 bootstrap / 256 drawing tiles
+- [x] Add full-world zoom-22 no-allocation regression coverage
+- [x] Run full regression suite and release build
+- [x] Build/install/verify the 1.0.1 MSI
+- [ ] Push, tag, and publish v1.0.1 as Latest
+
 ## Part A — CRS reprojection fix
 - [x] Add `proj4: Option<String>` to `CrsInfo` (crates/ocs_pointcloud/src/crs.rs)
 - [x] Add `proj4_from_wkt()` WKT→PROJ.4 parser (LCC 2SP, TMerc, geographic)
