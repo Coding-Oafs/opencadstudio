@@ -9,7 +9,7 @@
 //   Click a point INSIDE a closed region → boundary auto-detected.
 //   Type "S" to switch to manual vertex-picking mode (HATCH/GRADIENT only).
 
-use crate::command::{CadCommand, CmdResult};
+use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::IconKind;
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern, PatFamily};
 use crate::scene::model::wire_model::WireModel;
@@ -850,20 +850,195 @@ impl CadCommand for GradientCommand {
 // ── BOUNDARY command ───────────────────────────────────────────────────────
 
 pub struct BoundaryCommand {
+    sources: rustc_hash::FxHashMap<Handle, crate::scene::BoundarySource>,
     outlines: Vec<Vec<[f64; 2]>>,
+    point_regions: Vec<Vec<Vec<[f64; 2]>>>,
+    object_regions: Vec<Vec<Vec<[f64; 2]>>>,
+    selected_objects: Vec<Handle>,
+    mode: BoundaryMode,
+    output: BoundaryOutput,
+    island_style: BoundaryIslandStyle,
+    gap_tolerance: f64,
+    plane: WorkingPlane,
     missed: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoundaryMode {
+    PickInside,
+    SelectObjects,
+    GapTolerance { return_to_selection: bool },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoundaryOutput {
+    Polyline,
+    Region,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoundaryIslandStyle {
+    Normal,
+    Outer,
+    Ignore,
+}
+
 impl BoundaryCommand {
-    pub fn new(outlines: Vec<Vec<[f64; 2]>>) -> Self {
-        Self {
+    pub fn new(
+        sources: rustc_hash::FxHashMap<Handle, crate::scene::BoundarySource>,
+        selected_objects: Vec<Handle>,
+        plane: WorkingPlane,
+    ) -> Self {
+        let selected_objects: Vec<_> = selected_objects
+            .into_iter()
+            .filter(|handle| sources.contains_key(handle))
+            .collect();
+        let has_selection = !selected_objects.is_empty();
+        let outlines = crate::scene::boundary_faces(&sources, 1.0e-6);
+        let mut command = Self {
+            sources,
             outlines,
+            point_regions: Vec::new(),
+            object_regions: Vec::new(),
+            selected_objects: Vec::new(),
+            mode: if has_selection {
+                BoundaryMode::SelectObjects
+            } else {
+                BoundaryMode::PickInside
+            },
+            output: BoundaryOutput::Polyline,
+            island_style: BoundaryIslandStyle::Normal,
+            gap_tolerance: 1.0e-6,
+            plane,
             missed: false,
+        };
+        if has_selection {
+            command.set_object_selection(selected_objects);
+        }
+        command
+    }
+
+    fn set_object_selection(&mut self, handles: Vec<Handle>) {
+        let selected_sources: rustc_hash::FxHashMap<_, _> = handles
+            .iter()
+            .filter_map(|handle| self.sources.get(handle).cloned().map(|source| (*handle, source)))
+            .collect();
+        self.object_regions = crate::scene::boundary_faces(
+            &selected_sources,
+            self.gap_tolerance,
+        )
+        .into_iter()
+        .map(|ring| vec![ring])
+        .collect();
+        self.missed = !handles.is_empty() && self.object_regions.is_empty();
+        self.selected_objects = handles;
+    }
+
+    fn rebuild_faces(&mut self) {
+        self.outlines = crate::scene::boundary_faces(&self.sources, self.gap_tolerance);
+        if !self.selected_objects.is_empty() {
+            self.set_object_selection(self.selected_objects.clone());
+        }
+        self.point_regions.clear();
+    }
+
+    fn region_count(&self) -> usize {
+        self.point_regions.len() + self.object_regions.len()
+    }
+
+    fn regions(&self) -> Vec<Vec<Vec<[f64; 2]>>> {
+        let mut regions = Vec::new();
+        for region in self.point_regions.iter().chain(self.object_regions.iter()) {
+            if !regions.iter().any(|existing| existing == region) {
+                regions.push(region.clone());
+            }
+        }
+        regions
+    }
+
+    fn output_label(&self) -> &'static str {
+        match self.output {
+            BoundaryOutput::Polyline => "Polyline",
+            BoundaryOutput::Region => "Region",
+        }
+    }
+
+    fn island_label(&self) -> &'static str {
+        match self.island_style {
+            BoundaryIslandStyle::Normal => "Normal",
+            BoundaryIslandStyle::Outer => "Outer",
+            BoundaryIslandStyle::Ignore => "Ignore",
+        }
+    }
+
+    fn picked_region(&self, point: [f64; 2]) -> Option<Vec<Vec<[f64; 2]>>> {
+        let mut containing: Vec<(usize, f64)> = self
+            .outlines
+            .iter()
+            .enumerate()
+            .filter(|(_, outline)| point_in_polygon(point, outline))
+            .map(|(index, outline)| (index, polygon_area(outline)))
+            .collect();
+        containing.sort_by(|left, right| left.1.total_cmp(&right.1));
+        let outer_index = containing.first()?.0;
+        let outer = &self.outlines[outer_index];
+        let mut rings = vec![outer.clone()];
+        if self.island_style == BoundaryIslandStyle::Ignore {
+            return Some(rings);
+        }
+        for (index, candidate) in self.outlines.iter().enumerate() {
+            if index == outer_index
+                || !polygon_contains_polygon(outer, candidate)
+                || point_in_polygon(point, candidate)
+            {
+                continue;
+            }
+            if self.island_style == BoundaryIslandStyle::Outer {
+                let has_intermediate = self.outlines.iter().enumerate().any(|(middle, other)| {
+                    middle != index
+                        && middle != outer_index
+                        && polygon_contains_polygon(outer, other)
+                        && polygon_contains_polygon(other, candidate)
+                });
+                if has_intermediate {
+                    continue;
+                }
+            }
+            rings.push(candidate.clone());
+        }
+        Some(rings)
+    }
+
+    fn add_point_region(&mut self, region: Vec<Vec<[f64; 2]>>) {
+        if !self.point_regions.iter().any(|existing| existing == &region) {
+            self.point_regions.push(region);
+        }
+    }
+
+    fn make_entities(&self) -> Vec<acadrust::EntityType> {
+        let regions = self.regions();
+        match self.output {
+            BoundaryOutput::Polyline => crate::scene::boundary_polyline_entities(
+                &regions,
+                self.plane,
+                &self.sources,
+                self.gap_tolerance,
+            ),
+            BoundaryOutput::Region => crate::scene::boundary_region_entities(
+                &regions,
+                self.plane,
+                &self.sources,
+                self.gap_tolerance,
+            ),
         }
     }
 }
 
 impl CadCommand for BoundaryCommand {
+    fn set_working_plane(&mut self, plane: WorkingPlane) {
+        self.plane = plane;
+    }
+
     fn name(&self) -> &'static str {
         "BOUNDARY"
     }
@@ -874,28 +1049,198 @@ impl CadCommand for BoundaryCommand {
         } else {
             String::new()
         };
-        t!("BOUNDARY  Pick internal point:%{miss}", miss = miss).into_owned()
-    }
-
-    fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        let xy = [pt.x, pt.y];
-        match resolve_hatch_rings(&self.outlines, xy) {
-            Some(rings) => {
-                self.missed = false;
-                CmdResult::CommitEntitiesAndExit(crate::scene::boundary_entities(&rings))
-            }
-            None => {
-                self.missed = true;
-                CmdResult::NeedPoint
-            }
+        match self.mode {
+            BoundaryMode::PickInside => t!(
+                "BOUNDARY  Pick internal point (%{count} regions, %{output}, islands: %{islands}; Enter to apply):%{miss}",
+                count = self.region_count(),
+                output = self.output_label(),
+                islands = self.island_label(),
+                miss = miss
+            )
+            .into_owned(),
+            BoundaryMode::SelectObjects => t!(
+                "BOUNDARY  Select boundary objects (%{objects} objects, %{count} regions; Enter to apply):%{miss}",
+                objects = self.selected_objects.len(),
+                count = self.region_count(),
+                miss = miss
+            )
+            .into_owned(),
+            BoundaryMode::GapTolerance { .. } => t!(
+                "BOUNDARY  Enter gap tolerance <%{tolerance}>:",
+                tolerance = self.gap_tolerance
+            )
+            .into_owned(),
         }
     }
 
-    fn on_enter(&mut self) -> CmdResult {
-        CmdResult::Cancel
+    fn options(&self) -> Vec<crate::command::CmdOption> {
+        use crate::command::CmdOption;
+        if matches!(self.mode, BoundaryMode::GapTolerance { .. }) {
+            return Vec::new();
+        }
+        let mut options = vec![
+            CmdOption::new(
+                if matches!(self.mode, BoundaryMode::SelectObjects) {
+                    "Pick internal points"
+                } else {
+                    "Select objects"
+                },
+                if matches!(self.mode, BoundaryMode::SelectObjects) { "I" } else { "O" },
+            ),
+            CmdOption::new(
+                &format!("Object type: {}", self.output_label()),
+                "T",
+            ),
+            CmdOption::new(
+                &format!("Island detection: {}", self.island_label()),
+                "S",
+            ),
+            CmdOption::new("Gap tolerance", "G"),
+        ];
+        if self.region_count() > 0 {
+            options.push(CmdOption::enter("Accept"));
+        }
+        options
     }
+
+    fn on_point(&mut self, pt: DVec3) -> CmdResult {
+        if matches!(self.mode, BoundaryMode::PickInside) {
+            let local = self.plane.to_local(pt);
+            match self.picked_region([local.x, local.y]) {
+                Some(region) => {
+                    self.missed = false;
+                    self.add_point_region(region);
+                }
+                None => self.missed = true,
+            }
+        }
+        CmdResult::NeedPoint
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        if let BoundaryMode::GapTolerance { return_to_selection } = self.mode {
+            self.mode = if return_to_selection {
+                BoundaryMode::SelectObjects
+            } else {
+                BoundaryMode::PickInside
+            };
+            return CmdResult::NeedPoint;
+        }
+        let entities = self.make_entities();
+        if entities.is_empty() {
+            CmdResult::Cancel
+        } else {
+            CmdResult::CommitEntitiesAndExit(entities)
+        }
+    }
+
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+
+    fn wants_text_input(&self) -> bool {
+        true
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        if let BoundaryMode::GapTolerance { return_to_selection } = self.mode {
+            if let Ok(value) = text.trim().parse::<f64>() {
+                if value.is_finite() && value > 0.0 {
+                    self.gap_tolerance = value;
+                    self.rebuild_faces();
+                    self.missed = false;
+                }
+            }
+            self.mode = if return_to_selection {
+                BoundaryMode::SelectObjects
+            } else {
+                BoundaryMode::PickInside
+            };
+            return Some(CmdResult::NeedPoint);
+        }
+        match text.trim().to_ascii_uppercase().as_str() {
+            "O" | "OBJECT" | "OBJECTS" => {
+                self.mode = BoundaryMode::SelectObjects;
+                self.missed = false;
+            }
+            "I" | "INTERNAL" | "POINTS" => {
+                self.mode = BoundaryMode::PickInside;
+                self.missed = false;
+            }
+            "T" | "TYPE" => {
+                self.output = match self.output {
+                    BoundaryOutput::Polyline => BoundaryOutput::Region,
+                    BoundaryOutput::Region => BoundaryOutput::Polyline,
+                };
+            }
+            "POLYLINE" => self.output = BoundaryOutput::Polyline,
+            "REGION" => self.output = BoundaryOutput::Region,
+            "S" | "ISLAND" | "ISLANDS" => {
+                self.island_style = match self.island_style {
+                    BoundaryIslandStyle::Normal => BoundaryIslandStyle::Outer,
+                    BoundaryIslandStyle::Outer => BoundaryIslandStyle::Ignore,
+                    BoundaryIslandStyle::Ignore => BoundaryIslandStyle::Normal,
+                };
+                self.point_regions.clear();
+            }
+            "NORMAL" => self.island_style = BoundaryIslandStyle::Normal,
+            "OUTER" => self.island_style = BoundaryIslandStyle::Outer,
+            "IGNORE" => self.island_style = BoundaryIslandStyle::Ignore,
+            "G" | "GAP" | "TOLERANCE" => {
+                self.mode = BoundaryMode::GapTolerance {
+                    return_to_selection: matches!(self.mode, BoundaryMode::SelectObjects),
+                };
+            }
+            _ => return None,
+        }
+        Some(CmdResult::NeedPoint)
+    }
+
+    fn is_selection_gathering(&self) -> bool {
+        matches!(self.mode, BoundaryMode::SelectObjects)
+    }
+
+    fn selection_forces_add(&self) -> bool {
+        matches!(self.mode, BoundaryMode::SelectObjects)
+    }
+
+    fn on_selection_complete(&mut self, handles: Vec<Handle>) -> CmdResult {
+        if matches!(self.mode, BoundaryMode::SelectObjects) {
+            self.set_object_selection(handles);
+            CmdResult::NeedPoint
+        } else {
+            CmdResult::Cancel
+        }
+    }
+
+    fn on_undo_step(&mut self) -> Option<CmdResult> {
+        self.point_regions.pop().map(|_| CmdResult::NeedPoint)
+    }
+
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
+        if !matches!(self.mode, BoundaryMode::PickInside) {
+            return None;
+        }
+        let local = self.plane.to_local(pt);
+        let region = self.picked_region([local.x, local.y])?;
+        let mut points = Vec::new();
+        for ring in region {
+            if !points.is_empty() {
+                points.push([f64::NAN; 3]);
+            }
+            for [x, y] in &ring {
+                points.push(self.plane.to_world(DVec3::new(*x, *y, 0.0)).to_array());
+            }
+            if let Some([x, y]) = ring.first() {
+                points.push(self.plane.to_world(DVec3::new(*x, *y, 0.0)).to_array());
+            }
+        }
+        Some(WireModel::solid_f64(
+            "boundary_preview".into(),
+            points,
+            WireModel::CYAN,
+            false,
+        ))
     }
 }
 

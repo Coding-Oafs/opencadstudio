@@ -676,8 +676,21 @@ impl OpenCADStudio {
 
             "BOUNDARY" => {
                 use crate::modules::draw::draw::hatch::BoundaryCommand;
-                let outlines = self.tabs[i].scene.closed_outlines();
-                let new_cmd = BoundaryCommand::new(outlines);
+                let plane = if self.tabs[i].editing_model_space() {
+                    self.tabs[i].ucs_xform().working_plane()
+                } else {
+                    crate::command::WorkingPlane::default()
+                };
+                let sources = self.tabs[i]
+                    .scene
+                    .boundary_sources_on_plane(plane, 1.0e-6);
+                let selected = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .iter()
+                    .map(|(handle, _)| *handle)
+                    .collect();
+                let new_cmd = BoundaryCommand::new(sources, selected, plane);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
