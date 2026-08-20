@@ -262,21 +262,32 @@ impl StorageHatchBatch {
             let mut grad_kind = 0u32;
             let (mode, color2, grad_cos, grad_sin, grad_min, grad_range) = match &h.pattern {
                 HatchPattern::Solid => (1u32, [0.0; 4], 0.0, 0.0, 0.0, 1.0),
-                HatchPattern::Gradient { angle_deg, color2, kind, invert } => {
+                HatchPattern::Gradient {
+                    angle_deg,
+                    color2,
+                    kind,
+                    invert,
+                    shift,
+                } => {
                     grad_kind = kind.shader_kind() | if *invert { 16 } else { 0 };
+                    let center = crate::scene::model::hatch_model::gradient_shift_offset(
+                        &h.boundary,
+                        *shift,
+                    );
                     if kind.radial() {
-                        // Radial fill: the boundary is stored relative to its
-                        // centre (`world_origin`), so the centre is the local
-                        // origin; radius = the farthest boundary vertex. mode 3.
-                        let radius = radial_radius(&h.boundary);
-                        (3u32, *color2, 0.0, 0.0, 0.0, radius)
+                        let radius = crate::scene::model::hatch_model::gradient_radius(
+                            &h.boundary,
+                            center,
+                        );
+                        (3u32, *color2, center[0], center[1], 0.0, radius)
                     } else {
                         let r = angle_deg.to_radians();
                         // Gradient projection range (proj_min / proj_range) —
                         // computed at upload time, identical to per-hatch path.
                         let (gmin, gmax) = boundary_projection_range(&h.boundary, r);
                         let grange = (gmax - gmin).max(1.0);
-                        (2u32, *color2, r.cos(), r.sin(), gmin, grange)
+                        let shifted_min = gmin + center[0] * r.cos() + center[1] * r.sin();
+                        (2u32, *color2, r.cos(), r.sin(), shifted_min, grange)
                     }
                 }
                 HatchPattern::Pattern(fams) => {
@@ -657,18 +668,6 @@ fn boundary_projection_range(boundary: &[[f32; 2]], theta: f32) -> (f32, f32) {
         return (0.0, 1.0);
     }
     (lo, hi)
-}
-
-/// Radius of a radial gradient — the distance from the boundary centre (the
-/// local origin, since vertices are stored relative to it) to the farthest
-/// vertex, so `t = 1` (the end colour) reaches the corners.
-fn radial_radius(boundary: &[[f32; 2]]) -> f32 {
-    boundary
-        .iter()
-        .filter(|p| p[0].is_finite() && p[1].is_finite())
-        .map(|p| (p[0] * p[0] + p[1] * p[1]).sqrt())
-        .fold(0.0_f32, f32::max)
-        .max(1.0)
 }
 
 // PatFamily is re-exported by hatch_model so we don't need to import

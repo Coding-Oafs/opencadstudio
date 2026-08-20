@@ -1222,7 +1222,8 @@ impl OpenCADStudio {
                             acadrust::EntityType::Text(_)
                             | acadrust::EntityType::MText(_)
                             | acadrust::EntityType::Insert(_)
-                            | acadrust::EntityType::Leader(_) => Some(("annotative", None)),
+                            | acadrust::EntityType::Leader(_)
+                            | acadrust::EntityType::Hatch(_) => Some(("annotative", None)),
                             acadrust::EntityType::MultiLeader(_) => {
                                 Some(("enable_annotation_scale", None))
                             }
@@ -1265,7 +1266,8 @@ impl OpenCADStudio {
                                         },
                                     ),
                                     acadrust::EntityType::Text(_)
-                                    | acadrust::EntityType::Insert(_) => set_row_value(
+                                    | acadrust::EntityType::Insert(_)
+                                    | acadrust::EntityType::Hatch(_) => set_row_value(
                                         &mut sections,
                                         "annotative",
                                         crate::scene::model::object::PropValue::BoolToggle {

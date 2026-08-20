@@ -58,6 +58,21 @@ impl GradientKind {
         GradientKind::Curved,
     ];
 
+    /// User-facing gradient definitions in their standard persisted order.
+    /// Inverted definitions are real named patterns rather than a separate
+    /// property, so Properties and the draw command share this single list.
+    pub const CHOICES: [(GradientKind, bool); 9] = [
+        (GradientKind::Linear, false),
+        (GradientKind::Cylinder, false),
+        (GradientKind::Cylinder, true),
+        (GradientKind::Spherical, false),
+        (GradientKind::Hemispherical, false),
+        (GradientKind::Curved, false),
+        (GradientKind::Spherical, true),
+        (GradientKind::Hemispherical, true),
+        (GradientKind::Curved, true),
+    ];
+
     /// Radial fills shade from the boundary centre outward.
     pub fn radial(self) -> bool {
         matches!(self, GradientKind::Spherical | GradientKind::Hemispherical)
@@ -75,6 +90,27 @@ impl GradientKind {
 
     pub fn from_label(label: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|k| k.label() == label)
+    }
+
+    pub fn choice_label(self, inverted: bool) -> &'static str {
+        match (self, inverted) {
+            (GradientKind::Linear, _) => "Linear",
+            (GradientKind::Cylinder, false) => "Cylindrical",
+            (GradientKind::Cylinder, true) => "Inverted cylindrical",
+            (GradientKind::Spherical, false) => "Spherical",
+            (GradientKind::Spherical, true) => "Inverted spherical",
+            (GradientKind::Hemispherical, false) => "Hemispherical",
+            (GradientKind::Hemispherical, true) => "Inverted hemispherical",
+            (GradientKind::Curved, false) => "Curved",
+            (GradientKind::Curved, true) => "Inverted curved",
+        }
+    }
+
+    pub fn from_choice_label(label: &str) -> Option<(Self, bool)> {
+        Self::CHOICES
+            .iter()
+            .copied()
+            .find(|(kind, inverted)| kind.choice_label(*inverted).eq_ignore_ascii_case(label))
     }
 
     /// Parse the DXF gradient name (`LINEAR`, `INVCYLINDER`, …) into the kind
@@ -139,7 +175,37 @@ pub enum HatchPattern {
         color2: [f32; 4],
         kind: GradientKind,
         invert: bool,
+        /// 0 = centred, 1 = shifted towards the upper-left light source.
+        shift: f32,
     },
+}
+
+/// Local-space focal offset for the persisted 0..1 gradient shift.
+pub fn gradient_shift_offset(boundary: &[[f32; 2]], shift: f32) -> [f32; 2] {
+    let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
+    let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for &[x, y] in boundary {
+        if x.is_finite() && y.is_finite() {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if !min_x.is_finite() {
+        return [0.0, 0.0];
+    }
+    let shift = shift.clamp(0.0, 1.0);
+    [-(max_x - min_x) * 0.25 * shift, (max_y - min_y) * 0.25 * shift]
+}
+
+pub fn gradient_radius(boundary: &[[f32; 2]], center: [f32; 2]) -> f32 {
+    boundary
+        .iter()
+        .filter(|point| point[0].is_finite() && point[1].is_finite())
+        .map(|point| (point[0] - center[0]).hypot(point[1] - center[1]))
+        .fold(0.0_f32, f32::max)
+        .max(1.0)
 }
 
 /// GPU-side separator between disconnected boundary sub-loops. A finite

@@ -90,6 +90,36 @@ fn family_from_stored_line(
     }
 }
 
+/// Preserve the selected hue while moving its HSL lightness towards the
+/// persisted one-colour tint/shade target (0 = black, 1 = white).
+fn gradient_tint_color(base: [f32; 4], target: f32) -> [f32; 4] {
+    let max = base[0].max(base[1]).max(base[2]);
+    let min = base[0].min(base[1]).min(base[2]);
+    let lightness = (max + min) * 0.5;
+    let target = target.clamp(0.0, 1.0);
+    let mut result = base;
+    if target <= lightness {
+        let factor = if lightness > 1.0e-6 {
+            target / lightness
+        } else {
+            0.0
+        };
+        for channel in &mut result[..3] {
+            *channel *= factor;
+        }
+    } else {
+        let factor = if lightness < 1.0 - 1.0e-6 {
+            (target - lightness) / (1.0 - lightness)
+        } else {
+            1.0
+        };
+        for channel in &mut result[..3] {
+            *channel += (1.0 - *channel) * factor;
+        }
+    }
+    result
+}
+
 impl Scene {
     // ── Entity management ─────────────────────────────────────────────────
 
@@ -1041,8 +1071,13 @@ impl Scene {
                                 m.angle_offset = dxf.pattern_angle as f32;
                                 m.scale = dxf.pattern_scale as f32;
                             }
-                            model::hatch_model::HatchPattern::Gradient { angle_deg, .. } => {
-                                *angle_deg = dxf.pattern_angle.to_degrees() as f32;
+                            model::hatch_model::HatchPattern::Gradient {
+                                angle_deg,
+                                shift,
+                                ..
+                            } => {
+                                *angle_deg = dxf.gradient_color.angle.to_degrees() as f32;
+                                *shift = dxf.gradient_color.shift as f32;
                             }
                             model::hatch_model::HatchPattern::Pattern(_)
                             | model::hatch_model::HatchPattern::Solid => {}
@@ -1522,6 +1557,7 @@ impl Scene {
 
         let mut boundary: Vec<[f64; 2]> = Vec::new();
         let mut boundary_exterior = Vec::new();
+        let mut boundary_sources = Vec::new();
 
         for path in &dxf.paths {
             // Skip TEXTBOX boundary paths (flag bit 3). These are text
@@ -1529,6 +1565,19 @@ impl Scene {
             // never drawn or filled. Treating one as a fill boundary paints its
             // rectangle solid and creates a phantom bar.
             if path.flags.bits() & 8 != 0 {
+                continue;
+            }
+            let first_fill_path = boundary_exterior.is_empty();
+            let keep_for_style = match dxf.style {
+                acadrust::entities::HatchStyleType::Normal => true,
+                acadrust::entities::HatchStyleType::Outer => {
+                    first_fill_path || path.flags.is_external() || path.flags.is_outermost()
+                }
+                acadrust::entities::HatchStyleType::Ignore => {
+                    first_fill_path || path.flags.is_external()
+                }
+            };
+            if !keep_for_style {
                 continue;
             }
             let before_path = boundary.len();
@@ -1556,6 +1605,7 @@ impl Scene {
                 continue;
             }
             boundary_exterior.push(path.flags.is_external() || path.flags.is_outermost());
+            boundary_sources.push(path.boundary_handles.clone());
             if boundary.len() >= path_start + 3 {
                 let first = boundary[path_start];
                 let last = *boundary.last().unwrap();
@@ -1618,8 +1668,13 @@ impl Scene {
                 )
             };
             gradient_color1 = stop(0);
-            let color2 = stop(1).unwrap_or(color);
-            let angle_deg = dxf.pattern_angle.to_degrees() as f32;
+            let color1 = gradient_color1.unwrap_or(color);
+            let color2 = if dxf.gradient_color.is_single_color {
+                gradient_tint_color(color1, dxf.gradient_color.color_tint as f32)
+            } else {
+                stop(1).unwrap_or(color)
+            };
+            let angle_deg = dxf.gradient_color.angle.to_degrees() as f32;
             let (kind, invert) =
                 model::hatch_model::GradientKind::from_name(&dxf.gradient_color.name);
             model::hatch_model::HatchPattern::Gradient {
@@ -1627,6 +1682,7 @@ impl Scene {
                 color2,
                 kind,
                 invert,
+                shift: dxf.gradient_color.shift as f32,
             }
         } else if dxf.is_solid {
             model::hatch_model::HatchPattern::Solid
@@ -1768,13 +1824,7 @@ impl Scene {
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
             boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
-            boundary_sources: Some(std::sync::Arc::new(
-                dxf.paths
-                    .iter()
-                    .filter(|path| path.flags.bits() & 8 == 0)
-                    .map(|path| path.boundary_handles.clone())
-                    .collect(),
-            )),
+            boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
             pattern,
             name,
             // A gradient starts from its first stop; other fills use the
@@ -2254,6 +2304,7 @@ impl Scene {
             color2,
             kind,
             invert,
+            shift,
         } = &model.pattern
         {
             let to_color = |c: [f32; 4]| acadrust::types::Color::Rgb {
@@ -2268,6 +2319,7 @@ impl Scene {
             // (radians); the gradient record keeps its own copy for the file.
             dxf.pattern_angle = (*angle_deg as f64).to_radians();
             dxf.gradient_color.angle = (*angle_deg as f64).to_radians();
+            dxf.gradient_color.shift = *shift as f64;
             dxf.gradient_color.is_single_color = false;
             // Linear has no INV name in the standard set: persist an inverted
             // linear by swapping the colour stops instead.

@@ -345,59 +345,66 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
     if g.enabled {
         // ── Gradient fill ──────────────────────────────────────────────────
         let grad_type = if g.is_single_color { "One color" } else { "Two color" };
-        let centered = if g.shift.abs() < 1e-9 { "Yes" } else { "No" };
-        let mut sections = vec![
+        let (kind, inverted) =
+            crate::scene::model::hatch_model::GradientKind::from_name(&g.name);
+        let mut pattern_props = vec![
+            ro(t!("Type").as_ref(), "fill_kind", t!("Gradient").into_owned()),
+            Property {
+                label: t!("Color mode").into_owned(),
+                field: "fill_type",
+                value: PropValue::Choice {
+                    selected: grad_type.to_string(),
+                    options: vec!["One color".into(), "Two color".into()],
+                },
+            },
+            Property {
+                label: t!("Gradient type").into_owned(),
+                field: "gradient_type",
+                value: PropValue::Choice {
+                    selected: kind.choice_label(inverted).to_string(),
+                    options: crate::scene::model::hatch_model::GradientKind::CHOICES
+                        .iter()
+                        .map(|(kind, inverted)| kind.choice_label(*inverted).to_string())
+                        .collect(),
+                },
+            },
+            Property {
+                label: t!("Color 1").into_owned(),
+                field: "gradient_color_1",
+                value: PropValue::ColorChoice(grad_c1),
+            },
+        ];
+        if g.is_single_color {
+            pattern_props.push(edit(
+                t!("Tint/Shade").as_ref(),
+                "gradient_tint",
+                g.color_tint.clamp(0.0, 1.0),
+            ));
+        } else {
+            pattern_props.push(Property {
+                label: t!("Color 2").into_owned(),
+                field: "gradient_color_2",
+                value: PropValue::ColorChoice(grad_c2),
+            });
+        }
+        pattern_props.push(edit_angle(
+            t!("Angle").as_ref(),
+            "pattern_angle",
+            g.angle.to_degrees(),
+        ));
+        pattern_props.push(Property {
+            label: t!("Centered").into_owned(),
+            field: "gradient_centered",
+            value: PropValue::BoolToggle {
+                field: "gradient_centered",
+                value: g.shift < 0.5,
+            },
+        });
+
+        return vec![
             PropSection {
                 title: t!("Pattern").into_owned(),
-                props: vec![
-                    Property {
-                        label: t!("Type").into_owned(),
-                        field: "fill_type",
-                        value: PropValue::Choice {
-                            selected: grad_type.to_string(),
-                            options: vec!["Two color".into(), "One color".into()],
-                        },
-                    },
-                    {
-                        let (kind, invert) =
-                            crate::scene::model::hatch_model::GradientKind::from_name(&g.name);
-                        let _ = invert;
-                        Property {
-                            label: t!("Gradient type").into_owned(),
-                            field: "gradient_type",
-                            value: PropValue::Choice {
-                                selected: kind.label().to_string(),
-                                options: crate::scene::model::hatch_model::GradientKind::ALL
-                                    .iter()
-                                    .map(|k| k.label().to_string())
-                                    .collect(),
-                            },
-                        }
-                    },
-                    Property {
-                        label: t!("Invert").into_owned(),
-                        field: "gradient_invert",
-                        value: PropValue::BoolToggle {
-                            field: "gradient_invert",
-                            value: crate::scene::model::hatch_model::GradientKind::from_name(
-                                &g.name,
-                            )
-                            .1,
-                        },
-                    },
-                    Property {
-                        label: t!("Color 1").into_owned(),
-                        field: "gradient_color_1",
-                        value: PropValue::ColorChoice(grad_c1),
-                    },
-                    Property {
-                        label: t!("Color 2").into_owned(),
-                        field: "gradient_color_2",
-                        value: PropValue::ColorChoice(grad_c2),
-                    },
-                    edit_angle(t!("Angle").as_ref(), "pattern_angle", g.angle.to_degrees()),
-                    ro(t!("Centered").as_ref(), "gradient_centered", centered),
-                ],
+                props: pattern_props,
             },
             PropSection {
                 title: t!("Geometry").into_owned(),
@@ -410,33 +417,26 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
             PropSection {
                 title: t!("Misc").into_owned(),
                 props: vec![
-                    ro(t!("Associative").as_ref(),
-                        "associative",
-                        if h.is_associative { "Yes" } else { "No" },
-                    ),
-                    ro(t!("Annotative").as_ref(), "annotative", String::new()),
-                    ro(t!("Island detection style").as_ref(), "style", style),
                     Property {
-                        label: t!("Background").into_owned(),
-                        field: "bg_enabled",
+                        label: t!("Associative").into_owned(),
+                        field: "associative",
                         value: PropValue::BoolToggle {
-                            field: "bg_enabled",
-                            value: bg_on,
+                            field: "associative",
+                            value: h.is_associative,
+                        },
+                    },
+                    ro(t!("Annotative").as_ref(), "annotative", String::new()),
+                    Property {
+                        label: t!("Island detection style").into_owned(),
+                        field: "style",
+                        value: PropValue::Choice {
+                            selected: style.to_string(),
+                            options: vec!["Normal".into(), "Outer".into(), "Ignore".into()],
                         },
                     },
                 ],
             },
         ];
-        if bg_on {
-            if let Some(sec) = sections.last_mut() {
-                sec.props.push(Property {
-                    label: t!("Background color").into_owned(),
-                    field: "background_color",
-                    value: PropValue::ColorChoice(bg_col),
-                });
-            }
-        }
-        return sections;
     }
 
 
@@ -567,11 +567,22 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
             return;
         }
         "associative" => {
-            h.is_associative = if value == "toggle" {
+            let requested = if value == "toggle" {
                 !h.is_associative
             } else {
                 value == "true"
             };
+            // An associative flag without source handles is inert and cannot
+            // update from boundary edits. Only enable it when a real
+            // relationship is available; disabling retains the handles so the
+            // user can turn it back on later.
+            if !requested
+                || h.paths
+                    .iter()
+                    .any(|path| !path.boundary_handles.is_empty())
+            {
+                h.is_associative = requested;
+            }
             return;
         }
         "pattern_type_label" => {
@@ -593,31 +604,27 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
             return;
         }
         "fill_type" => {
-            h.gradient_color.is_single_color = value == "One color";
+            let one_color = value == "One color";
+            if one_color && !h.gradient_color.is_single_color {
+                h.gradient_color.color_tint = 1.0;
+            }
+            h.gradient_color.is_single_color = one_color;
             return;
         }
-        // Gradient shape selection + stop inversion (#415). Both re-derive the
-        // standard DXF gradient name; Linear has no INV name, so inverting a
-        // linear swaps the colour stops instead.
         "gradient_type" => {
             use crate::scene::model::hatch_model::GradientKind;
-            let (_, invert) = GradientKind::from_name(&h.gradient_color.name);
-            if let Some(kind) = GradientKind::from_label(value) {
+            if let Some((kind, invert)) = GradientKind::from_choice_label(value) {
                 h.gradient_color.name = kind.dxf_name(invert).to_string();
             }
             return;
         }
-        "gradient_invert" => {
-            use crate::scene::model::hatch_model::GradientKind;
-            let (kind, invert) = GradientKind::from_name(&h.gradient_color.name);
-            let invert = !invert;
-            if matches!(kind, GradientKind::Linear) {
-                if h.gradient_color.colors.len() >= 2 {
-                    h.gradient_color.colors.swap(0, 1);
-                }
+        "gradient_centered" => {
+            let centered = if value == "toggle" {
+                h.gradient_color.shift >= 0.5
             } else {
-                h.gradient_color.name = kind.dxf_name(invert).to_string();
-            }
+                value == "true"
+            };
+            h.gradient_color.shift = if centered { 0.0 } else { 1.0 };
             return;
         }
         _ => {}
@@ -629,6 +636,9 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
         "pattern_angle" if h.gradient_color.enabled => {
             h.gradient_color.angle = v.to_radians();
             h.pattern_angle = v.to_radians();
+        }
+        "gradient_tint" if h.gradient_color.enabled => {
+            h.gradient_color.color_tint = v.clamp(0.0, 1.0);
         }
         "pattern_angle" => {
             let angle = v.to_radians();

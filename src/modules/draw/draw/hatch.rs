@@ -643,6 +643,7 @@ impl CadCommand for HatchCommand {
 
 pub struct GradientCommand {
     outlines: Vec<Vec<[f64; 2]>>,
+    boundary_sources: rustc_hash::FxHashMap<Handle, Vec<Line>>,
     mode: Mode,
     manual_pts: Vec<DVec3>,
     missed: bool,
@@ -653,9 +654,13 @@ pub struct GradientCommand {
 }
 
 impl GradientCommand {
-    pub fn new(outlines: Vec<Vec<[f64; 2]>>) -> Self {
+    pub fn new(
+        outlines: Vec<Vec<[f64; 2]>>,
+        boundary_sources: rustc_hash::FxHashMap<Handle, Vec<Line>>,
+    ) -> Self {
         Self {
             outlines,
+            boundary_sources,
             mode: Mode::PickInside,
             manual_pts: vec![],
             missed: false,
@@ -666,6 +671,14 @@ impl GradientCommand {
 
     fn make_hatch(&self, rings: Vec<Vec<[f64; 2]>>) -> HatchModel {
         let (rel, origin, wcs) = pack_rings(&rings);
+        let exterior = cadkernel::geom2d::ring_nesting_depths(&rings)
+            .into_iter()
+            .map(|depth| depth % 2 == 0)
+            .collect();
+        let boundary_sources = rings
+            .iter()
+            .map(|ring| crate::scene::ring_source_handles(ring, &self.boundary_sources))
+            .collect();
         HatchModel {
             render_instance: None,
             boundary: std::sync::Arc::new(rel),
@@ -674,6 +687,7 @@ impl GradientCommand {
                 color2: [0.18, 0.18, 0.18, 0.0],
                 kind: self.kind,
                 invert: self.invert,
+                shift: 0.0,
             },
             name: self.kind.dxf_name(self.invert).into(),
             color: [0.30, 0.60, 0.95, 0.80],
@@ -683,8 +697,8 @@ impl GradientCommand {
             scale: 1.0,
             world_origin: origin,
             boundary_wcs: Some(std::sync::Arc::new(wcs)),
-            boundary_exterior: None,
-            boundary_sources: None,
+            boundary_exterior: Some(std::sync::Arc::new(exterior)),
+            boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
             draw_depth: 0.0,
         }
     }
@@ -703,15 +717,10 @@ impl CadCommand for GradientCommand {
                 } else {
                     std::borrow::Cow::Borrowed("")
                 };
-                let invert = if self.invert {
-                    t!(", inverted")
-                } else {
-                    std::borrow::Cow::Borrowed("")
-                };
                 t!(
                     "GRADIENT (%{kind}%{invert})  Pick internal point:%{miss}",
-                    kind = t!(self.kind.label()),
-                    invert = invert,
+                    kind = t!(self.kind.choice_label(self.invert)),
+                    invert = std::borrow::Cow::Borrowed(""),
                     miss = miss
                 )
                 .into_owned()
@@ -731,15 +740,14 @@ impl CadCommand for GradientCommand {
         match &self.mode {
             Mode::PickInside => {
                 let mut opts = vec![CmdOption::new("Draw manually", "S")];
-                for k in crate::scene::model::hatch_model::GradientKind::ALL {
-                    if k != self.kind {
-                        opts.push(CmdOption::new(k.label(), k.label()));
+                for (kind, inverted) in
+                    crate::scene::model::hatch_model::GradientKind::CHOICES
+                {
+                    if kind != self.kind || inverted != self.invert {
+                        let label = kind.choice_label(inverted);
+                        opts.push(CmdOption::new(label, label));
                     }
                 }
-                opts.push(CmdOption::new(
-                    if self.invert { "Invert: on" } else { "Invert: off" },
-                    "I",
-                ));
                 opts
             }
             Mode::Manual => {
@@ -804,17 +812,11 @@ impl CadCommand for GradientCommand {
             self.missed = false;
             return Some(CmdResult::NeedPoint);
         }
-        // Gradient type keywords / buttons + the invert toggle (#415).
-        if t.eq_ignore_ascii_case("i") || t.eq_ignore_ascii_case("invert") {
-            self.invert = !self.invert;
-            return Some(CmdResult::NeedPoint);
-        }
-        if let Some(k) = crate::scene::model::hatch_model::GradientKind::ALL
-            .iter()
-            .copied()
-            .find(|k| k.label().eq_ignore_ascii_case(t))
+        if let Some((kind, inverted)) =
+            crate::scene::model::hatch_model::GradientKind::from_choice_label(t)
         {
-            self.kind = k;
+            self.kind = kind;
+            self.invert = inverted;
             return Some(CmdResult::NeedPoint);
         }
         None
