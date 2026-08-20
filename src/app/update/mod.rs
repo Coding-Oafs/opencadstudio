@@ -1559,18 +1559,35 @@ impl OpenCADStudio {
                 ))
             }
 
-            Message::CommandLineArrowProbe { direction } => {
+            Message::CommandLineArrowProbe {
+                direction,
+                extend_selection,
+            } => {
                 iced::widget::operation::is_focused(iced::widget::Id::new(
                     crate::ui::command_line::CMD_INPUT_ID,
                 ))
                 .map(move |focused| Message::CommandLineArrowResolved {
                     direction,
                     focused,
+                    extend_selection,
                 })
             }
 
-            Message::CommandLineArrowResolved { direction, focused } => {
+            Message::CommandLineArrowResolved {
+                direction,
+                focused,
+                extend_selection,
+            } => {
                 if !focused {
+                    return Task::none();
+                }
+                // The editor inherits arrows captured by the focused command line.
+                if self.mtext_editor.is_some() {
+                    match direction {
+                        ArrowKey::Up => self.mtext_caret_move_vertical(1, extend_selection),
+                        ArrowKey::Down => self.mtext_caret_move_vertical(-1, extend_selection),
+                        ArrowKey::Left | ArrowKey::Right => {}
+                    }
                     return Task::none();
                 }
                 match direction {
