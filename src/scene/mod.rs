@@ -33,7 +33,10 @@ mod project;
 mod scene_markers;
 mod selection;
 
-pub(crate) use boundary::{boundary_entities, ring_source_handles};
+pub(crate) use boundary::{
+    boundary_entities, boundary_faces, boundary_polyline_entities, ring_source_handles,
+    BoundarySource,
+};
 
 // Parallel tessellation free functions live in `convert::tess` (alongside the
 // other tessellation code); re-exported here so this root and sibling topic
