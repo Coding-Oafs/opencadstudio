@@ -339,8 +339,48 @@ pub(crate) fn tessellate_entity_dim_text(
     }
     wires
 }
-
 pub(crate) fn tessellate_entity(
+    document: &acadrust::CadDocument,
+    selected: &HashSet<Handle>,
+    active_viewport: Option<Handle>,
+    bg_color: [f32; 4],
+    anno_scale: f32,
+    annotation_scale_handle: Option<Handle>,
+    e: &EntityType,
+    block_cache: Option<&cache::block_cache::BlockCache>,
+    view_aabb: Option<[f32; 4]>,
+    world_per_pixel: Option<f32>,
+    paper_space: bool,
+) -> Vec<WireModel> {
+    let mut wires = tessellate_entity_inner(
+        document,
+        selected,
+        active_viewport,
+        bg_color,
+        anno_scale,
+        annotation_scale_handle,
+        e,
+        block_cache,
+        view_aabb,
+        world_per_pixel,
+        paper_space,
+    );
+
+    let layer_plottable = document
+        .layers
+        .get(&e.common().layer)
+        .map(|layer| layer.is_plottable)
+        .unwrap_or(true);
+
+    if !layer_plottable {
+        for wire in &mut wires {
+            wire.plot_visible = false;
+        }
+    }
+
+    wires
+}
+fn tessellate_entity_inner(
     document: &acadrust::CadDocument,
     selected: &HashSet<Handle>,
     active_viewport: Option<Handle>,

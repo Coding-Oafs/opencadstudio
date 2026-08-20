@@ -482,6 +482,16 @@ impl Scene {
         models.extend(instanced);
         Arc::new(models)
     }
+    pub fn paper_plot_hatches(&self) -> Arc<Vec<HatchModel>> {
+        let layout_block = self.current_layout_block_handle();
+
+        Arc::new(self.plot_hatches_for_block(
+            layout_block,
+            None,
+            self.paper_annotation_scale_handle(),
+            self.annotation_all_visible(),
+        ))
+    }
 
     /// Plot-only hatch set for a specific block. Paper PDF generation uses this
     /// for the model block behind each floating viewport; unlike
@@ -500,6 +510,13 @@ impl Scene {
                 .map(|l| l.flags.off || l.flags.frozen)
                 .unwrap_or(false)
         };
+        let layer_plottable = |layer: &str| {
+            self.document
+                .layers
+                .get(layer)
+                .map(|l| l.is_plottable)
+                .unwrap_or(true)
+        };
         let mut models = Vec::new();
         for (&handle, model) in self.hatches.iter() {
             let Some(source) = self.document.get_entity(handle) else {
@@ -515,6 +532,7 @@ impl Scene {
             if common.invisible
                 || self.entity_temporarily_hidden(handle)
                 || layer_hidden(&common.layer)
+                || !layer_plottable(&common.layer)
                 || self.layer_frozen_in(&common.layer, frozen)
                 || crate::scene::annotative::annotative_offscale_for(
                     &self.document,
@@ -554,10 +572,9 @@ impl Scene {
             }
             models.push(hatch);
         }
-        models.extend(self.instanced_hatch_models(
+        models.extend(self.instanced_plot_hatch_models(
             block,
             self.paper_bg_color,
-            false,
             frozen,
             annotation_scale_handle,
             all_visible,
