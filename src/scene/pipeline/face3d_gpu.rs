@@ -22,6 +22,20 @@ use crate::scene::model::wire_model::WireModel;
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt;
 
+fn planar_solid_faces_view(wire: &WireModel, view_dir: glam::Vec3) -> bool {
+    if !wire.fill_is_2d_solid || wire.fill_is_3d {
+        return true;
+    }
+    let view = view_dir.normalize_or_zero();
+    wire.fill_tris.chunks_exact(3).any(|triangle| {
+        let first = glam::Vec3::from_array(triangle[0]);
+        let second = glam::Vec3::from_array(triangle[1]);
+        let third = glam::Vec3::from_array(triangle[2]);
+        let normal = (second - first).cross(third - first).normalize_or_zero();
+        normal.length_squared() > 0.0 && normal.dot(view).abs() >= 1.0 - 1.0e-5
+    })
+}
+
 // ── Vertex layout ──────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -149,6 +163,7 @@ impl Face3DGpu {
         all_wires: &[WireModel],
         keep_3d_mesh_fills: bool,
         show_2d_solid_fills: bool,
+        view_dir: glam::Vec3,
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) -> Self {
         let depth_of =
@@ -198,6 +213,9 @@ impl Face3DGpu {
                 continue;
             }
             if !show_2d_solid_fills && wire.fill_is_2d_solid {
+                continue;
+            }
+            if !planar_solid_faces_view(wire, view_dir) {
                 continue;
             }
             // A real 3-D surface fill (PolyfaceMesh / PolygonMesh) carries a
@@ -259,6 +277,7 @@ impl Face3DGpu {
             all_wires,
             keep_3d_mesh_fills,
             show_2d_solid_fills,
+            view_dir,
             depth_map,
         );
         Self {
@@ -275,6 +294,7 @@ fn upload_block_chunks(
     wires: &[WireModel],
     keep_3d_mesh_fills: bool,
     show_2d_solid_fills: bool,
+    view_dir: glam::Vec3,
     depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
 ) -> (Vec<BlockFace3DChunk>, Vec<BlockFace3DChunk>) {
     let mut slots = rustc_hash::FxHashMap::default();
@@ -285,6 +305,7 @@ fn upload_block_chunks(
         };
         if wire.fill_tris.is_empty()
             || (!show_2d_solid_fills && wire.fill_is_2d_solid)
+            || !planar_solid_faces_view(wire, view_dir)
             || (wire.fill_is_3d && !keep_3d_mesh_fills)
         {
             continue;

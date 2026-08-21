@@ -2158,8 +2158,8 @@ impl Scene {
     }
 
     /// Build a solid-fill HatchModel for a DXF Solid entity.
-    /// Conventional DXF SOLID corners use Z-order; legacy entities may already
-    /// be in perimeter order. Use the same non-crossing resolver as wire fill.
+    /// SOLID corners use Z-order. Preserve it in the projected hatch as well so
+    /// intentionally crossing geometry is not silently rewritten.
     pub(super) fn solid_hatch_model(solid: &DxfSolid, color: [f32; 4]) -> HatchModel {
         // Keep the corners in f64 until the AABB centre is known, then store
         // each as a small f32 offset from it — same precision-preserving anchor
@@ -2167,7 +2167,7 @@ impl Scene {
         // to f32 costs ~0.06 units of resolution at UTM magnitudes (~1e6), so
         // the quad snapped to a grid and the fill drifted off its outline.
         let wcs = crate::entities::solid::wcs_corners(solid);
-        let order = crate::entities::solid::perimeter_indices(&wcs);
+        let order = [0, 1, 3, 2];
         let corners: [[f64; 2]; 4] = order.map(|index| [wcs[index][0], wcs[index][1]]);
         let mut min = [f64::INFINITY; 2];
         let mut max = [f64::NEG_INFINITY; 2];
