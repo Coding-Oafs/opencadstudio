@@ -635,8 +635,10 @@ impl OpenCADStudio {
 
             "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
-                let outlines = self.tabs[i].scene.hatch_boundary_outlines();
-                let boundary_sources = self.tabs[i].scene.hatch_boundary_sources();
+                let boundary_sources = self.tabs[i]
+                    .scene
+                    .boundary_sources_on_plane(crate::command::WorkingPlane::default(), 1.0e-6);
+                let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
                 let selected = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -664,11 +666,22 @@ impl OpenCADStudio {
                 if sel.len() == 1 {
                     let (h, _) = sel[0];
                     if let Some(model) = self.tabs[i].scene.hatches.get(&h).cloned() {
+                        let annotative = self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(h)
+                            .is_some_and(|entity| {
+                                crate::scene::annotative::is_annotative(
+                                    &self.tabs[i].scene.document,
+                                    entity,
+                                )
+                            });
                         let cmd = HatcheditCommand::with_handle(
                             h,
                             model.name.clone(),
                             model.scale,
-                            model.angle_offset,
+                            model.angle_offset.to_degrees(),
+                            annotative,
                         );
                         self.command_line.push_info(&cmd.prompt());
                         self.tabs[i].active_cmd = Some(Box::new(cmd));
@@ -685,8 +698,10 @@ impl OpenCADStudio {
 
             "GRADIENT" => {
                 use crate::modules::draw::draw::hatch::GradientCommand;
-                let outlines = self.tabs[i].scene.hatch_boundary_outlines();
-                let boundary_sources = self.tabs[i].scene.hatch_boundary_sources();
+                let boundary_sources = self.tabs[i]
+                    .scene
+                    .boundary_sources_on_plane(crate::command::WorkingPlane::default(), 1.0e-6);
+                let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
                 let new_cmd = GradientCommand::new(outlines, boundary_sources);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));

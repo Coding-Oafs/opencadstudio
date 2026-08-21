@@ -210,6 +210,13 @@ pub struct HatchModel {
     pub boundary_exterior: Option<Arc<Vec<bool>>>,
     /// Source entity handles for each boundary ring.
     pub boundary_sources: Option<Arc<Vec<Vec<acadrust::Handle>>>>,
+    /// Exact persisted boundary paths for draw/edit workflows. Rendering keeps
+    /// using the compact tessellated boundary above, while persistence can
+    /// retain analytic arcs, ellipses and splines without rebuilding them as
+    /// straight polyline chords.
+    pub boundary_paths: Option<Arc<Vec<acadrust::entities::BoundaryPath>>>,
+    /// Island handling used by the persisted hatch entity.
+    pub style: acadrust::entities::HatchStyleType,
     /// Fill pattern.
     pub pattern: HatchPattern,
     /// Catalog name for this pattern (e.g. "ANSI31", "SOLID", "LINEAR").

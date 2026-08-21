@@ -1394,6 +1394,33 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
+            CmdResult::CommitHatches {
+                hatches,
+                entity_style,
+            } => {
+                let label = self.history_label_from_active_cmd(i, "HATCH");
+                let pending = self.begin_undo(i, label, hatches.len(), true);
+                let layer = self.tabs[i].active_layer.clone();
+                for hatch in hatches {
+                    let new_handle = self.tabs[i].scene.add_hatch(
+                        hatch,
+                        Some(&layer),
+                        entity_style.clone(),
+                    );
+                    if !new_handle.is_null() {
+                        self.tabs[i].scene.select_entity(new_handle, true);
+                    }
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
             CmdResult::BatchCopy(mut handles, transforms) => {
                 handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
                 if handles.is_empty() {
@@ -3203,42 +3230,214 @@ impl OpenCADStudio {
                 name,
                 scale,
                 angle,
+                operation,
             } => {
                 if self.reject_locked_edit(i, handle) {
                     return Task::none();
                 }
-                if let Some(mut model) = self.tabs[i].scene.hatches.get(&handle).cloned() {
-                    let layer = self.tabs[i]
-                        .scene
-                        .document
-                        .get_entity(handle)
-                        .map(|entity| entity.as_entity().layer().to_string())
-                        .unwrap_or_else(|| "0".to_string());
-                    // Update model fields
-                    if !name.is_empty() {
-                        use crate::scene::model::hatch_model::HatchPattern;
-                        use crate::scene::model::hatch_patterns;
-                        model.name = name.clone();
-                        if name.to_uppercase() == "SOLID" {
-                            model.pattern = HatchPattern::Solid;
-                        } else if let Some(entry) = hatch_patterns::find(&name) {
-                            model.pattern = entry.gpu.clone();
-                        }
-                        // If not found in catalog, keep existing pattern type
-                    }
-                    model.scale = scale;
-                    model.angle_offset = angle;
-
-                    self.push_undo_snapshot(i, "HATCHEDIT");
-                    // Remove old hatch (entity + GPU model)
-                    self.tabs[i].scene.erase_entities(&[handle]);
-                    // Re-add with updated model
-                    self.tabs[i].scene.add_hatch(model, Some(&layer), None);
-                    self.tabs[i].dirty = true;
-                    self.command_line.push_output(crate::t!("HATCHEDIT: hatch updated.").as_ref());
-                } else {
+                if !matches!(
+                    self.tabs[i].scene.document.get_entity(handle),
+                    Some(acadrust::EntityType::Hatch(_))
+                ) {
                     self.command_line
                         .push_error(crate::t!("HATCHEDIT: hatch entity not found.").as_ref());
+                } else {
+                    use crate::command::HatchEditOperation;
+                    if matches!(
+                        &operation,
+                        HatchEditOperation::DrawOrderFront | HatchEditOperation::DrawOrderBack
+                    ) {
+                        let command = if matches!(&operation, HatchEditOperation::DrawOrderFront) {
+                            "DRAWORDER FRONT"
+                        } else {
+                            "DRAWORDER BACK"
+                        };
+                        self.tabs[i].scene.deselect_all();
+                        self.tabs[i].scene.select_entity(handle, false);
+                        self.tabs[i].active_cmd = None;
+                        return self.dispatch_view(command, i).unwrap_or_else(Task::none);
+                    }
+                    self.push_undo_snapshot(i, "HATCHEDIT");
+                    match operation {
+                        HatchEditOperation::Update {
+                            origin,
+                            disassociate,
+                            style,
+                            annotative,
+                        } => {
+                            if let Some(acadrust::EntityType::Hatch(hatch)) =
+                                self.tabs[i].scene.document.get_entity_mut(handle)
+                            {
+                                if !name.is_empty() && name != hatch.pattern.name {
+                                    if let Some(entry) =
+                                        crate::scene::model::hatch_patterns::find(&name)
+                                    {
+                                        let old_origin = hatch
+                                            .pattern
+                                            .lines
+                                            .first()
+                                            .map(|line| line.base_point);
+                                        let mut pattern = crate::scene::model::hatch_patterns::build_dxf_pattern(entry);
+                                        crate::entities::hatch::scale_pattern_geometry(
+                                            &mut pattern,
+                                            scale.max(1.0e-6) as f64,
+                                        );
+                                        crate::entities::hatch::rotate_pattern_geometry(
+                                            &mut pattern,
+                                            (angle as f64).to_radians(),
+                                        );
+                                        if let (Some(old), Some(new)) = (
+                                            old_origin,
+                                            pattern.lines.first().map(|line| line.base_point),
+                                        ) {
+                                            crate::entities::hatch::translate_pattern_geometry(
+                                                &mut pattern,
+                                                old.x - new.x,
+                                                old.y - new.y,
+                                            );
+                                        }
+                                        hatch.pattern = pattern;
+                                        hatch.is_solid = matches!(
+                                            entry.gpu,
+                                            crate::scene::model::hatch_model::HatchPattern::Solid
+                                        );
+                                        hatch.pattern_type =
+                                            acadrust::entities::HatchPatternType::Predefined;
+                                        hatch.gradient_color.enabled = false;
+                                    }
+                                } else {
+                                    let requested_scale = scale.max(1.0e-6) as f64;
+                                    if hatch.pattern_scale > 1.0e-12 {
+                                        let factor = requested_scale / hatch.pattern_scale;
+                                        crate::entities::hatch::scale_pattern_geometry(
+                                            &mut hatch.pattern,
+                                            factor,
+                                        );
+                                    }
+                                    let requested_angle = (angle as f64).to_radians();
+                                    let delta = requested_angle - hatch.pattern_angle;
+                                    crate::entities::hatch::rotate_pattern_geometry(
+                                        &mut hatch.pattern,
+                                        delta,
+                                    );
+                                }
+                                hatch.pattern_scale = scale.max(1.0e-6) as f64;
+                                hatch.pattern_angle = (angle as f64).to_radians();
+                                if let Some((x, y)) = origin {
+                                    if let Some(current) =
+                                        hatch.pattern.lines.first().map(|line| line.base_point)
+                                    {
+                                        crate::entities::hatch::translate_pattern_geometry(
+                                            &mut hatch.pattern,
+                                            x - current.x,
+                                            y - current.y,
+                                        );
+                                    }
+                                }
+                                if disassociate {
+                                    for path in &mut hatch.paths {
+                                        path.boundary_handles.clear();
+                                    }
+                                    hatch.is_associative = false;
+                                }
+                                if let Some(style) = style {
+                                    hatch.style = style;
+                                }
+                            }
+                            if let Some(value) = annotative {
+                                crate::scene::annotative::set_entity_annotative(
+                                    &mut self.tabs[i].scene.document,
+                                    handle,
+                                    value,
+                                );
+                                if value {
+                                    if let Some(scale_handle) =
+                                        self.tabs[i].scene.creation_annotation_scale_handle()
+                                    {
+                                        crate::scene::annotative::create_annotation_context(
+                                            &mut self.tabs[i].scene.document,
+                                            handle,
+                                            scale_handle,
+                                        );
+                                    }
+                                }
+                            }
+                            self.tabs[i].scene.bump_entities(&[(
+                                handle,
+                                crate::scene::ChangeKind::Modified,
+                            )]);
+                        }
+                        HatchEditOperation::AddBoundaries(handles) => {
+                            self.tabs[i]
+                                .scene
+                                .edit_hatch_boundary_handles(handle, &handles, true);
+                        }
+                        HatchEditOperation::RemoveBoundaries(handles) => {
+                            self.tabs[i]
+                                .scene
+                                .edit_hatch_boundary_handles(handle, &handles, false);
+                        }
+                        HatchEditOperation::RecreateBoundary => {
+                            let model = self.tabs[i].scene.hatches.get(&handle).cloned();
+                            if let Some(model) = model {
+                                let mut rings = vec![Vec::new()];
+                                for &[x, y] in model.boundary.iter() {
+                                    if x.is_finite() && y.is_finite() {
+                                        rings.last_mut().unwrap().push([
+                                            model.world_origin[0] + x as f64,
+                                            model.world_origin[1] + y as f64,
+                                        ]);
+                                    } else if !rings.last().unwrap().is_empty() {
+                                        rings.push(Vec::new());
+                                    }
+                                }
+                                rings.retain(|ring| ring.len() >= 3);
+                                let entities = crate::scene::boundary_entities(&rings);
+                                let mut handles = Vec::new();
+                                for entity in entities {
+                                    if let Some(boundary) = self.commit_entity_handle(entity) {
+                                        handles.push(boundary);
+                                    }
+                                }
+                                if let Some(acadrust::EntityType::Hatch(hatch)) =
+                                    self.tabs[i].scene.document.get_entity_mut(handle)
+                                {
+                                    for (path, boundary) in
+                                        hatch.paths.iter_mut().zip(handles.iter().copied())
+                                    {
+                                        path.boundary_handles = vec![boundary];
+                                    }
+                                    hatch.is_associative = !handles.is_empty();
+                                }
+                                self.tabs[i].scene.bump_entities(&[(
+                                    handle,
+                                    crate::scene::ChangeKind::Modified,
+                                )]);
+                            }
+                        }
+                        HatchEditOperation::Separate => {
+                            let source = self.tabs[i].scene.document.get_entity(handle).cloned();
+                            if let Some(acadrust::EntityType::Hatch(hatch)) = source {
+                                for path in hatch.paths.iter().cloned() {
+                                    let mut separated = hatch.clone();
+                                    separated.common.handle = acadrust::Handle::NULL;
+                                    separated.paths = vec![path];
+                                    separated.is_associative = separated.paths.iter().any(|path| {
+                                        !path.boundary_handles.is_empty()
+                                    });
+                                    self.tabs[i]
+                                        .scene
+                                        .add_entity(acadrust::EntityType::Hatch(separated));
+                                }
+                                self.tabs[i].scene.erase_entities(&[handle]);
+                            }
+                        }
+                        HatchEditOperation::DrawOrderFront
+                        | HatchEditOperation::DrawOrderBack => unreachable!(),
+                    }
+                    self.tabs[i].dirty = true;
+                    self.command_line
+                        .push_output(crate::t!("HATCHEDIT: hatch updated.").as_ref());
                 }
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;

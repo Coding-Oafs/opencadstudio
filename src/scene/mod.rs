@@ -35,8 +35,8 @@ mod scene_markers;
 mod selection;
 
 pub(crate) use boundary::{
-    boundary_entities, boundary_faces, boundary_polyline_entities, ring_source_handles,
-    BoundarySource,
+    boundary_entities, boundary_faces, boundary_polyline_entities, exact_hatch_paths,
+    ring_source_handles, BoundarySource,
 };
 
 // Parallel tessellation free functions live in `convert::tess` (alongside the
@@ -3215,6 +3215,8 @@ impl Scene {
             fill_plane_boundary: None,
             boundary_exterior: None,
             boundary_sources: None,
+            boundary_paths: None,
+            style: acadrust::entities::HatchStyleType::Normal,
             pattern: crate::scene::model::hatch_model::HatchPattern::Solid,
             name: "SOLID".to_string(),
             color: self.paper_bg_color,

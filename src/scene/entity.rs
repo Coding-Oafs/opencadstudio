@@ -1469,6 +1469,8 @@ impl Scene {
                     fill_plane_boundary,
                     boundary_exterior: None,
                     boundary_sources: None,
+                    boundary_paths: None,
+                    style: acadrust::entities::HatchStyleType::Normal,
                     pattern: model::hatch_model::HatchPattern::Solid,
                     name: "WIPEOUT_FILL".into(),
                     color,
@@ -1885,6 +1887,8 @@ impl Scene {
             fill_plane_boundary: None,
             boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
             boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
+            boundary_paths: Some(std::sync::Arc::new(dxf.paths.clone())),
+            style: dxf.style,
             pattern,
             name,
             // A gradient starts from its first stop; other fills use the
@@ -2203,6 +2207,8 @@ impl Scene {
             fill_plane_boundary: None,
             boundary_exterior: None,
             boundary_sources: None,
+            boundary_paths: None,
+            style: acadrust::entities::HatchStyleType::Normal,
             pattern: model::hatch_model::HatchPattern::Solid,
             name: "SOLID".into(),
             color,
@@ -2222,14 +2228,20 @@ impl Scene {
         entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
     ) -> Handle {
         let mut dxf = DxfHatch::new();
+        dxf.style = model.style;
         dxf.is_solid = matches!(
             model.pattern,
             crate::scene::model::hatch_model::HatchPattern::Solid
         );
-        // Prefer exact command geometry; otherwise reconstruct every ring from
-        // the render offsets without dropping its separators.
-        // Build one DXF path per NaN-separated ring and retain each outer/hole role.
-        let reconstructed_wcs: Vec<[f64; 2]> = if model.boundary_wcs.is_none() {
+        // Keep analytic command geometry when available. The tessellated model
+        // remains the render representation only; it must not replace circles,
+        // ellipse arcs or splines in the persisted entity.
+        if let Some(paths) = model.boundary_paths.as_deref() {
+            dxf.paths = paths.clone();
+        } else {
+            // Otherwise reconstruct every ring from the render offsets without
+            // dropping its separators.
+            let reconstructed_wcs: Vec<[f64; 2]> = if model.boundary_wcs.is_none() {
             let [wx, wy] = model.world_origin;
             model
                 .boundary
@@ -2242,18 +2254,18 @@ impl Scene {
                     }
                 })
                 .collect()
-        } else {
-            Vec::new()
-        };
-        let wcs = model
-            .boundary_wcs
-            .as_deref()
-            .map(|points| points.as_slice())
-            .unwrap_or(reconstructed_wcs.as_slice());
-        let mut ring: Vec<Vector2> = Vec::new();
-        let mut first = true;
-        let mut ring_index = 0usize;
-        let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool, index: usize| {
+            } else {
+                Vec::new()
+            };
+            let wcs = model
+                .boundary_wcs
+                .as_deref()
+                .map(|points| points.as_slice())
+                .unwrap_or(reconstructed_wcs.as_slice());
+            let mut ring: Vec<Vector2> = Vec::new();
+            let mut first = true;
+            let mut ring_index = 0usize;
+            let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool, index: usize| {
             if !r.is_empty() {
                 let edge = PolylineEdge::new(std::mem::take(r), true);
                 let handles: Vec<_> = model
@@ -2281,31 +2293,32 @@ impl Scene {
                 }
                 dxf.paths.push(path);
             }
-        };
-        for &[x, y] in wcs {
-            if x.is_finite() && y.is_finite() {
-                ring.push(Vector2::new(x, y));
-            } else {
-                let is_outer = model
-                    .boundary_exterior
-                    .as_deref()
-                    .and_then(|roles| roles.get(ring_index))
-                    .copied()
-                    .unwrap_or(first);
-                first = false;
-                if !ring.is_empty() {
-                    push_ring(&mut ring, is_outer, ring_index);
-                    ring_index += 1;
+            };
+            for &[x, y] in wcs {
+                if x.is_finite() && y.is_finite() {
+                    ring.push(Vector2::new(x, y));
+                } else {
+                    let is_outer = model
+                        .boundary_exterior
+                        .as_deref()
+                        .and_then(|roles| roles.get(ring_index))
+                        .copied()
+                        .unwrap_or(first);
+                    first = false;
+                    if !ring.is_empty() {
+                        push_ring(&mut ring, is_outer, ring_index);
+                        ring_index += 1;
+                    }
                 }
             }
+            let is_outer = model
+                .boundary_exterior
+                .as_deref()
+                .and_then(|roles| roles.get(ring_index))
+                .copied()
+                .unwrap_or(first);
+            push_ring(&mut ring, is_outer, ring_index);
         }
-        let is_outer = model
-            .boundary_exterior
-            .as_deref()
-            .and_then(|roles| roles.get(ring_index))
-            .copied()
-            .unwrap_or(first);
-        push_ring(&mut ring, is_outer, ring_index);
         dxf.is_associative = dxf
             .paths
             .iter()
