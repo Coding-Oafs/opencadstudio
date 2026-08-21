@@ -4,19 +4,12 @@
 use crate::app::Message;
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
+use crate::ui::dock::{DockMsg, PanelId};
 use iced::widget::canvas::{Frame, Path, Program, Stroke};
-use iced::widget::{button, canvas, column, container, row, scrollable, svg, text, text_input};
+use iced::widget::{button, canvas, column, container, mouse_area, row, scrollable, svg, text, text_input, tooltip};
 use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 
-const PANEL_W: f32 = 260.0;
 const TOOL_H: f32 = 22.0;
-const PANEL_BG: Color = Color { r: 0.13, g: 0.13, b: 0.13, a: 1.0 };
-const PANEL_BORDER: Color = Color { r: 0.22, g: 0.22, b: 0.24, a: 1.0 };
-const CARD_BG: Color = Color { r: 0.16, g: 0.16, b: 0.18, a: 1.0 };
-const CARD_HOVER: Color = Color { r: 0.20, g: 0.20, b: 0.22, a: 1.0 };
-const CARD_ACTIVE: Color = Color { r: 0.20, g: 0.40, b: 0.70, a: 1.0 };
-const TEXT: Color = Color { r: 0.88, g: 0.88, b: 0.88, a: 1.0 };
-const DIM: Color = Color { r: 0.55, g: 0.55, b: 0.55, a: 1.0 };
 /// Character budget for a block card's label so all rows stay one line.
 /// Fits the narrowest card (Small = 3 per row) at size 11 without wrapping.
 const MAX_LABEL_CHARS: usize = 12;
@@ -32,8 +25,6 @@ pub enum BlockPaletteMsg {
     PickFile,
     Insert(String),
     Refresh,
-    ToggleBar,
-    Close,
     FilePicked(Result<std::path::PathBuf, String>),
 }
 
@@ -191,7 +182,7 @@ impl<'a> Program<Message> for BlockPreviewCanvas<'a> {
 }
 
 /// Build the docked panel element from the palette state.
-pub fn view(palette: &BlockPalette) -> Element<'_, Message> {
+pub fn view(palette: &BlockPalette, width: f32, auto_collapse: bool) -> Element<'_, Message> {
     let query = palette.search.trim().to_lowercase();
     let filtered: Vec<&BlockEntry> = palette
         .blocks
@@ -199,34 +190,54 @@ pub fn view(palette: &BlockPalette) -> Element<'_, Message> {
         .filter(|block| query.is_empty() || block.name.to_lowercase().contains(&query))
         .collect();
 
-    // ── Title bar (title, collapse, close) ──────────────────────────────────
-    let title_bar = container(
-        row![
-            text("Block Palette").size(12).color(TEXT),
-            iced::widget::Space::new().width(Fill),
-            icon_button(
-                IconKind::Svg(include_bytes!("../../../assets/icons/ui/tri_right.svg")),
-                BlockPaletteMsg::ToggleBar,
-            ),
-            icon_button(
-                IconKind::Svg(include_bytes!("../../../assets/icons/ui/close.svg")),
-                BlockPaletteMsg::Close,
-            ),
-        ]
-        .spacing(4)
-        .align_y(iced::Center),
+    // ── Dock chrome (title, pin, close) — matches the Properties panel ────
+    let pin_icon = if auto_collapse {
+        crate::ui::icons::themed_primary_weak_text(crate::ui::icons::PIN, 12.0)
+    } else {
+        crate::ui::icons::themed_secondary(crate::ui::icons::PIN, 12.0)
+    };
+    let pin = button(pin_icon)
+        .on_press(Message::Dock(DockMsg::AutoCollapseToggle(PanelId::BlockPalette)))
+        .style(move |theme: &Theme, status| {
+            let mut style = button::subtle(theme, status);
+            if auto_collapse {
+                let palette = theme.palette();
+                style.background = Some(Background::Color(palette.primary.weak.color));
+                style.text_color = palette.primary.weak.text;
+                style.border.color = palette.primary.base.color;
+                style.border.width = 1.0;
+            }
+            style
+        })
+        .padding([3, 5]);
+    let pin = tooltip(pin, text("Auto").size(10), tooltip::Position::Bottom).gap(4);
+
+    let close = button(crate::ui::icons::themed_secondary(crate::ui::icons::CLOSE, 12.0))
+        .on_press(Message::Dock(DockMsg::Close(PanelId::BlockPalette)))
+        .style(button::subtle)
+        .padding([3, 5]);
+    let close = tooltip(close, text("Close").size(10), tooltip::Position::Bottom).gap(4);
+
+    let title_bar = mouse_area(
+        container(
+            row![
+                text("Block Palette").size(12),
+                iced::widget::Space::new().width(Fill),
+                pin,
+                close,
+            ]
+            .spacing(3)
+            .align_y(iced::Center),
+        )
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.weak.color)),
+            ..Default::default()
+        })
+        .width(Fill)
+        .padding([3, 6]),
     )
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(CARD_BG)),
-        border: Border {
-            color: PANEL_BORDER,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..Default::default()
-    })
-    .width(Fill)
-    .padding([5, 6]);
+    .on_press(Message::Dock(DockMsg::DockGrab(PanelId::BlockPalette)))
+    .interaction(iced::mouse::Interaction::Grab);
 
     let search_input = text_input("Search blocks…", &palette.search)
         .on_input(|v| Message::BlockPalette(BlockPaletteMsg::Search(v)))
@@ -253,7 +264,7 @@ pub fn view(palette: &BlockPalette) -> Element<'_, Message> {
         } else {
             "No matches"
         };
-        container(text(msg).size(12).color(DIM))
+        container(text(msg).size(12).color(iced::Color { r: 0.55, g: 0.55, b: 0.55, a: 1.0 }))
             .center_x(Fill)
             .center_y(Fill)
             .width(Fill)
@@ -282,12 +293,12 @@ pub fn view(palette: &BlockPalette) -> Element<'_, Message> {
     };
 
     container(column![title_bar, header, body].spacing(6).padding(6))
-        .width(Length::Fixed(PANEL_W))
+        .width(Length::Fixed(width))
         .height(Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.base.color)),
             border: Border {
-                color: PANEL_BORDER,
+                color: theme.palette().background.neutral.color,
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -306,7 +317,7 @@ fn block_card<'a>(palette: &'a BlockPalette, block: &'a BlockEntry) -> Element<'
     // handles overflow, and this clips anything that still won't fit).
     let label = text(crate::ui::text_util::elide(&block.name, MAX_LABEL_CHARS))
         .size(11)
-        .color(TEXT)
+        .color(Color::WHITE)
         .width(Fill)
         .height(Length::Fixed(LABEL_LINE_H))
         .center();
@@ -314,23 +325,27 @@ fn block_card<'a>(palette: &'a BlockPalette, block: &'a BlockEntry) -> Element<'
     button(content)
         .on_press(Message::BlockPalette(BlockPaletteMsg::Insert(block.name.clone())))
         .width(Fill)
-        .style(move |_: &Theme, status| {
-            let bg = if is_placing {
-                CARD_ACTIVE
+        .style(move |theme: &Theme, status| {
+            let palette = theme.palette();
+            let neutral = palette.background.neutral.color;
+            let base = palette.background.base.color;
+            let strong = palette.background.strong.color;
+            let (bg, border) = if is_placing {
+                (palette.primary.base.color, palette.primary.base.color)
             } else {
                 match status {
-                    button::Status::Hovered | button::Status::Pressed => CARD_HOVER,
-                    _ => CARD_BG,
+                    button::Status::Hovered | button::Status::Pressed => (strong, neutral),
+                    _ => (base, neutral),
                 }
             };
             button::Style {
                 background: Some(Background::Color(bg)),
                 border: Border {
-                    color: PANEL_BORDER,
+                    color: border,
                     width: 1.0,
                     radius: 3.0.into(),
                 },
-                text_color: TEXT,
+                text_color: Color::WHITE,
                 ..Default::default()
             }
         })
@@ -349,9 +364,11 @@ fn icon_button<'a>(icon: IconKind, msg: BlockPaletteMsg) -> Element<'a, Message>
         .on_press(Message::BlockPalette(msg))
         .width(Length::Fixed(TOOL_H + 8.0))
         .height(Length::Fixed(TOOL_H + 8.0))
-        .style(|_: &Theme, status| button::Style {
+        .style(|theme: &Theme, status| button::Style {
             background: Some(Background::Color(match status {
-                button::Status::Hovered | button::Status::Pressed => CARD_HOVER,
+                button::Status::Hovered | button::Status::Pressed => {
+                    theme.palette().background.strong.color
+                }
                 _ => Color::TRANSPARENT,
             })),
             border: Border {

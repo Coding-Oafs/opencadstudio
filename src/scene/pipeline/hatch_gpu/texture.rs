@@ -1,14 +1,5 @@
-// Storage-free hatch renderer — texture-backed, UNCAPPED.
-//
-// Devices without storage buffers use this per-hatch renderer. It reuses the
-// storage-free hatch algorithm (see wipeout.wgsl / hatch_texture.wgsl) but packs the
-// variable-length boundary / family / dash arrays into ONE RGBA32F data texture
-// read via textureLoad — removing the MAX_FAMILIES / MAX_HATCH_BOUNDARY_VERTS /
-// MAX_DASHES caps of the uniform (WipeoutGpu) path. Every hatch type — solid,
-// gradient, and arbitrarily complex line patterns — renders in compat mode.
-//
-// Storage-capable devices use the sibling storage backend; wipeout masks use
-// wipeout_gpu.rs.
+// Texture-backed hatch renderer for devices without storage buffers. Boundary
+// geometry comes from the same kernel mesh as the storage backend.
 
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern};
 use iced::wgpu;
@@ -39,6 +30,29 @@ pub(super) fn vertex_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct TextureHatchPlacement {
+    translation: [f32; 2],
+    translation_low: [f32; 2],
+    draw_depth: f32,
+    _pad: [f32; 3],
+}
+
+impl TextureHatchPlacement {
+    pub(super) fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 3, format: wgpu::VertexFormat::Float32 },
+            ],
+        }
+    }
+}
+
 // ── Per-hatch uniform (binding 0) — 96 bytes, matches HatchUniforms in
 //    hatch_texture.wgsl. ──────────────────────────────────────────────────────
 
@@ -48,7 +62,7 @@ struct TextureHatchUniform {
     color: [f32; 4],      //  0
     color2: [f32; 4],     // 16
     mode: u32,            // 32
-    vcount: u32,          // 36
+    _reserved: u32,       // 36
     angle_offset: f32,    // 40
     scale: f32,           // 44
     grad_cos: f32,        // 48
@@ -67,6 +81,10 @@ struct TextureHatchUniform {
 
 pub(super) struct TextureHatch {
     pub(super) vertex_buffer: wgpu::Buffer,
+    pub(super) index_buffer: wgpu::Buffer,
+    pub(super) placement_buffer: wgpu::Buffer,
+    pub(super) index_count: u32,
+    pub(super) instance_count: u32,
     pub(super) bind_group: wgpu::BindGroup,
     /// Reserved for per-frame AABB LOD (mirrors `WipeoutGpu`); not yet wired
     /// into the web hatch draw loop — the native batched path doesn't do
@@ -78,6 +96,32 @@ pub(super) struct TextureHatch {
 }
 
 impl TextureHatch {
+    pub(super) fn from_models(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        models: &[HatchModel],
+        bgl1: &wgpu::BindGroupLayout,
+    ) -> Vec<Self> {
+        let mut slots = rustc_hash::FxHashMap::default();
+        let mut groups: Vec<Vec<&HatchModel>> = Vec::new();
+        for (index, model) in models.iter().enumerate() {
+            let key = model
+                .render_instance
+                .map(|instance| (true, instance.source_id))
+                .unwrap_or((false, index as u64));
+            let slot = *slots.entry(key).or_insert_with(|| {
+                let slot = groups.len();
+                groups.push(Vec::new());
+                slot
+            });
+            groups[slot].push(model);
+        }
+        groups
+            .into_iter()
+            .filter_map(|group| Self::new(device, queue, &group, bgl1))
+            .collect()
+    }
+
     /// Group-1 layout: uniform header (binding 0) + non-filterable float data
     /// texture (binding 1).
     pub(super) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -111,16 +155,17 @@ impl TextureHatch {
     pub(super) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        model: &HatchModel,
+        models: &[&HatchModel],
         bgl1: &wgpu::BindGroupLayout,
-    ) -> Self {
+    ) -> Option<Self> {
+        let model = models[0];
         // ── Decode pattern mode (mirrors WipeoutGpu::new) ─────────────────
         // The gradient shape (kind + invert bit) rides in the mode's high
         // bits — the 96-byte uniform has no spare slot.
         let (mode, color2, grad_cos, grad_sin) = match &model.pattern {
             HatchPattern::Solid => (1u32, [0.0f32; 4], 0.0f32, 0.0f32),
             HatchPattern::Pattern(_) => (0u32, [0.0f32; 4], 0.0f32, 0.0f32),
-            HatchPattern::Gradient { angle_deg, color2, kind, invert } => {
+            HatchPattern::Gradient { angle_deg, color2, kind, invert, .. } => {
                 let gk = (kind.shader_kind() | if *invert { 16 } else { 0 }) << 8;
                 if kind.radial() {
                     // Radial: centre is the local origin; grad_cos/sin unused.
@@ -145,87 +190,83 @@ impl TextureHatch {
             max_y = max_y.max(y);
         }
 
-        let max_spacing = match &model.pattern {
-            HatchPattern::Pattern(families) => {
-                families.iter().map(|f| f.dy.abs()).fold(0.0f32, f32::max)
-            }
-            _ => 5.0,
-        };
-        let diag = ((max_x - min_x).powi(2) + (max_y - min_y).powi(2)).sqrt();
-        let pad = (diag * 0.8 + max_spacing * 2.0 * model.scale).max(1.0);
-
-        // Anchor pattern phase at `world_origin` with the boundary stored raw,
-        // matching the storage backend — NOT WipeoutGpu,
-        // whose f64 origin grid-snap is dead code (wipeouts are always solid)
-        // and would phase-shift every line pattern relative to desktop. No drift.
         let origin = model.world_origin;
-        let drift = [0.0f32, 0.0f32];
-        let (x0, x1, y0, y1) = (
-            min_x + drift[0] - pad,
-            max_x + drift[0] + pad,
-            min_y + drift[1] - pad,
-            max_y + drift[1] + pad,
-        );
-
-        let quad = [
-            HatchVertex { pos: [x0, y0, 0.0], _pad: 0.0 },
-            HatchVertex { pos: [x1, y0, 0.0], _pad: 0.0 },
-            HatchVertex { pos: [x1, y1, 0.0], _pad: 0.0 },
-            HatchVertex { pos: [x0, y0, 0.0], _pad: 0.0 },
-            HatchVertex { pos: [x1, y1, 0.0], _pad: 0.0 },
-            HatchVertex { pos: [x0, y1, 0.0], _pad: 0.0 },
-        ];
+        let (mesh_points, indices) = model.fill_mesh();
+        if mesh_points.is_empty() || indices.is_empty() {
+            return None;
+        }
+        let vertices: Vec<HatchVertex> = mesh_points
+            .into_iter()
+            .map(|[x, y]| HatchVertex { pos: [x, y, 0.0], _pad: 0.0 })
+            .collect();
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.texture.vbuf"),
-            contents: bytemuck::cast_slice(&quad),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hatch.texture.ibuf"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let base = model
+            .render_instance
+            .map_or([0.0; 3], |instance| instance.translation);
+        let placements: Vec<TextureHatchPlacement> = models
+            .iter()
+            .map(|model| {
+                let translation = model
+                    .render_instance
+                    .map_or([0.0; 3], |instance| instance.translation);
+                let delta = [translation[0] - base[0], translation[1] - base[1]];
+                let high = [delta[0] as f32, delta[1] as f32];
+                TextureHatchPlacement {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                    ],
+                    draw_depth: model.draw_depth,
+                    _pad: [0.0; 3],
+                }
+            })
+            .collect();
+        let placement_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hatch.texture.placements"),
+            contents: bytemuck::cast_slice(&placements),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         // ── Gradient projection range (snapped-local space) ───────────────
-        let (grad_min, grad_range) = if mode == 2 {
-            let projs: Vec<f32> = model
-                .boundary
-                .iter()
-                .filter(|v| v[0].is_finite() && v[1].is_finite())
-                .map(|&[x, y]| (x + drift[0]) * grad_cos + (y + drift[1]) * grad_sin)
-                .collect();
-            if projs.is_empty() {
-                (0.0, 1.0)
-            } else {
-                let proj_min = projs.iter().cloned().fold(f32::INFINITY, f32::min);
-                let proj_max = projs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-                // Floor matches the storage backend.
-                (proj_min, (proj_max - proj_min).max(1.0))
-            }
-        } else if mode == 3 {
-            // Radial: range = the farthest boundary vertex from the centre.
-            let radius = model
-                .boundary
-                .iter()
-                .filter(|v| v[0].is_finite() && v[1].is_finite())
-                .map(|&[x, y]| (x * x + y * y).sqrt())
-                .fold(0.0_f32, f32::max)
-                .max(1.0);
-            (0.0, radius)
+        let base_mode = mode & 0xFF;
+        let frame = match &model.pattern {
+            HatchPattern::Gradient {
+                angle_deg, shift, ..
+            } => model.gradient_frame(*angle_deg, *shift),
+            _ => None,
+        };
+        let (grad_min, grad_range, radial_center) = if base_mode == 2 {
+            frame.map_or((0.0, 1.0, [0.0, 0.0]), |frame| {
+                (
+                    frame.projection_min as f32,
+                    frame.projection_span as f32,
+                    [0.0, 0.0],
+                )
+            })
+        } else if base_mode == 3 {
+            frame.map_or((0.0, 1.0, [0.0, 0.0]), |frame| {
+                (
+                    0.0,
+                    frame.radius as f32,
+                    [frame.center[0] as f32, frame.center[1] as f32],
+                )
+            })
         } else {
-            (0.0, 1.0)
+            (0.0, 1.0, [0.0, 0.0])
         };
 
-        // ── Pack the data texture: boundary | families | dashes ───────────
+        // ── Pack the data texture: families | dashes ─────────────────────
         let mut texels: Vec<[f32; 4]> = Vec::new();
-        // Boundary section (texels 0..vcount). NaN separators become the
-        // finite GPU sentinel — the shader NaN self-compare is folded to
-        // `true` on some drivers (#386, #416).
-        for &[x, y] in model.boundary.iter() {
-            if x.is_finite() && y.is_finite() {
-                texels.push([x + drift[0], y + drift[1], 0.0, 0.0]);
-            } else {
-                let s = crate::scene::model::hatch_model::GPU_BOUNDARY_SEP;
-                texels.push([s, s, 0.0, 0.0]);
-            }
-        }
-        let vcount = texels.len() as u32;
-
         // Family section (3 texels each) + a flat dash pool.
         let fam_off = texels.len() as u32;
         let mut n_families = 0u32;
@@ -241,7 +282,7 @@ impl TextureHatch {
                     0.0
                 };
                 let angle_r = fam.angle_deg.to_radians();
-                // QCAD PAT convention: perp_step = dy, along_step = dx.
+                // PAT local frame: perpendicular spacing and along-line phase.
                 texels.push([angle_r.cos(), angle_r.sin(), fam.x0, fam.y0]);
                 texels.push([fam.dx, fam.dy, fam.dy, fam.dx]);
                 // Counts as exact f32 (small integers → no denormal/bitcast risk).
@@ -306,13 +347,13 @@ impl TextureHatch {
             color: model.color,
             color2,
             mode,
-            vcount,
+            _reserved: 0,
             angle_offset: model.angle_offset,
             // Clamp like the desktop renderer so scale==0 can't make perp_step 0
             // → round(perp/0)=NaN → an invisible hatch.
             scale: model.scale.max(1e-6),
-            grad_cos,
-            grad_sin,
+            grad_cos: if base_mode == 3 { radial_center[0] } else { grad_cos },
+            grad_sin: if base_mode == 3 { radial_center[1] } else { grad_sin },
             grad_min,
             grad_range,
             origin: [origin[0] as f32, origin[1] as f32],
@@ -354,12 +395,16 @@ impl TextureHatch {
             [min_x, min_y, max_x, max_y]
         };
 
-        Self {
+        Some(Self {
             vertex_buffer,
+            index_buffer,
+            placement_buffer,
+            index_count: indices.len() as u32,
+            instance_count: placements.len() as u32,
             bind_group,
             world_aabb,
             _uniform_buf,
             _data_tex: data_tex,
-        }
+        })
     }
 }

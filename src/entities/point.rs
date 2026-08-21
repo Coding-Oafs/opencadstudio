@@ -82,7 +82,7 @@ pub fn relative_render(
         return None;
     };
     let pdsize = document.header.point_display_size;
-    let pdmode = document.header.point_display_mode;
+    let pdmode = effective_pdmode(pt, document.header.point_display_mode);
     if pdsize > 0.0 || pdmode == 0 {
         return None;
     }
@@ -173,8 +173,22 @@ fn point_glyph(cx: f64, cy: f64, z: f64, pdmode: i16, s_half: f64) -> Vec<[f64; 
     pts
 }
 
+fn is_defpoints_layer(layer: &str) -> bool {
+    let name = layer.rsplit_once('|').map_or(layer, |(_, name)| name);
+    name.eq_ignore_ascii_case("DEFPOINTS")
+}
+
+/// Definition points always use the dot style.
+fn effective_pdmode(pt: &Point, pdmode: i16) -> i16 {
+    if is_defpoints_layer(&pt.common.layer) {
+        0
+    } else {
+        pdmode
+    }
+}
+
 fn to_render(pt: &Point, document: &acadrust::CadDocument) -> RenderEntity {
-    let pdmode = document.header.point_display_mode;
+    let pdmode = effective_pdmode(pt, document.header.point_display_mode);
     let s = pdsize_world(document.header.point_display_size) * 0.5;
     point_render(pt, pdmode, s)
 }
@@ -240,3 +254,56 @@ impl RenderConvertible for Point {
 }
 
 crate::impl_entity_basics!(Point);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point_on(layer: &str) -> Point {
+        let mut pt = Point::default();
+        pt.common.layer = layer.to_string();
+        pt.location = acadrust::types::Vector3::new(1.0, 2.0, 0.0);
+        pt
+    }
+
+    #[test]
+    fn definition_points_ignore_the_point_style() {
+        let mut doc = acadrust::CadDocument::new();
+        doc.header.point_display_mode = 34;
+        doc.header.point_display_size = 2.0;
+
+        let drawn = to_render(&point_on("0"), &doc);
+        assert!(
+            matches!(drawn.object, RenderObject::Lines(ref pts) if !pts.is_empty()),
+            "a point the user placed still follows PDMODE"
+        );
+
+        for layer in ["Defpoints", "DEFPOINTS", "defpoints", "xref|Defpoints"] {
+            let defpoint = to_render(&point_on(layer), &doc);
+            assert!(
+                matches!(defpoint.object, RenderObject::Dot(_)),
+                "a definition point on {layer} must stay a dot"
+            );
+        }
+    }
+
+    #[test]
+    fn definition_points_ignore_the_point_style_at_relative_pdsize() {
+        let mut doc = acadrust::CadDocument::new();
+        doc.header.point_display_mode = 34;
+        doc.header.point_display_size = -5.0;
+
+        let drawn = relative_render(&EntityType::Point(point_on("0")), &doc, Some(0.01));
+        assert!(drawn.is_some(), "a user point still takes the viewport-aware path");
+
+        let defpoint = relative_render(
+            &EntityType::Point(point_on("xref|Defpoints")),
+            &doc,
+            Some(0.01),
+        );
+        assert!(
+            defpoint.is_none(),
+            "a definition point falls through to the dot instead of a sized glyph"
+        );
+    }
+}

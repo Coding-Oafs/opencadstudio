@@ -86,7 +86,7 @@ pub fn general_section(entity: &EntityType) -> PropSection {
             Property {
                 label: t!("Hyperlink").into_owned(),
                 field: "hyperlink",
-                value: PropValue::EditText(hyperlink),
+                value: PropValue::PlainText(hyperlink),
             },
         ],
     };

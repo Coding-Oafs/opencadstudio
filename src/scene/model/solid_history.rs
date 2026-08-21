@@ -1,0 +1,662 @@
+use acadrust::entities::{EmbeddedEntity, Solid3D};
+use acadrust::objects::{
+    SolidHistoryBox, SolidHistoryBrep, SolidHistoryCylinder, SolidHistoryLoft,
+    SolidHistoryNodeBase, SolidHistoryOperation, SolidHistoryPyramid,
+    SolidHistoryRevolve, SolidHistorySphere, SolidHistorySweep, SolidHistoryTorus,
+};
+use acadrust::types::{Vector2, Vector3};
+use acadrust::EntityType;
+use cadkernel::brep::Body;
+
+use crate::command::EntityTransform;
+use crate::scene::model::object::{
+    GripApply, GripDef, GripShape, PropSection, PropValue, Property,
+};
+use crate::t;
+
+pub const GRIP_LENGTH: usize = 10_001;
+pub const GRIP_WIDTH: usize = 10_002;
+pub const GRIP_HEIGHT: usize = 10_003;
+pub const GRIP_RADIUS: usize = 10_004;
+pub const GRIP_OUTER_RADIUS: usize = 10_005;
+pub const GRIP_INNER_RADIUS: usize = 10_006;
+pub const GRIP_SIDES: usize = 10_007;
+
+pub const PROP_LENGTH: &str = "solid_history_length";
+pub const PROP_WIDTH: &str = "solid_history_width";
+pub const PROP_HEIGHT: &str = "solid_history_height";
+pub const PROP_RADIUS: &str = "solid_history_radius";
+pub const PROP_OUTER_RADIUS: &str = "solid_history_outer_radius";
+pub const PROP_INNER_RADIUS: &str = "solid_history_inner_radius";
+pub const PROP_SIDES: &str = "solid_history_sides";
+
+fn history_prop(label: &str, field: &'static str, value: impl ToString) -> Property {
+    Property {
+        label: label.to_string(),
+        field,
+        value: PropValue::EditText(value.to_string()),
+    }
+}
+
+pub fn primitive_properties(
+    document: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Vec<PropSection> {
+    let Some(operation) = document.solid_history_operation(handle) else {
+        return Vec::new();
+    };
+    let props = match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => vec![
+            history_prop(t!("Length").as_ref(), PROP_LENGTH, value.length),
+            history_prop(t!("Width").as_ref(), PROP_WIDTH, value.width),
+            history_prop(t!("Height").as_ref(), PROP_HEIGHT, value.height),
+        ],
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => vec![
+            history_prop(t!("Radius").as_ref(), PROP_RADIUS, value.major_radius),
+            history_prop(t!("Height").as_ref(), PROP_HEIGHT, value.height),
+        ],
+        SolidHistoryOperation::Sphere(value) => vec![history_prop(
+            t!("Radius").as_ref(),
+            PROP_RADIUS,
+            value.radius,
+        )],
+        SolidHistoryOperation::Torus(value) => vec![
+            history_prop(
+                t!("Outer Radius").as_ref(),
+                PROP_OUTER_RADIUS,
+                value.major_radius + value.minor_radius,
+            ),
+            history_prop(
+                t!("Inner Radius").as_ref(),
+                PROP_INNER_RADIUS,
+                (value.major_radius - value.minor_radius).max(0.0),
+            ),
+        ],
+        SolidHistoryOperation::Pyramid(value) => vec![
+            history_prop(t!("Radius").as_ref(), PROP_RADIUS, value.radius),
+            history_prop(t!("Height").as_ref(), PROP_HEIGHT, value.height),
+            history_prop(t!("Sides").as_ref(), PROP_SIDES, value.sides),
+        ],
+        _ => return Vec::new(),
+    };
+    vec![PropSection {
+        title: t!("Primitive").into_owned(),
+        props,
+    }]
+}
+
+pub fn is_primitive_property(field: &str) -> bool {
+    matches!(
+        field,
+        PROP_LENGTH
+            | PROP_WIDTH
+            | PROP_HEIGHT
+            | PROP_RADIUS
+            | PROP_OUTER_RADIUS
+            | PROP_INNER_RADIUS
+            | PROP_SIDES
+    )
+}
+
+pub fn apply_primitive_property(
+    operation: &mut SolidHistoryOperation,
+    field: &str,
+    value: &str,
+) -> bool {
+    let Ok(number) = value.trim().parse::<f64>() else {
+        return false;
+    };
+    if !number.is_finite() {
+        return false;
+    }
+    let positive = || (number > 0.0).then_some(number);
+    match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => match field {
+            PROP_LENGTH => value.length = positive().unwrap_or(value.length),
+            PROP_WIDTH => value.width = positive().unwrap_or(value.width),
+            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+            _ => return false,
+        },
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => match field {
+            PROP_RADIUS => {
+                let Some(radius) = positive() else {
+                    return false;
+                };
+                value.major_radius = radius;
+                value.minor_radius = radius;
+                value.x_radius = radius;
+            }
+            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+            _ => return false,
+        },
+        SolidHistoryOperation::Sphere(value) if field == PROP_RADIUS => {
+            value.radius = positive().unwrap_or(value.radius);
+        }
+        SolidHistoryOperation::Torus(value) => {
+            let outer = value.major_radius + value.minor_radius;
+            let inner = (value.major_radius - value.minor_radius).max(0.0);
+            match field {
+                PROP_OUTER_RADIUS => {
+                    let Some(next_outer) = positive() else {
+                        return false;
+                    };
+                    if next_outer <= inner {
+                        return false;
+                    }
+                    value.major_radius = (next_outer + inner) * 0.5;
+                    value.minor_radius = (next_outer - inner) * 0.5;
+                }
+                PROP_INNER_RADIUS => {
+                    let Some(next_inner) = positive() else {
+                        return false;
+                    };
+                    if next_inner >= outer {
+                        return false;
+                    }
+                    value.major_radius = (outer + next_inner) * 0.5;
+                    value.minor_radius = (outer - next_inner) * 0.5;
+                }
+                _ => return false,
+            }
+        }
+        SolidHistoryOperation::Pyramid(value) => match field {
+            PROP_RADIUS => value.radius = positive().unwrap_or(value.radius),
+            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+            PROP_SIDES => {
+                let rounded = number.round();
+                if (number - rounded).abs() > 1e-9 {
+                    return false;
+                }
+                let sides = rounded as i32;
+                if !(3..=71).contains(&sides) {
+                    return false;
+                }
+                value.sides = sides;
+            }
+            _ => return false,
+        },
+        _ => return false,
+    }
+    positive().is_some() || field == PROP_SIDES
+}
+
+fn matrix(transform: [f64; 16]) -> Option<glam::DMat4> {
+    let matrix = glam::DMat4::from_cols_array(&transform);
+    (matrix.is_finite() && matrix.determinant().abs() > 1e-12).then_some(matrix)
+}
+
+fn codec_matrix(transform: &acadrust::types::Transform) -> glam::DMat4 {
+    let matrix = transform.matrix.m;
+    glam::DMat4::from_cols_array(&[
+        matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0],
+        matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1],
+        matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2],
+        matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3],
+    ])
+}
+
+fn transform_matrix(transform: &EntityTransform) -> Option<glam::DMat4> {
+    Some(match transform {
+        EntityTransform::Translate(delta) => glam::DMat4::from_translation(*delta),
+        EntityTransform::Rotate {
+            center,
+            axis,
+            angle_rad,
+        } => {
+            let axis = axis.normalize_or_zero();
+            if axis.length_squared() <= 1e-12 {
+                return None;
+            }
+            glam::DMat4::from_translation(*center)
+                * glam::DMat4::from_axis_angle(axis, *angle_rad)
+                * glam::DMat4::from_translation(-*center)
+        }
+        EntityTransform::Scale { center, factor } => {
+            glam::DMat4::from_translation(*center)
+                * glam::DMat4::from_scale(glam::DVec3::splat(*factor))
+                * glam::DMat4::from_translation(-*center)
+        }
+        EntityTransform::Mirror {
+            p1,
+            p2,
+            working_normal,
+        } => codec_matrix(&crate::scene::view::transform::reflection_about_working_line(
+            *p1,
+            *p2,
+            *working_normal,
+        )),
+        EntityTransform::Affine(value) => codec_matrix(value),
+    })
+}
+
+pub fn transform_operation(
+    operation: &mut SolidHistoryOperation,
+    transform: &EntityTransform,
+) -> bool {
+    let Some(base) = operation.base_mut() else {
+        return false;
+    };
+    let Some(current) = matrix(base.transform) else {
+        return false;
+    };
+    let Some(by) = transform_matrix(transform) else {
+        return false;
+    };
+    let transformed = by * current;
+    if !transformed.is_finite() || transformed.determinant().abs() <= 1e-12 {
+        return false;
+    }
+    base.transform = transformed.to_cols_array();
+    true
+}
+
+fn world_point(transform: [f64; 16], point: [f64; 3]) -> Option<glam::DVec3> {
+    Some(matrix(transform)?.transform_point3(glam::DVec3::from_array(point)))
+}
+
+fn world_vector(transform: [f64; 16], vector: [f64; 3]) -> Option<glam::DVec3> {
+    let vector = matrix(transform)?.transform_vector3(glam::DVec3::from_array(vector));
+    (vector.length_squared() > 1e-12).then(|| vector.normalize())
+}
+
+fn local_point(transform: [f64; 16], point: glam::DVec3) -> Option<glam::DVec3> {
+    Some(matrix(transform)?.inverse().transform_point3(point))
+}
+
+fn grip(
+    id: usize,
+    world: glam::DVec3,
+    shape: GripShape,
+    axis: Option<glam::DVec3>,
+) -> GripDef {
+    GripDef {
+        id,
+        world,
+        is_midpoint: false,
+        shape,
+        dir: None,
+        axis,
+    }
+}
+
+pub fn primitive_grips(
+    document: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Vec<GripDef> {
+    let Some(operation) = document.solid_history_operation(handle) else {
+        return Vec::new();
+    };
+    let mut grips = Vec::new();
+    let mut add = |id, transform, point, shape, axis: Option<[f64; 3]>| {
+        if let Some(world) = world_point(transform, point) {
+            grips.push(grip(
+                id,
+                world,
+                shape,
+                axis.and_then(|vector| world_vector(transform, vector)),
+            ));
+        }
+    };
+    match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => {
+            add(
+                GRIP_LENGTH,
+                value.base.transform,
+                [value.length, value.width * 0.5, 0.0],
+                GripShape::Square,
+                None,
+            );
+            add(
+                GRIP_WIDTH,
+                value.base.transform,
+                [value.length * 0.5, value.width, 0.0],
+                GripShape::Square,
+                None,
+            );
+            add(
+                GRIP_HEIGHT,
+                value.base.transform,
+                [value.length * 0.5, value.width * 0.5, value.height],
+                GripShape::Square,
+                Some([0.0, 0.0, 1.0]),
+            );
+        }
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
+            add(
+                GRIP_RADIUS,
+                value.base.transform,
+                [value.major_radius, 0.0, value.height * 0.5],
+                GripShape::Square,
+                None,
+            );
+            add(
+                GRIP_HEIGHT,
+                value.base.transform,
+                [0.0, 0.0, value.height],
+                GripShape::Square,
+                Some([0.0, 0.0, 1.0]),
+            );
+        }
+        SolidHistoryOperation::Sphere(value) => add(
+            GRIP_RADIUS,
+            value.base.transform,
+            [value.radius, 0.0, 0.0],
+            GripShape::Square,
+            None,
+        ),
+        SolidHistoryOperation::Torus(value) => {
+            add(
+                GRIP_OUTER_RADIUS,
+                value.base.transform,
+                [value.major_radius + value.minor_radius, 0.0, 0.0],
+                GripShape::Square,
+                None,
+            );
+            add(
+                GRIP_INNER_RADIUS,
+                value.base.transform,
+                [
+                    (value.major_radius - value.minor_radius).max(0.0),
+                    0.0,
+                    0.0,
+                ],
+                GripShape::Square,
+                None,
+            );
+        }
+        SolidHistoryOperation::Pyramid(value) => {
+            add(
+                GRIP_RADIUS,
+                value.base.transform,
+                [value.radius, 0.0, 0.0],
+                GripShape::Square,
+                None,
+            );
+            add(
+                GRIP_HEIGHT,
+                value.base.transform,
+                [0.0, 0.0, value.height],
+                GripShape::Square,
+                Some([0.0, 0.0, 1.0]),
+            );
+            let angle = (value.sides.clamp(3, 71) as f64 * 5.0).to_radians();
+            add(
+                GRIP_SIDES,
+                value.base.transform,
+                [value.radius * angle.cos(), value.radius * angle.sin(), 0.0],
+                GripShape::Triangle,
+                None,
+            );
+        }
+        _ => {}
+    }
+    grips
+}
+
+pub fn apply_primitive_grip(
+    operation: &mut SolidHistoryOperation,
+    grip_id: usize,
+    apply: GripApply,
+) -> bool {
+    let GripApply::Absolute(world) = apply else {
+        return false;
+    };
+    let Some(transform) = operation.base().map(|base| base.transform) else {
+        return false;
+    };
+    let Some(local) = local_point(transform, world) else {
+        return false;
+    };
+    let positive = |value: f64| value.abs().max(1e-6);
+    match operation {
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => {
+            match grip_id {
+                GRIP_LENGTH => value.length = positive(local.x),
+                GRIP_WIDTH => value.width = positive(local.y),
+                GRIP_HEIGHT => value.height = local.z.max(1e-6),
+                _ => return false,
+            }
+        }
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
+            match grip_id {
+                GRIP_RADIUS => {
+                    let radius = local.x.hypot(local.y).max(1e-6);
+                    value.major_radius = radius;
+                    value.minor_radius = radius;
+                    value.x_radius = radius;
+                }
+                GRIP_HEIGHT => value.height = local.z.max(1e-6),
+                _ => return false,
+            }
+        }
+        SolidHistoryOperation::Sphere(value) if grip_id == GRIP_RADIUS => {
+            value.radius = local.length().max(1e-6);
+        }
+        SolidHistoryOperation::Torus(value) => match grip_id {
+            GRIP_OUTER_RADIUS => {
+                let outer = local.x.hypot(local.y).max(1e-6);
+                let inner = (value.major_radius - value.minor_radius).max(1e-6);
+                if outer <= inner {
+                    return false;
+                }
+                value.major_radius = (outer + inner) * 0.5;
+                value.minor_radius = (outer - inner) * 0.5;
+            }
+            GRIP_INNER_RADIUS => {
+                let inner = local.x.hypot(local.y).max(1e-6);
+                let outer = value.major_radius + value.minor_radius;
+                if inner >= outer {
+                    return false;
+                }
+                value.major_radius = (outer + inner) * 0.5;
+                value.minor_radius = (outer - inner) * 0.5;
+            }
+            _ => return false,
+        },
+        SolidHistoryOperation::Pyramid(value) => match grip_id {
+            GRIP_RADIUS => value.radius = local.x.hypot(local.y).max(1e-6),
+            GRIP_HEIGHT => value.height = local.z.max(1e-6),
+            GRIP_SIDES => {
+                let angle = local.y.atan2(local.x).rem_euclid(std::f64::consts::TAU);
+                value.sides = (angle.to_degrees() / 5.0).round() as i32;
+                value.sides = value.sides.clamp(3, 71);
+            }
+            _ => return false,
+        },
+        _ => return false,
+    }
+    true
+}
+
+fn base(transform: [f64; 16]) -> SolidHistoryNodeBase {
+    let mut base = SolidHistoryNodeBase::new(1);
+    base.transform = transform;
+    base
+}
+
+fn embedded(entity: &EntityType) -> Option<EmbeddedEntity> {
+    Some(match entity {
+        EntityType::Point(value) => EmbeddedEntity::Point(value.clone()),
+        EntityType::Line(value) => EmbeddedEntity::Line(value.clone()),
+        EntityType::Arc(value) => EmbeddedEntity::Arc(value.clone()),
+        EntityType::Circle(value) => EmbeddedEntity::Circle(value.clone()),
+        EntityType::Ellipse(value) => EmbeddedEntity::Ellipse(value.clone()),
+        EntityType::Spline(value) => EmbeddedEntity::Spline(value.clone()),
+        EntityType::LwPolyline(value) => EmbeddedEntity::LwPolyline(value.clone()),
+        EntityType::Ray(value) => EmbeddedEntity::Ray(value.clone()),
+        EntityType::XLine(value) => EmbeddedEntity::XLine(value.clone()),
+        _ => return None,
+    })
+}
+
+pub fn box_op(
+    transform: [f64; 16],
+    length: f64,
+    width: f64,
+    height: f64,
+) -> SolidHistoryOperation {
+    SolidHistoryOperation::Box(SolidHistoryBox {
+        base: base(transform),
+        operation_major: 1,
+        length,
+        width,
+        height,
+        ..SolidHistoryBox::default()
+    })
+}
+
+pub fn wedge_op(
+    transform: [f64; 16],
+    length: f64,
+    width: f64,
+    height: f64,
+) -> SolidHistoryOperation {
+    SolidHistoryOperation::Wedge(SolidHistoryBox {
+        base: base(transform),
+        operation_major: 1,
+        length,
+        width,
+        height,
+        ..SolidHistoryBox::default()
+    })
+}
+
+pub fn cylinder_op(
+    transform: [f64; 16],
+    radius: f64,
+    height: f64,
+) -> SolidHistoryOperation {
+    SolidHistoryOperation::Cylinder(SolidHistoryCylinder {
+        base: base(transform),
+        operation_major: 1,
+        height,
+        major_radius: radius,
+        minor_radius: radius,
+        x_radius: radius,
+        ..SolidHistoryCylinder::default()
+    })
+}
+
+pub fn cone_op(
+    transform: [f64; 16],
+    radius: f64,
+    height: f64,
+) -> SolidHistoryOperation {
+    SolidHistoryOperation::Cone(SolidHistoryCylinder {
+        base: base(transform),
+        operation_major: 1,
+        height,
+        major_radius: radius,
+        minor_radius: radius,
+        x_radius: radius,
+        ..SolidHistoryCylinder::default()
+    })
+}
+
+pub fn sphere_op(transform: [f64; 16], radius: f64) -> SolidHistoryOperation {
+    SolidHistoryOperation::Sphere(SolidHistorySphere {
+        base: base(transform),
+        operation_major: 1,
+        radius,
+        ..SolidHistorySphere::default()
+    })
+}
+
+pub fn torus_op(
+    transform: [f64; 16],
+    major_radius: f64,
+    minor_radius: f64,
+) -> SolidHistoryOperation {
+    SolidHistoryOperation::Torus(SolidHistoryTorus {
+        base: base(transform),
+        operation_major: 1,
+        major_radius,
+        minor_radius,
+        ..SolidHistoryTorus::default()
+    })
+}
+
+pub fn pyramid_op(
+    transform: [f64; 16],
+    radius: f64,
+    height: f64,
+    sides: usize,
+) -> SolidHistoryOperation {
+    SolidHistoryOperation::Pyramid(SolidHistoryPyramid {
+        base: base(transform),
+        operation_major: 1,
+        height,
+        sides: sides as i32,
+        radius,
+        ..SolidHistoryPyramid::default()
+    })
+}
+
+pub fn brep_op(body: &Body) -> SolidHistoryOperation {
+    let acis_data = crate::scene::convert::acis_export::planar_solid_to_sat(body)
+        .map(|document| {
+            let mut solid = Solid3D::new();
+            solid.set_sat_document(&document);
+            solid.acis_data
+        })
+        .unwrap_or_default();
+    SolidHistoryOperation::Brep(SolidHistoryBrep {
+        base: base(glam::DMat4::IDENTITY.to_cols_array()),
+        operation_major: 1,
+        acis_data,
+        ..SolidHistoryBrep::default()
+    })
+}
+
+pub fn extrusion_op(profile: &EntityType, height: f64) -> SolidHistoryOperation {
+    SolidHistoryOperation::Extrusion(SolidHistorySweep {
+        base: base(glam::DMat4::IDENTITY.to_cols_array()),
+        operation_major: 1,
+        direction: Vector3::new(0.0, 0.0, height),
+        sweep_entity: embedded(profile),
+        scale_factor: 1.0,
+        sweep_entity_transform: glam::DMat4::IDENTITY.to_cols_array(),
+        path_entity_transform: glam::DMat4::IDENTITY.to_cols_array(),
+        ..SolidHistorySweep::default()
+    })
+}
+
+pub fn sweep_op(profile: &EntityType, path: &EntityType) -> SolidHistoryOperation {
+    SolidHistoryOperation::Sweep(SolidHistorySweep {
+        base: base(glam::DMat4::IDENTITY.to_cols_array()),
+        operation_major: 1,
+        sweep_entity: embedded(profile),
+        path_entity: embedded(path),
+        scale_factor: 1.0,
+        sweep_entity_transform: glam::DMat4::IDENTITY.to_cols_array(),
+        path_entity_transform: glam::DMat4::IDENTITY.to_cols_array(),
+        ..SolidHistorySweep::default()
+    })
+}
+
+pub fn loft_op(profiles: &[EntityType]) -> SolidHistoryOperation {
+    SolidHistoryOperation::Loft(SolidHistoryLoft {
+        base: base(glam::DMat4::IDENTITY.to_cols_array()),
+        operation_major: 1,
+        cross_sections: profiles.iter().filter_map(embedded).collect(),
+        ..SolidHistoryLoft::default()
+    })
+}
+
+pub fn revolve_op(
+    profile: &EntityType,
+    axis_start: [f64; 3],
+    axis_end: [f64; 3],
+    angle: f64,
+) -> SolidHistoryOperation {
+    let direction = glam::DVec3::from_array(axis_end) - glam::DVec3::from_array(axis_start);
+    SolidHistoryOperation::Revolve(SolidHistoryRevolve {
+        base: base(glam::DMat4::IDENTITY.to_cols_array()),
+        operation_major: 1,
+        axis_point: Vector3::new(axis_start[0], axis_start[1], axis_start[2]),
+        direction: Vector2::new(direction.x, direction.y),
+        revolve_angle: angle,
+        sweep_entity: embedded(profile),
+        ..SolidHistoryRevolve::default()
+    })
+}

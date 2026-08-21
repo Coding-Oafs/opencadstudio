@@ -52,6 +52,7 @@ impl OpenCADStudio {
                                 .selected_entities()
                                 .iter()
                                 .map(|(h, _)| *h)
+                                .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                                 .collect();
                             let mut found = false;
                             for sh in &selected_handles {
@@ -455,8 +456,20 @@ impl OpenCADStudio {
                         "SET" => {
                             let app = parts.get(1).copied().unwrap_or("OpenCADStudio");
                             let val = parts.get(2).copied().unwrap_or("");
+                            let editable: Vec<_> = selected_handles
+                                .iter()
+                                .copied()
+                                .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                                .collect();
+                            if editable.is_empty() {
+                                self.command_line.push_error(
+                                    crate::t!("XDATA: selected entities are on locked layers.")
+                                        .as_ref(),
+                                );
+                                return Some(Task::none());
+                            }
                             self.push_undo_snapshot(i, "XDATA SET");
-                            for sh in &selected_handles {
+                            for sh in &editable {
                                 if let Some(entity) =
                                     self.tabs[i].scene.document.get_entity_mut(*sh)
                                 {
@@ -469,15 +482,27 @@ impl OpenCADStudio {
                             self.command_line.push_output(
                                 crate::tf!(
                                     "XDATA: set [{app}] = \"{val}\" on {} entity/entities.",
-                                    selected_handles.len()
+                                    editable.len()
                                 )
                                 .as_ref(),
                             );
                         }
                         "CLEAR" => {
                             let app_filter = parts.get(1).copied();
+                            let editable: Vec<_> = selected_handles
+                                .iter()
+                                .copied()
+                                .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                                .collect();
+                            if editable.is_empty() {
+                                self.command_line.push_error(
+                                    crate::t!("XDATA: selected entities are on locked layers.")
+                                        .as_ref(),
+                                );
+                                return Some(Task::none());
+                            }
                             self.push_undo_snapshot(i, "XDATA CLEAR");
-                            for sh in &selected_handles {
+                            for sh in &editable {
                                 if let Some(entity) =
                                     self.tabs[i].scene.document.get_entity_mut(*sh)
                                 {
@@ -673,6 +698,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line.push_error(
@@ -780,6 +806,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -849,6 +876,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -904,6 +932,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line
@@ -1025,6 +1054,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(handle, _)| *handle)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     self.command_line.push_error(

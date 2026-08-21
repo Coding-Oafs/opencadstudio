@@ -122,9 +122,8 @@ impl Scene {
     pub fn restore_named_view(&mut self, view: &acadrust::tables::View) {
         use glam::Vec3;
         let cam = &mut *self.camera.borrow_mut();
-        // view.target is the look-at point; view.direction is eye→target direction.
+        // The stored direction points from the target toward the eye.
         cam.target = glam::DVec3::new(view.target.x, view.target.y, view.target.z);
-        // direction in acadrust = from-target-to-eye (same as AutoCAD convention).
         let eye_dir = Vec3::new(
             view.direction.x as f32,
             view.direction.y as f32,
@@ -720,16 +719,13 @@ impl Scene {
         )
     }
 
-    /// Reverse of `camera_from_vport`: write `cam`'s view target / direction
-    /// / height onto a fresh VPort entry with the given `name` and screen
-    /// rectangle (0..1 normalized, DXF bottom-left origin convention).
-    fn vport_from_camera(
+    fn apply_camera_to_vport(
         &self,
-        name: &str,
+        entry: &mut acadrust::tables::VPort,
         cam: &Camera,
         lower_left: acadrust::types::Vector2,
         upper_right: acadrust::types::Vector2,
-    ) -> acadrust::tables::VPort {
+    ) {
         let view_dir = cam.rotation * glam::Vec3::Z;
         let view_height = cam.ortho_size() * 2.0;
         let target_wcs = acadrust::types::Vector3 {
@@ -737,7 +733,6 @@ impl Scene {
             y: (cam.target.y as f64) + [0.0_f64; 3][1],
             z: (cam.target.z as f64) + [0.0_f64; 3][2],
         };
-        let mut entry = acadrust::tables::VPort::new(name);
         entry.lower_left = lower_left;
         entry.upper_right = upper_right;
         entry.view_target = target_wcs;
@@ -747,12 +742,43 @@ impl Scene {
             z: view_dir.z as f64,
         };
         entry.view_height = view_height as f64;
+        let (canvas_width, canvas_height) = self.selection.borrow().vp_size;
+        let viewport_width = (upper_right.x - lower_left.x).abs() * canvas_width as f64;
+        let viewport_height = (upper_right.y - lower_left.y).abs() * canvas_height as f64;
+        if viewport_width > 1e-9 && viewport_height > 1e-9 {
+            entry.aspect_ratio = viewport_width / viewport_height;
+        }
         entry.perspective = cam.projection == view::camera::Projection::Perspective;
         entry.lens_length = (12.0 / (cam.fov_y * 0.5).tan().max(1e-6)) as f64;
         entry.view_center = acadrust::types::Vector2::ZERO;
         // Stored twist = -roll, matching the decoder (roll = -twist).
         entry.view_twist = -cam.roll() as f64;
-        entry
+    }
+
+    fn vport_rect_matches(
+        entry: &acadrust::tables::VPort,
+        lower_left: acadrust::types::Vector2,
+        upper_right: acadrust::types::Vector2,
+    ) -> bool {
+        const EPSILON: f64 = 1e-5;
+        (entry.lower_left.x - lower_left.x).abs() <= EPSILON
+            && (entry.lower_left.y - lower_left.y).abs() <= EPSILON
+            && (entry.upper_right.x - upper_right.x).abs() <= EPSILON
+            && (entry.upper_right.y - upper_right.y).abs() <= EPSILON
+    }
+
+    fn vport_contains_rect_center(
+        entry: &acadrust::tables::VPort,
+        lower_left: acadrust::types::Vector2,
+        upper_right: acadrust::types::Vector2,
+    ) -> bool {
+        const EPSILON: f64 = 1e-5;
+        let center_x = (lower_left.x + upper_right.x) * 0.5;
+        let center_y = (lower_left.y + upper_right.y) * 0.5;
+        center_x >= entry.lower_left.x - EPSILON
+            && center_x <= entry.upper_right.x + EPSILON
+            && center_y >= entry.lower_left.y - EPSILON
+            && center_y <= entry.upper_right.y + EPSILON
     }
 
     /// Convert a `ModelTile`'s normalized iced rectangle (top-left origin) to
@@ -780,9 +806,7 @@ impl Scene {
         }
     }
 
-    /// Restore `model_tiles` from VPort entries that a previous save left in
-    /// the document. Native AutoCAD tiled model-space layouts are represented
-    /// by duplicate `*Active` VPort entries.
+    /// Restore model tiles from duplicate `*Active` VPort entries.
     /// Returns true on success — the caller skips `apply_active_vport_camera`
     /// in that case because the active tile's camera has already been loaded
     /// into `self.camera`.
@@ -828,8 +852,7 @@ impl Scene {
         true
     }
 
-    /// Persist `model_tiles` to the VPort table. Native AutoCAD tiled model
-    /// viewports are written as duplicate `*Active` entries.
+    /// Persist model tiles as duplicate `*Active` VPort entries.
     fn save_model_tiles_to_vports(&mut self) {
         // Stash the live camera into the active tile so the about-to-write
         // snapshot reflects the user's most recent orbit / pan / zoom.
@@ -843,6 +866,15 @@ impl Scene {
         }
 
         let table_handle = self.document.vports.handle();
+        let mut active_vports: Vec<acadrust::tables::VPort> = self
+            .document
+            .vports
+            .iter()
+            .filter(|v| is_active_vport_name(&v.name))
+            .cloned()
+            .collect();
+        let source_vports = active_vports.clone();
+        let inherited_vport = active_vports.first().cloned();
         let preserved_vps: Vec<acadrust::tables::VPort> = self
             .document
             .vports
@@ -870,15 +902,87 @@ impl Scene {
             }
         }
 
+        let mut scene_objects_changed = false;
         for tile in ordered_tiles {
             let (ll, ur) = Self::tile_rect_to_vport(tile.rect);
-            let mut entry = self.vport_from_camera("*Active", &tile.camera, ll, ur);
+            let exact = active_vports
+                .iter()
+                .position(|entry| Self::vport_rect_matches(entry, ll, ur));
+            let inherited = exact.or_else(|| {
+                active_vports
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, entry)| Self::vport_contains_rect_center(entry, ll, ur))
+                    .min_by(|(_, left), (_, right)| {
+                        let left_area = (left.upper_right.x - left.lower_left.x)
+                            * (left.upper_right.y - left.lower_left.y);
+                        let right_area = (right.upper_right.x - right.lower_left.x)
+                            * (right.upper_right.y - right.lower_left.y);
+                        left_area.total_cmp(&right_area)
+                    })
+                    .map(|(index, _)| index)
+            });
+            let mut entry = inherited
+                .map(|index| active_vports.remove(index))
+                .or_else(|| {
+                    source_vports
+                        .iter()
+                        .filter(|entry| Self::vport_contains_rect_center(entry, ll, ur))
+                        .min_by(|left, right| {
+                            let left_area = (left.upper_right.x - left.lower_left.x)
+                                * (left.upper_right.y - left.lower_left.y);
+                            let right_area = (right.upper_right.x - right.lower_left.x)
+                                * (right.upper_right.y - right.lower_left.y);
+                            left_area.total_cmp(&right_area)
+                        })
+                        .cloned()
+                })
+                .or_else(|| inherited_vport.clone())
+                .unwrap_or_else(|| acadrust::tables::VPort::new("*Active"));
+            let cloned = inherited.is_none();
+            if cloned {
+                entry.handle = acadrust::Handle::NULL;
+            }
+            entry.name = "*Active".to_string();
+            self.apply_camera_to_vport(&mut entry, &tile.camera, ll, ur);
             entry.render_mode = tile.render_mode;
             // Each viewport persists its own grid display + grid-snap (#121).
             entry.grid_on = tile.grid_on;
             entry.snap_on = tile.snap_on;
-            entry.handle = self.document.allocate_handle();
+            if !entry.handle.is_valid() {
+                entry.handle = self.document.allocate_handle();
+            }
+            if cloned && entry.sun_handle.is_valid() {
+                let source_sun = self.document.objects.get(&entry.sun_handle).and_then(|object| {
+                    match object {
+                        acadrust::objects::ObjectType::ClassObject(value)
+                            if matches!(
+                                &value.data,
+                                acadrust::objects::ClassObjectData::Sun(_)
+                            ) => Some(value.clone()),
+                        _ => None,
+                    }
+                });
+                if let Some(mut sun) = source_sun {
+                    let handle = self.document.allocate_handle();
+                    sun.handle = handle;
+                    sun.owner = entry.handle;
+                    sun.reactors.clear();
+                    sun.xdictionary_handle = None;
+                    self.document.objects.insert(
+                        handle,
+                        acadrust::objects::ObjectType::ClassObject(sun),
+                    );
+                    entry.sun_handle = handle;
+                    scene_objects_changed = true;
+                }
+            }
             self.document.vports.add_allow_duplicate(entry);
+        }
+        if scene_objects_changed {
+            self.object_data_cache =
+                crate::entities::object_data::build_cache(&self.document);
+            self.lighting_cache.borrow_mut().clear();
         }
     }
 
@@ -1000,31 +1104,6 @@ impl Scene {
         };
 
         if self.current_layout == "Model" {
-            let target_wcs = acadrust::types::Vector3 {
-                x: (cam.target.x as f64) + [0.0_f64; 3][0],
-                y: (cam.target.y as f64) + [0.0_f64; 3][1],
-                z: (cam.target.z as f64) + [0.0_f64; 3][2],
-            };
-
-            // Write back to the *Active VPort entry (may be overridden by DWG writer).
-            if let Some(vp) = self
-                .document
-                .vports
-                .iter_mut()
-                .find(|v| is_active_vport_name(&v.name))
-            {
-                vp.view_target = target_wcs;
-                vp.view_center = acadrust::types::Vector2::ZERO;
-                vp.view_direction = vd3;
-                vp.view_height = view_height as f64;
-                vp.view_twist = twist;
-                vp.perspective = cam.projection == view::camera::Projection::Perspective;
-                vp.lens_length = (12.0 / (cam.fov_y * 0.5).tan().max(1e-6)) as f64;
-            }
-
-            // Persist the tiled layout as duplicate `*Active` VPort entries.
-            // The view lives entirely in the standard VPORT table now — no
-            // app-specific View record.
             self.save_model_tiles_to_vports();
             true
         } else {
@@ -1040,11 +1119,7 @@ impl Scene {
             if let Some(EntityType::Viewport(vp)) =
                 self.document.get_entity_mut(sheet_handle)
             {
-                // AutoCAD stores the paper-space view position in
-                // `view_center` (DCS) with `view_target` at the origin —
-                // writing it the other way round shifts the layout and
-                // crashes nothing but renders the sheet off-place. Paper
-                // space is always a plan view, so DCS == WCS XY here.
+                // Paper-space position is stored in view_center (DCS).
                 vp.view_center =
                     acadrust::types::Vector3::new(target_wcs.x, target_wcs.y, 0.0);
                 vp.view_target = acadrust::types::Vector3::ZERO;

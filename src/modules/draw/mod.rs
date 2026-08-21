@@ -161,17 +161,17 @@ impl CadModule for DrawModule {
                             icon: leader_cmd::ICON,
                             items: vec![
                                 (
-                                    mleader_cmd::tool().id,
-                                    mleader_cmd::tool().label,
-                                    mleader_cmd::tool().icon,
-                                ),
-                                (
                                     leader_cmd::tool().id,
                                     leader_cmd::tool().label,
                                     leader_cmd::tool().icon,
                                 ),
+                                (
+                                    mleader_cmd::tool().id,
+                                    mleader_cmd::tool().label,
+                                    mleader_cmd::tool().icon,
+                                ),
                             ],
-                            default: "MLEADER",
+                            default: "LEADER",
                         },
                     ],
                 },

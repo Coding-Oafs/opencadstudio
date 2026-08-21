@@ -16,6 +16,7 @@ use acadrust::{EntityType, LwPolyline};
 use crate::t;
 
 use crate::command::{CadCommand, CmdResult, WorkingPlane};
+use crate::modules::draw::defaults;
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
@@ -470,7 +471,7 @@ pub struct PolyCommand {
 impl PolyCommand {
     pub fn new() -> Self {
         Self {
-            sides: 6,
+            sides: defaults::get_polygon_sides() as u32,
             step: 0,
             center: DVec3::ZERO,
             plane: WorkingPlane::default(),
@@ -544,6 +545,7 @@ impl CadCommand for PolyCommand {
         if let Ok(n) = text.trim().parse::<u32>() {
             if (3..=1024).contains(&n) {
                 self.sides = n;
+                defaults::set_polygon_sides(n as f64);
             }
         }
         self.step = 1;
@@ -619,7 +621,7 @@ pub struct PolyCCommand {
 impl PolyCCommand {
     pub fn new() -> Self {
         Self {
-            sides: 6,
+            sides: defaults::get_polygon_sides() as u32,
             step: 0,
             center: DVec3::ZERO,
             plane: WorkingPlane::default(),
@@ -652,6 +654,7 @@ impl CadCommand for PolyCCommand {
         if let Ok(n) = text.trim().parse::<u32>() {
             if (3..=1024).contains(&n) {
                 self.sides = n;
+                defaults::set_polygon_sides(n as f64);
             }
         }
         self.step = 1;
@@ -751,7 +754,7 @@ pub struct PolyECommand {
 impl PolyECommand {
     pub fn new() -> Self {
         Self {
-            sides: 6,
+            sides: defaults::get_polygon_sides() as u32,
             step: 0,
             a: DVec3::ZERO,
             plane: WorkingPlane::default(),
@@ -784,6 +787,7 @@ impl CadCommand for PolyECommand {
         if let Ok(n) = text.trim().parse::<u32>() {
             if (3..=1024).contains(&n) {
                 self.sides = n;
+                defaults::set_polygon_sides(n as f64);
             }
         }
         self.step = 1;
@@ -893,6 +897,31 @@ fn edge_poly_params(
     Some((center_world, vr, sa))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polygon_variants_share_last_valid_side_count() {
+        let mut inscribed = PolyCommand::new();
+        let _ = inscribed.on_text_input("7");
+        assert_eq!(PolyCCommand::new().sides, 7);
+        assert_eq!(PolyECommand::new().sides, 7);
+
+        let mut circumscribed = PolyCCommand::new();
+        let _ = circumscribed.on_text_input("8");
+        assert_eq!(PolyCommand::new().sides, 8);
+        assert_eq!(PolyECommand::new().sides, 8);
+
+        let mut edge = PolyECommand::new();
+        let _ = edge.on_text_input("9");
+        assert_eq!(PolyCommand::new().sides, 9);
+        assert_eq!(PolyCCommand::new().sides, 9);
+
+        let _ = edge.on_text_input("2");
+        assert_eq!(PolyCommand::new().sides, 9);
+    }
+}
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["POLY_C"] });  // PolyCCommand

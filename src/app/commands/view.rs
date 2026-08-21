@@ -652,6 +652,16 @@ impl OpenCADStudio {
                                 }
                             })
                             .collect();
+                        if to_erase
+                            .iter()
+                            .any(|handle| self.tabs[i].scene.is_layer_locked(*handle))
+                        {
+                            self.command_line.push_error(
+                                crate::t!("VPORTS: unlock existing viewport layers first.")
+                                    .as_ref(),
+                            );
+                            return Some(Task::none());
+                        }
                         self.push_undo_snapshot(i, "VPORTS");
                         self.tabs[i].scene.erase_entities(&to_erase);
                         // Create new viewports.
@@ -814,6 +824,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .iter()
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if selected.is_empty() {
                     self.command_line
@@ -1004,6 +1015,7 @@ impl OpenCADStudio {
                     .iter()
                     .filter(|(_, e)| matches!(e, acadrust::EntityType::Viewport(_)))
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if vps.len() < 2 {
                     self.command_line.push_error(

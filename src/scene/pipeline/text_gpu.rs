@@ -68,6 +68,37 @@ impl TextVertex {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlockTextInstance {
+    pub translation: [f32; 3],
+    pub translation_low: [f32; 3],
+    pub draw_depth: f32,
+    pub _pad: [f32; 3],
+}
+
+impl BlockTextInstance {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockTextInstance, translation) as u64, shader_location: 5, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockTextInstance, translation_low) as u64, shader_location: 6, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockTextInstance, draw_depth) as u64, shader_location: 7, format: wgpu::VertexFormat::Float32 },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRS,
+        }
+    }
+}
+
+pub struct BlockTextGpu {
+    pub vertex_buffer: wgpu::Buffer,
+    pub instance_buffer: wgpu::Buffer,
+    pub vertex_count: u32,
+    pub instance_count: u32,
+}
+
 /// Split an f64 into the double-single (high f32, low residual f32) pair the
 /// shaders reconstruct relative-to-eye.
 pub(crate) fn split_ds(v: f64) -> (f32, f32) {
@@ -261,7 +292,12 @@ pub fn create_pipelines(
     color_format: wgpu::TextureFormat,
     sample_count: u32,
     content_stencil: &wgpu::StencilState,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text.wgsl"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/text.wgsl").into()),
@@ -311,6 +347,50 @@ pub fn create_pipelines(
             cache: None,
         })
     };
+    let block_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("block_text.wgsl"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/block_text.wgsl").into()),
+    });
+    let create_block = |label, depth_write_enabled, depth_compare| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &block_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[TextVertex::layout(), BlockTextInstance::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &block_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled,
+                depth_compare,
+                stencil: content_stencil.clone(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        })
+    };
     (
         create(
             "text.pipeline",
@@ -322,7 +402,118 @@ pub fn create_pipelines(
             Some(false),
             Some(wgpu::CompareFunction::Always),
         ),
+        create_block(
+            "block_text.pipeline",
+            Some(true),
+            Some(wgpu::CompareFunction::LessEqual),
+        ),
+        create_block(
+            "block_text.highlight.pipeline",
+            Some(false),
+            Some(wgpu::CompareFunction::Always),
+        ),
     )
+}
+
+pub fn upload_block_vertices(
+    device: &wgpu::Device,
+    wires: &[crate::scene::model::wire_model::WireModel],
+    depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
+) -> Vec<BlockTextGpu> {
+    let refs: Vec<&crate::scene::model::wire_model::WireModel> = wires.iter().collect();
+    upload_block_vertex_refs(device, &refs, depth_map, None)
+}
+
+pub fn upload_block_vertex_refs(
+    device: &wgpu::Device,
+    wires: &[&crate::scene::model::wire_model::WireModel],
+    depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
+    tint: Option<[f32; 4]>,
+) -> Vec<BlockTextGpu> {
+    let mut slots = rustc_hash::FxHashMap::default();
+    let mut groups: Vec<Vec<&crate::scene::model::wire_model::WireModel>> = Vec::new();
+    for &wire in wires {
+        if tint.is_none() && !wire.display_visible {
+            continue;
+        }
+        let Some(instance) = wire.render_instance else {
+            continue;
+        };
+        if wire.text_verts.is_empty() {
+            continue;
+        }
+        let slot = *slots.entry(instance.source_id).or_insert_with(|| {
+            let slot = groups.len();
+            groups.push(Vec::new());
+            slot
+        });
+        groups[slot].push(wire);
+    }
+    let mut out = Vec::new();
+    for group in groups {
+        let Some(&source) = group.first() else {
+            continue;
+        };
+        let Some(base) = source.render_instance else {
+            continue;
+        };
+        let tinted;
+        let vertices = if let Some(tint) = tint {
+            tinted = source
+                .text_verts
+                .iter()
+                .map(|vertex| TextVertex {
+                    color: [tint[0], tint[1], tint[2], vertex.color[3]],
+                    ..*vertex
+                })
+                .collect::<Vec<_>>();
+            tinted.as_slice()
+        } else {
+            source.text_verts.as_slice()
+        };
+        let Some(vertex_buffer) = upload_vertices(device, vertices) else {
+            continue;
+        };
+        let instances: Vec<BlockTextInstance> = group
+            .iter()
+            .filter_map(|wire| {
+                let instance = wire.render_instance?;
+                let delta = [
+                    instance.translation[0] - base.translation[0],
+                    instance.translation[1] - base.translation[1],
+                    instance.translation[2] - base.translation[2],
+                ];
+                let high = delta.map(|value| value as f32);
+                Some(BlockTextInstance {
+                    translation: high,
+                    translation_low: [
+                        (delta[0] - high[0] as f64) as f32,
+                        (delta[1] - high[1] as f64) as f32,
+                        (delta[2] - high[2] as f64) as f32,
+                    ],
+                    draw_depth: super::wire_gpu::wire_draw_depth(wire, depth_map),
+                    _pad: [0.0; 3],
+                })
+            })
+            .collect();
+        let max_instances = ((device.limits().max_buffer_size as usize / 10) * 9
+            / std::mem::size_of::<BlockTextInstance>())
+            .max(1);
+        for chunk in instances.chunks(max_instances) {
+            let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("block_text.instances"),
+                contents: bytemuck::cast_slice(chunk),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            out.push(BlockTextGpu {
+                vertex_buffer: vertex_buffer.clone(),
+                instance_buffer,
+                vertex_count: vertices.len() as u32,
+                instance_count: chunk.len() as u32,
+            });
+        }
+    }
+    out
 }
 
 /// Upload a finished vertex list; `None` if empty.

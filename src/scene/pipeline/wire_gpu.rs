@@ -285,6 +285,84 @@ pub struct WireGpu {
     pub const_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlockWireVertex {
+    pub pos_a: [f32; 3],
+    pub pos_a_low: [f32; 3],
+    pub pos_b: [f32; 3],
+    pub pos_b_low: [f32; 3],
+    pub distances: [f32; 2],
+    pub taper_ratio: [u16; 2],
+}
+
+impl BlockWireVertex {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_a) as u64,       shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_b) as u64,       shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_a_low) as u64,   shader_location: 2, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_b_low) as u64,   shader_location: 3, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, distances) as u64,   shader_location: 4, format: wgpu::VertexFormat::Float32x2 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, taper_ratio) as u64, shader_location: 5, format: wgpu::VertexFormat::Unorm16x2 },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: ATTRS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlockWireInstance {
+    pub translation: [f32; 3],
+    pub translation_low: [f32; 3],
+    pub depth: [f32; 2],
+}
+
+impl BlockWireInstance {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireInstance, translation) as u64,     shader_location: 6, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireInstance, translation_low) as u64, shader_location: 7, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireInstance, depth) as u64,           shader_location: 8, format: wgpu::VertexFormat::Float32x2 },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRS,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct BlockWireGpu {
+    pub vertex_buffer: wgpu::Buffer,
+    pub instance_buffer: wgpu::Buffer,
+    pub vertex_count: u32,
+    pub instance_count: u32,
+    pub is_3d_mesh_edge: bool,
+    pub const_bind_group: std::sync::Arc<wgpu::BindGroup>,
+}
+
+pub fn block_const_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("block_wire_const.bgl"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
 /// Expand one `WireModel` into its per-segment instance stream (1 instance per
 /// finite segment). Pulled out so both the single-wire and batched paths share
 /// the same emission logic, and so the batched path can `par_iter` across
@@ -560,6 +638,135 @@ pub(crate) fn wire_draw_depth(
         (Some([d, half]), Some(local)) => d + local * half,
         (Some([d, _]), None) => d,
         (None, _) => 0.0,
+    }
+}
+
+impl BlockWireGpu {
+    pub fn from_wires(
+        device: &wgpu::Device,
+        wires: &[&WireModel],
+        depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
+        color_override: Option<[f32; 4]>,
+        const_bgl: &wgpu::BindGroupLayout,
+    ) -> Vec<Self> {
+        use wgpu::util::DeviceExt;
+
+        let mut slots: rustc_hash::FxHashMap<(u64, bool), usize> =
+            rustc_hash::FxHashMap::default();
+        let mut groups: Vec<(bool, Vec<&WireModel>)> = Vec::new();
+        for &wire in wires {
+            if color_override.is_none() && !wire.display_visible {
+                continue;
+            }
+            let Some(instance) = wire.render_instance else {
+                continue;
+            };
+            if wire.points.len() < 2 {
+                continue;
+            }
+            let mesh_edge = color_override.is_none() && wire.fill_is_3d;
+            let key = (instance.source_id, mesh_edge);
+            let slot = *slots.entry(key).or_insert_with(|| {
+                let slot = groups.len();
+                groups.push((mesh_edge, Vec::new()));
+                slot
+            });
+            groups[slot].1.push(wire);
+        }
+
+        let mut out = Vec::new();
+        for (mesh_edge, group) in groups {
+            let Some(&source) = group.first() else {
+                continue;
+            };
+            let Some(base) = source.render_instance else {
+                continue;
+            };
+            let color = color_override.unwrap_or(source.color);
+            let (segments, mut constant) = emit_wire_native(source, 0, color, 0.0);
+            if segments.is_empty() {
+                continue;
+            }
+            constant.draw_depth = 0.0;
+            let mut vertices = Vec::with_capacity(segments.len() * 6);
+            for segment in segments {
+                let vertex = BlockWireVertex {
+                    pos_a: segment.pos_a,
+                    pos_a_low: segment.pos_a_low,
+                    pos_b: segment.pos_b,
+                    pos_b_low: segment.pos_b_low,
+                    distances: [segment.distance_a, segment.distance_b],
+                    taper_ratio: segment.taper_ratio,
+                };
+                vertices.extend_from_slice(&[vertex; 6]);
+            }
+            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("block_wire.vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let const_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("block_wire.const"),
+                contents: bytemuck::bytes_of(&constant),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let const_bind_group = std::sync::Arc::new(device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    label: Some("block_wire.const.bg"),
+                    layout: const_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: const_buffer.as_entire_binding(),
+                    }],
+                },
+            ));
+            let instances: Vec<BlockWireInstance> = group
+                .iter()
+                .filter_map(|wire| {
+                    let instance = wire.render_instance?;
+                    let delta = [
+                        instance.translation[0] - base.translation[0],
+                        instance.translation[1] - base.translation[1],
+                        instance.translation[2] - base.translation[2],
+                    ];
+                    let high = delta.map(|value| value as f32);
+                    Some(BlockWireInstance {
+                        translation: high,
+                        translation_low: [
+                            (delta[0] - high[0] as f64) as f32,
+                            (delta[1] - high[1] as f64) as f32,
+                            (delta[2] - high[2] as f64) as f32,
+                        ],
+                        depth: [
+                            if mesh_edge {
+                                0.0
+                            } else {
+                                wire_draw_depth(wire, depth_map)
+                            },
+                            0.0,
+                        ],
+                    })
+                })
+                .collect();
+            let max_instances = ((device.limits().max_buffer_size as usize / 10) * 9
+                / std::mem::size_of::<BlockWireInstance>())
+                .max(1);
+            for chunk in instances.chunks(max_instances) {
+                out.push(Self {
+                    vertex_buffer: vertex_buffer.clone(),
+                    instance_buffer: instance_buffer_mapped(
+                        device,
+                        "block_wire.instances",
+                        chunk,
+                    ),
+                    vertex_count: vertices.len() as u32,
+                    instance_count: chunk.len() as u32,
+                    is_3d_mesh_edge: mesh_edge,
+                    const_bind_group: const_bind_group.clone(),
+                });
+            }
+        }
+        out
     }
 }
 

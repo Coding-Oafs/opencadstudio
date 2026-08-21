@@ -12,7 +12,9 @@ use crate::modules::ModuleEvent;
 use crate::scene::pick::grip::{
     find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit, GripEditMode,
 };
-use crate::scene::model::object::GripApply;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::plugin::v4_support;
+use crate::scene::model::object::{GripApply, PropValue};
 use crate::scene::{
     self, hover_id, CubeRegion, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
 };
@@ -109,6 +111,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.pending_close = Some(crate::app::PendingClose::Tab(idx));
                     return self.open_unsaved_dialog_window();
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                let tab_id = self.tabs.get(idx).map(|t| t.id);
                 // This tab is closing for good — drop its autosave recovery copy.
                 #[cfg(not(target_arch = "wasm32"))]
                 let _ = std::fs::remove_file(self.autosave_target(idx));
@@ -132,6 +136,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.sync_ribbon_layers();
                 self.sync_ribbon_styles();
                 self.sync_ribbon_from_selection();
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(tab_id) = tab_id {
+                    v4_support::on_tab_closed(tab_id);
+                }
                 Task::none()
     }
 
@@ -239,6 +247,11 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // Grip-menu value prompt — consume the typed number and
                 // route it through `apply_grip_menu_value`.
                 if let Some(pending) = self.grip_pending.take() {
+                    let i = self.active_tab;
+                    if self.reject_locked_edit(i, pending.handle) {
+                        self.cancel_active_grip_edit();
+                        return Task::none();
+                    }
                     let raw = crate::app::expr_eval::eval_to_string(self.command_line.input.trim());
                     self.command_line.input.clear();
                     let Ok(v) = raw.parse::<f64>() else {
@@ -249,7 +262,6 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         self.grip_pending = Some(pending);
                         return self.focus_cmd_input();
                     };
-                    let i = self.active_tab;
                     let interactive_lengthen = self.tabs[i]
                         .active_grip
                         .as_ref()
@@ -368,6 +380,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                             })
                                             .collect();
                                     }
+
+                                    self.capture_grip_history_originals(i, &edited_handles);
 
                                     self.grip_preview_handles = edited_handles;
                                 }
@@ -1097,39 +1111,14 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         .get(idx)
                         .map(|l| l.name.clone())
                         .unwrap_or_default();
-                    if !new_name.is_empty()
-                        && new_name != old_name
-                        && !self.tabs[i].scene.document.layers.contains(&new_name)
-                    {
+                    if !new_name.is_empty() && new_name != old_name {
                         self.push_undo_snapshot(i, "LAYER RENAME");
-                        // Keep the whole record (handle, color, linetype,
-                        // lineweight, flags) and only change the name, so the
-                        // renamed layer still has a valid handle and survives a
-                        // DWG save (issue #67).
-                        if let Some(mut nl) =
-                            self.tabs[i].scene.document.layers.get(&old_name).cloned()
-                        {
-                            nl.name = new_name.clone();
-                            if !nl.handle.is_valid() {
-                                nl.handle = self.tabs[i].scene.document.allocate_handle();
-                            }
-                            let _ = self.tabs[i].scene.document.layers.add(nl);
+                        if !self.tabs[i].rename_layer(&old_name, &new_name) {
+                            self.discard_last_undo_entry(i);
                         }
-                        self.tabs[i].scene.document.layers.remove(&old_name);
-                        for e in self.tabs[i].scene.document.entities_mut() {
-                            if e.as_entity().layer() == old_name {
-                                e.as_entity_mut().set_layer(new_name.clone());
-                            }
-                        }
-                        self.tabs[i].dirty = true;
                     }
-                    let doc_layers = self.tabs[i].scene.document.layers.clone();
-                    let vp_info = self.tabs[i].scene.viewport_list();
-                    self.tabs[i]
-                        .layers
-                        .sync_with_viewports(&doc_layers, vp_info);
                     self.tabs[i].layers.edit_buf.clear();
-                    self.sync_ribbon_layers();
+                    self.refresh_layer_panel();
                 }
                 Task::none()
     }
@@ -1139,6 +1128,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 let Some(popup) = self.grip_popup.take() else {
                     return Task::none();
                 };
+                if self.reject_locked_edit(i, popup.handle) {
+                    return Task::none();
+                }
                 self.grip_hover = None;
                 let Some(item) = popup.items.get(idx).cloned() else {
                     return Task::none();
@@ -1330,6 +1322,27 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                 }
                 // One-shot action — apply immediately.
+                let unchanged = self.tabs[i]
+                    .scene
+                    .document
+                    .get_entity(popup.handle)
+                    .is_some_and(|entity| match (item.action, entity) {
+                        (GripMenuAction::ShowFit, acadrust::EntityType::Spline(spline)) => {
+                            !spline.cv_frame_visible
+                                && crate::entities::spline::uses_fit_method(spline)
+                        }
+                        (
+                            GripMenuAction::ShowControlVertices,
+                            acadrust::EntityType::Spline(spline),
+                        ) => {
+                            spline.cv_frame_visible
+                                || !crate::entities::spline::uses_fit_method(spline)
+                        }
+                        _ => false,
+                    });
+                if unchanged {
+                    return Task::none();
+                }
                 self.push_undo_snapshot(i, item.label);
                 // For Add Leader, the new arrow becomes the last grip; remember
                 // its id so we can grab it for placement right after.
@@ -1515,6 +1528,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // No selection — change the creation default. Persist
                     // into the tab's header (CLAYER) so it survives a tab
                     // switch and rides the next save. #21.
@@ -1557,6 +1573,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // Persist the new default into the tab's header so it
                     // round-trips through tab switches and writes back on
                     // save (CECOLOR). #21.
@@ -1583,6 +1602,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 self.ribbon.close_dropdown();
                 let handles = self.property_target_handles(i);
                 if handles.is_empty() {
+                    if self.has_property_selection(i) {
+                        return Task::none();
+                    }
                     // Persist into the tab's header (CELTYPE). Resolve to a
                     // handle when the name matches a line_types entry so the
                     // handle-based lookup stays in sync. #21.
@@ -1718,12 +1740,114 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 Task::none()
     }
 
-    pub(super) fn on_prop_geom_choice_changed(&mut self, field: &'static str, value: String) -> Task<Message> {
-                let i = self.active_tab;
-                let handles = self.property_target_handles(i);
-                if !handles.is_empty() {
-                    self.push_undo_snapshot(i, "CHPROP");
-                    if field == "vp_ucs_name" {
+    pub(super) fn on_prop_geom_choice_changed(
+        &mut self,
+        field: &'static str,
+        value: String,
+    ) -> Task<Message> {
+        let i = self.active_tab;
+        let handles = self.property_target_handles(i);
+
+        if !handles.is_empty() {
+            if matches!(
+                field,
+                "spline_method"
+                    | "knot_param"
+                    | "cv_frame"
+                    | "fill_type"
+                    | "gradient_type"
+                    | "style"
+                    | "pattern_type_label"
+            ) {
+                let unchanged = handles.iter().all(|handle| {
+                    match self.tabs[i].scene.document.get_entity(*handle) {
+                        Some(acadrust::EntityType::Spline(spline)) => match field {
+                            "spline_method" => {
+                                value
+                                    == if crate::entities::spline::shows_fit_points(spline) {
+                                        "Fit"
+                                    } else {
+                                        "Control Vertices"
+                                    }
+                            }
+                            "knot_param" => {
+                                let current = match spline.knot_parameterization {
+                                    0 => "Chord",
+                                    1 => "Square Root",
+                                    2 => "Uniform",
+                                    _ => "Custom",
+                                };
+                                value == current
+                            }
+                            "cv_frame" => {
+                                value
+                                    == if spline.cv_frame_visible {
+                                        "Show"
+                                    } else {
+                                        "Hide"
+                                    }
+                            }
+                            _ => false,
+                        },
+                        Some(acadrust::EntityType::Hatch(hatch)) => match field {
+                            "fill_type" => {
+                                value
+                                    == if hatch.gradient_color.is_single_color {
+                                        "One color"
+                                    } else {
+                                        "Two color"
+                                    }
+                            }
+                            "gradient_type" => {
+                                let (kind, inverted) =
+                                    crate::scene::model::hatch_model::GradientKind::from_name(
+                                        &hatch.gradient_color.name,
+                                    );
+                                value == kind.choice_label(inverted)
+                            }
+                            "style" => {
+                                value
+                                    == match hatch.style {
+                                        acadrust::entities::HatchStyleType::Normal => "Normal",
+                                        acadrust::entities::HatchStyleType::Outer => "Outer",
+                                        acadrust::entities::HatchStyleType::Ignore => "Ignore",
+                                    }
+                            }
+                            "pattern_type_label" => {
+                                value
+                                    == match hatch.pattern_type {
+                                        acadrust::entities::HatchPatternType::Predefined => {
+                                            "Predefined"
+                                        }
+                                        acadrust::entities::HatchPatternType::UserDefined => {
+                                            "User Defined"
+                                        }
+                                        acadrust::entities::HatchPatternType::Custom => "Custom",
+                                    }
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    }
+                });
+                if unchanged {
+                    return Task::none();
+                }
+            }
+            self.push_undo_snapshot(i, "CHPROP");
+
+            if field == "vscale_std" {
+                for &handle in &handles {
+                    if matches!(
+                        self.tabs[i].scene.document.get_entity(handle),
+                        Some(acadrust::EntityType::Viewport(_))
+                    ) {
+                        let _ = self.tabs[i]
+                            .scene
+                            .set_viewport_scale_named_for(handle, &value);
+                    }
+                }
+            } else if field == "vp_ucs_name" {
                         // Resolve UCS name → cloned data, then mutate viewports.
                         let ucs_data = self.tabs[i]
                             .scene
@@ -1949,7 +2073,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         // selected inserts to the picked definition. A stale
                         // typed value in the text buffer would mask the pick,
                         // so drop it; the pick also closes the list.
-                        self.tabs[i].properties.edit_buf.remove("block");
+                        self.tabs[i]
+                            .properties
+                            .edit_buf
+                            .remove(&crate::ui::properties::FieldKey::Geom("block"));
                         self.tabs[i].properties.edit_choice_open = false;
                         let canon = self.tabs[i]
                             .scene
@@ -2078,6 +2205,10 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                     self.invalidate_property_targets(i, &handles);
                     self.tabs[i].dirty = true;
+                    if field == "spline_method" {
+                        self.tabs[i].properties.prop_vertex = 0;
+                        self.tabs[i].properties.prop_vertex_indicator_active = false;
+                    }
                     self.refresh_properties();
                 }
                 Task::none()
@@ -2085,16 +2216,59 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
 
     pub(super) fn on_prop_geom_commit(&mut self, field: &'static str) -> Task<Message> {
                 let i = self.active_tab;
+                self.tabs[i].properties.active_field = None;
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
-                    if let Some(raw_val) = self.tabs[i].properties.edit_buf.remove(field) {
-                        // Block names are free-form text — a name like "10-5"
-                        // must not be arithmetic-evaluated.
-                        let val = if field == "block" {
-                            raw_val
-                        } else {
+                    let evaluates_expression = self.tabs[i]
+                        .properties
+                        .sections
+                        .iter()
+                        .flat_map(|section| section.props.iter())
+                        .find(|property| property.field == field)
+                        .is_some_and(|property| {
+                            matches!(property.value, PropValue::EditText(_))
+                        });
+                    if let Some(raw_val) = self.tabs[i]
+                        .properties
+                        .edit_buf
+                        .remove(&crate::ui::properties::FieldKey::Geom(field))
+                    {
+                        let val = if evaluates_expression {
                             crate::app::expr_eval::eval_to_string(&raw_val)
+                        } else {
+                            raw_val
                         };
+                        if matches!(field, "current_fit_point" | "current_control_point") {
+                            let count = handles
+                                .iter()
+                                .filter_map(|handle| {
+                                    let entity = self.tabs[i].scene.document.get_entity(*handle)?;
+                                    match (field, entity) {
+                                        (
+                                            "current_fit_point",
+                                            acadrust::EntityType::Spline(spline),
+                                        ) => Some(spline.fit_points.len()),
+                                        (
+                                            "current_control_point",
+                                            acadrust::EntityType::Spline(spline),
+                                        ) => Some(
+                                            crate::entities::spline::control_vertex_count(spline),
+                                        ),
+                                        _ => None,
+                                    }
+                                })
+                                .min()
+                                .unwrap_or(0);
+                            if let Ok(requested) = val.trim().parse::<usize>() {
+                                if count > 0 {
+                                    let next = requested.clamp(1, count) - 1;
+                                    self.tabs[i].properties.prop_vertex = next;
+                                    self.tabs[i].properties.prop_vertex_indicator_active = true;
+                                }
+                            }
+                            self.refresh_properties();
+                            return Task::none();
+                        }
                         self.push_undo_snapshot(i, "CHPROP");
                         if field == "block" {
                             // Name row on a block reference: an existing name
@@ -2204,15 +2378,36 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         }
                                     }
                                     _ => {
-                                        if let Some(entity) =
-                                            self.tabs[i].scene.document.get_entity_mut(handle)
-                                        {
-                                            crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
-                                                entity,
+                                        if crate::scene::model::solid_history::is_primitive_property(
+                                            field,
+                                        ) {
+                                            self.tabs[i].scene.apply_solid_history_property(
+                                                handle,
+                                                field,
+                                                &val,
+                                            );
+                                        } else if self.tabs[i]
+                                            .scene
+                                            .apply_solid_position_property(
+                                                handle,
                                                 field,
                                                 &val,
                                                 plane,
-                                            );
+                                            )
+                                            .is_none()
+                                        {
+                                            if let Some(entity) = self.tabs[i]
+                                                .scene
+                                                .document
+                                                .get_entity_mut(handle)
+                                            {
+                                                crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
+                                                    entity,
+                                                    field,
+                                                    &val,
+                                                    plane,
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -2292,6 +2487,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     /// it is not run through the expression evaluator like numeric fields).
     pub(super) fn on_prop_attr_commit(&mut self, tag: String) -> Task<Message> {
         let i = self.active_tab;
+        self.tabs[i].properties.active_field = None;
         let key = crate::ui::properties::attr_edit_key(&tag);
         let handles = self.property_target_handles(i);
         if handles.is_empty() {
@@ -2321,6 +2517,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
     /// attributes. Entry points: double-clicking such a block, or ATTEDIT.
     pub(crate) fn open_attribute_editor(&mut self, handle: acadrust::Handle) {
         let i = self.active_tab;
+        if self.reject_locked_edit(i, handle) {
+            return;
+        }
         let doc = &self.tabs[i].scene.document;
         // Ok((block, rows)) to open; Err(msg) to report and stay closed. The
         // borrow of `doc` ends with this match, before any `self` mutation.
@@ -2542,4 +2741,181 @@ fn block_attr_prompts(
         }
     }
     map
+}
+
+#[cfg(test)]
+mod layer_rename_tests {
+    use crate::app::OpenCADStudio;
+    use acadrust::entities::Line;
+    use acadrust::{EntityType, Handle};
+
+    fn app_with_editing_layer() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.on_layer_new();
+        app
+    }
+
+    fn rename_layer(app: &mut OpenCADStudio, old_name: &str, new_name: &str) {
+        let i = app.active_tab;
+        let idx = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .position(|layer| layer.name == old_name)
+            .expect("layer exists in panel");
+        app.tabs[i].layers.editing = Some(idx);
+        app.tabs[i].layers.edit_buf = new_name.to_string();
+        let _ = app.on_layer_rename_commit();
+    }
+
+    #[test]
+    fn layer_rename_allows_ascii_case_only_change() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "TEST");
+        let handle = app.tabs[i].scene.document.layers.get("TEST").unwrap().handle;
+
+        rename_layer(&mut app, "TEST", "test");
+
+        let layer = app.tabs[i].scene.document.layers.get("test").unwrap();
+        assert_eq!(layer.name, "test");
+        assert_eq!(layer.handle, handle);
+    }
+
+    #[test]
+    fn layer_rename_allows_unicode_case_only_change() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "é");
+
+        rename_layer(&mut app, "é", "É");
+
+        assert_eq!(
+            app.tabs[i].scene.document.layers.get("É").unwrap().name,
+            "É"
+        );
+    }
+
+    #[test]
+    fn current_layer_rename_updates_name_and_allocated_handle() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let idx = app.tabs[i].layers.editing.expect("new layer is being edited");
+        let old_name = app.tabs[i].layers.layers[idx].name.clone();
+        app.tabs[i]
+            .scene
+            .document
+            .layers
+            .get_mut(&old_name)
+            .unwrap()
+            .handle = Handle::NULL;
+        app.tabs[i].layers.selected = Some(idx);
+        let _ = app.on_layer_set_current();
+
+        rename_layer(&mut app, &old_name, "Renamed");
+
+        let layer = app.tabs[i]
+            .scene
+            .document
+            .layers
+            .get("Renamed")
+            .unwrap();
+        assert!(layer.handle.is_valid());
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(app.tabs[i].layers.current_layer, "Renamed");
+        assert_eq!(app.ribbon.active_layer, "Renamed");
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_name,
+            "Renamed"
+        );
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_handle,
+            layer.handle
+        );
+    }
+
+    #[test]
+    fn layer_rename_undo_redo_restores_active_layer() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let idx = app.tabs[i].layers.editing.expect("new layer is being edited");
+        let old_name = app.tabs[i].layers.layers[idx].name.clone();
+        app.tabs[i].layers.selected = Some(idx);
+        let _ = app.on_layer_set_current();
+
+        rename_layer(&mut app, &old_name, "Renamed");
+        app.undo_active_tab();
+
+        assert!(app.tabs[i].scene.document.layers.contains(&old_name));
+        assert_eq!(app.tabs[i].active_layer, old_name);
+        assert_eq!(app.ribbon.active_layer, app.tabs[i].active_layer);
+
+        app.redo_active_tab();
+
+        assert!(app.tabs[i].scene.document.layers.contains("Renamed"));
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(app.ribbon.active_layer, "Renamed");
+    }
+
+    #[test]
+    fn layer_rename_keeps_independent_current_layer_mirrors() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "A");
+        let _ = app.on_layer_new();
+        let b_idx = app.tabs[i].layers.editing.expect("new layer is being edited");
+        app.tabs[i].layers.selected = Some(b_idx);
+        let _ = app.on_layer_set_current();
+        let header_name = app.tabs[i].scene.document.header.current_layer_name.clone();
+        let header_handle = app.tabs[i].scene.document.header.current_layer_handle;
+        app.tabs[i].active_layer = "A".to_string();
+
+        rename_layer(&mut app, "A", "Renamed");
+
+        assert_eq!(app.tabs[i].active_layer, "Renamed");
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_name,
+            header_name
+        );
+        assert_eq!(
+            app.tabs[i].scene.document.header.current_layer_handle,
+            header_handle
+        );
+    }
+
+    #[test]
+    fn layer_rename_updates_mixed_case_entity_references() {
+        let mut app = app_with_editing_layer();
+        let i = app.active_tab;
+        let old_name = app.tabs[i].layers.edit_buf.clone();
+        rename_layer(&mut app, &old_name, "TEST");
+        let mut line = Line::new();
+        line.common.layer = "test".to_string();
+        let handle = app.tabs[i].scene.add_entity(EntityType::Line(line));
+        app.tabs[i]
+            .scene
+            .invalidate_layer_dependencies(&["TEST".to_string()]);
+
+        rename_layer(&mut app, "TEST", "Renamed");
+
+        assert_eq!(
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(handle)
+                .unwrap()
+                .common()
+                .layer,
+            "Renamed"
+        );
+        let epoch = app.tabs[i].scene.geometry_epoch;
+        app.tabs[i]
+            .scene
+            .invalidate_layer_dependencies(&["Renamed".to_string()]);
+        assert_ne!(app.tabs[i].scene.geometry_epoch, epoch);
+    }
 }

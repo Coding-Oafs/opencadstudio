@@ -118,6 +118,11 @@ pub fn entity_type_name(et: &EntityType) -> &str {
         EntityType::Polyline(_) => "Polyline",
         EntityType::Polyline2D(_) => "Polyline2D",
         EntityType::Polyline3D(_) => "Polyline3D",
+        EntityType::LwPolyline(polyline)
+            if crate::entities::lwpolyline::is_revision_cloud(polyline) =>
+        {
+            "Revcloud"
+        }
         EntityType::LwPolyline(_) => "LwPolyline",
         EntityType::Text(_) => "Text",
         EntityType::MText(_) => "MText",

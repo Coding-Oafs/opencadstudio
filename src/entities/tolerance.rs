@@ -840,7 +840,6 @@ mod tests {
     /// together inside correctly-sized boxes.
     #[test]
     fn cells_are_drawn_with_the_spacing_they_were_measured_with() {
-        use acadrust::EntityType;
         let doc = acadrust::CadDocument::new();
         let mut tol = Tolerance::new();
         tol.text = "ABC".into();

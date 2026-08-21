@@ -401,9 +401,11 @@ fn drop_row_enabled<'a>(
     }
     row![
         text(label).size(11).style(muted_style).width(92),
-        container(text(selected.map(|choice| choice.to_string()).unwrap_or_default()).size(12).style(muted_style))
-            .padding([4, 7])
-            .width(width),
+        crate::ui::read_only::field(
+            selected.map(|choice| choice.to_string()).unwrap_or_default().as_str(),
+            12.0,
+            width,
+        ),
     ]
     .spacing(8)
     .align_y(iced::Center)
@@ -442,9 +444,7 @@ fn field_row_enabled<'a>(
     }
     row![
         text(label).size(11).style(muted_style).width(92),
-        container(text(value.to_string()).size(12).style(muted_style))
-            .padding([4, 7])
-            .width(width as f32),
+        crate::ui::read_only::field(value, 12.0, Length::Fixed(width as f32)),
     ]
     .spacing(8)
     .align_y(iced::Center)
@@ -892,24 +892,22 @@ pub fn view_window(
     let body = row![list_panel, vsep(height), detail]
         .width(width)
         .height(height);
-    let mut toolbar_row = row![left_bar, Space::new().width(width)].align_y(iced::Center);
-    if !print_all_options {
-        toolbar_row = toolbar_row
-            .push(
-                button(text(t!("Set current")).size(11))
-                    .on_press(Message::PlotDlg(PlotDlgMsg::SetCurrent))
-                    .style(btn(false))
-                    .padding([4, 12]),
-            )
-            .push(Space::new().width(6))
-            .push(
-                button(text(t!("Preview")).size(11))
-                    .on_press(Message::PlotDlg(PlotDlgMsg::Preview))
-                    .style(btn(false))
-                    .padding([4, 12]),
-            )
-            .push(Space::new().width(6));
-    }
+    let mut toolbar_row = row![left_bar, Space::new().width(width)]
+    .align_y(iced::Center)
+    .push(
+        button(text(t!("Set current")).size(11))
+            .on_press(Message::PlotDlg(PlotDlgMsg::SetCurrent))
+            .style(btn(false))
+            .padding([4, 12]),
+    )
+    .push(Space::new().width(6))
+    .push(
+        button(text(t!("Preview")).size(11))
+            .on_press(Message::PlotDlg(PlotDlgMsg::Preview))
+            .style(btn(false))
+            .padding([4, 12]),
+    )
+    .push(Space::new().width(6));
     toolbar_row = toolbar_row.push(
         button(text(action).size(11))
             .on_press(Message::PlotDlg(PlotDlgMsg::Commit))

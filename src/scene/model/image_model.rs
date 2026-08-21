@@ -101,6 +101,7 @@ fn clip_triangles_px(img: &acadrust::entities::RasterImage) -> Vec<[f64; 2]> {
 
 #[derive(Clone, Debug)]
 pub struct ImageModel {
+    pub render_instance: Option<super::instance_model::RenderInstance>,
     /// Original file path (used for reload / display in properties).
     pub file_path: String,
     /// RGBA8 pixel data in row-major order. Arc-wrapped so cloning ImageModel
@@ -189,6 +190,7 @@ impl ImageModel {
 
         let decoded = resolve_image(&img.file_path)?;
         Some(Self {
+            render_instance: None,
             file_path: img.file_path.clone(),
             pixels: decoded.pixels,
             width: decoded.width,
@@ -299,6 +301,7 @@ impl ImageModel {
             .collect();
 
         Some(Self {
+            render_instance: None,
             file_path: def.file_path.clone(),
             pixels: raster.pixels.clone(),
             width: raster.width,
@@ -347,6 +350,7 @@ impl ImageModel {
         let corners_low = [l0, l1, l2, l3];
         let verts = quad_verts(&corners, &corners_low);
         Self {
+            render_instance: None,
             file_path: label.to_string(),
             pixels,
             width,
@@ -401,6 +405,7 @@ impl ImageModel {
         let corners_low = [l0, l1, l2, l3];
         let verts = quad_verts(&corners, &corners_low);
         Some(Self {
+            render_instance: None,
             file_path: "OLE2FRAME".to_string(),
             pixels: Arc::new(pixels),
             width,
@@ -423,8 +428,10 @@ pub struct DecodedImage {
     pub height: u32,
 }
 
-fn image_cache() -> &'static Mutex<HashMap<String, Option<DecodedImage>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<DecodedImage>>>> = OnceLock::new();
+type ImageCacheEntry = Arc<OnceLock<Option<DecodedImage>>>;
+
+fn image_cache() -> &'static Mutex<HashMap<String, ImageCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ImageCacheEntry>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -448,22 +455,20 @@ pub fn resolve_image(path: &str) -> Option<DecodedImage> {
     if path.is_empty() {
         return None;
     }
-    // Cache probe in its own scope so the lock is released before any fetch.
-    {
-        if let Ok(cache) = image_cache().lock() {
-            if let Some(cached) = cache.get(path) {
-                return cached.clone();
-            }
-        }
-    }
-    let decoded = decode_reference(path);
-    if let Ok(mut cache) = image_cache().lock() {
-        cache.insert(path.to_string(), decoded.clone());
-    }
-    decoded
+    let entry = {
+        let mut cache = image_cache()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Arc::clone(
+            cache
+                .entry(path.to_string())
+                .or_insert_with(|| Arc::new(OnceLock::new())),
+        )
+    };
+    entry.get_or_init(|| decode_reference(path)).clone()
 }
 
-/// Decode a reference (local path or remote URL) to downscaled RGBA pixels.
+/// Decode a reference (local path or remote URL) to RGBA pixels.
 fn decode_reference(path: &str) -> Option<DecodedImage> {
     let lower = path.to_ascii_lowercase();
     let img = if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -592,7 +597,9 @@ mod cache_tests {
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 png.len()
             );
-            stream.write_all(header.as_bytes()).expect("response header");
+            stream
+                .write_all(header.as_bytes())
+                .expect("response header");
             stream.write_all(&png).expect("response body");
         });
 

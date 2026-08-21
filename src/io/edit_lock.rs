@@ -22,7 +22,11 @@ pub struct FileFingerprint {
 
 impl FileFingerprint {
     pub fn capture(path: &Path) -> std::io::Result<Self> {
-        let mut file = File::open(path)?;
+        Self::capture_from(&mut File::open(path)?)
+    }
+
+    /// Fingerprint an already-open drawing handle.
+    pub fn capture_from(file: &mut File) -> std::io::Result<Self> {
         let metadata = file.metadata()?;
         let len = metadata.len();
         let modified_ns = metadata
@@ -64,6 +68,52 @@ impl FileFingerprint {
             sample_hash: hasher.finish(),
         })
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn path_matches_file(path: &Path, file: &File) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let path_metadata = std::fs::metadata(path)?;
+    let file_metadata = file.metadata()?;
+    Ok(path_metadata.dev() == file_metadata.dev() && path_metadata.ino() == file_metadata.ino())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn path_matches_file(path: &Path, file: &File) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let path_file = OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)?;
+    Ok(windows_file_identity(&path_file)? == windows_file_identity(file)?)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_file_identity(file: &File) -> std::io::Result<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok((info.dwVolumeSerialNumber, index))
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub(crate) fn path_matches_file(path: &Path, file: &File) -> std::io::Result<bool> {
+    let mut path_file = File::open(path)?;
+    let mut leased_file = file.try_clone()?;
+    Ok(FileFingerprint::capture_from(&mut path_file)?
+        == FileFingerprint::capture_from(&mut leased_file)?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +201,19 @@ impl EditLease {
 
     pub fn platform_warning(&self) -> Option<&str> {
         self.platform_warning.as_deref()
+    }
+
+    /// Fingerprint through the lease's drawing handle.
+    pub fn fingerprint(&mut self) -> std::io::Result<Option<FileFingerprint>> {
+        self.drawing
+            .as_mut()
+            .map(FileFingerprint::capture_from)
+            .transpose()
+    }
+
+    /// Clone the leased drawing handle for a worker.
+    pub fn reader(&self) -> std::io::Result<Option<File>> {
+        self.drawing.as_ref().map(File::try_clone).transpose()
     }
 
     /// Atomic save replaces the path with a new file object. Move the platform
@@ -251,6 +314,66 @@ mod tests {
         ));
         drop(first);
         assert!(EditLease::acquire(&path).is_ok());
+        let _ = std::fs::remove_file(sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_lease_fingerprints_the_drawing_it_has_locked() {
+        let path = unique_path("leased.dwg");
+        std::fs::write(&path, b"drawing bytes").unwrap();
+        let unlocked = FileFingerprint::capture(&path).unwrap();
+
+        let mut lease = EditLease::acquire(&path).unwrap();
+        let leased = lease
+            .fingerprint()
+            .expect("the lease handle is readable")
+            .expect("the lease holds a drawing handle");
+        assert_eq!(unlocked, leased);
+
+        drop(lease);
+        let _ = std::fs::remove_file(sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_lease_lends_a_reader_for_the_drawing_it_has_locked() {
+        let path = unique_path("leased_reader.dwg");
+        std::fs::write(&path, b"drawing bytes").unwrap();
+
+        let lease = EditLease::acquire(&path).unwrap();
+        let mut reader = lease
+            .reader()
+            .expect("the lease handle is cloneable")
+            .expect("the lease holds a drawing handle");
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(b"drawing bytes".as_slice(), bytes.as_slice());
+
+        drop(reader);
+        drop(lease);
+        let _ = std::fs::remove_file(sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_replaced_path_no_longer_matches_the_lease() {
+        let path = unique_path("identity.dwg");
+        let replacement = unique_path("replacement.dwg");
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::write(&replacement, b"new").unwrap();
+
+        let lease = EditLease::acquire(&path).unwrap();
+        let reader = lease
+            .reader()
+            .unwrap()
+            .expect("the lease holds a drawing handle");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert!(!path_matches_file(&path, &reader).unwrap());
+
+        drop(reader);
+        drop(lease);
         let _ = std::fs::remove_file(sidecar_path(&path));
         let _ = std::fs::remove_file(path);
     }

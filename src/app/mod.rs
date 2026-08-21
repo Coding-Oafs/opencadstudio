@@ -89,6 +89,8 @@ pub struct GripPopup {
     pub anchor: iced::Point,
     pub items: Vec<crate::scene::model::object::GripMenuItem>,
     pub selected: usize,
+    /// Whether a click-opened menu stays visible away from its grip.
+    pub pinned: bool,
 }
 
 /// Pending follow-up value for grip-menu actions that need a number
@@ -358,19 +360,6 @@ pub(super) struct OpenCADStudio {
     /// Widest natural single-row width of the Start-page action buttons,
     /// measured by `WrapFlow` so side lists collapse before those buttons wrap.
     start_action_w: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// When the window is too narrow the properties panel collapses to a
-    /// vertical bar; this is the user's toggle to expand it back out.
-    props_expanded: bool,
-    /// Persisted dock width and side of the Properties panel.
-    properties_width: f32,
-    properties_side: config::DockSide,
-    properties_auto_collapse: bool,
-    /// Transient hover/drag state for the docked Properties panel.
-    properties_hovered: bool,
-    properties_dragging: bool,
-    properties_resizing: bool,
-    properties_drag_last: Option<Point>,
-    properties_dock_preview: Option<config::DockSide>,
     /// Read-only editor buffer backing the command-line history dropdown, so
     /// the log can be drag-selected across lines and copied (issue #232).
     /// Rebuilt from the history each time the dropdown is opened.
@@ -561,6 +550,11 @@ pub(super) struct OpenCADStudio {
     /// Snapshots of edited entities taken at the start of a grip drag. The drag
     /// mutates the document live, so Escape restores this group atomically.
     grip_originals: Vec<(acadrust::Handle, acadrust::EntityType)>,
+    /// Solid-history objects paired with their owning entity before a grip drag.
+    grip_history_originals: Vec<(
+        acadrust::Handle,
+        Vec<(acadrust::Handle, acadrust::objects::ObjectType)>,
+    )>,
     /// Document dirty state before the live grip mutation began.
     grip_dirty_before: Option<bool>,
     /// Frozen wire geometry of the entities being grip-edited.
@@ -604,10 +598,21 @@ pub(super) struct OpenCADStudio {
     show_properties: bool,
     /// Docked Insert Block panel visibility.
     pub(crate) show_block_palette: bool,
+    /// General edge-stack dock layout for the side panels.
+    pub(crate) dock: crate::ui::dock::DockState,
+    /// Which panel is currently floated at full height (hovered, or a pinned
+    /// panel on top).
+    pub(crate) dock_expanded: Option<crate::ui::dock::PanelId>,
+    /// Panel currently being dragged between sides / reordered.
+    pub(crate) dock_dragging: Option<crate::ui::dock::PanelId>,
+    /// Panel currently being width-resized.
+    pub(crate) dock_resizing: Option<crate::ui::dock::PanelId>,
+    /// Last pointer position during a drag / resize.
+    pub(crate) dock_drag_last: Option<iced::Point>,
+    /// Live drag target (side + index), shown as a highlight while dragging.
+    pub(crate) dock_drag_target: Option<(crate::app::config::DockSide, usize)>,
     /// Docked Insert Block panel state (search, preview size, cached thumbnails).
     pub(crate) block_palette: crate::ui::window::block_palette::BlockPalette,
-    /// Whether the narrow-window block-palette bar is expanded.
-    block_palette_expanded: bool,
     /// Docked Tool Palettes panel visibility.
     pub(crate) show_tool_palettes: bool,
     /// Docked Tool Palettes panel state (selected tab, search, seeded palettes).
@@ -1717,6 +1722,10 @@ pub enum ArrowKey {
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick(Instant),
+    /// Periodic drain of plugin-to-host requests that arrived outside a host
+    /// call (e.g. mutations from the Python REPL).
+    #[cfg(not(target_arch = "wasm32"))]
+    DrainPluginRequests,
     /// Web: periodic check for per-script fonts a drawing needs but hasn't
     /// fetched yet (#141). Native: never emitted.
     PollWebFonts,
@@ -1780,23 +1789,6 @@ pub enum Message {
     OpenUrl(String),
     /// Select which section a narrow (tabbed) Start page shows.
     StartSectionSelect(StartSection),
-    /// Expand/collapse the properties panel when it has shrunk to a bar.
-    TogglePropertiesBar,
-    /// Close the docked Properties panel; the ribbon command can reopen it.
-    PropertiesClose,
-    /// Pin/unpin the docked Properties panel.
-    PropertiesAutoCollapseToggle,
-    /// Hover state drives expansion while auto-collapse is enabled.
-    PropertiesHover(bool),
-    /// Begin dragging the Properties title bar to the opposite dock edge.
-    PropertiesDockGrab,
-    /// Begin dragging the Properties/viewport divider.
-    PropertiesResizeGrab,
-    /// Reset the dock width to its default value.
-    PropertiesWidthReset,
-    /// Full-workspace pointer tracking shared by dock and resize drags.
-    PropertiesDragMove(Point),
-    PropertiesDragRelease,
     /// Scroll the status-bar layout-tab strip horizontally by `delta` px
     /// (negative = left). Driven by the ‹ › arrows next to the tabs.
     ScrollLayoutTabs(f32),
@@ -2010,11 +2002,13 @@ pub enum Message {
     /// keyboard focus.
     CommandLineArrowProbe {
         direction: ArrowKey,
+        extend_selection: bool,
     },
     /// Result of the command-input focus query for a captured Up/Down key.
     CommandLineArrowResolved {
         direction: ArrowKey,
         focused: bool,
+        extend_selection: bool,
     },
     /// Toggle the dropdown listing the full command-line history.
     CommandHistoryToggle,
@@ -2413,6 +2407,17 @@ pub enum Message {
     },
     /// User committed a block-attribute value edit (Enter pressed).
     PropAttrCommit(String),
+    /// Reports the currently keyboard-focused widget (if any) after a
+    /// [`sync_active_field_task`](crate::ui::properties::sync_active_field_task)
+    /// sweep, so the update handler can keep the active-row marker reconciled
+    /// against real focus instead of pointer hover.
+    PropSyncActive(Option<iced::widget::Id>),
+    /// A left mouse button was pressed anywhere. The clicked widget has already
+    /// been given focus by the time this arrives (the widget tree processes the
+    /// event before the runtime broadcasts it to subscriptions), so a focus
+    /// sweep — which resolves as `PropSyncActive` — reveals whether a property
+    /// value field was clicked and can select its whole value.
+    PropPointerPressed,
     /// Toggle the inline color picker dropdown open/closed.
     PropColorPickerToggle,
     /// Toggle the MTEXT background-colour picker dropdown open/closed.
@@ -2761,6 +2766,9 @@ pub enum Message {
     ToolPalettes(crate::ui::window::tool_palettes::ToolPalettesMsg),
     /// An edit inside the docked Sheet Set Manager.
     SheetSet(crate::ui::window::sheetset::SheetSetMsg),
+    /// A dock chrome interaction (grab/resize/pin/hover/dock move) on a side
+    /// panel.
+    Dock(crate::ui::dock::DockMsg),
     /// Open the paper-layout batch output dialog.
     PrintAllOpen,
     /// Toggle one paper layout in the batch.
@@ -2798,7 +2806,9 @@ pub enum Message {
     PlotStylePanelScreenBuf(String),
     /// Apply current edit buffers to the selected ACI entry.
     PlotStylePanelApply,
-    /// Save the modified table back to disk.
+    /// Save the modified table directly over the currently edited CTB.
+    PlotStylePanelSaveDirect,
+    /// Save the modified table under a chosen name/path.
     PlotStylePanelSave,
     /// Save callback.
     PlotStylePanelSavePath(Option<std::path::PathBuf>),
@@ -3199,15 +3209,6 @@ impl OpenCADStudio {
             props_asym_scale: std::collections::HashSet::new(),
             start_section: StartSection::default(),
             start_action_w: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            props_expanded: false,
-            properties_width: 250.0,
-            properties_side: config::DockSide::Left,
-            properties_auto_collapse: false,
-            properties_hovered: false,
-            properties_dragging: false,
-            properties_resizing: false,
-            properties_drag_last: None,
-            properties_dock_preview: None,
             history_content: iced::widget::text_editor::Content::new(),
             command_history_resizing: false,
             command_history_drag_last: None,
@@ -3284,6 +3285,7 @@ impl OpenCADStudio {
             grip_preview_handles: Vec::new(),
             hover_dwell: None,
             grip_originals: Vec::new(),
+            grip_history_originals: Vec::new(),
             grip_dirty_before: None,
             grip_snap_wires: Vec::new(),
             grip_text_verts: Vec::new(),
@@ -3298,7 +3300,6 @@ impl OpenCADStudio {
             show_properties: true,
             show_block_palette: false,
             block_palette: Default::default(),
-            block_palette_expanded: false,
             show_tool_palettes: false,
             tool_palettes: crate::ui::window::tool_palettes::ToolPalettes {
                 palettes: crate::ui::window::tool_palettes::default_palettes(),
@@ -3312,6 +3313,12 @@ impl OpenCADStudio {
                 }),
                 ..Default::default()
             },
+            dock: Default::default(),
+            dock_expanded: None,
+            dock_dragging: None,
+            dock_resizing: None,
+            dock_drag_last: None,
+            dock_drag_target: None,
             show_file_tabs: true,
             show_layout_tabs: true,
             last_point: None,
@@ -3646,17 +3653,6 @@ impl OpenCADStudio {
         self.command_line.push_error(msg);
     }
 
-    #[cfg(test)]
-    pub(crate) fn command_history_info(&self) -> Vec<String> {
-        use crate::ui::command_line::EntryKind;
-        self.command_line
-            .history
-            .iter()
-            .filter(|e| e.kind == EntryKind::Info)
-            .map(|e| e.text.clone())
-            .collect()
-    }
-
     /// Boot function for `iced::daemon`: returns initial state plus a task that
     /// opens the primary application window. Native only — the web build uses
     /// [`Self::boot_web`].
@@ -3886,6 +3882,7 @@ pub fn run_web() -> iced::Result {
     .subscription(OpenCADStudio::subscription)
     .title(|_state: &OpenCADStudio| "Open CAD Studio".to_string())
     .theme(|state: &OpenCADStudio| state.active_theme.clone())
+    .backend(iced::Backend::Hardware(iced::backend::Api::OpenGL))
     .font(iced_aw::ICED_AW_FONT_BYTES)
     .run()
 }

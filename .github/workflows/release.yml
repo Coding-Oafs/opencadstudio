@@ -4,6 +4,15 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      target:
+        description: Build target
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - snap
 
 jobs:
   build-appimage:
@@ -43,6 +52,17 @@ jobs:
           rsvg-convert -w 256 -h 256 assets/logo.svg \
             -o AppDir/usr/share/icons/hicolor/256x256/apps/io.github.HakanSeven12.OpenCadStudio.png
 
+      - name: Pack shared Linux payload
+        run: tar -C AppDir -czf linux-payload.tar.gz usr
+
+      - name: Upload shared Linux payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-payload
+          path: linux-payload.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Download linuxdeploy
         run: |
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
@@ -68,7 +88,77 @@ jobs:
           mv OpenCADStudio.AppImage "$ASSET"
           gh release upload ${{ github.ref_name }} "$ASSET" --clobber --repo ${{ github.repository }}
 
+  build-snap:
+    needs: build-appimage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    concurrency:
+      group: snap
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    env:
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download shared Linux payload
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-payload
+          path: .
+
+      - name: Set package version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            VERSION="${REF_NAME#v}"
+            if [ "v$VERSION" != "$REF_NAME" ]; then
+              echo "::error::Release tag must be vX.Y.Z"
+              exit 1
+            fi
+          else
+            VERSION="$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' Cargo.toml | head -1)"
+          fi
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid package version: $VERSION"
+            exit 1
+          fi
+          sed -i "s/^version: .*/version: '$VERSION'/" snap/snapcraft.yaml
+
+      - name: Build snap
+        id: snapcraft
+        uses: snapcore/action-build@v1
+
+      - name: Upload snap to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SNAP: ${{ steps.snapcraft.outputs.snap }}
+        run: gh release upload "${{ github.ref_name }}" "$SNAP" --clobber
+
+      - name: Upload snap as workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-cad-studio-snap
+          path: ${{ steps.snapcraft.outputs.snap }}
+          if-no-files-found: error
+
+      - name: Publish snap to edge
+        if: github.event_name == 'release' && env.SNAPCRAFT_STORE_CREDENTIALS != ''
+        uses: snapcore/action-publish@v1
+        with:
+          snap: ${{ steps.snapcraft.outputs.snap }}
+          release: edge
+
   build-windows:
+    if: github.event_name == 'release' || inputs.target == 'all'
     runs-on: windows-latest
     permissions:
       contents: write
@@ -215,6 +305,7 @@ jobs:
             --clobber --repo ${{ github.repository }}
 
   build-macos:
+    if: github.event_name == 'release' || inputs.target == 'all'
     runs-on: macos-14    # Apple Silicon (arm64) only
     permissions:
       contents: write

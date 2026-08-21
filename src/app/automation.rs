@@ -288,8 +288,7 @@ impl OpenCADStudio {
             "query" => self.entity_query(&req),
             "layers" => {
                 let i = self.active_tab;
-                let layers: Vec<Value> = self
-                    .tabs[i]
+                let layers: Vec<Value> = self.tabs[i]
                     .scene
                     .document
                     .layers
@@ -346,7 +345,9 @@ impl OpenCADStudio {
                     if let Some(arr) = req["handles"].as_array() {
                         for h in arr.iter().filter_map(|h| h.as_str()) {
                             if let Ok(v) = u64::from_str_radix(h.trim_start_matches("0x"), 16) {
-                                self.tabs[i].scene.select_entity(acadrust::Handle::new(v), false);
+                                self.tabs[i]
+                                    .scene
+                                    .select_entity(acadrust::Handle::new(v), false);
                             }
                         }
                     }
@@ -383,8 +384,7 @@ impl OpenCADStudio {
                     return err("save: no \"path\" and the document has none");
                 };
                 #[cfg(not(target_arch = "wasm32"))]
-                let result =
-                    self.save_tab_synchronously_protected(i, path.clone(), true);
+                let result = self.save_tab_synchronously_protected(i, path.clone(), true);
                 #[cfg(target_arch = "wasm32")]
                 let result = crate::io::save(&self.tabs[i].scene.document, &path)
                     .map_err(crate::io::SaveFailure::other);
@@ -567,9 +567,7 @@ mod tests {
     fn tilted_ucs_places_planar_entities_with_the_plane_normal() {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
-        app.automation_op(
-            r#"{"op":"run","cmd":"UCS 3POINT 0,0,0 1,0,0 0,0,1"}"#,
-        );
+        app.automation_op(r#"{"op":"run","cmd":"UCS 3POINT 0,0,0 1,0,0 0,0,1"}"#);
         app.automation_op(r#"{"op":"run","cmd":"CIRCLE 2,3 1"}"#);
 
         let circle = app.tabs[app.active_tab]
@@ -581,13 +579,11 @@ mod tests {
                 _ => None,
             })
             .expect("CIRCLE should create one entity");
-        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        // CIRCLE centers are stored in the entity's OCS, so compare the
-        // corresponding world point rather than its raw DXF fields.
         let center = crate::scene::view::transform::ocs_point_to_wcs(
             (circle.center.x, circle.center.y, circle.center.z),
             (circle.normal.x, circle.normal.y, circle.normal.z),
         );
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
         assert!(close(center.0, 2.0));
         assert!(close(center.1, 0.0));
         assert!(close(center.2, 3.0));
@@ -614,7 +610,10 @@ mod tests {
             h.linetype_scale
         );
         // No command should be left dangling.
-        assert!(app.tabs[i].active_cmd.is_none(), "command must have finished");
+        assert!(
+            app.tabs[i].active_cmd.is_none(),
+            "command must have finished"
+        );
     }
 
     #[test]
@@ -650,6 +649,9 @@ mod tests {
         use crate::app::Message;
         use crate::modules::ModuleEvent;
 
+        let command_refusal = crate::t!("No drawing open. Use NEW or OPEN to start a drawing.");
+        let tool_refusal = crate::t!("No drawing open — use New or Open first.");
+
         // Fresh app = welcome tab, no drawing.
         let mut app = OpenCADStudio::new_for_test();
         assert!(
@@ -671,7 +673,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            !out.contains("No drawing open"),
+            !out.contains(command_refusal.as_ref()),
             "ABOUT needs no drawing and must not be refused on the welcome page: {out:?}"
         );
 
@@ -687,7 +689,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            out.contains("No drawing open"),
+            out.contains(command_refusal.as_ref()),
             "LINE must still be refused on the welcome page: {out:?}"
         );
         assert!(
@@ -707,7 +709,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            out.contains("No drawing open"),
+            out.contains(tool_refusal.as_ref()),
             "a scene-touching event must stay inert on the welcome page: {out:?}"
         );
 
@@ -801,7 +803,9 @@ mod tests {
                     (20.0, 300.0),
                 ]
             };
-            let _ = app.update(Message::ViewportMove(iced::Point::new(path[0].0, path[0].1)));
+            let _ = app.update(Message::ViewportMove(iced::Point::new(
+                path[0].0, path[0].1,
+            )));
             let _ = app.update(Message::ViewportLeftPress);
             std::thread::sleep(std::time::Duration::from_millis(180));
             for &(x, y) in &path {
@@ -844,7 +848,10 @@ mod tests {
         // Two-step: bare command then the value, like typing 1 + Enter
         // (feed_active_cmd is the same path the GUI submit offers first).
         let _ = app.run_command_line("PICKDRAG");
-        assert!(app.tabs[app.active_tab].active_cmd.is_some(), "prompt must open");
+        assert!(
+            app.tabs[app.active_tab].active_cmd.is_some(),
+            "prompt must open"
+        );
         app.feed_active_cmd("1");
         assert!(app.pick_drag_rect, "PICKDRAG 1 via the prompt must switch");
     }
@@ -882,10 +889,7 @@ mod tests {
         let _ = app.run_command_line("MATCHPROP");
         assert!(app.tabs[i].active_cmd.is_some(), "MATCHPROP must start");
         let _ = app.feed_command(StepInput::EntityPick(src_h, glam::DVec3::ZERO));
-        let _ = app.feed_command(StepInput::SelectionComplete(vec![
-            dst_text_h,
-            dst_mtext_h,
-        ]));
+        let _ = app.feed_command(StepInput::SelectionComplete(vec![dst_text_h, dst_mtext_h]));
 
         let doc = &app.tabs[i].scene.document;
         match doc.get_entity(dst_text_h) {
@@ -937,7 +941,10 @@ mod tests {
             app.opening.is_none(),
             "an already-open drawing must not start a load"
         );
-        assert!(app.pending_opens.is_empty(), "and must not queue one either");
+        assert!(
+            app.pending_opens.is_empty(),
+            "and must not queue one either"
+        );
 
         // The same file spelled differently (a `..` hop) is still the same file.
         let indirect = canon.parent().unwrap().join("..").join(
@@ -1009,6 +1016,41 @@ mod tests {
 
         let _ = std::fs::remove_file(&a);
         let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn saving_over_an_existing_drawing_succeeds() {
+        for (label, pre_existing) in [("new path", false), ("existing drawing", true)] {
+            let path = std::env::temp_dir().join(format!(
+                "ocs_save_over_{}_{}.dxf",
+                std::process::id(),
+                pre_existing,
+            ));
+            let _ = std::fs::remove_file(&path);
+            if pre_existing {
+                std::fs::write(&path, b"a previous drawing").unwrap();
+            }
+
+            let mut app = OpenCADStudio::new_for_test();
+            app.automation_op(r#"{"op":"new"}"#);
+            let p = path.to_string_lossy().replace('\\', "\\\\");
+            let saved = app.automation_op(&format!(r#"{{"op":"save","path":"{p}"}}"#));
+            assert_eq!(saved["ok"], true, "{label}: {}", saved["error"]);
+            let saved_again = app.automation_op(r#"{"op":"save"}"#);
+            assert_eq!(
+                saved_again["ok"], true,
+                "normal save: {}",
+                saved_again["error"]
+            );
+
+            drop(app);
+            let sidecar = path.with_file_name(format!(
+                ".{}.ocs.lock",
+                path.file_name().unwrap().to_string_lossy()
+            ));
+            let _ = std::fs::remove_file(sidecar);
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     #[test]

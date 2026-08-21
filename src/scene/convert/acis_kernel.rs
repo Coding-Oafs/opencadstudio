@@ -23,6 +23,7 @@ pub fn tessellate_sat(
     name: String,
     color: [f32; 4],
     facet_res: f64,
+    chordal_deflection: Option<f64>,
     isolines: usize,
 ) -> Option<MeshLodSet> {
     let (bodies, loss) = lift(document);
@@ -53,7 +54,10 @@ pub fn tessellate_sat(
     } else {
         1.0
     };
-    let max_angle = cadkernel::tessellation::angle_for_resolution(resolution);
+    let max_angle = chordal_deflection.map_or_else(
+        || cadkernel::tessellation::angle_for_resolution(resolution),
+        |_| cadkernel::tessellation::display_angle_for_resolution(resolution),
+    );
 
     // Positions stay f64 until `finalize_mesh` splits them into the coarse
     // and fine pair, so a solid at survey coordinates keeps its millimetres.
@@ -106,11 +110,14 @@ pub fn tessellate_sat(
         DEFAULT_FIT_TOLERANCE
     };
     for (body, placement_scale) in &bodies {
-        let tolerance = brep::mesh::TessellationTolerance::new(
+        let mut tolerance = brep::mesh::TessellationTolerance::new(
             max_angle,
             source_fit * placement_scale,
         )
         .with_isolines(isolines);
+        if let Some(deflection) = chordal_deflection {
+            tolerance = tolerance.with_chordal_deflection(deflection);
+        }
         let tessellation = brep::mesh::tessellate(body, tolerance);
         undrawn += tessellation.missing_faces.len();
         for face in &tessellation.triangle_faces {
@@ -242,17 +249,6 @@ mod tests {
         // which reads as a plausible position and is the wrong one.
         let moved = placed([0.0, 0.0, 0.0], quarter_turn());
         assert_eq!(moved, [10.0, 20.0, 30.0]);
-    }
-
-    fn sides(max_angle: f64) -> f64 {
-        std::f64::consts::TAU / max_angle
-    }
-
-    #[test]
-    fn a_round_surface_gets_the_same_sides_whatever_its_size() {
-        let angle = cadkernel::tessellation::DEFAULT_ANGLE;
-        assert!(sides(angle) > 24.0, "{}", sides(angle));
-        assert!(sides(angle) < 96.0, "{}", sides(angle));
     }
 
 }

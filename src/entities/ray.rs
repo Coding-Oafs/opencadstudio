@@ -3,6 +3,7 @@ use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{center_grip, edit_prop as edit, square_grip};
+use crate::entities::curve::{point_along, unit_direction, unit_vector};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, RenderConvertible};
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
@@ -229,12 +230,16 @@ impl Grippable for XLine {
 
 impl PropertyEditable for XLine {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
+        let second_point = point_along(self.base_point, self.direction, 1.0);
         vec![PropSection {
             title: t!("Geometry").into_owned(),
             props: vec![
                 edit(t!("Base X").as_ref(), "xl_bx", self.base_point.x),
                 edit(t!("Base Y").as_ref(), "xl_by", self.base_point.y),
                 edit(t!("Base Z").as_ref(), "xl_bz", self.base_point.z),
+                edit(t!("Second X").as_ref(), "xl_sx", second_point.x),
+                edit(t!("Second Y").as_ref(), "xl_sy", second_point.y),
+                edit(t!("Second Z").as_ref(), "xl_sz", second_point.z),
                 edit(t!("Direction vector X").as_ref(), "xl_dx", self.direction.x),
                 edit(t!("Direction vector Y").as_ref(), "xl_dy", self.direction.y),
                 edit(t!("Direction vector Z").as_ref(), "xl_dz", self.direction.z),
@@ -250,14 +255,29 @@ impl PropertyEditable for XLine {
             "xl_bx" => self.base_point.x = v,
             "xl_by" => self.base_point.y = v,
             "xl_bz" => self.base_point.z = v,
-            "xl_dx" => {
-                self.direction.x = v;
+            "xl_sx" | "xl_sy" | "xl_sz" => {
+                let mut second_point = self.point_at(1.0);
+                match field {
+                    "xl_sx" => second_point.x = v,
+                    "xl_sy" => second_point.y = v,
+                    "xl_sz" => second_point.z = v,
+                    _ => unreachable!(),
+                }
+                if let Some(direction) = unit_direction(self.base_point, second_point) {
+                    self.direction = direction;
+                }
             }
-            "xl_dy" => {
-                self.direction.y = v;
-            }
-            "xl_dz" => {
-                self.direction.z = v;
+            "xl_dx" | "xl_dy" | "xl_dz" => {
+                let mut direction = self.direction;
+                match field {
+                    "xl_dx" => direction.x = v,
+                    "xl_dy" => direction.y = v,
+                    "xl_dz" => direction.z = v,
+                    _ => unreachable!(),
+                }
+                if let Some(direction) = unit_vector(direction) {
+                    self.direction = direction;
+                }
             }
             _ => {}
         }

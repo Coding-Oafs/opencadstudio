@@ -27,6 +27,7 @@ use acadrust::types::Vector3;
 use acadrust::{CadDocument, EntityType, Handle};
 
 use crate::command::{CadCommand, CmdResult};
+use crate::entities::curve::lwpolyline_world_xy;
 use crate::modules::{IconKind, ModuleEvent, ToolDef};
 use glam::DVec3;
 use crate::t;
@@ -188,6 +189,9 @@ pub fn normalize_entity_for_block(entity: EntityType) -> EntityType {
 }
 
 fn explode_lwpolyline(p: &LwPolyline) -> Vec<EntityType> {
+    let Some(p) = lwpolyline_world_xy(p) else {
+        return vec![];
+    };
     let n = p.vertices.len();
     if n < 2 {
         return vec![];

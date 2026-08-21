@@ -8,7 +8,23 @@ use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
 
 const HASH_MARKER: &str = "\nreport-source-sha256:";
-const PROTOCOL_VERSION: u16 = 3;
+const PROTOCOL_VERSION: u16 = 4;
+
+#[derive(serde::Serialize)]
+struct EntityRuntimeFields {
+    handle: u64,
+    linetype_handle: Option<u64>,
+    color_book_handle: Option<u64>,
+    face_visual_style_handle: Option<u64>,
+    edge_visual_style_handle: Option<u64>,
+    material_flags: u8,
+    material_handle: Option<u64>,
+    shadow_flags: u8,
+    plotstyle_flags: u8,
+    plotstyle_handle: Option<u64>,
+    entity_mode: Option<u8>,
+    has_ds_data: bool,
+}
 
 /// Parse DWG/DXF on a dedicated browser worker and return a compact serialized
 /// document. The main wasm instance only deserializes and installs it, so the
@@ -159,11 +175,43 @@ fn encode_result(
     recoverable_parse_error: bool,
     bytes: &[u8],
 ) -> Result<Uint8Array, JsValue> {
+    let runtime_fields = result
+        .as_ref()
+        .ok()
+        .map(|outcome| {
+            outcome
+                .document
+                .entities()
+                .map(|entity| {
+                    let common = entity.common();
+                    EntityRuntimeFields {
+                        handle: common.handle.value(),
+                        linetype_handle: common.linetype_handle.map(|handle| handle.value()),
+                        color_book_handle: common.color_book_handle.map(|handle| handle.value()),
+                        face_visual_style_handle: common
+                            .face_visual_style_handle
+                            .map(|handle| handle.value()),
+                        edge_visual_style_handle: common
+                            .edge_visual_style_handle
+                            .map(|handle| handle.value()),
+                        material_flags: common.material_flags,
+                        material_handle: common.material_handle.map(|handle| handle.value()),
+                        shadow_flags: common.shadow_flags,
+                        plotstyle_flags: common.plotstyle_flags,
+                        plotstyle_handle: common.plotstyle_handle.map(|handle| handle.value()),
+                        entity_mode: common.entity_mode,
+                        has_ds_data: common.has_ds_data,
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let encoded = bincode::serialize(&(
         PROTOCOL_VERSION,
         result,
         source_sha256,
         recoverable_parse_error,
+        runtime_fields,
     ))
         .map_err(|error| worker_error(error.to_string(), bytes, true))?;
     Ok(Uint8Array::from(encoded.as_slice()))

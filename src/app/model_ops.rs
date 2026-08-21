@@ -7,23 +7,31 @@
 // cylinder afterwards, and saves as one.
 
 use acadrust::entities::Solid3D;
+use acadrust::objects::SolidHistoryOperation;
 use cadkernel::brep::Body;
 use acadrust::{EntityType, Handle};
 use iced::Task;
 
 use super::Message;
 use crate::modules::model::boolean_cmd::BoolOp;
+use crate::scene::model::solid_history;
 use crate::scene::model::solid_model::{self, Bool};
 
 impl super::OpenCADStudio {
     /// Commit a Model-tab solid: add its acadrust entity to the document, then
     /// register the B-rep (caches it for booleans + tessellates it into the
     /// shaded mesh pipeline). Returns the new entity handle.
-    pub(super) fn add_solid_model(&mut self, entity: EntityType, solid: Body) -> Handle {
+    pub(super) fn add_solid_model(
+        &mut self,
+        entity: EntityType,
+        solid: Body,
+        history: SolidHistoryOperation,
+    ) -> Handle {
         let i = self.active_tab;
         let Some(handle) = self.commit_entity_handle(entity) else {
             return Handle::NULL;
         };
+        self.tabs[i].scene.create_solid_history(handle, history);
         self.tabs[i].scene.register_solid_model(handle, solid);
         handle
     }
@@ -35,9 +43,9 @@ impl super::OpenCADStudio {
         // Selected entities that have a cached B-rep.
         let handles: Vec<Handle> = self.tabs[i]
             .scene
-            .selected
-            .iter()
-            .copied()
+            .selected_handles_in_order()
+            .into_iter()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 2 {
@@ -66,7 +74,8 @@ impl super::OpenCADStudio {
         // mesh + cached B-rep; its edge wires make it pickable.
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
-        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result);
+        let history = solid_history::brep_op(&result);
+        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -87,6 +96,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -137,7 +147,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
-        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result);
+        let history = solid_history::brep_op(&result);
+        let handle = self.add_solid_model(EntityType::Solid3D(s3d), result, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -161,6 +172,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 2 {
@@ -176,7 +188,8 @@ impl super::OpenCADStudio {
                 // Keep both originals; add the interference solid.
                 let mut s3d = Solid3D::new();
                 s3d.wires = solid_model::edge_wires(&result);
-                self.add_solid_model(EntityType::Solid3D(s3d), result);
+                let history = solid_history::brep_op(&result);
+                self.add_solid_model(EntityType::Solid3D(s3d), result, history);
                 self.tabs[i].dirty = true;
                 self.refresh_properties();
                 self.command_line
@@ -199,6 +212,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -223,7 +237,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&rotated);
-        let handle = self.add_solid_model(EntityType::Solid3D(s3d), rotated);
+        let history = solid_history::brep_op(&rotated);
+        let handle = self.add_solid_model(EntityType::Solid3D(s3d), rotated, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -242,30 +257,22 @@ impl super::OpenCADStudio {
     /// reusing the box primitive + the boolean union path.
     pub(super) fn solid_polysolid(&mut self, width: f64, height: f64) -> Task<Message> {
         let i = self.active_tab;
-        let found: Option<(Handle, Vec<[f64; 2]>, bool)> = self.tabs[i]
+        let found: Option<(Handle, Vec<[f64; 3]>)> = self.tabs[i]
             .scene
             .selected_entities()
             .iter()
+            .filter(|(h, _)| !self.tabs[i].scene.is_layer_locked(*h))
             .find_map(|(h, e)| match e {
-                EntityType::LwPolyline(pl) => Some((
-                    *h,
-                    pl.vertices
-                        .iter()
-                        .map(|v| [v.location.x, v.location.y])
-                        .collect(),
-                    pl.is_closed,
-                )),
+                EntityType::LwPolyline(_) => crate::entities::curve::entity_curve(e)
+                    .map(|curve| (*h, crate::entities::curve::curve_points(&curve))),
                 _ => None,
             });
-        let Some((handle, pts, closed)) = found else {
+        let Some((handle, pts)) = found else {
             self.command_line
                 .push_error(crate::t!("POLYSOLID: select a polyline first.").as_ref());
             return Task::none();
         };
-        let mut segs: Vec<([f64; 2], [f64; 2])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
-        if closed && pts.len() > 2 {
-            segs.push((pts[pts.len() - 1], pts[0]));
-        }
+        let segs: Vec<([f64; 3], [f64; 3])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
         let mut acc: Option<Body> = None;
         let mut used = 0usize;
         for (a, b) in &segs {
@@ -285,7 +292,7 @@ impl super::OpenCADStudio {
                         [cos, sin, 0.0],
                         [-sin, cos, 0.0],
                         [0.0, 0.0, 1.0],
-                        [a[0], a[1], 0.0],
+                        [a[0], a[1], a[2]],
                     )
                 })
             else {
@@ -306,7 +313,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&[handle]);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&result);
-        let h = self.add_solid_model(EntityType::Solid3D(s3d), result);
+        let history = solid_history::brep_op(&result);
+        let h = self.add_solid_model(EntityType::Solid3D(s3d), result, history);
         self.tabs[i].scene.deselect_all();
         if !h.is_null() {
             self.tabs[i].scene.select_entity(h, false);
@@ -330,6 +338,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -351,7 +360,8 @@ impl super::OpenCADStudio {
         self.push_undo_snapshot(i, "3DMIRROR");
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&reflected);
-        let h = self.add_solid_model(EntityType::Solid3D(s3d), reflected);
+        let history = solid_history::brep_op(&reflected);
+        let h = self.add_solid_model(EntityType::Solid3D(s3d), reflected, history);
         self.tabs[i].scene.deselect_all();
         if !h.is_null() {
             self.tabs[i].scene.select_entity(h, false);
@@ -380,6 +390,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -421,7 +432,8 @@ impl super::OpenCADStudio {
         self.tabs[i].scene.erase_entities(&handles);
         let mut s3d = Solid3D::new();
         s3d.wires = solid_model::edge_wires(&aligned);
-        let h = self.add_solid_model(EntityType::Solid3D(s3d), aligned);
+        let history = solid_history::brep_op(&aligned);
+        let h = self.add_solid_model(EntityType::Solid3D(s3d), aligned, history);
         self.tabs[i].scene.deselect_all();
         if !h.is_null() {
             self.tabs[i].scene.select_entity(h, false);
@@ -446,6 +458,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
@@ -514,7 +527,13 @@ impl super::OpenCADStudio {
         if let EntityType::Solid3D(inner) = &mut entity {
             inner.wires = solid_model::edge_wires(&solid);
         }
-        let handle = self.add_solid_model(entity, solid);
+        let history = solid_history::pyramid_op(
+            glam::DMat4::IDENTITY.to_cols_array(),
+            radius,
+            height,
+            n,
+        );
+        let handle = self.add_solid_model(entity, solid, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
             self.tabs[i].scene.select_entity(handle, false);
@@ -540,15 +559,23 @@ impl super::OpenCADStudio {
             .scene
             .selected_entities()
             .iter()
-            .find_map(|(h, e)| match e {
-                EntityType::LwPolyline(pl) => Some((
+            .filter(|(h, _)| !self.tabs[i].scene.is_layer_locked(*h))
+            .find_map(|(h, e)| {
+                let EntityType::LwPolyline(_) = e else {
+                    return None;
+                };
+                let curve = crate::entities::curve::entity_curve(e)?;
+                let cadkernel::geom2d::Curve::Polyline(polyline) = &curve.curve else {
+                    return None;
+                };
+                Some((
                     *h,
-                    pl.vertices
+                    polyline
+                        .vertices
                         .iter()
-                        .map(|v| [v.location.x, v.location.y, 0.0])
+                        .map(|vertex| curve.plane.point_at(vertex.position))
                         .collect(),
-                )),
-                _ => None,
+                ))
             });
         let Some((handle, fit)) = found else {
             self.command_line
@@ -565,7 +592,7 @@ impl super::OpenCADStudio {
         let p = |k: usize| glam::DVec3::new(fit[k][0], fit[k][1], fit[k][2]);
         // Catmull-Rom → cubic Bézier control points: [P0, b1,b2,P1, b1,b2,P2, …].
         let mut ctrl: Vec<Vector3> = Vec::with_capacity(3 * m + 1);
-        ctrl.push(Vector3::new(fit[0][0], fit[0][1], 0.0));
+        ctrl.push(Vector3::new(fit[0][0], fit[0][1], fit[0][2]));
         for seg in 0..m {
             let p0 = p(seg);
             let p1 = p(seg + 1);
@@ -573,9 +600,9 @@ impl super::OpenCADStudio {
             let next = if seg + 2 <= m { p(seg + 2) } else { p1 };
             let b1 = p0 + (p1 - prev) / 6.0;
             let b2 = p1 - (next - p0) / 6.0;
-            ctrl.push(Vector3::new(b1.x, b1.y, 0.0));
-            ctrl.push(Vector3::new(b2.x, b2.y, 0.0));
-            ctrl.push(Vector3::new(p1.x, p1.y, 0.0));
+            ctrl.push(Vector3::new(b1.x, b1.y, b1.z));
+            ctrl.push(Vector3::new(b2.x, b2.y, b2.z));
+            ctrl.push(Vector3::new(p1.x, p1.y, p1.z));
         }
         // Clamped piecewise-Bézier knots (degree 3): len == ctrl.len()+degree+1.
         let mut knots: Vec<f64> = vec![0.0; 4];
@@ -587,7 +614,10 @@ impl super::OpenCADStudio {
         spl.degree = 3;
         spl.control_points = ctrl;
         spl.knots = knots;
-        spl.fit_points = fit.iter().map(|q| Vector3::new(q[0], q[1], 0.0)).collect();
+        spl.fit_points = fit
+            .iter()
+            .map(|q| Vector3::new(q[0], q[1], q[2]))
+            .collect();
         // flags.rational defaults to false (non-rational) — exactly what we want.
         self.push_undo_snapshot(i, "SPLINEFIT");
         self.tabs[i].scene.erase_entities(&[handle]);
@@ -611,6 +641,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.is_empty() {
@@ -651,6 +682,7 @@ impl super::OpenCADStudio {
             .selected
             .iter()
             .copied()
+            .filter(|h| !self.tabs[i].scene.is_layer_locked(*h))
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.is_empty() {

@@ -35,6 +35,64 @@ fn pt_pt_d2(a: Point, b: Point) -> f32 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
 }
 
+fn cursor_on_projected_axis(
+    cursor: Point,
+    bounds: iced::Rectangle,
+    view: glam::Mat4,
+    eye: glam::DVec3,
+    origin: glam::DVec3,
+    direction: glam::DVec3,
+) -> Option<glam::DVec3> {
+    let direction = direction.normalize_or_zero();
+    if direction.length_squared() <= 1e-12 {
+        return None;
+    }
+    let relative = (origin - eye).as_vec3();
+    let start = view * relative.extend(1.0);
+    let next = view * (relative + direction.as_vec3()).extend(1.0);
+    if start.w.abs() <= 1e-9 {
+        return None;
+    }
+    let delta = next - start;
+    let ndc = start.truncate() / start.w;
+    let derivative = glam::Vec2::new(
+        (delta.x * start.w - start.x * delta.w) / start.w.powi(2),
+        (delta.y * start.w - start.y * delta.w) / start.w.powi(2),
+    );
+    let screen_origin = glam::Vec2::new(
+        (ndc.x + 1.0) * 0.5 * bounds.width,
+        (1.0 - ndc.y) * 0.5 * bounds.height,
+    );
+    let screen_direction = glam::Vec2::new(
+        derivative.x * 0.5 * bounds.width,
+        -derivative.y * 0.5 * bounds.height,
+    );
+    let length_squared = screen_direction.length_squared();
+    if length_squared <= 1e-8 {
+        return None;
+    }
+    let cursor = glam::Vec2::new(cursor.x, cursor.y);
+    let screen = screen_origin
+        + screen_direction * (cursor - screen_origin).dot(screen_direction) / length_squared;
+    let target = glam::Vec2::new(
+        screen.x / bounds.width * 2.0 - 1.0,
+        1.0 - screen.y / bounds.height * 2.0,
+    );
+    let x_denominator = target.x * delta.w - delta.x;
+    let y_denominator = target.y * delta.w - delta.y;
+    if x_denominator.abs().max(y_denominator.abs()) <= 1e-9 {
+        return None;
+    }
+    let distance = if x_denominator.abs() >= y_denominator.abs() {
+        (start.x - target.x * start.w) / x_denominator
+    } else {
+        (start.y - target.y * start.w) / y_denominator
+    };
+    distance
+        .is_finite()
+        .then_some(origin + direction * distance as f64)
+}
+
 fn is_added_polyline_vertex(
     original: &AcadEntityType,
     current: &AcadEntityType,
@@ -291,9 +349,8 @@ impl OpenCADStudio {
         (origin, (x.as_vec3(), y.as_vec3(), z.as_vec3()))
     }
 
-    /// Adopt the active viewport's grid *display* into the live toggle. Called
-    /// on load and whenever the active tab or viewport changes, so the grid
-    /// drawing follows the active viewport.
+    /// Adopt the active viewport's display state into the live toggles. Called
+    /// on load and whenever the active tab or viewport changes.
     ///
     /// Grid *snap* (`SnapType::Grid`) is deliberately NOT adopted here: it stays
     /// off by default everywhere and is controlled solely by the user's snap
@@ -303,6 +360,9 @@ impl OpenCADStudio {
         if let Some((grid_on, _snap_on)) = self.tabs[i].scene.active_tile_grid_snap() {
             self.show_grid = grid_on;
         }
+        let ortho = self.tabs[i].scene.active_camera_projection()
+            == crate::scene::Projection::Orthographic;
+        self.ribbon.set_ortho(ortho);
     }
 
     pub(in crate::app) fn sync_render_mode_to_active_tile(&mut self, i: usize) {
@@ -473,35 +533,72 @@ impl OpenCADStudio {
         is_translate: bool,
         world: glam::DVec3,
     ) -> GripEdit {
-        if !self.tabs[i].hot_grips.contains(&(handle, grip_id)) {
-            self.tabs[i].hot_grips.clear();
-            return GripEdit::single(handle, grip_id, is_translate, world);
-        }
-
-        let mut targets: Vec<GripTarget> = self.tabs[i]
+        let axis = self.tabs[i]
             .selected_grip_handles
             .iter()
             .copied()
             .zip(self.tabs[i].selected_grips.iter())
-            .filter(|(owner, grip)| self.tabs[i].hot_grips.contains(&(*owner, grip.id)))
-            .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
-            .map(|(owner, grip)| GripTarget {
-                handle: owner,
-                grip_id: grip.id,
-                is_translate: grip.is_midpoint,
-                last_world: grip.world,
-            })
-            .collect();
+            .find(|(owner, grip)| *owner == handle && grip.id == grip_id)
+            .and_then(|(_, grip)| grip.axis);
+
+        let clicked_is_hot = self.tabs[i].hot_grips.contains(&(handle, grip_id));
+
+        let mut targets: Vec<GripTarget> = if clicked_is_hot {
+            // Explicit hot grips keep their existing multi-grip behaviour.
+            self.tabs[i]
+                .selected_grip_handles
+                .iter()
+                .copied()
+                .zip(self.tabs[i].selected_grips.iter())
+                .filter(|(owner, grip)| {
+                    self.tabs[i].hot_grips.contains(&(*owner, grip.id))
+                })
+                .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
+                .map(|(owner, grip)| GripTarget {
+                    handle: owner,
+                    grip_id: grip.id,
+                    is_translate: grip.is_midpoint,
+                    last_world: grip.world,
+                })
+                .collect()
+        } else {
+            // A normal click on coincident grips stretches all selected grips that
+            // share the same geometric point. Use a tiny world-space tolerance:
+            // visually-near grips caused by zoom must remain independent.
+            self.tabs[i].hot_grips.clear();
+
+            const COINCIDENT_GRIP_EPSILON: f64 = 1.0e-9;
+            let epsilon_sq = COINCIDENT_GRIP_EPSILON * COINCIDENT_GRIP_EPSILON;
+
+            self.tabs[i]
+                .selected_grip_handles
+                .iter()
+                .copied()
+                .zip(self.tabs[i].selected_grips.iter())
+                .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
+                .filter(|(_, grip)| {
+                    (grip.world - world).length_squared() <= epsilon_sq
+                })
+                .map(|(owner, grip)| GripTarget {
+                    handle: owner,
+                    grip_id: grip.id,
+                    is_translate: grip.is_midpoint,
+                    last_world: grip.world,
+                })
+                .collect()
+        };
 
         // A midpoint/centre grip translates its whole entity. If that entity also
-        // has hot point grips, applying both would move it twice; one translate
-        // target owns the entity in that case.
+        // has coincident point grips, applying both would move it twice; one
+        // translate target owns that entity in that case.
         let translate_handles: rustc_hash::FxHashSet<_> = targets
             .iter()
             .filter(|target| target.is_translate)
             .map(|target| target.handle)
             .collect();
+
         let mut used_translates = rustc_hash::FxHashSet::default();
+
         targets.retain(|target| {
             if translate_handles.contains(&target.handle) {
                 target.is_translate && used_translates.insert(target.handle)
@@ -509,15 +606,24 @@ impl OpenCADStudio {
                 true
             }
         });
+
         if targets.is_empty() {
-            return GripEdit::single(handle, grip_id, is_translate, world);
+            let mut edit = GripEdit::single(handle, grip_id, is_translate, world);
+            edit.axis = axis;
+            return edit;
         }
+
+        // An axis constraint belongs to a single grip. When several coincident
+        // grips participate, let the common cursor delta drive all of them.
+        let axis = (targets.len() == 1).then_some(axis).flatten();
+
         GripEdit {
             handle,
             grip_id,
             origin_world: world,
             last_world: world,
             mode: GripEditMode::Stretch,
+            axis,
             targets,
         }
     }
@@ -598,7 +704,9 @@ impl OpenCADStudio {
                         screen: p,
                         started: iced::time::Instant::now(),
                     });
-                    self.grip_popup = None;
+                    if !self.grip_popup.as_ref().is_some_and(|popup| popup.pinned) {
+                        self.grip_popup = None;
+                    }
                 } else if let Some(h) = self.grip_hover.as_mut() {
                     h.screen = p;
                 }
@@ -617,12 +725,17 @@ impl OpenCADStudio {
                         use crate::entities::traits::EntityTypeOps;
                         let items = e.grip_menu(grip_id);
                         if !items.is_empty() {
+                            let selected = items
+                                .iter()
+                                .position(|item| item.label.starts_with('✓'))
+                                .unwrap_or(0);
                             self.grip_popup = Some(crate::app::GripPopup {
                                 handle,
                                 grip_id,
                                 anchor: p,
                                 items,
-                                selected: 0,
+                                selected,
+                                pinned: false,
                             });
                         }
                     }
@@ -630,7 +743,7 @@ impl OpenCADStudio {
             }
             None => {
                 self.grip_hover = None;
-                if let Some(popup) = &self.grip_popup {
+                if let Some(popup) = self.grip_popup.as_ref().filter(|popup| !popup.pinned) {
                     let dx = p.x - popup.anchor.x;
                     let dy = p.y - popup.anchor.y;
                     if (dx * dx + dy * dy).sqrt() > POPUP_DISMISS_PX {
@@ -988,12 +1101,14 @@ impl OpenCADStudio {
                         return Task::none();
                     } else if self.tabs[i].scene.current_layout == "Model" {
                         if sel.orbit_pivot.is_none() {
-                            // Selection centre when something is selected,
-                            // otherwise the point under the cursor. (#229)
-                            sel.orbit_pivot = self.tabs[i]
-                                .scene
-                                .orbit_pivot()
-                                .or(Some(self.tabs[i].last_cursor_world));
+                            let scene = &self.tabs[i].scene;
+                            let bounds = scene.active_model_tile_bounds(vp_size.0, vp_size.1);
+                            sel.orbit_pivot = Some(
+                                scene
+                                    .orbit_pivot()
+                                    .or_else(|| scene.view_center_surface_pivot(bounds))
+                                    .unwrap_or_else(|| scene.camera.borrow().target),
+                            );
                         }
                         let pivot = sel.orbit_pivot;
                         drop(sel);
@@ -1085,6 +1200,14 @@ impl OpenCADStudio {
 
         // ── Grip drag ─────────────────────────────────────────────
         if let Some(grip) = self.tabs[i].active_grip.clone() {
+            if grip
+                .targets
+                .iter()
+                .any(|target| self.tabs[i].scene.is_layer_locked(target.handle))
+            {
+                self.cancel_active_grip_edit();
+                return Task::none();
+            }
             let grip_started = Instant::now();
             let (vw, vh) = vp_size;
             let bounds = iced::Rectangle {
@@ -1123,8 +1246,7 @@ impl OpenCADStudio {
                 .filter(|handle| seen_handles.insert(*handle))
                 .collect();
 
-            // First move of this drag: hide every edited entity from the base
-            // tessellation so subsequent moves refresh only the overlay.
+            // Wire entities use the overlay; solid meshes stay visible and move live.
             if self.grip_preview_handles != edited_handles {
                 if self.grip_dirty_before.is_none() {
                     self.grip_dirty_before = Some(self.tabs[i].dirty);
@@ -1148,8 +1270,11 @@ impl OpenCADStudio {
                         })
                         .collect();
                 }
+                self.capture_grip_history_originals(i, &edited_handles);
                 for &handle in &edited_handles {
-                    self.tabs[i].scene.preview_hidden.insert(handle);
+                    if !self.tabs[i].scene.meshes.contains_key(&handle) {
+                        self.tabs[i].scene.preview_hidden.insert(handle);
+                    }
                 }
                 let changes: Vec<_> = edited_handles
                     .iter()
@@ -1305,6 +1430,18 @@ impl OpenCADStudio {
                 }
             }
 
+            if let Some(axis) = grip.axis {
+                snapped = cursor_on_projected_axis(
+                    p,
+                    bounds,
+                    view_rot,
+                    eye,
+                    grip.origin_world,
+                    axis,
+                )
+                .unwrap_or(snapped);
+            }
+
             let snap_ms = snap_started.elapsed().as_secs_f64() * 1000.0;
             // The overlay builds the active tracking guide from `otrack_active.base`
             // to `last_cursor_world`. Keep it synchronized with the actual point used
@@ -1430,6 +1567,13 @@ impl OpenCADStudio {
                     );
                 }
             }
+            let mesh_changes: Vec<_> = edited_handles
+                .iter()
+                .copied()
+                .filter(|handle| self.tabs[i].scene.meshes.contains_key(handle))
+                .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                .collect();
+            self.tabs[i].scene.bump_entities(&mesh_changes);
             self.tabs[i].scene.set_preview_hatches(&edited_handles);
             self.tabs[i].dirty = true;
             if let Some(active) = self.tabs[i].active_grip.as_mut() {
@@ -1760,6 +1904,14 @@ impl OpenCADStudio {
                 }
                 pt
             };
+            let effective = self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .and_then(|command| command.cursor_axis())
+                .and_then(|(origin, direction)| {
+                    cursor_on_projected_axis(p, bounds, view_rot, eye, origin, direction)
+                })
+                .unwrap_or(effective);
             // Dynamic-input locked fields constrain the preview point
             // (#356): a typed angle pins the direction, a typed
             // distance pins the radius — the same resolution the Enter
@@ -2024,8 +2176,11 @@ impl OpenCADStudio {
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
+                            display_visible: true,
+                            plot_visible: true,
                             fill_is_3d: false,
                             fill_is_2d_solid: false,
+                            render_instance: None,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
                             dash_from_start: false,
@@ -2623,6 +2778,32 @@ impl OpenCADStudio {
                     let Some(&handle) = self.tabs[i].selected_grip_handles.get(grip_index) else {
                         return Task::none();
                     };
+                    let grip_shape = self.tabs[i].selected_grips[grip_index].shape;
+                    if grip_shape == crate::scene::model::object::GripShape::Dropdown {
+                        use crate::entities::traits::EntityTypeOps;
+                        let items = self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(handle)
+                            .map(|entity| entity.grip_menu(grip_id))
+                            .unwrap_or_default();
+                        if !items.is_empty() {
+                            let selected = items
+                                .iter()
+                                .position(|item| item.label.starts_with('✓'))
+                                .unwrap_or(0);
+                            self.grip_popup = Some(crate::app::GripPopup {
+                                handle,
+                                grip_id,
+                                anchor: p_full,
+                                items,
+                                selected,
+                                pinned: true,
+                            });
+                        }
+                        self.grip_hover = None;
+                        return Task::none();
+                    }
                     // The visibility (lookup) grip opens a state
                     // dropdown instead of starting a stretch drag.
                     if grip_id == crate::app::visibility::VIS_GRIP_ID {
@@ -2747,8 +2928,12 @@ impl OpenCADStudio {
             // edited entity back into the resident tessellation.
             let handles = std::mem::take(&mut self.grip_preview_handles);
             let originals = std::mem::take(&mut self.grip_originals);
+            let history_originals = std::mem::take(&mut self.grip_history_originals);
             let dirty_before = self.grip_dirty_before.take().unwrap_or(self.tabs[i].dirty);
             if !handles.is_empty() {
+                for &handle in &handles {
+                    let _ = self.tabs[i].scene.finalize_solid_history(handle);
+                }
                 if !originals.is_empty() {
                     self.push_entity_group_history(
                         i,
@@ -2756,6 +2941,10 @@ impl OpenCADStudio {
                         originals
                             .into_iter()
                             .map(|(handle, entity)| (handle, std::sync::Arc::new(entity)))
+                            .collect(),
+                        history_originals
+                            .into_iter()
+                            .flat_map(|(_, objects)| objects)
                             .collect(),
                         dirty_before,
                     );
@@ -3001,6 +3190,14 @@ impl OpenCADStudio {
                         }
                     }
                 }
+                pt = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .and_then(|command| command.cursor_axis())
+                    .and_then(|(origin, direction)| {
+                        cursor_on_projected_axis(p, bounds, view_rot, eye, origin, direction)
+                    })
+                    .unwrap_or(pt);
                 // A click while dynamic-input fields hold typed values
                 // commits the CONSTRAINED point — the same resolution
                 // the preview shows and Enter would commit (#356).
@@ -3532,8 +3729,6 @@ impl OpenCADStudio {
                             bounds,
                             candidate_handles.as_ref(),
                         ));
-                        // Objects on a locked layer aren't selectable.
-                        handles.retain(|&h| !self.tabs[i].scene.is_layer_locked(h));
                         // Box/lasso accumulates like individual picks
                         // (issue #83): a plain box adds to the current
                         // selection, Shift+box removes the boxed
@@ -3646,7 +3841,6 @@ impl OpenCADStudio {
                         .into_iter()
                         .filter_map(|s| Scene::handle_from_wire_name(s))
                         .filter(|&h| self.tabs[i].scene.passes_selection_filter(h))
-                        .filter(|&h| !self.tabs[i].scene.is_layer_locked(h))
                         .collect();
                         if cands.len() >= 2 {
                             // Overlap: open the list box at the cursor.
@@ -3706,45 +3900,33 @@ impl OpenCADStudio {
                         // Selection filter: drop a pick whose type is excluded.
                         let hit = hit.filter(|&h| self.tabs[i].scene.passes_selection_filter(h));
                         if let Some(handle) = hit {
-                            if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
-                                // Locked layer: visible + snappable but
-                                // not selectable. Report and do nothing
-                                // else — in particular do NOT set
-                                // `selection_just_completed`, or a
-                                // gather command (MOVE's "select
-                                // objects") would wrongly finish.
-                                self.command_line.push_info(crate::tf!(
-                                            "Object is on locked layer \"{layer}\" — unlock the layer to select or edit it."
-                                        ).as_ref());
-                            } else {
-                                // Individual picks accumulate (issue #47):
-                                // each plain click adds to the selection,
-                                // Shift+click removes the picked entity.
-                                // PICKADD 0 (#226): a plain click
-                                // REPLACES the selection instead and
-                                // Shift+click toggles membership.
-                                if self.shift_down || self.select_remove_mode {
-                                    // Remove was asked for by name, so it only
-                                    // ever takes away — the toggle below is
-                                    // Shift's PICKADD-0 behaviour, not its.
-                                    if !self.select_remove_mode
-                                        && !selection_pick_add
-                                        && !self.tabs[i].scene.selected.contains(&handle)
-                                    {
-                                        self.tabs[i].scene.select_entity(handle, false);
-                                        self.tabs[i].scene.expand_selection_for_groups(&[handle]);
-                                    } else {
-                                        self.tabs[i].scene.deselect_entity(handle);
-                                    }
-                                } else {
-                                    self.tabs[i]
-                                        .scene
-                                        .select_entity(handle, !selection_pick_add);
+                            // Individual picks accumulate (issue #47):
+                            // each plain click adds to the selection,
+                            // Shift+click removes the picked entity.
+                            // PICKADD 0 (#226): a plain click
+                            // REPLACES the selection instead and
+                            // Shift+click toggles membership.
+                            if self.shift_down || self.select_remove_mode {
+                                // Remove was asked for by name, so it only
+                                // ever takes away — the toggle below is
+                                // Shift's PICKADD-0 behaviour, not its.
+                                if !self.select_remove_mode
+                                    && !selection_pick_add
+                                    && !self.tabs[i].scene.selected.contains(&handle)
+                                {
+                                    self.tabs[i].scene.select_entity(handle, false);
                                     self.tabs[i].scene.expand_selection_for_groups(&[handle]);
+                                } else {
+                                    self.tabs[i].scene.deselect_entity(handle);
                                 }
-                                self.refresh_properties();
-                                selection_just_completed = true;
+                            } else {
+                                self.tabs[i]
+                                    .scene
+                                    .select_entity(handle, !selection_pick_add);
+                                self.tabs[i].scene.expand_selection_for_groups(&[handle]);
                             }
+                            self.refresh_properties();
+                            selection_just_completed = true;
                         } else {
                             // Empty-space click only ARMS a box here; it
                             // no longer clears the selection, so a box can
@@ -3908,8 +4090,6 @@ impl OpenCADStudio {
                     ));
                     // Selection filter: keep only allowed types.
                     handles.retain(|&h| self.tabs[i].scene.passes_selection_filter(h));
-                    // Objects on a locked layer aren't selectable.
-                    handles.retain(|&h| !self.tabs[i].scene.is_layer_locked(h));
                     // Accumulate (issue #83): a plain box adds to the
                     // current selection, Shift+box removes the boxed
                     // entities. An empty box leaves the selection alone
@@ -4111,46 +4291,75 @@ impl OpenCADStudio {
                     height: vh,
                 };
 
-                // 1) Try direct wire hit — works when the border is clicked.
-                let wire_hit: Option<acadrust::Handle> = {
-                    let (view_rot, eye) = {
-                        let c = self.tabs[i].scene.camera.borrow();
-                        (c.view_proj_rte(bounds), c.eye())
-                    };
-                    let all_wires = self.tabs[i].scene.hit_test_wires();
-                    let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-                    let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
-                        all_wires,
-                        click_world,
-                        view_rot,
-                        eye,
-                        bounds,
-                        crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
-                    );
-                    scene::pick::hit_test::click_hit(
-                        p,
-                        &click_candidates,
-                        view_rot,
-                        eye,
-                        bounds,
-                        self.tabs[i].scene.document.header.lineweight_display,
-                        crate::ui::overlay::pick_box_aperture_px(self.pick_box),
-                    )
-                    .and_then(|s| Scene::handle_from_wire_name(s))
-                    .and_then(|h| {
-                        if let Some(AcadEntityType::Viewport(vp)) =
-                            self.tabs[i].scene.document.get_entity(h)
-                        {
-                            if Scene::is_content_viewport(vp) {
-                                Some(h)
-                            } else {
-                                None
-                            }
+                let (view_rot, eye) = {
+                    let c = self.tabs[i].scene.camera.borrow();
+                    (c.view_proj_rte(bounds), c.eye())
+                };
+
+                let all_wires = self.tabs[i].scene.hit_test_wires();
+                let click_world = self.cursor_model_point(i, &edit_cam, p, bounds);
+                let click_candidates = self.tabs[i].scene.interaction_pick_candidates_near(
+                    all_wires,
+                    click_world,
+                    view_rot,
+                    eye,
+                    bounds,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box) * 2.0,
+                );
+
+                let raw_wire_hit = scene::pick::hit_test::click_hit(
+                    p,
+                    &click_candidates,
+                    view_rot,
+                    eye,
+                    bounds,
+                    self.tabs[i].scene.document.header.lineweight_display,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
+                )
+                .and_then(|s| Scene::handle_from_wire_name(s));
+
+                // In paper space, text editing takes precedence over entering MSPACE.
+                // This mirrors the model-space double-click behaviour.
+                if let Some(handle) = raw_wire_hit {
+                    let is_editable_text = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(handle)
+                        .is_some_and(|entity| {
+                            crate::app::text_inline::read_text_field(entity).is_some()
+                                || matches!(entity, AcadEntityType::Leader(_))
+                        });
+
+                    if is_editable_text {
+                        if let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) {
+                            self.command_line.push_info(
+                                crate::tf!(
+                                    "Object is on locked layer \"{layer}\" — unlock the layer to edit it."
+                                )
+                                .as_ref(),
+                            );
+                            return Task::none();
+                        }
+
+                        return self.begin_text_edit(handle);
+                    }
+                }
+
+                // If the double-click was not on editable text, keep the existing
+                // paper-space behaviour and try to enter the clicked viewport.
+                let wire_hit: Option<acadrust::Handle> = raw_wire_hit.and_then(|h| {
+                    if let Some(AcadEntityType::Viewport(vp)) =
+                        self.tabs[i].scene.document.get_entity(h)
+                    {
+                        if Scene::is_content_viewport(vp) {
+                            Some(h)
                         } else {
                             None
                         }
-                    })
-                };
+                    } else {
+                        None
+                    }
+                });
 
                 // 2) Decide which viewport (if any) the click enters,
                 //    keyed on the *visible* on-screen rectangle. Screen-space

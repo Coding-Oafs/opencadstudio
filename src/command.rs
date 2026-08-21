@@ -1153,6 +1153,8 @@ pub enum CmdResult {
     CommitEntity(EntityType),
     /// Commit several acadrust entities in one undo step; keep the command active.
     CommitEntities(Vec<EntityType>),
+    /// Commit several entities in one undo step and end the command.
+    CommitEntitiesAndExit(Vec<EntityType>),
     /// Commit an acadrust entity to the document and end the command.
     CommitAndExit(EntityType),
     /// Commit a Model-tab 3D solid: the acadrust entity (for selection /
@@ -1161,6 +1163,7 @@ pub enum CmdResult {
     CommitSolid {
         entity: EntityType,
         solid: Box<cadkernel::brep::Body>,
+        history: acadrust::objects::SolidHistoryOperation,
     },
     /// Commit an acadrust entity, end the command, and open the in-place text
     /// editor on it (used by MLEADER to type the annotation after placement).
@@ -1184,6 +1187,18 @@ pub enum CmdResult {
     CopySelected(Vec<Handle>, EntityTransform),
     /// Commit a hatch fill (stored in Scene::hatches, not the DXF document).
     CommitHatch(HatchModel),
+    /// Commit a hatch with the selected hatch's entity colour and transparency.
+    CommitStyledHatch {
+        hatch: HatchModel,
+        color: acadrust::types::Color,
+        transparency: acadrust::types::Transparency,
+    },
+    /// Commit a hatch and retain each boundary ring as an entity.
+    CommitHatchWithBoundaries {
+        hatch: HatchModel,
+        boundaries: Vec<EntityType>,
+        entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
+    },
     /// Copy selected entities with multiple transforms (e.g. rectangular array); end command.
     BatchCopy(Vec<Handle>, Vec<EntityTransform>),
     /// Erase `handle` and replace with new entities; command stays active.
@@ -1313,7 +1328,11 @@ pub enum CmdResult {
         boundary_handle: Handle,
     },
     /// Create a wipeout from an existing closed polyline in the active space.
-    WipeoutFromPolyline(Handle),
+    /// `erase_source` controls whether the source boundary is consumed.
+    WipeoutFromPolyline {
+        handle: Handle,
+        erase_source: bool,
+    },
     /// Temporarily switch between paper and Model while MVIEW defines a new
     /// model-space window, keeping the command active.
     MviewSwitchLayout(String),
@@ -1356,21 +1375,21 @@ pub enum CmdResult {
         scale: f32,
         angle: f32,
     },
-    /// Implicit STRETCH selection: the crossing window was drawn with no prior
-    /// selection, so the host resolves which entities it touches and restarts
-    /// the command at the base-point step with them. (#338)
+    /// STRETCH crossing-window selection. The command can accumulate several
+    /// independent crossing windows before Enter ends the selection stage.
     StretchWindow {
-        win_min: DVec3,
-        win_max: DVec3,
+        /// Handles already gathered by previous crossing windows / preselection.
+        handles: Vec<Handle>,
+        /// Every crossing window gathered so far.
+        windows: Vec<(DVec3, DVec3)>,
     },
-    /// Stretch entities: move only vertices/endpoints inside the crossing window.
+    /// Stretch entities: move only vertices/endpoints inside any gathered
+    /// crossing window.
     StretchEntities {
         handles: Vec<Handle>,
-        /// Min corner of the crossing window in world XZ (= DXF XY).
-        win_min: DVec3,
-        /// Max corner of the crossing window in world XZ (= DXF XY).
-        win_max: DVec3,
-        /// Translation vector to apply to vertices inside the window.
+        /// Independent crossing windows that define the points to move.
+        windows: Vec<(DVec3, DVec3)>,
+        /// Translation vector applied once to every selected point.
         delta: DVec3,
     },
     /// Create a Solid3D placeholder entity + associated MeshModel.
@@ -1668,6 +1687,11 @@ pub trait CadCommand: Send {
     /// during TRIM and trims during EXTEND, #336). Default no-op.
     fn set_shift(&mut self, _shift: bool) {}
 
+    /// Constrain the cursor to a construction axis for this step.
+    fn cursor_axis(&self) -> Option<(DVec3, DVec3)> {
+        None
+    }
+
     /// Mid-command Ctrl+Z: a multi-point drawing command can take the undo
     /// itself (PLINE pops its last vertex) instead of the document undo
     /// swallowing the whole in-progress object. `None` (default) lets the
@@ -1850,6 +1874,11 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// Current drawing-persisted SKETCH settings.
+    fn sketch_settings(&self) -> Option<(i16, f64, f64)> {
+        None
+    }
+
     /// Returns `true` when the active text prompt expects free-form prose
     /// that can legitimately contain whitespace (the body of a TEXT /
     /// MTEXT / DDEDIT entity, an attribute default value, etc.). For
@@ -1890,6 +1919,10 @@ pub trait CadCommand: Send {
     fn inject_selection_entities(&mut self, _entities: Vec<SelectionEntity>) {}
 
     fn area_preview_regions(&self) -> Option<Vec<AreaPreviewRegion>> {
+        None
+    }
+
+    fn hatch_preview_models(&self) -> Option<Vec<crate::scene::model::hatch_model::HatchModel>> {
         None
     }
 

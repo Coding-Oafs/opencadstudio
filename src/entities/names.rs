@@ -19,6 +19,11 @@ pub fn ui_name(e: &EntityType) -> &'static str {
         EntityType::Ellipse(_) => "Ellipse",
         EntityType::Spline(_) => "Spline",
         EntityType::Helix(_) => "Helix",
+        EntityType::LwPolyline(polyline)
+            if crate::entities::lwpolyline::is_revision_cloud(polyline) =>
+        {
+            "Revcloud"
+        }
         EntityType::LwPolyline(_) => "Polyline",
         EntityType::Polyline(_) => "Polyline",
         EntityType::Polyline2D(_) => "Polyline2D",

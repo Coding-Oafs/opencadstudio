@@ -6,6 +6,8 @@ pub mod external;
 pub mod host;
 pub mod marketplace;
 pub mod registry;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod v4_support;
 
 pub use registry::{all_ribbon_modules, plugin_command_names, ribbon_modules_enabled};
 pub(crate) use registry::try_dispatch;

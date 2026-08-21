@@ -91,39 +91,56 @@ pub fn list_printers() -> Vec<String> {
     }
 }
 
+/// Build the platform printer-properties command.
+#[cfg(not(target_arch = "wasm32"))]
+fn printer_properties_command(printer: Option<&str>) -> (&'static str, Vec<String>) {
+    let named = printer
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+
+    #[cfg(target_os = "windows")]
+    let command = match named {
+        Some(name) => (
+            "rundll32.exe",
+            vec![
+                "printui.dll,PrintUIEntry".to_string(),
+                "/p".to_string(),
+                "/n".to_string(),
+                name.to_string(),
+            ],
+        ),
+        None => ("control.exe", vec!["printers".to_string()]),
+    };
+
+    #[cfg(target_os = "macos")]
+    let command = {
+        let _ = named;
+        (
+            "open",
+            vec!["x-apple.systempreferences:com.apple.Print-Scan-Settings.extension".to_string()],
+        )
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let command = {
+        let target = named
+            .map(|name| format!("http://localhost:631/printers/{name}"))
+            .unwrap_or_else(|| "http://localhost:631/printers".to_string());
+        ("xdg-open", vec![target])
+    };
+
+    command
+}
+
 /// Open the operating system's printer configuration surface.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_printer_properties(printer: Option<&str>) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = std::process::Command::new("control.exe");
-        command.arg("printers");
-        return command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("Could not open printer properties: {error}"));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = std::process::Command::new("open");
-        command.arg("x-apple.systempreferences:com.apple.Print-Scan-Settings.extension");
-        return command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("Could not open printer properties: {error}"));
-    }
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        let target = printer
-            .filter(|name| !name.is_empty())
-            .map(|name| format!("http://localhost:631/printers/{name}"))
-            .unwrap_or_else(|| "http://localhost:631/printers".to_string());
-        std::process::Command::new("xdg-open")
-            .arg(target)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("Could not open printer properties: {error}"))
-    }
+    let (program, args) = printer_properties_command(printer);
+    std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open printer properties: {error}"))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -308,5 +325,74 @@ fn dispatch_to_printer_opts(
                 String::from_utf8_lossy(&out.stderr)
             ))
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod printer_properties_tests {
+    use super::printer_properties_command;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_opens_selected_printer_or_printer_list() {
+        assert_eq!(
+            printer_properties_command(Some("  Office LaserJet  ")),
+            (
+                "rundll32.exe",
+                vec![
+                    "printui.dll,PrintUIEntry".to_string(),
+                    "/p".to_string(),
+                    "/n".to_string(),
+                    "Office LaserJet".to_string(),
+                ],
+            ),
+        );
+        assert_eq!(
+            printer_properties_command(None),
+            ("control.exe", vec!["printers".to_string()]),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_opens_print_settings() {
+        let expected = (
+            "open",
+            vec![
+                "x-apple.systempreferences:com.apple.Print-Scan-Settings.extension".to_string(),
+            ],
+        );
+        assert_eq!(
+            printer_properties_command(Some("  Office LaserJet  ")),
+            expected.clone(),
+        );
+        assert_eq!(printer_properties_command(None), expected);
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    #[test]
+    fn unix_opens_selected_cups_printer_or_printer_list() {
+        assert_eq!(
+            printer_properties_command(Some("  Office LaserJet  ")),
+            (
+                "xdg-open",
+                vec!["http://localhost:631/printers/Office LaserJet".to_string()],
+            ),
+        );
+        assert_eq!(
+            printer_properties_command(None),
+            (
+                "xdg-open",
+                vec!["http://localhost:631/printers".to_string()],
+            ),
+        );
+    }
+
+    #[test]
+    fn a_blank_selection_is_treated_as_no_selection() {
+        assert_eq!(
+            printer_properties_command(Some("   ")),
+            printer_properties_command(None),
+        );
     }
 }

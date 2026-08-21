@@ -82,7 +82,19 @@ impl OpenCADStudio {
         self.select_remove_mode = false;
         {
             let mut selection = self.tabs[i].scene.selection.borrow_mut();
+            // Cancel the active selection gesture before the new command starts.
+            selection.left_down = false;
+            selection.left_press_pos = None;
+            selection.left_press_time = None;
+            selection.left_dragging = false;
+            selection.box_anchor = None;
+            selection.box_anchor_world = None;
+            selection.box_current = None;
+            selection.box_crossing = false;
             selection.box_crossing_locked = false;
+            selection.poly_active = false;
+            selection.poly_points.clear();
+            selection.poly_crossing = false;
         }
         // Cancel any running command before starting a new one.
         if self.tabs[i].active_cmd.is_some() {
@@ -511,10 +523,20 @@ inventory::submit!(crate::command::CommandRegistration {
         "CMLJUST",
         "TEXTQLTY",
         "SORTENTS",
+        "FRAME",
+        "IMAGEFRAME",
+        "PDFFRAME",
+        "POINTCLOUDCLIPFRAME",
         "XCLIPFRAME",
+        "WIPEOUTFRAME",
+        "FRAMES0",
+        "FRAMES1",
+        "FRAMES2",
         "HALOGAP",
         "TRACEWID",
         "SKETCHINC",
+        "SKPOLY",
+        "SKTOLERANCE",
         // Reset selected entities' overrides to follow their layer.
         "SETBYLAYER",
         // Remove duplicate objects; set drawing base point; audit integrity;
@@ -708,3 +730,121 @@ inventory::submit!(crate::command::CommandRegistration {
         "ZS",
     ]
 });
+
+#[cfg(test)]
+mod marquee_cancel_tests {
+    use crate::app::OpenCADStudio;
+    use iced::time::Instant;
+
+    fn fresh() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app
+    }
+
+    /// Arm a held box drag.
+    fn arm_marquee(app: &mut OpenCADStudio) {
+        let i = app.active_tab;
+        let mut sel = app.tabs[i].scene.selection.borrow_mut();
+        sel.left_down = true;
+        sel.left_press_pos = Some(iced::Point::new(10.0, 10.0));
+        sel.left_press_time = Some(Instant::now());
+        sel.left_dragging = true;
+        sel.box_anchor = Some(iced::Point::new(10.0, 10.0));
+        sel.box_anchor_world = Some(glam::DVec3::new(1.0, 2.0, 0.0));
+        sel.box_current = Some(iced::Point::new(40.0, 40.0));
+        sel.box_crossing = true;
+        sel.box_crossing_locked = true;
+    }
+
+    /// Arm a held lasso drag.
+    fn arm_lasso(app: &mut OpenCADStudio) {
+        let i = app.active_tab;
+        let mut sel = app.tabs[i].scene.selection.borrow_mut();
+        sel.left_down = true;
+        sel.left_press_pos = Some(iced::Point::new(10.0, 10.0));
+        sel.left_press_time = Some(Instant::now());
+        sel.left_dragging = true;
+        sel.poly_active = true;
+        sel.poly_points = vec![
+            iced::Point::new(10.0, 10.0),
+            iced::Point::new(20.0, 30.0),
+        ];
+        sel.poly_crossing = true;
+    }
+
+    #[test]
+    fn typing_a_command_cancels_a_half_drawn_marquee() {
+        let mut app = fresh();
+        arm_marquee(&mut app);
+        let i = app.active_tab;
+
+        let _ = app.dispatch_command("LINE");
+
+        let sel = app.tabs[i].scene.selection.borrow();
+        assert!(!sel.left_down);
+        assert!(sel.left_press_pos.is_none());
+        assert!(sel.left_press_time.is_none());
+        assert!(!sel.left_dragging);
+        assert!(sel.box_anchor.is_none());
+        assert!(sel.box_anchor_world.is_none());
+        assert!(sel.box_current.is_none());
+        assert!(!sel.box_crossing);
+        assert!(!sel.box_crossing_locked);
+    }
+
+    #[test]
+    fn typing_a_command_cancels_a_held_lasso() {
+        let mut app = fresh();
+        arm_lasso(&mut app);
+        let i = app.active_tab;
+
+        let _ = app.dispatch_command("LINE");
+
+        let sel = app.tabs[i].scene.selection.borrow();
+        assert!(!sel.left_down);
+        assert!(sel.left_press_pos.is_none());
+        assert!(sel.left_press_time.is_none());
+        assert!(!sel.left_dragging);
+        assert!(!sel.poly_active);
+        assert!(sel.poly_points.is_empty());
+        assert!(!sel.poly_crossing);
+    }
+
+    #[test]
+    fn an_aliased_command_cancels_it_as_well() {
+        let mut app = fresh();
+        arm_marquee(&mut app);
+        let i = app.active_tab;
+
+        let _ = app.dispatch_command("L");
+
+        assert_eq!(
+            app.tabs[i].active_cmd.as_deref().map(|cmd| cmd.name()),
+            Some("LINE")
+        );
+        let sel = app.tabs[i].scene.selection.borrow();
+        assert!(sel.box_anchor.is_none());
+        assert!(sel.box_anchor_world.is_none());
+    }
+
+    #[test]
+    fn a_transparent_command_leaves_the_marquee_alone() {
+        let mut app = fresh();
+        arm_marquee(&mut app);
+        let i = app.active_tab;
+
+        let _ = app.dispatch_command("ORTHO");
+
+        let sel = app.tabs[i].scene.selection.borrow();
+        assert!(sel.left_down);
+        assert!(sel.left_press_pos.is_some());
+        assert!(sel.left_press_time.is_some());
+        assert!(sel.left_dragging);
+        assert!(sel.box_anchor.is_some());
+        assert!(sel.box_anchor_world.is_some());
+        assert!(sel.box_current.is_some());
+        assert!(sel.box_crossing);
+        assert!(sel.box_crossing_locked);
+    }
+}

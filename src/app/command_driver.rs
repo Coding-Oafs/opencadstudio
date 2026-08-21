@@ -4,7 +4,26 @@ use acadrust::Handle;
 use iced::Task;
 
 impl OpenCADStudio {
-    fn refresh_area_preview(&mut self, i: usize) {
+    pub(super) fn reject_locked_edit(&mut self, i: usize, handle: Handle) -> bool {
+        let Some(layer) = self.tabs[i].scene.locked_layer_name(handle) else {
+            return false;
+        };
+        self.command_line.push_info(
+            crate::tf!("Object is on locked layer \"{layer}\" — unlock the layer to edit it.")
+                .as_ref(),
+        );
+        true
+    }
+
+    pub(super) fn refresh_area_preview(&mut self, i: usize) {
+        let hatches = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.hatch_preview_models());
+        if let Some(hatches) = hatches {
+            self.tabs[i].scene.set_command_preview_hatches(hatches);
+            return;
+        }
         let regions = self.tabs[i]
             .active_cmd
             .as_ref()
@@ -102,11 +121,25 @@ impl OpenCADStudio {
 
     /// Roll a hot grip back to its pre-drag image and remove every grip-owned
     /// overlay. Shared by Escape and drawing-space transitions.
+    pub(super) fn capture_grip_history_originals(&mut self, i: usize, handles: &[Handle]) {
+        if !self.grip_history_originals.is_empty() {
+            return;
+        }
+        self.grip_history_originals = handles
+            .iter()
+            .filter_map(|&handle| {
+                let objects = self.tabs[i].scene.solid_history_objects(handle);
+                (!objects.is_empty()).then_some((handle, objects))
+            })
+            .collect();
+    }
+
     pub(super) fn cancel_active_grip_edit(&mut self) -> bool {
         let i = self.active_tab;
         let had_grip = self.tabs[i].active_grip.take().is_some()
             || self.grip_add_provisional.is_some()
-            || !self.grip_preview_handles.is_empty();
+            || !self.grip_preview_handles.is_empty()
+            || !self.grip_history_originals.is_empty();
         if !had_grip {
             return false;
         }
@@ -127,11 +160,58 @@ impl OpenCADStudio {
 
         let handles = std::mem::take(&mut self.grip_preview_handles);
         let originals = std::mem::take(&mut self.grip_originals);
+        let history_originals = std::mem::take(&mut self.grip_history_originals);
+        let history_handles: rustc_hash::FxHashSet<_> = history_originals
+            .iter()
+            .map(|(handle, _)| *handle)
+            .collect();
+        for (_, objects) in history_originals {
+            for (object_handle, object) in objects {
+                self.tabs[i]
+                    .scene
+                    .document
+                    .objects
+                    .insert(object_handle, object);
+            }
+        }
         let mut changed_handles: rustc_hash::FxHashSet<_> = handles.iter().copied().collect();
         for (handle, original) in originals {
             changed_handles.insert(handle);
+            if !history_handles.contains(&handle) {
+                let current = self.tabs[i]
+                    .scene
+                    .document
+                    .get_entity(handle)
+                    .and_then(crate::entities::solid3d::point_of_reference)
+                    .map(|point| [point.x, point.y, point.z]);
+                let target = crate::entities::solid3d::point_of_reference(&original)
+                    .map(|point| [point.x, point.y, point.z]);
+                if let (Some(current), Some(target)) = (current, target) {
+                    self.tabs[i].scene.translate_solid_geometry(
+                        handle,
+                        [
+                            target[0] - current[0],
+                            target[1] - current[1],
+                            target[2] - current[2],
+                        ],
+                    );
+                }
+            }
             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle) {
                 *entity = original;
+            }
+        }
+        for handle in history_handles {
+            let restored = self.tabs[i]
+                .scene
+                .document
+                .solid_history_operation(handle)
+                .cloned()
+                .is_some_and(|operation| {
+                    self.tabs[i].scene.rebuild_solid_history(handle, operation)
+                });
+            if !restored {
+                self.tabs[i].scene.reseed_derived_caches(handle);
             }
         }
         for &handle in &handles {
@@ -435,16 +515,12 @@ impl OpenCADStudio {
                 .entity_wires()
                 .iter()
                 .filter_map(|w| crate::scene::Scene::handle_from_wire_name(&w.name))
-                .filter(|&h| !self.tabs[i].scene.is_layer_locked(h))
                 .collect(),
             "P" | "PREVIOUS" => self.tabs[i]
                 .prev_selection
                 .iter()
                 .copied()
-                .filter(|&h| {
-                    self.tabs[i].scene.document.get_entity(h).is_some()
-                        && !self.tabs[i].scene.is_layer_locked(h)
-                })
+                .filter(|&h| self.tabs[i].scene.document.get_entity(h).is_some())
                 .collect(),
             // Highest handle among the selectable wires of the current space —
             // handles are handed out monotonically, so that is the most
@@ -454,7 +530,6 @@ impl OpenCADStudio {
                 .entity_wires()
                 .iter()
                 .filter_map(|w| crate::scene::Scene::handle_from_wire_name(&w.name))
-                .filter(|&h| !self.tabs[i].scene.is_layer_locked(h))
                 .max_by_key(|h| h.value())
                 .into_iter()
                 .collect(),
@@ -565,6 +640,25 @@ impl OpenCADStudio {
     /// Pure-selection commands (SELECTALL, QSELECT, …) run without an active
     /// command, so `was_active` is false and their selection is preserved.
     pub(super) fn apply_cmd_result(&mut self, result: CmdResult) -> Task<Message> {
+        let settings = self.tabs[self.active_tab]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.sketch_settings());
+        if let Some((sketch_type, increment, tolerance)) = settings {
+            let tab = &mut self.tabs[self.active_tab];
+            let changed = tab.scene.document.header.sketch_type != sketch_type
+                || (tab.scene.document.header.sketch_increment - increment).abs() > f64::EPSILON
+                || (tab.scene.document.header.sketch_tolerance - tolerance).abs() > f64::EPSILON;
+            if changed {
+                crate::io::set_sketch_settings(
+                    &mut tab.scene.document,
+                    sketch_type,
+                    increment,
+                    tolerance,
+                );
+                tab.dirty = true;
+            }
+        }
         let was_active = self.tabs[self.active_tab].active_cmd.is_some();
         let preserve_selection =
             matches!(result, CmdResult::Relaunch(..) | CmdResult::Dispatch(..));
@@ -649,6 +743,17 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::CommitEntity(entity) => {
+                let source_handle = entity.common().handle;
+                if !source_handle.is_null()
+                    && self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(source_handle)
+                        .is_some()
+                    && self.reject_locked_edit(i, source_handle)
+                {
+                    return Task::none();
+                }
                 // A line/arc drawn by a repeating command advances the ARC_CONT
                 // continuation anchor, so ending one run and launching another
                 // keeps continuing from the last segment (mirrors the
@@ -677,6 +782,17 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::CommitEntities(entities) => {
+                let locked_source = entities.iter().find_map(|entity| {
+                    let handle = entity.common().handle;
+                    (!handle.is_null()
+                        && self.tabs[i].scene.document.get_entity(handle).is_some()
+                        && self.tabs[i].scene.is_layer_locked(handle))
+                    .then_some(handle)
+                });
+                if let Some(handle) = locked_source {
+                    self.reject_locked_edit(i, handle);
+                    return Task::none();
+                }
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
                 let delta_safe = entities.iter().all(|entity| self.delta_add_safe(i, entity));
                 let pending = self.begin_undo(i, label, entities.len(), delta_safe);
@@ -684,10 +800,27 @@ impl OpenCADStudio {
                     self.commit_entity(entity);
                 }
                 self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                 if let Some(p) = prompt {
                     self.command_line.push_info(&p);
                 }
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::CommitEntitiesAndExit(entities) => {
+                let label = self.history_label_from_active_cmd(i, "ENTITY");
+                let delta_safe = entities.iter().all(|entity| self.delta_add_safe(i, entity));
+                let pending = self.begin_undo(i, label, entities.len(), delta_safe);
+                for entity in entities {
+                    self.commit_entity(entity);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
                 }
@@ -879,7 +1012,10 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pending);
                 }
             }
-            CmdResult::WipeoutFromPolyline(handle) => {
+            CmdResult::WipeoutFromPolyline {
+                handle,
+                erase_source,
+            } => {
                 let wipeout = {
                     let scene = &self.tabs[i].scene;
                     scene
@@ -889,18 +1025,21 @@ impl OpenCADStudio {
                         .and_then(crate::modules::draw::draw::wipeout::wipeout_from_polyline)
                 };
                 if let Some(wipeout) = wipeout {
+                    if erase_source {
+                        return self.apply_cmd_result(CmdResult::ReplaceMany(
+                            vec![(handle, Vec::new())],
+                            vec![wipeout],
+                        ));
+                    }
                     return self.apply_cmd_result(CmdResult::CommitAndExit(wipeout));
                 }
                 self.command_line.push_error(
-                    "WIPEOUT Polyline: select a closed planar polyline with at least 3 vertices.",
+                    crate::t!("WIPEOUT Polyline: select a straight, closed, planar 2D polyline with at least 3 non-intersecting vertices.").as_ref(),
                 );
-                if let Some(prompt) = self.tabs[i]
-                    .active_cmd
-                    .as_ref()
-                    .map(|command| command.prompt())
-                {
-                    self.command_line.push_info(&prompt);
-                }
+                let command = crate::modules::draw::draw::wipeout::WipeoutCommand::new_polyline();
+                self.command_line
+                    .push_info(&crate::command::CadCommand::prompt(&command));
+                self.tabs[i].active_cmd = Some(Box::new(command));
             }
             CmdResult::MviewSwitchLayout(layout) => {
                 let task = self.on_layout_switch_preserving_command(layout);
@@ -920,20 +1059,18 @@ impl OpenCADStudio {
                 self.restore_pre_cmd_tangent();
                 return self.on_layout_switch(layout);
             }
-            CmdResult::TransformSelected(handles, transform) => {
+            CmdResult::TransformSelected(mut handles, transform) => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                if handles.is_empty() {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 let label = self.history_label_from_active_cmd(i, "MOVE");
                 // A move/rotate/scale/mirror mutates only the selected entities
                 // (and their baked dimension sub-entities) through
                 // transform_entities — always delta-safe.
                 let pending = self.begin_undo(i, label, handles.len(), true);
                 self.tabs[i].scene.transform_entities(&handles, &transform);
-                // ACIS solids render from a cached mesh, so a move/rotate/
-                // scale/mirror needs the mesh re-tessellated from the now-moved
-                // body — wire re-tessellation alone leaves the solid drawn at
-                // its old spot. (#135)
-                if self.tabs[i].scene.any_solid(&handles) {
-                    self.tabs[i].scene.refresh_meshes_for_handles(&handles);
-                }
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
@@ -944,16 +1081,17 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, p);
                 }
             }
-            CmdResult::CopySelected(handles, transform) => {
+            CmdResult::CopySelected(mut handles, transform) => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                if handles.is_empty() {
+                    return Task::none();
+                }
                 let label = self.history_label_from_active_cmd(i, "COPY");
                 // Copying a dimension clones a *D block record, so gate delta on
                 // the selection being dimension-free.
                 let delta_safe = self.delta_copy_safe(i, &handles);
                 let pending = self.begin_undo(i, label, handles.len(), delta_safe);
                 let new_handles = self.tabs[i].scene.copy_entities(&handles, &transform);
-                if self.tabs[i].scene.any_solid(&new_handles) {
-                    self.tabs[i].scene.refresh_meshes_for_handles(&new_handles);
-                }
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.deselect_all();
                 for h in new_handles {
@@ -1011,10 +1149,14 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
-            CmdResult::CommitSolid { entity, solid } => {
+            CmdResult::CommitSolid {
+                entity,
+                solid,
+                history,
+            } => {
                 let label = self.history_label_from_active_cmd(i, "SOLID");
                 let pending = self.begin_undo(i, label, 1, true);
-                self.add_solid_model(entity, *solid);
+                self.add_solid_model(entity, *solid, history);
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
@@ -1064,10 +1206,24 @@ impl OpenCADStudio {
                 // Link the leader to its annotation so the pair edits as a unit
                 // (double-click on the leader resolves to the text entity).
                 if let (Some(lh), Some(ah)) = (leader_handle, edit_handle) {
-                    if let Some(acadrust::EntityType::Leader(l)) =
+                    let linked = if let Some(acadrust::EntityType::Leader(l)) =
                         self.tabs[i].scene.document.get_entity_mut(lh)
                     {
                         l.annotation_handle = ah;
+                        true
+                    } else {
+                        false
+                    };
+
+                    if linked {
+                        // The LEADER may already have received its annotation context while
+                        // annotation_handle was still NULL. Refresh it now that the MTEXT link
+                        // is known so the context represents the finished leader.
+                        self.tabs[i].scene.sync_displayed_annotation_context(lh);
+
+                        self.tabs[i]
+                            .scene
+                            .bump_entities(&[(lh, crate::scene::ChangeKind::Modified)]);
                     }
                 }
                 self.tabs[i].dirty = true;
@@ -1084,10 +1240,16 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::CreateBlock {
-                handles,
+                mut handles,
                 name,
                 base,
             } => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                if handles.is_empty() {
+                    self.command_line
+                        .push_info(crate::t!("No editable objects selected.").as_ref());
+                    return Task::none();
+                }
                 self.push_undo_snapshot(i, "BLOCK");
                 let ucs = self.tabs[i].ucs_xform();
                 let world_to_block = ucs.to_ucs_transform_at(base);
@@ -1124,7 +1286,8 @@ impl OpenCADStudio {
             CmdResult::CommitHatch(hatch) => {
                 let label = self.history_label_from_active_cmd(i, "HATCH");
                 let pending = self.begin_undo(i, label, 1, true);
-                let new_handle = self.tabs[i].scene.add_hatch(hatch);
+                let layer = self.tabs[i].active_layer.clone();
+                let new_handle = self.tabs[i].scene.add_hatch(hatch, Some(&layer), None);
                 if !new_handle.is_null() {
                     self.tabs[i].scene.select_entity(new_handle, true);
                 }
@@ -1138,7 +1301,70 @@ impl OpenCADStudio {
                     self.commit_undo_delta(i, pd);
                 }
             }
-            CmdResult::BatchCopy(handles, transforms) => {
+            CmdResult::CommitStyledHatch {
+                hatch,
+                color,
+                transparency,
+            } => {
+                let label = self.history_label_from_active_cmd(i, "HATCH");
+                let pending = self.begin_undo(i, label, 1, true);
+                let layer = self.tabs[i].active_layer.clone();
+                let new_handle =
+                    self.tabs[i]
+                        .scene
+                        .add_hatch(hatch, Some(&layer), Some((color, transparency)));
+                if !new_handle.is_null() {
+                    self.tabs[i].scene.select_entity(new_handle, true);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::CommitHatchWithBoundaries {
+                mut hatch,
+                boundaries,
+                entity_style,
+            } => {
+                let label = self.history_label_from_active_cmd(i, "HATCH");
+                let pending = self.begin_undo(i, label, boundaries.len() + 1, true);
+                let mut sources = Vec::with_capacity(boundaries.len());
+                for boundary in boundaries {
+                    let handles = self
+                        .commit_entity_handle(boundary)
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    sources.push(handles);
+                }
+                hatch.boundary_sources = Some(std::sync::Arc::new(sources));
+                let layer = self.tabs[i].active_layer.clone();
+                let new_handle = self.tabs[i]
+                    .scene
+                    .add_hatch(hatch, Some(&layer), entity_style);
+                if !new_handle.is_null() {
+                    self.tabs[i].scene.select_entity(new_handle, true);
+                }
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.restore_pre_cmd_tangent();
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::BatchCopy(mut handles, transforms) => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                if handles.is_empty() {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 let label = self.history_label_from_active_cmd(i, "ARRAY");
                 let count = transforms.len();
                 // Same gate as COPY (dimension-free), sized by the total number
@@ -1162,6 +1388,14 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::ReplaceMany(replacements, additions) => {
+                if let Some((handle, _)) = replacements
+                    .iter()
+                    .find(|(handle, _)| self.tabs[i].scene.is_layer_locked(*handle))
+                {
+                    self.reject_locked_edit(i, *handle);
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 let label = self.history_label_from_active_cmd(i, "FILLET");
                 let was_catchment = self.tabs[i]
                     .active_cmd
@@ -1195,6 +1429,13 @@ impl OpenCADStudio {
                 self.refresh_properties();
             }
             CmdResult::ReplaceManyContinue(replacements) => {
+                if let Some((handle, _)) = replacements
+                    .iter()
+                    .find(|(handle, _)| self.tabs[i].scene.is_layer_locked(*handle))
+                {
+                    self.reject_locked_edit(i, *handle);
+                    return Task::none();
+                }
                 let label = self.history_label_from_active_cmd(i, "TRIM");
                 self.push_undo_snapshot(i, label);
                 for (handle, entities) in replacements {
@@ -1220,6 +1461,9 @@ impl OpenCADStudio {
                 self.refresh_properties();
             }
             CmdResult::ReplaceEntity(handle, new_entities) => {
+                if self.reject_locked_edit(i, handle) {
+                    return Task::none();
+                }
                 // Detect SPLINEDIT sentinel: a single XLine with a magic layer name.
                 if new_entities.len() == 1 {
                     if let acadrust::EntityType::XLine(ref xl) = new_entities[0] {
@@ -1599,7 +1843,14 @@ impl OpenCADStudio {
                     .document
                     .get_entity(src)
                     .map(|e| e.common().layer.clone());
-                if let Some(layer) = src_layer {
+                let dest: Vec<_> = dest
+                    .into_iter()
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                    .collect();
+                if dest.is_empty() {
+                    self.command_line
+                        .push_info(crate::t!("No editable objects selected.").as_ref());
+                } else if let Some(layer) = src_layer {
                     self.push_undo_snapshot(i, "LAYMATCH");
                     for h in &dest {
                         if let Some(e) = self.tabs[i].scene.document.get_entity_mut(*h) {
@@ -1619,7 +1870,11 @@ impl OpenCADStudio {
                         .push_error(crate::t!("Source object not found.").as_ref());
                 }
             }
-            CmdResult::MatchProperties { dest, src } => {
+            CmdResult::MatchProperties { mut dest, src } => {
+                dest.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                if dest.is_empty() {
+                    return Task::none();
+                }
                 // The command stays active after each apply so more targets
                 // can keep being picked; Enter / Esc ends it (#362).
                 // Special (type-specific) properties travel like AutoCAD's
@@ -1798,10 +2053,14 @@ impl OpenCADStudio {
                         .push_info(crate::tf!("{count} object(s) pasted.").as_ref());
                 }
             }
-            CmdResult::CreateGroup { handles, name } => {
+            CmdResult::CreateGroup { mut handles, name } => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
+                if handles.is_empty() {
+                    return Task::none();
+                }
                 let undo = self.begin_group_undo(i, "GROUP");
                 self.tabs[i].scene.create_group(name.clone(), handles);
                 self.tabs[i].dirty = true;
@@ -1809,10 +2068,14 @@ impl OpenCADStudio {
                 self.command_line
                     .push_info(crate::tf!("Group \"{}\" created.", name).as_ref());
             }
-            CmdResult::DeleteGroups { handles } => {
+            CmdResult::DeleteGroups { mut handles } => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
+                if handles.is_empty() {
+                    return Task::none();
+                }
                 let undo = self.begin_group_undo(i, "UNGROUP");
                 let count = self.tabs[i].scene.delete_groups_containing(&handles);
                 self.tabs[i].dirty = true;
@@ -1977,12 +2240,13 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::AlignSelected {
-                handles,
+                mut handles,
                 src1,
                 dst1,
                 angle_rad,
                 scale,
             } => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
                 if handles.is_empty() {
                     self.tabs[i].active_cmd = None;
                     self.tabs[i].snap_result = None;
@@ -2047,6 +2311,9 @@ impl OpenCADStudio {
                 pick_pt,
                 mode,
             } => {
+                if self.reject_locked_edit(i, handle) {
+                    return Task::none();
+                }
                 use crate::modules::draw::modify::lengthen::lengthen_entity;
                 let result = self.tabs[i]
                     .scene
@@ -2133,6 +2400,9 @@ impl OpenCADStudio {
                 self.restore_pre_cmd_tangent();
             }
             CmdResult::PeditOp { handle, op } => {
+                if self.reject_locked_edit(i, handle) {
+                    return Task::none();
+                }
                 use crate::modules::draw::modify::pedit::{
                     apply_pedit, convert_to_polyline, PeditOp,
                 };
@@ -2189,6 +2459,13 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::JoinEntities(handles) => {
+                if let Some(handle) = handles
+                    .iter()
+                    .find(|handle| self.tabs[i].scene.is_layer_locked(**handle))
+                {
+                    self.reject_locked_edit(i, *handle);
+                    return Task::none();
+                }
                 use crate::modules::draw::modify::join::join_entities;
                 let pairs: Vec<_> = handles
                     .iter()
@@ -2227,6 +2504,9 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::BreakEntity { handle, p1, p2 } => {
+                if self.reject_locked_edit(i, handle) {
+                    return Task::none();
+                }
                 use crate::modules::draw::modify::break_cmd::break_entity;
                 let replacement = self.tabs[i]
                     .scene
@@ -2307,50 +2587,55 @@ impl OpenCADStudio {
                 self.restore_pre_cmd_tangent();
                 return self.on_quick_print_handles(handles);
             }
-            CmdResult::StretchWindow { win_min, win_max } => {
-                // Implicit STRETCH selection (#338): the crossing window drawn
-                // with no prior selection picks the objects itself. Entities
-                // whose world AABB touches the window are handed back to the
-                // command at the base-point step — over-selection is harmless,
-                // since only points INSIDE the window move anyway.
-                let mut handles: Vec<Handle> = Vec::new();
+            CmdResult::StretchWindow {
+                mut handles,
+                windows,
+            } => {
+                // Accumulate every entity touched by any crossing window. Keep STRETCH
+                // in its selection stage; Enter is what advances to the base point.
                 {
                     let scene = &self.tabs[i].scene;
-                    handles.extend(
-                        scene
-                            .interaction_handles_in_world_aabb([
-                                win_min.x, win_min.y, win_max.x, win_max.y,
-                            ])
-                            .into_iter()
-                            .filter(|&h| !scene.is_layer_locked(h)),
-                    );
+
+                    for (win_min, win_max) in &windows {
+                        handles.extend(
+                            scene
+                                .interaction_handles_in_world_aabb([
+                                    win_min.x, win_min.y, win_max.x, win_max.y,
+                                ])
+                                .into_iter()
+                                .filter(|&handle| !scene.is_layer_locked(handle)),
+                        );
+                    }
                 }
-                use crate::command::CadCommand;
-                use crate::modules::draw::modify::stretch::StretchCommand;
-                // A window that caught nothing is a missed aim, not a decision
-                // to stop. Ending the command there made the user restart it to
-                // try again; instead say so and ask for the corner afresh, the
-                // way a selection that picks nothing leaves MOVE still asking.
-                // (#676)
-                let cmd = if handles.is_empty() {
+
+                handles.sort_unstable_by_key(|handle| handle.value());
+                handles.dedup();
+
+                if handles.is_empty() {
                     self.command_line
                         .push_output(crate::t!("STRETCH: nothing crosses the window.").as_ref());
-                    StretchCommand::new(Vec::new(), Vec::new())
-                } else {
-                    let wires = self.tabs[i].scene.wire_models_for(&handles);
-                    StretchCommand::with_window(handles, wires, win_min, win_max)
-                };
-                self.tabs[i].snap_result = None;
-                self.tabs[i].scene.clear_preview_wire();
+                }
+
+                use crate::command::CadCommand;
+                use crate::modules::draw::modify::stretch::StretchCommand;
+
+                let wires = self.tabs[i].scene.wire_models_for(&handles);
+
+                let cmd = StretchCommand::with_windows(handles, wires, windows);
+
                 self.command_line.push_info(&CadCommand::prompt(&cmd));
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
             CmdResult::StretchEntities {
-                handles,
-                win_min,
-                win_max,
+                mut handles,
+                windows,
                 delta,
             } => {
+                handles.retain(|handle| !self.tabs[i].scene.is_layer_locked(*handle));
+                if handles.is_empty() {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 let structural = handles.iter().any(|handle| {
                     matches!(
                         self.tabs[i].scene.document.get_entity(*handle),
@@ -2364,7 +2649,9 @@ impl OpenCADStudio {
                 // Helper: is DXF point (x, y) inside the world-space window?
                 // Drawing plane is world XY (= DXF XY).
                 let in_win = |x: f64, y: f64| -> bool {
-                    x >= win_min.x && x <= win_max.x && y >= win_min.y && y <= win_max.y
+                    windows.iter().any(|(win_min, win_max)| {
+                        x >= win_min.x && x <= win_max.x && y >= win_min.y && y <= win_max.y
+                    })
                 };
 
                 let dx = delta.x as f64;
@@ -2398,12 +2685,19 @@ impl OpenCADStudio {
                             }
                         }
                         acadrust::EntityType::LwPolyline(p) => {
-                            for v in &mut p.vertices {
+                            let Some(mut world) = crate::entities::curve::lwpolyline_world_xy(p)
+                            else {
+                                continue;
+                            };
+                            for v in &mut world.vertices {
                                 if in_win(v.location.x, v.location.y) {
                                     v.location.x += dx;
                                     v.location.y += dy;
                                     stretched = true;
                                 }
+                            }
+                            if stretched {
+                                *p = world;
                             }
                         }
                         acadrust::EntityType::Polyline2D(p) => {
@@ -2473,8 +2767,9 @@ impl OpenCADStudio {
                             }
                         }
                         acadrust::EntityType::Viewport(vp) => {
-                            stretched =
-                                crate::entities::viewport::stretch(vp, win_min, win_max, delta);
+                            stretched = windows.iter().any(|(win_min, win_max)| {
+                                crate::entities::viewport::stretch(vp, *win_min, *win_max, delta)
+                            });
                         }
                         acadrust::EntityType::Dimension(dim) => {
                             use acadrust::entities::Dimension;
@@ -2616,10 +2911,15 @@ impl OpenCADStudio {
                     let color = [0.6f32, 0.6, 0.8, 1.0]; // default colour; command embedded it
                     let _ = color; // color is captured inside mesh_fn
                     if let Some(mesh) = mesh_fn(name) {
-                        self.tabs[i]
-                            .scene
-                            .meshes
-                            .insert(handle, crate::scene::MeshLodSet::from_single(mesh));
+                        let set = crate::scene::MeshLodSet::from_single(mesh);
+                        if let Some(acadrust::EntityType::Solid3D(entity)) =
+                            self.tabs[i].scene.document.get_entity_mut(handle)
+                        {
+                            let center = set.metrics.centroid;
+                            entity.point_of_reference =
+                                acadrust::types::Vector3::new(center[0], center[1], center[2]);
+                        }
+                        self.tabs[i].scene.meshes.insert(handle, set);
                     }
                     self.tabs[i].dirty = true;
                     self.command_line
@@ -2640,6 +2940,10 @@ impl OpenCADStudio {
                 height,
                 color,
             } => {
+                if self.reject_locked_edit(i, handle) {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
                 use crate::scene::model::{solid_model, sweep_model};
 
@@ -2651,12 +2955,17 @@ impl OpenCADStudio {
                     let result = sweep_model::extruded(&entity, height as f64)
                         .and_then(|body| Some((solid_model::mesh_from_solid(&body, color)?, body)));
                     if let Some((mesh, solid)) = result {
+                        let history = crate::scene::model::solid_history::extrusion_op(
+                            &entity,
+                            height as f64,
+                        );
                         let pending = self.begin_undo(i, "EXTRUDE", 1, true);
                         let mut s3d = empty_solid3d();
                         if let acadrust::EntityType::Solid3D(inner) = &mut s3d {
                             inner.wires = solid_model::edge_wires(&solid);
                         }
                         let new_handle = self.tabs[i].scene.add_entity(s3d);
+                        self.tabs[i].scene.create_solid_history(new_handle, history);
                         self.tabs[i].scene.register_solid_model(new_handle, solid);
                         let _ = mesh;
                         self.tabs[i].dirty = true;
@@ -2686,6 +2995,10 @@ impl OpenCADStudio {
                 angle_deg,
                 color,
             } => {
+                if self.reject_locked_edit(i, handle) {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
                 use crate::scene::model::{solid_model, sweep_model};
 
@@ -2706,12 +3019,19 @@ impl OpenCADStudio {
                     )
                     .and_then(|body| Some((solid_model::mesh_from_solid(&body, color)?, body)));
                     if let Some((mesh, solid)) = result {
+                        let history = crate::scene::model::solid_history::revolve_op(
+                            &entity,
+                            axis_start.to_array(),
+                            axis_end.to_array(),
+                            (angle_deg as f64).to_radians(),
+                        );
                         let pending = self.begin_undo(i, "REVOLVE", 1, true);
                         let mut s3d = empty_solid3d();
                         if let acadrust::EntityType::Solid3D(inner) = &mut s3d {
                             inner.wires = solid_model::edge_wires(&solid);
                         }
                         let new_handle = self.tabs[i].scene.add_entity(s3d);
+                        self.tabs[i].scene.create_solid_history(new_handle, history);
                         self.tabs[i].scene.register_solid_model(new_handle, solid);
                         let _ = mesh;
                         self.tabs[i].dirty = true;
@@ -2740,6 +3060,12 @@ impl OpenCADStudio {
                 path_handle,
                 color,
             } => {
+                if self.reject_locked_edit(i, profile_handle)
+                    || self.reject_locked_edit(i, path_handle)
+                {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
                 use crate::scene::model::sweep_model;
 
@@ -2749,13 +3075,28 @@ impl OpenCADStudio {
                     .get_entity(profile_handle)
                     .cloned();
                 let path_ent = self.tabs[i].scene.document.get_entity(path_handle).cloned();
+                let history = profile_ent
+                    .as_ref()
+                    .zip(path_ent.as_ref())
+                    .map(|(profile, path)| {
+                        crate::scene::model::solid_history::sweep_op(profile, path)
+                    });
                 let result = profile_ent
                     .zip(path_ent)
                     .and_then(|(profile, path)| sweep_model::swept(&profile, &path, color));
 
                 if let Some(mut set) = result {
                     let pending = self.begin_undo(i, "SWEEP", 1, true);
-                    let new_handle = self.tabs[i].scene.add_entity(empty_solid3d());
+                    let mut entity = empty_solid3d();
+                    if let acadrust::EntityType::Solid3D(solid) = &mut entity {
+                        let center = set.metrics.centroid;
+                        solid.point_of_reference =
+                            acadrust::types::Vector3::new(center[0], center[1], center[2]);
+                    }
+                    let new_handle = self.tabs[i].scene.add_entity(entity);
+                    if let Some(history) = history {
+                        self.tabs[i].scene.create_solid_history(new_handle, history);
+                    }
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());
                     }
@@ -2779,6 +3120,15 @@ impl OpenCADStudio {
 
             // ── LOFT ──────────────────────────────────────────────────────
             CmdResult::LoftEntities { handles, color } => {
+                if let Some(handle) = handles
+                    .iter()
+                    .find(|handle| self.tabs[i].scene.is_layer_locked(**handle))
+                    .copied()
+                {
+                    self.reject_locked_edit(i, handle);
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 use crate::modules::insert::solid3d_cmds::empty_solid3d;
                 use crate::scene::model::sweep_model;
 
@@ -2787,8 +3137,16 @@ impl OpenCADStudio {
                     .filter_map(|handle| self.tabs[i].scene.document.get_entity(*handle).cloned())
                     .collect();
                 if let Some(mut set) = sweep_model::lofted(&profiles, color) {
+                    let history = crate::scene::model::solid_history::loft_op(&profiles);
                     let pending = self.begin_undo(i, "LOFT", 1, true);
-                    let new_handle = self.tabs[i].scene.add_entity(empty_solid3d());
+                    let mut entity = empty_solid3d();
+                    if let acadrust::EntityType::Solid3D(solid) = &mut entity {
+                        let center = set.metrics.centroid;
+                        solid.point_of_reference =
+                            acadrust::types::Vector3::new(center[0], center[1], center[2]);
+                    }
+                    let new_handle = self.tabs[i].scene.add_entity(entity);
+                    self.tabs[i].scene.create_solid_history(new_handle, history);
                     for mesh in &mut set.lods {
                         mesh.name = format!("{}", new_handle.value());
                     }
@@ -2816,7 +3174,16 @@ impl OpenCADStudio {
                 scale,
                 angle,
             } => {
+                if self.reject_locked_edit(i, handle) {
+                    return Task::none();
+                }
                 if let Some(mut model) = self.tabs[i].scene.hatches.get(&handle).cloned() {
+                    let layer = self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(handle)
+                        .map(|entity| entity.as_entity().layer().to_string())
+                        .unwrap_or_else(|| "0".to_string());
                     // Update model fields
                     if !name.is_empty() {
                         use crate::scene::model::hatch_model::HatchPattern;
@@ -2836,7 +3203,7 @@ impl OpenCADStudio {
                     // Remove old hatch (entity + GPU model)
                     self.tabs[i].scene.erase_entities(&[handle]);
                     // Re-add with updated model
-                    self.tabs[i].scene.add_hatch(model);
+                    self.tabs[i].scene.add_hatch(model, Some(&layer), None);
                     self.tabs[i].dirty = true;
                     self.command_line
                         .push_output(crate::t!("HATCHEDIT: hatch updated.").as_ref());
@@ -2922,6 +3289,10 @@ impl OpenCADStudio {
                 self.tabs[i].scene.clear_preview_wire();
             }
             CmdResult::DdeditEntity { handle, new_text } => {
+                if self.reject_locked_edit(i, handle) {
+                    self.tabs[i].active_cmd = None;
+                    return Task::none();
+                }
                 self.push_undo_snapshot(i, "DDEDIT");
                 let mut updated = false;
                 let mut is_dim = false;
@@ -3125,6 +3496,45 @@ impl OpenCADStudio {
             _ => glam::DVec3::ZERO,
         };
         self.merge_clipboard_ext_objects(i, &by_index, annotation_delta);
+        // Source handles stored in the clipboard map one-to-one to the freshly
+        // pasted handles. Use that map to reconnect LEADER -> copied annotation.
+        let mut handle_map = rustc_hash::FxHashMap::default();
+
+        for (source, &copied) in self.clipboard.iter().zip(by_index.iter()) {
+            if !copied.is_null() {
+                handle_map.insert(source.common().handle, copied);
+            }
+        }
+
+        let leader_links: Vec<(Handle, Handle)> = self
+            .clipboard
+            .iter()
+            .filter_map(|source| {
+                let acadrust::EntityType::Leader(leader) = source else {
+                    return None;
+                };
+
+                let copied_leader = handle_map.get(&source.common().handle).copied()?;
+                let copied_annotation = handle_map
+                    .get(&leader.annotation_handle)
+                    .copied()
+                    .unwrap_or(Handle::NULL);
+
+                Some((copied_leader, copied_annotation))
+            })
+            .collect();
+
+        for (leader_handle, annotation_handle) in leader_links {
+            if let Some(acadrust::EntityType::Leader(leader)) =
+                self.tabs[i].scene.document.get_entity_mut(leader_handle)
+            {
+                leader.annotation_handle = annotation_handle;
+            }
+
+            let _ = self.tabs[i]
+                .scene
+                .sync_displayed_annotation_context(leader_handle);
+        }
         // Recreate any group whose whole membership was copied, so a pasted
         // group stays grouped — cross-drawing too, since the groups were
         // snapshotted into the clipboard at copy time. `by_index` is aligned
@@ -3132,12 +3542,6 @@ impl OpenCADStudio {
         // its clipboard clone to its new handle. Same shared `recreate_groups`
         // the in-drawing COPY path uses. (#440)
         if !self.clipboard_deps.groups.is_empty() {
-            let mut handle_map = rustc_hash::FxHashMap::default();
-            for (src, &new) in self.clipboard.iter().zip(by_index.iter()) {
-                if !new.is_null() {
-                    handle_map.insert(src.common().handle, new);
-                }
-            }
             let groups = self.clipboard_deps.groups.clone();
             self.tabs[i].scene.recreate_groups(groups, &handle_map);
         }

@@ -41,6 +41,9 @@ struct VertIn {
     @location(0) pos:     vec3<f32>,
     @location(1) uv:      vec2<f32>,
     @location(2) pos_low: vec3<f32>,
+    @location(3) translation: vec3<f32>,
+    @location(4) translation_low: vec3<f32>,
+    @location(5) draw_depth: f32,
 };
 
 struct VertOut {
@@ -51,9 +54,11 @@ struct VertOut {
 @vertex
 fn vs_main(in: VertIn) -> VertOut {
     var out: VertOut;
-    let rel = (in.pos - u.eye_high) + (in.pos_low - u.eye_low);
+    let rel = (in.pos + in.translation - u.eye_high)
+        + (in.pos_low + in.translation_low - u.eye_low);
     out.clip_pos = u.view_rot * vec4<f32>(rel, 1.0);
-    out.clip_pos.z = out.clip_pos.z - img_params.draw_depth * DRAW_ORDER_BIAS * out.clip_pos.w;
+    out.clip_pos.z = out.clip_pos.z
+        - (img_params.draw_depth + in.draw_depth) * DRAW_ORDER_BIAS * out.clip_pos.w;
     out.uv = in.uv;
     return out;
 }

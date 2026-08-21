@@ -53,6 +53,7 @@ impl LeaderCommand {
         } else {
             defaults.scale
         };
+
         Self {
             verts: Vec::new(),
             plane: WorkingPlane::default(),
@@ -63,6 +64,78 @@ impl LeaderCommand {
             gap: defaults.gap,
             arrow_size: defaults.arrow_size,
             annotative: defaults.annotative,
+        }
+    }
+
+    fn finish(&self) -> CmdResult {
+        if self.verts.len() < 2 {
+            return CmdResult::Cancel;
+        }
+
+            let local: Vec<DVec3> = self
+            .verts
+            .iter()
+            .map(|point| self.plane.to_local(*point))
+            .collect();
+
+        let displayed_height = self.text_height * self.display_scale;
+
+        let displayed_landing = if self.arrow_size > 1.0e-9 {
+            self.arrow_size * self.display_scale
+        } else {
+            displayed_height * 1.5
+        };
+
+        // The user supplies only the arrow point and elbow. The horizontal
+        // landing is stored as a real third LEADER vertex so it can have its own grip.
+        let mut leader_points = local.clone();
+
+        let first = local[0];
+        let elbow = local[1];
+        let sign = if elbow.x >= first.x { 1.0 } else { -1.0 };
+
+        let landing_end = DVec3::new(
+            elbow.x + sign * displayed_landing,
+            elbow.y,
+            elbow.z,
+        );
+
+        leader_points.push(landing_end);
+
+        let leader = build_leader(
+            &leader_points,
+            Mat4::IDENTITY,
+            &self.dimension_style,
+            self.text_height,
+            self.gap,
+            self.arrow_size,
+        );
+
+        // The MTEXT starts at the real end of the landing.
+        let (anchor, attach) =
+            annotation_anchor(&leader_points, 0.0, Mat4::IDENTITY);
+
+        // Store the MTEXT at its native model-space size for the current
+        // annotation scale. Its annotation contexts then scale it relatively
+        // when another representation becomes active.
+        let mtext_height = displayed_height;
+
+        let mtext = build_mtext(
+            "",
+            anchor,
+            mtext_height,
+            attach,
+            Mat4::IDENTITY,
+            &self.text_style,
+            self.annotative,
+        );
+
+        CmdResult::CommitManyAndEditText {
+            entities: vec![
+                self.plane.place_entity(EntityType::Leader(leader)),
+                self.plane.place_entity(EntityType::MText(mtext)),
+            ],
+            edit_index: 1,
         }
     }
 }
@@ -80,61 +153,22 @@ impl CadCommand for LeaderCommand {
         if self.verts.is_empty() {
             t!("LEADER  Specify arrowhead point:").into_owned()
         } else {
-            t!(
-                "LEADER  Specify next point [%{count} pts — Enter to place text]:",
-                count = self.verts.len()
-            )
-            .into_owned()
+            t!("LEADER  Specify landing point:").into_owned()
         }
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         self.verts.push(pt);
-        CmdResult::NeedPoint
+
+        if self.verts.len() >= 2 {
+            self.finish()
+        } else {
+            CmdResult::NeedPoint
+        }
     }
 
     fn on_enter(&mut self) -> CmdResult {
-        if self.verts.len() < 2 {
-            return CmdResult::Cancel;
-        }
-        // Place the leader plus an empty MText annotation, link them, then open
-        // the in-place MText editor so the user types the annotation text.
-        let local: Vec<DVec3> = self
-            .verts
-            .iter()
-            .map(|point| self.plane.to_local(*point))
-            .collect();
-        let leader = build_leader(
-            &local,
-            Mat4::IDENTITY,
-            &self.dimension_style,
-            self.text_height,
-            self.gap,
-            self.arrow_size,
-        );
-        let displayed_height = self.text_height * self.display_scale;
-        let (anchor, attach) = annotation_anchor(&local, displayed_height, Mat4::IDENTITY);
-        let mtext_height = if self.annotative {
-            self.text_height
-        } else {
-            displayed_height
-        };
-        let mtext = build_mtext(
-            "",
-            anchor,
-            mtext_height,
-            attach,
-            Mat4::IDENTITY,
-            &self.text_style,
-            self.annotative,
-        );
-        CmdResult::CommitManyAndEditText {
-            entities: vec![
-                self.plane.place_entity(EntityType::Leader(leader)),
-                self.plane.place_entity(EntityType::MText(mtext)),
-            ],
-            edit_index: 1,
-        }
+        self.finish()
     }
 
     fn on_escape(&mut self) -> CmdResult {
@@ -189,7 +223,10 @@ fn build_leader(
 ) -> Leader {
     let mut l = Leader::from_vertices(verts.iter().map(|p| dv3(*p)).collect());
     l.creation_type = LeaderCreationType::WithText;
-    l.hookline_enabled = true;
+
+    // New leaders store the landing as their final real vertex, so the renderer
+    // must not append a second synthetic hookline.
+    l.hookline_enabled = false;
     l.dimension_style = dimension_style.to_string();
     l.text_height = text_height;
     l.dimension_gap = gap;
@@ -206,21 +243,28 @@ fn build_leader(
 /// left-pointing landing, to the left of a right-pointing one).
 fn annotation_anchor(
     verts: &[DVec3],
-    text_height: f64,
+    landing_length: f64,
     ucs: Mat4,
 ) -> (DVec3, AttachmentPoint) {
     let last = *verts.last().unwrap();
     let prev = verts[verts.len() - 2];
-    // Side + landing run along the UCS X axis (identity = world).
-    let ux = ucs.transform_vector3(Vec3::X).normalize_or(Vec3::X).as_dvec3();
+
+    let ux = ucs
+        .transform_vector3(Vec3::X)
+        .normalize_or(Vec3::X)
+        .as_dvec3();
+
     let to_right = (last - prev).dot(ux) >= 0.0;
     let sign = if to_right { 1.0_f64 } else { -1.0_f64 };
-    let anchor = last + ux * (sign * text_height * 1.5);
+
+    let anchor = last + ux * (sign * landing_length);
+
     let attach = if to_right {
         AttachmentPoint::MiddleLeft
     } else {
         AttachmentPoint::MiddleRight
     };
+
     (anchor, attach)
 }
 
@@ -259,8 +303,11 @@ fn preview_wire(pts: &[Vec3], arrow_size: f32) -> WireModel {
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
+        display_visible: true,
+        plot_visible: true,
         fill_is_3d: false,
         fill_is_2d_solid: false,
+        render_instance: None,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,

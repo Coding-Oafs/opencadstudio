@@ -13,11 +13,248 @@
 
 use std::any::Any;
 
-use acadrust::xdata::ExtendedDataRecord;
-use acadrust::{CadDocument, EntityType, Handle};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::manifest::PluginManifest;
 use crate::ribbon::CadModule;
+
+// Re-export the acadrust crate and the types that appear in the HostApi trait
+// so out-of-tree plugins can use them without adding their own acadrust
+// dependency (which would risk an ABI-mismatching version).
+pub use acadrust;
+pub use acadrust::{CadDocument, EntityType, Handle};
+pub use acadrust::xdata::ExtendedDataRecord;
+
+use crate::ipc::protocol::{PluginRequest, PluginResponse};
+
+/// Thread-safe handle that can issue host requests from plugin worker threads.
+/// Out-of-process V4 plugins implement this; in-process hosts may return `None`.
+pub trait PluginRequestSender: Send + Sync {
+    fn request(&self, req: PluginRequest) -> Result<PluginResponse, PluginRequestError>;
+}
+
+/// Error returned when a plugin worker thread cannot issue a host request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRequestError(pub String);
+
+impl std::fmt::Display for PluginRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PluginRequestError: {}", self.0)
+    }
+}
+
+impl std::error::Error for PluginRequestError {}
+
+/// Log level carried by [`PluginNotification::Log`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// A notification the host sends to a plugin. These are best-effort,
+/// full-duplex messages correlated with an optional `command_id`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum HostNotification {
+    InputLine { line: String },
+    Cancel,
+    DocumentChanged { version: u64 },
+    SelectionChanged { handles: Vec<Handle> },
+    Raw(Vec<u8>),
+    /// V4 snapshot changed for a specific tab. Discriminant 5.
+    DocumentChangedV4 { tab_id: u64, version: u64 },
+    /// V4 tab closed notification. Discriminant 6.
+    DocumentTabClosed { tab_id: u64 },
+    /// Fallback for notification variants added in future minor revisions.
+    /// Carries the raw bincode payload so an older peer can ignore it without
+    /// failing deserialization.
+    Unknown(Vec<u8>),
+}
+
+impl Serialize for HostNotification {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut bytes = Vec::new();
+        match self {
+            HostNotification::InputLine { line } => {
+                bytes.push(0);
+                bincode::serialize_into(&mut bytes, line)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::Cancel => bytes.push(1),
+            HostNotification::DocumentChanged { version } => {
+                bytes.push(2);
+                bincode::serialize_into(&mut bytes, version)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::SelectionChanged { handles } => {
+                bytes.push(3);
+                bincode::serialize_into(&mut bytes, handles)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::Raw(data) => {
+                bytes.push(4);
+                bincode::serialize_into(&mut bytes, data)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::DocumentChangedV4 { tab_id, version } => {
+                bytes.push(5);
+                bincode::serialize_into(&mut bytes, tab_id)
+                    .map_err(serde::ser::Error::custom)?;
+                bincode::serialize_into(&mut bytes, version)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::DocumentTabClosed { tab_id } => {
+                bytes.push(6);
+                bincode::serialize_into(&mut bytes, tab_id)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::Unknown(raw) => bytes.extend_from_slice(raw),
+        }
+        bytes.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for HostNotification {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        if bytes.is_empty() {
+            return Err(serde::de::Error::custom("empty HostNotification"));
+        }
+        let discriminant = bytes[0];
+        let rest = &bytes[1..];
+        match discriminant {
+            0 => bincode::deserialize(rest)
+                .map(|line| HostNotification::InputLine { line })
+                .map_err(serde::de::Error::custom),
+            1 => Ok(HostNotification::Cancel),
+            2 => bincode::deserialize(rest)
+                .map(|version| HostNotification::DocumentChanged { version })
+                .map_err(serde::de::Error::custom),
+            3 => bincode::deserialize(rest)
+                .map(|handles| HostNotification::SelectionChanged { handles })
+                .map_err(serde::de::Error::custom),
+            4 => bincode::deserialize(rest)
+                .map(HostNotification::Raw)
+                .map_err(serde::de::Error::custom),
+            5 => bincode::deserialize(rest)
+                .map(|(tab_id, version)| HostNotification::DocumentChangedV4 { tab_id, version })
+                .map_err(serde::de::Error::custom),
+            6 => bincode::deserialize(rest)
+                .map(|tab_id| HostNotification::DocumentTabClosed { tab_id })
+                .map_err(serde::de::Error::custom),
+            _ => Ok(HostNotification::Unknown(bytes)),
+        }
+    }
+}
+
+/// A notification a plugin sends to the host. These are best-effort,
+/// full-duplex messages correlated with an optional `command_id`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PluginNotification {
+    Output { text: String },
+    Error { text: String },
+    Prompt { text: String },
+    Progress { percent: u8 },
+    Log { level: LogLevel, text: String },
+    Raw(Vec<u8>),
+    /// V4 REPL status update. Discriminant 6.
+    ReplStatus { status: String, message: String },
+    /// Fallback for notification variants added in future minor revisions.
+    /// Carries the raw bincode payload so an older peer can ignore it without
+    /// failing deserialization.
+    Unknown(Vec<u8>),
+}
+
+impl Serialize for PluginNotification {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut bytes = Vec::new();
+        match self {
+            PluginNotification::Output { text } => {
+                bytes.push(0);
+                bincode::serialize_into(&mut bytes, text)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::Error { text } => {
+                bytes.push(1);
+                bincode::serialize_into(&mut bytes, text)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::Prompt { text } => {
+                bytes.push(2);
+                bincode::serialize_into(&mut bytes, text)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::Progress { percent } => {
+                bytes.push(3);
+                bincode::serialize_into(&mut bytes, percent)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::Log { level, text } => {
+                bytes.push(4);
+                bincode::serialize_into(&mut bytes, level)
+                    .map_err(serde::ser::Error::custom)?;
+                bincode::serialize_into(&mut bytes, text)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::Raw(data) => {
+                bytes.push(5);
+                bincode::serialize_into(&mut bytes, data)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::ReplStatus { status, message } => {
+                bytes.push(6);
+                bincode::serialize_into(&mut bytes, status)
+                    .map_err(serde::ser::Error::custom)?;
+                bincode::serialize_into(&mut bytes, message)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            PluginNotification::Unknown(raw) => bytes.extend_from_slice(raw),
+        }
+        bytes.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginNotification {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        if bytes.is_empty() {
+            return Err(serde::de::Error::custom("empty PluginNotification"));
+        }
+        let discriminant = bytes[0];
+        let rest = &bytes[1..];
+        match discriminant {
+            0 => bincode::deserialize(rest)
+                .map(|text| PluginNotification::Output { text })
+                .map_err(serde::de::Error::custom),
+            1 => bincode::deserialize(rest)
+                .map(|text| PluginNotification::Error { text })
+                .map_err(serde::de::Error::custom),
+            2 => bincode::deserialize(rest)
+                .map(|text| PluginNotification::Prompt { text })
+                .map_err(serde::de::Error::custom),
+            3 => bincode::deserialize(rest)
+                .map(|percent| PluginNotification::Progress { percent })
+                .map_err(serde::de::Error::custom),
+            4 => {
+                let (level, text): (LogLevel, String) = bincode::deserialize(rest)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(PluginNotification::Log { level, text })
+            }
+            5 => bincode::deserialize(rest)
+                .map(PluginNotification::Raw)
+                .map_err(serde::de::Error::custom),
+            6 => bincode::deserialize(rest)
+                .map(|(status, message)| PluginNotification::ReplStatus { status, message })
+                .map_err(serde::de::Error::custom),
+            _ => Ok(PluginNotification::Unknown(bytes)),
+        }
+    }
+}
 
 /// An add-on package's entry point: its manifest, optional ribbon tab, and
 /// command dispatch. Built-in (in-tree) and dynamically-loaded (cdylib) plugins
@@ -27,6 +264,28 @@ pub trait BuiltinPlugin: Send + Sync {
     fn manifest(&self) -> &'static PluginManifest;
     fn ribbon(&self) -> Box<dyn CadModule>;
     fn dispatch(&self, host: &mut dyn HostApi, cmd: &str) -> bool;
+
+    /// Long-running REPL code execution (API v4). The plugin may start the
+    /// work on another thread and call `respond` when finished; the runner
+    /// will forward the result to the host. The supplied `host` is the active
+    /// document tab's API surface, so the REPL session is tied to a tab.
+    ///
+    /// Returning `false` means the plugin does not support code execution.
+    fn start_execute_code(
+        &mut self,
+        _host: &mut dyn HostApi,
+        _command_id: u64,
+        _code: &str,
+        _source: CommandSource,
+        _respond: Box<dyn FnOnce(ExecutionResult) + Send>,
+    ) -> bool {
+        false
+    }
+
+    /// State-only callback for host-to-plugin notifications. Added in API v4;
+    /// the V4 runner guarantees it is only called for plugins that report
+    /// API major 4 or newer.
+    fn on_notification(&mut self, _command_id: Option<u64>, _notification: HostNotification) {}
 }
 
 /// A point-driven interactive command a plugin starts via
@@ -203,6 +462,63 @@ pub trait HostApi {
     fn document_view(&mut self) -> Option<crate::shm::DocumentViewInfo> {
         None
     }
+
+    // ── Notifications (added in API v4; appended at the end to keep vtable
+    // indices stable for V2/V3 plugins) ───────────────────────────────────────
+
+    /// Send a best-effort notification from the plugin to the host.
+    ///
+    /// In-process plugins can override this to forward to the host event loop;
+    /// out-of-process plugins send a V4 notification frame.
+    fn notify_plugin(&mut self, _command_id: Option<u64>, _notification: PluginNotification) {}
+
+    /// Poll for a host-to-plugin notification, if any.
+    ///
+    /// Returns the optional `command_id` used to correlate the notification
+    /// with a running command, and the notification payload. Long-running
+    /// plugins should call this periodically to drain the bounded queue.
+    fn try_recv_notification(
+        &mut self,
+    ) -> Option<(Option<u64>, HostNotification)> {
+        None
+    }
+
+    /// Returns a thread-safe handle that can issue host requests from worker
+    /// threads. Out-of-process V4 plugins implement this; in-process hosts may
+    /// return `None`.
+    fn plugin_request_sender(&self) -> Option<Box<dyn PluginRequestSender>> {
+        None
+    }
+
+    // ── V4 tab/document identity (added for REPL; appended at the end) ───────
+
+    /// Stable tab identifier for the active document tab.
+    fn tab_id(&self) -> u64 {
+        self.tab_index() as u64
+    }
+
+    /// Open (or refresh) the host-side V4 shared document view for `tab_id`
+    /// and return the mapping information. In-process hosts implement this;
+    /// out-of-process plugin proxies return `None`.
+    fn document_view_v4(&mut self, tab_id: u64) -> Option<crate::shm::DocumentViewInfo> {
+        let _ = tab_id;
+        None
+    }
+
+    /// Close the host-side V4 shared document view for `tab_id`.
+    fn close_document_view_v4(&mut self, tab_id: u64) {
+        let _ = tab_id;
+    }
+
+    // ── Batch entities (added after API v4; appended at the very end so older
+    // plugins compiled without it keep stable vtable indices) ────────────────
+
+    /// Add multiple entities to the active document, returning their handles.
+    /// The default implementation calls [`add_entity`](Self::add_entity) for each
+    /// entity; hosts should override it for batch efficiency.
+    fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
+        entities.into_iter().map(|e| self.add_entity(e)).collect()
+    }
 }
 
 /// Simplified, read-only entity kind exposed by [`DocumentReader`].
@@ -349,3 +665,95 @@ pub fn ensure_plugin_state<'a, T: Any + Send + Sync>(
     any.downcast_mut::<T>()
         .expect("plugin state type mismatch for plugin_id")
 }
+
+#[cfg(feature = "host")]
+mod repl {
+    use serde::{Deserialize, Serialize};
+
+    /// Source surface that submitted a REPL code snippet.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[non_exhaustive]
+    pub enum CommandSource {
+        CommandLine,
+        Script,
+        Editor,
+    }
+
+    /// Outcome of a REPL `ExecuteCode` request.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[non_exhaustive]
+    pub struct ExecutionResult {
+        pub success: bool,
+        pub output: Option<String>,
+        pub error: Option<String>,
+        pub error_type: Option<String>,
+        pub traceback: Option<String>,
+        pub line_number: Option<u32>,
+        pub column_number: Option<u32>,
+        pub duration_ms: f64,
+    }
+
+    impl ExecutionResult {
+        /// Create a new execution result.
+        pub fn new(
+            success: bool,
+            output: Option<String>,
+            error: Option<String>,
+            error_type: Option<String>,
+            traceback: Option<String>,
+            line_number: Option<u32>,
+            column_number: Option<u32>,
+            duration_ms: f64,
+        ) -> Self {
+            Self {
+                success,
+                output,
+                error,
+                error_type,
+                traceback,
+                line_number,
+                column_number,
+                duration_ms,
+            }
+        }
+    }
+
+    /// Spawn a thread that runs `f` and calls `respond` with the returned
+    /// `ExecutionResult`. If `f` panics, `respond` is called with a panic error
+    /// result instead, so the host never waits indefinitely for a callback that
+    /// will never arrive.
+    pub fn execute_code_guard<F>(
+        respond: Box<dyn FnOnce(ExecutionResult) + Send>,
+        f: F,
+    ) -> std::thread::JoinHandle<()>
+    where
+        F: FnOnce() -> ExecutionResult + Send + 'static,
+    {
+        std::thread::spawn(move || {
+            let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+                Ok(result) => result,
+                Err(payload) => {
+                    let msg = payload
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("execute_code panicked");
+                    ExecutionResult {
+                        success: false,
+                        output: None,
+                        error: Some(format!("panic: {}", msg)),
+                        error_type: Some("panic".to_string()),
+                        traceback: None,
+                        line_number: None,
+                        column_number: None,
+                        duration_ms: 0.0,
+                    }
+                }
+            };
+            respond(result);
+        })
+    }
+}
+
+#[cfg(feature = "host")]
+pub use repl::{execute_code_guard, CommandSource, ExecutionResult};

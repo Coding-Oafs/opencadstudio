@@ -19,19 +19,19 @@ fn base_props(base: &DimensionBase) -> Vec<crate::scene::model::object::Property
         crate::scene::model::object::Property {
             label: t!("Text").into_owned(),
             field: "text",
-            value: crate::scene::model::object::PropValue::EditText(base.text.clone()),
+            value: crate::scene::model::object::PropValue::PlainText(base.text.clone()),
         },
         crate::scene::model::object::Property {
             label: t!("User Text").into_owned(),
             field: "user_text",
-            value: crate::scene::model::object::PropValue::EditText(
+            value: crate::scene::model::object::PropValue::PlainText(
                 base.user_text.clone().unwrap_or_default(),
             ),
         },
         crate::scene::model::object::Property {
             label: t!("Style").into_owned(),
             field: "style_name",
-            value: crate::scene::model::object::PropValue::EditText(base.style_name.clone()),
+            value: crate::scene::model::object::PropValue::PlainText(base.style_name.clone()),
         },
         edit(t!("Text X").as_ref(), "text_x", base.text_middle_point.x),
         edit(t!("Text Y").as_ref(), "text_y", base.text_middle_point.y),
@@ -853,6 +853,184 @@ fn apply_to_v3(target: &mut acadrust::types::Vector3, apply: &GripApply) {
     }
 }
 
+
+
+#[derive(Clone, Copy)]
+struct DimTextRelativePosition {
+    along_fraction: f64,
+    perpendicular_offset: f64,
+    z_offset: f64,
+}
+
+fn capture_dim_text_relative_position(dim: &Dimension) -> Option<DimTextRelativePosition> {
+    let base = dim.base();
+
+    // Auto-positioned text is recomputed by the renderer from DIMSTYLE.
+    // Only an explicitly moved text point needs to follow a grip deformation.
+    if !base.text_user_positioned {
+        return None;
+    }
+
+    let text = base.text_middle_point;
+    if text.x * text.x + text.y * text.y + text.z * text.z <= 1e-16 {
+        return None;
+    }
+
+    let (first, second, defpt, ax, ay) = match dim {
+        Dimension::Linear(d) => (
+            d.first_point,
+            d.second_point,
+            d.definition_point,
+            d.rotation.cos(),
+            d.rotation.sin(),
+        ),
+        Dimension::Aligned(d) => {
+            let dx = d.second_point.x - d.first_point.x;
+            let dy = d.second_point.y - d.first_point.y;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len <= 1e-12 {
+                return None;
+            }
+
+            (
+                d.first_point,
+                d.second_point,
+                d.definition_point,
+                dx / len,
+                dy / len,
+            )
+        }
+        _ => return None,
+    };
+
+    let px = -ay;
+    let py = ax;
+
+    let t1 = (first.x - defpt.x) * ax + (first.y - defpt.y) * ay;
+    let t2 = (second.x - defpt.x) * ax + (second.y - defpt.y) * ay;
+    let text_t = (text.x - defpt.x) * ax + (text.y - defpt.y) * ay;
+
+    let span = t2 - t1;
+    let along_fraction = if span.abs() > 1e-12 {
+        (text_t - t1) / span
+    } else {
+        0.5
+    };
+
+    let along = t1 + span * along_fraction;
+    let line_x = defpt.x + ax * along;
+    let line_y = defpt.y + ay * along;
+
+    let perpendicular_offset =
+        (text.x - line_x) * px + (text.y - line_y) * py;
+
+    Some(DimTextRelativePosition {
+        along_fraction,
+        perpendicular_offset,
+        z_offset: text.z - defpt.z,
+    })
+}
+
+fn restore_dim_text_relative_position(
+    dim: &mut Dimension,
+    saved: DimTextRelativePosition,
+) {
+    let (first, second, defpt, ax, ay) = match dim {
+        Dimension::Linear(d) => (
+            d.first_point,
+            d.second_point,
+            d.definition_point,
+            d.rotation.cos(),
+            d.rotation.sin(),
+        ),
+        Dimension::Aligned(d) => {
+            let dx = d.second_point.x - d.first_point.x;
+            let dy = d.second_point.y - d.first_point.y;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len <= 1e-12 {
+                return;
+            }
+
+            (
+                d.first_point,
+                d.second_point,
+                d.definition_point,
+                dx / len,
+                dy / len,
+            )
+        }
+        _ => return,
+    };
+
+    let px = -ay;
+    let py = ax;
+
+    let t1 = (first.x - defpt.x) * ax + (first.y - defpt.y) * ay;
+    let t2 = (second.x - defpt.x) * ax + (second.y - defpt.y) * ay;
+
+    let along = t1 + (t2 - t1) * saved.along_fraction;
+
+    let base = dim.base_mut();
+    base.text_middle_point = Vector3::new(
+        defpt.x + ax * along + px * saved.perpendicular_offset,
+        defpt.y + ay * along + py * saved.perpendicular_offset,
+        defpt.z + saved.z_offset,
+    );
+}
+
+fn dimension_line_grip_position(dim: &Dimension) -> Option<DVec3> {
+    let (first, second, defpt, ax, ay) = match dim {
+        Dimension::Linear(d) => (
+            d.first_point,
+            d.second_point,
+            d.definition_point,
+            d.rotation.cos(),
+            d.rotation.sin(),
+        ),
+        Dimension::Aligned(d) => {
+            let dx = d.second_point.x - d.first_point.x;
+            let dy = d.second_point.y - d.first_point.y;
+            let len = (dx * dx + dy * dy).sqrt();
+
+            if len <= 1e-12 {
+                return None;
+            }
+
+            (
+                d.first_point,
+                d.second_point,
+                d.definition_point,
+                dx / len,
+                dy / len,
+            )
+        }
+        _ => return None,
+    };
+
+    let px = -ay;
+    let py = ax;
+
+    // Project both extension origins onto the current dimension line.
+    let off1 =
+        (defpt.x - first.x) * px + (defpt.y - first.y) * py;
+    let off2 =
+        (defpt.x - second.x) * px + (defpt.y - second.y) * py;
+
+    let p1 = DVec3::new(
+        first.x + px * off1,
+        first.y + py * off1,
+        defpt.z,
+    );
+
+    let p2 = DVec3::new(
+        second.x + px * off2,
+        second.y + py * off2,
+        defpt.z,
+    );
+
+    Some((p1 + p2) * 0.5)
+}
+
 impl Grippable for Dimension {
     fn grips(&self) -> Vec<GripDef> {
         // Auto-placed dimensions carry a zero text_middle_point sentinel; put
@@ -870,13 +1048,21 @@ impl Grippable for Dimension {
             Dimension::Linear(d) => vec![
                 square_grip(0, dv3(&d.first_point)),
                 center_grip(1, dv3(&d.second_point)),
-                center_grip(2, dv3(&d.definition_point)),
+                center_grip(
+                    2,
+                    dimension_line_grip_position(self)
+                        .unwrap_or_else(|| dv3(&d.definition_point)),
+                ),
                 center_grip(3, text),
             ],
             Dimension::Aligned(d) => vec![
                 square_grip(0, dv3(&d.first_point)),
                 center_grip(1, dv3(&d.second_point)),
-                center_grip(2, dv3(&d.definition_point)),
+                center_grip(
+                    2,
+                    dimension_line_grip_position(self)
+                        .unwrap_or_else(|| dv3(&d.definition_point)),
+                ),
                 center_grip(3, text),
             ],
             Dimension::Radius(d) => vec![
@@ -935,6 +1121,8 @@ impl Grippable for Dimension {
         }
     }
 
+
+
     fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
         // Last grip always moves the text.
         let text_grip = match self {
@@ -952,6 +1140,12 @@ impl Grippable for Dimension {
             self.base_mut().text_user_positioned = true;
             return;
         }
+
+        // A manually positioned dimension text point is stored in the DWG as an
+        // absolute coordinate. Capture its relation to the old dimension geometry
+        // before moving a definition grip so that it can be reconstructed against
+        // the new geometry afterwards.
+        let relative_text = capture_dim_text_relative_position(self);
 
         match self {
             Dimension::Linear(d) => match grip_id {
@@ -1013,6 +1207,11 @@ impl Grippable for Dimension {
                 _ => {}
             },
         }
+
+        if let Some(saved) = relative_text {
+            restore_dim_text_relative_position(self, saved);
+        }
+
         self.base_mut().actual_measurement = self.measurement();
     }
 
@@ -1870,8 +2069,11 @@ fn tessellate_dimension_inner(
                     taper_widths: Vec::new(),
                     world_width: 0.0,
                     depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
                     fill_is_3d: false,
                     fill_is_2d_solid: false,
+                    render_instance: None,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1900,8 +2102,11 @@ fn tessellate_dimension_inner(
                     taper_widths: Vec::new(),
                     world_width: 0.0,
                     depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
                     fill_is_3d: false,
                     fill_is_2d_solid: false,
+                    render_instance: None,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1930,8 +2135,11 @@ fn tessellate_dimension_inner(
                 taper_widths: Vec::new(),
                 world_width: 0.0,
                 depth_override: None,
+                display_visible: true,
+                plot_visible: true,
                 fill_is_3d: false,
                 fill_is_2d_solid: false,
+                render_instance: None,
                 pick_tris: Vec::new(),
                 pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1961,8 +2169,11 @@ fn tessellate_dimension_inner(
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
+        display_visible: true,
+        plot_visible: true,
         fill_is_3d: false,
         fill_is_2d_solid: false,
+        render_instance: None,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -2008,8 +2219,11 @@ fn tessellate_dimension_inner(
                     taper_widths: Vec::new(),
                     world_width: 0.0,
                     depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
                     fill_is_3d: false,
                     fill_is_2d_solid: false,
+                    render_instance: None,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -3795,6 +4009,30 @@ pub(crate) fn baked_dimension_text_entity(
     Some(ent)
 }
 
+pub(crate) fn dimension_text_grip_position(
+    dim: &Dimension,
+    document: &CadDocument,
+    anno_scale: f64,
+) -> Option<Vector3> {
+    // Once the user has moved the text, its saved point is authoritative.
+    let base = dim.base();
+    if base.text_user_positioned {
+        let p = base.text_middle_point;
+        if p.x * p.x + p.y * p.y + p.z * p.z > 1e-16 {
+            return Some(p);
+        }
+    }
+
+    // For automatic text, use the same text-building path used by the
+    // dimension picture so the grip follows the actual DIMSTYLE placement,
+    // including annotation scaling and fit behaviour.
+    match baked_dimension_text_entity(dim, document, anno_scale)? {
+        EntityType::Text(text) => Some(text.insertion_point),
+        EntityType::MText(text) => Some(text.insertion_point),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod dimtad_tests {
     use super::text_on_dim_line;
@@ -3900,5 +4138,4 @@ mod arch_format_tests {
         assert_eq!(format_fractional(6.5, 0), "6 1/2");
     }
 }
-
 

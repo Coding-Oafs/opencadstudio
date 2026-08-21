@@ -34,6 +34,7 @@ struct ViewportLightingSettings {
     force_default: bool,
     default_type: i16,
     ambient: [f32; 3],
+    sun_handle: Handle,
 }
 
 #[derive(Clone)]
@@ -94,6 +95,7 @@ impl Default for ViewportLightingSettings {
             force_default: true,
             default_type: 1,
             ambient: [0.18; 3],
+            sun_handle: Handle::NULL,
         }
     }
 }
@@ -391,7 +393,7 @@ impl shader::Primitive for Primitive {
                 inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
                 inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
-                inner.mesh_lod_key = (usize::MAX, u64::MAX, 0, 0);
+                inner.silhouette_key = (usize::MAX, u64::MAX, [u32::MAX; 3], false);
                 inner.render_sig = u64::MAX;
             }
             // The MSAA / depth / resolve textures are always sized to the
@@ -466,9 +468,13 @@ impl shader::Primitive for Primitive {
                 continue;
             }
             let Some(vp_wires) = vp.wires.upgrade() else {
+                inner.render_sig = u64::MAX;
+                inner.skip_geometry = true;
                 continue;
             };
             let Some(draw_depths) = vp.draw_depths.upgrade() else {
+                inner.render_sig = u64::MAX;
+                inner.skip_geometry = true;
                 continue;
             };
             inner.point_gpu.upload(device, queue, &vp.point_cloud);
@@ -535,8 +541,15 @@ impl shader::Primitive for Primitive {
                 .cached_text_source
                 .as_ref()
                 .map_or(true, |source| !Arc::ptr_eq(source, &vp.text_verts))
+                || vp.wire_content_id != inner.cached_wire_id
             {
-                inner.upload_text(device, queue, &vp.text_verts[..]);
+                inner.upload_text(
+                    device,
+                    queue,
+                    &vp.text_verts[..],
+                    &vp_wires[..],
+                    &draw_depths,
+                );
                 inner.cached_text_source = Some(Arc::clone(&vp.text_verts));
             }
             inner.cached_fill_mode = fill_mode;
@@ -611,7 +624,8 @@ impl shader::Primitive for Primitive {
                     && (inner.wire_const_bgl.is_some()
                         || ((vp.wire_patch.is_some()
                             || inner.wire_arena_id != u64::MAX)
-                            && packed_arena_owner));
+                            && packed_arena_owner))
+                    && !vp_wires.iter().any(|wire| wire.render_instance.is_some());
                 if use_wire_arena {
                     use crate::scene::pipeline::wire_arena::{
                         self, PersistentWireArena as WireArena,
@@ -828,6 +842,7 @@ impl shader::Primitive for Primitive {
                             gpus.extend(arena.wire_gpus());
                         }
                         inner.gpu_wires = std::sync::Arc::new(gpus);
+                        inner.gpu_block_wires = std::sync::Arc::new(Vec::new());
                         if _patched {
                             wire_arena::patch_handle_index(
                                 &mut inner.wire_handle_index,
@@ -885,17 +900,26 @@ impl shader::Primitive for Primitive {
                             if pipeline.wire_buffer_cache.len() > 16 {
                                 pipeline
                                     .wire_buffer_cache
-                                    .retain(|_, (w, _)| std::sync::Arc::strong_count(w) > 1);
+                                    .retain(|_, (w, b, _)| {
+                                        std::sync::Arc::strong_count(w) > 1
+                                            || std::sync::Arc::strong_count(b) > 1
+                                    });
                             }
                             entry
                         }
                     };
                     inner.gpu_wires = built.0;
-                    inner.wire_handle_index = built.1;
+                    inner.gpu_block_wires = built.1;
+                    inner.wire_handle_index = built.2;
                 } // end !arena_served
                 inner.cached_wire_id = vp.wire_content_id;
                 if _perf {
                     let gi: u32 = inner.gpu_wires.iter().map(|w| w.instance_count).sum();
+                    let bi: u32 = inner
+                        .gpu_block_wires
+                        .iter()
+                        .map(|w| w.instance_count)
+                        .sum();
                     let outcome = if !arena_served {
                         "shared-fullupload"
                     } else if _patched {
@@ -906,11 +930,12 @@ impl shader::Primitive for Primitive {
                         "arena-build"
                     };
                     crate::perf_record!(
-                        "[perf] wire {:>7.1}ms  {:<18} wires={} gpu_instances={}",
+                        "[perf] wire {:>7.1}ms  {:<18} wires={} gpu_instances={} block_instances={}",
                         _t0.elapsed().as_secs_f64() * 1000.0,
                         outcome,
                         vp_wires.len(),
                         gi,
+                        bi,
                     );
                 }
             }
@@ -957,6 +982,7 @@ impl shader::Primitive for Primitive {
                     &vp.selected_handles,
                     &vp.hover_handles,
                     &vp.annotation_context_wires,
+                    &draw_depths,
                 );
                 inner.cached_annotation_highlight_source =
                     Some(Arc::clone(&vp.annotation_context_wires));
@@ -1011,13 +1037,22 @@ impl shader::Primitive for Primitive {
                 vp.uniforms.eye_high[1] as f64 + vp.uniforms.eye_low[1] as f64,
                 vp.uniforms.eye_high[2] as f64 + vp.uniforms.eye_low[2] as f64,
             );
-            // Rebuild view-dependent silhouettes each frame when requested by
-            // DISPSILH or by a visual style such as HiddenLine. Only modes that
-            // draw edges consume them — pure shaded hides them.
-            if vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges) {
-                inner.upload_silhouettes(device, &vp.meshes[..], vp.view_dir);
-            } else {
-                inner.upload_silhouettes(device, &[], vp.view_dir);
+            let silhouette_enabled =
+                vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges);
+            let silhouette_key = (
+                Arc::as_ptr(&vp.meshes) as usize,
+                vp.wire_content_id,
+                vp.view_dir.to_array().map(f32::to_bits),
+                silhouette_enabled,
+            );
+            if inner.silhouette_key != silhouette_key {
+                inner.upload_silhouettes(
+                    device,
+                    if silhouette_enabled { &vp.meshes[..] } else { &[] },
+                    vp.wire_content_id,
+                    vp.view_dir,
+                );
+                inner.silhouette_key = silhouette_key;
             }
             inner.upload_clip_boundary(device, &vp.clip_boundary_ndc);
             let hatch_lod_key = (
@@ -1041,22 +1076,6 @@ impl shader::Primitive for Primitive {
             if inner.wipeout_lod_key != wipeout_lod_key {
                 inner.compute_wipeout_lod(view_rot, eye, clip_size.width, clip_size.height);
                 inner.wipeout_lod_key = wipeout_lod_key;
-            }
-            let mesh_lod_key = (
-                Arc::as_ptr(&vp.meshes) as usize,
-                vp.camera_generation,
-                clip_size.width,
-                clip_size.height,
-            );
-            if inner.mesh_lod_key != mesh_lod_key {
-                inner.compute_mesh_lod(
-                    queue,
-                    view_rot,
-                    eye,
-                    clip_size.width,
-                    clip_size.height,
-                );
-                inner.mesh_lod_key = mesh_lod_key;
             }
             let cull_key = (
                 vp.wire_content_id,
@@ -1252,6 +1271,12 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
         .map(|image| std::sync::Arc::as_ptr(&image.pixels) as usize)
         .unwrap_or(0)
         .hash(&mut h);
+    if vp.meshes.is_empty() {
+        0usize
+    } else {
+        std::sync::Arc::as_ptr(&vp.meshes) as usize
+    }
+    .hash(&mut h);
     vp.geometry_epoch.hash(&mut h);
     vp.selection_generation.hash(&mut h);
     vp.selected_sig.hash(&mut h);
@@ -1265,6 +1290,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     vp.show_2d_solid_fills.hash(&mut h);
     vp.mesh_fill.hash(&mut h);
     vp.show_3d_edges.hash(&mut h);
+    vp.display_silhouette.hash(&mut h);
     vp.hidden_line.hash(&mut h);
     // ViewCube visibility is excluded from the *scene* signature elsewhere only
     // for the live-hover pass; here it MUST invalidate the cache so toggling the
@@ -1327,6 +1353,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
                 color2,
                 kind,
                 invert,
+                shift,
             } => {
                 2_u8.hash(&mut h);
                 angle_deg.to_bits().hash(&mut h);
@@ -1335,6 +1362,7 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
                 }
                 kind.shader_kind().hash(&mut h);
                 invert.hash(&mut h);
+                shift.to_bits().hash(&mut h);
             }
         }
     }
@@ -1395,9 +1423,148 @@ fn crop_view_proj(view_proj: glam::Mat4, uo: f32, vo: f32, us: f32, vs: f32) -> 
     crop * view_proj
 }
 
+fn normalized_direction(value: [f64; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let length = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+    if length <= 1e-12 {
+        fallback
+    } else {
+        [
+            (value[0] / length) as f32,
+            (value[1] / length) as f32,
+            (value[2] / length) as f32,
+        ]
+    }
+}
+
+fn solar_direction(
+    sun: &acadrust::objects::Sun,
+    geo: &acadrust::objects::GeoData,
+) -> Option<[f32; 3]> {
+    if sun.julian_day < 1_000_000 {
+        return None;
+    }
+    let daylight_ms = if sun.is_daylight_savings_on {
+        3_600_000.0
+    } else {
+        0.0
+    };
+    let jd = sun.julian_day as f64
+        + (sun.milliseconds as f64 - daylight_ms) / 86_400_000.0;
+    let days = jd - 2_451_545.0;
+    let mean_longitude = (280.460 + 0.985_647_4 * days).to_radians();
+    let mean_anomaly = (357.528 + 0.985_600_3 * days).to_radians();
+    let ecliptic_longitude = mean_longitude
+        + (1.915 * mean_anomaly.sin() + 0.020 * (2.0 * mean_anomaly).sin()).to_radians();
+    let obliquity = (23.439 - 0.000_000_4 * days).to_radians();
+    let right_ascension =
+        (obliquity.cos() * ecliptic_longitude.sin()).atan2(ecliptic_longitude.cos());
+    let declination = (obliquity.sin() * ecliptic_longitude.sin()).asin();
+    let local_sidereal =
+        (280.460_618_37 + 360.985_647_366_29 * days + geo.reference_point.x).to_radians();
+    let hour_angle = (local_sidereal - right_ascension + std::f64::consts::PI)
+        .rem_euclid(std::f64::consts::TAU)
+        - std::f64::consts::PI;
+    let latitude = geo.reference_point.y.to_radians();
+    let east_component = -declination.cos() * hour_angle.sin();
+    let north_component = declination.sin() * latitude.cos()
+        - declination.cos() * hour_angle.cos() * latitude.sin();
+    let up_component = declination.sin() * latitude.sin()
+        + declination.cos() * hour_angle.cos() * latitude.cos();
+    if up_component <= 0.0 {
+        return None;
+    }
+    let north = normalized_direction(
+        [geo.north_direction.x, geo.north_direction.y, 0.0],
+        [0.0, 1.0, 0.0],
+    );
+    let east = [north[1], -north[0], 0.0];
+    let up = normalized_direction(
+        [geo.up_direction.x, geo.up_direction.y, geo.up_direction.z],
+        [0.0, 0.0, 1.0],
+    );
+    Some(normalized_direction(
+        [
+            -(east[0] as f64 * east_component
+                + north[0] as f64 * north_component
+                + up[0] as f64 * up_component),
+            -(east[1] as f64 * east_component
+                + north[1] as f64 * north_component
+                + up[1] as f64 * up_component),
+            -(east[2] as f64 * east_component
+                + north[2] as f64 * north_component
+                + up[2] as f64 * up_component),
+        ],
+        [0.0, 0.0, -1.0],
+    ))
+}
+
 // ── Render-style helpers (impl Scene) ────────────────────────────────────
 
 impl Scene {
+    fn model_tile_vport(&self, index: usize) -> Option<&acadrust::tables::VPort> {
+        let rect = self.model_tiles.borrow().get(index)?.rect;
+        let lower_left = [rect.x as f64, (1.0 - rect.y - rect.height) as f64];
+        let upper_right = [
+            (rect.x + rect.width) as f64,
+            (1.0 - rect.y) as f64,
+        ];
+        const EPSILON: f64 = 1e-5;
+        let exact = self
+            .document
+            .vports
+            .iter()
+            .filter(|value| value.name.eq_ignore_ascii_case("*Active"))
+            .find(|value| {
+                (value.lower_left.x - lower_left[0]).abs() <= EPSILON
+                    && (value.lower_left.y - lower_left[1]).abs() <= EPSILON
+                    && (value.upper_right.x - upper_right[0]).abs() <= EPSILON
+                    && (value.upper_right.y - upper_right[1]).abs() <= EPSILON
+            });
+        exact.or_else(|| {
+            let center_x = (lower_left[0] + upper_right[0]) * 0.5;
+            let center_y = (lower_left[1] + upper_right[1]) * 0.5;
+            self.document
+                .vports
+                .iter()
+                .filter(|value| {
+                    value.name.eq_ignore_ascii_case("*Active")
+                        && center_x >= value.lower_left.x - EPSILON
+                        && center_x <= value.upper_right.x + EPSILON
+                        && center_y >= value.lower_left.y - EPSILON
+                        && center_y <= value.upper_right.y + EPSILON
+                })
+                .min_by(|left, right| {
+                    let left_area = (left.upper_right.x - left.lower_left.x)
+                        * (left.upper_right.y - left.lower_left.y);
+                    let right_area = (right.upper_right.x - right.lower_left.x)
+                        * (right.upper_right.y - right.lower_left.y);
+                    left_area.total_cmp(&right_area)
+                })
+                .or_else(|| {
+                    self.document
+                        .vports
+                        .iter()
+                        .find(|value| value.name.eq_ignore_ascii_case("*Active"))
+                })
+        })
+    }
+
+    fn geolocation(&self) -> Option<&acadrust::objects::GeoData> {
+        use acadrust::objects::ObjectType;
+
+        crate::entities::object_data::geo_objects(&self.object_data_cache)
+            .iter()
+            .find_map(|handle| match self.document.objects.get(handle) {
+                Some(ObjectType::GeoData(value))
+                    if value.coordinate_type == 3
+                        && value.reference_point.x.is_finite()
+                        && value.reference_point.y.is_finite()
+                        && value.reference_point.x.abs() <= 180.0
+                        && value.reference_point.y.abs() <= 90.0 => Some(value),
+                _ => None,
+            })
+    }
+
     fn build_lighting_cache(
         &self,
         target_block: Handle,
@@ -1405,92 +1572,11 @@ impl Scene {
     ) -> Vec<SceneLight> {
         use acadrust::objects::{ClassObjectData, ObjectType};
 
-        fn normalized(value: [f64; 3], fallback: [f32; 3]) -> [f32; 3] {
-            let length =
-                (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
-            if length <= 1e-12 {
-                fallback
-            } else {
-                [
-                    (value[0] / length) as f32,
-                    (value[1] / length) as f32,
-                    (value[2] / length) as f32,
-                ]
-            }
-        }
-
-        fn solar_direction(
-            sun: &acadrust::objects::Sun,
-            geo: &acadrust::objects::GeoData,
-        ) -> Option<[f32; 3]> {
-            if sun.julian_day < 1_000_000 {
-                return None;
-            }
-            let daylight_ms = if sun.is_daylight_savings_on {
-                3_600_000.0
-            } else {
-                0.0
-            };
-            let jd = sun.julian_day as f64
-                + (sun.milliseconds as f64 - daylight_ms) / 86_400_000.0;
-            let days = jd - 2_451_545.0;
-            let mean_longitude = (280.460 + 0.985_647_4 * days).to_radians();
-            let mean_anomaly = (357.528 + 0.985_600_3 * days).to_radians();
-            let ecliptic_longitude = mean_longitude
-                + (1.915 * mean_anomaly.sin()
-                    + 0.020 * (2.0 * mean_anomaly).sin())
-                    .to_radians();
-            let obliquity = (23.439 - 0.000_000_4 * days).to_radians();
-            let right_ascension = (obliquity.cos() * ecliptic_longitude.sin())
-                .atan2(ecliptic_longitude.cos());
-            let declination =
-                (obliquity.sin() * ecliptic_longitude.sin()).asin();
-            let local_sidereal = (280.460_618_37
-                + 360.985_647_366_29 * days
-                + geo.reference_point.x)
-                .to_radians();
-            let hour_angle = (local_sidereal - right_ascension + std::f64::consts::PI)
-                .rem_euclid(std::f64::consts::TAU)
-                - std::f64::consts::PI;
-            let latitude = geo.reference_point.y.to_radians();
-            let east_component = -declination.cos() * hour_angle.sin();
-            let north_component = declination.sin() * latitude.cos()
-                - declination.cos() * hour_angle.cos() * latitude.sin();
-            let up_component = declination.sin() * latitude.sin()
-                + declination.cos() * hour_angle.cos() * latitude.cos();
-            if up_component <= 0.0 {
-                return None;
-            }
-            let north = normalized(
-                [geo.north_direction.x, geo.north_direction.y, 0.0],
-                [0.0, 1.0, 0.0],
-            );
-            let east = [north[1], -north[0], 0.0];
-            let up = normalized(
-                [geo.up_direction.x, geo.up_direction.y, geo.up_direction.z],
-                [0.0, 0.0, 1.0],
-            );
-            Some(normalized(
-                [
-                    -(east[0] as f64 * east_component
-                        + north[0] as f64 * north_component
-                        + up[0] as f64 * up_component),
-                    -(east[1] as f64 * east_component
-                        + north[1] as f64 * north_component
-                        + up[1] as f64 * up_component),
-                    -(east[2] as f64 * east_component
-                        + north[2] as f64 * north_component
-                        + up[2] as f64 * up_component),
-                ],
-                [0.0, 0.0, -1.0],
-            ))
-        }
-
         fn converted(scene: &Scene, light: &acadrust::entities::Light) -> Option<SceneLight> {
             if !light.status {
                 return None;
             }
-            let mut direction = normalized(
+            let mut direction = normalized_direction(
                 [
                     light.target.x - light.position.x,
                     light.target.y - light.position.y,
@@ -1656,19 +1742,7 @@ impl Scene {
             }
         }
 
-        // SUN is document-global. Keep it after entity lights so the four-light
-        // shader limit prefers visible lights owned by this viewport's block.
-        let geo = crate::entities::object_data::geo_objects(&self.object_data_cache)
-            .iter()
-            .find_map(|handle| match self.document.objects.get(handle) {
-                Some(ObjectType::GeoData(value))
-                    if value.coordinate_type == 3
-                        && value.reference_point.x.is_finite()
-                        && value.reference_point.y.is_finite()
-                        && value.reference_point.x.abs() <= 180.0
-                        && value.reference_point.y.abs() <= 90.0 => Some(value),
-                _ => None,
-            });
+        let geo = self.geolocation();
         for handle in crate::entities::object_data::sun_objects(&self.object_data_cache) {
             let Some(ObjectType::ClassObject(value)) = self.document.objects.get(handle) else {
                 continue;
@@ -1680,10 +1754,10 @@ impl Scene {
                 continue;
             }
             let Some(geo) = geo else {
-                break;
+                continue;
             };
             let Some(direction) = solar_direction(sun, geo) else {
-                break;
+                continue;
             };
             let rgba = tess_util::aci_to_rgba(&sun.color);
             lights.push(SceneLight {
@@ -1706,7 +1780,6 @@ impl Scene {
                 web_rotation: [0.0; 3],
                 web_enabled: false,
             });
-            break;
         }
         lights
     }
@@ -1725,6 +1798,7 @@ impl Scene {
         }
         let cache = self.lighting_cache.borrow();
         let lights = cache.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let settings = self.viewport_lighting_settings(viewport);
         let visible_lights: Vec<&SceneLight> = lights
             .iter()
             .filter(|light| match self.document.get_entity(light.handle) {
@@ -1746,12 +1820,12 @@ impl Scene {
                         object,
                         acadrust::objects::ObjectType::ClassObject(value)
                             if matches!(&value.data, acadrust::objects::ClassObjectData::Sun(_))
-                    )
+                    ) && (!settings.sun_handle.is_valid()
+                        || settings.sun_handle == light.handle)
                 }),
             })
             .take(4)
             .collect();
-        let settings = self.viewport_lighting_settings(viewport);
         uniforms.lighting[1..4].copy_from_slice(&settings.ambient);
         if settings.force_default || visible_lights.is_empty() {
             Self::apply_default_lighting(uniforms, &viewport.camera, settings.default_type);
@@ -1902,11 +1976,13 @@ impl Scene {
             force_default: value.default_lighting,
             default_type: value.default_lighting_type,
             ambient: ambient(&value.ambient_color),
+            sun_handle: value.sun_handle,
         };
         let from_table = |value: &acadrust::tables::VPort| ViewportLightingSettings {
             force_default: value.use_default_lights,
             default_type: value.default_lighting_type,
             ambient: ambient(&value.ambient_color),
+            sun_handle: value.sun_handle,
         };
 
         if viewport.paper_sheet {
@@ -1920,13 +1996,7 @@ impl Scene {
             }
         } else if self.current_layout == "Model" {
             let index = viewport.tile_idx.unwrap_or(0);
-            if let Some(value) = self
-                .document
-                .vports
-                .iter()
-                .filter(|value| value.name.eq_ignore_ascii_case("*Active"))
-                .nth(index)
-            {
+            if let Some(value) = self.model_tile_vport(index) {
                 return from_table(value);
             }
         }
@@ -1994,13 +2064,7 @@ impl Scene {
             }
         } else if self.current_layout == "Model" {
             let index = viewport.tile_idx.unwrap_or(0);
-            if let Some(value) = self
-                .document
-                .vports
-                .iter()
-                .filter(|value| value.name.eq_ignore_ascii_case("*Active"))
-                .nth(index)
-            {
+            if let Some(value) = self.model_tile_vport(index) {
                 return build(
                     value.visual_style_handle,
                     value.brightness,
@@ -2048,7 +2112,16 @@ impl Scene {
             candidates.push(base.join(&source));
             if let Some(name) = source.file_name() {
                 candidates.push(base.join(name));
-                for folder in ["Textures", "textures", "Materials", "materials"] {
+                for folder in [
+                    "Textures",
+                    "textures",
+                    "Materials",
+                    "materials",
+                    "Environments",
+                    "environments",
+                    "Render",
+                    "render",
+                ] {
                     candidates.push(base.join(folder).join(name));
                 }
             }
@@ -2342,12 +2415,38 @@ impl Scene {
                 }
                 result
             }
-            ClassObjectData::SkyLightBackground(_) => {
+            ClassObjectData::SkyLightBackground(background) => {
                 let mut result = ViewportBackgroundSettings::canvas(canvas);
                 result.colors[0] = [0.18, 0.42, 0.78, 1.0];
+                result.colors[1] = [1.0, 0.92, 0.72, 0.0];
                 result.colors[2] = [0.78, 0.86, 0.95, 1.0];
                 result.base = result.colors[2];
                 result.params[0] = 6.0;
+                if let Some(ObjectType::ClassObject(value)) =
+                    self.document.objects.get(&background.sun)
+                {
+                    if let ClassObjectData::Sun(sun) = &value.data {
+                        if sun.is_on {
+                            if let Some(direction) = self
+                                .geolocation()
+                                .and_then(|geo| solar_direction(sun, geo))
+                            {
+                                result.params[1..4].copy_from_slice(&[
+                                    -direction[0],
+                                    -direction[1],
+                                    -direction[2],
+                                ]);
+                                let color = tess_util::aci_to_rgba(&sun.color);
+                                result.colors[1] = [
+                                    color[0],
+                                    color[1],
+                                    color[2],
+                                    sun.intensity.max(0.0) as f32,
+                                ];
+                            }
+                        }
+                    }
+                }
                 result
             }
             _ => ViewportBackgroundSettings::canvas(canvas),
@@ -2834,6 +2933,12 @@ impl Scene {
         }
         let mut out: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
         for w in wires {
+            if !w.display_visible {
+                continue;
+            }
+            if w.render_instance.is_some() {
+                continue;
+            }
             if !w.text_verts.is_empty() {
                 // Bake the host wire's draw-order depth into its glyphs so
                 // text layers like the rest of the entity: its own background
@@ -3020,7 +3125,7 @@ impl Scene {
                 }
                 let context_scale = match self.document.objects.get(&scale) {
                     Some(acadrust::objects::ObjectType::Scale(value)) => {
-                        value.inverse_factor() as f32
+                        (value.inverse_factor() / self.annotation_scale_unit_factor()) as f32
                     }
                     _ => annotation_scale,
                 };
@@ -3203,13 +3308,8 @@ impl Scene {
         let display = self.viewport_display_settings(inst);
         let mut flags = render_mode_flags(inst.render_mode);
         if let Some(style) = display.visual_style.as_ref() {
-            if flags.mesh_fill {
-                flags.face3d_fill &= style.face_visible();
-                flags.mesh_fill &= style.face_visible();
-                flags.show_3d_edges = style.edges_visible();
-                if style.face_lighting_quality == 1 {
-                    flags.flat_shade = true;
-                }
+            if flags.mesh_fill && style.face_lighting_quality == 1 {
+                flags.flat_shade = true;
             }
         }
         let view_wireframe = !flags.face3d_fill;
@@ -3445,7 +3545,13 @@ impl Scene {
         uniforms.background_image_params = display.background.image_params;
         uniforms.background_image_transform = display.background.image_transform;
         uniforms.environment_params = display.background.environment_params;
-        uniforms.environment_view = glam::Mat4::from_quat(inst.camera.rotation);
+        let environment_scale = (inst.camera.fov_y * 0.5).tan().max(1e-4);
+        uniforms.environment_view = glam::Mat4::from_quat(inst.camera.rotation)
+            * glam::Mat4::from_scale(glam::Vec3::new(
+                visible_w / visible_h.max(1.0) * environment_scale,
+                environment_scale,
+                1.0,
+            ));
         uniforms.fog_color = display.background.fog_color;
         uniforms.fog_params = display.background.fog_params;
         uniforms.fog_distances = display.background.fog_distances;
@@ -3617,6 +3723,7 @@ impl Scene {
         } else {
             Arc::new(vec![])
         };
+        let navigating = !inst.paper_sheet && self.navigating_lod();
         Some(ViewportData {
             instance_id,
             force_rasterize,
@@ -3661,7 +3768,7 @@ impl Scene {
             // actively moving; the scene-render cache holds the full-quality
             // (hatched) frame once it settles. Only applied to the on-screen
             // Model / paper content — the paper *sheet* keeps its fills.
-            skip_hatch: self.hatch_lod_enabled() && !inst.paper_sheet && self.navigating_lod(),
+            skip_hatch: self.hatch_lod_enabled() && navigating,
             skip_background: !inst.paper_sheet && self.current_layout != "Model",
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,

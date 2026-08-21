@@ -27,6 +27,8 @@ pub enum Language {
     System,
     #[serde(rename = "en-US")]
     EnUs,
+    #[serde(rename = "bg-BG")]
+    BgBg,
     #[serde(rename = "tr-TR")]
     TrTr,
     #[serde(rename = "nl-NL")]
@@ -49,29 +51,52 @@ pub enum Language {
     ArSa,
     #[serde(rename = "ja-JP")]
     JaJp,
+    #[serde(rename = "ko-KR")]
+    KoKr,
+    #[serde(rename = "cs-CZ")]
+    CsCz,
+    #[serde(rename = "it-IT")]
+    ItIt,
+    #[serde(rename = "fi-FI")]
+    FiFi,
+    #[serde(rename = "hu-HU")]
+    HuHu,
+    #[serde(rename = "pl-PL")]
+    PlPl,
+    #[serde(rename = "zh-TW")]
+    ZhTw,
 }
 
 impl Language {
-    pub const ALL: [Language; 13] = [
+    pub const ALL: [Language; 21] = [
         Language::System,
         Language::EnUs,
-        Language::TrTr,
+        Language::BgBg,
+        Language::PtBr,
+        Language::CsCz,
         Language::NlNl,
         Language::FrFr,
+        Language::FiFi,
         Language::DeDe,
-        Language::HiIn,
+        Language::HuHu,
+        Language::ItIt,
+        Language::JaJp,
+        Language::KoKr,
+        Language::PlPl,
         Language::RuRu,
         Language::ZhCn,
         Language::EsEs,
-        Language::PtBr,
+        Language::ZhTw,
+        Language::TrTr,
+        Language::HiIn,
         Language::ArSa,
-        Language::JaJp,
     ];
 
     fn requested(self) -> Vec<i18n_embed::unic_langid::LanguageIdentifier> {
         match self {
             Language::System => system_languages(),
             Language::EnUs => vec!["en-US".parse().expect("valid locale")],
+            Language::BgBg => vec!["bg-BG".parse().expect("valid locale")],
             Language::TrTr => vec!["tr-TR".parse().expect("valid locale")],
             Language::NlNl => vec!["nl-NL".parse().expect("valid locale")],
             Language::FrFr => vec!["fr-FR".parse().expect("valid locale")],
@@ -83,6 +108,13 @@ impl Language {
             Language::PtBr => vec!["pt-BR".parse().expect("valid locale")],
             Language::ArSa => vec!["ar-SA".parse().expect("valid locale")],
             Language::JaJp => vec!["ja-JP".parse().expect("valid locale")],
+            Language::KoKr => vec!["ko-KR".parse().expect("valid locale")],
+            Language::CsCz => vec!["cs-CZ".parse().expect("valid locale")],
+            Language::ItIt => vec!["it-IT".parse().expect("valid locale")],
+            Language::FiFi => vec!["fi-FI".parse().expect("valid locale")],
+            Language::HuHu => vec!["hu-HU".parse().expect("valid locale")],
+            Language::PlPl => vec!["pl-PL".parse().expect("valid locale")],
+            Language::ZhTw => vec!["zh-TW".parse().expect("valid locale")],
         }
     }
 
@@ -90,6 +122,7 @@ impl Language {
         match self {
             Language::System => crate::tr!("language", "system"),
             Language::EnUs => crate::tr!("language", "english"),
+            Language::BgBg => crate::tr!("language", "bulgarian"),
             Language::TrTr => crate::tr!("language", "turkish"),
             Language::NlNl => crate::tr!("language", "dutch"),
             Language::FrFr => crate::tr!("language", "french"),
@@ -101,6 +134,13 @@ impl Language {
             Language::PtBr => crate::tr!("language", "portuguese"),
             Language::ArSa => crate::tr!("language", "arabic"),
             Language::JaJp => crate::tr!("language", "japanese"),
+            Language::KoKr => crate::tr!("language", "korean"),
+            Language::CsCz => crate::tr!("language", "czech"),
+            Language::ItIt => crate::tr!("language", "italian"),
+            Language::FiFi => crate::tr!("language", "finnish"),
+            Language::HuHu => crate::tr!("language", "hungarian"),
+            Language::PlPl => crate::tr!("language", "polish"),
+            Language::ZhTw => crate::tr!("language", "chinese-traditional"),
         }
     }
 }

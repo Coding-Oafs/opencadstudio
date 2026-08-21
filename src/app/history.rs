@@ -189,6 +189,7 @@ impl OpenCADStudio {
         i: usize,
         label: impl Into<String>,
         before: Vec<(Handle, Arc<EntityType>)>,
+        object_before: Vec<(Handle, acadrust::objects::ObjectType)>,
         dirty_before: bool,
     ) {
         self.finish_pending_history(i);
@@ -199,7 +200,18 @@ impl OpenCADStudio {
                 Some((handle, Some(original), Some(after)))
             })
             .collect();
-        if entities.is_empty() {
+        let objects: Vec<_> = object_before
+            .into_iter()
+            .filter_map(|(handle, before)| {
+                let after = self.tabs[i].scene.document.objects.get(&handle).cloned();
+                (Some(before.clone()) != after).then_some(ObjectEntryDelta {
+                    handle,
+                    before: Some(before),
+                    after,
+                })
+            })
+            .collect();
+        if entities.is_empty() && objects.is_empty() {
             return;
         }
         let selected: Vec<Handle> = self.tabs[i].scene.selected.iter().copied().collect();
@@ -211,7 +223,8 @@ impl OpenCADStudio {
             selected_after: selected,
             dirty_before,
             dirty_after: true,
-            structure: None,
+            active_layer: None,
+            structure: (!objects.is_empty()).then_some(StructureSnapshot::Objects(objects)),
             label: label.into(),
         };
         self.push_undo_entry(i, HistorySnapshot::Delta(delta));
@@ -301,10 +314,12 @@ impl OpenCADStudio {
             .collect();
         let selected_after: Vec<Handle> = self.tabs[i].scene.selected.iter().copied().collect();
         let dirty_after = self.tabs[i].dirty;
+        let active_layer_after = self.tabs[i].active_layer.clone();
         if entities.is_empty()
             && !structure_changed
             && pending.selected_before == selected_after
             && pending.dirty_before == dirty_after
+            && pending.active_layer == active_layer_after
         {
             return;
         }
@@ -316,6 +331,8 @@ impl OpenCADStudio {
             selected_after,
             dirty_before: pending.dirty_before,
             dirty_after,
+            active_layer: (pending.active_layer != active_layer_after)
+                .then_some((pending.active_layer, active_layer_after)),
             structure: structure_changed.then_some(StructureSnapshot::Full(pending.structure_before)),
             label: pending.label,
         };
@@ -339,6 +356,7 @@ impl OpenCADStudio {
         self.tabs[i].history.pending = Some(PendingHistorySnapshot {
             label,
             current_layout,
+            active_layer: self.tabs[i].active_layer.clone(),
             selected_before,
             dirty_before,
             structure_before,
@@ -421,6 +439,7 @@ impl OpenCADStudio {
             selected_after,
             dirty_before: pending.dirty_before,
             dirty_after: self.tabs[i].dirty,
+            active_layer: None,
             structure: Some(StructureSnapshot::Layers(entries)),
             label: pending.label,
         };
@@ -475,6 +494,7 @@ impl OpenCADStudio {
             selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
             dirty_before: pending.dirty_before,
             dirty_after: self.tabs[i].dirty,
+            active_layer: None,
             structure: Some(StructureSnapshot::TextStyles(entries)),
             label: pending.label,
         };
@@ -529,6 +549,7 @@ impl OpenCADStudio {
             selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
             dirty_before: pending.dirty_before,
             dirty_after: self.tabs[i].dirty,
+            active_layer: None,
             structure: Some(StructureSnapshot::DimStyles(entries)),
             label: pending.label,
         };
@@ -591,6 +612,7 @@ impl OpenCADStudio {
             selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
             dirty_before: pending.dirty_before,
             dirty_after: self.tabs[i].dirty,
+            active_layer: None,
             structure: Some(StructureSnapshot::Objects(entries)),
             label: pending.label,
         };
@@ -617,6 +639,7 @@ impl OpenCADStudio {
             selected_after: self.tabs[i].scene.selected.iter().copied().collect(),
             dirty_before,
             dirty_after: true,
+            active_layer: None,
             structure: Some(StructureSnapshot::Styles {
                 before,
                 after,
@@ -742,6 +765,7 @@ impl OpenCADStudio {
             selected_after,
             dirty_before: pending.dirty_before,
             dirty_after,
+            active_layer: None,
             structure,
             label: pending.label,
         };
@@ -896,6 +920,9 @@ impl OpenCADStudio {
         } else {
             d.current_layout_after.clone()
         };
+        if let Some((before, after)) = &d.active_layer {
+            self.tabs[i].active_layer = if undo { before } else { after }.clone();
+        }
         self.tabs[i].dirty = dirty;
         changes
     }
@@ -1043,7 +1070,7 @@ impl OpenCADStudio {
                             structure,
                             StructureSnapshot::Full(_) | StructureSnapshot::Layers(_)
                         )
-                    }) || d.entities.iter().any(|(_, before, after)| {
+                    }) || d.active_layer.is_some() || d.entities.iter().any(|(_, before, after)| {
                         before
                             .as_deref()
                             .is_some_and(|entity| matches!(entity, EntityType::Viewport(_)))
@@ -1098,7 +1125,7 @@ impl OpenCADStudio {
                             structure,
                             StructureSnapshot::Full(_) | StructureSnapshot::Layers(_)
                         )
-                    }) || d.entities.iter().any(|(_, before, after)| {
+                    }) || d.active_layer.is_some() || d.entities.iter().any(|(_, before, after)| {
                         before
                             .as_deref()
                             .is_some_and(|entity| matches!(entity, EntityType::Viewport(_)))

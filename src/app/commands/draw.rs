@@ -48,7 +48,11 @@ impl OpenCADStudio {
                 let wo_cmd = match args.as_str() {
                     "P" | "POLYLINE" => WipeoutCommand::new_polyline(),
                     "R" | "RECTANGULAR" => WipeoutCommand::new_rectangular(),
-                    _ => WipeoutCommand::new_polygonal(),
+                    _ => WipeoutCommand::new_polygonal(
+                        crate::modules::draw::draw::wipeout::wipeout_frame_mode(
+                            &self.tabs[i].scene.document,
+                        ),
+                    ),
                 };
                 self.command_line.push_info(&wo_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(wo_cmd));
@@ -60,7 +64,15 @@ impl OpenCADStudio {
 
             "REVCLOUD" => {
                 use crate::modules::draw::draw::revcloud::RevCloudCommand;
-                let cmd = RevCloudCommand::new();
+                let view_height = self.tabs[i].scene.camera.borrow().ortho_size() as f64 * 2.0;
+                let default_arc_length = (view_height * 0.0125).max(1.0e-6);
+                let sources = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .map(|entity| (entity.common().handle, entity.clone()))
+                    .collect();
+                let cmd = RevCloudCommand::new(default_arc_length, sources);
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
@@ -145,6 +157,9 @@ impl OpenCADStudio {
                         let mut changed = 0usize;
                         self.push_undo_snapshot(i, "ATTEDIT");
                         for sh in &selected_handles {
+                            if self.tabs[i].scene.is_layer_locked(*sh) {
+                                continue;
+                            }
                             if let Some(acadrust::EntityType::Insert(ins)) = self.tabs[i]
                                 .scene
                                 .document
@@ -195,10 +210,22 @@ impl OpenCADStudio {
                 let sub = cmd.split_whitespace().nth(1).unwrap_or("").to_uppercase();
                 match sub.as_str() {
                     "ON" | "OFF" | "NORMAL" => {
+                        let handles: Vec<_> = self.tabs[i]
+                            .scene
+                            .document
+                            .entities()
+                            .filter_map(|entity| {
+                                matches!(entity, acadrust::EntityType::AttributeDefinition(_))
+                                    .then_some(entity.common().handle)
+                            })
+                            .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
+                            .collect();
                         self.push_undo_snapshot(i, "ATTDISP");
                         let mut count = 0usize;
-                        for entity in self.tabs[i].scene.document.entities_mut() {
-                            if let acadrust::EntityType::AttributeDefinition(ad) = entity {
+                        for handle in handles {
+                            if let Some(acadrust::EntityType::AttributeDefinition(ad)) =
+                                self.tabs[i].scene.document.get_entity_mut(handle)
+                            {
                                 match sub.as_str() {
                                     "ON" => {
                                         ad.flags.invisible = false;
@@ -207,8 +234,6 @@ impl OpenCADStudio {
                                     "OFF" => {
                                         ad.flags.invisible = true;
                                         count += 1;
-                                    }
-                                    "NORMAL" => { /* leave existing flags — they are already the "normal" state */
                                     }
                                     _ => {}
                                 }
@@ -462,7 +487,12 @@ impl OpenCADStudio {
 
             "SKETCH" => {
                 use crate::modules::draw::draw::sketch::SketchCommand;
-                let new_cmd = SketchCommand::new();
+                let header = &self.tabs[i].scene.document.header;
+                let new_cmd = SketchCommand::new(
+                    header.sketch_type,
+                    header.sketch_increment,
+                    header.sketch_tolerance,
+                );
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -490,6 +520,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -605,9 +636,25 @@ impl OpenCADStudio {
             "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
                 let outlines = self.tabs[i].scene.hatch_boundary_outlines();
-                let new_cmd = HatchCommand::new(outlines);
+                let boundary_sources = self.tabs[i].scene.hatch_boundary_sources();
+                let selected = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .map(|(handle, _)| handle)
+                    .collect::<Vec<_>>();
+                let inherited = selected
+                    .iter()
+                    .find_map(|handle| {
+                        let model = self.tabs[i].scene.hatches.get(handle)?.clone();
+                        let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
+                        Some((model, common.color.clone(), common.transparency))
+                    });
+                let new_cmd =
+                    HatchCommand::new(outlines, boundary_sources, selected, inherited);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+                self.refresh_area_preview(i);
             }
 
             "HATCHEDIT" => {
@@ -638,16 +685,30 @@ impl OpenCADStudio {
 
             "GRADIENT" => {
                 use crate::modules::draw::draw::hatch::GradientCommand;
-                let outlines = self.tabs[i].scene.closed_outlines();
-                let new_cmd = GradientCommand::new(outlines);
+                let outlines = self.tabs[i].scene.hatch_boundary_outlines();
+                let boundary_sources = self.tabs[i].scene.hatch_boundary_sources();
+                let new_cmd = GradientCommand::new(outlines, boundary_sources);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
             "BOUNDARY" => {
                 use crate::modules::draw::draw::hatch::BoundaryCommand;
-                let outlines = self.tabs[i].scene.closed_outlines();
-                let new_cmd = BoundaryCommand::new(outlines);
+                let plane = if self.tabs[i].editing_model_space() {
+                    self.tabs[i].ucs_xform().working_plane()
+                } else {
+                    crate::command::WorkingPlane::default()
+                };
+                let sources = self.tabs[i]
+                    .scene
+                    .boundary_sources_on_plane(plane, 1.0e-6);
+                let selected = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .iter()
+                    .map(|(handle, _)| *handle)
+                    .collect();
+                let new_cmd = BoundaryCommand::new(sources, selected, plane);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -730,6 +791,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -826,33 +888,21 @@ impl OpenCADStudio {
                 use acadrust::types::Vector3;
                 let mut loops: Vec<Vec<Vector3>> = Vec::new();
                 for (_, e) in self.tabs[i].scene.selected_entities().iter() {
-                    match e {
+                    let supported = matches!(
+                        e,
                         acadrust::EntityType::LwPolyline(pl)
-                            if pl.is_closed && pl.vertices.len() >= 3 =>
-                        {
-                            loops.push(
-                                pl.vertices
-                                    .iter()
-                                    .map(|v| Vector3::new(v.location.x, v.location.y, 0.0))
-                                    .collect(),
-                            );
-                        }
-                        acadrust::EntityType::Circle(c) => {
-                            let n = 64;
-                            loops.push(
-                                (0..n)
-                                    .map(|k| {
-                                        let a = std::f64::consts::TAU * k as f64 / n as f64;
-                                        Vector3::new(
-                                            c.center.x + c.radius * a.cos(),
-                                            c.center.y + c.radius * a.sin(),
-                                            c.center.z,
-                                        )
-                                    })
-                                    .collect(),
-                            );
-                        }
-                        _ => {}
+                            if pl.is_closed && pl.vertices.len() >= 3
+                    ) || matches!(e, acadrust::EntityType::Circle(_));
+                    if supported {
+                        let Some(curve) = crate::entities::curve::entity_curve(e) else {
+                            continue;
+                        };
+                        loops.push(
+                            crate::entities::curve::curve_points(&curve)
+                                .into_iter()
+                                .map(|point| Vector3::new(point[0], point[1], point[2]))
+                                .collect(),
+                        );
                     }
                 }
                 if loops.is_empty() {

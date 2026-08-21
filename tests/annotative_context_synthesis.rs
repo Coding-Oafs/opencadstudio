@@ -23,7 +23,7 @@ fn empty_annotation_scales_is_not_annotative() {
     let ent = doc.add_entity(EntityType::MText(m)).unwrap();
 
     // Build xdict -> "AcDbContextDataManager" -> "ACDB_ANNOTATIONSCALES" (empty).
-    let mut mk = |doc: &mut CadDocument, owner: Handle| -> Handle {
+    let mk = |doc: &mut CadDocument, owner: Handle| -> Handle {
         let h = doc.allocate_handle();
         let mut d = Dictionary::new();
         d.handle = h;

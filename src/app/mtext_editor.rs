@@ -606,6 +606,9 @@ impl super::OpenCADStudio {
         initial: &str,
         height: f64,
     ) {
+        if handle.is_some_and(|h| self.tabs[self.active_tab].scene.is_layer_locked(h)) {
+            return;
+        }
         let mut state = MTextEditorState::new(pos, initial, height, handle);
         if let Some(p) = self.tabs[self.active_tab].scene.selection.borrow().last_move_pos {
             state.screen_anchor = p;
@@ -702,7 +705,7 @@ impl super::OpenCADStudio {
         // it keeps the layout's shape, wrapping and alignment identical.
         mt.insertion_point = Vector3::new(0.0, 0.0, 0.0);
         let entity = EntityType::MText(mt.clone());
-        let anno = self.tabs[i].scene.annotation_scale;
+        let anno = 1.0;
         let bg = self.tabs[i].scene.bg_color;
         let wires: Vec<WireModel> = tessellate::tessellate(
             &self.tabs[i].scene.document,
@@ -1222,6 +1225,10 @@ impl super::OpenCADStudio {
             return false;
         }
         if let Some(h) = ed.editing {
+            if self.tabs[i].scene.is_layer_locked(h) {
+                self.refresh_properties();
+                return false;
+            }
             self.push_undo_snapshot(i, "MTEXT");
             match self.tabs[i].scene.document.get_entity_mut(h) {
                 Some(EntityType::MText(t)) => {
@@ -1307,6 +1314,9 @@ impl super::OpenCADStudio {
             return;
         }
         if let Some(h) = editing {
+            if self.tabs[i].scene.is_layer_locked(h) {
+                return;
+            }
             self.push_undo_snapshot(i, "MTEXT");
             match self.tabs[i].scene.document.get_entity_mut(h) {
                 Some(EntityType::MText(t)) => {

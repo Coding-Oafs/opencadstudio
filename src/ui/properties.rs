@@ -121,6 +121,7 @@ impl canvas::Program<Message> for HatchPatternPreview {
             }
             HatchPattern::Pattern(_) => {
                 let model = HatchModel {
+                    render_instance: None,
                     world_origin: [0.0, 0.0],
                     boundary: Arc::new(vec![
                         [pad, pad],
@@ -129,6 +130,10 @@ impl canvas::Program<Message> for HatchPatternPreview {
                         [pad, bounds.height - pad],
                     ]),
                     boundary_wcs: None,
+                    fill_plane: None,
+                    fill_plane_boundary: None,
+                    boundary_exterior: None,
+                    boundary_sources: None,
                     pattern: self.pattern.clone(),
                     name: String::new(),
                     color: [1.0; 4],
@@ -239,11 +244,123 @@ pub fn lw_options() -> Vec<LwItem> {
     .collect()
 }
 
-/// Edit-buffer key for a block attribute value, keyed by its tag. Kept in one
-/// place so the live-input handler and the row renderer agree. The `\x01`
-/// sentinel guarantees no collision with a geometry field's `&'static str` key.
-pub fn attr_edit_key(tag: &str) -> String {
-    format!("\x01attr\x01{tag}")
+/// Edit-buffer / active-field key identifying which value a row edits. Geometry
+/// and common fields key on their `&'static str` field name; block attribute
+/// rows key on the attribute's tag. One typed enum replaces the old
+/// `\x01attr\x01…` sentinel prefix, so the two key namespaces can't collide by
+/// construction.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FieldKey {
+    /// A geometry / common editable value field, keyed by its field name.
+    Geom(&'static str),
+    /// A block attribute value field, keyed by its tag.
+    Attr(String),
+}
+
+impl FieldKey {
+    /// The text-input widget id backing this key (the shape used by the row
+    /// renderer and the `PropSyncActive` handler). Geometry keys map straight
+    /// onto their field id; attribute keys map onto the tag's field id.
+    pub fn widget_id(&self) -> iced::widget::Id {
+        match self {
+            FieldKey::Geom(field) => prop_geom_field_id(field),
+            FieldKey::Attr(tag) => prop_attr_field_id(tag),
+        }
+    }
+}
+
+/// Edit-buffer / active-field key for a block attribute value, keyed by its
+/// tag. Kept in one place so the live-input handler and the row renderer agree.
+pub fn attr_edit_key(tag: &str) -> FieldKey {
+    FieldKey::Attr(tag.to_string())
+}
+
+/// Text-input widget id for a geometry/common editable value field. The same
+/// id (built from the `&'static str` key) is used by the row renderer to tag
+/// the input and by the update handler to focus / select it on click.
+pub fn prop_geom_field_id(field: &str) -> iced::widget::Id {
+    iced::widget::Id::from(format!("props-geom-field-{field}"))
+}
+
+/// Text-input widget id for a block attribute value field, keyed by the tag.
+pub fn prop_attr_field_id(tag: &str) -> iced::widget::Id {
+    iced::widget::Id::from(format!("props-attr-field-{tag}"))
+}
+
+/// Keeps the active-row highlight keyed to real keyboard focus: returns true
+/// only while the currently-focused widget IS the text input of the active
+/// field. Focus on any other widget (another property field, a non-property
+/// widget, or nothing at all) clears the marker. Setting the key for a newly
+/// focused property field is handled by the `PropSyncActive` handler before
+/// this runs.
+pub fn active_key_focused(
+    active_key: Option<&FieldKey>,
+    focused: Option<&iced::widget::Id>,
+) -> bool {
+    match (active_key, focused) {
+        (Some(key), Some(focused_id)) => focused_id == &key.widget_id(),
+        _ => false,
+    }
+}
+
+/// Precomputes the focused-id → [`FieldKey`] map for every editable value row
+/// in the given sections. Building it once when the panel's sections are
+/// assembled lets a `PropSyncActive` event map a focused text-input id back to
+/// its field key in O(1) instead of re-scanning the sections. The block-Name
+/// caret-dropdown (`EditChoice`) is editable but deliberately carries no id and
+/// is excluded here, mirroring the renderer.
+pub fn build_field_key_map(
+    sections: &[PropSection],
+) -> HashMap<iced::widget::Id, FieldKey> {
+    let mut map = HashMap::default();
+    for section in sections {
+        for prop in &section.props {
+            let key = match &prop.value {
+                PropValue::EditText(_) | PropValue::PlainText(_) => {
+                    Some(FieldKey::Geom(prop.field))
+                }
+                PropValue::AttrText { tag, .. } => Some(FieldKey::Attr(tag.clone())),
+                _ => None,
+            };
+            if let Some(key) = key {
+                map.insert(key.widget_id(), key);
+            }
+        }
+    }
+    map
+}
+
+/// Returns a task that sweeps the widget tree for the currently-focused widget
+/// and reports its `Id` via [`Message::PropSyncActive`], which the update
+/// handler uses to reconcile the active-row marker against real focus. Mirrors
+/// the `WebFieldCopy` operation idiom: `focusable` fires for every focusable
+/// widget, and we record the one that `is_focused()`.
+pub fn sync_active_field_task() -> iced::Task<Message> {
+    use iced::advanced::widget::operation::{Focusable, Outcome};
+    use iced::advanced::widget::{Id, Operation};
+    #[derive(Default)]
+    struct FocusedId {
+        focused: Option<Id>,
+    }
+    impl Operation<Option<Id>> for FocusedId {
+        fn focusable(
+            &mut self,
+            id: Option<&Id>,
+            _bounds: iced::Rectangle,
+            state: &mut dyn Focusable,
+        ) {
+            if state.is_focused() && self.focused.is_none() {
+                self.focused = id.cloned();
+            }
+        }
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Option<Id>>)) {
+            operate(self);
+        }
+        fn finish(&self) -> Outcome<Option<Id>> {
+            Outcome::Some(self.focused.clone())
+        }
+    }
+    iced::advanced::widget::operate(FocusedId::default()).map(Message::PropSyncActive)
 }
 
 /// A translated choice label paired with the unchanged value stored in the
@@ -288,8 +405,8 @@ pub struct PropertiesPanel {
     pub hatch_pattern_search: String,
     /// Keyboard/hover focus inside the filtered visual pattern grid.
     pub hatch_pattern_focus: usize,
-    /// In-progress text edits keyed by `field` name.
-    pub edit_buf: HashMap<String, String>,
+    /// In-progress text edits keyed by [`FieldKey`].
+    pub edit_buf: HashMap<FieldKey, String>,
     /// Entity handles this panel was built for. `refresh_properties` compares
     /// it against the new selection to decide whether an uncommitted `edit_buf`
     /// may carry over: same selection → keep (survive a commit-triggered
@@ -321,6 +438,16 @@ pub struct PropertiesPanel {
     pub expanded_groups: HashSet<String>,
     /// Whether the editable-dropdown (block Name) option list is open.
     pub edit_choice_open: bool,
+    /// Field key of the value row currently being edited, or `None`. Marked when
+    /// the user focuses an editable value field and cleared on commit / when the
+    /// selection changes, so the active row can be highlighted. Geometry fields
+    /// use [`FieldKey::Geom`]; attribute rows use [`FieldKey::Attr`].
+    pub active_field: Option<FieldKey>,
+    /// Focused-text-input id → [`FieldKey`] for the editable value rows in
+    /// [`PropertiesPanel::sections`], precomputed by [`build_field_key_map`]
+    /// when the panel is rebuilt. Gives the `PropSyncActive` handler an O(1)
+    /// id→key lookup. Derived from `sections`: rebuild it alongside them.
+    pub field_key_by_id: HashMap<iced::widget::Id, FieldKey>,
 }
 
 impl Default for PropertiesPanel {
@@ -349,6 +476,8 @@ impl Default for PropertiesPanel {
             prop_vertex_indicator_active: false,
             expanded_groups: HashSet::default(),
             edit_choice_open: false,
+            active_field: None,
+            field_key_by_id: HashMap::default(),
         }
     }
 }
@@ -361,6 +490,13 @@ impl PropertiesPanel {
         }
     }
 
+    /// Maps a focused text-input widget id back to the [`FieldKey`] of that
+    /// property row, if the id belongs to an editable value field currently
+    /// shown. O(1) via the [`PropertiesPanel::field_key_by_id`] map.
+    pub fn prop_field_key_for_id(&self, id: &iced::widget::Id) -> Option<FieldKey> {
+        self.field_key_by_id.get(id).cloned()
+    }
+
     pub fn selected_handles(&self) -> Vec<Handle> {
         self.selected_group
             .as_ref()
@@ -369,6 +505,7 @@ impl PropertiesPanel {
     }
 
     pub fn view(&self, width: f32, auto_collapse: bool) -> Element<'_, Message> {
+        use crate::ui::dock::{DockMsg, PanelId};
         // ── Header ──────────────────────────────────────────────────────────
         let pin_icon = if auto_collapse {
             crate::ui::icons::themed_primary_weak_text(crate::ui::icons::PIN, 12.0)
@@ -376,7 +513,7 @@ impl PropertiesPanel {
             crate::ui::icons::themed_secondary(crate::ui::icons::PIN, 12.0)
         };
         let pin = button(pin_icon)
-            .on_press(Message::PropertiesAutoCollapseToggle)
+            .on_press(Message::Dock(DockMsg::AutoCollapseToggle(PanelId::Properties)))
             .style(move |theme: &Theme, status| {
                 let mut style = button::subtle(theme, status);
                 if auto_collapse {
@@ -395,7 +532,7 @@ impl PropertiesPanel {
             crate::ui::icons::CLOSE,
             12.0,
         ))
-        .on_press(Message::PropertiesClose)
+        .on_press(Message::Dock(DockMsg::Close(PanelId::Properties)))
         .style(button::subtle)
         .padding([3, 5]);
         let close = tooltip(
@@ -425,7 +562,7 @@ impl PropertiesPanel {
             .width(Length::Fill)
             .padding([3, 6]),
         )
-        .on_press(Message::PropertiesDockGrab)
+        .on_press(Message::Dock(DockMsg::DockGrab(PanelId::Properties)))
         .interaction(iced::mouse::Interaction::Grab);
 
         // ── Title bar (entity type / "No Selection") ─────────────────────
@@ -632,7 +769,12 @@ impl PropertiesPanel {
             }
             PropValue::BoolToggle { field, value } => render_bool_row(label, *field, *value),
             PropValue::Stepper { display, .. } => render_stepper_row(label, display),
-            PropValue::EditText(val) => self.render_edit_row(label, prop.field, val),
+            PropValue::EditText(val) | PropValue::PlainText(val) => {
+                self.render_edit_row(label, prop.field, val)
+            }
+            PropValue::ReadOnly(val) if prop.field == "annotative_scale" => {
+                render_annotative_scale_row(label, val)
+            }
             PropValue::ReadOnly(val) => render_ro_row(label, val),
             PropValue::HatchPatternChoice(current) => {
                 self.render_hatch_pattern_row(label, current)
@@ -926,13 +1068,16 @@ impl PropertiesPanel {
         field: &'static str,
         entity_val: &'a str,
     ) -> Element<'a, Message> {
+        let key = FieldKey::Geom(field);
         let display = self
             .edit_buf
-            .get(field)
+            .get(&key)
             .map(|s| s.as_str())
             .unwrap_or(entity_val);
 
+        let active = self.active_field.as_ref() == Some(&key);
         let ti = text_input("", display)
+            .id(prop_geom_field_id(field))
             .on_input(move |v| Message::PropGeomInput { field, value: v })
             .on_submit(Message::PropGeomCommit(field))
             .size(FONT_SZ)
@@ -940,7 +1085,7 @@ impl PropertiesPanel {
             .padding([3, 6])
             .width(Length::Fill);
 
-        prop_row_widget(label, ti.into())
+        prop_row_with_active(label, ti.into(), active)
     }
 
     /// Editable dropdown row (block reference Name): a text field with a caret
@@ -955,9 +1100,13 @@ impl PropertiesPanel {
         entity_val: &'a str,
         options: &'a [String],
     ) -> Element<'a, Message> {
-        let typed = self.edit_buf.get(field);
+        let typed = self.edit_buf.get(&FieldKey::Geom(field));
         let display = typed.map(|s| s.as_str()).unwrap_or(entity_val);
 
+        // NOTE: unlike `render_edit_row` / `render_attr_row`, this input is
+        // deliberately NOT wrapped in a click-to-focus mouse_area. It is a
+        // caret-dropdown: clicking should place the caret / open the list, and
+        // the auto Select-all-on-focus would fight that. Don't "fix" it.
         let input = text_input("", display)
             .on_input(move |v| Message::PropGeomInput { field, value: v })
             .on_submit(Message::PropGeomCommit(field))
@@ -1071,8 +1220,10 @@ impl PropertiesPanel {
             .map(|s| s.as_str())
             .unwrap_or(entity_val);
 
+        let active = self.active_field.as_ref() == Some(&key);
         let tag_for_input = tag.to_string();
         let ti = text_input("", display)
+            .id(prop_attr_field_id(tag))
             .on_input(move |v| Message::PropAttrInput {
                 tag: tag_for_input.clone(),
                 value: v,
@@ -1083,7 +1234,7 @@ impl PropertiesPanel {
             .padding([3, 6])
             .width(Length::Fill);
 
-        prop_row_widget(tag, ti.into())
+        prop_row_with_active(tag, ti.into(), active)
     }
 
     fn render_hatch_pattern_row<'a>(
@@ -1597,13 +1748,8 @@ fn render_group_row(
         .height(Length::Fixed(ROW_H))
         .align_y(iced::Center);
 
-    // text_input copies the value, so the locally-built `joined` is fine here.
-    let value_field = text_input("", &joined)
-        .on_input(|_| Message::Noop)
-        .size(FONT_SZ)
-        .style(ro_input_style)
-        .padding([3, 6])
-        .width(Length::Fill);
+    // The field copies the value, so the locally-built `joined` is fine here.
+    let value_field = crate::ui::read_only::field(&joined, FONT_SZ, Length::Fill);
     let value_col = container(value_field)
         .style(|theme: &Theme| container::Style {
             background: Some(Background::Color(
@@ -1633,32 +1779,60 @@ fn render_group_row(
         })
         .into()
 }
+fn render_annotative_scale_row<'a>(
+    label: &'a str,
+    value: &'a str,
+) -> Element<'a, Message> {
+    let field = crate::ui::read_only::field(value, FONT_SZ, Length::Fill);
 
+    let manage = button(text("...").size(FONT_SZ))
+        .on_press(Message::AnnoObjectScaleOpen)
+        .style(button::secondary)
+        .padding([2, 7]);
+
+    let controls = row![
+        field,
+        manage,
+        iced::widget::space().width(10)
+    ]
+    .spacing(2)
+    .align_y(iced::Center)
+    .width(Length::Fill);
+
+    prop_row_widget(label, controls.into())
+}
 fn render_ro_row<'a>(label: &'a str, value: &'a str) -> Element<'a, Message> {
-    // A read-only value is shown as a non-editable but selectable text field:
-    // the user can select the text (which carries the full, un-truncated
-    // value) and copy it with Ctrl+C. Keystrokes route to Noop, so the value
-    // can be selected/copied but never edited.
-    let field = text_input("", value)
-        .on_input(|_| Message::Noop)
-        .size(FONT_SZ)
-        .style(ro_input_style)
-        .padding([3, 6])
-        .width(Length::Fill);
-    prop_row_widget(label, field.into())
+    // A read-only value is shown as a non-editable but selectable field: no
+    // on_input means the caret never appears, but the text can be selected
+    // (carrying the full, un-truncated value) and copied with Ctrl+C.
+    let field = crate::ui::read_only::field(value, FONT_SZ, Length::Fill);
+    prop_row_widget(label, field)
 }
 
 /// Build a label | widget property row.
 fn prop_row_widget<'a>(label: &'a str, widget: Element<'a, Message>) -> Element<'a, Message> {
+    prop_row_with_active(label, widget, false)
+}
+
+/// Like [`prop_row_widget`] but tints the row as the currently-active edit
+/// row when `active` is true, using the palette's `primary.weak` highlight so
+/// it reads as "selected" without shouting.
+fn prop_row_with_active<'a>(
+    label: &'a str,
+    widget: Element<'a, Message>,
+    active: bool,
+) -> Element<'a, Message> {
     let label_col = container(
         text(crate::ui::text_util::elide(label, 18))
             .size(FONT_SZ)
             .style(muted_text_style),
     )
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.weakest.color,
-            )),
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(if active {
+                theme.palette().primary.weak.color
+            } else {
+                theme.palette().background.weakest.color
+            })),
             ..Default::default()
         })
         .width(Length::FillPortion(5))
@@ -1671,10 +1845,12 @@ fn prop_row_widget<'a>(label: &'a str, widget: Element<'a, Message>) -> Element<
             right: 6.0,
         });
     let value_col = container(widget)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.palette().background.base.color,
-            )),
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(if active {
+                theme.palette().primary.weak.color
+            } else {
+                theme.palette().background.base.color
+            })),
             ..Default::default()
         })
         .width(Length::FillPortion(6))
@@ -1688,9 +1864,13 @@ fn prop_row_widget<'a>(label: &'a str, widget: Element<'a, Message>) -> Element<
         });
     container(row![label_col, value_col])
         .height(Length::Fixed(ROW_H))
-        .style(|theme: &Theme| container::Style {
+        .style(move |theme: &Theme| container::Style {
             border: Border {
-                color: theme.palette().background.neutral.color,
+                color: if active {
+                    theme.palette().primary.base.color
+                } else {
+                    theme.palette().background.neutral.color
+                },
                 width: 1.0,
                 radius: 0.0.into(),
             },
@@ -1805,25 +1985,6 @@ fn combo_input_style(theme: &Theme, status: text_input::Status) -> text_input::S
     text_input_style(theme, status)
 }
 
-/// Style for a read-only-but-selectable value field: flat (no input box or
-/// focus highlight, so it reads as plain text, unlike the bordered editable
-/// fields) yet with a visible selection colour so Ctrl+C copy is discoverable.
-fn ro_input_style(theme: &Theme, _status: text_input::Status) -> text_input::Style {
-    let palette = theme.palette();
-    text_input::Style {
-        background: Background::Color(palette.background.base.color),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 0.0.into(),
-        },
-        icon: Color::TRANSPARENT,
-        placeholder: palette.background.base.text.scale_alpha(0.48),
-        value: palette.background.base.text,
-        selection: palette.primary.base.color.scale_alpha(0.5),
-    }
-}
-
 fn muted_text_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(theme.palette().background.base.text.scale_alpha(0.72)),
@@ -1838,7 +1999,105 @@ fn hint_text_style(theme: &Theme) -> iced::widget::text::Style {
 
 #[cfg(test)]
 mod tests {
-    use super::{hatch_pattern_matches, hatch_preview_scale};
+    use super::{
+        active_key_focused, attr_edit_key, build_field_key_map, hatch_pattern_matches,
+        hatch_preview_scale, prop_attr_field_id, prop_geom_field_id, FieldKey,
+    };
+
+    fn sample_sections() -> Vec<crate::scene::model::object::PropSection> {
+        use crate::scene::model::object::{Property, PropValue};
+        vec![
+            crate::scene::model::object::PropSection {
+                title: "Geometry".into(),
+                props: vec![Property {
+                    label: "X".into(),
+                    field: "pos_x",
+                    value: PropValue::EditText("1.0".into()),
+                }],
+            },
+            crate::scene::model::object::PropSection {
+                title: "Attributes".into(),
+                props: vec![Property {
+                    label: "TITLE".into(),
+                    field: "0",
+                    value: PropValue::AttrText {
+                        tag: "TITLE".into(),
+                        value: "hello".into(),
+                    },
+                }],
+            },
+            crate::scene::model::object::PropSection {
+                title: "Reference".into(),
+                props: vec![Property {
+                    label: "Name".into(),
+                    field: "name",
+                    value: PropValue::EditChoice {
+                        value: "Door".into(),
+                        options: vec!["Door".into(), "Window".into()],
+                    },
+                }],
+            },
+        ]
+    }
+
+    #[test]
+    fn focus_transition_updates_the_active_field_highlight() {
+        // The highlight is keyed to real keyboard focus: it persists only while
+        // the focused widget is THAT field's text input, and clears when focus
+        // moves to any other widget (or nowhere).
+        //
+        // Focus on the active field's own input → row stays marked active.
+        let focused = prop_geom_field_id("pos_x");
+        assert!(active_key_focused(Some(&FieldKey::Geom("pos_x")), Some(&focused)));
+
+        // Focus moves to another property field → superseded (cleared here; the
+        // manual focus-setter then marks the new field active).
+        assert!(!active_key_focused(
+            Some(&FieldKey::Geom("pos_x")),
+            Some(&prop_geom_field_id("pos_y"))
+        ));
+
+        // Focus moves to a non-property widget / nothing → cleared.
+        assert!(!active_key_focused(
+            Some(&FieldKey::Geom("pos_x")),
+            Some(&prop_attr_field_id("TITLE"))
+        ));
+        assert!(!active_key_focused(Some(&FieldKey::Geom("pos_x")), None));
+
+        // No active field (or one whose input isn't focused) never reads active.
+        assert!(!active_key_focused(None, Some(&prop_geom_field_id("pos_x"))));
+    }
+
+    #[test]
+    fn field_ids_are_distinct_across_geometries_and_attributes() {
+        assert_ne!(prop_geom_field_id("pos_x"), prop_geom_field_id("pos_y"));
+        assert_ne!(prop_geom_field_id("pos_x"), prop_attr_field_id("TITLE"));
+        assert_eq!(prop_attr_field_id("TITLE"), prop_attr_field_id("TITLE"));
+    }
+
+    #[test]
+    fn prop_field_key_for_id_maps_focus_ids_to_active_keys() {
+        let sections = sample_sections();
+        let map = build_field_key_map(&sections);
+
+        // A focused geometry edit field maps back to its `&'static str` key,
+        // and round-trips through `active_key_focused`.
+        let geom_id = prop_geom_field_id("pos_x");
+        assert_eq!(map.get(&geom_id), Some(&FieldKey::Geom("pos_x")));
+        assert!(active_key_focused(map.get(&geom_id), Some(&geom_id)));
+
+        // A focused attribute edit field maps back to its tag key.
+        let attr_id = prop_attr_field_id("TITLE");
+        assert_eq!(map.get(&attr_id), Some(&attr_edit_key("TITLE")));
+        assert!(active_key_focused(map.get(&attr_id), Some(&attr_id)));
+
+        // The block-Name caret-dropdown is editable but deliberately excluded.
+        assert_eq!(map.get(&prop_geom_field_id("name")), None);
+
+        // Unknown or non-property ids map to nothing.
+        assert_eq!(map.get(&prop_geom_field_id("nope")), None);
+        assert_eq!(map.get(&iced::widget::Id::new("elsewhere")), None);
+    }
 
     #[test]
     fn hatch_picker_filters_names_and_descriptions() {

@@ -106,6 +106,7 @@ impl OpenCADStudio {
                         }
                         self.push_undo_snapshot(i, "LAYER LOCK");
                         self.tabs[i].dirty = true;
+                        self.refresh_properties();
                         self.command_line.push_output(crate::t!("LAYER: layers locked.").as_ref());
                     }
                     "UNLOCK" | "UL" => {
@@ -116,6 +117,7 @@ impl OpenCADStudio {
                         }
                         self.push_undo_snapshot(i, "LAYER UNLOCK");
                         self.tabs[i].dirty = true;
+                        self.refresh_properties();
                         self.command_line.push_output(crate::t!("LAYER: layers unlocked.").as_ref());
                     }
                     "COLOR" | "C" => {

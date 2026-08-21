@@ -158,7 +158,10 @@ pub fn lengthen_entity(entity: &EntityType, pick_pt: Vec3, mode: &LenMode) -> Op
         EntityType::Arc(a) => lengthen_arc(a, pick_pt, mode),
         EntityType::Ellipse(e) => lengthen_ellipse(e, pick_pt, mode),
         EntityType::Spline(s) => lengthen_spline(s, pick_pt, mode),
-        EntityType::LwPolyline(p) => lengthen_lwpoly(p, pick_pt, mode),
+        EntityType::LwPolyline(p) => {
+            let p = crate::entities::curve::lwpolyline_world_xy(p)?;
+            lengthen_lwpoly(&p, pick_pt, mode)
+        }
         _ => None,
     }
 }

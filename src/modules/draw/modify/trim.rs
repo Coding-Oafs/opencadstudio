@@ -29,13 +29,13 @@ use acadrust::{EntityType, Handle};
 use glam::DVec3;
 use cadkernel::geom2d::nurbs::clamped_uniform_knots;
 use cadkernel::geom2d::{
-    intersect as kernel_intersect, Arc as KernelArc, Circle as KernelCircle, Curve,
-    Extent as KernelExtent,
+    intersect as kernel_intersect, trim_spans as kernel_trim_spans, Arc as KernelArc,
+    Circle as KernelCircle, Curve, Extent as KernelExtent,
     Ellipse as KernelEllipse, EllipseArc as KernelEllipseArc, Line as KernelLine,
     NurbsCurve, Ray as KernelRay, Tolerance as KernelTolerance, XLine as KernelXLine,
 };
 
-use crate::entities::curve::entity_curve_xy;
+use crate::entities::curve::{entity_curve_xy, entity_with_lwpolyline_world_xy};
 
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::draw::modify::spline_ops::{
@@ -485,7 +485,24 @@ fn trim_ellipse(orig: &EllipseEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> 
         return vec![EntityType::Ellipse(e)];
     }
 
-    trim_intervals(ts, t_click)
+    let major_radius = orig.major_axis.x.hypot(orig.major_axis.y);
+    if major_radius < 1e-9 {
+        return vec![];
+    }
+    let curve = Curve::Ellipse(KernelEllipseArc {
+        ellipse: KernelEllipse {
+            centre: [orig.center.x, orig.center.y],
+            major_radius,
+            minor_radius: major_radius * orig.minor_axis_ratio,
+            major_axis: [
+                orig.major_axis.x / major_radius,
+                orig.major_axis.y / major_radius,
+            ],
+        },
+        start_parameter: t0,
+        end_parameter: t1,
+    });
+    trim_intervals(&curve, ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
             if (tb - ta).abs() < 1e-6 {
@@ -545,11 +562,13 @@ fn extend_ellipse(orig: &EllipseEnt, t_click: f64, geos: &[Geo]) -> Option<Entit
 
 /// Trim a Spline entity. Returns surviving spline pieces (one or two).
 fn trim_spline(spl: &SplineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
-    let Some((t0, t1)) = spline_range(spl) else {
+    let Some(curve) = spline_to_nurbs(spl) else {
         return vec![];
     };
+    let (t0, t1) = curve.domain();
+    let curve = Curve::Nurbs(curve);
 
-    trim_intervals(ts, t_click)
+    trim_intervals(&curve, ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
             let t_lo = t0 + ta * (t1 - t0);
@@ -642,39 +661,16 @@ fn extend_spline(spl: &SplineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityTy
 
 // ── Trim helpers ──────────────────────────────────────────────────────────
 
-/// Remove the t-interval containing `t_click` from sorted ts.  Returns surviving pieces.
-fn trim_intervals(ts: &[f64], t_click: f64) -> Vec<(f64, f64)> {
-    cut_intervals(ts, t_click, KernelExtent::Bounded)
-}
-
-/// The stretches a target keeps after the one holding the click is removed.
-///
-/// The outer bounds come from how far the target's parameter runs, so a ray
-/// keeps an interval that reaches infinity rather than one that stops at an
-/// invented far end. Those infinities are what tell the caller a surviving
-/// piece is still unbounded.
-fn cut_intervals(ts: &[f64], t_click: f64, extent: KernelExtent) -> Vec<(f64, f64)> {
-    let (first, last) = match extent {
-        KernelExtent::Bounded => (0.0, 1.0),
-        KernelExtent::Forward => (0.0, f64::INFINITY),
-        KernelExtent::Infinite => (f64::NEG_INFINITY, f64::INFINITY),
-    };
-    let mut bounds = vec![first];
-    bounds.extend_from_slice(ts);
-    bounds.push(last);
-    bounds.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-
-    let remove = bounds
-        .windows(2)
-        .position(|w| t_click >= w[0] - 1e-6 && t_click <= w[1] + 1e-6);
-
-    bounds
-        .windows(2)
-        .enumerate()
-        .filter(|(idx, _)| Some(*idx) != remove)
-        .filter(|(_, w)| (w[1] - w[0]) > 1e-6)
-        .map(|(_, w)| (w[0], w[1]))
-        .collect()
+fn trim_intervals(curve: &Curve, ts: &[f64], t_click: f64) -> Vec<(f64, f64)> {
+    kernel_trim_spans(
+        curve,
+        ts,
+        t_click,
+        KernelTolerance::new(CUT_TOLERANCE),
+    )
+    .into_iter()
+    .map(|span| (span[0], span[1]))
+    .collect()
 }
 
 /// Trim a Line entity. Returns the surviving line segments.
@@ -682,7 +678,8 @@ fn trim_line(orig: &LineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let p1 = [orig.start.x, orig.start.y];
     let p2 = [orig.end.x, orig.end.y];
     let z = orig.start.z;
-    trim_intervals(ts, t_click)
+    let curve = Curve::Line(KernelLine { start: p1, end: p2 });
+    trim_intervals(&curve, ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
             let a = lerp2(p1, p2, ta);
@@ -768,8 +765,14 @@ fn trim_arc(orig: &ArcEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
         }
     };
     let angle_at = |t: f64| norm(a0) + span * t;
+    let curve = Curve::Arc(KernelArc {
+        centre: [orig.center.x, orig.center.y],
+        radius: orig.radius,
+        start_angle: a0,
+        end_angle: a1,
+    });
 
-    trim_intervals(ts, t_click)
+    trim_intervals(&curve, ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
             if (tb - ta).abs() < 1e-6 {
@@ -1113,7 +1116,8 @@ fn trim_ray(orig: &RayEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let dz = orig.direction.z;
     let pt = |t: f64| [bx + t * dx, by + t * dy, bz + t * dz];
 
-    cut_intervals(ts, t_click, KernelExtent::Forward)
+    let curve = ray_curve(orig);
+    trim_intervals(&curve, ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
             let pa = pt(ta);
@@ -1159,7 +1163,8 @@ fn trim_xline(orig: &XLineEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
     let dz = orig.direction.z;
     let pt = |t: f64| [bx + t * dx, by + t * dy, bz + t * dz];
 
-    cut_intervals(ts, t_click, KernelExtent::Infinite)
+    let curve = xline_curve(orig);
+    trim_intervals(&curve, ts, t_click)
         .into_iter()
         .filter_map(|(ta, tb)| {
             let pa = pt(ta);
@@ -2166,6 +2171,10 @@ pub struct TrimCommand {
 
 impl TrimCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let all_entities: Vec<EntityType> = all_entities
+            .iter()
+            .map(entity_with_lwpolyline_world_xy)
+            .collect();
         let entity_index = ModifyEntityIndex::build(&all_entities);
         let geos = build_geos(&all_entities);
         Self {
@@ -2902,6 +2911,10 @@ pub struct ExtendCommand {
 
 impl ExtendCommand {
     pub fn new(all_entities: Vec<EntityType>) -> Self {
+        let all_entities: Vec<EntityType> = all_entities
+            .iter()
+            .map(entity_with_lwpolyline_world_xy)
+            .collect();
         let entity_index = ModifyEntityIndex::build(&all_entities);
         let geos = build_geos(&all_entities);
         Self {
@@ -3711,8 +3724,11 @@ fn preview_wire(points: Vec<[f32; 3]>, color: [f32; 4], name: &str) -> WireModel
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
+        display_visible: true,
+        plot_visible: true,
         fill_is_3d: false,
         fill_is_2d_solid: false,
+        render_instance: None,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
         dash_from_start: false,
@@ -3826,6 +3842,10 @@ pub struct ExtrimCommand {
 
 impl ExtrimCommand {
     pub fn new(all: Vec<(Handle, EntityType)>) -> Self {
+        let all = all
+            .into_iter()
+            .map(|(handle, entity)| (handle, entity_with_lwpolyline_world_xy(&entity)))
+            .collect();
         Self { all, boundary: None, geos: Vec::new() }
     }
 }

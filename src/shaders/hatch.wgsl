@@ -1,23 +1,10 @@
-// Phase 4-B — batched hatch shader. All hatches in one draw call;
-// per-instance data fetched from storage buffers indexed by the
-// `instance_index` vertex attribute (passed from the per-vertex
-// (local_xy, instance_index) stream of tessellated boundary-triangle
-// positions so we don't depend on @builtin(instance_index) edge cases
-// across backends).
+// Batched hatch shader. Kernel mesh vertices carry their source instance.
 //
 // Layout — matches `hatch_gpu/storage.rs`:
-//   group 1 binding 0  InstanceBuffer  HatchInstance[]   (128 B / inst)
-//   group 1 binding 1  BoundaryBuffer  vec4<f32>[]       (xy in .xy)
-//   group 1 binding 2  FamilyBuffer    LineFamilyGpu[]   (48 B / fam)
-//   group 1 binding 3  DashBuffer      f32[]
-//
-// The vertex shader emits tessellated boundary triangles in local space
-// (an instance whose boundary failed to tessellate falls back to an
-// AABB quad with `poly_test == 1`, so the fragment shader still runs
-// `in_polygon` to clip it to the real shape). A `visible == 0` instance
-// gets an out-of-NDC clip position so the fragment shader never runs
-// for it — that's the GPU-side cull (Phase 4-B equivalent of
-// `compute_hatch_lod` writing `hatch_skip_flags`).
+//   group 1 binding 0  InstanceBuffer  HatchInstance[]
+//   group 1 binding 1  FamilyBuffer    LineFamilyGpu[]
+//   group 1 binding 2  DashBuffer      f32[]
+//   group 1 binding 3  Visibility      u32[]
 
 // ── Group 0: shared frame uniforms (matches hatch.wgsl) ──────────────────
 
@@ -53,14 +40,10 @@ struct HatchInstance {
     grad_range:      f32,
     mode:            u32,         // 0=pattern, 1=solid, 2=gradient
     visible:         u32,         // 0 = skip (CPU writes via compute_hatch_lod)
-    boundary_offset: u32,
-    boundary_count:  u32,
     family_offset:   u32,
     family_count:    u32,
     draw_depth:      f32,          // signed (-1,1) draw-order bias; 0 = neutral
-    poly_test:       u32,         // 1 = run in_polygon (fallback), 0 = skip
     grad_kind:       u32,         // shape (0=linear,1=cyl,2=sph,3=hemi,4=curved), bit4=invert
-    _pad2:           u32,
 }
 
 // Draw-order depth bias (see wire.wgsl). Higher draw_depth → smaller z →
@@ -83,20 +66,23 @@ struct LineFamily {
 }
 
 @group(1) @binding(0) var<storage, read> instances:  array<HatchInstance>;
-@group(1) @binding(1) var<storage, read> boundary:   array<vec4<f32>>;
-@group(1) @binding(2) var<storage, read> families:   array<LineFamily>;
-@group(1) @binding(3) var<storage, read> dashes:     array<f32>;
+@group(1) @binding(1) var<storage, read> families:   array<LineFamily>;
+@group(1) @binding(2) var<storage, read> dashes:     array<f32>;
 // Per-instance visibility (Phase 4-B sub-pixel + frustum skip).
 // CPU writes `1` to draw / `0` to skip every frame; vertex shader
 // emits an out-of-NDC clip position for 0-instances so the GPU
 // rasterizer culls the primitive before any fragment runs.
-@group(1) @binding(4) var<storage, read> visibility: array<u32>;
+@group(1) @binding(3) var<storage, read> visibility: array<u32>;
 
 // ── Vertex shader ────────────────────────────────────────────────────────
 
 struct VIn {
     @location(0) local_xy:       vec2<f32>,
     @location(1) instance_index: u32,
+    @location(2) translation: vec2<f32>,
+    @location(3) translation_low: vec2<f32>,
+    @location(4) draw_depth: f32,
+    @location(5) visible: u32,
 }
 
 struct VOut {
@@ -114,7 +100,7 @@ struct VOut {
     // frustum-culls the primitive and no fragment runs. (WGSL
     // forbids literal NaN so this out-of-NDC trick replaces the
     // usual NaN-degenerate-triangle.)
-    if visibility[v.instance_index] == 0u {
+    if visibility[v.instance_index] == 0u || v.visible == 0u {
         o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         o.xz = vec2<f32>(0.0, 0.0);
         o.instance_index = v.instance_index;
@@ -126,69 +112,18 @@ struct VOut {
     // against eye_high (Sterbenz); local + anchor low + (−eye_low) carry the
     // residual. `local` is small (boundary-relative), so adding it in the low
     // term keeps full precision at UTM-scale anchors.
-    let hi = vec3<f32>(inst.world_origin.x - u.eye_high.x,
-                       inst.world_origin.y - u.eye_high.y,
+    let hi = vec3<f32>(inst.world_origin.x + v.translation.x - u.eye_high.x,
+                       inst.world_origin.y + v.translation.y - u.eye_high.y,
                        -u.eye_high.z);
-    let lo = vec3<f32>(local.x + inst.world_origin_low.x - u.eye_low.x,
-                       local.y + inst.world_origin_low.y - u.eye_low.y,
+    let lo = vec3<f32>(local.x + inst.world_origin_low.x + v.translation_low.x - u.eye_low.x,
+                       local.y + inst.world_origin_low.y + v.translation_low.y - u.eye_low.y,
                        -u.eye_low.z);
     o.clip = u.view_rot * vec4<f32>(hi + lo, 1.0);
-    o.clip.z = o.clip.z - inst.draw_depth * DRAW_ORDER_BIAS * o.clip.w;
+    o.clip.z = o.clip.z
+        - (inst.draw_depth + v.draw_depth) * DRAW_ORDER_BIAS * o.clip.w;
     o.xz = local;
     o.instance_index = v.instance_index;
     return o;
-}
-
-// ── Point-in-polygon (ray casting) over a sub-range of BoundaryBuffer ────
-
-fn valid_vertex(p: vec2<f32>) -> bool {
-    // Sub-loop separators are a huge finite sentinel (1e30, see
-    // GPU_BOUNDARY_SEP), not NaN: `x == x` NaN detection gets folded to
-    // `true` by some drivers (Intel Mesa fast math), which made separators
-    // read as real vertices and bleed fills past their boundary (#386, #416).
-    return abs(p.x) < 1.0e29 && abs(p.y) < 1.0e29;
-}
-
-fn edge_crosses(p: vec2<f32>, a: vec2<f32>, c: vec2<f32>) -> bool {
-    if (a.y > p.y) != (c.y > p.y) {
-        let x_int = (c.x - a.x) * (p.y - a.y) / (c.y - a.y) + a.x;
-        return p.x < x_int;
-    }
-    return false;
-}
-
-fn in_polygon(p: vec2<f32>, offset: u32, count: u32) -> bool {
-    var inside = false;
-    var prev = vec2<f32>(0.0, 0.0);
-    var first = vec2<f32>(0.0, 0.0);
-    var have_prev = false;
-    for (var i = 0u; i < count; i++) {
-        let vi = boundary[offset + i].xy;
-        if !valid_vertex(vi) {
-            // Close the sub-loop that just ended (last → first edge). An
-            // unclosed boundary — e.g. a SOLID's 4 corners, which are not
-            // repeated — otherwise miscounts crossings and the fill bleeds
-            // outside the shape. (#140)
-            if have_prev && edge_crosses(p, prev, first) {
-                inside = !inside;
-            }
-            have_prev = false;
-            continue;
-        }
-        if have_prev {
-            if edge_crosses(p, prev, vi) {
-                inside = !inside;
-            }
-        } else {
-            first = vi;
-        }
-        prev = vi;
-        have_prev = true;
-    }
-    if have_prev && edge_crosses(p, prev, first) {
-        inside = !inside;
-    }
-    return inside;
 }
 
 // ── Per-family hatch test (same math as hatch.wgsl, dashes from
@@ -277,15 +212,7 @@ fn check_family(
 
     let inst = instances[v.instance_index];
 
-    // 1. Boundary test — only on the fallback path (poly_test==1). On the
-    //    tessellated fast path the triangles already bound the fill.
-    if inst.poly_test == 1u {
-        if !in_polygon(v.xz, inst.boundary_offset, inst.boundary_count) {
-            discard;
-        }
-    }
-
-    // 2. Mode dispatch.
+    // Mode dispatch.
     if inst.mode == 1u {
         return inst.color;
     } else if inst.mode == 2u {
@@ -314,12 +241,11 @@ fn check_family(
             t = 1.0 - t;
         }
         // Radial stops run OUTSIDE-IN: colour 1 at the rim, colour 2 at the
-        // centre (AutoCAD's SPHERICAL/HEMISPHERICAL convention; the INV bit
-        // above swaps them back).
+        // centre; the INV bit above swaps them back.
         return mix(inst.color2, inst.color, t);
     }
 
-    // 3. Pattern LOD. Keep every family visible until all family spacings
+    // Pattern LOD. Keep every family visible until all family spacings
     //    project below 2 px, then substitute one solid fill. A single dense
     //    family must neither hide itself nor turn a complex hatch solid.
     var all_families_subpixel = inst.family_count > 0u && u.world_per_pixel > 0.0;
@@ -338,7 +264,7 @@ fn check_family(
         return inst.color;
     }
 
-    // 4. Pattern evaluation.
+    // Pattern evaluation.
     let cos_off = cos(inst.angle_offset);
     let sin_off = sin(inst.angle_offset);
     for (var i = 0u; i < inst.family_count; i++) {

@@ -1,7 +1,7 @@
-import init, { parse_document, sha256_document } from "./worker_pkg/ocs_web_worker.js?v=3";
+import init, { parse_document, sha256_document } from "./worker_pkg/ocs_web_worker.js?v=4";
 
 const ready = init(
-  new URL("./worker_pkg/ocs_web_worker_bg.wasm?v=3", import.meta.url),
+  new URL("./worker_pkg/ocs_web_worker_bg.wasm?v=4", import.meta.url),
 );
 
 self.onmessage = async ({ data }) => {

@@ -53,7 +53,7 @@ fn expand_block_mtext(
         &doc,
         1.0,
         None,
-        false,
+        true,
         [0.0, 0.0, 0.0, 1.0],
         None,
         &Default::default(),

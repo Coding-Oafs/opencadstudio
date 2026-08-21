@@ -291,11 +291,12 @@ pub fn install(release: &Release, repository: &str) -> Result<String, String> {
 
     let toml_text = download_string(&toml.url)?;
     let manifest = external::parse_plugin_toml(&toml_text).ok_or("plugin.toml is missing an id")?;
-    if manifest.api_version != ocs_plugin_api::API_VERSION {
+    if !ocs_plugin_api::manifest::host_accepts_plugin_version(manifest.api_version) {
         return Err(format!(
-            "API version {} is incompatible (host requires {})",
+            "API version {} is incompatible (host supports {}-{})",
             manifest.api_version,
-            ocs_plugin_api::API_VERSION
+            ocs_plugin_api::manifest::API_VERSION_MIN_SUPPORTED,
+            ocs_plugin_api::manifest::effective_max_api_version()
         ));
     }
 

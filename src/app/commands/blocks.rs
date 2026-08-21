@@ -71,6 +71,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -106,6 +107,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -132,6 +134,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if coords.len() == 3 && !handles.is_empty() {
                     let base = glam::DVec3::new(coords[0], coords[1], coords[2]);
@@ -160,6 +163,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     use crate::modules::draw::select::SelectObjectsCommand;
@@ -393,32 +397,55 @@ impl OpenCADStudio {
                             .collect()
                     })
                     .unwrap_or_default();
+                let inserts: Vec<_> = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .filter_map(|entity| match entity {
+                        acadrust::EntityType::Insert(insert)
+                            if insert.block_name.eq_ignore_ascii_case(&block)
+                                && !self.tabs[i]
+                                    .scene
+                                    .is_layer_locked(insert.common.handle) =>
+                        {
+                            Some(insert.common.handle)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if inserts.is_empty() {
+                    self.command_line.push_error(
+                        crate::t!("ATTSYNC: no editable block references.").as_ref(),
+                    );
+                    return Some(Task::none());
+                }
                 self.push_undo_snapshot(i, "ATTSYNC");
                 let mut synced = 0usize;
                 let mut changes = Vec::new();
-                for e in self.tabs[i].scene.document.entities_mut() {
-                    if let acadrust::EntityType::Insert(ins) = e {
-                        if ins.block_name.eq_ignore_ascii_case(&block) {
-                            ins.attributes.retain(|a| {
-                                attdefs.iter().any(|(t, _)| t.eq_ignore_ascii_case(&a.tag))
-                            });
-                            for (tag, default) in &attdefs {
-                                if !ins
-                                    .attributes
-                                    .iter()
-                                    .any(|a| a.tag.eq_ignore_ascii_case(tag))
-                                {
-                                    ins.attributes
-                                        .push(acadrust::entities::AttributeEntity::new(
-                                            tag.clone(),
-                                            default.clone(),
-                                        ));
-                                }
+                for handle in inserts {
+                    let Some(acadrust::EntityType::Insert(ins)) =
+                        self.tabs[i].scene.document.get_entity_mut(handle)
+                    else {
+                        continue;
+                    };
+                    ins.attributes.retain(|a| {
+                        attdefs.iter().any(|(t, _)| t.eq_ignore_ascii_case(&a.tag))
+                    });
+                    for (tag, default) in &attdefs {
+                        if !ins
+                            .attributes
+                            .iter()
+                            .any(|a| a.tag.eq_ignore_ascii_case(tag))
+                        {
+                            ins.attributes
+                                .push(acadrust::entities::AttributeEntity::new(
+                                    tag.clone(),
+                                    default.clone(),
+                                ));
                             }
-                            synced += 1;
-                            changes.push((ins.common.handle, crate::scene::ChangeKind::Modified));
-                        }
                     }
+                    synced += 1;
+                    changes.push((ins.common.handle, crate::scene::ChangeKind::Modified));
                 }
                 self.tabs[i].scene.bump_entities(&changes);
                 self.tabs[i].dirty = true;
@@ -461,8 +488,8 @@ impl OpenCADStudio {
                 self.show_block_palette ^= true;
                 if self.show_block_palette {
                     // Always open expanded so the panel is immediately usable;
-                    // the user can still collapse it via the title-bar button.
-                    self.block_palette_expanded = true;
+                    // the user can still collapse it via the pin (Auto) button.
+                    self.dock_expanded = Some(crate::ui::dock::PanelId::BlockPalette);
                     self.refresh_block_palette();
                 }
             }
@@ -626,6 +653,7 @@ impl OpenCADStudio {
                     .iter()
                     .filter(|(_, e)| matches!(e, acadrust::EntityType::Insert(_)))
                     .map(|(h, _)| *h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if inserts.is_empty() {
                     self.command_line
@@ -708,7 +736,7 @@ mod tests {
         let _ = app.run_command_line("BLOCKPALETTE");
         assert!(app.show_block_palette);
         assert!(
-            app.block_palette_expanded,
+            app.dock_expanded == Some(crate::ui::dock::PanelId::BlockPalette),
             "palette must open expanded, not as the collapsed bar"
         );
         let _ = app.run_command_line("BLOCKSPALETTE");

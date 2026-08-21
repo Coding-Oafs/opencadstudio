@@ -104,6 +104,12 @@ pub struct MeshLodSet {
     pub instance_source: Option<std::sync::Arc<MeshInstanceSource>>,
     /// Accumulated block-local → world transform for this rendered instance.
     pub instance_transform: Option<acadrust::types::Transform>,
+    /// Parent INSERT selected for this rendered block instance.
+    pub instance_handle: Option<acadrust::Handle>,
+    /// Effective colour after INSERT inheritance, without copying the mesh.
+    pub instance_color: Option<[f32; 4]>,
+    /// Precise world bounds used by the interaction index.
+    pub instance_aabb: Option<[f64; 6]>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +118,7 @@ pub struct MeshInstanceSource {
     pub lods: Vec<MeshModel>,
     pub edge_verts: Vec<[f32; 3]>,
     pub edge_verts_low: Vec<[f32; 3]>,
+    pub curved_gens: Vec<CurvedGen>,
 }
 
 /// 3D bounds of every LOD's vertices: `([min_x, min_y, max_x, max_y], [min_z, max_z])`.
@@ -225,6 +232,9 @@ impl MeshLodSet {
             z_aabb,
             instance_source: None,
             instance_transform: None,
+            instance_handle: None,
+            instance_color: None,
+            instance_aabb: None,
         }
     }
 
@@ -250,7 +260,35 @@ impl MeshLodSet {
             lods: self.lods.clone(),
             edge_verts: self.edge_verts.clone(),
             edge_verts_low: self.edge_verts_low.clone(),
+            curved_gens: self.curved_gens.clone(),
         }));
         self.instance_transform = None;
+        self.instance_handle = None;
+        self.instance_color = None;
+        self.instance_aabb = None;
+    }
+
+    pub fn geometry_lods(&self) -> &[MeshModel] {
+        self.instance_source
+            .as_ref()
+            .map_or(self.lods.as_slice(), |source| source.lods.as_slice())
+    }
+
+    pub fn entity_handle(&self) -> Option<acadrust::Handle> {
+        self.instance_handle.or_else(|| {
+            self.lods
+                .first()
+                .and_then(|mesh| mesh.name.parse::<u64>().ok())
+                .map(acadrust::Handle::new)
+        })
+    }
+
+    pub fn display_color(&self) -> Option<[f32; 4]> {
+        self.instance_color.or_else(|| {
+            self.geometry_lods()
+                .iter()
+                .find(|mesh| !mesh.indices.is_empty())
+                .map(|mesh| mesh.color)
+        })
     }
 }

@@ -81,9 +81,7 @@ pub struct GripMarker {
     pub is_hot: bool,
     /// True → pointer is over this grip (drawn with the hover fill).
     pub is_hovered: bool,
-    /// World-XY direction vector — only consumed by the `Rectangle`
-    /// shape to orient the box along its segment. `None` for grips
-    /// that don't need rotation.
+    /// Screen-plane direction with positive Y pointing up.
     pub dir: Option<[f32; 2]>,
 }
 
@@ -263,6 +261,7 @@ pub fn selection_overlay<'a>(
     snap_ext_base: Option<Point>,
     snap_ext_base2: Option<Point>,
     grips: Vec<GripMarker>,
+    control_polygon: Option<(Vec<Point>, bool)>,
     grip_clip: Option<iced::Rectangle>,
     ucs_icons: Vec<UcsIconParams>,
     ost_points: Vec<OstTrackPoint>,
@@ -284,6 +283,7 @@ pub fn selection_overlay<'a>(
         snap_ext_base,
         snap_ext_base2,
         grips,
+        control_polygon,
         grip_clip,
         ucs_icons,
         ost_points,
@@ -314,6 +314,8 @@ struct SelectionCanvas {
     /// both crossing extensions stay drawn when the crossing is caught. (#247, #259)
     snap_ext_base2: Option<Point>,
     grips: Vec<GripMarker>,
+    /// Selected spline control polygon and closed state.
+    control_polygon: Option<(Vec<Point>, bool)>,
     /// Active 3D pane / floating viewport rectangle. Grip markers are clipped
     /// here so orbiting cannot leak them into paper space or adjacent panes.
     grip_clip: Option<iced::Rectangle>,
@@ -347,7 +349,7 @@ struct SelectionCanvas {
     /// is usable instead of the cursor vanishing over it. (#227)
     suppressed: bool,
     /// The entity under the crosshair is on a locked layer — draw a small lock
-    /// badge by the cursor so the user knows it can't be selected/edited.
+    /// badge by the cursor so the user knows it can't be edited.
     hover_locked: bool,
     /// Background of the active drawing space. Crosshair contrast follows this
     /// rather than the UI theme, which may be light over a dark model viewport.
@@ -386,12 +388,29 @@ fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme)
             })
         }
         GripShape::Triangle => canvas::Path::new(|b| {
-            b.move_to(Point::new(sp.x, sp.y - h));
-            b.line_to(Point::new(sp.x + h, sp.y + h));
-            b.line_to(Point::new(sp.x - h, sp.y + h));
+            let (forward_x, forward_y) = match grip.dir {
+                Some([dx, dy]) if (dx * dx + dy * dy) > 1e-12 => {
+                    let length = (dx * dx + dy * dy).sqrt();
+                    (dx / length, -dy / length)
+                }
+                _ => (0.0, -1.0),
+            };
+            let side_x = -forward_y;
+            let side_y = forward_x;
+            let tip = Point::new(sp.x + forward_x * h, sp.y + forward_y * h);
+            let base = Point::new(sp.x - forward_x * h, sp.y - forward_y * h);
+            b.move_to(tip);
+            b.line_to(Point::new(base.x + side_x * h, base.y + side_y * h));
+            b.line_to(Point::new(base.x - side_x * h, base.y - side_y * h));
             b.close();
         }),
         GripShape::Circle => canvas::Path::circle(Point::new(sp.x, sp.y), h),
+        GripShape::Dropdown => canvas::Path::new(|b| {
+            b.move_to(Point::new(sp.x - h, sp.y - h * 0.5));
+            b.line_to(Point::new(sp.x + h, sp.y - h * 0.5));
+            b.line_to(Point::new(sp.x, sp.y + h));
+            b.close();
+        }),
     };
 
     if grip.is_hot {
@@ -410,10 +429,12 @@ fn draw_grip_marker(frame: &mut canvas::Frame, grip: &GripMarker, theme: &Theme)
     } else {
         let palette = theme.palette();
         let color = palette.primary.base.color;
-        frame.fill(
-            &path,
-            palette.background.base.color.scale_alpha(0.7),
-        );
+        let fill = if grip.shape == GripShape::Dropdown {
+            color
+        } else {
+            palette.background.base.color.scale_alpha(0.7)
+        };
+        frame.fill(&path, fill);
         frame.stroke(
             &path,
             canvas::Stroke {
@@ -686,6 +707,31 @@ impl canvas::Program<Message> for SelectionCanvas {
                 height: grip_y1 - grip_y0,
             };
             frame.with_clip(grip_clip, |frame| {
+                if let Some((points, closed)) = &self.control_polygon {
+                    if points.len() >= 2 {
+                        let polygon = canvas::Path::new(|builder| {
+                            builder.move_to(points[0]);
+                            for point in points.iter().skip(1) {
+                                builder.line_to(*point);
+                            }
+                            if *closed {
+                                builder.line_to(points[0]);
+                            }
+                        });
+                        frame.stroke(
+                            &polygon,
+                            canvas::Stroke {
+                                width: 1.0,
+                                style: canvas::Style::Solid(Color::from_rgb(0.72, 0.32, 0.15)),
+                                line_dash: canvas::LineDash {
+                                    segments: &[4.0, 4.0],
+                                    offset: 0,
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
                 for grip in &self.grips {
                     draw_grip_marker(frame, grip, theme);
                 }
@@ -1042,7 +1088,7 @@ impl canvas::Program<Message> for SelectionCanvas {
 
                 // Locked-layer badge: a small padlock beside the crosshair when
                 // the hovered object sits on a locked layer (issue: locked
-                // objects are visible + snappable but not selectable/editable).
+                // objects are visible, snappable and selectable but not editable).
                 if self.hover_locked {
                     let warning = theme.palette().warning.base;
                     let amber = warning.color.scale_alpha(0.98);
@@ -1841,39 +1887,28 @@ fn ucs_icon_geometry(
         return None;
     }
 
-    // Project to NDC (including depth) then to screen pixels.
-    let w2ndc = |world: Vec3| -> Option<Vec3> {
-        let ndc = vp.project_point3(world);
-        if !ndc.x.is_finite() || !ndc.y.is_finite() || !ndc.z.is_finite() {
+    // Transform directions directly. Projecting a point at the eye origin is
+    // undefined in perspective views.
+    let axis_screen = |axis: Vec3| -> Option<(f32, f32, f32, f32)> {
+        let clip = vp * axis.extend(0.0);
+        if !clip.x.is_finite() || !clip.y.is_finite() || !clip.z.is_finite() {
             return None;
         }
-        Some(ndc)
-    };
-    let ndc2s = |ndc: Vec3| -> Point {
-        Point::new(
-            bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
-            bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
-        )
+        let dx = clip.x * 0.5 * bounds.width;
+        let dy = -clip.y * 0.5 * bounds.height;
+        Some((dx, dy, (dx * dx + dy * dy).sqrt(), clip.z))
     };
 
-    // Project the UCS axis directions (not fixed world axes) so the tripod
-    // rotates to the active UCS. Directions are translation-invariant, so a
-    // common origin is fine.
     let (ax, ay, az) = axes;
-    let org = w2ndc(Vec3::ZERO)?;
-    let xn = w2ndc(ax)?;
-    let yn = w2ndc(ay)?;
-    let zn = w2ndc(az)?;
-
-    let org_s = ndc2s(org);
+    let (xdx, xdy, xlen, xdepth) = axis_screen(ax)?;
+    let (ydx, ydy, ylen, ydepth) = axis_screen(ay)?;
+    let (zdx, zdy, zlen, zdepth) = axis_screen(az)?;
     let corner = Point::new(
         bounds.x + UCS_ICON_MARGIN,
         bounds.y + (bounds.height - UCS_ICON_MARGIN).max(UCS_ICON_MARGIN),
     );
     // Snap the tripod to the projected UCS origin when it is on-screen
-    // (UCSICON ORigin); otherwise keep it in the corner. `org_s` (the
-    // rotation-only origin) stays the reference for axis-tip directions —
-    // those are translation-invariant, so only the anchor point moves.
+    // (UCSICON ORigin); otherwise keep it in the corner.
     let (icon_origin, at_origin) = match origin_screen {
         Some(p)
             if p.x >= bounds.x
@@ -1886,37 +1921,24 @@ fn ucs_icon_geometry(
         _ => (corner, false),
     };
 
-    // Raw screen-space displacement for each axis tip.
-    let raw = |ndc_tip: Vec3| -> (f32, f32, f32) {
-        let s = ndc2s(ndc_tip);
-        let dx = s.x - org_s.x;
-        let dy = s.y - org_s.y;
-        (dx, dy, (dx * dx + dy * dy).sqrt())
-    };
-
-    let (xdx, xdy, xlen) = raw(xn);
-    let (ydx, ydy, ylen) = raw(yn);
-    let (zdx, zdy, zlen) = raw(zn);
-
     // Scale so the longest projected axis fills UCS_ICON_LEN; shorter axes
     // stay proportionally shorter (this IS the foreshortening effect).
     let max_len = xlen.max(ylen).max(zlen).max(1e-4);
     let sc = UCS_ICON_LEN / max_len;
 
-    let mk = |dx: f32, dy: f32, len: f32, tip_z: f32| IconAxis {
+    let mk = |dx: f32, dy: f32, len: f32, depth: f32| IconAxis {
         dx: dx * sc,
         dy: dy * sc,
         sc_len: len * sc,
-        // depth > 0 → tip farther than origin (into screen); < 0 → toward viewer.
-        depth: tip_z - org.z,
+        depth,
     };
     Some((
         icon_origin,
         at_origin,
         [
-            mk(xdx, xdy, xlen, xn.z),
-            mk(ydx, ydy, ylen, yn.z),
-            mk(zdx, zdy, zlen, zn.z),
+            mk(xdx, xdy, xlen, xdepth),
+            mk(ydx, ydy, ylen, ydepth),
+            mk(zdx, zdy, zlen, zdepth),
         ],
     ))
 }

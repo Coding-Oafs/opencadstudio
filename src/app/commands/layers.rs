@@ -399,6 +399,7 @@ impl OpenCADStudio {
                     self.tabs[i].dirty = true;
                     self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
+                    self.refresh_properties();
                     self.command_line.push_info(crate::t!("Layer(s) locked.").as_ref());
                 }
             }
@@ -508,6 +509,7 @@ impl OpenCADStudio {
                     self.tabs[i].dirty = true;
                     self.commit_layer_undo(i, undo);
                     self.refresh_layer_panel();
+                    self.refresh_properties();
                     self.command_line.push_info(crate::t!("Layer(s) unlocked.").as_ref());
                 }
             }
@@ -686,6 +688,7 @@ impl OpenCADStudio {
                     .selected_entities()
                     .into_iter()
                     .map(|(h, _)| h)
+                    .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if handles.is_empty() {
                     use crate::modules::draw::groups::ungroup::UngroupCommand;
@@ -875,6 +878,28 @@ impl OpenCADStudio {
                 vp.view_target = vp.view_target * factor;
             }
             reframed += 1;
+        }
+
+        // Keep the active model-space annotation scale in sync as well.
+        // annotation_scale is drawing/paper, while CANNOSCALEVALUE stores
+        // the reciprocal paper/drawing factor.
+        if self.tabs[i].scene.annotation_scale.abs() > 1.0e-12 {
+            self.tabs[i].scene.annotation_scale *= factor as f32;
+        }
+
+        if self.tabs[i]
+            .scene
+            .document
+            .header
+            .annotation_scale_value
+            .abs()
+            > 1.0e-12
+        {
+            self.tabs[i]
+                .scene
+                .document
+                .header
+                .annotation_scale_value /= factor;
         }
         // Sizes the drawing keeps as settings rather than as geometry: dash
         // lengths, default heights and widths, the radii the fillet and chamfer

@@ -2,7 +2,7 @@
 // dictionary pointer unresolvable — it names a handle that never loaded (or a
 // non-dictionary), while the real named-object sub-dictionaries are owned by an
 // unrelated handle. Navigating that root then silently no-ops, so registering a
-// new named-object entry (a page setup, the CTAB current-tab variable, an
+// new named-object entry (a page setup, the variable dictionary, an
 // annotation scale) would vanish instead of persisting.
 //
 // `annotative::root_named_dict_handle` resolves the root robustly and, when it

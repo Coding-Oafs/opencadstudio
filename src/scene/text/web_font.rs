@@ -17,11 +17,12 @@ use std::sync::Arc;
 
 /// A script we ship a Noto subset for. [`script_of`] maps a char to one.
 ///
-/// CJK is split by language — Chinese, Japanese and Korean each get their own
-/// file. Their ideographs (Han, U+4E00–9FFF) share the same code points but
-/// differ in glyph shape, so the shared block is routed by the document's
-/// language (see [`set_cjk_lang_from_codepage`]); kana is always Japanese and
-/// Hangul always Korean.
+/// CJK is split by language — Simplified Chinese, Traditional Chinese,
+/// Japanese and Korean each get their own file. Their ideographs (Han,
+/// U+4E00–9FFF) share the same code points but differ in glyph shape, so the
+/// shared block is routed by the document's language (see
+/// [`set_cjk_lang_from_codepage`]); kana is always Japanese and Hangul always
+/// Korean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Script {
     Latin,
@@ -32,6 +33,7 @@ pub enum Script {
     Thai,
     Devanagari,
     Chinese,
+    TraditionalChinese,
     Japanese,
     Korean,
 }
@@ -49,6 +51,7 @@ impl Script {
             Script::Thai => "fonts/thai.ttf",
             Script::Devanagari => "fonts/devanagari.ttf",
             Script::Chinese => "fonts/chinese.ttf",
+            Script::TraditionalChinese => "fonts/traditional_chinese.ttf",
             Script::Japanese => "fonts/japanese.ttf",
             Script::Korean => "fonts/korean.ttf",
         }
@@ -57,6 +60,7 @@ impl Script {
     pub fn family(self) -> &'static str {
         match self {
             Script::Chinese => "Noto Sans CJK SC",
+            Script::TraditionalChinese => "Noto Sans CJK TC",
             Script::Japanese => "Noto Sans CJK JP",
             Script::Korean => "Noto Sans CJK KR",
             Script::Latin
@@ -80,6 +84,7 @@ impl Script {
             7 => Script::Chinese,
             8 => Script::Japanese,
             9 => Script::Korean,
+            10 => Script::TraditionalChinese,
             _ => Script::Latin,
         }
     }
@@ -97,12 +102,13 @@ impl Script {
             Script::Chinese => 7,
             Script::Japanese => 8,
             Script::Korean => 9,
+            Script::TraditionalChinese => 10,
         }
     }
 }
 
-/// Language used to render shared Han ideographs: 0 = Chinese, 1 = Japanese,
-/// 2 = Korean. Set from the active document's code page.
+/// Language used to render shared Han ideographs: 0 = Simplified Chinese,
+/// 1 = Japanese, 2 = Korean, 3 = Traditional Chinese.
 static CJK_LANG: AtomicU8 = AtomicU8::new(0);
 static PRIMARY_SCRIPT: AtomicU8 = AtomicU8::new(0);
 static FONT_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -117,22 +123,29 @@ fn bump_generation() {
 
 #[cfg(target_arch = "wasm32")]
 pub fn scripts_for_language_tag(language: &str) -> Vec<Script> {
-    let language = language
+    let full_language = language.to_ascii_lowercase().replace('_', "-");
+    let language = full_language
         .split(['-', '_'])
         .next()
-        .unwrap_or(language)
+        .unwrap_or(&full_language)
         .to_ascii_lowercase();
-    let script = match language.as_str() {
-        "ar" | "fa" | "ur" => Some(Script::Arabic),
-        "el" => Some(Script::Greek),
-        "he" | "yi" => Some(Script::Hebrew),
-        "hi" | "mr" | "ne" => Some(Script::Devanagari),
-        "ja" => Some(Script::Japanese),
-        "ko" => Some(Script::Korean),
-        "ru" | "uk" | "bg" | "sr" => Some(Script::Cyrillic),
-        "th" => Some(Script::Thai),
-        "zh" => Some(Script::Chinese),
-        _ => None,
+    let script = if matches!(full_language.as_str(), "zh-tw" | "zh-hk")
+        || full_language.starts_with("zh-hant")
+    {
+        Some(Script::TraditionalChinese)
+    } else {
+        match language.as_str() {
+            "ar" | "fa" | "ur" => Some(Script::Arabic),
+            "el" => Some(Script::Greek),
+            "he" | "yi" => Some(Script::Hebrew),
+            "hi" | "mr" | "ne" => Some(Script::Devanagari),
+            "ja" => Some(Script::Japanese),
+            "ko" => Some(Script::Korean),
+            "ru" | "uk" | "bg" | "sr" => Some(Script::Cyrillic),
+            "th" => Some(Script::Thai),
+            "zh" => Some(Script::Chinese),
+            _ => None,
+        }
     };
     vec![script.unwrap_or(Script::Latin)]
 }
@@ -184,22 +197,24 @@ fn cjk_lang() -> Script {
     match CJK_LANG.load(Ordering::Relaxed) {
         1 => Script::Japanese,
         2 => Script::Korean,
+        3 => Script::TraditionalChinese,
         _ => Script::Chinese,
     }
 }
 
 /// Point the shared-Han routing at a language based on a DWG/DXF code page
-/// (`$DWGCODEPAGE`), e.g. `ANSI_932` → Japanese, `ANSI_949` → Korean, GB/936 or
-/// anything else → Chinese. Returns `true` if the language changed (the caller
-/// then clears the glyph cache and re-tessellates).
+/// (`$DWGCODEPAGE`), e.g. `ANSI_932` → Japanese, `ANSI_949` → Korean and
+/// `ANSI_950` → Traditional Chinese. Returns `true` if the language changed.
 pub fn set_cjk_lang_from_codepage(code_page: &str) -> bool {
     let c = code_page.to_ascii_uppercase();
     let lang = if c.contains("932") || c.contains("SJIS") || c.contains("SHIFT") {
         1 // Japanese (Shift-JIS)
     } else if c.contains("949") || c.contains("KOR") || c.contains("UHC") {
         2 // Korean
+    } else if c.contains("950") || c.contains("BIG5") {
+        3 // Traditional Chinese
     } else {
-        0 // Chinese (936 / GB / 950 / Big5) or non-CJK default
+        0 // Simplified Chinese (936 / GB) or non-CJK default
     };
     CJK_LANG.swap(lang, Ordering::Relaxed) != lang
 }

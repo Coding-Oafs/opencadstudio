@@ -33,10 +33,13 @@ fn main() {
         revision
     };
     println!("cargo:rustc-env=OCS_GIT_REV={revision}");
-    println!(
-        "cargo:rustc-env=OCS_BUILD_PROFILE={}",
-        std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string())
-    );
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=OCS_BUILD_PROFILE={profile}");
+    if std::env::var("TARGET").ok().as_deref() == Some("x86_64-pc-windows-msvc")
+        && profile == "debug"
+    {
+        println!("cargo:rustc-link-arg-bin=OpenCADStudio=/STACK:16777216");
+    }
     let mut features: Vec<String> = std::env::vars()
         .filter_map(|(name, value)| {
             (value == "1")

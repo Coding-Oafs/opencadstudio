@@ -658,64 +658,203 @@ pub fn click_hits_all<'a, W: WireSource + ?Sized>(
     hits.into_iter().map(|(_, name)| name).collect()
 }
 
-pub fn mesh_click_hit<'a>(
+type MeshPickItem<'a> = (
+    Handle,
+    &'a MeshModel,
+    Option<acadrust::types::Transform>,
+    [f64; 6],
+);
+
+pub(crate) fn mesh_click_hit<'a>(
     cursor: Point,
-    meshes: impl Iterator<Item = (Handle, &'a MeshModel)>,
+    meshes: impl Iterator<Item = MeshPickItem<'a>>,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
 ) -> Option<Handle> {
-    let mut best: Option<(f32, Handle)> = None;
-    for (handle, mesh) in meshes {
-        let v = &mesh.verts;
-        let idx = &mesh.indices;
-        let lo = &mesh.verts_low;
-        // Indexed meshes reuse most vertices across several triangles.
-        // Project once per vertex instead of three matrix transforms per
-        // triangle; dense solid misses are otherwise the worst-case hover.
-        let projected: Vec<(Point, f32)> = v
-            .iter()
-            .enumerate()
-            .map(|(i, &vertex)| {
-                let ndc =
-                    view_rot.project_point3((mesh_vert(vertex, lo, i) - eye).as_vec3());
-                (
-                    Point::new(
-                        (ndc.x + 1.0) * 0.5 * bounds.width,
-                        (1.0 - ndc.y) * 0.5 * bounds.height,
+    mesh_click_result(cursor, meshes, view_rot, eye, bounds).map(|(_, handle, _)| handle)
+}
+
+pub(crate) fn mesh_click_point<'a>(
+    cursor: Point,
+    meshes: impl Iterator<Item = MeshPickItem<'a>>,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Option<glam::DVec3> {
+    mesh_click_result(cursor, meshes, view_rot, eye, bounds).map(|(_, _, point)| point)
+}
+
+fn mesh_click_result<'a>(
+    cursor: Point,
+    meshes: impl Iterator<Item = MeshPickItem<'a>>,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Option<(f64, Handle, glam::DVec3)> {
+    let profile = crate::perf::enabled().then(iced::time::Instant::now);
+    let mut set_count = 0usize;
+    let mut bound_hits = 0usize;
+    let mut exact_triangles = 0usize;
+    let ndc = glam::Vec3::new(
+        cursor.x / bounds.width * 2.0 - 1.0,
+        1.0 - cursor.y / bounds.height * 2.0,
+        0.0,
+    );
+    let inverse_view = view_rot.inverse();
+    let near = eye + inverse_view.project_point3(ndc).as_dvec3();
+    let far = eye
+        + inverse_view
+            .project_point3(glam::Vec3::new(ndc.x, ndc.y, 1.0))
+            .as_dvec3();
+    let world_direction = (far - near).normalize_or_zero();
+    if !near.is_finite() || !world_direction.is_finite() || world_direction.length_squared() < 1e-18
+    {
+        return None;
+    }
+    let mut best: Option<(f64, Handle, glam::DVec3)> = None;
+    for (handle, mesh, transform, aabb) in meshes {
+        set_count += 1;
+        let Some((near_t, _)) = ray_aabb(near, world_direction, aabb) else {
+            continue;
+        };
+        bound_hits += 1;
+        exact_triangles += mesh.indices.len() / 3;
+        if best.is_some_and(|(distance, _, _)| near_t > distance) {
+            continue;
+        }
+        let model = transform.map(codec_transform_matrix);
+        let (origin, direction) = if let Some(model) = model {
+            if !model.is_finite() || model.determinant().abs() <= 1e-18 {
+                continue;
+            }
+            let inverse = model.inverse();
+            let origin = inverse.transform_point3(near);
+            let direction = inverse.transform_vector3(world_direction).normalize_or_zero();
+            (origin, direction)
+        } else {
+            (near, world_direction)
+        };
+        if direction.length_squared() < 1e-18 {
+            continue;
+        }
+        let local_t = mesh
+            .indices
+            .chunks_exact(3)
+            .filter_map(|triangle| {
+                ray_triangle(
+                    origin,
+                    direction,
+                    mesh_vert(
+                        mesh.verts[triangle[0] as usize],
+                        &mesh.verts_low,
+                        triangle[0] as usize,
                     ),
-                    ndc.z,
+                    mesh_vert(
+                        mesh.verts[triangle[1] as usize],
+                        &mesh.verts_low,
+                        triangle[1] as usize,
+                    ),
+                    mesh_vert(
+                        mesh.verts[triangle[2] as usize],
+                        &mesh.verts_low,
+                        triangle[2] as usize,
+                    ),
                 )
             })
-            .collect();
-        let mut t = 0;
-        while t + 2 < idx.len() {
-            let tri = [idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize];
-            t += 3;
-            let mut sp = [Point::ORIGIN; 3];
-            let mut depth = 0.0f32;
-            for (j, &k) in tri.iter().enumerate() {
-                let (point, z) = projected[k];
-                sp[j] = point;
-                depth += z;
-            }
-            if point_in_polygon(cursor, &sp) {
-                let d = depth / 3.0;
-                if best.map_or(true, |(bd, _)| d < bd) {
-                    best = Some((d, handle));
-                }
-                break; // one hit per mesh is enough
+            .min_by(f64::total_cmp);
+        if let Some(local_t) = local_t {
+            let local_hit = origin + direction * local_t;
+            let world_hit = model.map_or(local_hit, |model| model.transform_point3(local_hit));
+            let distance = (world_hit - near).dot(world_direction);
+            if distance >= 0.0 && best.is_none_or(|(current, _, _)| distance < current) {
+                best = Some((distance, handle, world_hit));
             }
         }
     }
-    best.map(|(_, h)| h)
+    if let Some(started) = profile {
+        crate::perf_record!(
+            "[perf] mesh-ray {:>7.1}ms sets={} bounds={} source_triangles={}",
+            started.elapsed().as_secs_f64() * 1000.0,
+            set_count,
+            bound_hits,
+            exact_triangles,
+        );
+    }
+    best
+}
+
+fn codec_transform_matrix(transform: acadrust::types::Transform) -> glam::DMat4 {
+    let matrix = transform.matrix.m;
+    glam::DMat4::from_cols_array(&[
+        matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0],
+        matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1],
+        matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2],
+        matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3],
+    ])
+}
+
+fn ray_aabb(origin: glam::DVec3, direction: glam::DVec3, aabb: [f64; 6]) -> Option<(f64, f64)> {
+    let mut near = 0.0_f64;
+    let mut far = f64::INFINITY;
+    for axis in 0..3 {
+        let origin = origin[axis];
+        let direction = direction[axis];
+        if direction.abs() <= 1e-18 {
+            if origin < aabb[axis] || origin > aabb[axis + 3] {
+                return None;
+            }
+            continue;
+        }
+        let first = (aabb[axis] - origin) / direction;
+        let second = (aabb[axis + 3] - origin) / direction;
+        near = near.max(first.min(second));
+        far = far.min(first.max(second));
+        if far < near {
+            return None;
+        }
+    }
+    Some((near, far))
+}
+
+fn ray_triangle(
+    origin: glam::DVec3,
+    direction: glam::DVec3,
+    a: glam::DVec3,
+    b: glam::DVec3,
+    c: glam::DVec3,
+) -> Option<f64> {
+    let edge1 = b - a;
+    let edge2 = c - a;
+    let cross = direction.cross(edge2);
+    let determinant = edge1.dot(cross);
+    if determinant.abs() <= 1e-12 {
+        return None;
+    }
+    let inverse = determinant.recip();
+    let offset = origin - a;
+    let u = offset.dot(cross) * inverse;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = offset.cross(edge1);
+    let v = direction.dot(q) * inverse;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let distance = edge2.dot(q) * inverse;
+    (distance >= 0.0).then_some(distance)
 }
 
 /// Reconstruct a mesh vertex's absolute f64 position from its high/low pair —
 /// without the low residual the f32 high alone is ~0.5 m off at UTM scale and
 /// box / lasso / face selection lands on the wrong place.
 #[inline]
-fn mesh_vert(hi: [f32; 3], low: &[[f32; 3]], i: usize) -> glam::DVec3 {
+fn mesh_vert(
+    hi: [f32; 3],
+    low: &[[f32; 3]],
+    i: usize,
+) -> glam::DVec3 {
     let l = low.get(i).copied().unwrap_or([0.0; 3]);
     glam::DVec3::new(
         hi[0] as f64 + l[0] as f64,
@@ -727,6 +866,7 @@ fn mesh_vert(hi: [f32; 3], low: &[[f32; 3]], i: usize) -> glam::DVec3 {
 /// Project a mesh's vertices to screen space.
 fn project_mesh_verts(
     mesh: &MeshModel,
+    transform: Option<acadrust::types::Transform>,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -735,7 +875,12 @@ fn project_mesh_verts(
         .iter()
         .enumerate()
         .map(|(i, &w)| {
-            let ndc = view_rot.project_point3((mesh_vert(w, &mesh.verts_low, i) - eye).as_vec3());
+            let point = mesh_vert(w, &mesh.verts_low, i);
+            let point = transform.map_or(point, |transform| {
+                let point = transform.apply(acadrust::types::Vector3::new(point.x, point.y, point.z));
+                glam::DVec3::new(point.x, point.y, point.z)
+            });
+            let ndc = view_rot.project_point3((point - eye).as_vec3());
             Point::new(
                 (ndc.x + 1.0) * 0.5 * bounds.width,
                 (1.0 - ndc.y) * 0.5 * bounds.height,
@@ -769,7 +914,13 @@ pub fn mesh_box_hit<'a>(
     a: Point,
     b: Point,
     crossing: bool,
-    meshes: impl Iterator<Item = (Handle, &'a MeshModel)>,
+    meshes: impl Iterator<
+        Item = (
+            Handle,
+            &'a MeshModel,
+            Option<acadrust::types::Transform>,
+        ),
+    >,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -784,8 +935,8 @@ pub fn mesh_box_hit<'a>(
         Point::new(min_x, max_y),
     ];
     let mut out = Vec::new();
-    for (h, mesh) in meshes {
-        let proj = project_mesh_verts(mesh, view_rot, eye, bounds);
+    for (h, mesh, transform) in meshes {
+        let proj = project_mesh_verts(mesh, transform, view_rot, eye, bounds);
         if proj.is_empty() {
             continue;
         }
@@ -807,7 +958,13 @@ pub fn mesh_box_hit<'a>(
 pub fn mesh_poly_hit<'a>(
     poly: &[Point],
     crossing: bool,
-    meshes: impl Iterator<Item = (Handle, &'a MeshModel)>,
+    meshes: impl Iterator<
+        Item = (
+            Handle,
+            &'a MeshModel,
+            Option<acadrust::types::Transform>,
+        ),
+    >,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -816,8 +973,8 @@ pub fn mesh_poly_hit<'a>(
         return Vec::new();
     }
     let mut out = Vec::new();
-    for (h, mesh) in meshes {
-        let proj = project_mesh_verts(mesh, view_rot, eye, bounds);
+    for (h, mesh, transform) in meshes {
+        let proj = project_mesh_verts(mesh, transform, view_rot, eye, bounds);
         if proj.is_empty() {
             continue;
         }

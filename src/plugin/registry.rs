@@ -62,7 +62,6 @@ pub(crate) fn try_dispatch(app: &mut OpenCADStudio, tab: usize, cmd: &str) -> bo
                 manager.dispatch(&mut host, cmd, |id| disabled.contains(id))
             })
         };
-
         for id in result.dead_plugins {
             app.push_plugin_error(&format!("Plugin '{id}' process died; skipping dispatch"));
         }

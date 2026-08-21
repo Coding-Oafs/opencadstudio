@@ -1,6 +1,6 @@
 [package]
 name = "OpenCADStudio"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 build = "build.rs"
 
@@ -37,8 +37,8 @@ glam = { version = "0.33", features = ["bytemuck"] }
 rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
-acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "7e2fa8c", features = ["serde"] }
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "2c73f76", features = ["acis", "offset"] }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "0908da7", features = ["serde"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "ebeb2ec", features = ["acis", "offset"] }
 acadifc = { git = "https://github.com/OpenAEC-Foundation/acadifc.git", rev = "47b5603", optional = true }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
@@ -75,6 +75,7 @@ iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
 ocs_pointcloud = { path = "crates/ocs_pointcloud" }
 ocs_scripting = { path = "crates/ocs_scripting" }
+meshopt = "0.6.2"
 i18n-embed = { version = "0.16", features = ["desktop-requester"] }
 rayon = "1"
 open = "5"

@@ -48,6 +48,7 @@ pub struct LocalWire {
     pub tangent_geoms: Vec<TangentGeom>,
     pub fill_tris: Vec<[f32; 3]>,
     pub fill_tris_low: Vec<[f32; 3]>,
+    pub fill_is_3d: bool,
     /// Preserves the planar SOLID classification through block expansion so
     /// it never gets merged with unrelated annotation fills of the same style.
     pub fill_is_2d_solid: bool,
@@ -60,6 +61,9 @@ pub struct LocalWire {
     /// equals the sub-entity's resolved colour. For colour-split MTEXT
     /// (`\C`/`\c` inline overrides) each wire carries its own override colour.
     pub color: [f32; 4],
+    pub contrast_bg: Option<[f32; 4]>,
+    pub preserve_color: bool,
+    pub canvas_color: bool,
     pub aci: u8,
     pub pattern_length: f32,
     pub pattern: [f32; 8],
@@ -69,6 +73,8 @@ pub struct LocalWire {
     /// shader band grows with a scaled insert. `0.0` = a normal wire.
     pub world_width: f32,
     pub plinegen: bool,
+    pub plot_visible: bool,
+    pub hide_unselected: bool,
     /// Set at construction; used to discriminate fill-only GPU batches from
     /// stroke batches in [`StyleKey`]. Derived from
     /// `points.is_empty() && !fill_tris.is_empty()`.
@@ -146,6 +152,7 @@ pub struct BlockCache {
     expansion_prototypes: std::sync::Mutex<
         HashMap<ExpansionPrototypeKey, Arc<std::sync::Mutex<Option<Arc<CachedExpansion>>>>>,
     >,
+    clip_prototypes: std::sync::Mutex<HashMap<(u64, Vec<u64>), u64>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -164,6 +171,24 @@ struct CachedExpansion {
 }
 
 impl BlockCache {
+    pub fn clip_source_id(
+        &self,
+        source_id: u64,
+        polygon: &[[f64; 2]],
+        translation: [f64; 3],
+    ) -> u64 {
+        let mut shape = Vec::with_capacity(polygon.len() * 2);
+        for point in polygon {
+            shape.push((point[0] - translation[0]).to_bits());
+            shape.push((point[1] - translation[1]).to_bits());
+        }
+        *self
+            .clip_prototypes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry((source_id, shape))
+            .or_insert_with(crate::scene::model::instance_model::next_source_id)
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -706,6 +731,8 @@ fn tessellate_sub_local(
         return vec![];
     }
 
+    let frame_mode = crate::scene::frame::entity_kind(sub)
+        .map(|kind| crate::scene::frame::mode(doc, kind));
     let mut result = Vec::with_capacity(wires_out.len());
     for wire in wires_out {
         // Per-wire point-count cap: a single wire that exceeds this is skipped
@@ -733,6 +760,23 @@ fn tessellate_sub_local(
                 .chain(wire.text_verts.iter().map(|v| v.pos)),
         );
         let is_fill_only = wire.points.is_empty() && !wire.fill_tris.is_empty();
+        let mtext_has_background = matches!(
+            sub,
+            EntityType::MText(text) if text.background_fill_flags & 0x03 != 0
+        );
+        let preserve_color = mtext_has_background && is_fill_only;
+        let canvas_color = is_fill_only
+            && matches!(
+                sub,
+                EntityType::MText(text) if text.background_fill_flags & 0x02 != 0
+            );
+        let contrast_bg = if !preserve_color
+            && (!wire.text_verts.is_empty() || !wire.points.is_empty())
+        {
+            tessellate::explicit_mtext_background(sub)
+        } else {
+            None
+        };
         // A wire whose colour differs from the entity's resolved base colour
         // carries an explicit per-segment override (e.g. an MTEXT `\C1;` inline
         // colour). ByBlock / layer-0 inheritance applies only to wires still on
@@ -750,16 +794,22 @@ fn tessellate_sub_local(
             tangent_geoms: wire.tangent_geoms,
             fill_tris: wire.fill_tris,
             fill_tris_low: wire.fill_tris_low,
+            fill_is_3d: wire.fill_is_3d,
             fill_is_2d_solid: wire.fill_is_2d_solid,
             pick_tris: wire.pick_tris,
             pick_tris_low: wire.pick_tris_low,
             color: wire.color,
+            contrast_bg,
+            preserve_color,
+            canvas_color,
             aci,
             pattern_length: pat_len,
             pattern: pat,
             line_weight_px: lw_px,
             world_width: wire.world_width,
             plinegen: wire.plinegen,
+            plot_visible: frame_mode.is_none_or(|mode| mode == 1),
+            hide_unselected: frame_mode == Some(0),
             is_fill_only,
             color_is_byblock: color_is_byblock && wire_on_base_color,
             lt_is_byblock,
@@ -911,9 +961,7 @@ pub fn expand_insert(
         xform = xform.then(&scale_about_p);
     }
     let name = ins_handle.value().to_string();
-    let prototype_key = if view_aabb.is_none()
-        && world_per_pixel.is_none()
-        && !ins.is_array()
+    let prototype_key = if !ins.is_array()
         && cache.prototype_blocks.contains(&ins.block_name)
     {
         Some(expansion_prototype_key(
@@ -994,7 +1042,71 @@ pub fn expand_insert(
         }
     }
 
-    for offset in &crate::scene::render_graph::array_offsets(ins) {
+    let ctx = ExpandCtx {
+        cache,
+        ins_color: ins_resolved_color,
+        ins_aci,
+        ins_pat_len,
+        ins_pat,
+        ins_lw_px,
+        l0: ins_layer,
+        l0_aci: ins_layer_aci,
+        selected,
+        pslt_factor,
+        view_aabb: None,
+        world_per_pixel: None,
+        is_xref,
+        bg_color,
+    };
+    let offsets = crate::scene::render_graph::array_offsets(ins);
+    if offsets.len() > 1 {
+        let cell_xform = |offset: &[f64; 3]| {
+            if offset == &[0.0; 3] {
+                xform.clone()
+            } else {
+                Transform::from_translation(Vector3::new(offset[0], offset[1], offset[2]))
+                    .then(&xform)
+            }
+        };
+        let first_xform = cell_xform(&offsets[0]);
+        let first_translation = transform_translation(&first_xform);
+        let mut first_batches = Batches::default();
+        expand_defn(
+            defn,
+            &first_xform,
+            &ctx,
+            &mut first_batches,
+            &mut visited,
+            0,
+            (0.0, 1.0),
+        );
+        let mut first = first_batches.finalize(&name, selected, bg_color);
+        for wire in &mut first {
+            if wire.render_instance.is_none() {
+                wire.render_instance = Some(
+                    crate::scene::model::instance_model::RenderInstance {
+                        source_id: crate::scene::model::instance_model::next_source_id(),
+                        translation: first_translation,
+                    },
+                );
+            }
+        }
+        let mut result = first.clone();
+        for offset in offsets.iter().skip(1) {
+            let translation = transform_translation(&cell_xform(offset));
+            let delta = [
+                translation[0] - first_translation[0],
+                translation[1] - first_translation[1],
+                translation[2] - first_translation[2],
+            ];
+            result.extend(first.iter().map(|wire| {
+                translated_prototype_wire(wire, &name, delta)
+            }));
+        }
+        return Some(result);
+    }
+
+    for offset in &offsets {
         let base_xform = if offset == &[0.0; 3] {
             xform.clone()
         } else {
@@ -1003,28 +1115,21 @@ pub fn expand_insert(
             ));
             translation.then(&xform)
         };
-        let ctx = ExpandCtx {
-            cache,
-            ins_color: ins_resolved_color,
-            ins_aci,
-            ins_pat_len,
-            ins_pat,
-            ins_lw_px,
-            l0: ins_layer,
-            l0_aci: ins_layer_aci,
-            selected,
-            pslt_factor,
-            view_aabb,
-            world_per_pixel,
-            is_xref,
-            bg_color,
-        };
         expand_defn(defn, &base_xform, &ctx, &mut batches, &mut visited, 0, (0.0, 1.0));
     }
-    let wires = batches.finalize(&name, selected, bg_color);
+    let mut wires = batches.finalize(&name, selected, bg_color);
     if let Some(guard) = prototype_guard.as_mut() {
+        let translation = transform_translation(&xform);
+        for wire in &mut wires {
+            if wire.render_instance.is_none() {
+                wire.render_instance = Some(crate::scene::model::instance_model::RenderInstance {
+                    source_id: crate::scene::model::instance_model::next_source_id(),
+                    translation,
+                });
+            }
+        }
         let cached = Arc::new(CachedExpansion {
-            translation: transform_translation(&xform),
+            translation,
             wires: Arc::new(wires.clone()),
         });
         **guard = Some(cached);
@@ -1088,9 +1193,18 @@ fn expansion_prototype_key(
     }
 }
 
-fn translated_prototype_wire(source: &WireModel, name: &str, delta: [f64; 3]) -> WireModel {
+fn translated_prototype_wire(
+    source: &WireModel,
+    name: &str,
+    delta: [f64; 3],
+) -> WireModel {
     let mut wire = source.clone();
     wire.name = name.to_string();
+    if let Some(instance) = wire.render_instance.as_mut() {
+        for axis in 0..3 {
+            instance.translation[axis] += delta[axis];
+        }
+    }
     translate_double_single(&mut wire.points, &mut wire.points_low, delta);
     translate_double_single(&mut wire.fill_tris, &mut wire.fill_tris_low, delta);
     translate_double_single(&mut wire.pick_tris, &mut wire.pick_tris_low, delta);
@@ -1182,6 +1296,39 @@ struct ExpandCtx<'a> {
     bg_color: [f32; 4],
 }
 
+fn nested_prototype_key(
+    block_name: &str,
+    transform: &Transform,
+    ctx: &ExpandCtx<'_>,
+    depth_scale: f32,
+) -> NestedPrototypeKey {
+    let matrix = &transform.matrix.m;
+    let linear = [
+        matrix[0][0].to_bits(), matrix[0][1].to_bits(), matrix[0][2].to_bits(),
+        matrix[1][0].to_bits(), matrix[1][1].to_bits(), matrix[1][2].to_bits(),
+        matrix[2][0].to_bits(), matrix[2][1].to_bits(), matrix[2][2].to_bits(),
+    ];
+    let mut style = Vec::with_capacity(32);
+    style.extend(ctx.ins_color.map(f32::to_bits));
+    style.push(ctx.ins_pat_len.to_bits());
+    style.extend(ctx.ins_pat.map(f32::to_bits));
+    style.push(ctx.ins_lw_px.to_bits());
+    style.extend(ctx.l0.color.map(f32::to_bits));
+    style.push(ctx.l0.pat_len.to_bits());
+    style.extend(ctx.l0.pat.map(f32::to_bits));
+    style.push(ctx.l0.lw_px.to_bits());
+    style.push(ctx.pslt_factor.to_bits());
+    style.extend(ctx.bg_color.map(f32::to_bits));
+    NestedPrototypeKey {
+        block_name: block_name.to_string(),
+        linear,
+        style,
+        selected: ctx.selected,
+        is_xref: ctx.is_xref,
+        depth_scale: depth_scale.to_bits(),
+    }
+}
+
 /// Fade `color` toward `bg` by 50%, preserving alpha. Used to mark xref
 /// geometry — the hue stays recognizable but the contrast against the
 /// background drops, reading as "washed out".
@@ -1200,6 +1347,9 @@ pub(crate) fn fade_toward_bg(color: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct StyleKey {
     color: [u32; 4],
+    contrast_bg: Option<[u32; 4]>,
+    preserve_color: bool,
+    canvas_color: bool,
     pattern_length: u32,
     pattern: [u32; 8],
     line_weight_px: u32,
@@ -1217,6 +1367,9 @@ struct StyleKey {
     /// Part of the batch key so planar SOLID fills remain independently
     /// switchable after block geometry is merged by style.
     fill_is_2d_solid: bool,
+    fill_is_3d: bool,
+    plot_visible: bool,
+    hide_unselected: bool,
     /// Bit-cast composed block-local depth for band wires (`0` = no override).
     /// Keeps bands of different in-block draw ranks in separate batches so
     /// each finalized WireModel carries one correct `depth_override`.
@@ -1226,6 +1379,9 @@ struct StyleKey {
 #[derive(Default, Debug)]
 struct BatchEntry {
     color: [f32; 4],
+    contrast_bg: Option<[f32; 4]>,
+    preserve_color: bool,
+    canvas_color: bool,
     pattern_length: f32,
     pattern: [f32; 8],
     line_weight_px: f32,
@@ -1246,7 +1402,10 @@ struct BatchEntry {
     /// reconstructs `high + low`). Without it absolute f32 fills quantize to
     /// ~0.5 m and the greek-text rectangles shear.
     fill_tris_low: Vec<[f32; 3]>,
+    fill_is_3d: bool,
     fill_is_2d_solid: bool,
+    plot_visible: bool,
+    hide_unselected: bool,
     /// Accumulated thickness-wall pick geometry, paired high/low like
     /// `fill_tris`. Pick-only — no GPU batch reads this.
     pick_tris: Vec<[f32; 3]>,
@@ -1257,6 +1416,23 @@ struct BatchEntry {
     min_y: f32,
     max_x: f32,
     max_y: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct NestedPrototypeKey {
+    block_name: String,
+    linear: [u64; 9],
+    style: Vec<u32>,
+    selected: bool,
+    is_xref: bool,
+    depth_scale: u32,
+}
+
+#[derive(Clone, Debug)]
+struct NestedPrototype {
+    translation: [f64; 3],
+    depth_base: f32,
+    wires: Arc<Vec<WireModel>>,
 }
 
 /// Hard cap on point count for a single batched WireModel. Above this the
@@ -1276,11 +1452,15 @@ struct Batches {
     /// WireModels by `clip_wires`. Appended verbatim at `finalize` (only their
     /// name/selected flag are stamped to match the host insert).
     extra_wires: Vec<WireModel>,
+    nested_prototypes: HashMap<NestedPrototypeKey, NestedPrototype>,
 }
 
 impl BatchEntry {
     fn new(
         color: [f32; 4],
+        contrast_bg: Option<[f32; 4]>,
+        preserve_color: bool,
+        canvas_color: bool,
         pat_len: f32,
         pat: [f32; 8],
         lw_px: f32,
@@ -1289,6 +1469,9 @@ impl BatchEntry {
         plinegen: bool,
         _is_fill_only: bool,
         fill_is_2d_solid: bool,
+        fill_is_3d: bool,
+        plot_visible: bool,
+        hide_unselected: bool,
     ) -> Self {
         // `is_fill_only` is part of the StyleKey hash so greek fills never
         // share a batch with regular wires (otherwise the finalized
@@ -1297,6 +1480,9 @@ impl BatchEntry {
         // itself — the empty `points` field is enough at finalize time.
         Self {
             color,
+            contrast_bg,
+            preserve_color,
+            canvas_color,
             pattern_length: pat_len,
             pattern: pat,
             line_weight_px: lw_px,
@@ -1304,6 +1490,9 @@ impl BatchEntry {
             aci,
             plinegen,
             fill_is_2d_solid,
+            fill_is_3d,
+            plot_visible,
+            hide_unselected,
             min_x: f32::INFINITY,
             min_y: f32::INFINITY,
             max_x: f32::NEG_INFINITY,
@@ -1320,24 +1509,41 @@ impl Batches {
             .closed
             .into_iter()
             .chain(self.by_style.into_values())
-            .map(|b| {
+            .map(|mut b| {
+                if b.hide_unselected && !selected {
+                    b.points.clear();
+                    b.points_low.clear();
+                }
                 let aabb = if b.min_x.is_infinite() {
                     WireModel::UNBOUNDED_AABB
                 } else {
                     [b.min_x, b.min_y, b.max_x, b.max_y]
                 };
-                // RAW colour came from `tessellate_sub_local` (and from
-                // `expand_defn`'s ByBlock fallbacks); apply `adapt_to_bg`
-                // now so each render against a different bg gets the
-                // right pure-black ↔ pure-white flip without rebuilding
-                // the cached defn.
-                let color = crate::scene::view::render::adapt_to_bg(b.color, bg_color);
+                let contrast_bg = b.contrast_bg.unwrap_or(bg_color);
+                let color = if b.canvas_color {
+                    bg_color
+                } else if b.preserve_color {
+                    b.color
+                } else {
+                    crate::scene::view::render::adapt_to_bg(b.color, contrast_bg)
+                };
+                if !b.preserve_color {
+                    for vertex in &mut b.text_verts {
+                        vertex.color = crate::scene::view::render::adapt_to_bg(
+                            vertex.color,
+                            contrast_bg,
+                        );
+                    }
+                }
                 WireModel {
                     taper_widths: Vec::new(),
                     world_width: b.world_width,
                     depth_override: b.local_depth,
-                    fill_is_3d: false,
+                    display_visible: !b.hide_unselected || selected,
+                    plot_visible: b.plot_visible,
+                    fill_is_3d: b.fill_is_3d,
                     fill_is_2d_solid: b.fill_is_2d_solid,
+                    render_instance: None,
                     pick_tris: b.pick_tris,
                     pick_tris_low: b.pick_tris_low,
                     dash_from_start: false,
@@ -1375,6 +1581,9 @@ impl Batches {
 
 fn style_key(
     color: [f32; 4],
+    contrast_bg: Option<[f32; 4]>,
+    preserve_color: bool,
+    canvas_color: bool,
     pat_len: f32,
     pat: [f32; 8],
     lw_px: f32,
@@ -1383,6 +1592,9 @@ fn style_key(
     plinegen: bool,
     is_fill_only: bool,
     fill_is_2d_solid: bool,
+    fill_is_3d: bool,
+    plot_visible: bool,
+    hide_unselected: bool,
     local_depth: Option<f32>,
 ) -> StyleKey {
     StyleKey {
@@ -1392,6 +1604,9 @@ fn style_key(
             color[2].to_bits(),
             color[3].to_bits(),
         ],
+        contrast_bg: contrast_bg.map(|color| color.map(f32::to_bits)),
+        preserve_color,
+        canvas_color,
         pattern_length: pat_len.to_bits(),
         pattern: [
             pat[0].to_bits(),
@@ -1409,6 +1624,9 @@ fn style_key(
         plinegen,
         is_fill_only,
         fill_is_2d_solid,
+        fill_is_3d,
+        plot_visible,
+        hide_unselected,
         depth_bits: local_depth.map_or(0, f32::to_bits),
     }
 }
@@ -1529,54 +1747,133 @@ fn expand_defn(
                     d_range.0 + nref.local_rank * d_range.1,
                     d_range.1 / (nested_defn.child_count.max(1) as f32 + 1.0),
                 );
+                let composed_for = |offset: &[f64; 3]| {
+                    if offset == &[0.0; 3] {
+                        nref.xform.then(accum_xform)
+                    } else {
+                        Transform::from_translation(Vector3::new(
+                            offset[0], offset[1], offset[2],
+                        ))
+                        .then(&nref.xform)
+                        .then(accum_xform)
+                    }
+                };
                 if let Some(cp) = &nref.clip_poly {
-                    // XCLIP'd nested insert: expand into an isolated batch set,
-                    // finalize to whole wires, clip them to the boundary mapped
-                    // into world by the accumulated transform, then carry the
-                    // clipped wires out via `extra_wires`. Single instance only —
-                    // an array of clipped nested inserts is vanishingly rare, so
-                    // the array case is not handled (boundary placement per
-                    // instance would differ).
-                    let composed = nref.xform.then(accum_xform);
-                    let mut sub = Batches::default();
-                    expand_defn(
-                        nested_defn,
-                        &composed,
-                        &inner_ctx,
-                        &mut sub,
-                        visited,
-                        depth + 1,
-                        nested_range,
-                    );
-                    let mut wires = sub.finalize("", ctx.selected, ctx.bg_color);
-                    let world_poly: Vec<[f64; 2]> = cp
+                    let base_composed = nref.xform.then(accum_xform);
+                    let base_translation = transform_translation(&base_composed);
+                    let base_poly: Vec<[f64; 2]> = cp
                         .iter()
                         .map(|&[x, y]| {
                             let w = accum_xform.apply(Vector3::new(x, y, 0.0));
                             [w.x, w.y]
                         })
                         .collect();
-                    crate::scene::pick::xclip::clip_wires(&mut wires, &world_poly);
-                    out.extra_wires.append(&mut wires);
-                } else {
+                    let mut first: Option<(Vec<WireModel>, [f64; 3])> = None;
                     for offset in &nref.instance_offsets {
-                        let composed = if offset == &[0.0; 3] {
-                            nref.xform.then(accum_xform)
-                        } else {
-                            let translation = Transform::from_translation(Vector3::new(
-                                offset[0], offset[1], offset[2],
-                            ));
-                            translation.then(&nref.xform).then(accum_xform)
-                        };
+                        let composed = composed_for(offset);
+                        let translation = transform_translation(&composed);
+                        if let Some((source, source_translation)) = &first {
+                            let delta = [
+                                translation[0] - source_translation[0],
+                                translation[1] - source_translation[1],
+                                translation[2] - source_translation[2],
+                            ];
+                            out.extra_wires.extend(source.iter().map(|wire| {
+                                translated_prototype_wire(wire, "", delta)
+                            }));
+                            continue;
+                        }
+                        let mut sub = Batches::default();
                         expand_defn(
                             nested_defn,
                             &composed,
                             &inner_ctx,
-                            out,
+                            &mut sub,
                             visited,
                             depth + 1,
                             nested_range,
                         );
+                        let mut wires = sub.finalize("", ctx.selected, ctx.bg_color);
+                        let poly_delta = [
+                            translation[0] - base_translation[0],
+                            translation[1] - base_translation[1],
+                        ];
+                        let world_poly: Vec<[f64; 2]> = base_poly
+                            .iter()
+                            .map(|point| [point[0] + poly_delta[0], point[1] + poly_delta[1]])
+                            .collect();
+                        crate::scene::pick::xclip::clip_wires(&mut wires, &world_poly);
+                        for wire in &mut wires {
+                            wire.render_instance = Some(
+                                crate::scene::model::instance_model::RenderInstance {
+                                    source_id: crate::scene::model::instance_model::next_source_id(),
+                                    translation,
+                                },
+                            );
+                        }
+                        out.extra_wires.extend(wires.iter().cloned());
+                        first = Some((wires, translation));
+                    }
+                } else {
+                    for offset in &nref.instance_offsets {
+                        let composed = composed_for(offset);
+                        let translation = transform_translation(&composed);
+                        let key = nested_prototype_key(
+                            &nref.block_name,
+                            &composed,
+                            &inner_ctx,
+                            nested_range.1,
+                        );
+                        if let Some(cached) = out.nested_prototypes.get(&key).cloned() {
+                            let delta = [
+                                translation[0] - cached.translation[0],
+                                translation[1] - cached.translation[1],
+                                translation[2] - cached.translation[2],
+                            ];
+                            let depth_delta = nested_range.0 - cached.depth_base;
+                            out.extra_wires.extend(cached.wires.iter().map(|wire| {
+                                let mut wire = translated_prototype_wire(
+                                    wire,
+                                    "",
+                                    delta,
+                                );
+                                if let Some(depth) = wire.depth_override.as_mut() {
+                                    *depth += depth_delta;
+                                }
+                                wire
+                            }));
+                        } else {
+                            let mut sub = Batches::default();
+                            expand_defn(
+                                nested_defn,
+                                &composed,
+                                &inner_ctx,
+                                &mut sub,
+                                visited,
+                                depth + 1,
+                                nested_range,
+                            );
+                            let mut wires = sub.finalize("", ctx.selected, ctx.bg_color);
+                            for wire in &mut wires {
+                                if wire.render_instance.is_none() {
+                                    wire.render_instance = Some(
+                                        crate::scene::model::instance_model::RenderInstance {
+                                            source_id: crate::scene::model::instance_model::next_source_id(),
+                                            translation,
+                                        },
+                                    );
+                                }
+                            }
+                            out.extra_wires.extend(wires.iter().cloned());
+                            out.nested_prototypes.insert(
+                                key,
+                                NestedPrototype {
+                                    translation,
+                                    depth_base: nested_range.0,
+                                    wires: Arc::new(wires),
+                                },
+                            );
+                        }
                     }
                 }
                 visited.pop();
@@ -1729,6 +2026,9 @@ fn emit_wire(
 
     let key = style_key(
         final_color,
+        lw.contrast_bg,
+        lw.preserve_color,
+        lw.canvas_color,
         final_pat_len,
         final_pat,
         final_lw_px,
@@ -1737,6 +2037,9 @@ fn emit_wire(
         lw.plinegen,
         lw.is_fill_only,
         lw.fill_is_2d_solid,
+        lw.fill_is_3d,
+        lw.plot_visible,
+        lw.hide_unselected,
         local_depth,
     );
 
@@ -1752,6 +2055,9 @@ fn emit_wire(
     let entry = out.by_style.entry(key).or_insert_with(|| {
         BatchEntry::new(
             final_color,
+            lw.contrast_bg,
+            lw.preserve_color,
+            lw.canvas_color,
             final_pat_len,
             final_pat,
             final_lw_px,
@@ -1760,6 +2066,9 @@ fn emit_wire(
             lw.plinegen,
             lw.is_fill_only,
             lw.fill_is_2d_solid,
+            lw.fill_is_3d,
+            lw.plot_visible,
+            lw.hide_unselected,
         )
     });
     entry.local_depth = local_depth;

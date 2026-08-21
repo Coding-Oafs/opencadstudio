@@ -13,15 +13,27 @@
 //!   ([`RibbonGroup`], [`ToolDef`], …) a plugin uses to describe its tab.
 //!
 //! The runtime host surface a plugin uses at *dispatch* time (document access,
-//! command line, undo) is `acadrust`-typed and therefore lives in the host
-//! binary for now; see `docs/plugin-architecture.md` (phase 1b).
+//! command line, undo) is `acadrust`-typed and therefore lives in the `host`
+//! feature; it re-exports `acadrust` so plugins do not need to depend on it
+//! directly and risk an ABI mismatch from a different version.
+//!
+//! For binary compatibility, the host and every plugin must resolve the same
+//! `acadrust` source. The host does this via a `[patch.crates-io]` entry in
+//! `Cargo.toml`; out-of-tree plugins should copy that exact patch.
 
 pub mod manifest;
 pub mod ribbon;
+pub mod type_registry;
+pub mod type_registry_types;
+pub mod version_info;
 
 /// Runtime host surface — only built with the `host` feature (pulls `acadrust`).
 #[cfg(feature = "host")]
 pub mod host;
+
+/// Host-side V4 snapshot manager — only built with the `host` feature.
+#[cfg(feature = "host")]
+pub mod host_v4;
 
 /// Out-of-process plugin runtime — only built with the `host` feature.
 #[cfg(feature = "host")]
@@ -42,9 +54,15 @@ pub mod shm;
 pub mod runner;
 
 pub use manifest::{
-    host_accepts_plugin_version, ApiVersion, PluginManifest, API_VERSION, API_VERSION_MIN_SUPPORTED,
+    effective_max_api_version, host_accepts_plugin_version, ApiVersion, PluginManifest,
+    API_VERSION, API_VERSION_MIN_SUPPORTED, MAX_API_VERSION_ENV,
 };
 pub use ribbon::{CadModule, IconKind, ModuleEvent, RibbonGroup, RibbonItem, StyleKey, ToolDef};
+pub use type_registry::{
+    get_embedded_type_registry_json, EnumVariantInfo, FieldInfo, MethodInfo, ParameterInfo,
+    TypeId, TypeInfo, TypeKind, TypeRegistry,
+};
+pub use version_info::get_embedded_version_info_json;
 
 #[cfg(feature = "host")]
 pub use process::{DispatchResult, PluginError, PluginManager, PluginProcess};

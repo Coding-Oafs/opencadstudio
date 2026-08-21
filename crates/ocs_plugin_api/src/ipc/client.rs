@@ -16,7 +16,7 @@ use crate::ipc::protocol::{
     HostResponse, HostToPlugin, PluginRequest, PluginResponse, PluginToHost, RunnerHandshake,
 };
 use crate::ipc::transport::{recv, send};
-use crate::shm::{DocumentViewInfo, SharedDocumentReader};
+use crate::shm::{DocumentViewInfo, SharedDocumentReader, DocumentViewData};
 
 /// Shared registry of active interactive commands, keyed by host-assigned id.
 pub type InteractiveRegistry = Rc<RefCell<HashMap<u64, Box<dyn InteractiveCommand>>>>;
@@ -60,10 +60,10 @@ impl IpcClient {
         &self,
         req: PluginRequest,
     ) -> Result<PluginResponse, crate::ipc::transport::TransportError> {
-        send(&mut self.stream.borrow_mut(), &PluginToHost::Request(req))?;
+        send(&mut self.stream.borrow_mut(), &PluginToHost::Request(Box::new(req)))?;
         loop {
             match recv::<HostToPlugin>(&mut self.stream.borrow_mut())? {
-                HostToPlugin::Response(resp) => return Ok(resp),
+                HostToPlugin::Response(resp) => return Ok(*resp),
                 HostToPlugin::Request(host_req) => {
                     let resp = HostResponse::Error(format!(
                         "unexpected nested host request: {host_req:?}"
@@ -107,7 +107,7 @@ impl PluginHostApi {
 
     fn fetch_document(&self) -> CadDocument {
         match self.client.request(PluginRequest::DocumentSnapshot) {
-            Ok(PluginResponse::Document(doc)) => doc,
+            Ok(PluginResponse::Document(doc)) => *doc,
             Ok(other) => {
                 eprintln!("[plugin] unexpected DocumentSnapshot response: {other:?}");
                 CadDocument::default()
@@ -152,6 +152,25 @@ impl HostApi for PluginHostApi {
             Err(e) => {
                 eprintln!("[plugin] AddEntity failed: {e}");
                 Handle::default()
+            }
+        }
+    }
+
+    fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
+        match self.client.request(PluginRequest::AddEntities(entities)) {
+            Ok(PluginResponse::Handles(handles)) => {
+                // The cached snapshot is now stale; drop it so a later
+                // document() re-fetches the host's post-edit truth.
+                self.document_cache = OnceCell::new();
+                handles
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected AddEntities response: {other:?}");
+                Vec::new()
+            }
+            Err(e) => {
+                eprintln!("[plugin] AddEntities failed: {e}");
+                Vec::new()
             }
         }
     }
@@ -369,7 +388,7 @@ impl HostApi for PluginHostApi {
             }
         }
         match self.doc_view.borrow().as_ref() {
-            Some(info) => match SharedDocumentReader::open(Path::new(&info.path)) {
+            Some(info) => match SharedDocumentReader::<DocumentViewData>::open(Path::new(&info.path)) {
                 Ok(reader) => Box::new(reader),
                 Err(e) => {
                     eprintln!(
@@ -455,10 +474,13 @@ mod tests {
         let peer_handle = thread::spawn(move || {
             let msg = recv::<PluginToHost>(&mut peer).unwrap();
             match msg {
-                PluginToHost::Request(PluginRequest::PushInfo(s)) => assert_eq!(s, "hello host"),
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::PushInfo(s) => assert_eq!(s, "hello host"),
+                    other => panic!("unexpected: {other:?}"),
+                },
                 other => panic!("unexpected: {other:?}"),
             }
-            send(&mut peer, &HostToPlugin::Response(PluginResponse::Ok)).unwrap();
+            send(&mut peer, &HostToPlugin::Response(Box::new(PluginResponse::Ok))).unwrap();
         });
         api.push_info("hello host");
         peer_handle.join().unwrap();
@@ -470,12 +492,15 @@ mod tests {
         let peer_handle = thread::spawn(move || {
             let msg = recv::<PluginToHost>(&mut peer).unwrap();
             match msg {
-                PluginToHost::Request(PluginRequest::AddEntity(_)) => {}
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::AddEntity(_) => {}
+                    other => panic!("unexpected: {other:?}"),
+                },
                 other => panic!("unexpected: {other:?}"),
             }
             send(
                 &mut peer,
-                &HostToPlugin::Response(PluginResponse::Handle(Handle::new(42))),
+                &HostToPlugin::Response(Box::new(PluginResponse::Handle(Handle::new(42)))),
             )
             .unwrap();
         });
@@ -485,15 +510,49 @@ mod tests {
     }
 
     #[test]
+    fn add_entities_awaits_handles_response() {
+        let (mut api, mut peer) = make_client();
+        let peer_handle = thread::spawn(move || {
+            let msg = recv::<PluginToHost>(&mut peer).unwrap();
+            match msg {
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::AddEntities(v) => assert_eq!(v.len(), 3),
+                    other => panic!("unexpected: {other:?}"),
+                },
+                other => panic!("unexpected: {other:?}"),
+            }
+            send(
+                &mut peer,
+                &HostToPlugin::Response(Box::new(PluginResponse::Handles(vec![
+                    Handle::new(10),
+                    Handle::new(11),
+                    Handle::new(12),
+                ]))),
+            )
+            .unwrap();
+        });
+        let handles = api.add_entities(vec![
+            EntityType::Point(Point::new()),
+            EntityType::Point(Point::new()),
+            EntityType::Point(Point::new()),
+        ]);
+        peer_handle.join().unwrap();
+        assert_eq!(handles, vec![Handle::new(10), Handle::new(11), Handle::new(12)]);
+    }
+
+    #[test]
     fn update_entity_awaits_bool_response() {
         let (mut api, mut peer) = make_client();
         let peer_handle = thread::spawn(move || {
             let msg = recv::<PluginToHost>(&mut peer).unwrap();
             match msg {
-                PluginToHost::Request(PluginRequest::UpdateEntity(_)) => {}
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::UpdateEntity(_) => {}
+                    other => panic!("unexpected: {other:?}"),
+                },
                 other => panic!("unexpected: {other:?}"),
             }
-            send(&mut peer, &HostToPlugin::Response(PluginResponse::Bool(true))).unwrap();
+            send(&mut peer, &HostToPlugin::Response(Box::new(PluginResponse::Bool(true)))).unwrap();
         });
         assert!(api.update_entity(EntityType::Point(Point::new())));
         peer_handle.join().unwrap();
@@ -505,12 +564,15 @@ mod tests {
         let peer_handle = thread::spawn(move || {
             let msg = recv::<PluginToHost>(&mut peer).unwrap();
             match msg {
-                PluginToHost::Request(PluginRequest::RemoveEntity { handle }) => {
-                    assert_eq!(handle, Handle::new(7));
-                }
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::RemoveEntity { handle } => {
+                        assert_eq!(handle, Handle::new(7));
+                    }
+                    other => panic!("unexpected: {other:?}"),
+                },
                 other => panic!("unexpected: {other:?}"),
             }
-            send(&mut peer, &HostToPlugin::Response(PluginResponse::Bool(true))).unwrap();
+            send(&mut peer, &HostToPlugin::Response(Box::new(PluginResponse::Bool(true)))).unwrap();
         });
         assert!(api.remove_entity(Handle::new(7)));
         peer_handle.join().unwrap();
