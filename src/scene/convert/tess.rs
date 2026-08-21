@@ -339,8 +339,48 @@ pub(crate) fn tessellate_entity_dim_text(
     }
     wires
 }
-
 pub(crate) fn tessellate_entity(
+    document: &acadrust::CadDocument,
+    selected: &HashSet<Handle>,
+    active_viewport: Option<Handle>,
+    bg_color: [f32; 4],
+    anno_scale: f32,
+    annotation_scale_handle: Option<Handle>,
+    e: &EntityType,
+    block_cache: Option<&cache::block_cache::BlockCache>,
+    view_aabb: Option<[f32; 4]>,
+    world_per_pixel: Option<f32>,
+    paper_space: bool,
+) -> Vec<WireModel> {
+    let mut wires = tessellate_entity_inner(
+        document,
+        selected,
+        active_viewport,
+        bg_color,
+        anno_scale,
+        annotation_scale_handle,
+        e,
+        block_cache,
+        view_aabb,
+        world_per_pixel,
+        paper_space,
+    );
+
+    let layer_plottable = document
+        .layers
+        .get(&e.common().layer)
+        .map(|layer| layer.is_plottable)
+        .unwrap_or(true);
+
+    if !layer_plottable {
+        for wire in &mut wires {
+            wire.plot_visible = false;
+        }
+    }
+
+    wires
+}
+fn tessellate_entity_inner(
     document: &acadrust::CadDocument,
     selected: &HashSet<Handle>,
     active_viewport: Option<Handle>,
@@ -1056,6 +1096,11 @@ pub(crate) fn tessellate_entity(
                 _ => None,
             })
             .unwrap_or(0);
+        let ins_layer_plottable = document
+            .layers
+            .get(&ins.common.layer)
+            .map(|layer| layer.is_plottable)
+            .unwrap_or(true);
         let ip = glam::Vec3::new(
             (ins.insert_point.x) as f32,
             (ins.insert_point.y) as f32,
@@ -1127,6 +1172,7 @@ pub(crate) fn tessellate_entity(
             ins_lw_px,
             ins_layer,
             ins_layer_aci,
+            ins_layer_plottable,
             sel,
             pslt_factor,
             view_aabb,
@@ -1181,6 +1227,7 @@ pub(crate) fn tessellate_entity(
             ins_pat,
             ins_lw_px,
             ins_layer,
+            ins_layer_plottable,
             bg_color,
             is_xref,
             pslt_factor,

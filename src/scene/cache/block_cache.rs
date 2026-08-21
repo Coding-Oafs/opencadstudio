@@ -74,6 +74,7 @@ pub struct LocalWire {
     pub world_width: f32,
     pub plinegen: bool,
     pub plot_visible: bool,
+    pub plot_l0: bool,
     pub hide_unselected: bool,
     /// Set at construction; used to discriminate fill-only GPU batches from
     /// stroke batches in [`StyleKey`]. Derived from
@@ -108,6 +109,8 @@ pub struct NestedRef {
     pub xform: Transform,
     pub style: crate::scene::render_graph::InsertStyleSpec,
     pub instance_offsets: Vec<[f64; 3]>,
+    pub plot_visible: bool,
+    pub plot_l0: bool,
     /// XCLIP boundary for this nested insert, in the parent defn's local frame
     /// (`None` = unclipped). Baked at build time because the clip's spatial
     /// filter lives in `doc.objects`, which isn't reachable at expand time; on
@@ -520,6 +523,14 @@ fn build_defn(
                 if let Some(record) = baked.filter(|record| {
                     !record.entity_handles.is_empty()
                 }) {
+                    let table_plot_l0 = crate::scene::view::render::is_effective_layer_zero(
+                        &table.common.layer,
+                    );
+                    let table_plot_visible = doc
+                        .layers
+                        .get(&table.common.layer)
+                        .map(|layer| layer.is_plottable)
+                        .unwrap_or(true);
                     let mut insert = acadrust::entities::Insert::new(
                         record.name.clone(),
                         table.insertion_point,
@@ -544,7 +555,7 @@ fn build_defn(
                         |leaf, context| {
                             let mut placed = leaf.clone();
                             placed.apply_transform(&context.transform);
-                            for wire in tessellate_sub_local(
+                            for mut wire in tessellate_sub_local(
                                 doc,
                                 &placed,
                                 anno_scale,
@@ -553,6 +564,8 @@ fn build_defn(
                                 viewport,
                                 depth_map,
                             ) {
+                                wire.plot_visible &= table_plot_l0 || table_plot_visible;
+                                wire.plot_l0 |= table_plot_l0;
                                 subs.push(LocalSub::Wire(wire));
                             }
                         },
@@ -628,12 +641,22 @@ fn build_nested_ref(
         .map(|filter| {
             crate::scene::pick::xclip::world_clip_polygon_for_transform(filter, &xform)
         });
+    let plot_l0 = crate::scene::view::render::is_effective_layer_zero(
+        &nested_ins.common.layer,
+    );
+    let plot_visible = doc
+        .layers
+        .get(&nested_ins.common.layer)
+        .map(|layer| layer.is_plottable)
+        .unwrap_or(true);
 
     NestedRef {
         block_name: nested_ins.block_name.clone(),
         xform,
         style: crate::scene::render_graph::InsertStyleSpec::new(doc, nested_ins, viewport),
         instance_offsets: crate::scene::render_graph::array_offsets(nested_ins),
+        plot_visible,
+        plot_l0,
         clip_poly,
         local_rank: depth_map
             .get(&nested_ins.common.handle.value())
@@ -679,6 +702,11 @@ fn tessellate_sub_local(
     // INSERT's layer at expand time. Flag each ByLayer property so emit_wire
     // can override the cached (layer-0-resolved) value with the insert layer's.
     let on_l0 = crate::scene::view::render::is_effective_layer_zero(&sub.common().layer);
+    let layer_plottable = doc
+        .layers
+        .get(&sub.common().layer)
+        .map(|layer| layer.is_plottable)
+        .unwrap_or(true);
     let color_l0 =
         !has_book_color && on_l0 && sub.common().color == AcadColor::ByLayer;
     let transparency_l0 = on_l0 && sub.common().transparency.alpha() == 0;
@@ -808,7 +836,9 @@ fn tessellate_sub_local(
             line_weight_px: lw_px,
             world_width: wire.world_width,
             plinegen: wire.plinegen,
-            plot_visible: frame_mode.is_none_or(|mode| mode == 1),
+            plot_visible: frame_mode.is_none_or(|mode| mode == 1)
+                && (on_l0 || layer_plottable),
+            plot_l0: on_l0,
             hide_unselected: frame_mode == Some(0),
             is_fill_only,
             color_is_byblock: color_is_byblock && wire_on_base_color,
@@ -921,6 +951,7 @@ pub fn expand_insert(
     // The INSERT's own layer style — layer-0 inheritance target for children.
     ins_layer: crate::scene::view::render::InheritStyle,
     ins_layer_aci: u8,
+    ins_layer_plottable: bool,
     selected: bool,
     pslt_factor: f32,
     // World-space XY view AABB (with world_offset already subtracted, so the
@@ -972,6 +1003,7 @@ pub fn expand_insert(
             ins_pat,
             ins_lw_px,
             ins_layer,
+            ins_layer_plottable,
             selected,
             pslt_factor,
             is_xref,
@@ -1051,6 +1083,8 @@ pub fn expand_insert(
         ins_lw_px,
         l0: ins_layer,
         l0_aci: ins_layer_aci,
+        l0_plottable: ins_layer_plottable,
+        plot_visible: ins_layer_plottable,
         selected,
         pslt_factor,
         view_aabb: None,
@@ -1154,6 +1188,7 @@ fn expansion_prototype_key(
     ins_pat: [f32; 8],
     ins_lw_px: f32,
     ins_layer: crate::scene::view::render::InheritStyle,
+    ins_layer_plottable: bool,
     selected: bool,
     pslt_factor: f32,
     is_xref: bool,
@@ -1181,6 +1216,7 @@ fn expansion_prototype_key(
     insert_style.push(ins_layer.pat_len.to_bits());
     insert_style.extend(ins_layer.pat.map(f32::to_bits));
     insert_style.push(ins_layer.lw_px.to_bits());
+    insert_style.push(ins_layer_plottable as u32);
     insert_style.push(pslt_factor.to_bits());
     insert_style.extend(bg_color.map(f32::to_bits));
     insert_style.push(anno_scale.to_bits());
@@ -1283,6 +1319,8 @@ struct ExpandCtx<'a> {
     /// for child wires on layer "0" whose properties are ByLayer.
     l0: crate::scene::view::render::InheritStyle,
     l0_aci: u8,
+    l0_plottable: bool,
+    plot_visible: bool,
     selected: bool,
     pslt_factor: f32,
     // World-space XY view AABB (post world_offset). `None` = no culling.
@@ -1317,6 +1355,8 @@ fn nested_prototype_key(
     style.push(ctx.l0.pat_len.to_bits());
     style.extend(ctx.l0.pat.map(f32::to_bits));
     style.push(ctx.l0.lw_px.to_bits());
+    style.push(ctx.l0_plottable as u32);
+    style.push(ctx.plot_visible as u32);
     style.push(ctx.pslt_factor.to_bits());
     style.extend(ctx.bg_color.map(f32::to_bits));
     NestedPrototypeKey {
@@ -1724,6 +1764,11 @@ fn expand_defn(
                     layer0_aci: ctx.l0_aci,
                 };
                 let nested_style = nref.style.resolve(parent_style);
+                let nested_layer_plottable = if nref.plot_l0 {
+                    ctx.l0_plottable
+                } else {
+                    nref.plot_visible
+                };
                 let inner_ctx = ExpandCtx {
                     cache: ctx.cache,
                     ins_color: nested_style.insert.0,
@@ -1733,6 +1778,8 @@ fn expand_defn(
                     ins_lw_px: nested_style.insert.3,
                     l0: nested_style.layer0,
                     l0_aci: nested_style.layer0_aci,
+                    l0_plottable: nested_layer_plottable,
+                    plot_visible: ctx.plot_visible && nested_layer_plottable,
                     selected: ctx.selected,
                     pslt_factor: ctx.pslt_factor,
                     view_aabb: ctx.view_aabb,
@@ -2023,6 +2070,9 @@ fn emit_wire(
     // batches stay merged.
     let local_depth = (lw.world_width > 0.0)
         .then(|| d_range.0 + lw.local_rank * d_range.1);
+    let plot_visible = ctx.plot_visible
+        && lw.plot_visible
+        && (!lw.plot_l0 || ctx.l0_plottable);
 
     let key = style_key(
         final_color,
@@ -2038,7 +2088,7 @@ fn emit_wire(
         lw.is_fill_only,
         lw.fill_is_2d_solid,
         lw.fill_is_3d,
-        lw.plot_visible,
+        plot_visible,
         lw.hide_unselected,
         local_depth,
     );
@@ -2067,7 +2117,7 @@ fn emit_wire(
             lw.is_fill_only,
             lw.fill_is_2d_solid,
             lw.fill_is_3d,
-            lw.plot_visible,
+            plot_visible,
             lw.hide_unselected,
         )
     });

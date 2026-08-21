@@ -436,6 +436,7 @@ impl Scene {
                 Some(&frozen),
                 self.viewport_scale_handle(viewport.common.handle),
                 self.annotation_all_visible(),
+                true,
             );
             for hatch in hatches {
                 if matches!(&hatch.pattern, HatchPattern::Pattern(_)) {

@@ -1144,9 +1144,58 @@ impl Scene {
             viewport,
             None,
             false,
+            false,
         )
     }
 
+    fn layer_plottable_in_context(
+        &self,
+        entity: &EntityType,
+        context: &crate::scene::render_graph::RenderContext,
+    ) -> bool {
+        let common = entity.common();
+        let layer = if crate::scene::view::render::is_effective_layer_zero(&common.layer) {
+            context
+                .insert_path
+                .iter()
+                .rev()
+                .find(|insert| {
+                    !crate::scene::view::render::is_effective_layer_zero(&insert.common.layer)
+                })
+                .map(|insert| insert.common.layer.as_str())
+                .unwrap_or(common.layer.as_str())
+        } else {
+            common.layer.as_str()
+        };
+        self.document
+            .layers
+            .get(layer)
+            .map(|layer| layer.is_plottable)
+            .unwrap_or(true)
+    }
+
+    pub(super) fn instanced_plot_hatch_models(
+        &self,
+        layout_block: Handle,
+        hatch_bg: [f32; 4],
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
+        viewport: Option<Handle>,
+    ) -> Vec<HatchModel> {
+        self.instanced_hatch_models_filtered(
+            layout_block,
+            hatch_bg,
+            false,
+            frozen,
+            annotation_scale_handle,
+            all_visible,
+            viewport,
+            None,
+            false,
+            true,
+        )
+    }
     /// Build live hatch overlays for INSERT grip previews. The edited INSERT
     /// is intentionally hidden from the resident scene while its current
     /// document entity moves, so include that hidden target and reuse the full
@@ -1183,6 +1232,7 @@ impl Scene {
             self.active_viewport,
             Some(&targets),
             true,
+            false,
         )
     }
 
@@ -1197,6 +1247,7 @@ impl Scene {
         viewport: Option<Handle>,
         targets: Option<&rustc_hash::FxHashSet<Handle>>,
         include_preview_hidden: bool,
+        plot_only: bool,
     ) -> Vec<HatchModel> {
         let depth_map = self.draw_depth_map();
         let graph = crate::scene::render_graph::RenderSceneGraph::new(
@@ -1213,10 +1264,15 @@ impl Scene {
         graph.walk_root(
             self.render_scene_root(layout_block),
             |entity, context| {
+                let common = entity.common();
+
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return false;
+                }
+
                 if context.is_instanced() {
                     return true;
                 }
-                let common = entity.common();
                 if self.object_isolation.hides(common.handle)
                     || (!include_preview_hidden
                         && self.preview_hidden.contains(&common.handle))
@@ -1254,6 +1310,9 @@ impl Scene {
                 let EntityType::Hatch(source_hatch) = entity else {
                     return;
                 };
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return;
+                }
                 let style = context.style_for(&self.document, entity);
                 let preserve_white_mask = source_hatch.is_solid
                     && matches!(
@@ -1352,6 +1411,7 @@ impl Scene {
             all_visible,
             bg_color,
             false,
+            false,
         )
     }
 
@@ -1363,6 +1423,7 @@ impl Scene {
         all_visible: bool,
         bg_color: [f32; 4],
         tint_insert_selection: bool,
+        plot_only: bool,
     ) -> Vec<HatchModel> {
         let depth_map = self.draw_depth_map();
         let graph = crate::scene::render_graph::RenderSceneGraph::new(
@@ -1377,8 +1438,11 @@ impl Scene {
         graph.walk_root(
             self.render_scene_root(target_block),
             |entity, context| {
-                context.is_instanced()
-                    || !self.entity_temporarily_hidden(entity.common().handle)
+                let common = entity.common();
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return false;
+                }
+                context.is_instanced() || !self.entity_temporarily_hidden(common.handle)
             },
             |entity, context| {
                 let EntityType::Wipeout(source) = entity else {

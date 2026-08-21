@@ -171,8 +171,8 @@ fn plot_scene_content(
     let (mut paper_wires, mut model_wires) = scene.plot_wire_groups(render_mode_override);
     paper_wires.retain(|wire| wire.plot_visible);
     model_wires.retain(|wire| wire.plot_visible);
-    let paper_hatches = scene.paper_canvas_hatches().as_ref().clone();
-    let paper_wipeouts = scene.paper_canvas_wipeouts().as_ref().clone();
+    let paper_hatches = scene.paper_plot_hatches().as_ref().clone();
+    let paper_wipeouts = scene.paper_plot_wipeouts().as_ref().clone();
     if scene.current_layout == "Model" {
         let splits = crate::io::pdf_export::PlotGroupSplits {
             wires: paper_wires.len(),
