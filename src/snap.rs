@@ -1661,6 +1661,88 @@ impl Snapper {
                                 });
                             (w, edge_d * edge_d)
                         }
+                        TangentGeom::Arc {
+                            center,
+                            axis_x,
+                            axis_y,
+                            radius,
+                            start_angle,
+                            end_angle,
+                        } => {
+                            let cv = Vec3::from(*center);
+                            let ux = Vec3::from(*axis_x).normalize_or_zero();
+                            let uy = Vec3::from(*axis_y).normalize_or_zero();
+                            let r = *radius;
+                            let sweep = (*end_angle - *start_angle)
+                                .rem_euclid(std::f32::consts::TAU);
+                            let contains = |angle: f32| {
+                                (angle - *start_angle).rem_euclid(std::f32::consts::TAU)
+                                    <= sweep + 1.0e-5
+                            };
+                            let candidate = self.from_point.and_then(|from| {
+                                let delta = from - cv;
+                                let px = delta.dot(ux);
+                                let py = delta.dot(uy);
+                                let d2 = px * px + py * py;
+                                if d2 <= r * r + 1.0e-6 {
+                                    return None;
+                                }
+                                let base = r * r / d2;
+                                let side = r * (d2 - r * r).sqrt() / d2;
+                                let local = [
+                                    (base * px - side * py, base * py + side * px),
+                                    (base * px + side * py, base * py - side * px),
+                                ];
+                                local
+                                    .into_iter()
+                                    .filter(|&(x, y)| contains(y.atan2(x)))
+                                    .map(|(x, y)| cv + ux * x + uy * y)
+                                    .min_by(|a, b| {
+                                        let sa = world_to_screen(
+                                            a.as_dvec3(), view_rot, eye, bounds,
+                                        );
+                                        let sb = world_to_screen(
+                                            b.as_dvec3(), view_rot, eye, bounds,
+                                        );
+                                        dist2(sa, cursor_screen)
+                                            .total_cmp(&dist2(sb, cursor_screen))
+                                    })
+                            });
+                            let fallback = || {
+                                (0..wire.points.len())
+                                    .map(|index| wp_f64(wire, index).as_vec3())
+                                    .filter(|point| point.is_finite())
+                                    .min_by(|a, b| {
+                                        let sa = world_to_screen(
+                                            a.as_dvec3(), view_rot, eye, bounds,
+                                        );
+                                        let sb = world_to_screen(
+                                            b.as_dvec3(), view_rot, eye, bounds,
+                                        );
+                                        dist2(sa, cursor_screen)
+                                            .total_cmp(&dist2(sb, cursor_screen))
+                                    })
+                                    .unwrap_or(cv)
+                            };
+                            let world = candidate.unwrap_or_else(fallback);
+                            let edge_d2 = wire
+                                .points
+                                .windows(2)
+                                .enumerate()
+                                .filter_map(|(index, _)| {
+                                    let a = wp_f64(wire, index);
+                                    let b = wp_f64(wire, index + 1);
+                                    (a.is_finite() && b.is_finite()).then(|| {
+                                        dist2_to_segment(
+                                            cursor_screen,
+                                            world_to_screen(a, view_rot, eye, bounds),
+                                            world_to_screen(b, view_rot, eye, bounds),
+                                        )
+                                    })
+                                })
+                                .fold(f32::INFINITY, f32::min);
+                            (world, edge_d2)
+                        }
                     };
                     let (tier, sub) = (
                         snap_tier(SnapType::Tangent),
@@ -1680,6 +1762,14 @@ impl Snapper {
                                 p2: glam::DVec3::new(p2[0] as f64, p2[1] as f64, p2[2] as f64),
                             },
                             TangentGeom::Circle { center, radius } => TangentObject::Circle {
+                                center: glam::DVec3::new(
+                                    center[0] as f64,
+                                    center[1] as f64,
+                                    center[2] as f64,
+                                ),
+                                radius: *radius as f64,
+                            },
+                            TangentGeom::Arc { center, radius, .. } => TangentObject::Circle {
                                 center: glam::DVec3::new(
                                     center[0] as f64,
                                     center[1] as f64,

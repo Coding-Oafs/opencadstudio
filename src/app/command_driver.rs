@@ -764,7 +764,10 @@ impl OpenCADStudio {
                 // leave the anchor untouched. (#327)
                 if matches!(
                     entity,
-                    acadrust::EntityType::Line(_) | acadrust::EntityType::Arc(_)
+                    acadrust::EntityType::Line(_)
+                        | acadrust::EntityType::Arc(_)
+                        | acadrust::EntityType::LwPolyline(_)
+                        | acadrust::EntityType::Polyline2D(_)
                 ) {
                     self.update_cont_anchor(&entity);
                 }

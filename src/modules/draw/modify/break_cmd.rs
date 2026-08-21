@@ -96,9 +96,15 @@ fn break_arc(arc: &ArcEnt, p1: DVec3, p2: DVec3) -> Vec<EntityType> {
     let cy = arc.center.y;
     let r = arc.radius;
 
-    // Project p1 and p2 onto the arc (world XY plane)
-    let a1 = angle_on_arc(cx, cy, p1);
-    let a2 = angle_on_arc(cx, cy, p2);
+    let plane = crate::entities::curve::arc_curve(arc).plane;
+    let Some(q1) = plane.project(p1.to_array()) else {
+        return vec![EntityType::Arc(arc.clone())];
+    };
+    let Some(q2) = plane.project(p2.to_array()) else {
+        return vec![EntityType::Arc(arc.clone())];
+    };
+    let a1 = angle_on_arc(cx, cy, DVec3::new(q1[0], q1[1], 0.0));
+    let a2 = angle_on_arc(cx, cy, DVec3::new(q2[0], q2[1], 0.0));
 
     let start = arc.start_angle;
     let end = arc.end_angle;
