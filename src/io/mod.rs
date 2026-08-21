@@ -1345,7 +1345,10 @@ fn validate_save_extension(path: &Path) -> Result<(), SaveFailure> {
         .extension()
         .map(|value| value.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    if matches!(extension.as_str(), "dwg" | "dxf") {
+    // `.sv$` is the application's internal autosave/recovery container. It
+    // carries DWG bytes and is intentionally accepted here even though it is
+    // not exposed as a manual export format.
+    if matches!(extension.as_str(), "dwg" | "dxf" | "sv$") {
         return Ok(());
     }
 
@@ -1414,6 +1417,29 @@ mod save_failure_tests {
             "unsupported output format .pdf; supported formats: .dwg, .dxf"
         );
         assert!(!path.exists(), "unsupported export created an output file");
+    }
+
+    #[test]
+    fn autosave_recovery_extension_writes_dwg_bytes() {
+        let path = std::env::temp_dir().join(format!(
+            "ocs_autosave_{}_{}.dwg.ocs-autosave.sv$",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        save_as_version(
+            &acadrust::CadDocument::new(),
+            &path,
+            acadrust::DxfVersion::AC1032,
+        )
+        .expect("autosave recovery copy");
+
+        let bytes = std::fs::read(&path).expect("read autosave recovery copy");
+        assert!(bytes.starts_with(b"AC1032"), "autosave must contain DWG data");
+        let _ = std::fs::remove_file(path);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

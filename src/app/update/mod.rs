@@ -942,8 +942,8 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            Message::PointCloudIndexed(tab_id, path, result) => {
-                self.finish_point_cloud_index(tab_id, path, result)
+            Message::PointCloudIndexed(tab_id, source_id, path, result) => {
+                self.finish_point_cloud_index(tab_id, source_id, path, result)
             }
 
             #[cfg(not(target_arch = "wasm32"))]

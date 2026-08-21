@@ -513,6 +513,12 @@ impl PointCloudDataset {
         self.sources.iter_mut().find(|source| source.id == id)
     }
 
+    pub(super) fn contains_source_path(&self, path: &std::path::Path) -> bool {
+        self.sources
+            .iter()
+            .any(|source| path_matches(&source.source_path, path))
+    }
+
     /// Generates a stable, collision-free sidecar id for a new source.
     pub(super) fn next_source_id(&self) -> String {
         let taken: std::collections::BTreeSet<&str> = self
@@ -870,6 +876,19 @@ impl OpenCADStudio {
     }
 
     pub(super) fn start_point_cloud_load(&mut self, path: PathBuf) -> Task<Message> {
+        if self.tabs[self.active_tab]
+            .point_cloud
+            .contains_source_path(&path)
+        {
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDATTACH: \"{}\" is already attached; skipped duplicate.",
+                    path.display()
+                )
+                .as_str(),
+            );
+            return Task::none();
+        }
         let tab_id = self.tabs[self.active_tab].id;
         let density = self.tabs[self.active_tab].point_cloud.display.density;
         let options = Self::sample_options_for(density);
@@ -1157,6 +1176,23 @@ impl OpenCADStudio {
             }
         };
 
+        // A second picker/queue completion can race the first background read.
+        // Recheck at installation time so one physical source never becomes
+        // two live attachments even when both reads were already in flight.
+        if self.tabs[tab_index]
+            .point_cloud
+            .contains_source_path(&path)
+        {
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDATTACH: \"{}\" is already attached; skipped duplicate.",
+                    path.display()
+                )
+                .as_str(),
+            );
+            return deferred_message(Message::PointCloudQueuePump(tab_id));
+        }
+
         let id = self.tabs[tab_index].point_cloud.next_source_id();
         let mut attachment = PointCloudAttachment::new(id, path.clone(), sample);
         let mut restored_sidecar = false;
@@ -1195,6 +1231,13 @@ impl OpenCADStudio {
                 }
             }
         }
+        if let Some((cache_path, manifest)) =
+            find_valid_tile_cache(&path, attachment.cache_path.as_deref())
+        {
+            attachment.cache_path = Some(cache_path);
+            attachment.cache_manifest = Some(manifest);
+            attachment.stream_camera_generation = u64::MAX;
+        }
         let metadata = &attachment.sample.metadata;
         let point_count = metadata.point_count;
         let sampled = attachment.sample.points.len();
@@ -1216,26 +1259,6 @@ impl OpenCADStudio {
             self.tabs[tab_index]
                 .scene
                 .fit_external_bounds(union_min, union_max);
-        }
-
-        let restored_cache = self.tabs[tab_index]
-            .point_cloud
-            .source(&source_id)
-            .and_then(|source| source.cache_path.clone())
-            .and_then(|cache_path| {
-                TileCacheManifest::open(&cache_path)
-                    .and_then(|manifest| {
-                        manifest.validate_source(&path)?;
-                        Ok((cache_path, manifest))
-                    })
-                    .ok()
-            });
-        if let Some((cache_path, manifest)) = restored_cache {
-            if let Some(source) = self.tabs[tab_index].point_cloud.source_mut(&source_id) {
-                source.cache_path = Some(cache_path);
-                source.cache_manifest = Some(manifest);
-                source.stream_camera_generation = u64::MAX;
-            }
         }
 
         let source_label = if dataset_had_sources {
@@ -1493,6 +1516,7 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDINDEX: attach a LAS/LAZ cloud first.");
             return Task::none();
         };
+        let source_id = cloud.id.clone();
         let source = cloud.source_path.clone();
         let cache_path = cache_path_for_source(&source);
         if cache_path.exists() {
@@ -1502,7 +1526,12 @@ impl OpenCADStudio {
                     Ok(manifest)
                 })
                 .map_err(|error| error.to_string());
-            return Task::done(Message::PointCloudIndexed(tab_id, cache_path, result));
+            return Task::done(Message::PointCloudIndexed(
+                tab_id,
+                source_id,
+                cache_path,
+                result,
+            ));
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1525,7 +1554,7 @@ impl OpenCADStudio {
                 )
                 .map_err(|error| error.to_string())
             },
-            move |result| Message::PointCloudIndexed(tab_id, cache_path, result),
+            move |result| Message::PointCloudIndexed(tab_id, source_id, cache_path, result),
         )
     }
 
@@ -1548,21 +1577,11 @@ impl OpenCADStudio {
     pub(super) fn finish_point_cloud_index(
         &mut self,
         tab_id: u64,
+        source_id: String,
         cache_path: PathBuf,
         result: Result<TileCacheManifest, String>,
     ) -> Task<Message> {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
-            return Task::none();
-        };
-        // The completing build is the source that still holds its cancel
-        // handle; only one index build runs per dataset at a time.
-        let source_id = self.tabs[tab_index]
-            .point_cloud
-            .sources
-            .iter()
-            .find(|source| source.index_cancel.is_some())
-            .map(|source| source.id.clone());
-        let Some(source_id) = source_id else {
             return Task::none();
         };
         let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&source_id) else {
@@ -3918,6 +3937,43 @@ fn cache_path_for_source(source: &std::path::Path) -> PathBuf {
     source.with_file_name(format!("{name}.ocstiles"))
 }
 
+/// The persisted sidecar path wins when valid, but a cache beside the source
+/// is also discovered automatically. Older sidecars can therefore pick up an
+/// already-built `<source>.ocstiles` directory without requiring a rebuild.
+fn point_cloud_cache_candidates(
+    source: &std::path::Path,
+    persisted: Option<&std::path::Path>,
+) -> Vec<PathBuf> {
+    let default = cache_path_for_source(source);
+    let mut candidates = Vec::with_capacity(2);
+    if let Some(path) = persisted {
+        candidates.push(path.to_path_buf());
+    }
+    if !candidates
+        .iter()
+        .any(|candidate| path_matches(candidate, &default))
+    {
+        candidates.push(default);
+    }
+    candidates
+}
+
+fn find_valid_tile_cache(
+    source: &std::path::Path,
+    persisted: Option<&std::path::Path>,
+) -> Option<(PathBuf, TileCacheManifest)> {
+    point_cloud_cache_candidates(source, persisted)
+        .into_iter()
+        .find_map(|cache_path| {
+            TileCacheManifest::open(&cache_path)
+                .and_then(|manifest| {
+                    manifest.validate_source(source)?;
+                    Ok((cache_path, manifest))
+                })
+                .ok()
+        })
+}
+
 /// Guard against pathological scans (junction loops, misdirected roots).
 const MAX_FOLDER_SOURCES: usize = 2_000;
 
@@ -4096,6 +4152,14 @@ mod tests {
     }
 
     #[test]
+    fn dataset_recognizes_an_already_attached_source_path() {
+        let mut dataset = PointCloudDataset::default();
+        dataset.sources.push(attachment("tile-a", 1));
+        assert!(dataset.contains_source_path(&dataset.sources[0].source_path));
+        assert!(!dataset.contains_source_path(std::path::Path::new("other.las")));
+    }
+
+    #[test]
     fn dataset_model_concatenates_every_source() {
         let mut dataset = PointCloudDataset::default();
         dataset.sources.push(attachment("a", 3));
@@ -4208,6 +4272,26 @@ mod tests {
             names
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cache_candidates_fall_back_to_the_source_sidecar_directory() {
+        let source = PathBuf::from("survey").join("tile.laz");
+        let default = source.with_file_name("tile.laz.ocstiles");
+        assert_eq!(
+            vec![default.clone()],
+            point_cloud_cache_candidates(&source, None)
+        );
+        assert_eq!(
+            vec![default.clone()],
+            point_cloud_cache_candidates(&source, Some(&default))
+        );
+
+        let persisted = PathBuf::from("drawing-cache").join("tile.ocstiles");
+        assert_eq!(
+            vec![persisted.clone(), default],
+            point_cloud_cache_candidates(&source, Some(&persisted))
+        );
     }
 }
 

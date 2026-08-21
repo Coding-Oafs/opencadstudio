@@ -3080,6 +3080,7 @@ pub enum Message {
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudIndexed(
         u64,
+        String,
         std::path::PathBuf,
         Result<ocs_pointcloud::TileCacheManifest, String>,
     ),
