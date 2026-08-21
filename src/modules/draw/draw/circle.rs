@@ -151,6 +151,7 @@ pub struct CircleCommand {
 enum StepCR {
     Center,
     Radius(DVec3),
+    Diameter(DVec3),
 }
 
 impl CircleCommand {
@@ -186,6 +187,11 @@ impl CadCommand for CircleCommand {
                 )
                 .into_owned()
             }
+            StepCR::Diameter(_) => crate::tf!(
+                "CIRCLE  Specify diameter  <{:.4}>:",
+                self.default_r * 2.0
+            )
+            .into_owned(),
         }
     }
 
@@ -196,15 +202,16 @@ impl CadCommand for CircleCommand {
                 CmdOption::new("3P", "3P"),
                 CmdOption::new("2P", "2P"),
                 CmdOption::new("Ttr", "TTR"),
-                CmdOption::new("Ttt", "TTT"),
+            ],
+            StepCR::Radius(_) => vec![
                 CmdOption::new(t!("Diameter").as_ref(), "D"),
             ],
-            StepCR::Radius(_) => vec![],
+            StepCR::Diameter(_) => vec![],
         }
     }
 
     fn point_step_accepts_keywords(&self) -> bool {
-        matches!(self.step, StepCR::Center)
+        !matches!(self.step, StepCR::Diameter(_))
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.step {
@@ -214,27 +221,49 @@ impl CadCommand for CircleCommand {
             }
             StepCR::Radius(c) => {
                 let r = plane_distance(*c, pt, self.plane);
+                if r <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
                 defaults::set_circle_radius(r);
                 CmdResult::CommitAndExit(make_circle(*c, r, self.plane))
+            }
+            StepCR::Diameter(c) => {
+                let radius = plane_distance(*c, pt, self.plane);
+                if radius <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
+                defaults::set_circle_radius(radius);
+                CmdResult::CommitAndExit(make_circle(*c, radius, self.plane))
             }
         }
     }
     fn on_enter(&mut self) -> CmdResult {
-        if let StepCR::Radius(c) = &self.step {
-            let c = *c;
-            let r = self.default_r;
-            return CmdResult::CommitAndExit(make_circle(c, r, self.plane));
+        match self.step {
+            StepCR::Radius(center) => {
+                CmdResult::CommitAndExit(make_circle(center, self.default_r, self.plane))
+            }
+            StepCR::Diameter(center) => {
+                CmdResult::CommitAndExit(make_circle(center, self.default_r, self.plane))
+            }
+            StepCR::Center => CmdResult::Cancel,
         }
-        CmdResult::Cancel
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
-        if let StepCR::Radius(c) = &self.step {
-            Some(circle_wire(*c, plane_distance(*c, pt, self.plane), self.plane))
-        } else {
-            None
+        match self.step {
+            StepCR::Radius(center) => Some(circle_wire(
+                center,
+                plane_distance(center, pt, self.plane),
+                self.plane,
+            )),
+            StepCR::Diameter(center) => Some(circle_wire(
+                center,
+                plane_distance(center, pt, self.plane),
+                self.plane,
+            )),
+            StepCR::Center => None,
         }
     }
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
@@ -245,10 +274,14 @@ impl CadCommand for CircleCommand {
                 "3P" => Some(CmdResult::Dispatch("CIRCLE_3P".into())),
                 "2P" => Some(CmdResult::Dispatch("CIRCLE_2P".into())),
                 "T" | "TTR" => Some(CmdResult::Dispatch("CIRCLE_TTR".into())),
-                "TTT" => Some(CmdResult::Dispatch("CIRCLE_TTT".into())),
-                "D" | "DIAMETER" => Some(CmdResult::Dispatch("CIRCLE_CD".into())),
                 _ => None,
             };
+        }
+        if let StepCR::Radius(center) = &self.step {
+            if matches!(text.trim().to_uppercase().as_str(), "D" | "DIAMETER") {
+                self.step = StepCR::Diameter(*center);
+                return Some(CmdResult::NeedPoint);
+            }
         }
         if let StepCR::Radius(c) = &self.step {
             let r: f64 = text.trim().replace(',', ".").parse().ok()?;
@@ -257,12 +290,23 @@ impl CadCommand for CircleCommand {
                 return Some(CmdResult::CommitAndExit(make_circle(*c, r, self.plane)));
             }
         }
+        if let StepCR::Diameter(c) = &self.step {
+            let diameter: f64 = text.trim().replace(',', ".").parse().ok()?;
+            if diameter > 0.0 {
+                defaults::set_circle_diam(diameter);
+                return Some(CmdResult::CommitAndExit(make_circle(
+                    *c,
+                    diameter * 0.5,
+                    self.plane,
+                )));
+            }
+        }
         None
     }
     fn dyn_field(&self) -> DynField {
         match self.step {
             StepCR::Center => DynField::Point,
-            StepCR::Radius(_) => DynField::Distance,
+            StepCR::Radius(_) | StepCR::Diameter(_) => DynField::Distance,
         }
     }
 
@@ -276,6 +320,12 @@ impl CadCommand for CircleCommand {
             StepCR::Radius(c) => Some(DynSpec {
                 anchor: DynAnchor::Point(c),
                 fields: vec![DynFieldSpec::new(DynRole::Radius)],
+                guide: DynGuide::Radius,
+                ref_point: None,
+            }),
+            StepCR::Diameter(c) => Some(DynSpec {
+                anchor: DynAnchor::Point(c),
+                fields: vec![DynFieldSpec::new(DynRole::Diameter)],
                 guide: DynGuide::Radius,
                 ref_point: None,
             }),
@@ -312,28 +362,33 @@ impl CadCommand for CircleCDCommand {
     fn prompt(&self) -> String {
         match &self.step {
             StepCR::Center => t!("CIRCLE CD  Specify center point:").into_owned(),
-            StepCR::Radius(c) => crate::tf!(
+            StepCR::Diameter(c) => crate::tf!(
                 "CIRCLE CD  Specify diameter or type value  <{:.4}>  [center ({:.3},{:.3})]:",
                 self.default_d, c.x, c.y
             )
             .into_owned(),
+            StepCR::Radius(_) => unreachable!(),
         }
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match &self.step {
             StepCR::Center => {
-                self.step = StepCR::Radius(pt);
+                self.step = StepCR::Diameter(pt);
                 CmdResult::NeedPoint
             }
-            StepCR::Radius(c) => {
-                let d = plane_distance(*c, pt, self.plane) * 2.0;
-                defaults::set_circle_diam(d);
-                CmdResult::CommitAndExit(make_circle(*c, d / 2.0, self.plane))
+            StepCR::Diameter(c) => {
+                let radius = plane_distance(*c, pt, self.plane);
+                if radius <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
+                defaults::set_circle_radius(radius);
+                CmdResult::CommitAndExit(make_circle(*c, radius, self.plane))
             }
+            StepCR::Radius(_) => unreachable!(),
         }
     }
     fn on_enter(&mut self) -> CmdResult {
-        if let StepCR::Radius(c) = &self.step {
+        if let StepCR::Diameter(c) = &self.step {
             let c = *c;
             let d = self.default_d;
             return CmdResult::CommitAndExit(make_circle(c, d / 2.0, self.plane));
@@ -344,15 +399,18 @@ impl CadCommand for CircleCDCommand {
         CmdResult::Cancel
     }
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
-        // Preview radius = distance to cursor; on commit that distance becomes the radius (diameter = 2x).
-        if let StepCR::Radius(c) = &self.step {
-            Some(circle_wire(*c, plane_distance(*c, pt, self.plane), self.plane))
+        if let StepCR::Diameter(c) = &self.step {
+            Some(circle_wire(
+                *c,
+                plane_distance(*c, pt, self.plane),
+                self.plane,
+            ))
         } else {
             None
         }
     }
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        if let StepCR::Radius(c) = &self.step {
+        if let StepCR::Diameter(c) = &self.step {
             let d: f64 = text.trim().replace(',', ".").parse().ok()?;
             if d > 0.0 {
                 defaults::set_circle_diam(d);
@@ -368,12 +426,13 @@ impl CadCommand for CircleCDCommand {
             StepCR::Center => None,
             // Diameter: the box shows/accepts twice the cursor radius; resolved
             // back to a radius point by the host (role scaling).
-            StepCR::Radius(c) => Some(DynSpec {
+            StepCR::Diameter(c) => Some(DynSpec {
                 anchor: DynAnchor::Point(c),
                 fields: vec![DynFieldSpec::new(DynRole::Diameter)],
                 guide: DynGuide::Radius,
                 ref_point: None,
             }),
+            StepCR::Radius(_) => None,
         }
     }
 }
@@ -418,6 +477,10 @@ impl CadCommand for Circle2PCommand {
             Some(p1) => {
                 let center = (p1 + pt) * 0.5;
                 let radius = plane_distance(p1, pt, self.plane) / 2.0;
+                if radius <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
+                defaults::set_circle_radius(radius);
                 CmdResult::CommitAndExit(make_circle(center, radius, self.plane))
             }
         }

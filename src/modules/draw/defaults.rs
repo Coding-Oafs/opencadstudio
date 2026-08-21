@@ -5,7 +5,6 @@ use std::cell::Cell;
 
 thread_local! {
     static CIRCLE_RADIUS:   Cell<f64> = Cell::new(1.0);
-    static CIRCLE_DIAM:     Cell<f64> = Cell::new(2.0);
     static ROTATE_ANGLE:    Cell<f64> = Cell::new(0.0);   // degrees
     static SCALE_FACTOR:    Cell<f64> = Cell::new(1.0);
     static OFFSET_DIST:     Cell<f64> = Cell::new(1.0);
@@ -34,7 +33,13 @@ macro_rules! accessors {
 }
 
 accessors!(get_circle_radius, set_circle_radius, CIRCLE_RADIUS);
-accessors!(get_circle_diam, set_circle_diam, CIRCLE_DIAM);
+pub fn get_circle_diam() -> f64 {
+    get_circle_radius() * 2.0
+}
+
+pub fn set_circle_diam(value: f64) {
+    set_circle_radius(value * 0.5);
+}
 accessors!(get_rotate_angle, set_rotate_angle, ROTATE_ANGLE);
 accessors!(get_scale_factor, set_scale_factor, SCALE_FACTOR);
 accessors!(get_offset_dist, set_offset_dist, OFFSET_DIST);
