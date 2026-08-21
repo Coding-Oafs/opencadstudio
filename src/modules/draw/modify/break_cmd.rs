@@ -131,8 +131,15 @@ fn break_circle(circle: &acadrust::entities::Circle, p1: DVec3, p2: DVec3) -> Ve
     let cx = circle.center.x;
     let cy = circle.center.y;
 
-    let a1 = angle_on_arc(cx, cy, p1);
-    let a2 = angle_on_arc(cx, cy, p2);
+    let plane = crate::entities::curve::circle_curve(circle).plane;
+    let Some(q1) = plane.project(p1.to_array()) else {
+        return vec![EntityType::Circle(circle.clone())];
+    };
+    let Some(q2) = plane.project(p2.to_array()) else {
+        return vec![EntityType::Circle(circle.clone())];
+    };
+    let a1 = angle_on_arc(cx, cy, DVec3::new(q1[0], q1[1], 0.0));
+    let a2 = angle_on_arc(cx, cy, DVec3::new(q2[0], q2[1], 0.0));
 
     if (a1 - a2).abs() < 0.01 {
         return vec![EntityType::Circle(circle.clone())];
@@ -144,6 +151,7 @@ fn break_circle(circle: &acadrust::entities::Circle, p1: DVec3, p2: DVec3) -> Ve
     arc.common.handle = Handle::NULL;
     arc.center = circle.center.clone();
     arc.radius = circle.radius;
+    arc.thickness = circle.thickness;
     arc.normal = circle.normal.clone();
     arc.start_angle = a2;
     arc.end_angle = a1;

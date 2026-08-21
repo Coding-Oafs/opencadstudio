@@ -1268,7 +1268,8 @@ fn translated_prototype_wire(
                     center[axis] += delta_f32[axis];
                 }
             }
-            TangentGeom::Arc { center, .. } => {
+            TangentGeom::PlanarCircle { center, .. }
+            | TangentGeom::Arc { center, .. } => {
                 for axis in 0..3 {
                     center[axis] += delta[axis];
                 }
@@ -2369,6 +2370,36 @@ fn transform_tangent(
                 radius: radius * ((sx + sy) * 0.5),
                 start_angle: *start_angle,
                 end_angle: *end_angle,
+            })
+        }
+        TangentGeom::PlanarCircle {
+            center,
+            axis_x,
+            axis_y,
+            radius,
+        } => {
+            let c = t.apply(Vector3::new(center[0], center[1], center[2]));
+            let x = t.apply_rotation(Vector3::new(axis_x[0], axis_x[1], axis_x[2]));
+            let y = t.apply_rotation(Vector3::new(axis_y[0], axis_y[1], axis_y[2]));
+            let sx = x.length();
+            let sy = y.length();
+            let scale = sx.max(sy);
+            if !scale.is_finite()
+                || scale <= 1.0e-12
+                || (sx - sy).abs() > scale * 1.0e-9
+            {
+                return None;
+            }
+            let x = x / sx;
+            let y = y / sy;
+            if x.dot(&y).abs() > 1.0e-9 {
+                return None;
+            }
+            Some(TangentGeom::PlanarCircle {
+                center: [c.x, c.y, c.z],
+                axis_x: [x.x, x.y, x.z],
+                axis_y: [y.x, y.y, y.z],
+                radius: radius * ((sx + sy) * 0.5),
             })
         }
     }

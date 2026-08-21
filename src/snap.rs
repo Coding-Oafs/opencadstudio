@@ -1692,6 +1692,62 @@ impl Snapper {
                                 .fold(f32::INFINITY, f32::min);
                             (world, edge_d2)
                         }
+                        TangentGeom::PlanarCircle {
+                            center,
+                            axis_x,
+                            axis_y,
+                            radius,
+                        } => {
+                            let cv = DVec3::from_array(*center);
+                            let candidate = self.from_point.and_then(|from| {
+                                planar_circle_tangent_points(
+                                    from.as_dvec3(),
+                                    *center,
+                                    *axis_x,
+                                    *axis_y,
+                                    *radius,
+                                )
+                                .into_iter()
+                                .min_by(|a, b| {
+                                    let sa = world_to_screen(*a, view_rot, eye, bounds);
+                                    let sb = world_to_screen(*b, view_rot, eye, bounds);
+                                    dist2(sa, cursor_screen).total_cmp(&dist2(sb, cursor_screen))
+                                })
+                            });
+                            if self.from_point.is_some() && candidate.is_none() {
+                                continue;
+                            }
+                            let fallback = || {
+                                (0..wire.points.len())
+                                    .map(|index| wp_f64(wire, index))
+                                    .filter(|point| point.is_finite())
+                                    .min_by(|a, b| {
+                                        let sa = world_to_screen(*a, view_rot, eye, bounds);
+                                        let sb = world_to_screen(*b, view_rot, eye, bounds);
+                                        dist2(sa, cursor_screen)
+                                            .total_cmp(&dist2(sb, cursor_screen))
+                                    })
+                                    .unwrap_or(cv)
+                            };
+                            let world = candidate.unwrap_or_else(fallback);
+                            let edge_d2 = wire
+                                .points
+                                .windows(2)
+                                .enumerate()
+                                .filter_map(|(index, _)| {
+                                    let a = wp_f64(wire, index);
+                                    let b = wp_f64(wire, index + 1);
+                                    (a.is_finite() && b.is_finite()).then(|| {
+                                        dist2_to_segment(
+                                            cursor_screen,
+                                            world_to_screen(a, view_rot, eye, bounds),
+                                            world_to_screen(b, view_rot, eye, bounds),
+                                        )
+                                    })
+                                })
+                                .fold(f32::INFINITY, f32::min);
+                            (world, edge_d2)
+                        }
                     };
                     let (tier, sub) = (
                         snap_tier(SnapType::Tangent),
@@ -1722,6 +1778,12 @@ impl Snapper {
                                 center: glam::DVec3::from_array(*center),
                                 radius: *radius,
                             },
+                            TangentGeom::PlanarCircle { center, radius, .. } => {
+                                TangentObject::Circle {
+                                    center: glam::DVec3::from_array(*center),
+                                    radius: *radius,
+                                }
+                            }
                         };
                         best = Some(SnapResult {
                             world: world_pt,
@@ -2298,6 +2360,27 @@ fn circle_tangent_points(p: Vec3, center: Vec3, radius: f32) -> Option<(Vec3, Ve
         Vec3::new(first.point[0] as f32, first.point[1] as f32, center.z),
         Vec3::new(second.point[0] as f32, second.point[1] as f32, center.z),
     ))
+}
+
+fn planar_circle_tangent_points(
+    from: DVec3,
+    center: [f64; 3],
+    axis_x: [f64; 3],
+    axis_y: [f64; 3],
+    radius: f64,
+) -> Vec<DVec3> {
+    let plane = cadkernel::space::Plane::from_axes(center, axis_x, axis_y);
+    let Some(from) = plane.project(from.to_array()) else {
+        return Vec::new();
+    };
+    let curve = cadkernel::geom2d::Curve::Circle(cadkernel::geom2d::Circle {
+        centre: [0.0, 0.0],
+        radius,
+    });
+    cadkernel::geom2d::tangent_from(&curve, from)
+        .into_iter()
+        .map(|point| DVec3::from_array(plane.point_at(point.point)))
+        .collect()
 }
 
 fn arc_tangent_points(

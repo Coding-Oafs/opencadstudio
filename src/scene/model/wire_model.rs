@@ -31,6 +31,13 @@ pub enum TangentGeom {
     Line { p1: [f32; 3], p2: [f32; 3] },
     /// Complete circle.
     Circle { center: [f32; 3], radius: f32 },
+    /// Complete circle in an arbitrary world-space plane.
+    PlanarCircle {
+        center: [f64; 3],
+        axis_x: [f64; 3],
+        axis_y: [f64; 3],
+        radius: f64,
+    },
     /// Bounded circular arc in its world-space plane.
     Arc {
         center: [f64; 3],

@@ -105,8 +105,8 @@ fn offset_xline(x: &XLineEnt, dist: f64, side_pt: Vec3) -> Option<EntityType> {
 // ── Circle offset ──────────────────────────────────────────────────────────
 
 fn offset_circle(c: &CircleEnt, dist: f64, side_pt: Vec3) -> Option<EntityType> {
-    let px = side_pt.x as f64;
-    let py = side_pt.y as f64;
+    let plane = crate::entities::curve::circle_curve(c).plane;
+    let [px, py] = plane.project(side_pt.as_dvec3().to_array())?;
     let dc = ((px - c.center.x).powi(2) + (py - c.center.y).powi(2)).sqrt();
 
     let new_r = if dc < c.radius {
