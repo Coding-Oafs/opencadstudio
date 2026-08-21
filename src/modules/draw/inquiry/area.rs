@@ -79,7 +79,7 @@ impl AreaCommand {
         let curve = entity_curve(entity)?;
         let perimeter = curve.length();
         Some(AreaMeasurement {
-            area: curve.curve.enclosed_area().abs(),
+            area: curve.curve.chord_closed_area()?.abs(),
             perimeter: perimeter.is_finite().then_some(perimeter),
         })
     }

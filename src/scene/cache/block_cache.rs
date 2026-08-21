@@ -1268,6 +1268,11 @@ fn translated_prototype_wire(
                     center[axis] += delta_f32[axis];
                 }
             }
+            TangentGeom::Arc { center, .. } => {
+                for axis in 0..3 {
+                    center[axis] += delta[axis];
+                }
+            }
         }
     }
     if !wire.text_verts.is_empty() {
@@ -2194,9 +2199,9 @@ fn emit_wire(
         ));
     }
     for tg in &lw.tangent_geoms {
-        entry
-            .tangent_geoms
-            .push(transform_tangent(tg, accum_xform));
+        if let Some(tangent) = transform_tangent(tg, accum_xform) {
+            entry.tangent_geoms.push(tangent);
+        }
     }
     // Per the WireModel contract an empty `fill_tris_low` means "all-zero low
     // half" (e.g. a Leader / dimension arrowhead fill, which the tessellator
@@ -2299,7 +2304,7 @@ fn emit_wire(
 fn transform_tangent(
     tg: &TangentGeom,
     t: &Transform,
-) -> TangentGeom {
+) -> Option<TangentGeom> {
     match tg {
         TangentGeom::Line { p1, p2 } => {
             let q1 = t.apply(Vector3::new(
@@ -2312,10 +2317,10 @@ fn transform_tangent(
                 p2[1] as f64,
                 p2[2] as f64,
             ));
-            TangentGeom::Line {
+            Some(TangentGeom::Line {
                 p1: [(q1.x) as f32, (q1.y) as f32, (q1.z) as f32],
                 p2: [(q2.x) as f32, (q2.y) as f32, (q2.z) as f32],
-            }
+            })
         }
         TangentGeom::Circle { center, radius } => {
             let c = t.apply(Vector3::new(
@@ -2327,10 +2332,44 @@ fn transform_tangent(
             let sx = ((m[0][0] * m[0][0] + m[0][1] * m[0][1] + m[0][2] * m[0][2]) as f64).sqrt();
             let sy = ((m[1][0] * m[1][0] + m[1][1] * m[1][1] + m[1][2] * m[1][2]) as f64).sqrt();
             let s = ((sx + sy) * 0.5) as f32;
-            TangentGeom::Circle {
+            Some(TangentGeom::Circle {
                 center: [(c.x) as f32, (c.y) as f32, (c.z) as f32],
                 radius: radius * s,
+            })
+        }
+        TangentGeom::Arc {
+            center,
+            axis_x,
+            axis_y,
+            radius,
+            start_angle,
+            end_angle,
+        } => {
+            let c = t.apply(Vector3::new(center[0], center[1], center[2]));
+            let x = t.apply_rotation(Vector3::new(axis_x[0], axis_x[1], axis_x[2]));
+            let y = t.apply_rotation(Vector3::new(axis_y[0], axis_y[1], axis_y[2]));
+            let sx = x.length();
+            let sy = y.length();
+            let scale = sx.max(sy);
+            if !scale.is_finite()
+                || scale <= 1.0e-12
+                || (sx - sy).abs() > scale * 1.0e-9
+            {
+                return None;
             }
+            let x = x / sx;
+            let y = y / sy;
+            if x.dot(&y).abs() > 1.0e-9 {
+                return None;
+            }
+            Some(TangentGeom::Arc {
+                center: [c.x, c.y, c.z],
+                axis_x: [x.x, x.y, x.z],
+                axis_y: [y.x, y.y, y.z],
+                radius: radius * ((sx + sy) * 0.5),
+                start_angle: *start_angle,
+                end_angle: *end_angle,
+            })
         }
     }
 }
