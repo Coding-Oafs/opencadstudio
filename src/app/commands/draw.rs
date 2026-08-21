@@ -473,9 +473,43 @@ impl OpenCADStudio {
 
             "CENTERLINE" => {
                 use crate::modules::draw::draw::centerline::CenterLineCommand;
-                let new_cmd = CenterLineCommand::new();
+                let settings = self.tabs[i].scene.centerline_settings();
+                let new_cmd = CenterLineCommand::new(settings);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
+            "CENTERRESET" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                self.push_undo_snapshot(i, "CENTERRESET");
+                let count = self.tabs[i].scene.reset_centerlines(&handles);
+                if count > 0 {
+                    self.tabs[i].dirty = true;
+                }
+                self.command_line
+                    .push_output(&format!("CENTERRESET: {count} centerline(s) updated."));
+            }
+
+            "CENTERREASSOCIATE" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                self.push_undo_snapshot(i, "CENTERREASSOCIATE");
+                let count = self.tabs[i].scene.set_centerline_association(&handles, true);
+                if count > 0 {
+                    self.tabs[i].dirty = true;
+                }
+                self.command_line
+                    .push_output(&format!("CENTERREASSOCIATE: {count} centerline(s) associated."));
+            }
+
+            "CENTERDISASSOCIATE" => {
+                let handles = self.tabs[i].scene.selected_handles_in_order();
+                self.push_undo_snapshot(i, "CENTERDISASSOCIATE");
+                let count = self.tabs[i].scene.set_centerline_association(&handles, false);
+                if count > 0 {
+                    self.tabs[i].dirty = true;
+                }
+                self.command_line
+                    .push_output(&format!("CENTERDISASSOCIATE: {count} centerline(s) detached."));
             }
 
             "DIMCENTER" | "CENTERMARK" => {

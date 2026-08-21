@@ -21,6 +21,7 @@ pub mod view;
 // blocks and/or free functions). Pure text-move from the original mod.rs.
 mod boundary;
 mod camera_ops;
+pub(crate) mod centerline;
 mod entity;
 mod group_layer;
 mod layout;
@@ -2393,6 +2394,11 @@ impl Scene {
             self.associative_hatch_source_cache.borrow_mut().take();
         }
         let mut changes = changes.to_vec();
+        for change in self.refresh_associative_centerlines(&changes) {
+            if !changes.iter().any(|(handle, _)| *handle == change.0) {
+                changes.push(change);
+            }
+        }
         for change in self.refresh_associative_hatches(&changes) {
             if !changes.iter().any(|(handle, _)| *handle == change.0) {
                 changes.push(change);

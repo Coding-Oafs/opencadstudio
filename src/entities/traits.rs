@@ -111,6 +111,14 @@ pub trait TextContent {
 pub fn entity_type_name(et: &EntityType) -> &str {
     match et {
         EntityType::Point(_) => "Point",
+        EntityType::Line(line)
+            if acadrust::entities::CenterLineAssociation::read(
+                &line.common.extended_data,
+            )
+            .is_some() =>
+        {
+            "CenterLine"
+        }
         EntityType::Line(_) => "Line",
         EntityType::Circle(_) => "Circle",
         EntityType::Arc(_) => "Arc",

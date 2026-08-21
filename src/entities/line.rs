@@ -3,7 +3,8 @@ use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    center_grip, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
+    center_grip, edit_prop as edit, oriented_triangle_grip, parse_f64, ro_prop as ro,
+    square_grip,
 };
 use crate::entities::traits::RenderConvertible;
 use crate::scene::convert::acad_to_render::{extrusion_wall_tris, RenderEntity, RenderObject};
@@ -67,10 +68,51 @@ fn grips(line: &Line) -> Vec<GripDef> {
     let s = glam::DVec3::new(line.start.x, line.start.y, line.start.z);
     let e = glam::DVec3::new(line.end.x, line.end.y, line.end.z);
     let m = (s + e) * 0.5;
+    if let Some(association) =
+        acadrust::entities::CenterLineAssociation::read(&line.common.extended_data)
+    {
+        let direction = (e - s).normalize_or(glam::DVec3::X);
+        let start_extension = association.start_extension + association.start_length_adjustment;
+        let end_extension = association.end_extension + association.end_length_adjustment;
+        let base_start = s + direction * start_extension;
+        let base_end = e - direction * end_extension;
+        return vec![
+            square_grip(0, base_start),
+            square_grip(1, base_end),
+            center_grip(2, m),
+            oriented_triangle_grip(3, s, -direction),
+            oriented_triangle_grip(4, e, direction),
+        ];
+    }
     vec![square_grip(0, s), square_grip(1, e), center_grip(2, m)]
 }
 
 fn properties(line: &Line) -> Vec<PropSection> {
+    if let Some(association) =
+        acadrust::entities::CenterLineAssociation::read(&line.common.extended_data)
+    {
+        return vec![PropSection {
+            title: t!("Geometry").into_owned(),
+            props: vec![
+                edit(
+                    "Start extension",
+                    "centerline_start_extension",
+                    association.start_extension,
+                ),
+                edit(
+                    "End extension",
+                    "centerline_end_extension",
+                    association.end_extension,
+                ),
+                ro(t!("Length").as_ref(), "length", format!("{:.4}", line.length())),
+                ro(
+                    "Associative",
+                    "centerline_associative",
+                    if association.associated { "Yes" } else { "No" },
+                ),
+            ],
+        }];
+    }
     let dx = line.end.x - line.start.x;
     let dy = line.end.y - line.start.y;
     let dz = line.end.z - line.start.z;
@@ -97,6 +139,33 @@ fn apply_geom_prop(line: &mut Line, field: &str, value: &str) {
     let Some(v) = parse_f64(value) else {
         return;
     };
+    if let Some(mut association) =
+        acadrust::entities::CenterLineAssociation::read(&line.common.extended_data)
+    {
+        if !v.is_finite() || v < 0.0 {
+            return;
+        }
+        let start = glam::DVec3::new(line.start.x, line.start.y, line.start.z);
+        let end = glam::DVec3::new(line.end.x, line.end.y, line.end.z);
+        let direction = (end - start).normalize_or(glam::DVec3::X);
+        match field {
+            "centerline_start_extension" => {
+                let delta = v - association.start_extension;
+                let moved = start - direction * delta;
+                line.start = acadrust::types::Vector3::new(moved.x, moved.y, moved.z);
+                association.start_extension = v;
+            }
+            "centerline_end_extension" => {
+                let delta = v - association.end_extension;
+                let moved = end + direction * delta;
+                line.end = acadrust::types::Vector3::new(moved.x, moved.y, moved.z);
+                association.end_extension = v;
+            }
+            _ => return,
+        }
+        association.write(&mut line.common.extended_data);
+        return;
+    }
     match field {
         "start_x" => line.start.x = v,
         "start_y" => line.start.y = v,
@@ -109,6 +178,55 @@ fn apply_geom_prop(line: &mut Line, field: &str, value: &str) {
 }
 
 fn apply_grip(line: &mut Line, grip_id: usize, apply: GripApply) {
+    if let Some(mut association) =
+        acadrust::entities::CenterLineAssociation::read(&line.common.extended_data)
+    {
+        let start = glam::DVec3::new(line.start.x, line.start.y, line.start.z);
+        let end = glam::DVec3::new(line.end.x, line.end.y, line.end.z);
+        let direction = (end - start).normalize_or(glam::DVec3::X);
+        let start_total = association.start_extension + association.start_length_adjustment;
+        let end_total = association.end_extension + association.end_length_adjustment;
+        let base_start = start + direction * start_total;
+        let base_end = end - direction * end_total;
+        match (grip_id, apply) {
+            (0, GripApply::Absolute(point)) => {
+                let delta = (point - base_start).dot(direction);
+                association.start_length_adjustment -= delta;
+                let moved = start + direction * delta;
+                line.start = acadrust::types::Vector3::new(moved.x, moved.y, moved.z);
+            }
+            (1, GripApply::Absolute(point)) => {
+                let delta = (point - base_end).dot(direction);
+                association.end_length_adjustment += delta;
+                let moved = end + direction * delta;
+                line.end = acadrust::types::Vector3::new(moved.x, moved.y, moved.z);
+            }
+            (2, GripApply::Translate(delta)) => {
+                line.start.x += delta.x;
+                line.start.y += delta.y;
+                line.start.z += delta.z;
+                line.end.x += delta.x;
+                line.end.y += delta.y;
+                line.end.z += delta.z;
+                association.associated = false;
+            }
+            (3, GripApply::Absolute(point)) => {
+                let total = (base_start - point).dot(direction).max(0.0);
+                association.start_extension = (total - association.start_length_adjustment).max(0.0);
+                let moved = base_start - direction * (association.start_extension + association.start_length_adjustment);
+                line.start = acadrust::types::Vector3::new(moved.x, moved.y, moved.z);
+            }
+            (4, GripApply::Absolute(point)) => {
+                let total = (point - base_end).dot(direction).max(0.0);
+                association.end_extension = (total - association.end_length_adjustment).max(0.0);
+                let moved = base_end + direction * (association.end_extension + association.end_length_adjustment);
+                line.end = acadrust::types::Vector3::new(moved.x, moved.y, moved.z);
+            }
+            _ => return,
+        }
+        association.write(&mut line.common.extended_data);
+        return;
+    }
     match (grip_id, apply) {
         (0, GripApply::Absolute(p)) => {
             line.start.x = p.x as f64;
@@ -133,6 +251,12 @@ fn apply_grip(line: &mut Line, grip_id: usize, apply: GripApply) {
 }
 
 fn apply_transform(line: &mut Line, t: &EntityTransform) {
+    if let Some(mut association) =
+        acadrust::entities::CenterLineAssociation::read(&line.common.extended_data)
+    {
+        association.associated = false;
+        association.write(&mut line.common.extended_data);
+    }
     match t {
         EntityTransform::Translate(d) => {
             line.translate(acadrust::types::Vector3::new(

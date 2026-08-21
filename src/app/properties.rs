@@ -1844,6 +1844,36 @@ impl OpenCADStudio {
             &mut entity,
         );
 
+        // Smart centre lines carry their own drawing-level creation style.
+        // Apply it after the generic ribbon style so ordinary LINE entities
+        // keep the existing path while centre lines honour their settings.
+        if acadrust::entities::CenterLineAssociation::read(
+            &entity.common().extended_data,
+        )
+        .is_some()
+        {
+            let settings = self.tabs[i].scene.centerline_settings();
+            if !settings.layer.eq_ignore_ascii_case("Current") {
+                entity.common_mut().layer = settings.layer;
+            }
+            if !settings.linetype.eq_ignore_ascii_case("Current") {
+                entity.common_mut().linetype = settings.linetype;
+            }
+            entity.common_mut().linetype_scale = settings.linetype_scale;
+            if !self.tabs[i]
+                .scene
+                .document
+                .app_ids
+                .contains(acadrust::entities::CENTERLINE_XDATA_APPLICATION)
+            {
+                let mut app = acadrust::tables::AppId::new(
+                    acadrust::entities::CENTERLINE_XDATA_APPLICATION,
+                );
+                app.handle = self.tabs[i].scene.document.allocate_handle();
+                let _ = self.tabs[i].scene.document.app_ids.add(app);
+            }
+        }
+
         let text_style_annotative = match &entity {
             acadrust::EntityType::Text(text) => {
                 crate::scene::annotative::text_style_is_annotative(
