@@ -95,26 +95,31 @@ fn to_render(circle: &Circle) -> RenderEntity {
 }
 
 fn grips(circle: &Circle) -> Vec<GripDef> {
-    let ctr = glam::DVec3::new(circle.center.x, circle.center.y, circle.center.z);
+    let center = circle.center_wcs();
+    let (axis_x, axis_y) = circle.axes_wcs();
+    let ctr = glam::DVec3::new(center.x, center.y, center.z);
+    let axis_x = glam::DVec3::new(axis_x.x, axis_x.y, axis_x.z);
+    let axis_y = glam::DVec3::new(axis_y.x, axis_y.y, axis_y.z);
     let r = circle.radius;
     vec![
         center_grip(0, ctr),
-        square_grip(1, ctr + glam::DVec3::new(r, 0.0, 0.0)),
-        square_grip(2, ctr + glam::DVec3::new(0.0, r, 0.0)),
-        square_grip(3, ctr - glam::DVec3::new(r, 0.0, 0.0)),
-        square_grip(4, ctr - glam::DVec3::new(0.0, r, 0.0)),
+        square_grip(1, ctr + axis_x * r),
+        square_grip(2, ctr + axis_y * r),
+        square_grip(3, ctr - axis_x * r),
+        square_grip(4, ctr - axis_y * r),
     ]
 }
 
 fn properties(circle: &Circle) -> Vec<PropSection> {
     use std::f64::consts::PI;
     let r = circle.radius;
+    let center = circle.center_wcs();
     vec![PropSection {
         title: t!("Geometry").into_owned(),
         props: vec![
-            edit(t!("Center X").as_ref(), "center_x", circle.center.x),
-            edit(t!("Center Y").as_ref(), "center_y", circle.center.y),
-            edit(t!("Center Z").as_ref(), "center_z", circle.center.z),
+            edit(t!("Center X").as_ref(), "center_x", center.x),
+            edit(t!("Center Y").as_ref(), "center_y", center.y),
+            edit(t!("Center Z").as_ref(), "center_z", center.z),
             edit(t!("Radius").as_ref(), "radius", r),
             edit(t!("Diameter").as_ref(), "diameter", r * 2.0),
             edit(t!("Circumference").as_ref(), "circumference", 2.0 * PI * r),
@@ -132,9 +137,22 @@ fn apply_geom_prop(circle: &mut Circle, field: &str, value: &str) {
         return;
     };
     match field {
-        "center_x" => circle.center.x = v,
-        "center_y" => circle.center.y = v,
-        "center_z" => circle.center.z = v,
+        "center_x" | "center_y" | "center_z" => {
+            let normal = (circle.normal.x, circle.normal.y, circle.normal.z);
+            let center = circle.center_wcs();
+            let (mut x, mut y, mut z) = (center.x, center.y, center.z);
+            match field {
+                "center_x" => x = v,
+                "center_y" => y = v,
+                "center_z" => z = v,
+                _ => {}
+            }
+            let (ox, oy, oz) =
+                crate::scene::view::transform::wcs_point_to_ocs((x, y, z), normal);
+            circle.center.x = ox;
+            circle.center.y = oy;
+            circle.center.z = oz;
+        }
         "radius" if v > 0.0 => circle.radius = v,
         "diameter" if v > 0.0 => circle.radius = v / 2.0,
         "circumference" if v > 0.0 => circle.radius = v / (2.0 * PI),
@@ -146,19 +164,31 @@ fn apply_geom_prop(circle: &mut Circle, field: &str, value: &str) {
 fn apply_grip(circle: &mut Circle, grip_id: usize, apply: GripApply) {
     match (grip_id, apply) {
         (0, GripApply::Absolute(p)) => {
-            circle.center.x = p.x as f64;
-            circle.center.y = p.y as f64;
-            circle.center.z = p.z as f64;
+            let (x, y, z) = crate::scene::view::transform::wcs_point_to_ocs(
+                (p.x, p.y, p.z),
+                (circle.normal.x, circle.normal.y, circle.normal.z),
+            );
+            circle.center.x = x;
+            circle.center.y = y;
+            circle.center.z = z;
         }
         (0, GripApply::Translate(d)) => {
-            circle.center.x += d.x as f64;
-            circle.center.y += d.y as f64;
-            circle.center.z += d.z as f64;
+            let (x, y, z) = crate::scene::view::transform::wcs_point_to_ocs(
+                (d.x, d.y, d.z),
+                (circle.normal.x, circle.normal.y, circle.normal.z),
+            );
+            circle.center.x += x;
+            circle.center.y += y;
+            circle.center.z += z;
         }
         (1..=4, GripApply::Absolute(p)) => {
-            let dx = p.x - circle.center.x;
-            let dy = p.y - circle.center.y;
-            circle.radius = (dx * dx + dy * dy).sqrt();
+            let plane = crate::entities::curve::circle_curve(circle).plane;
+            if let Some(point) = plane.project([p.x, p.y, p.z]) {
+                let radius = (point[0] - circle.center.x).hypot(point[1] - circle.center.y);
+                if radius > 1.0e-9 {
+                    circle.radius = radius;
+                }
+            }
         }
         _ => {}
     }
@@ -187,11 +217,12 @@ impl crate::entities::traits::MassPropsCalc for Circle {
     fn mass_props(&self) -> crate::entities::traits::MassProps {
         use std::f64::consts::{PI, TAU};
         let r = self.radius;
+        let center = self.center_wcs();
         crate::entities::traits::MassProps {
             area: PI * r * r,
             perimeter: TAU * r,
-            cx: self.center.x,
-            cy: self.center.y,
+            cx: center.x,
+            cy: center.y,
         }
     }
 }
