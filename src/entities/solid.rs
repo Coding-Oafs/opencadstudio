@@ -1,12 +1,4 @@
-// SOLID entity — 2D filled quadrilateral (or triangle when p3 == p4).
-//
-// Wireframe: the 4 perimeter edges as RenderObject::Lines.
-// Filled:    boundary triangles on `fill_tris`, plus the top and side faces for
-//            non-zero thickness. The full WCS plane is preserved both at top
-//            level and through block expansion. The scene keeps a separate 2-D
-//            HatchModel only for plot projection; screen rendering filters that
-//            flattened copy out.
-// Grips:     4 corner grip points.
+// SOLID geometry comes from the kernel; entity coordinates stay in WCS here.
 
 use acadrust::entities::Solid;
 use crate::t;
@@ -17,6 +9,14 @@ use crate::entities::traits::{Grippable, PropertyEditable, Transformable, Render
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
 use crate::scene::model::wire_model::SnapHint;
+
+type Edge = ([f64; 3], [f64; 3]);
+
+struct SolidGeometry {
+    edges: Vec<Edge>,
+    fill_tris: Vec<[f64; 3]>,
+    extruded: bool,
+}
 
 fn normal_tuple(solid: &Solid) -> (f64, f64, f64) {
     let normal = glam::DVec3::new(solid.normal.x, solid.normal.y, solid.normal.z)
@@ -64,87 +64,171 @@ fn push_edge(lines: &mut Vec<[f64; 3]>, start: [f64; 3], end: [f64; 3]) {
     lines.extend([start, end, [f64::NAN; 3]]);
 }
 
-fn push_fan(triangles: &mut Vec<[f64; 3]>, points: &[[f64; 3]], reverse: bool) {
-    for index in 1..points.len() - 1 {
-        if reverse {
-            triangles.extend([points[0], points[index + 1], points[index]]);
-        } else {
-            triangles.extend([points[0], points[index], points[index + 1]]);
-        }
+fn boundary(solid: &Solid) -> Vec<[f64; 3]> {
+    let corners = wcs_corners(solid);
+    if solid.is_triangle() {
+        vec![corners[0], corners[1], corners[2]]
+    } else {
+        vec![corners[0], corners[1], corners[3], corners[2]]
     }
+}
+
+fn boundary_edges(points: &[[f64; 3]]) -> Vec<Edge> {
+    (0..points.len())
+        .map(|index| (points[index], points[(index + 1) % points.len()]))
+        .collect()
+}
+
+fn kernel_tolerance(points: &[[f64; 3]]) -> f64 {
+    cadkernel::space::coplanarity_tolerance(points).max(1.0e-12)
+}
+
+fn extrusion_body(
+    solid: &Solid,
+    base: &[[f64; 3]],
+    tolerance: f64,
+    profile_valid: bool,
+) -> Option<cadkernel::brep::Body> {
+    if solid.thickness.abs() <= 1.0e-10 || !profile_valid {
+        return None;
+    }
+    let normal = glam::DVec3::new(solid.normal.x, solid.normal.y, solid.normal.z)
+        .normalize_or(glam::DVec3::Z);
+    let origin = glam::DVec3::from_array(base[0]);
+    let axis = base
+        .iter()
+        .skip(1)
+        .map(|point| glam::DVec3::from_array(*point) - origin)
+        .find(|axis| axis.length() > tolerance)?;
+    let plane = cadkernel::space::Plane::orthonormal(
+        base[0],
+        axis.to_array(),
+        normal.to_array(),
+    )?;
+    if base
+        .iter()
+        .any(|point| !plane.contains(*point, tolerance))
+    {
+        return None;
+    }
+    let projected = base
+        .iter()
+        .map(|point| plane.project(*point))
+        .collect::<Option<Vec<_>>>()?;
+    let profile = (0..projected.len())
+        .map(|index| {
+            cadkernel::geom2d::Curve::Line(cadkernel::geom2d::Line {
+                start: projected[index],
+                end: projected[(index + 1) % projected.len()],
+            })
+        })
+        .collect::<Vec<_>>();
+    cadkernel::brep::extrude(
+        plane,
+        &profile,
+        (normal * solid.thickness).to_array(),
+    )
+}
+
+fn solid_geometry(solid: &Solid) -> Option<SolidGeometry> {
+    let base = boundary(solid);
+    let tolerance = kernel_tolerance(&base);
+    let fill_tris = cadkernel::space::polygon::triangulate(
+        &base,
+        cadkernel::geom2d::Tolerance::new(tolerance),
+    );
+    if solid.thickness.abs() <= 1.0e-10 {
+        return Some(SolidGeometry {
+            edges: boundary_edges(&base),
+            fill_tris,
+            extruded: false,
+        });
+    }
+    let Some(body) = extrusion_body(solid, &base, tolerance, !fill_tris.is_empty()) else {
+        return Some(SolidGeometry {
+            edges: boundary_edges(&base),
+            fill_tris: Vec::new(),
+            extruded: false,
+        });
+    };
+    let mesh = cadkernel::brep::mesh::tessellate(
+        &body,
+        cadkernel::brep::mesh::TessellationTolerance::new(
+            cadkernel::tessellation::DEFAULT_ANGLE,
+            tolerance,
+        ),
+    );
+    if !mesh.missing_faces.is_empty() || mesh.mesh.is_empty() {
+        return Some(SolidGeometry {
+            edges: boundary_edges(&base),
+            fill_tris: Vec::new(),
+            extruded: false,
+        });
+    }
+    let edges = mesh
+        .edges
+        .iter()
+        .flat_map(|edge| edge.positions.windows(2).map(|pair| (pair[0], pair[1])))
+        .collect();
+    let mut fill_tris = Vec::with_capacity(mesh.mesh.triangles.len() * 3);
+    for triangle in mesh.mesh.triangles {
+        fill_tris.extend(triangle.map(|index| mesh.mesh.positions[index]));
+    }
+    Some(SolidGeometry {
+        edges,
+        fill_tris,
+        extruded: true,
+    })
+}
+
+pub(crate) fn wcs_bounds(solid: &Solid) -> Option<cadkernel::brep::Aabb> {
+    let base = boundary(solid);
+    let tolerance = kernel_tolerance(&base);
+    let profile_valid = !cadkernel::space::polygon::triangulate(
+        &base,
+        cadkernel::geom2d::Tolerance::new(tolerance),
+    )
+    .is_empty();
+    extrusion_body(solid, &base, tolerance, profile_valid)
+        .and_then(|body| cadkernel::brep::body_bounds(&body))
+        .or_else(|| cadkernel::brep::Aabb::around(base))
 }
 
 impl RenderConvertible for Solid {
     fn to_render(&self, _document: &acadrust::CadDocument) -> Option<RenderEntity> {
-        // SOLID corners are OCS and the last two are stored in Z order. Preserve
-        // that ordering exactly: it is part of the entity geometry and can
-        // intentionally describe a crossing shape.
-        let corners = wcs_corners(self);
-        let base = if self.is_triangle() {
-            vec![corners[0], corners[1], corners[2]]
-        } else {
-            vec![corners[0], corners[1], corners[3], corners[2]]
-        };
-        let normal = glam::DVec3::new(self.normal.x, self.normal.y, self.normal.z)
-            .normalize_or(glam::DVec3::Z);
-        let extruded = self.thickness.abs() > 1.0e-10;
-        let top: Vec<[f64; 3]> = base
-            .iter()
-            .map(|point| {
-                (glam::DVec3::from_array(*point) + normal * self.thickness).to_array()
-            })
-            .collect();
-
+        let geometry = solid_geometry(self)?;
         let mut lines = Vec::new();
-        for index in 0..base.len() {
-            push_edge(&mut lines, base[index], base[(index + 1) % base.len()]);
+        for &(start, end) in &geometry.edges {
+            push_edge(&mut lines, start, end);
         }
-        if extruded {
-            for index in 0..top.len() {
-                push_edge(&mut lines, top[index], top[(index + 1) % top.len()]);
-                push_edge(&mut lines, base[index], top[index]);
+        let mut nodes = Vec::new();
+        for &(start, end) in &geometry.edges {
+            for point in [start, end] {
+                if !nodes.contains(&point) {
+                    nodes.push(point);
+                }
             }
         }
-
-        let mut fill_tris = Vec::new();
-        push_fan(&mut fill_tris, &base, false);
-        if extruded {
-            push_fan(&mut fill_tris, &top, true);
-            for index in 0..base.len() {
-                let next = (index + 1) % base.len();
-                fill_tris.extend([
-                    base[index],
-                    base[next],
-                    top[next],
-                    base[index],
-                    top[next],
-                    top[index],
-                ]);
-            }
+        let mut snap = Vec::with_capacity(nodes.len() * 2 + geometry.edges.len());
+        for point in nodes {
+            snap.push((dvec3(point), SnapHint::Node));
+            snap.push((dvec3(point), SnapHint::Endpoint));
         }
-
-        let mut snap_points = base.clone();
-        if extruded {
-            snap_points.extend(top.iter().copied());
-        }
-        let snap = snap_points
-            .iter()
-            .copied()
-            .map(|point| (dvec3(point), SnapHint::Node))
-            .collect();
-        let pick_tris = if extruded {
-            fill_tris.clone()
-        } else {
-            Vec::new()
-        };
+        snap.extend(geometry.edges.iter().map(|(start, end)| {
+            ((dvec3(*start) + dvec3(*end)) * 0.5, SnapHint::Midpoint)
+        }));
+        let pick_tris = geometry
+            .extruded
+            .then(|| geometry.fill_tris.clone())
+            .unwrap_or_default();
 
         Some(RenderEntity {
             pick_tris,
             object: RenderObject::Lines(lines),
             snap_pts: snap,
             tangent_geoms: vec![],
-            key_vertices: snap_points,
-            fill_tris,
+            key_vertices: Vec::new(),
+            fill_tris: geometry.fill_tris,
         })
     }
 }

@@ -378,7 +378,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_wire_id = u64::MAX;
                 inner.cached_selection = (u64::MAX, u64::MAX);
                 inner.cached_mesh_content_id = u64::MAX;
-                inner.cached_face3d_key = (u64::MAX, false, false, [u32::MAX; 3]);
+                inner.cached_face3d_key = (u64::MAX, false, false, u64::MAX);
                 inner.cached_hatch_source = None;
                 inner.cached_preview_hatch_source = None;
                 inner.cached_wipeout_source = None;
@@ -485,11 +485,11 @@ impl shader::Primitive for Primitive {
             // the Wireframe overlay style.
             let face3d_fill_active = fill_mode && !vp.view_wireframe;
             let solid_fill_active = fill_mode && vp.show_2d_solid_fills;
-            let view_dir_key = [
-                vp.view_dir.x.to_bits(),
-                vp.view_dir.y.to_bits(),
-                vp.view_dir.z.to_bits(),
-            ];
+            let solid_visibility_key =
+                crate::scene::pipeline::face3d_gpu::planar_solid_visibility_key(
+                    &vp_wires,
+                    vp.view_dir,
+                );
             let fill_changed = inner.cached_fill_mode != fill_mode;
             let hatch_changed = inner
                 .cached_hatch_source
@@ -581,7 +581,7 @@ impl shader::Primitive for Primitive {
             if face3d_changed
                 || face3d_fill_active != inner.cached_face3d_key.1
                 || solid_fill_active != inner.cached_face3d_key.2
-                || view_dir_key != inner.cached_face3d_key.3
+                || solid_visibility_key != inner.cached_face3d_key.3
             {
                 inner.upload_face3d(
                     device,
@@ -599,7 +599,7 @@ impl shader::Primitive for Primitive {
                 vp.wire_content_id,
                 face3d_fill_active,
                 solid_fill_active,
-                view_dir_key,
+                solid_visibility_key,
             );
             // Wire buffers are world-space, so a camera move alone doesn't
             // change them — only the view_proj uniform (uploaded every frame).

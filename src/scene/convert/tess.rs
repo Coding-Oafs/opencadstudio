@@ -1657,12 +1657,25 @@ pub(crate) fn set_wire_aabb(w: &mut WireModel, entity_box: [f32; 4]) {
     w.aabb = out;
 }
 
+fn entity_bounds(e: &acadrust::EntityType) -> ([f64; 3], [f64; 3]) {
+    if let acadrust::EntityType::Solid(solid) = e {
+        if let Some(bounds) = crate::entities::solid::wcs_bounds(solid) {
+            return (bounds.min, bounds.max);
+        }
+    }
+    let bounds = e.as_entity().bounding_box();
+    (
+        [bounds.min.x, bounds.min.y, bounds.min.z],
+        [bounds.max.x, bounds.max.y, bounds.max.z],
+    )
+}
+
 pub(crate) fn entity_aabb(e: &acadrust::EntityType) -> [f32; 4] {
-    let bbox = e.as_entity().bounding_box();
-    let min_x = (bbox.min.x) as f32;
-    let min_y = (bbox.min.y) as f32;
-    let max_x = (bbox.max.x) as f32;
-    let max_y = (bbox.max.y) as f32;
+    let (min, max) = entity_bounds(e);
+    let min_x = min[0] as f32;
+    let min_y = min[1] as f32;
+    let max_x = max[0] as f32;
+    let max_y = max[1] as f32;
     // The all-zero box is bounding_box()'s Default — returned by entities with
     // no usable box (unimplemented) — so treat it as UNBOUNDED (never
     // pre-rejected). A genuinely zero-size box *away* from the origin (e.g. a
@@ -1680,8 +1693,8 @@ pub(crate) fn entity_aabb(e: &acadrust::EntityType) -> [f32; 4] {
 /// indexing uses this so changing `world_offset` doesn't invalidate
 /// the index.
 pub(crate) fn entity_world_aabb_f64(e: &acadrust::EntityType) -> Option<[f64; 4]> {
-    let bbox = e.as_entity().bounding_box();
-    let (xmin, ymin, xmax, ymax) = (bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y);
+    let (min, max) = entity_bounds(e);
+    let (xmin, ymin, xmax, ymax) = (min[0], min[1], max[0], max[1]);
     if xmin == xmax && ymin == ymax {
         return None;
     }

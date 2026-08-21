@@ -312,12 +312,8 @@ pub struct Pipeline {
     /// a pick bumps only `selection_generation`, refreshing the overlay without
     /// touching the main wire buffers.
     pub cached_selection: (u64, u64),
-    /// `(wire_content_id, face3d_fill_active, show_2d_solid_fills, view_dir)` the Face3D
-    /// edge/fill buffers were uploaded for. A stable content id avoids retaining
-    /// the resident wire Arc:
-    /// that Arc must stay uniquely owned by Scene so a small edit can splice it
-    /// in place instead of rebuilding the whole drawing.
-    pub cached_face3d_key: (u64, bool, bool, [u32; 3]),
+    /// Face upload key; keeps the resident wire Arc uniquely owned by Scene.
+    pub cached_face3d_key: (u64, bool, bool, u64),
     /// Handle → indices into the resident wire set, built once per wire upload
     /// (when `cached_wire_id` changes). Lets the selection/hover xray overlay
     /// gather just the highlighted entity's wires (`O(highlighted)`) instead of
@@ -2323,7 +2319,7 @@ impl Pipeline {
             cached_epoch: (u64::MAX, u64::MAX, u64::MAX),
             cached_wire_id: u64::MAX,
             cached_selection: (u64::MAX, u64::MAX),
-            cached_face3d_key: (u64::MAX, false, false, [u32::MAX; 3]),
+            cached_face3d_key: (u64::MAX, false, false, u64::MAX),
             wire_handle_index: std::sync::Arc::new(rustc_hash::FxHashMap::default()),
             render_sig: u64::MAX,
             skip_geometry: false,
