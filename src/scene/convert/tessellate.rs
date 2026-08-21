@@ -1260,7 +1260,7 @@ pub fn tessellate(
                         | EntityType::PolyfaceMesh(_)
                         | EntityType::PolygonMesh(_)
                         | EntityType::Mesh(_)
-                );
+                ) || matches!(entity, EntityType::Solid(solid) if solid.thickness.abs() > 1.0e-10);
                 // Thickness walls ride on the wire that carries their edges, not
                 // on a wire of their own: they are pick geometry for that entity,
                 // and `fill_tris` below deliberately splits off into a fill-only

@@ -378,7 +378,7 @@ impl shader::Primitive for Primitive {
                 inner.cached_wire_id = u64::MAX;
                 inner.cached_selection = (u64::MAX, u64::MAX);
                 inner.cached_mesh_content_id = u64::MAX;
-                inner.cached_face3d_key = (u64::MAX, false, false);
+                inner.cached_face3d_key = (u64::MAX, false, false, u64::MAX);
                 inner.cached_hatch_source = None;
                 inner.cached_preview_hatch_source = None;
                 inner.cached_wipeout_source = None;
@@ -484,6 +484,12 @@ impl shader::Primitive for Primitive {
             // the view toggle so 2D fills stay on even when the user picks
             // the Wireframe overlay style.
             let face3d_fill_active = fill_mode && !vp.view_wireframe;
+            let solid_fill_active = fill_mode && vp.show_2d_solid_fills;
+            let solid_visibility_key =
+                crate::scene::pipeline::face3d_gpu::planar_solid_visibility_key(
+                    &vp_wires,
+                    vp.view_dir,
+                );
             let fill_changed = inner.cached_fill_mode != fill_mode;
             let hatch_changed = inner
                 .cached_hatch_source
@@ -574,14 +580,16 @@ impl shader::Primitive for Primitive {
                     && !face_pass_unchanged);
             if face3d_changed
                 || face3d_fill_active != inner.cached_face3d_key.1
-                || vp.show_2d_solid_fills != inner.cached_face3d_key.2
+                || solid_fill_active != inner.cached_face3d_key.2
+                || solid_visibility_key != inner.cached_face3d_key.3
             {
                 inner.upload_face3d(
                     device,
                     &vp.face3d_wires[..],
                     &vp_wires[..],
                     !face3d_fill_active,
-                    vp.show_2d_solid_fills,
+                    solid_fill_active,
+                    vp.view_dir,
                     &draw_depths,
                 );
                 inner.cached_face3d_source = Some(Arc::clone(&vp.face3d_wires));
@@ -590,7 +598,8 @@ impl shader::Primitive for Primitive {
             inner.cached_face3d_key = (
                 vp.wire_content_id,
                 face3d_fill_active,
-                vp.show_2d_solid_fills,
+                solid_fill_active,
+                solid_visibility_key,
             );
             // Wire buffers are world-space, so a camera move alone doesn't
             // change them — only the view_proj uniform (uploaded every frame).
