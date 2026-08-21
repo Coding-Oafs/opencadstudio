@@ -538,6 +538,7 @@ impl CadCommand for Circle3PCommand {
         let (a, b, c) = (self.pts[0], self.pts[1], self.pts[2]);
         match circumcircle(a, b, c, self.plane) {
             Some((center, radius)) => {
+                defaults::set_circle_radius(radius);
                 CmdResult::CommitAndExit(make_circle(center, radius, self.plane))
             }
             None => {
@@ -857,6 +858,7 @@ fn ttt_solve_sign(objs: &[TangentObject; 3], eps: &[f64; 3]) -> Vec<(DVec3, f64)
 
 pub struct CircleTTRCommand {
     step: StepTTR,
+    default_r: f64,
     plane: WorkingPlane,
 }
 
@@ -878,8 +880,43 @@ impl CircleTTRCommand {
     pub fn new() -> Self {
         Self {
             step: StepTTR::First,
+            default_r: defaults::get_circle_radius(),
             plane: WorkingPlane::default(),
         }
+    }
+
+    fn result_for_radius(&self, radius: f64) -> CmdResult {
+        if radius <= 1.0e-9 {
+            return CmdResult::NeedPoint;
+        }
+        let StepTTR::Radius {
+            obj1,
+            obj2,
+            hit1,
+            hit2,
+        } = &self.step
+        else {
+            return CmdResult::NeedPoint;
+        };
+        let hint = (*hit1 + *hit2) * 0.5;
+        let candidates = ttr_candidates(*obj1, *obj2, radius);
+        let Some(center) = best_of(&candidates, hint) else {
+            return CmdResult::NeedPoint;
+        };
+        defaults::set_circle_radius(radius);
+        CmdResult::CommitAndExit(make_circle(
+            self.plane.to_world(center),
+            radius,
+            self.plane,
+        ))
+    }
+
+    fn radius_from_point(&self, point: DVec3) -> Option<f64> {
+        let StepTTR::Radius { hit2, .. } = &self.step else {
+            return None;
+        };
+        let point = self.plane.to_local(point);
+        Some((point.x - hit2.x).hypot(point.y - hit2.y))
     }
 }
 
@@ -912,12 +949,18 @@ impl CadCommand for CircleTTRCommand {
         match &self.step {
             StepTTR::First => crate::t!("CIRCLE TTR  Select first tangent object:").into_owned(),
             StepTTR::Second { .. } => crate::t!("CIRCLE TTR  Select second tangent object:").into_owned(),
-            StepTTR::Radius { .. } => crate::t!("CIRCLE TTR  Specify radius:").into_owned(),
+            StepTTR::Radius { .. } => format!(
+                "{} <{:.4}>",
+                crate::t!("CIRCLE TTR  Specify radius:"),
+                self.default_r
+            ),
         }
     }
 
-    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
-        CmdResult::NeedPoint
+    fn on_point(&mut self, pt: DVec3) -> CmdResult {
+        self.radius_from_point(pt)
+            .map(|radius| self.result_for_radius(radius))
+            .unwrap_or(CmdResult::NeedPoint)
     }
 
     fn on_tangent_point(&mut self, obj: TangentObject, hit: DVec3) -> CmdResult {
@@ -946,41 +989,57 @@ impl CadCommand for CircleTTRCommand {
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        let r: f64 = text.trim().parse().ok()?;
+        let r: f64 = text.trim().replace(',', ".").parse().ok()?;
         if r <= 0.0 {
-            return Some(CmdResult::Cancel);
+            return Some(CmdResult::NeedPoint);
         }
-        if let StepTTR::Radius {
+        matches!(self.step, StepTTR::Radius { .. }).then(|| self.result_for_radius(r))
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        if matches!(self.step, StepTTR::Radius { .. }) {
+            self.result_for_radius(self.default_r)
+        } else {
+            CmdResult::Cancel
+        }
+    }
+    fn on_escape(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
+        let radius = self.radius_from_point(pt)?;
+        let StepTTR::Radius {
             obj1,
             obj2,
             hit1,
             hit2,
         } = &self.step
-        {
-            let hint = (*hit1 + *hit2) * 0.5;
-            let candidates = ttr_candidates(*obj1, *obj2, r);
-            if let Some(center) = best_of(&candidates, hint) {
-                Some(CmdResult::CommitAndExit(make_circle(
-                    self.plane.to_world(center),
-                    r,
-                    self.plane,
-                )))
-            } else {
-                Some(CmdResult::Cancel)
-            }
-        } else {
-            None
-        }
+        else {
+            return None;
+        };
+        let center = best_of(&ttr_candidates(*obj1, *obj2, radius), (*hit1 + *hit2) * 0.5)?;
+        Some(circle_wire(
+            self.plane.to_world(center),
+            radius,
+            self.plane,
+        ))
     }
 
-    fn on_enter(&mut self) -> CmdResult {
-        CmdResult::Cancel
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        let StepTTR::Radius { hit2, .. } = &self.step else {
+            return None;
+        };
+        Some(DynSpec {
+            anchor: DynAnchor::Point(self.plane.to_world(*hit2)),
+            fields: vec![DynFieldSpec::new(DynRole::Radius)],
+            guide: DynGuide::Radius,
+            ref_point: None,
+        })
     }
-    fn on_escape(&mut self) -> CmdResult {
-        CmdResult::Cancel
-    }
-    fn on_mouse_move(&mut self, _pt: DVec3) -> Option<WireModel> {
-        None
+
+    fn dyn_live_value(&self, cursor: DVec3) -> Option<f64> {
+        self.radius_from_point(cursor)
     }
 }
 
@@ -1036,11 +1095,14 @@ impl CadCommand for CircleTTTCommand {
         let hint = self.hits.iter().fold(DVec3::ZERO, |a, &b| a + b) / 3.0;
         let candidates = ttt_candidates(self.objs[0], self.objs[1], self.objs[2]);
         match best_circle_of(&candidates, hint) {
-            Some((center, r)) => CmdResult::CommitAndExit(make_circle(
-                self.plane.to_world(center),
-                r,
-                self.plane,
-            )),
+            Some((center, r)) => {
+                defaults::set_circle_radius(r);
+                CmdResult::CommitAndExit(make_circle(
+                    self.plane.to_world(center),
+                    r,
+                    self.plane,
+                ))
+            }
             None => {
                 self.objs.pop();
                 self.hits.pop();
