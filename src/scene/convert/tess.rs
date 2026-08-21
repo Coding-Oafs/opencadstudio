@@ -1096,6 +1096,11 @@ fn tessellate_entity_inner(
                 _ => None,
             })
             .unwrap_or(0);
+        let ins_layer_plottable = document
+            .layers
+            .get(&ins.common.layer)
+            .map(|layer| layer.is_plottable)
+            .unwrap_or(true);
         let ip = glam::Vec3::new(
             (ins.insert_point.x) as f32,
             (ins.insert_point.y) as f32,
@@ -1167,6 +1172,7 @@ fn tessellate_entity_inner(
             ins_lw_px,
             ins_layer,
             ins_layer_aci,
+            ins_layer_plottable,
             sel,
             pslt_factor,
             view_aabb,
@@ -1221,6 +1227,7 @@ fn tessellate_entity_inner(
             ins_pat,
             ins_lw_px,
             ins_layer,
+            ins_layer_plottable,
             bg_color,
             is_xref,
             pslt_factor,

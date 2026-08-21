@@ -253,6 +253,10 @@ impl LayerPanel {
         self.apply_sort();
     }
 
+    pub fn refresh_sort(&mut self) {
+        self.apply_sort();
+    }
+
     /// Reorder `self.layers` by the active sort column, preserving the current
     /// selection by name. No-op in document order (`sort_col == None`).
     fn apply_sort(&mut self) {

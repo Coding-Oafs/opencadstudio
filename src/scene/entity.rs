@@ -1147,6 +1147,33 @@ impl Scene {
             false,
         )
     }
+
+    fn layer_plottable_in_context(
+        &self,
+        entity: &EntityType,
+        context: &crate::scene::render_graph::RenderContext,
+    ) -> bool {
+        let common = entity.common();
+        let layer = if crate::scene::view::render::is_effective_layer_zero(&common.layer) {
+            context
+                .insert_path
+                .iter()
+                .rev()
+                .find(|insert| {
+                    !crate::scene::view::render::is_effective_layer_zero(&insert.common.layer)
+                })
+                .map(|insert| insert.common.layer.as_str())
+                .unwrap_or(common.layer.as_str())
+        } else {
+            common.layer.as_str()
+        };
+        self.document
+            .layers
+            .get(layer)
+            .map(|layer| layer.is_plottable)
+            .unwrap_or(true)
+    }
+
     pub(super) fn instanced_plot_hatch_models(
         &self,
         layout_block: Handle,
@@ -1239,13 +1266,7 @@ impl Scene {
             |entity, context| {
                 let common = entity.common();
 
-                if plot_only
-                    && self
-                        .document
-                        .layers
-                        .get(&common.layer)
-                        .is_some_and(|layer| !layer.is_plottable)
-                {
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
                     return false;
                 }
 
@@ -1289,13 +1310,7 @@ impl Scene {
                 let EntityType::Hatch(source_hatch) = entity else {
                     return;
                 };
-                if plot_only
-                    && self
-                        .document
-                        .layers
-                        .get(&source_hatch.common.layer)
-                        .is_some_and(|layer| !layer.is_plottable)
-                {
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
                     return;
                 }
                 let style = context.style_for(&self.document, entity);
@@ -1396,6 +1411,7 @@ impl Scene {
             all_visible,
             bg_color,
             false,
+            false,
         )
     }
 
@@ -1407,6 +1423,7 @@ impl Scene {
         all_visible: bool,
         bg_color: [f32; 4],
         tint_insert_selection: bool,
+        plot_only: bool,
     ) -> Vec<HatchModel> {
         let depth_map = self.draw_depth_map();
         let graph = crate::scene::render_graph::RenderSceneGraph::new(
@@ -1421,8 +1438,11 @@ impl Scene {
         graph.walk_root(
             self.render_scene_root(target_block),
             |entity, context| {
-                context.is_instanced()
-                    || !self.entity_temporarily_hidden(entity.common().handle)
+                let common = entity.common();
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return false;
+                }
+                context.is_instanced() || !self.entity_temporarily_hidden(common.handle)
             },
             |entity, context| {
                 let EntityType::Wipeout(source) = entity else {

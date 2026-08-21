@@ -2457,6 +2457,8 @@ impl OpenCADStudio {
                             }
                         }
 
+                        self.tabs[i].layers.refresh_sort();
+
                         self.tabs[i]
                             .scene
                             .invalidate_layer_dependencies(&targets);

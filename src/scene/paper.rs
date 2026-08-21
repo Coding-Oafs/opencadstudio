@@ -490,6 +490,7 @@ impl Scene {
             None,
             self.paper_annotation_scale_handle(),
             self.annotation_all_visible(),
+            false,
         ))
     }
 
@@ -502,6 +503,7 @@ impl Scene {
         frozen: Option<&rustc_hash::FxHashSet<Handle>>,
         annotation_scale_handle: Option<Handle>,
         all_visible: bool,
+        include_solids: bool,
     ) -> Vec<HatchModel> {
         let layer_hidden = |layer: &str| {
             self.document
@@ -528,6 +530,9 @@ impl Scene {
                 annotation_scale_handle,
             );
             let entity = contextual.as_ref();
+            if !include_solids && matches!(entity, EntityType::Solid(_)) {
+                continue;
+            }
             let common = entity.common();
             if common.invisible
                 || self.entity_temporarily_hidden(handle)
@@ -600,6 +605,7 @@ impl Scene {
             all_visible,
             self.paper_bg_color,
             highlight_selection,
+            true,
         )
     }
 
@@ -610,12 +616,25 @@ impl Scene {
     /// copy on the paper sheet.
     pub fn paper_canvas_wipeouts(&self) -> Arc<Vec<HatchModel>> {
         let layout_block = self.current_layout_block_handle();
+        Arc::new(self.wipeout_models_for_block_graph(
+            layout_block,
+            None,
+            self.paper_annotation_scale_handle(),
+            self.annotation_all_visible(),
+            self.paper_bg_color,
+            true,
+            false,
+        ))
+    }
+
+    pub fn paper_plot_wipeouts(&self) -> Arc<Vec<HatchModel>> {
+        let layout_block = self.current_layout_block_handle();
         Arc::new(self.plot_wipeouts_for_block(
             layout_block,
             None,
             self.paper_annotation_scale_handle(),
             self.annotation_all_visible(),
-            true,
+            false,
         ))
     }
 

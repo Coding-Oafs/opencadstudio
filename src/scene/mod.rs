@@ -8676,6 +8676,7 @@ impl Scene {
                 }
                 EntityType::Insert(insert) => {
                     for attribute in &insert.attributes {
+                        add(&mut index.layers, &attribute.common.layer);
                         add(&mut index.text_styles, &attribute.text_style);
                     }
                 }
