@@ -1,7 +1,7 @@
 use super::*;
 
 impl OpenCADStudio {
-    pub(super) fn dispatch_view(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
+    pub(crate) fn dispatch_view(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             "DONATE" => {
                 self.command_line.push_info(crate::t!("Opening Patreon page...").as_ref());

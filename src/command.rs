@@ -11,6 +11,22 @@ use crate::scene::Scene;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
+#[derive(Clone, Debug)]
+pub enum HatchEditOperation {
+    Update {
+        origin: Option<(f64, f64)>,
+        disassociate: bool,
+        style: Option<acadrust::entities::HatchStyleType>,
+        annotative: Option<bool>,
+    },
+    RecreateBoundary,
+    Separate,
+    AddBoundaries(Vec<Handle>),
+    RemoveBoundaries(Vec<Handle>),
+    DrawOrderFront,
+    DrawOrderBack,
+}
+
 // ── Working plane ─────────────────────────────────────────────────────────
 
 /// Full-precision coordinate frame used by interactive commands.
@@ -1197,6 +1213,11 @@ pub enum CmdResult {
         boundaries: Vec<EntityType>,
         entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
     },
+    /// Commit independently editable hatch entities for every selected region.
+    CommitHatches {
+        hatches: Vec<HatchModel>,
+        entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
+    },
     /// Copy selected entities with multiple transforms (e.g. rectangular array); end command.
     BatchCopy(Vec<Handle>, Vec<EntityTransform>),
     /// Erase `handle` and replace with new entities; command stays active.
@@ -1344,6 +1365,7 @@ pub enum CmdResult {
         name: String,
         scale: f32,
         angle: f32,
+        operation: HatchEditOperation,
     },
     /// STRETCH crossing-window selection. The command can accumulate several
     /// independent crossing windows before Enter ends the selection stage.

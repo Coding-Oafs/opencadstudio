@@ -1726,6 +1726,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     entry.gpu,
                                     crate::scene::model::hatch_model::HatchPattern::Solid
                                 );
+                                dxf.pattern_type =
+                                    acadrust::entities::HatchPatternType::Predefined;
+                                dxf.gradient_color.enabled = false;
                             }
                             if let Some(model) = self.tabs[i].scene.hatches.get_mut(&handle) {
                                 model.pattern = entry.gpu.clone();

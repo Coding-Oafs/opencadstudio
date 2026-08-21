@@ -3490,13 +3490,28 @@ impl OpenCADStudio {
                         .unwrap_or(false)
                     {
                         if let Some(model) = self.tabs[i].scene.hatches.get(&handle).cloned() {
+                            let entity = self.tabs[i].scene.document.get_entity(handle);
+                            let annotative = entity.is_some_and(|entity| {
+                                    crate::scene::annotative::is_annotative(
+                                        &self.tabs[i].scene.document,
+                                        entity,
+                                    )
+                                });
+                            let (scale, angle) = match entity {
+                                Some(acadrust::EntityType::Hatch(hatch)) => (
+                                    hatch.pattern_scale as f32,
+                                    hatch.pattern_angle.to_degrees() as f32,
+                                ),
+                                _ => (model.scale, model.angle_offset.to_degrees()),
+                            };
                             use crate::command::CadCommand;
                             use crate::modules::draw::draw::hatchedit::HatcheditCommand;
                             let cmd: Box<dyn CadCommand> = Box::new(HatcheditCommand::with_handle(
                                 handle,
                                 model.name.clone(),
-                                model.scale,
-                                model.angle_offset,
+                                scale,
+                                angle,
+                                annotative,
                             ));
                             self.command_line.push_info(&cmd.prompt());
                             self.tabs[i].active_cmd = Some(cmd);

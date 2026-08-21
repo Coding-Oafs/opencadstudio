@@ -14,41 +14,40 @@ use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Pr
 use crate::scene::convert::tess_util::FallbackGeometry;
 use crate::scene::model::wire_model::SnapHint;
 
-/// The area the hatch's boundary paths enclose.
-///
-/// Summed edge by edge through the kernel, which measures what each edge
-/// actually encloses rather than what a polygon through some of its points
-/// would. The version this replaced pushed an arc's *centre* into the ring
-/// and a spline's control points — neither of which is on the boundary — so
-/// the number it produced was not the area of anything.
-///
-/// Outer paths and their holes both contribute; the sign of a loop says
-/// which it is, so the magnitude of the sum is the region's own area.
-fn boundary_area(h: &Hatch) -> f64 {
-    let mut area = 0.0;
+/// The area enclosed by the hatch boundary paths.
+pub(crate) fn boundary_area(h: &Hatch) -> f64 {
+    let mut path_areas = Vec::new();
+    let mut rings = Vec::new();
     for path in &h.paths {
         let mut path_area = 0.0;
-        let mut ends: Vec<[f64; 2]> = Vec::new();
-        for edge in &path.edges {
-            let Some(curve) = edge_curve(edge) else {
-                continue;
-            };
-            path_area += curve.enclosed_area();
-            ends.push(curve.point_at(0.0));
-            ends.push(curve.point_at(1.0));
+        let directions = crate::scene::hatch_path_directions(path);
+        let curves = path.edges.iter().filter_map(edge_curve);
+        for (curve, direction) in curves.zip(directions) {
+            path_area += direction * curve.enclosed_area();
         }
-        // Edges are stored as separate pieces, so the chain has to be closed
-        // by the chord from the last end back to the first — the same closing
-        // an open polyline gets.
-        if let (Some(first), Some(last)) = (ends.first(), ends.last()) {
-            path_area += 0.5 * (last[0] * first[1] - first[0] * last[1]);
-        }
-        area += path_area.abs();
+        path_areas.push(path_area.abs());
+        rings.push(crate::scene::hatch_path_ring(path).unwrap_or_default());
     }
-    area
+    let depths = cadkernel::geom2d::ring_nesting_depths(&rings);
+    path_areas
+        .into_iter()
+        .zip(depths)
+        .filter_map(|(area, depth)| match h.style {
+            acadrust::entities::HatchStyleType::Normal => {
+                Some(if depth % 2 == 0 { area } else { -area })
+            }
+            acadrust::entities::HatchStyleType::Outer if depth <= 1 => {
+                Some(if depth == 0 { area } else { -area })
+            }
+            acadrust::entities::HatchStyleType::Outer => None,
+            acadrust::entities::HatchStyleType::Ignore if depth == 0 => Some(area),
+            acadrust::entities::HatchStyleType::Ignore => None,
+        })
+        .sum::<f64>()
+        .abs()
 }
 
-/// A hatch boundary edge as a kernel curve, in the hatch's own OCS.
+/// A hatch boundary edge as a kernel curve in the hatch OCS.
 pub(crate) fn edge_curve(edge: &BoundaryEdge) -> Option<KernelCurve> {
     Some(match edge {
         BoundaryEdge::Line(l) => KernelCurve::Line(KernelLine {
@@ -461,14 +460,18 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
 
 
     // ── Hatch (pattern / solid) ────────────────────────────────────────────
-    // "Type" = pattern definition source (Predefined / User Defined / Custom).
-    let type_row = Property {
-        label: t!("Type").into_owned(),
-        field: "pattern_type_label",
-        value: PropValue::Choice {
-            selected: pattern_type.to_string(),
-            options: vec!["Predefined".into(), "User Defined".into(), "Custom".into()],
-        },
+    // Show only controls used by the selected fill type.
+    let type_row = if h.is_solid {
+        ro(t!("Type").as_ref(), "fill_kind", t!("Solid").into_owned())
+    } else {
+        Property {
+            label: t!("Type").into_owned(),
+            field: "pattern_type_label",
+            value: PropValue::Choice {
+                selected: pattern_type.to_string(),
+                options: vec!["Predefined".into(), "User Defined".into(), "Custom".into()],
+            },
+        }
     };
     let pattern_name_row = Property {
         label: t!("Pattern name").into_owned(),
@@ -492,47 +495,51 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
             options: vec!["Normal".into(), "Outer".into(), "Ignore".into()],
         },
     };
-    let spacing_row = edit(t!("Spacing").as_ref(),
-        "spacing",
-        h.pattern
-            .lines
-            .first()
-            .map(|l| l.offset.length())
-            .unwrap_or_default(),
-    );
-    // Pattern tiling origin: the base point the pattern lines are anchored to.
-    let (origin_x, origin_y) = h
-        .pattern
-        .lines
-        .first()
-        .map(|l| (l.base_point.x, l.base_point.y))
-        .unwrap_or((0.0, 0.0));
+    let spacing_row = edit(t!("Spacing").as_ref(), "spacing", h.pattern_scale);
+
+    let mut pattern_props = vec![type_row, pattern_name_row];
+    pattern_props.push(ro(t!("Annotative").as_ref(), "annotative", String::new()));
+    if !h.is_solid {
+        pattern_props.push(edit_angle(
+            t!("Angle").as_ref(),
+            "pattern_angle",
+            h.pattern_angle.to_degrees(),
+        ));
+        if matches!(
+            h.pattern_type,
+            acadrust::entities::HatchPatternType::UserDefined
+        ) {
+            pattern_props.push(spacing_row);
+            pattern_props.push(double_row);
+        } else {
+            pattern_props.push(edit(t!("Scale").as_ref(), "pattern_scale", h.pattern_scale));
+            // Origin edits are relative offsets.
+            pattern_props.push(edit(t!("Origin X").as_ref(), "origin_x", 0.0));
+            pattern_props.push(edit(t!("Origin Y").as_ref(), "origin_y", 0.0));
+            if h.pattern.name.to_ascii_uppercase().starts_with("ISO") {
+                pattern_props.push(edit(
+                    t!("ISO pen width").as_ref(),
+                    "iso_pen_width",
+                    h.pattern_scale,
+                ));
+            }
+        }
+    }
+    pattern_props.push(associative_row);
+    pattern_props.push(island_row);
+    pattern_props.push(Property {
+        label: t!("Background").into_owned(),
+        field: "bg_enabled",
+        value: PropValue::BoolToggle {
+            field: "bg_enabled",
+            value: bg_on,
+        },
+    });
 
     let mut sections = vec![
         PropSection {
             title: t!("Pattern").into_owned(),
-            props: vec![
-                type_row,
-                pattern_name_row,
-                ro(t!("Annotative").as_ref(), "annotative", String::new()),
-                edit_angle(t!("Angle").as_ref(), "pattern_angle", h.pattern_angle.to_degrees()),
-                edit(t!("Scale").as_ref(), "pattern_scale", h.pattern_scale),
-                edit(t!("Origin X").as_ref(), "origin_x", origin_x),
-                edit(t!("Origin Y").as_ref(), "origin_y", origin_y),
-                spacing_row,
-                ro(t!("ISO pen width").as_ref(), "iso_pen_width", String::new()),
-                double_row,
-                associative_row,
-                island_row,
-                Property {
-                    label: t!("Background").into_owned(),
-                    field: "bg_enabled",
-                    value: PropValue::BoolToggle {
-                        field: "bg_enabled",
-                        value: bg_on,
-                    },
-                },
-            ],
+            props: pattern_props,
         },
         PropSection {
             title: t!("Geometry").into_owned(),
@@ -599,12 +606,44 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
             return;
         }
         "pattern_type_label" => {
-            h.pattern_type = match value {
+            let requested = match value {
                 "Predefined" => HatchPatternType::Predefined,
                 "User Defined" => HatchPatternType::UserDefined,
                 "Custom" => HatchPatternType::Custom,
                 _ => h.pattern_type,
             };
+            if requested != h.pattern_type {
+                let old_origin = h.pattern.lines.first().map(|line| line.base_point);
+                h.pattern_type = requested;
+                h.is_solid = false;
+                match requested {
+                    HatchPatternType::UserDefined => {
+                        // Rebuild user-defined geometry from its parameters.
+                        h.pattern = acadrust::entities::HatchPattern::new("_USER");
+                    }
+                    HatchPatternType::Predefined => {
+                        if let Some(entry) =
+                            crate::scene::model::hatch_patterns::find("ANSI31")
+                        {
+                            let mut pattern =
+                                crate::scene::model::hatch_patterns::build_dxf_pattern(entry);
+                            scale_pattern_geometry(&mut pattern, h.pattern_scale);
+                            rotate_pattern_geometry(&mut pattern, h.pattern_angle);
+                            if let (Some(old), Some(new)) =
+                                (old_origin, pattern.lines.first().map(|line| line.base_point))
+                            {
+                                translate_pattern_geometry(
+                                    &mut pattern,
+                                    old.x - new.x,
+                                    old.y - new.y,
+                                );
+                            }
+                            h.pattern = pattern;
+                        }
+                    }
+                    HatchPatternType::Custom => {}
+                }
+            }
             return;
         }
         "style" => {
@@ -674,37 +713,32 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
         // Scale every pattern line's offset so the first line's spacing = v,
         // preserving the relative spacing between lines.
         "spacing" if v > 0.0 => {
-            let cur = h
-                .pattern
-                .lines
-                .first()
-                .map(|l| l.offset.length())
-                .unwrap_or(0.0);
-            if cur > 1e-9 {
-                let s = v / cur;
-                for line in h.pattern.lines.iter_mut() {
-                    line.offset.x *= s;
-                    line.offset.y *= s;
-                }
+            h.pattern_scale = v;
+            if matches!(
+                h.pattern_type,
+                acadrust::entities::HatchPatternType::UserDefined
+            ) {
+                h.pattern.lines.clear();
+                h.pattern.name = "_USER".to_string();
             }
         }
-        // Move the pattern origin: shift every line's base point by the delta
-        // from the current origin (first line), preserving their relative offsets.
+        // Origin rows are relative offsets and return to zero after commit.
         "origin_x" => {
-            if let Some(cur) = h.pattern.lines.first().map(|l| l.base_point.x) {
-                let d = v - cur;
-                for line in h.pattern.lines.iter_mut() {
-                    line.base_point.x += d;
-                }
+            for line in h.pattern.lines.iter_mut() {
+                line.base_point.x += v;
             }
         }
         "origin_y" => {
-            if let Some(cur) = h.pattern.lines.first().map(|l| l.base_point.y) {
-                let d = v - cur;
-                for line in h.pattern.lines.iter_mut() {
-                    line.base_point.y += d;
-                }
+            for line in h.pattern.lines.iter_mut() {
+                line.base_point.y += v;
             }
+        }
+        "iso_pen_width" if v > 0.0 => {
+            let old = h.pattern_scale;
+            if old > 1e-12 {
+                scale_pattern_geometry(&mut h.pattern, v / old);
+            }
+            h.pattern_scale = v;
         }
         "elevation" => h.elevation = v,
         _ => {}
@@ -713,13 +747,7 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
 
 fn apply_transform(h: &mut Hatch, t: &EntityTransform) {
     crate::scene::view::transform::apply_standard_entity_transform(h, t, |entity, p1, p2| {
-        // Delegate the mirror to acadrust's transform_hatch (via the Entity
-        // trait): it flips the boundary-arc direction flags, re-mirrors the
-        // stored angles and preserves the stored sweep — including the
-        // wrap-encoded end angles above 2π that AutoCAD writes. The old
-        // hand-rolled angle-swap here was only valid for ccw boundary arcs on
-        // an axis-aligned mirror line and went stale the moment those
-        // conventions were fixed upstream.
+        // Keep boundary directions, angles, and sweeps consistent.
         let t = crate::scene::view::transform::reflection_about_xy_line(p1, p2);
         acadrust::entities::Entity::apply_transform(entity, &t);
     });
@@ -763,6 +791,15 @@ impl Grippable for Hatch {
                 boundary_centroid(self).unwrap_or((l0.base_point.x, l0.base_point.y));
             out.push(circle_grip(id, glam::DVec3::new(gx, gy, elev)));
             id += 1;
+        } else if self.is_associative {
+            if let Some((gx, gy)) = boundary_centroid(self) {
+                out.push(circle_grip(id, glam::DVec3::new(gx, gy, elev)));
+                id += 1;
+            }
+        }
+        // Edit associative boundaries through their source objects.
+        if self.is_associative {
+            return out;
         }
         for path in &self.paths {
             for edge in &path.edges {
@@ -834,8 +871,11 @@ impl Grippable for Hatch {
             .map(|l| (l.base_point.x, l.base_point.y))
         {
             if grip_id == id {
-                let (nx, ny) = resolve(&apply, Vec3::new(ox as f32, oy as f32, elev));
-                let (dx, dy) = (nx - ox, ny - oy);
+                let (gx, gy) = boundary_centroid(self).unwrap_or((ox, oy));
+                let (dx, dy) = match apply {
+                    GripApply::Absolute(point) => (point.x - gx, point.y - gy),
+                    GripApply::Translate(delta) => (delta.x, delta.y),
+                };
                 for line in self.pattern.lines.iter_mut() {
                     line.base_point.x += dx;
                     line.base_point.y += dy;
@@ -934,8 +974,14 @@ impl Grippable for Hatch {
         }
     }
 
-    fn grip_menu(&self, _grip_id: usize) -> Vec<crate::scene::model::object::GripMenuItem> {
+    fn grip_menu(&self, grip_id: usize) -> Vec<crate::scene::model::object::GripMenuItem> {
         use crate::scene::model::object::{GripMenuAction, GripMenuItem};
+        if self.pattern.lines.is_empty() || grip_id != 0 {
+            return vec![GripMenuItem {
+                label: "Stretch",
+                action: GripMenuAction::Stretch,
+            }];
+        }
         vec![
             GripMenuItem {
                 label: "Stretch",
@@ -956,9 +1002,16 @@ impl Grippable for Hatch {
         ]
     }
 
-    fn apply_grip_menu(&mut self, _grip_id: usize, _action: crate::scene::model::object::GripMenuAction) {
-        // Origin / Angle / Scale need a follow-up value — handled by
-        // `apply_grip_menu_value`.
+    fn apply_grip_menu(&mut self, grip_id: usize, action: crate::scene::model::object::GripMenuAction) {
+        use crate::scene::model::object::GripMenuAction as A;
+        if grip_id == 0 && matches!(action, A::OriginPoint) {
+            if let (Some((gx, gy)), Some((ox, oy))) = (
+                boundary_centroid(self),
+                self.pattern.lines.first().map(|line| (line.base_point.x, line.base_point.y)),
+            ) {
+                translate_pattern_geometry(&mut self.pattern, gx - ox, gy - oy);
+            }
+        }
     }
 
     fn grip_menu_value_prompt(
