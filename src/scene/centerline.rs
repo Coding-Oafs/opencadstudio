@@ -24,7 +24,7 @@ impl Default for CenterLineSettings {
         Self {
             extension: 0.12,
             layer: "Current".to_owned(),
-            linetype: "CENTER".to_owned(),
+            linetype: "CENTER2".to_owned(),
             linetype_scale: 1.0,
             linetype_file: String::new(),
         }
@@ -206,7 +206,10 @@ pub(crate) fn construct_line(
 
 impl Scene {
     pub(crate) fn centerline_settings(&self) -> CenterLineSettings {
-        let defaults = CenterLineSettings::default();
+        let mut defaults = CenterLineSettings::default();
+        if matches!(self.document.header.insertion_units, 4..=7 | 11..=17) {
+            defaults.extension = 3.5;
+        }
         let Some(layout) = self.current_layout_object_handle() else { return defaults; };
         let Some(record) = self.document.xrecord(layout, SETTINGS_RECORD) else { return defaults; };
         let value = |code| record.entries.iter().find(|entry| entry.code == code).map(|entry| &entry.value);
@@ -251,8 +254,8 @@ impl Scene {
             "CENTERLAYER" => (1, XRecordValue::String(value.to_owned()), value.to_owned()),
             "CENTERLTYPE" => (2, XRecordValue::String(value.to_owned()), value.to_owned()),
             "CENTERLTSCALE" => {
-                let number = value.parse::<f64>().map_err(|_| "CENTERLTSCALE requires a positive number.".to_owned())?;
-                if !number.is_finite() || number <= 0.0 { return Err("CENTERLTSCALE requires a positive number.".to_owned()); }
+                let number = value.parse::<f64>().map_err(|_| "CENTERLTSCALE requires a non-zero number.".to_owned())?;
+                if !number.is_finite() || number == 0.0 { return Err("CENTERLTSCALE requires a non-zero number.".to_owned()); }
                 (41, XRecordValue::Double(number), number.to_string())
             }
             "CENTERLTYPEFILE" => (3, XRecordValue::String(value.to_owned()), value.to_owned()),
