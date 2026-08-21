@@ -35,8 +35,9 @@ mod scene_markers;
 mod selection;
 
 pub(crate) use boundary::{
-    boundary_entities, boundary_faces, boundary_polyline_entities, exact_hatch_paths,
-    ring_source_handles, BoundarySource,
+    boundary_entities, boundary_entities_from_sources, boundary_faces,
+    boundary_polyline_entities, exact_hatch_paths, hatch_boundary_rings, hatch_path_directions,
+    hatch_path_ring, ring_source_handles, separated_hatch_path_groups, BoundarySource,
 };
 
 // Parallel tessellation free functions live in `convert::tess` (alongside the

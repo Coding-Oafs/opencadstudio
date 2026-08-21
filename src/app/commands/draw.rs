@@ -635,9 +635,25 @@ impl OpenCADStudio {
 
             "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
+                let working_plane = if self.tabs[i].editing_model_space() {
+                    self.tabs[i].ucs_xform().working_plane()
+                } else {
+                    crate::command::WorkingPlane::default()
+                };
+                let normal = working_plane.z.normalize_or(glam::DVec3::Z);
+                let elevation = working_plane.origin.dot(normal);
+                let storage = crate::entities::curve::ocs_plane(
+                    acadrust::types::Vector3::new(normal.x, normal.y, normal.z),
+                    elevation,
+                );
+                let plane = crate::command::WorkingPlane::new(
+                    glam::DVec3::from_array(storage.origin),
+                    glam::DVec3::from_array(storage.x_axis),
+                    glam::DVec3::from_array(storage.y_axis),
+                );
                 let boundary_sources = self.tabs[i]
                     .scene
-                    .boundary_sources_on_plane(crate::command::WorkingPlane::default(), 1.0e-6);
+                    .boundary_sources_on_plane(plane, 1.0e-6);
                 let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
                 let selected = self.tabs[i]
                     .scene
@@ -652,8 +668,13 @@ impl OpenCADStudio {
                         let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
                         Some((model, common.color.clone(), common.transparency))
                     });
-                let new_cmd =
-                    HatchCommand::new(outlines, boundary_sources, selected, inherited);
+                let new_cmd = HatchCommand::new(
+                    outlines,
+                    boundary_sources,
+                    selected,
+                    inherited,
+                    plane,
+                );
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 self.refresh_area_preview(i);
@@ -666,21 +687,25 @@ impl OpenCADStudio {
                 if sel.len() == 1 {
                     let (h, _) = sel[0];
                     if let Some(model) = self.tabs[i].scene.hatches.get(&h).cloned() {
-                        let annotative = self.tabs[i]
-                            .scene
-                            .document
-                            .get_entity(h)
-                            .is_some_and(|entity| {
+                        let entity = self.tabs[i].scene.document.get_entity(h);
+                        let annotative = entity.is_some_and(|entity| {
                                 crate::scene::annotative::is_annotative(
                                     &self.tabs[i].scene.document,
                                     entity,
                                 )
                             });
+                        let (scale, angle) = match entity {
+                            Some(acadrust::EntityType::Hatch(hatch)) => (
+                                hatch.pattern_scale as f32,
+                                hatch.pattern_angle.to_degrees() as f32,
+                            ),
+                            _ => (model.scale, model.angle_offset.to_degrees()),
+                        };
                         let cmd = HatcheditCommand::with_handle(
                             h,
                             model.name.clone(),
-                            model.scale,
-                            model.angle_offset.to_degrees(),
+                            scale,
+                            angle,
                             annotative,
                         );
                         self.command_line.push_info(&cmd.prompt());

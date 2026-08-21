@@ -1,8 +1,9 @@
 use super::*;
 
 use cadkernel::geom2d::{
-    bounded_faces, contains, distance_to, intersect, segment_crossing, triangulate, Curve, Line,
-    SegmentCrossing, Tolerance, Transform as CurveTransform,
+    bounded_faces, closest_point, contains, distance_to, intersect, ring_nesting_depths,
+    segment_crossing, signed_area, triangulate, Curve, Line, SegmentCrossing, Tolerance,
+    Transform as CurveTransform,
 };
 
 use crate::command::WorkingPlane;
@@ -13,12 +14,7 @@ pub struct BoundarySource {
     pub curves: Vec<Curve>,
 }
 
-/// How far apart two points may be and still be taken for the same one.
-///
-/// The boundary search runs on already-tessellated wire geometry, so the
-/// input is a chord approximation of the drawn curves to begin with; this
-/// only has to be coarse enough to close the gaps that leaves and fine
-/// enough not to weld genuinely separate corners together.
+/// Boundary welding tolerance for tessellated wires.
 const WELD_TOLERANCE: f64 = 1.0e-6;
 
 fn wire_segments_on_plane(
@@ -188,6 +184,19 @@ fn curve_forward(curve: &Curve, start: [f64; 2], next: [f64; 2]) -> bool {
     delta >= 0.0
 }
 
+fn stored_arc_angles(start: f64, end: f64, counter_clockwise: bool, whole: bool) -> (f64, f64) {
+    let stored_start = if counter_clockwise { start } else { -start }
+        .rem_euclid(std::f64::consts::TAU);
+    let sweep = if whole {
+        std::f64::consts::TAU
+    } else if counter_clockwise {
+        (end - start).rem_euclid(std::f64::consts::TAU)
+    } else {
+        (start - end).rem_euclid(std::f64::consts::TAU)
+    };
+    (stored_start, stored_start + sweep)
+}
+
 fn exact_boundary_edge(
     curve: Option<&Curve>,
     start: [f64; 2],
@@ -213,11 +222,10 @@ fn exact_boundary_edge(
             end: Vector2::new(end[0], end[1]),
         }),
         Curve::Circle(circle) => {
-            let start_angle = (start[1] - circle.centre[1]).atan2(start[0] - circle.centre[0]);
-            let mut end_angle = (end[1] - circle.centre[1]).atan2(end[0] - circle.centre[0]);
-            if whole_curve {
-                end_angle = start_angle + std::f64::consts::TAU;
-            }
+            let true_start = (start[1] - circle.centre[1]).atan2(start[0] - circle.centre[0]);
+            let true_end = (end[1] - circle.centre[1]).atan2(end[0] - circle.centre[0]);
+            let (start_angle, end_angle) =
+                stored_arc_angles(true_start, true_end, forward, whole_curve);
             BoundaryEdge::CircularArc(CircularArcEdge {
                 center: Vector2::new(circle.centre[0], circle.centre[1]),
                 radius: circle.radius,
@@ -227,8 +235,10 @@ fn exact_boundary_edge(
             })
         }
         Curve::Arc(arc) => {
-            let start_angle = (start[1] - arc.centre[1]).atan2(start[0] - arc.centre[0]);
-            let end_angle = (end[1] - arc.centre[1]).atan2(end[0] - arc.centre[0]);
+            let true_start = (start[1] - arc.centre[1]).atan2(start[0] - arc.centre[0]);
+            let true_end = (end[1] - arc.centre[1]).atan2(end[0] - arc.centre[0]);
+            let (start_angle, end_angle) =
+                stored_arc_angles(true_start, true_end, forward, whole_curve);
             BoundaryEdge::CircularArc(CircularArcEdge {
                 center: Vector2::new(arc.centre[0], arc.centre[1]),
                 radius: arc.radius,
@@ -239,14 +249,10 @@ fn exact_boundary_edge(
         }
         Curve::Ellipse(arc) => {
             let ellipse = arc.ellipse;
-            let mut start_parameter = arc.start_parameter + curve.parameter_at(start) * arc.sweep();
-            let mut end_parameter = arc.start_parameter + curve.parameter_at(end) * arc.sweep();
-            if !forward {
-                std::mem::swap(&mut start_parameter, &mut end_parameter);
-            }
-            if whole_curve {
-                end_parameter = start_parameter + std::f64::consts::TAU;
-            }
+            let true_start = arc.start_parameter + curve.parameter_at(start) * arc.sweep();
+            let true_end = arc.start_parameter + curve.parameter_at(end) * arc.sweep();
+            let (start_parameter, end_parameter) =
+                stored_arc_angles(true_start, true_end, forward, whole_curve);
             BoundaryEdge::EllipticArc(EllipticArcEdge {
                 center: Vector2::new(ellipse.centre[0], ellipse.centre[1]),
                 major_axis_endpoint: Vector2::new(
@@ -264,8 +270,13 @@ fn exact_boundary_edge(
                 Some(if forward { source.clone() } else { source.reversed() })
             } else {
                 source.trimmed(source.parameter_at(start), source.parameter_at(end))
-            }
-            .unwrap_or_else(|| source.clone());
+            };
+            let Some(trimmed) = trimmed else {
+                return BoundaryEdge::Line(LineEdge {
+                    start: Vector2::new(start[0], start[1]),
+                    end: Vector2::new(end[0], end[1]),
+                });
+            };
             let rational = trimmed.is_rational();
             BoundaryEdge::Spline(SplineEdge {
                 degree: trimmed.degree() as i32,
@@ -294,9 +305,7 @@ fn exact_boundary_edge(
     }
 }
 
-/// Rebuild detected tessellated rings as analytic hatch paths wherever their
-/// source entity exposes an exact curve. Intersections remain the graph's
-/// vertices, while the edge between them is stored as a trimmed source curve.
+/// Rebuild detected rings from exact source curves.
 pub(crate) fn exact_hatch_paths(
     rings: &[Vec<[f64; 2]>],
     exterior: &[bool],
@@ -371,7 +380,10 @@ pub(crate) fn exact_hatch_paths(
         .collect()
 }
 
-pub(crate) fn boundary_entities(rings: &[Vec<[f64; 2]>]) -> Vec<acadrust::EntityType> {
+pub(crate) fn boundary_entities(
+    rings: &[Vec<[f64; 2]>],
+    plane: WorkingPlane,
+) -> Vec<acadrust::EntityType> {
     rings
         .iter()
         .filter_map(|ring| {
@@ -397,7 +409,7 @@ pub(crate) fn boundary_entities(rings: &[Vec<[f64; 2]>]) -> Vec<acadrust::Entity
                     acadrust::entities::LwVertex::new(acadrust::types::Vector2::new(x, y))
                 })
                 .collect();
-            Some(acadrust::EntityType::LwPolyline(polyline))
+            Some(plane.place_entity(acadrust::EntityType::LwPolyline(polyline)))
         })
         .collect()
 }
@@ -458,7 +470,7 @@ fn nearest_crossing(a: &Curve, b: &Curve, point: [f64; 2], tolerance: f64) -> Op
 }
 
 fn project_to_curve(curve: &Curve, point: [f64; 2]) -> [f64; 2] {
-    curve.point_at(curve.parameter_at(point))
+    closest_point(curve, point).point
 }
 
 fn refined_boundary_ring(
@@ -571,6 +583,18 @@ pub(crate) fn boundary_polyline_entities(
         .collect()
 }
 
+pub(crate) fn boundary_entities_from_sources(
+    rings: &[Vec<[f64; 2]>],
+    plane: WorkingPlane,
+    sources: &rustc_hash::FxHashMap<Handle, BoundarySource>,
+    tolerance: f64,
+) -> Vec<EntityType> {
+    rings
+        .iter()
+        .filter_map(|ring| boundary_polyline(ring, plane, sources, tolerance))
+        .collect()
+}
+
 impl Scene {
     pub(crate) fn edit_hatch_boundary_handles(
         &mut self,
@@ -592,6 +616,11 @@ impl Scene {
             }
         } else {
             path.boundary_handles.retain(|handle| !handles.contains(handle));
+        }
+        if path.boundary_handles.is_empty() {
+            path.flags.set_external(false);
+        } else {
+            path.flags.set_external(true);
         }
         hatch.is_associative = hatch
             .paths
@@ -693,6 +722,9 @@ impl Scene {
                 let old_count = path.boundary_handles.len();
                 path.boundary_handles
                     .retain(|source| self.document.get_entity(*source).is_some());
+                if path.boundary_handles.is_empty() {
+                    path.flags.set_external(false);
+                }
                 association_changed |= path.boundary_handles.len() != old_count;
                 modified |= association_changed;
                 let sources: rustc_hash::FxHashMap<_, _> = path
@@ -799,6 +831,82 @@ impl Scene {
         }
         sources
     }
+}
+
+fn hatch_path_geometry(
+    path: &acadrust::entities::BoundaryPath,
+) -> (Vec<[f64; 2]>, Vec<f64>) {
+    let edges: Vec<_> = path
+        .edges
+        .iter()
+        .filter_map(crate::entities::hatch::edge_curve)
+        .map(|curve| curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE))
+        .collect();
+    super::entity::chain_path_edges_with_directions(edges)
+}
+
+pub(crate) fn hatch_path_ring(path: &acadrust::entities::BoundaryPath) -> Option<Vec<[f64; 2]>> {
+    let (ring, _) = hatch_path_geometry(path);
+    (ring.len() >= 3).then_some(ring)
+}
+
+pub(crate) fn hatch_path_directions(path: &acadrust::entities::BoundaryPath) -> Vec<f64> {
+    hatch_path_geometry(path).1
+}
+
+pub(crate) fn hatch_boundary_rings(hatch: &acadrust::entities::Hatch) -> Vec<Vec<[f64; 2]>> {
+    hatch.paths.iter().filter_map(hatch_path_ring).collect()
+}
+
+pub(crate) fn separated_hatch_path_groups(
+    hatch: &acadrust::entities::Hatch,
+) -> Vec<Vec<acadrust::entities::BoundaryPath>> {
+    let items: Vec<_> = hatch
+        .paths
+        .iter()
+        .filter_map(|path| hatch_path_ring(path).map(|ring| (path.clone(), ring)))
+        .collect();
+    let rings: Vec<_> = items.iter().map(|(_, ring)| ring.clone()).collect();
+    let depths = ring_nesting_depths(&rings);
+    let outer_indices: Vec<_> = depths
+        .iter()
+        .enumerate()
+        .filter_map(|(index, depth)| (*depth == 0).then_some(index))
+        .collect();
+    let mut groups: Vec<_> = outer_indices
+        .iter()
+        .map(|index| vec![items[*index].0.clone()])
+        .collect();
+    for (index, (path, ring)) in items.iter().enumerate() {
+        if depths.get(index) == Some(&0) {
+            continue;
+        }
+        let Some(seed) = ring.first().copied() else {
+            continue;
+        };
+        let owner = outer_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, outer)| {
+                contains(
+                    &face_curves(&rings[**outer]),
+                    seed,
+                    Tolerance::new(WELD_TOLERANCE),
+                )
+            })
+            .min_by(|(_, left), (_, right)| {
+                signed_area(&rings[**left])
+                    .abs()
+                    .total_cmp(&signed_area(&rings[**right]).abs())
+            })
+            .map(|(group, _)| group);
+        if let Some(owner) = owner {
+            groups[owner].push(path.clone());
+        } else {
+            groups.push(vec![path.clone()]);
+        }
+    }
+    groups
 }
 
 pub(crate) fn boundary_faces(

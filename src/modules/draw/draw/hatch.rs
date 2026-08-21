@@ -1,13 +1,4 @@
-// Hatch/Gradient/Boundary commands — OpenCADStudio Home > Draw > Hatch dropdown.
-//
-// Commands:
-//   HATCH    — ANSI31: 45° hatch lines (pick inside or type S for manual)
-//   GRADIENT — Linear gradient fill (pick inside or type S for manual)
-//   BOUNDARY — Traces the enclosing boundary as a closed LwPolyline
-//
-// Primary workflow (matches OpenCADStudio):
-//   Click a point INSIDE a closed region → boundary auto-detected.
-//   Type "S" to switch to manual vertex-picking mode (HATCH/GRADIENT only).
+// Hatch, gradient, and boundary commands.
 
 use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::modules::IconKind;
@@ -15,7 +6,7 @@ use crate::scene::model::hatch_model::{HatchModel, HatchPattern, PatFamily};
 use crate::scene::model::wire_model::WireModel;
 use acadrust::Handle;
 use cadkernel::geom2d::{
-    bounded_faces, contains, ring_nesting_depths, signed_area, Curve, Line, Tolerance,
+    bounded_faces, contains, ring_nesting_depths, signed_area, Circle, Curve, Line, Tolerance,
 };
 use glam::DVec3;
 use crate::t;
@@ -110,17 +101,7 @@ fn polygon_contains_polygon(outer: &[[f64; 2]], inner: &[[f64; 2]]) -> bool {
     inner.iter().all(|&v| point_in_polygon(v, outer))
 }
 
-/// Resolve the hatch boundary for a "pick inside" click.
-///
-/// The outer ring is the *smallest* outline containing the click point — the
-/// innermost region the point belongs to. Its holes are that ring's **direct
-/// children**: outlines nested one level inside it with no other outline in
-/// between. Deeper (grandchild) outlines belong to those children's own fills,
-/// so they are left out — otherwise even-odd rasterisation would flip the
-/// innermost island back on for 3+ nesting levels. The result is intuitive and
-/// draw-order independent:
-///   * click inside the innermost shape → hatch just that shape,
-///   * click in a gap → hatch that ring, with the next level in as holes.
+/// Resolve the innermost clicked ring and its direct holes.
 fn resolve_hatch_rings(
     outlines: &[Vec<[f64; 2]>],
     p: [f64; 2],
@@ -184,12 +165,7 @@ fn pack_rings(rings: &[Vec<[f64; 2]>]) -> (Vec<[f32; 2]>, [f64; 2], Vec<[f64; 2]
     (rel, origin, wcs)
 }
 
-/// Split an absolute boundary into the `(f32 offsets, f64 origin)` pair that
-/// `HatchModel` expects: the origin anchors on the first vertex in full f64 so a
-/// typed coordinate (issue #311) and large/UTM positions keep their precision,
-/// and `add_hatch` reconstructs each WCS vertex as `origin + offset`. A zero
-/// origin with absolute f32 offsets — the previous command output — quantized
-/// typed points and mis-placed the fill at large coordinates.
+/// Store boundary points as precise-origin-relative offsets.
 fn rte_boundary(pts: impl Iterator<Item = (f64, f64)>) -> (Vec<[f32; 2]>, [f64; 2]) {
     let pts: Vec<(f64, f64)> = pts.collect();
     let Some(&(ox, oy)) = pts.first() else {
@@ -228,6 +204,7 @@ pub struct HatchCommand {
         acadrust::types::Color,
         acadrust::types::Transparency,
     )>,
+    plane: WorkingPlane,
 }
 
 impl HatchCommand {
@@ -240,6 +217,7 @@ impl HatchCommand {
             acadrust::types::Color,
             acadrust::types::Transparency,
         )>,
+        plane: WorkingPlane,
     ) -> Self {
         let selected_objects: Vec<_> = selected_objects
             .into_iter()
@@ -273,6 +251,7 @@ impl HatchCommand {
                 .map(|(model, _, _)| model.style)
                 .unwrap_or(acadrust::entities::HatchStyleType::Normal),
             inherited,
+            plane,
         };
         command.set_object_selection(selected_objects);
         command
@@ -332,7 +311,30 @@ impl HatchCommand {
     }
 
     fn make_hatch(&self, rings: Vec<Vec<[f64; 2]>>) -> HatchModel {
-        let (rel, origin, wcs) = pack_rings(&rings);
+        let world_rings: Vec<Vec<[f64; 2]>> = rings
+            .iter()
+            .map(|ring| {
+                ring.iter()
+                    .map(|&[x, y]| {
+                        let point = self.plane.to_world(DVec3::new(x, y, 0.0));
+                        [point.x, point.y]
+                    })
+                    .collect()
+            })
+            .collect();
+        let (rel, origin, wcs) = pack_rings(&world_rings);
+        let mut local_boundary = Vec::new();
+        for (index, ring) in rings.iter().enumerate() {
+            if index != 0 {
+                local_boundary.push([f32::NAN, f32::NAN]);
+            }
+            local_boundary.extend(ring.iter().map(|&[x, y]| [x as f32, y as f32]));
+        }
+        let fill_plane = crate::scene::model::hatch_model::FillPlane {
+            origin: self.plane.origin.to_array(),
+            x_axis: self.plane.x.to_array(),
+            y_axis: self.plane.y.to_array(),
+        };
         let exterior: Vec<bool> = cadkernel::geom2d::ring_nesting_depths(&rings)
             .into_iter()
             .map(|depth| depth == 0)
@@ -353,6 +355,7 @@ impl HatchCommand {
             }
             for path in &mut boundary_paths {
                 path.boundary_handles.clear();
+                path.flags.set_external(false);
             }
         }
         if let Some((source, _, _)) = &self.inherited {
@@ -391,8 +394,8 @@ impl HatchCommand {
                 scale,
                 world_origin: origin,
                 boundary_wcs: Some(std::sync::Arc::new(wcs)),
-                fill_plane: None,
-                fill_plane_boundary: None,
+                fill_plane: Some(fill_plane),
+                fill_plane_boundary: Some(std::sync::Arc::new(local_boundary)),
                 boundary_exterior: Some(std::sync::Arc::new(exterior)),
                 boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
                 boundary_paths: Some(std::sync::Arc::new(boundary_paths)),
@@ -438,8 +441,8 @@ impl HatchCommand {
             scale: self.scale_override.unwrap_or(1.0).max(1.0e-6),
             world_origin: origin,
             boundary_wcs: Some(std::sync::Arc::new(wcs)),
-            fill_plane: None,
-            fill_plane_boundary: None,
+            fill_plane: Some(fill_plane),
+            fill_plane_boundary: Some(std::sync::Arc::new(local_boundary)),
             boundary_exterior: Some(std::sync::Arc::new(exterior)),
             boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
             boundary_paths: Some(std::sync::Arc::new(boundary_paths)),
@@ -476,32 +479,27 @@ impl HatchCommand {
 }
 
 fn arc_bulge(start: DVec3, middle: DVec3, end: DVec3) -> Option<f64> {
-    let d = 2.0
-        * (start.x * (middle.y - end.y)
-            + middle.x * (end.y - start.y)
-            + end.x * (start.y - middle.y));
-    if d.abs() <= 1.0e-12 {
+    let curvature = DVec3::from_array(cadkernel::space::curve::curvature_through(
+        start.to_array(),
+        middle.to_array(),
+        end.to_array(),
+    ));
+    let squared = curvature.length_squared();
+    if squared <= f64::MIN_POSITIVE {
         return None;
     }
-    let s2 = start.x * start.x + start.y * start.y;
-    let m2 = middle.x * middle.x + middle.y * middle.y;
-    let e2 = end.x * end.x + end.y * end.y;
-    let center_x = (s2 * (middle.y - end.y)
-        + m2 * (end.y - start.y)
-        + e2 * (start.y - middle.y))
-        / d;
-    let center_y = (s2 * (end.x - middle.x)
-        + m2 * (start.x - end.x)
-        + e2 * (middle.x - start.x))
-        / d;
-    let angle = |point: DVec3| (point.y - center_y).atan2(point.x - center_x);
-    let first = angle(start);
-    let through = (angle(middle) - first).rem_euclid(std::f64::consts::TAU);
-    let ccw = (angle(end) - first).rem_euclid(std::f64::consts::TAU);
+    let centre = start + curvature / squared;
+    let circle = Curve::Circle(Circle {
+        centre: [centre.x, centre.y],
+        radius: squared.sqrt().recip(),
+    });
+    let first = circle.parameter_at([start.x, start.y]);
+    let through = (circle.parameter_at([middle.x, middle.y]) - first).rem_euclid(1.0);
+    let ccw = (circle.parameter_at([end.x, end.y]) - first).rem_euclid(1.0);
     let sweep = if through <= ccw + 1.0e-12 {
-        ccw
+        ccw * std::f64::consts::TAU
     } else {
-        ccw - std::f64::consts::TAU
+        (ccw - 1.0) * std::f64::consts::TAU
     };
     Some((sweep * 0.25).tan())
 }
@@ -631,6 +629,7 @@ impl CadCommand for HatchCommand {
     }
 
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
+        let pt = self.plane.to_local(pt);
         match &self.mode {
             HatchMode::PickInside => {
                 let xy = [pt.x, pt.y];
@@ -667,6 +666,9 @@ impl CadCommand for HatchCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
+        if matches!(self.mode, HatchMode::Manual) && self.manual_arc_midpoint.is_some() {
+            return CmdResult::NeedPoint;
+        }
         if matches!(self.mode, HatchMode::Manual) && self.manual_pts.len() >= 3 {
             let ring = self.manual_pts.iter().map(|p| [p.x, p.y]).collect();
             self.add_point_region(vec![ring]);
@@ -706,7 +708,12 @@ impl CadCommand for HatchCommand {
         } else if self.retain_boundaries {
             CmdResult::CommitHatchWithBoundaries {
                 hatch: self.make_hatch(rings.clone()),
-                boundaries: crate::scene::boundary_entities(&rings),
+                boundaries: crate::scene::boundary_entities_from_sources(
+                    &rings,
+                    self.plane,
+                    &self.boundary_sources,
+                    1.0e-6,
+                ),
                 entity_style: self
                     .inherited
                     .as_ref()
@@ -798,6 +805,10 @@ impl CadCommand for HatchCommand {
                 _ => None,
             };
         }
+        if upper == "ASSOCIATIVE" {
+            self.associative = !self.associative;
+            return Some(CmdResult::NeedPoint);
+        }
         if let Some(rest) = upper.strip_prefix('P') {
             let name = rest.trim();
             if !name.is_empty() {
@@ -839,6 +850,9 @@ impl CadCommand for HatchCommand {
             }
             "B" | "BOUNDARY" | "BOUNDARIES" => {
                 self.retain_boundaries = !self.retain_boundaries;
+                if self.retain_boundaries {
+                    self.separate_hatches = false;
+                }
                 Some(CmdResult::NeedPoint)
             }
             "N" | "ASSOCIATIVE" => {
@@ -847,6 +861,9 @@ impl CadCommand for HatchCommand {
             }
             "D" | "SEPARATE" => {
                 self.separate_hatches = !self.separate_hatches;
+                if self.separate_hatches {
+                    self.retain_boundaries = false;
+                }
                 Some(CmdResult::NeedPoint)
             }
             "Y" | "ISLAND" => {
@@ -875,14 +892,10 @@ impl CadCommand for HatchCommand {
             let mut pts: Vec<[f32; 3]> = self
                 .manual_pts
                 .iter()
-                .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                .map(|&p| self.plane.to_world(p).as_vec3().to_array())
                 .collect();
-            pts.push([pt.x, pt.y, pt.z]);
-            pts.push([
-                self.manual_pts[0].x as f32,
-                self.manual_pts[0].y as f32,
-                self.manual_pts[0].z as f32,
-            ]);
+            pts.push(pt.to_array());
+            pts.push(self.plane.to_world(self.manual_pts[0]).as_vec3().to_array());
             return Some(WireModel::solid(
                 "rubber_band".into(),
                 pts,

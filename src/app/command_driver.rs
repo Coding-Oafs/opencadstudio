@@ -1375,6 +1375,13 @@ impl OpenCADStudio {
                         .collect::<Vec<_>>();
                     sources.push(handles);
                 }
+                if let Some(paths) = hatch.boundary_paths.as_mut() {
+                    for (path, handles) in std::sync::Arc::make_mut(paths).iter_mut().zip(&sources)
+                    {
+                        path.boundary_handles = handles.clone();
+                        path.flags.set_external(!handles.is_empty());
+                    }
+                }
                 hatch.boundary_sources = Some(std::sync::Arc::new(sources));
                 let layer = self.tabs[i].active_layer.clone();
                 let new_handle =
@@ -1619,10 +1626,7 @@ impl OpenCADStudio {
                     .into_iter()
                     .map(|e| self.tabs[i].scene.add_entity(e))
                     .collect();
-                // A replaced dimension carries edited geometry/text but still
-                // names its old *D block; drop that stale block so the next save
-                // re-bakes it — otherwise BricsCAD/ODA draw the pre-edit
-                // graphics while OCS shows the edit. (#181)
+                // Rebuild replaced dimensions from edited data.
                 for &nh in &new_handles {
                     if matches!(
                         self.tabs[i].scene.document.get_entity(nh),
@@ -1932,11 +1936,6 @@ impl OpenCADStudio {
                 }
                 // The command stays active after each apply so more targets
                 // can keep being picked; Enter / Esc ends it (#362).
-                // Special (type-specific) properties travel like AutoCAD's
-                // Special Properties: each is captured from the source when it
-                // carries it and applied only to destinations that support it
-                // (#281). Text formatting crosses TEXT ↔ MTEXT (#361); the dim
-                // style crosses Dimension / Leader / Tolerance.
                 let src_clone = self.tabs[i].scene.document.get_entity(src).cloned();
                 let src_common = src_clone.as_ref().map(|e| e.common().clone());
                 let thickness = src_clone
@@ -3337,6 +3336,7 @@ impl OpenCADStudio {
                                 if disassociate {
                                     for path in &mut hatch.paths {
                                         path.boundary_handles.clear();
+                                        path.flags.set_external(false);
                                     }
                                     hatch.is_associative = false;
                                 }
@@ -3378,21 +3378,19 @@ impl OpenCADStudio {
                                 .edit_hatch_boundary_handles(handle, &handles, false);
                         }
                         HatchEditOperation::RecreateBoundary => {
-                            let model = self.tabs[i].scene.hatches.get(&handle).cloned();
-                            if let Some(model) = model {
-                                let mut rings = vec![Vec::new()];
-                                for &[x, y] in model.boundary.iter() {
-                                    if x.is_finite() && y.is_finite() {
-                                        rings.last_mut().unwrap().push([
-                                            model.world_origin[0] + x as f64,
-                                            model.world_origin[1] + y as f64,
-                                        ]);
-                                    } else if !rings.last().unwrap().is_empty() {
-                                        rings.push(Vec::new());
-                                    }
-                                }
-                                rings.retain(|ring| ring.len() >= 3);
-                                let entities = crate::scene::boundary_entities(&rings);
+                            let source = self.tabs[i].scene.document.get_entity(handle).cloned();
+                            if let Some(acadrust::EntityType::Hatch(source)) = source {
+                                let storage = crate::entities::curve::ocs_plane(
+                                    source.normal,
+                                    source.elevation,
+                                );
+                                let plane = crate::command::WorkingPlane::new(
+                                    glam::DVec3::from_array(storage.origin),
+                                    glam::DVec3::from_array(storage.x_axis),
+                                    glam::DVec3::from_array(storage.y_axis),
+                                );
+                                let rings = crate::scene::hatch_boundary_rings(&source);
+                                let entities = crate::scene::boundary_entities(&rings, plane);
                                 let mut handles = Vec::new();
                                 for entity in entities {
                                     if let Some(boundary) = self.commit_entity_handle(entity) {
@@ -3406,6 +3404,7 @@ impl OpenCADStudio {
                                         hatch.paths.iter_mut().zip(handles.iter().copied())
                                     {
                                         path.boundary_handles = vec![boundary];
+                                        path.flags.set_external(true);
                                     }
                                     hatch.is_associative = !handles.is_empty();
                                 }
@@ -3418,18 +3417,22 @@ impl OpenCADStudio {
                         HatchEditOperation::Separate => {
                             let source = self.tabs[i].scene.document.get_entity(handle).cloned();
                             if let Some(acadrust::EntityType::Hatch(hatch)) = source {
-                                for path in hatch.paths.iter().cloned() {
-                                    let mut separated = hatch.clone();
-                                    separated.common.handle = acadrust::Handle::NULL;
-                                    separated.paths = vec![path];
-                                    separated.is_associative = separated.paths.iter().any(|path| {
-                                        !path.boundary_handles.is_empty()
-                                    });
-                                    self.tabs[i]
-                                        .scene
-                                        .add_entity(acadrust::EntityType::Hatch(separated));
+                                let groups = crate::scene::separated_hatch_path_groups(&hatch);
+                                if groups.len() > 1 {
+                                    for paths in groups {
+                                        let mut separated = hatch.clone();
+                                        separated.common.handle = acadrust::Handle::NULL;
+                                        separated.paths = paths;
+                                        separated.is_associative = separated
+                                            .paths
+                                            .iter()
+                                            .any(|path| !path.boundary_handles.is_empty());
+                                        self.tabs[i]
+                                            .scene
+                                            .add_entity(acadrust::EntityType::Hatch(separated));
+                                    }
+                                    self.tabs[i].scene.erase_entities(&[handle]);
                                 }
-                                self.tabs[i].scene.erase_entities(&[handle]);
                             }
                         }
                         HatchEditOperation::DrawOrderFront

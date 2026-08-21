@@ -175,6 +175,14 @@ impl CadCommand for HatcheditCommand {
             return self.apply_result(self.update_operation());
         }
 
+        if text == "ANNOTATIVE" {
+            self.annotative = Some(!self.annotative.unwrap_or(self.annotative_current));
+            return Some(CmdResult::NeedPoint);
+        }
+        if text == "SEPARATE" {
+            return self.apply_result(HatchEditOperation::Separate);
+        }
+
         // Parse option: P/S/A followed by value
         if let Some(rest) = text.strip_prefix('P') {
             let n = rest.trim().to_string();

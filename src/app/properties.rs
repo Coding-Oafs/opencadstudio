@@ -2057,9 +2057,7 @@ pub(super) fn aggregate_sections(
     for sections in all_sections {
         result = merge_sections(&result, &sections);
     }
-    // Unlike ordinary common properties, cumulative area is an aggregate by
-    // definition. Preserve the individual Area row's "varies" state while
-    // summing every selected hatch's actual filled area (holes subtracted).
+    // Sum the filled area while individual Area rows may still vary.
     if selected.len() > 1
         && selected
             .iter()

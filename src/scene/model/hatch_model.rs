@@ -203,17 +203,14 @@ pub struct HatchModel {
     /// rebuilt from a DXF entity — `add_hatch` then reconstructs the persisted
     /// vertices from `boundary` + `world_origin` instead.
     pub boundary_wcs: Option<Arc<Vec<[f64; 2]>>>,
-    /// Optional 3-D placement used by wipeout fills.
+    /// Optional 3-D placement for planar fills.
     pub fill_plane: Option<FillPlane>,
     pub fill_plane_boundary: Option<Arc<Vec<[f32; 2]>>>,
     /// Per-ring DXF role, aligned with the NaN-separated boundary paths.
     pub boundary_exterior: Option<Arc<Vec<bool>>>,
     /// Source entity handles for each boundary ring.
     pub boundary_sources: Option<Arc<Vec<Vec<acadrust::Handle>>>>,
-    /// Exact persisted boundary paths for draw/edit workflows. Rendering keeps
-    /// using the compact tessellated boundary above, while persistence can
-    /// retain analytic arcs, ellipses and splines without rebuilding them as
-    /// straight polyline chords.
+    /// Exact boundary paths retained for persistence and editing.
     pub boundary_paths: Option<Arc<Vec<acadrust::entities::BoundaryPath>>>,
     /// Island handling used by the persisted hatch entity.
     pub style: acadrust::entities::HatchStyleType,

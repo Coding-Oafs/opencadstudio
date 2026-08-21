@@ -14,42 +14,19 @@ use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Pr
 use crate::scene::convert::tess_util::FallbackGeometry;
 use crate::scene::model::wire_model::SnapHint;
 
-/// The area the hatch's boundary paths enclose.
-///
-/// Summed edge by edge through the kernel, which measures what each edge
-/// actually encloses rather than what a polygon through some of its points
-/// would. The version this replaced pushed an arc's *centre* into the ring
-/// and a spline's control points — neither of which is on the boundary — so
-/// the number it produced was not the area of anything.
-///
-/// Outer paths and their holes both contribute; the sign of a loop says
-/// which it is, so the magnitude of the sum is the region's own area.
+/// The area enclosed by the hatch boundary paths.
 pub(crate) fn boundary_area(h: &Hatch) -> f64 {
     let mut path_areas = Vec::new();
     let mut rings = Vec::new();
     for path in &h.paths {
         let mut path_area = 0.0;
-        let mut ends: Vec<[f64; 2]> = Vec::new();
-        let mut ring = Vec::new();
-        for edge in &path.edges {
-            let Some(curve) = edge_curve(edge) else {
-                continue;
-            };
-            path_area += curve.enclosed_area();
-            ends.push(curve.point_at(0.0));
-            ends.push(curve.point_at(1.0));
-            let tessellated = curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE);
-            let skip = usize::from(!ring.is_empty());
-            ring.extend(tessellated.into_iter().skip(skip));
-        }
-        // Edges are stored as separate pieces, so the chain has to be closed
-        // by the chord from the last end back to the first — the same closing
-        // an open polyline gets.
-        if let (Some(first), Some(last)) = (ends.first(), ends.last()) {
-            path_area += 0.5 * (last[0] * first[1] - first[0] * last[1]);
+        let directions = crate::scene::hatch_path_directions(path);
+        let curves = path.edges.iter().filter_map(edge_curve);
+        for (curve, direction) in curves.zip(directions) {
+            path_area += direction * curve.enclosed_area();
         }
         path_areas.push(path_area.abs());
-        rings.push(ring);
+        rings.push(crate::scene::hatch_path_ring(path).unwrap_or_default());
     }
     let depths = cadkernel::geom2d::ring_nesting_depths(&rings);
     path_areas
@@ -70,7 +47,7 @@ pub(crate) fn boundary_area(h: &Hatch) -> f64 {
         .abs()
 }
 
-/// A hatch boundary edge as a kernel curve, in the hatch's own OCS.
+/// A hatch boundary edge as a kernel curve in the hatch OCS.
 pub(crate) fn edge_curve(edge: &BoundaryEdge) -> Option<KernelCurve> {
     Some(match edge {
         BoundaryEdge::Line(l) => KernelCurve::Line(KernelLine {
@@ -483,9 +460,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
 
 
     // ── Hatch (pattern / solid) ────────────────────────────────────────────
-    // Pattern-specific rows are conditional: scale belongs to catalog/custom
-    // definitions, while spacing and double belong to user-defined hatches.
-    // A solid fill does not expose inert pattern controls.
+    // Show only controls used by the selected fill type.
     let type_row = if h.is_solid {
         ro(t!("Type").as_ref(), "fill_kind", t!("Solid").into_owned())
     } else {
@@ -538,9 +513,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
             pattern_props.push(double_row);
         } else {
             pattern_props.push(edit(t!("Scale").as_ref(), "pattern_scale", h.pattern_scale));
-            // Project convention: these fields are relative offsets, therefore
-            // they read zero after every committed move instead of leaking the
-            // absolute base point of the first stored pattern line.
+            // Origin edits are relative offsets.
             pattern_props.push(edit(t!("Origin X").as_ref(), "origin_x", 0.0));
             pattern_props.push(edit(t!("Origin Y").as_ref(), "origin_y", 0.0));
             if h.pattern.name.to_ascii_uppercase().starts_with("ISO") {
@@ -645,9 +618,7 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
                 h.is_solid = false;
                 match requested {
                     HatchPatternType::UserDefined => {
-                        // User-defined geometry is derived from angle, spacing
-                        // and the Double flag; stale catalog lines would make
-                        // the renderer treat it as a prebaked definition.
+                        // Rebuild user-defined geometry from its parameters.
                         h.pattern = acadrust::entities::HatchPattern::new("_USER");
                     }
                     HatchPatternType::Predefined => {
@@ -776,13 +747,7 @@ fn apply_geom_prop(h: &mut Hatch, field: &str, value: &str) {
 
 fn apply_transform(h: &mut Hatch, t: &EntityTransform) {
     crate::scene::view::transform::apply_standard_entity_transform(h, t, |entity, p1, p2| {
-        // Delegate the mirror to acadrust's transform_hatch (via the Entity
-        // trait): it flips the boundary-arc direction flags, re-mirrors the
-        // stored angles and preserves the stored sweep — including the
-        // wrap-encoded end angles above 2π that AutoCAD writes. The old
-        // hand-rolled angle-swap here was only valid for ccw boundary arcs on
-        // an axis-aligned mirror line and went stale the moment those
-        // conventions were fixed upstream.
+        // Keep boundary directions, angles, and sweeps consistent.
         let t = crate::scene::view::transform::reflection_about_xy_line(p1, p2);
         acadrust::entities::Entity::apply_transform(entity, &t);
     });
@@ -832,9 +797,7 @@ impl Grippable for Hatch {
                 id += 1;
             }
         }
-        // Associative boundaries are edited through their source objects. A
-        // hatch therefore exposes only its circular pattern control instead
-        // of a second, conflicting set of boundary vertices.
+        // Edit associative boundaries through their source objects.
         if self.is_associative {
             return out;
         }
