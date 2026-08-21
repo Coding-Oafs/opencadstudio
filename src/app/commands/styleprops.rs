@@ -938,6 +938,9 @@ impl OpenCADStudio {
                     | "CENTERLTYPE"
                     | "CENTERLTSCALE"
                     | "CENTERLTYPEFILE"
+                    | "CENTERCROSSSIZE"
+                    | "CENTERCROSSGAP"
+                    | "CENTERMARKEXE"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -960,7 +963,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     let frame_kind = crate::scene::frame::kind_for_name(&name);
@@ -1044,6 +1047,9 @@ impl OpenCADStudio {
                             | "CENTERLTYPE"
                             | "CENTERLTSCALE"
                             | "CENTERLTYPEFILE"
+                            | "CENTERCROSSSIZE"
+                            | "CENTERCROSSGAP"
+                            | "CENTERMARKEXE"
                     ) {
                         let settings = self.tabs[i].scene.centerline_settings();
                         let current = match name.as_str() {
@@ -1052,6 +1058,9 @@ impl OpenCADStudio {
                             "CENTERLTYPE" => settings.linetype,
                             "CENTERLTSCALE" => settings.linetype_scale.to_string(),
                             "CENTERLTYPEFILE" => settings.linetype_file,
+                            "CENTERCROSSSIZE" => settings.cross_size,
+                            "CENTERCROSSGAP" => settings.cross_gap,
+                            "CENTERMARKEXE" => i16::from(settings.mark_extensions).to_string(),
                             _ => unreachable!(),
                         };
                         if let Some(value) = &value {

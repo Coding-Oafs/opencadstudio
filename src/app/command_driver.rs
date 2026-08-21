@@ -1495,6 +1495,26 @@ impl OpenCADStudio {
                 }
                 self.refresh_properties();
             }
+            CmdResult::ReassociateCenterMark { target, source, point } => {
+                if self.reject_locked_edit(i, target) {
+                    return Task::none();
+                }
+                self.push_undo_snapshot(i, "CENTERREASSOCIATE");
+                if self.tabs[i].scene.reassociate_center_mark(target, source, point) {
+                    self.tabs[i].dirty = true;
+                    self.command_line.push_output(
+                        "CENTERREASSOCIATE: center mark associated.",
+                    );
+                } else {
+                    self.command_line.push_error(
+                        "CENTERREASSOCIATE: the selected source is not circular.",
+                    );
+                }
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.tabs[i].scene.clear_preview_wire();
+                self.refresh_properties();
+            }
             CmdResult::ReplaceEntity(handle, new_entities) => {
                 if self.reject_locked_edit(i, handle) {
                     return Task::none();

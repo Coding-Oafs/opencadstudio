@@ -17,6 +17,9 @@ pub(crate) struct CenterLineSettings {
     pub linetype: String,
     pub linetype_scale: f64,
     pub linetype_file: String,
+    pub cross_size: String,
+    pub cross_gap: String,
+    pub mark_extensions: bool,
 }
 
 impl Default for CenterLineSettings {
@@ -27,6 +30,9 @@ impl Default for CenterLineSettings {
             linetype: "CENTER2".to_owned(),
             linetype_scale: 1.0,
             linetype_file: String::new(),
+            cross_size: "0.1x".to_owned(),
+            cross_gap: "0.05x".to_owned(),
+            mark_extensions: true,
         }
     }
 }
@@ -219,6 +225,9 @@ impl Scene {
             linetype: value(2).and_then(XRecordValue::as_string).unwrap_or(&defaults.linetype).to_owned(),
             linetype_scale: value(41).and_then(XRecordValue::as_double).unwrap_or(defaults.linetype_scale),
             linetype_file: value(3).and_then(XRecordValue::as_string).unwrap_or(&defaults.linetype_file).to_owned(),
+            cross_size: value(4).and_then(XRecordValue::as_string).unwrap_or(&defaults.cross_size).to_owned(),
+            cross_gap: value(5).and_then(XRecordValue::as_string).unwrap_or(&defaults.cross_gap).to_owned(),
+            mark_extensions: value(290).and_then(XRecordValue::as_bool).unwrap_or(defaults.mark_extensions),
         }
     }
 
@@ -259,6 +268,27 @@ impl Scene {
                 (41, XRecordValue::Double(number), number.to_string())
             }
             "CENTERLTYPEFILE" => (3, XRecordValue::String(value.to_owned()), value.to_owned()),
+            "CENTERCROSSSIZE" | "CENTERCROSSGAP" => {
+                let trimmed = value.trim();
+                let valid = trimmed.eq_ignore_ascii_case("ByLineType")
+                    || trimmed.strip_suffix(['x', 'X']).is_some_and(|number| {
+                        number.parse::<f64>().is_ok_and(|value| value.is_finite() && value > 0.0)
+                    })
+                    || trimmed.parse::<f64>().is_ok_and(|value| value.is_finite() && value > 0.0);
+                if !valid {
+                    return Err(format!("{name} requires a positive length, a positive x factor, or ByLineType."));
+                }
+                let code = if name == "CENTERCROSSSIZE" { 4 } else { 5 };
+                (code, XRecordValue::String(trimmed.to_owned()), trimmed.to_owned())
+            }
+            "CENTERMARKEXE" => {
+                let enabled = match value.trim().to_ascii_lowercase().as_str() {
+                    "1" | "on" | "yes" | "true" => true,
+                    "0" | "off" | "no" | "false" => false,
+                    _ => return Err("CENTERMARKEXE requires On/Off or 1/0.".to_owned()),
+                };
+                (290, XRecordValue::Bool(enabled), if enabled { "1" } else { "0" }.to_owned())
+            }
             _ => return Err(format!("Unknown centerline setting: {name}")),
         };
         if let Some(entry) = record.entries.iter_mut().find(|entry| entry.code == code) {
@@ -361,4 +391,20 @@ impl Scene {
         }
         candidates.len()
     }
+}
+
+pub(crate) fn resolve_center_measure(specification: &str, diameter: f64, fallback_factor: f64) -> f64 {
+    let text = specification.trim();
+    if text.eq_ignore_ascii_case("ByLineType") {
+        return diameter * fallback_factor;
+    }
+    if let Some(factor) = text.strip_suffix(['x', 'X']).and_then(|value| value.parse::<f64>().ok()) {
+        return diameter * factor.max(0.0);
+    }
+    text.parse::<f64>().unwrap_or(diameter * fallback_factor).max(0.0)
+}
+
+pub(crate) fn center_measure_is_relative(specification: &str) -> bool {
+    let text = specification.trim();
+    text.eq_ignore_ascii_case("ByLineType") || text.ends_with(['x', 'X'])
 }

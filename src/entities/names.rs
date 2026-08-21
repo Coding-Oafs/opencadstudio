@@ -13,6 +13,8 @@ use acadrust::EntityType;
 pub fn ui_name(e: &EntityType) -> &'static str {
     match e {
         EntityType::Point(_) => "Point",
+        EntityType::Line(line)
+            if acadrust::entities::CenterMarkAssociation::read(&line.common.extended_data).is_some() => "Center Mark",
         EntityType::Line(_) => "Line",
         EntityType::Circle(_) => "Circle",
         EntityType::Arc(_) => "Arc",
