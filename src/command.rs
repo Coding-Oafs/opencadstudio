@@ -1206,6 +1206,12 @@ pub enum CmdResult {
     ReplaceMany(Vec<(Handle, Vec<EntityType>)>, Vec<EntityType>),
     /// Replace several entities as one undo step while keeping the command active.
     ReplaceManyContinue(Vec<(Handle, Vec<EntityType>)>),
+    /// Attach one smart centre mark to a newly selected circular source.
+    ReassociateCenterMark {
+        target: Handle,
+        source: Handle,
+        point: DVec3,
+    },
     /// Cancel: discard any preview and end the command.
     Cancel,
     /// Cancel because the active drawing space changed. Cleanup is identical

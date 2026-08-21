@@ -933,6 +933,14 @@ impl OpenCADStudio {
                     | "SKETCHINC"
                     | "SKPOLY"
                     | "SKTOLERANCE"
+                    | "CENTEREXE"
+                    | "CENTERLAYER"
+                    | "CENTERLTYPE"
+                    | "CENTERLTSCALE"
+                    | "CENTERLTYPEFILE"
+                    | "CENTERCROSSSIZE"
+                    | "CENTERCROSSGAP"
+                    | "CENTERMARKEXE"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -955,7 +963,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     let frame_kind = crate::scene::frame::kind_for_name(&name);
@@ -1029,6 +1037,45 @@ impl OpenCADStudio {
                                 ).as_ref());
                                 self.pending_setvar = Some(name.clone());
                             }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    if matches!(
+                        name.as_str(),
+                        "CENTEREXE"
+                            | "CENTERLAYER"
+                            | "CENTERLTYPE"
+                            | "CENTERLTSCALE"
+                            | "CENTERLTYPEFILE"
+                            | "CENTERCROSSSIZE"
+                            | "CENTERCROSSGAP"
+                            | "CENTERMARKEXE"
+                    ) {
+                        let settings = self.tabs[i].scene.centerline_settings();
+                        let current = match name.as_str() {
+                            "CENTEREXE" => settings.extension.to_string(),
+                            "CENTERLAYER" => settings.layer,
+                            "CENTERLTYPE" => settings.linetype,
+                            "CENTERLTSCALE" => settings.linetype_scale.to_string(),
+                            "CENTERLTYPEFILE" => settings.linetype_file,
+                            "CENTERCROSSSIZE" => settings.cross_size,
+                            "CENTERCROSSGAP" => settings.cross_gap,
+                            "CENTERMARKEXE" => i16::from(settings.mark_extensions).to_string(),
+                            _ => unreachable!(),
+                        };
+                        if let Some(value) = &value {
+                            match self.tabs[i].scene.set_centerline_setting(&name, value) {
+                                Ok(message) => {
+                                    self.tabs[i].dirty = true;
+                                    self.command_line.push_output(&message);
+                                }
+                                Err(error) => self.command_line.push_error(&error),
+                            }
+                        } else {
+                            self.command_line.push_output(crate::tf!(
+                                "Enter new value for {name} <{current}>:"
+                            ).as_ref());
+                            self.pending_setvar = Some(name.clone());
                         }
                         return Some(self.finish_dispatch(cmd));
                     }

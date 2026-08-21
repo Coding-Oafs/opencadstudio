@@ -1705,6 +1705,13 @@ pub(crate) fn set_wire_aabb(w: &mut WireModel, entity_box: [f32; 4]) {
 }
 
 fn entity_bounds(e: &acadrust::EntityType) -> ([f64; 3], [f64; 3]) {
+    if let acadrust::EntityType::Line(line) = e {
+        if let Some(association) = acadrust::entities::CenterMarkAssociation::read(
+            &line.common.extended_data,
+        ) {
+            return crate::scene::centermark::mark_bounds(&association);
+        }
+    }
     if let acadrust::EntityType::Solid(solid) = e {
         if let Some(bounds) = crate::entities::solid::wcs_bounds(solid) {
             return (bounds.min, bounds.max);
