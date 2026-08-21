@@ -65,7 +65,7 @@ pub const ICON: IconKind = ICON_CR;
 
 fn circle_wire(center: DVec3, radius: f64, plane: WorkingPlane) -> WireModel {
     let segs = 64u32;
-    let mut pts: Vec<[f64; 3]> = (0..=segs)
+    let pts: Vec<[f64; 3]> = (0..=segs)
         .map(|i| {
             let a = (i as f64) * TAU / segs as f64;
             let point = center
@@ -77,9 +77,6 @@ fn circle_wire(center: DVec3, radius: f64, plane: WorkingPlane) -> WireModel {
             [point.x, point.y, point.z]
         })
         .collect();
-    if let Some(first) = pts.first().cloned() {
-        pts.push(first);
-    }
     WireModel::solid_f64("rubber_band".into(), pts, WireModel::CYAN, false)
 }
 
