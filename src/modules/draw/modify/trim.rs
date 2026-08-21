@@ -1777,9 +1777,7 @@ fn fence_pieces(
         }
     }
 
-    // Sentinel handle: keeps the self-exclusion in *_seg_ts from matching any
-    // real boundary geo while the piece is being re-picked.
-    const TMP: u64 = u64::MAX - 7;
+    let target = e.common().handle;
     let mut pieces = vec![e.clone()];
     let mut changed = false;
     for _round in 0..8 {
@@ -1787,7 +1785,7 @@ fn fence_pieces(
         let mut any = false;
         for piece in &pieces {
             let mut tmp = piece.clone();
-            tmp.as_entity_mut().set_handle(Handle::new(TMP));
+            tmp.as_entity_mut().set_handle(target);
             let tmp_all = [tmp];
             let mut consumed = false;
             let mut cps = fence_cross_points(&tmp_all[0], fence_geos);
@@ -1808,10 +1806,10 @@ fn fence_pieces(
             }
             for cp in cps {
                 let res = if extend {
-                    pick_extend_at(&tmp_all, geos, Handle::new(TMP), cp[0], cp[1])
+                    pick_extend_at(&tmp_all, geos, target, cp[0], cp[1])
                         .map(|x| vec![x])
                 } else {
-                    pick_trim_at(&tmp_all, geos, Handle::new(TMP), cp[0], cp[1])
+                    pick_trim_at(&tmp_all, geos, target, cp[0], cp[1])
                 };
                 if let Some(mut sub) = res {
                     for sp in &mut sub {
