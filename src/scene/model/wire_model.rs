@@ -29,8 +29,15 @@ pub enum SnapHint {
 pub enum TangentGeom {
     /// Infinite line through these two world-space points.
     Line { p1: [f32; 3], p2: [f32; 3] },
-    /// Circle/arc.
+    /// Round geometry in the world XY plane.
     Circle { center: [f32; 3], radius: f32 },
+    /// Complete circle in an arbitrary world-space plane.
+    PlanarCircle {
+        center: [f32; 3],
+        axis_x: [f32; 3],
+        axis_y: [f32; 3],
+        radius: f32,
+    },
 }
 
 /// A 1-D entity (line, arc, polyline) represented as an ordered set of

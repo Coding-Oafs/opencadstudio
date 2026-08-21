@@ -25,8 +25,10 @@ fn to_render(circle: &Circle) -> RenderEntity {
     // definition answers here, in the tessellation and in a trim.
     let curve = crate::entities::curve::circle_curve(circle);
     let snap_pts = crate::entities::curve::snap_from(&curve).snap_pts;
-    let tangent = TangentGeom::Circle {
+    let tangent = TangentGeom::PlanarCircle {
         center: [cwx as f32, cwy as f32, cwz as f32],
+        axis_x: [ax.0 as f32, ax.1 as f32, ax.2 as f32],
+        axis_y: [ay.0 as f32, ay.1 as f32, ay.2 as f32],
         radius: rf,
     };
 

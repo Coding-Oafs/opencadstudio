@@ -1227,7 +1227,8 @@ fn translated_prototype_wire(
                     p2[axis] += delta_f32[axis];
                 }
             }
-            TangentGeom::Circle { center, .. } => {
+            TangentGeom::Circle { center, .. }
+            | TangentGeom::PlanarCircle { center, .. } => {
                 for axis in 0..3 {
                     center[axis] += delta_f32[axis];
                 }
@@ -2280,6 +2281,37 @@ fn transform_tangent(
             TangentGeom::Circle {
                 center: [(c.x) as f32, (c.y) as f32, (c.z) as f32],
                 radius: radius * s,
+            }
+        }
+        TangentGeom::PlanarCircle {
+            center,
+            axis_x,
+            axis_y,
+            radius,
+        } => {
+            let c = t.apply(Vector3::new(
+                center[0] as f64,
+                center[1] as f64,
+                center[2] as f64,
+            ));
+            let x = t.apply_rotation(Vector3::new(
+                axis_x[0] as f64,
+                axis_x[1] as f64,
+                axis_x[2] as f64,
+            ));
+            let y = t.apply_rotation(Vector3::new(
+                axis_y[0] as f64,
+                axis_y[1] as f64,
+                axis_y[2] as f64,
+            ));
+            let scale = (x.length() + y.length()) * 0.5;
+            let x = x.normalize();
+            let y = y.normalize();
+            TangentGeom::PlanarCircle {
+                center: [c.x as f32, c.y as f32, c.z as f32],
+                axis_x: [x.x as f32, x.y as f32, x.z as f32],
+                axis_y: [y.x as f32, y.y as f32, y.z as f32],
+                radius: radius * scale as f32,
             }
         }
     }
