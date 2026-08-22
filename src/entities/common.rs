@@ -432,6 +432,11 @@ pub fn parse_direction(text: &str) -> Option<f64> {
     Some(relative + ctx.angbase)
 }
 
+/// Read a direction typed at a command prompt, accepting a decimal comma.
+pub fn parse_typed_direction(text: &str) -> Option<f64> {
+    parse_direction(&text.replace(',', "."))
+}
+
 /// Two interior triangles covering a quad (flat list, 6 vertices) — the
 /// click-anywhere pick surface for frame-like entities (image, OLE frame,
 /// underlay, wipeout). Corners in ring order.

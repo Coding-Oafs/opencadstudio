@@ -824,11 +824,11 @@ pub(crate) fn is_rectangle(pline: &LwPolyline) -> bool {
     {
         return false;
     }
-    let edges: Vec<glam::DVec2> = (0..4)
+    let edges: Vec<Vec2> = (0..4)
         .map(|index| {
             let from = pline.vertices[index].location;
             let to = pline.vertices[(index + 1) % 4].location;
-            glam::DVec2::new(to.x - from.x, to.y - from.y)
+            Vec2::new(to.x - from.x, to.y - from.y)
         })
         .collect();
     let lengths: Vec<f64> = edges.iter().map(|edge| edge.length()).collect();
@@ -837,8 +837,8 @@ pub(crate) fn is_rectangle(pline: &LwPolyline) -> bool {
     }
     let tolerance = 1.0e-9;
     edges[0].dot(edges[1]).abs() <= tolerance * lengths[0] * lengths[1]
-        && edges[0].perp_dot(edges[2]).abs() <= tolerance * lengths[0] * lengths[2]
-        && edges[1].perp_dot(edges[3]).abs() <= tolerance * lengths[1] * lengths[3]
+        && edges[0].cross(edges[2]).abs() <= tolerance * lengths[0] * lengths[2]
+        && edges[1].cross(edges[3]).abs() <= tolerance * lengths[1] * lengths[3]
 }
 
 fn properties(pline: &LwPolyline) -> Vec<PropSection> {
@@ -986,8 +986,10 @@ fn apply_geom_prop(pline: &mut LwPolyline, field: &str, value: &str) {
             }
         }
         "bulge" => {
-            if let Some(vtx) = pline.vertices.get_mut(vi) {
-                vtx.bulge = v.clamp(-1.0e6, 1.0e6);
+            if v.is_finite() {
+                if let Some(vtx) = pline.vertices.get_mut(vi) {
+                    vtx.bulge = v.clamp(-1.0e6, 1.0e6);
+                }
             }
         }
         _ => {}

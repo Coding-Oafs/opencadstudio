@@ -134,6 +134,15 @@ impl Scene {
         let _ = self.document.layers.add(layer);
     }
 
+    fn ensure_app_id(&mut self, name: &str) {
+        if name.trim().is_empty() || self.document.app_ids.contains(name) {
+            return;
+        }
+        let mut app_id = acadrust::tables::AppId::new(name);
+        app_id.handle = self.document.allocate_handle();
+        let _ = self.document.app_ids.add(app_id);
+    }
+
     pub fn add_entity(&mut self, entity: EntityType) -> Handle {
         self.add_entity_internal(entity, true)
     }
@@ -256,6 +265,20 @@ impl Scene {
         let creates_layer =
             self.is_recording_undo() && !layer.trim().is_empty() && !self.document.layers.contains(&layer);
         self.ensure_layer(&layer);
+        let app_ids: Vec<String> = entity
+            .common()
+            .extended_data
+            .records()
+            .iter()
+            .map(|record| record.application_name.clone())
+            .collect();
+        let creates_app_id = self.is_recording_undo()
+            && app_ids.iter().any(|name| {
+                !name.trim().is_empty() && !self.document.app_ids.contains(name)
+            });
+        for name in &app_ids {
+            self.ensure_app_id(name);
+        }
 
         // Route to the correct block based on current editing mode:
         //   - BEDIT block editor: geometry belongs to the edited block record,
@@ -308,12 +331,10 @@ impl Scene {
             }
             // Delta-undo: the new handle's before-image is "nothing" (it did not
             // exist). Poison the recording if this add also mutated non-entity
-            // state (a new layer / block) so the app knows a pure-entity delta
-            // would be incomplete. Raster image definitions are captured as
-            // targeted object before-images above.
+            // state (a new layer, application ID, or block).
             if self.is_recording_undo() {
                 self.record_undo_before(handle, None);
-                if creates_layer || mutates_block_structure {
+                if creates_layer || creates_app_id || mutates_block_structure {
                     self.poison_undo_recording();
                 }
             }
