@@ -1,13 +1,15 @@
 use acadrust::entities::Point;
 use acadrust::EntityType;
-use crate::t;
+use cadkernel::geom2d::{Circle, Curve, Line};
+use cadkernel::space::{curve::bezier_points, PlanarCurve, Plane, Vec3};
 
+use crate::t;
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, parse_f64, square_grip};
 use crate::entities::traits::RenderConvertible;
 use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
-use crate::scene::model::wire_model::SnapHint;
+use crate::scene::model::wire_model::{PointMarker, SnapHint};
 
 /// Resolve a positive (absolute) PDSIZE to a world size. Relative/zero PDSIZE
 /// is handled by [`relative_render`].
@@ -99,7 +101,7 @@ pub fn relative_world_size(pdsize: f64, wpp: f32, viewport_height_px: f32) -> f6
 pub fn relative_marker_spec(
     entity: &EntityType,
     document: &acadrust::CadDocument,
-) -> Option<(f32, [f32; 3])> {
+) -> Option<PointMarker> {
     let EntityType::Point(pt) = entity else {
         return None;
     };
@@ -107,27 +109,41 @@ pub fn relative_marker_spec(
     if size > 0.0 || effective_pdmode(pt, document.header.point_display_mode) == 0 {
         return None;
     }
-    let n = point_normal(pt);
-    Some((
-        if size == 0.0 { 5.0 } else { -size as f32 },
-        [n.x as f32, n.y as f32, n.z as f32],
-    ))
+    let plane = point_plane(pt);
+    let normal = Vec3::from(plane.normal().unwrap_or([0.0, 0.0, 1.0]));
+    Some(PointMarker {
+        origin: glam::DVec3::new(pt.location.x, pt.location.y, pt.location.z),
+        normal: glam::DVec3::new(normal.x, normal.y, normal.z),
+        axis_x: glam::DVec3::from_array(plane.x_axis),
+        axis_y: glam::DVec3::from_array(plane.y_axis),
+        viewport_percent: if size == 0.0 { 5.0 } else { -size as f32 },
+    })
 }
 
 fn point_normal(pt: &Point) -> glam::DVec3 {
-    glam::DVec3::new(pt.normal.x, pt.normal.y, pt.normal.z).normalize_or(glam::DVec3::Z)
+    let normal = Vec3::new(pt.normal.x, pt.normal.y, pt.normal.z)
+        .normalize()
+        .unwrap_or(Vec3::Z);
+    glam::DVec3::new(normal.x, normal.y, normal.z)
 }
 
-fn point_axes(pt: &Point) -> (glam::DVec3, glam::DVec3, glam::DVec3) {
-    let n = point_normal(pt);
-    let (ax, ay) = crate::scene::view::transform::ocs_axes((n.x, n.y, n.z));
-    let base_x = glam::DVec3::new(ax.0, ax.1, ax.2);
-    let base_y = glam::DVec3::new(ay.0, ay.1, ay.2);
-    let (sin, cos) = pt.x_axis_angle.to_radians().sin_cos();
-    (
-        base_x * cos + base_y * sin,
-        -base_x * sin + base_y * cos,
-        n,
+fn point_plane(pt: &Point) -> Plane {
+    let origin = [pt.location.x, pt.location.y, pt.location.z];
+    let normal = Vec3::new(pt.normal.x, pt.normal.y, pt.normal.z)
+        .normalize()
+        .unwrap_or(Vec3::Z);
+    let x_seed = if normal.x.abs() < 1.0 / 64.0 && normal.y.abs() < 1.0 / 64.0 {
+        Vec3::Y.cross(normal)
+    } else {
+        Vec3::Z.cross(normal)
+    };
+    let base = Plane::orthonormal(origin, x_seed.to_array(), normal.to_array())
+        .unwrap_or(Plane::XY);
+    let (sin, cos) = pt.x_axis_angle.sin_cos();
+    Plane::from_axes(
+        origin,
+        base.vector_at([cos, sin]),
+        base.vector_at([-sin, cos]),
     )
 }
 
@@ -144,88 +160,68 @@ fn point_glyph(pt: &Point, pdmode: i16, s_half: f64) -> Vec<[f64; 3]> {
     // The '+' and '×' arms reach the full PDSIZE (twice the radius), so the
     // cross pokes out past any enclosing circle/square, which sit at the radius.
     let arm = 2.0 * s_half;
-    let nan = [f64::NAN, f64::NAN, f64::NAN];
-    let center = glam::DVec3::new(pt.location.x, pt.location.y, pt.location.z);
-    let (axis_x, axis_y, normal) = point_axes(pt);
-    let map = |x: f64, y: f64, height: f64| {
-        let p = center + axis_x * x + axis_y * y + normal * height;
-        [p.x, p.y, p.z]
-    };
-    let mut pts: Vec<[f64; 3]> = Vec::new();
-    let mut push_seg = |a: [f64; 3], b: [f64; 3]| {
-        if !pts.is_empty() {
-            pts.push(nan);
-        }
-        pts.push(a);
-        pts.push(b);
-    };
+    let mut curves = Vec::new();
+    let line = |start, end| Curve::Line(Line { start, end });
     match shape {
-        // 0 = single dot — emit a tiny "+" so it's visible at any zoom.
         0 => {
             let d = s * 0.05;
-            push_seg(map(-d, 0.0, 0.0), map(d, 0.0, 0.0));
-            push_seg(map(0.0, -d, 0.0), map(0.0, d, 0.0));
+            curves.push(line([-d, 0.0], [d, 0.0]));
+            curves.push(line([0.0, -d], [0.0, d]));
         }
-        1 => {} // explicit nothing
+        1 => {}
         2 => {
-            push_seg(map(-arm, 0.0, 0.0), map(arm, 0.0, 0.0));
-            push_seg(map(0.0, -arm, 0.0), map(0.0, arm, 0.0));
+            curves.push(line([-arm, 0.0], [arm, 0.0]));
+            curves.push(line([0.0, -arm], [0.0, arm]));
         }
         3 => {
-            push_seg(map(-arm, -arm, 0.0), map(arm, arm, 0.0));
-            push_seg(map(-arm, arm, 0.0), map(arm, -arm, 0.0));
+            curves.push(line([-arm, -arm], [arm, arm]));
+            curves.push(line([-arm, arm], [arm, -arm]));
         }
         4 => {
-            // Upward tick rising from the point (length = PDSIZE/2), not a
-            // vertical line centred on it.
-            push_seg(map(0.0, 0.0, 0.0), map(0.0, s, 0.0));
+            curves.push(line([0.0, 0.0], [0.0, s]));
         }
         _ => {
-            push_seg(map(-s, 0.0, 0.0), map(s, 0.0, 0.0));
-            push_seg(map(0.0, -s, 0.0), map(0.0, s, 0.0));
+            curves.push(line([-s, 0.0], [s, 0.0]));
+            curves.push(line([0.0, -s], [0.0, s]));
         }
     }
     if circle {
-        const N: usize = 64;
-        let mut ring: Vec<[f64; 3]> = Vec::with_capacity(N + 1);
-        for i in 0..=N {
-            let a = i as f64 * std::f64::consts::TAU / N as f64;
-            ring.push(map(a.cos() * s, a.sin() * s, 0.0));
-        }
-        if !pts.is_empty() {
-            pts.push(nan);
-        }
-        pts.extend(ring);
+        curves.push(Curve::Circle(Circle {
+            centre: [0.0, 0.0],
+            radius: s,
+        }));
     }
     if square {
-        let p1 = map(-s, -s, 0.0);
-        let p2 = map(s, -s, 0.0);
-        let p3 = map(s, s, 0.0);
-        let p4 = map(-s, s, 0.0);
-        if !pts.is_empty() {
-            pts.push(nan);
-        }
-        pts.extend_from_slice(&[p1, p2, p3, p4, p1]);
+        curves.push(line([-s, -s], [s, -s]));
+        curves.push(line([s, -s], [s, s]));
+        curves.push(line([s, s], [-s, s]));
+        curves.push(line([-s, s], [-s, -s]));
     }
-    if pt.thickness.abs() > 1.0e-10 && !pts.is_empty() {
-        let base = pts.clone();
-        pts.push(nan);
-        pts.extend(base.iter().map(|p| {
-            if p[0].is_finite() {
-                [
-                    p[0] + normal.x * pt.thickness,
-                    p[1] + normal.y * pt.thickness,
-                    p[2] + normal.z * pt.thickness,
-                ]
-            } else {
-                nan
-            }
+
+    let plane = point_plane(pt);
+    let nan = [f64::NAN; 3];
+    let mut paths: Vec<Vec<[f64; 3]>> = curves
+        .iter()
+        .map(|curve| PlanarCurve::new(plane, curve.clone()).tessellate(64.0 / std::f64::consts::TAU))
+        .collect();
+    if pt.thickness.abs() > 1.0e-10 && !curves.is_empty() {
+        let normal = Vec3::from(plane.normal().unwrap_or([0.0, 0.0, 1.0]));
+        let top_origin = (Vec3::from(plane.origin) + normal * pt.thickness).to_array();
+        let top_plane = Plane::from_axes(top_origin, plane.x_axis, plane.y_axis);
+        paths.extend(curves.iter().map(|curve| {
+            PlanarCurve::new(top_plane, curve.clone())
+                .tessellate(64.0 / std::f64::consts::TAU)
         }));
-        pts.push(nan);
-        pts.push(map(0.0, 0.0, 0.0));
-        pts.push(map(0.0, 0.0, pt.thickness));
+        paths.push(bezier_points(&[plane.origin, top_origin], 1));
     }
-    pts
+    let mut points = Vec::new();
+    for path in paths {
+        if !points.is_empty() {
+            points.push(nan);
+        }
+        points.extend(path);
+    }
+    points
 }
 
 fn is_defpoints_layer(layer: &str) -> bool {

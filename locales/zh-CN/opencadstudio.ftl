@@ -3044,7 +3044,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE 新值 [0=点 1=无 2=+ 3=× 4=短划；+32 圆 +64 方框]：
     .pdmode-v = PDMODE = __ocs_fmt_0__ 时间轴 :
     .pdmode-set-to-v = PDMODE 设置为__ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE 指定新点大小（0 = 视口的 5%，<0 = 绝对值）：
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE 指定新点大小（0 = 视口的 5%，>0 = 绝对值，<0 = 视口百分比）：
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__ 时间轴 :
     .pdsize-set-to-v-4 = PDSIZE 设置为__ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

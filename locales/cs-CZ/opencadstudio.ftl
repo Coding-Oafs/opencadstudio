@@ -3060,7 +3060,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE nová hodnota [0=dot 1=none 2=+ 3=x 4=tick; +32 kruh +64 čtverec]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE nastaveno na __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = Nová velikost bodu PDSIZE (0 = 5 % výřezu, <0 = absolutní):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = Nová velikost bodu PDSIZE (0 = 5 % výřezu, >0 = absolutní, <0 = procento výřezu):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE nastaveno na __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

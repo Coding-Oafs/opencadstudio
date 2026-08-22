@@ -3060,7 +3060,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE új érték [0=dot 1=none 2=+ 3=x 4=tick; +32 kör +64 négyzet]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = A PDMODE __ocs_fmt_0__ értékre van állítva
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE új pontméret (0 = a nézetablak 5%-a, <0 = abszolút):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE új pontméret (0 = a nézetablak 5%-a, >0 = abszolút, <0 = a nézetablak százaléka):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = A PDSIZE __ocs_fmt_0__ értékre van állítva
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

@@ -674,6 +674,7 @@ impl LeaderTess for Leader {
 
         if verts.len() < 2 {
             return WireModel {
+                point_marker: None,
                 taper_widths: Vec::new(),
                 world_width: 0.0,
                 depth_override: None,
@@ -852,6 +853,7 @@ impl LeaderTess for Leader {
             crate::scene::convert::tessellate::points_to_ds(fill_tris);
 
         WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,

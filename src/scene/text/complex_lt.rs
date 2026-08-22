@@ -309,6 +309,7 @@ pub fn apply_along(
         .into_iter()
         .filter(|s| s.len() >= 2)
         .map(|pts| WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,
@@ -355,6 +356,7 @@ pub fn apply_along(
             xy = xy.max(y);
         }
         out.push(WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,

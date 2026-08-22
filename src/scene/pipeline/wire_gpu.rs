@@ -521,29 +521,18 @@ fn finite3(p: [f32; 3]) -> bool {
 }
 
 fn marker_metadata(wire: &WireModel) -> ([f32; 4], [f32; 4], [f32; 4]) {
-    if wire.world_width >= 0.0 {
+    let Some(marker) = wire.point_marker else {
         return ([0.0; 4], [0.0; 4], [0.0; 4]);
-    }
-    let origin = wire
-        .snap_pts
-        .iter()
-        .find_map(|(point, hint)| {
-            matches!(hint, crate::scene::model::wire_model::SnapHint::Node).then_some(*point)
-        })
-        .unwrap_or(glam::DVec3::ZERO);
+    };
+    let origin = marker.origin;
     let (hx, lx) = WireModel::split_ds(origin.x);
     let (hy, ly) = WireModel::split_ds(origin.y);
     let (hz, lz) = WireModel::split_ds(origin.z);
-    let normal = glam::Vec3::new(
-        wire.taper_widths.first().copied().unwrap_or(0.0),
-        wire.taper_widths.get(1).copied().unwrap_or(0.0),
-        wire.taper_widths.get(2).copied().unwrap_or(1.0),
-    )
-    .normalize_or(glam::Vec3::Z);
+    let normal = marker.normal.as_vec3().normalize_or(glam::Vec3::Z);
     (
         [hx, hy, hz, 0.0],
         [lx, ly, lz, 0.0],
-        [normal.x, normal.y, normal.z, -wire.world_width],
+        [normal.x, normal.y, normal.z, marker.viewport_percent],
     )
 }
 
@@ -565,13 +554,7 @@ pub(crate) fn emit_wire_packed(
     let (dists, align_end, align_total) = wire_distances(wire);
     let (marker_origin_high, marker_origin_low, marker_normal_scale) = marker_metadata(wire);
     let low = |i: usize| -> [f32; 3] { wire.points_low.get(i).copied().unwrap_or([0.0; 3]) };
-    let tw = |i: usize| -> f32 {
-        if wire.world_width < 0.0 {
-            0.0
-        } else {
-            wire.taper_widths.get(i).copied().unwrap_or(0.0) * 0.5
-        }
-    };
+    let tw = |i: usize| -> f32 { wire.taper_widths.get(i).copied().unwrap_or(0.0) * 0.5 };
     let mut instances: Vec<PackedWireInstance> = Vec::with_capacity(seg_count);
     for i in 0..seg_count {
         let a = wire.points[i];
@@ -594,7 +577,7 @@ pub(crate) fn emit_wire_packed(
             draw_depth,
             align_end,
             align_total,
-            world_half_width: wire.world_width.max(0.0) * 0.5,
+            world_half_width: wire.world_width * 0.5,
             world_hw_a: tw(i),
             world_hw_b: tw(i + 1),
             marker_origin_high,
@@ -624,7 +607,7 @@ pub(crate) fn emit_wire_native(
         draw_depth,
         align_end,
         align_total,
-        world_half_width: wire.world_width.max(0.0) * 0.5,
+        world_half_width: wire.world_width * 0.5,
         _pad1: 0.0,
         _pad2: 0.0,
         marker_origin_high,

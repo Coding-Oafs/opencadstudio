@@ -192,6 +192,7 @@ fn v3(p: DVec3) -> Vector3 {
 
 fn preview_line(a: Vec3, b: Vec3) -> WireModel {
     WireModel {
+        point_marker: None,
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,

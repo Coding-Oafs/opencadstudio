@@ -88,8 +88,14 @@ fn marker_relative(
     let normal = normalize(wire_const.marker_normal_scale.xyz);
     let axial = normal * dot(delta, normal);
     let planar = delta - axial;
-    let world_size = wire_const.marker_normal_scale.w * 0.01
-        * u.world_per_pixel * u.viewport_size.y;
+    let origin_clip = u.view_rot * vec4<f32>(origin_relative, 1.0);
+    let projection_scale = max(length(vec3<f32>(
+        u.view_rot[0].y,
+        u.view_rot[1].y,
+        u.view_rot[2].y,
+    )), 1e-12);
+    let view_height = 2.0 * max(abs(origin_clip.w), 1e-6) / projection_scale;
+    let world_size = wire_const.marker_normal_scale.w * 0.01 * view_height;
     return origin_relative + axial + planar * world_size;
 }
 

@@ -145,6 +145,7 @@ fn point_cloud_wires(
     };
     let (points, points_low) = points_to_ds(body_points);
     let mut wires = vec![WireModel {
+        point_marker: None,
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
@@ -500,6 +501,7 @@ pub fn tessellate(
                     None
                 };
                 elem_wires.push(WireModel {
+                    point_marker: None,
                     taper_widths: Vec::new(),
                     world_width: 0.0,
                     depth_override: None,
@@ -807,6 +809,7 @@ pub fn tessellate(
                                         ftl.push(lo);
                                     }
                                     wires.push(WireModel {
+                                        point_marker: None,
                                         taper_widths: Vec::new(),
                                         world_width: 0.0,
                                         depth_override: None,
@@ -856,6 +859,7 @@ pub fn tessellate(
                                         fpl.push(lo);
                                     }
                                     wires.push(WireModel {
+                                        point_marker: None,
                                         taper_widths: Vec::new(),
                                         world_width: 0.0,
                                         depth_override: None,
@@ -907,6 +911,7 @@ pub fn tessellate(
                             low.push(ll);
                         }
                         wires.push(WireModel {
+                            point_marker: None,
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
@@ -939,6 +944,7 @@ pub fn tessellate(
                         });
                     }
                     wires.push(WireModel {
+                        point_marker: None,
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
@@ -1001,6 +1007,7 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+                            point_marker: None,
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
@@ -1045,6 +1052,7 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+                            point_marker: None,
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
@@ -1086,6 +1094,7 @@ pub fn tessellate(
                 // are empty → the early-return path above).
                 if !sdf_verts.is_empty() {
                     out.push(WireModel {
+                        point_marker: None,
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
@@ -1120,6 +1129,7 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+                        point_marker: None,
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
@@ -1188,6 +1198,7 @@ pub fn tessellate(
                             .map(|[kx, ky, kz]| [kx, ky, kz])
                             .collect();
                         return vec![WireModel {
+                            point_marker: None,
                             taper_widths: Vec::new(),
                             world_width: 0.0,
                             depth_override: None,
@@ -1310,20 +1321,12 @@ pub fn tessellate(
                     } else {
                         (Vec::new(), Vec::new(), Vec::new())
                     };
-                    let relative_marker =
+                    let point_marker =
                         crate::entities::point::relative_marker_spec(entity, document);
-                    let (taper_widths, world_width) = if let Some((percent, normal)) = relative_marker {
-                        // A negative width is reserved for viewport-relative
-                        // point markers. The first three taper entries carry
-                        // the marker-plane normal; normal taper processing is
-                        // disabled for the sentinel by the wire uploader.
-                        (normal.to_vec(), -percent)
-                    } else {
-                        (Vec::new(), polyline_band_width(entity))
-                    };
                     out.push(WireModel {
-                        taper_widths,
-                        world_width,
+                        point_marker,
+                        taper_widths: Vec::new(),
+                        world_width: polyline_band_width(entity),
                         depth_override: None,
                         display_visible: true,
                         plot_visible: true,
@@ -1365,6 +1368,7 @@ pub fn tessellate(
                         (Vec::new(), Vec::new(), Vec::new())
                     };
                     out.push(WireModel {
+                        point_marker: None,
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         pick_tris: Vec::new(),
@@ -1399,6 +1403,7 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+                        point_marker: None,
                         taper_widths: Vec::new(),
                         world_width: 0.0,
                         depth_override: None,
@@ -1446,6 +1451,7 @@ pub fn tessellate(
                 // treatment as the Contour arm, restarting the dash per segment.
                 let (pick_tris, pick_tris_low) = points_to_ds(te.pick_tris);
                 return vec![WireModel {
+                    point_marker: None,
                     taper_widths: Vec::new(),
                     world_width: polyline_band_width(entity),
                     depth_override: None,
@@ -1494,6 +1500,7 @@ pub fn tessellate(
                 let (pick_tris, pick_tris_low) = points_to_ds(te.pick_tris);
                 let world_width = widths.iter().copied().fold(0.0f32, f32::max);
                 return vec![WireModel {
+                    point_marker: None,
                     taper_widths: widths,
                     world_width,
                     depth_override: None,
@@ -1615,6 +1622,7 @@ pub fn tessellate(
         _ => (Vec::new(), Vec::new()),
     };
     vec![WireModel {
+        point_marker: None,
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,

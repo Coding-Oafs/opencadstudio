@@ -748,6 +748,7 @@ fn tessellate_entity_inner(
             Vec::new()
         };
         return vec![WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,
@@ -1107,6 +1108,7 @@ fn tessellate_entity_inner(
             (ins.insert_point.z) as f32,
         );
         let marker = WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,
@@ -1504,6 +1506,7 @@ fn lod_stub_wire(
     // LOD boundary. #19.
     let stored_color = if selected { WireModel::SELECTED } else { color };
     WireModel {
+        point_marker: None,
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,
@@ -1597,6 +1600,7 @@ fn lod_stub_wire_3d(
     }
     let stored_color = if selected { WireModel::SELECTED } else { color };
     WireModel {
+        point_marker: None,
         taper_widths: Vec::new(),
         world_width: 0.0,
         depth_override: None,

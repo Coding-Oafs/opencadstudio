@@ -3060,7 +3060,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE 새 값 [0=dot 1=none 2=+ 3=x 4=tick; +32원 +64사각형]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE가 __ocs_fmt_0__로 설정됨
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE 새 포인트 크기(0 = 뷰포트의 5%, <0 = 절대값):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE 새 포인트 크기(0 = 뷰포트의 5%, >0 = 절대값, <0 = 뷰포트 백분율):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE가 __ocs_fmt_0__로 설정됨
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

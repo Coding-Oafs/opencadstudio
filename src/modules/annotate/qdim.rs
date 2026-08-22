@@ -93,6 +93,7 @@ impl CadCommand for QdimCommand {
         }
         let d = 0.5_f32;
         Some(WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,

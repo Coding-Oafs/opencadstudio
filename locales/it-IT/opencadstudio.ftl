@@ -3060,7 +3060,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE nuovo valore [0=punto 1=none 2=+ 3=x 4=tick; +32 cerchio +64 quadrato]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE impostato su __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE nuova dimensione in punti (0 = 5% dell'area visibile, <0 = assoluto):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE nuova dimensione del punto (0 = 5% dell'area visibile, >0 = assoluto, <0 = percentuale dell'area visibile):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE impostato su __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

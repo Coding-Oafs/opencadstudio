@@ -3061,7 +3061,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  нова стойност [0=точка 1=нищо 2=+ 3=x 4=чертичка; +32 окръжност +64 квадрат]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE зададен на __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  нов размер на точка (0 = 5% от изгледа, <0 = абсолютно):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  нов размер на точка (0 = 5% от изгледа, >0 = абсолютен, <0 = процент от изгледа):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE зададен на __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)
