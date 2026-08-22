@@ -354,7 +354,7 @@ impl Scene {
     /// needs the equivalent paper-space geometry explicitly.
     pub fn viewport_plot_fills(
         &self,
-    ) -> (Vec<WireModel>, Vec<HatchModel>, Vec<HatchModel>) {
+    ) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>) {
         use acadrust::entities::Viewport;
         use model::hatch_model::HatchPattern;
 
@@ -478,7 +478,7 @@ impl Scene {
                         wire.aci = hatch.aci;
                         wire.line_weight_px = hatch.line_weight_px;
                         wire.aabb = aabb;
-                        pattern_wires.push(wire);
+                        pattern_wires.push((wire, hatch.draw_depth));
                     }
                     continue;
                 }

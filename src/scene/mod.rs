@@ -5454,6 +5454,14 @@ impl Scene {
         (self.paper_sheet_wires_arc().as_ref().clone(), model_wires)
     }
 
+    pub(crate) fn plot_wire_depths(&self, wires: &[WireModel]) -> Vec<f32> {
+        let depths = self.draw_depth_map();
+        wires
+            .iter()
+            .map(|wire| pipeline::wire_gpu::wire_draw_depth(wire, depths.as_ref()))
+            .collect()
+    }
+
     /// Per-entity stable draw-order depth, keyed by entity handle value.
     /// A full build assigns sparse labels in effective draw order. Incremental
     /// Add/Remove then changes only the named handle: existing siblings retain
