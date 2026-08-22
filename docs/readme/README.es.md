@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Participar en la conversación</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Espacio de trabajo de Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Espacio de trabajo de Open CAD Studio" width="100%"></p>
 
 ## Descripción general
 

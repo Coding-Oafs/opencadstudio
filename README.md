@@ -47,7 +47,7 @@
 </p>
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studio workspace" width="100%">
+  <img src="site/workspace.png" alt="Open CAD Studio workspace" width="100%">
 </p>
 
 ## Overview
