@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Dołącz do dyskusji</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Obszar roboczy Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Obszar roboczy Open CAD Studio" width="100%"></p>
 
 ## Przegląd
 
@@ -36,7 +36,7 @@ Projekt jest aktywnie rozwijany. Zachowuj kopie zapasowe ważnych rysunków prod
 - **Renderowanie GPU** — przyspieszone widoki 2D i 3D przez `wgpu`, z kamerą ortograficzną i perspektywiczną.
 - **Rozszerzalne przepływy pracy** — natywne wtyczki, skrypty poleceń, konwersja bez interfejsu i wierszowe API automatyzacji JSON.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Model 3D w Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Model 3D w Open CAD Studio" width="100%"></p>
 
 ## Przepływy plików
 

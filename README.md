@@ -47,7 +47,7 @@
 </p>
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studio workspace" width="100%">
+  <img src="site/workspace.png" alt="Open CAD Studio workspace" width="100%">
 </p>
 
 ## Overview
@@ -66,7 +66,7 @@ The project is under active development. Keep backups of important production dr
 - **Extensible workflows** — native plugins, command scripts, headless conversion, and a line-based JSON automation API.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D model in Open CAD Studio" width="100%">
+  <img src="site/modeling.png" alt="3D model in Open CAD Studio" width="100%">
 </p>
 
 ## File workflows

@@ -3040,7 +3040,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  Yeni değer [0=nokta 1=yok 2=+ 3=x 4=çentik; +32 çember +64 kare]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE __ocs_fmt_0__ olarak ayarlandı
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  Yeni nokta boyutu (0 = görünüm alanının %5'i, <0 = mutlak):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  Yeni nokta boyutu (0 = görünüm alanının %5'i, >0 = mutlak, <0 = görünüm alanı yüzdesi):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE __ocs_fmt_0__ olarak ayarlandı
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

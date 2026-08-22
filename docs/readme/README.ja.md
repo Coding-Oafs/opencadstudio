@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>ディスカッションに参加</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studio ワークスペース" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Open CAD Studio ワークスペース" width="100%"></p>
 
 ## 概要
 
@@ -36,7 +36,7 @@ Open CAD Studio は、技術製図、レイアウト作業、ソリッドモデ�
 - **GPU レンダリング** — `wgpu` による高速な 2D/3D ビューポートと、正投影・透視投影カメラ。
 - **拡張可能なワークフロー** — ネイティブプラグイン、コマンドスクリプト、ヘッドレス変換、行単位の JSON 自動化 API。
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio の 3D モデル" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio の 3D モデル" width="100%"></p>
 
 ## ファイルワークフロー
 

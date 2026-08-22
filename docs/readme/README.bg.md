@@ -21,7 +21,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Присъединете се към дискусията</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Работно пространство на Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Работно пространство на Open CAD Studio" width="100%"></p>
 
 ## Общ преглед
 
@@ -38,7 +38,7 @@ Open CAD Studio е междуплатформено приложение за т
 - **GPU визуализация** — ускорени 2D и 3D изгледи чрез `wgpu`, с ортографски и перспективни камери.
 - **Разширяеми работни процеси** — локални приставки, командни скриптове, преобразуване без графичен интерфейс и редово ориентиран JSON API за автоматизация.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D модел в Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D модел в Open CAD Studio" width="100%"></p>
 
 ## Работа с файлове
 

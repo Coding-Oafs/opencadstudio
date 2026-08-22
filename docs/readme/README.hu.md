@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Csatlakozás a beszélgetéshez</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studio munkaterület" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Open CAD Studio munkaterület" width="100%"></p>
 
 ## Áttekintés
 
@@ -36,7 +36,7 @@ A projekt aktív fejlesztés alatt áll. A fontos gyártási rajzokról tarts bi
 - **GPU-megjelenítés** — `wgpu` által gyorsított 2D és 3D nézetek, ortografikus és perspektivikus kamerákkal.
 - **Bővíthető munkafolyamatok** — natív bővítmények, parancsfájlok, felület nélküli konverzió és soralapú JSON automatizálási API.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D modell az Open CAD Studióban" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D modell az Open CAD Studióban" width="100%"></p>
 
 ## Fájlmunkafolyamatok
 

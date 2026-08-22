@@ -3086,7 +3086,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  القيمة الجديدة [0=نقطة 1=لا شيء 2=+ 3=x 4=شرطة؛ +32 دائرة +64 مربع]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = عُيّن PDMODE إلى __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  حجم النقطة الجديد (0 = 5% من منفذ العرض، <0 = مطلق):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  حجم النقطة الجديد (0 = 5% من منفذ العرض، >0 = مطلق، <0 = نسبة مئوية من منفذ العرض):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = عُيّن PDSIZE إلى __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

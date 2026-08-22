@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Participar da discussão</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Área de trabalho do Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Área de trabalho do Open CAD Studio" width="100%"></p>
 
 ## Visão geral
 
@@ -36,7 +36,7 @@ O projeto está em desenvolvimento ativo. Mantenha cópias de segurança de dese
 - **Renderização por GPU** — viewports 2D e 3D aceleradas por `wgpu`, com câmeras ortográfica e em perspectiva.
 - **Fluxos extensíveis** — plugins nativos, scripts de comandos, conversão sem interface e API de automação JSON baseada em linhas.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Modelo 3D no Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Modelo 3D no Open CAD Studio" width="100%"></p>
 
 ## Fluxos de arquivos
 

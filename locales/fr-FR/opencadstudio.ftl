@@ -3074,7 +3074,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  nouvelle valeur [0=dot 1=none 2=+ 3=x 4=tick; +32 cercle +64 carré]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE réglé sur __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE Nouvelle taille de point (0 = 5 % de la fenêtre, < 0 = absolue) :
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE Nouvelle taille de point (0 = 5 % de la fenêtre, > 0 = absolue, < 0 = pourcentage de la fenêtre) :
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE réglé sur __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

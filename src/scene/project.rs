@@ -160,6 +160,22 @@ impl Scene {
             let in_vp = |x: f32, y: f32| x >= vp_x0 && x <= vp_x1 && y >= vp_y0 && y <= vp_y1;
 
             for wire in model_wires.iter() {
+                let marker_view_height = wire.point_marker.map_or(view_height_eff, |marker| {
+                    if !use_perspective {
+                        return view_height_eff;
+                    }
+                    let relative = marker.origin
+                        - glam::DVec3::new(
+                            display_center_x,
+                            display_center_y,
+                            display_center_z,
+                        );
+                    let depth = relative.x * view_fwd_d.0
+                        + relative.y * view_fwd_d.1
+                        + relative.z * view_fwd_d.2;
+                    view_height_eff * (camera_dist_d - depth).max(0.001)
+                        / camera_dist_d.max(0.001)
+                });
                 let projected_pts: Vec<[f32; 3]> = wire
                     .points
                     .iter()
@@ -168,11 +184,8 @@ impl Scene {
                         if mx.is_nan() || my.is_nan() || mz.is_nan() {
                             return [f32::NAN; 3];
                         }
-                        // Reconstruct absolute WCS from the double-single high
-                        // (`points`) + low (`points_low`) pair — the high f32
-                        // alone is ~0.5 m off at UTM scale.
-                        let lo = wire.points_low.get(pi).copied().unwrap_or([0.0; 3]);
-                        proj_abs(mx as f64 + lo[0] as f64, my as f64 + lo[1] as f64, mz as f64 + lo[2] as f64)
+                        let point = wire.point_world(pi, marker_view_height);
+                        proj_abs(point.x, point.y, point.z)
                     })
                     .collect();
 
@@ -304,6 +317,7 @@ impl Scene {
                 // residual is needed, and keeping the model wire's points_low
                 // here would add a model-scale offset to the paper points.
                 out.points_low = Vec::new();
+                out.point_marker = None;
                 out.snap_pts = snap_pts;
                 out.key_vertices = key_vertices;
                 // Tangent geometry is in model space and can't be trivially
@@ -354,7 +368,7 @@ impl Scene {
     /// needs the equivalent paper-space geometry explicitly.
     pub fn viewport_plot_fills(
         &self,
-    ) -> (Vec<WireModel>, Vec<HatchModel>, Vec<HatchModel>) {
+    ) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>) {
         use acadrust::entities::Viewport;
         use model::hatch_model::HatchPattern;
 
@@ -478,7 +492,7 @@ impl Scene {
                         wire.aci = hatch.aci;
                         wire.line_weight_px = hatch.line_weight_px;
                         wire.aabb = aabb;
-                        pattern_wires.push(wire);
+                        pattern_wires.push((wire, hatch.draw_depth));
                     }
                     continue;
                 }

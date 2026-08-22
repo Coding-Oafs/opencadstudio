@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Zapojit se do diskuse</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Pracovní plocha Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Pracovní plocha Open CAD Studio" width="100%"></p>
 
 ## Přehled
 
@@ -36,7 +36,7 @@ Projekt je aktivně vyvíjen. Důležité produkční výkresy zálohujte a repr
 - **Vykreslování přes GPU** — akcelerované 2D a 3D pohledy pomocí `wgpu`, s ortografickou a perspektivní kamerou.
 - **Rozšiřitelné postupy** — nativní pluginy, příkazové skripty, bezobslužná konverze a řádkové JSON automatizační API.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D model v Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D model v Open CAD Studio" width="100%"></p>
 
 ## Práce se soubory
 

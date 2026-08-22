@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>参与讨论</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studio 工作区" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Open CAD Studio 工作区" width="100%"></p>
 
 ## 概览
 
@@ -36,7 +36,7 @@ Open CAD Studio 是一款用于技术绘图、布局设计和实体建模的跨�
 - **GPU 渲染** — 通过 `wgpu` 加速二维和三维视口，并支持正交与透视相机。
 - **可扩展工作流** — 支持原生插件、命令脚本、无界面转换和逐行 JSON 自动化 API。
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio 中的三维模型" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio 中的三维模型" width="100%"></p>
 
 ## 文件工作流
 

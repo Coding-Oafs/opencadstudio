@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>الانضمام إلى النقاش</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="مساحة عمل Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="مساحة عمل Open CAD Studio" width="100%"></p>
 
 ## نظرة عامة
 
@@ -36,7 +36,7 @@ Open CAD Studio تطبيق متعدد المنصات للرسم التقني و�
 - **تصيير عبر GPU** — إطارات عرض ثنائية وثلاثية الأبعاد مسرّعة بواسطة `wgpu` مع كاميرات متعامدة ومنظورية.
 - **سير عمل قابل للتوسعة** — إضافات أصلية ونصوص أوامر وتحويل من دون واجهة وواجهة JSON للأتمتة تعتمد على الأسطر.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="نموذج ثلاثي الأبعاد في Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="نموذج ثلاثي الأبعاد في Open CAD Studio" width="100%"></p>
 
 ## سير عمل الملفات
 

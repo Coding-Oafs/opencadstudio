@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Присоединиться к обсуждению</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Рабочее пространство Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Рабочее пространство Open CAD Studio" width="100%"></p>
 
 ## Обзор
 
@@ -36,7 +36,7 @@ Open CAD Studio — кроссплатформенное приложение д
 - **Отрисовка на GPU** — ускоренные 2D- и 3D-виды через `wgpu`, ортографическая и перспективная камеры.
 - **Расширяемые процессы** — нативные плагины, сценарии команд, преобразование без интерфейса и построчный JSON API автоматизации.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D-модель в Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D-модель в Open CAD Studio" width="100%"></p>
 
 ## Работа с файлами
 

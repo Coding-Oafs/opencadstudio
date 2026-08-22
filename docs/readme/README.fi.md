@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Osallistu keskusteluun</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Open CAD Studion työtila" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Open CAD Studion työtila" width="100%"></p>
 
 ## Yleiskatsaus
 
@@ -36,7 +36,7 @@ Projektia kehitetään aktiivisesti. Säilytä tärkeistä tuotantopiirustuksist
 - **GPU-renderöinti** — `wgpu`:n kiihdyttämät 2D- ja 3D-näkymät sekä ortografiset ja perspektiivikamerat.
 - **Laajennettavat työnkulut** — natiiviliitännäiset, komentoskriptit, käyttöliittymätön muunnos ja rivipohjainen JSON-automaatiorajapinta.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D-malli Open CAD Studiossa" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D-malli Open CAD Studiossa" width="100%"></p>
 
 ## Tiedostotyönkulut
 

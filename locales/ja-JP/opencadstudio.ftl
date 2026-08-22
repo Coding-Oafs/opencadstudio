@@ -3062,7 +3062,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  新しい値 [0=点 1=なし 2=+ 3=x 4=目盛り、+32 円 +64 正方形]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE を __ocs_fmt_0__ に設定しました
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  新しい点サイズ（0=ビューポートの 5%、<0=絶対値）:
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  新しい点サイズ（0=ビューポートの 5%、>0=絶対値、<0=ビューポートの割合）:
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE を __ocs_fmt_0__ に設定しました
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

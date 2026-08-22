@@ -3062,7 +3062,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE नया मान [0=बिंदु 1=कोई नहीं 2=+ 3=× 4=टिक; +32 वृत्त +64 वर्ग]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE सेट करने के लिए __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  नए बिंदु आकार (0 = 5% व्यूपोर्ट, <0 = निरपेक्ष):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  नया बिंदु आकार (0 = व्यूपोर्ट का 5%, >0 = निरपेक्ष, <0 = व्यूपोर्ट प्रतिशत):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE सेट करने के लिए __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

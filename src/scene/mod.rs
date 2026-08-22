@@ -5454,6 +5454,14 @@ impl Scene {
         (self.paper_sheet_wires_arc().as_ref().clone(), model_wires)
     }
 
+    pub(crate) fn plot_wire_depths(&self, wires: &[WireModel]) -> Vec<f32> {
+        let depths = self.draw_depth_map();
+        wires
+            .iter()
+            .map(|wire| pipeline::wire_gpu::wire_draw_depth(wire, depths.as_ref()))
+            .collect()
+    }
+
     /// Per-entity stable draw-order depth, keyed by entity handle value.
     /// A full build assigns sparse labels in effective draw order. Incremental
     /// Add/Remove then changes only the named handle: existing siblings retain
@@ -7359,14 +7367,30 @@ impl Scene {
         &self,
         wires: &Arc<Vec<WireModel>>,
         base_radius_px: f32,
+        viewport_height_px: f32,
+        include_line_weight: bool,
     ) -> f32 {
         if let Some((base_epoch, base, changes)) = self.interaction_overlay_base() {
             let (_, changed) =
                 self.interaction_overlay_changed_index(base_epoch, &changes);
-            base.pick_radius_px(changed.pick_radius_px(base_radius_px))
+            base.pick_radius_px(
+                changed.pick_radius_px(
+                    base_radius_px,
+                    viewport_height_px,
+                    include_line_weight,
+                ),
+                viewport_height_px,
+                include_line_weight,
+            )
         } else {
             self.cached_interaction_index(wires)
-                .map_or(base_radius_px, |index| index.pick_radius_px(base_radius_px))
+                .map_or(base_radius_px, |index| {
+                    index.pick_radius_px(
+                        base_radius_px,
+                        viewport_height_px,
+                        include_line_weight,
+                    )
+                })
         }
     }
 
@@ -7524,11 +7548,12 @@ impl Scene {
         {
             return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
         }
-        let radius_px = if include_line_weight {
-            self.indexed_interaction_pick_radius(&wires, radius_px)
-        } else {
-            radius_px
-        };
+        let radius_px = self.indexed_interaction_pick_radius(
+            &wires,
+            radius_px,
+            bounds.height,
+            include_line_weight,
+        );
         let flat_ortho = view_rot.z_axis.x.abs() < 1e-9
             && view_rot.z_axis.y.abs() < 1e-9
             && (view_rot.w_axis.w - 1.0).abs() < 1e-6;
@@ -7597,12 +7622,35 @@ impl Scene {
         {
             return crate::scene::pick::interaction_index::InteractionCandidates::all(wires);
         }
+        let pad_px =
+            self.indexed_interaction_pick_radius(&wires, 0.0, bounds.height, true);
         if flat_ortho {
-            self.indexed_interaction_candidates_xy(wires, aabb, false)
+            let world_x_px = ((view_rot.x_axis.x * bounds.width * 0.5).powi(2)
+                + (view_rot.x_axis.y * bounds.height * 0.5).powi(2))
+            .sqrt();
+            let world_y_px = ((view_rot.y_axis.x * bounds.width * 0.5).powi(2)
+                + (view_rot.y_axis.y * bounds.height * 0.5).powi(2))
+            .sqrt();
+            let scale = world_x_px.min(world_y_px);
+            let pad = if scale > 1e-6 {
+                pad_px as f64 / scale as f64
+            } else {
+                0.0
+            };
+            self.indexed_interaction_candidates_xy(
+                wires,
+                [aabb[0] - pad, aabb[1] - pad, aabb[2] + pad, aabb[3] + pad],
+                false,
+            )
         } else {
             self.indexed_interaction_candidates_screen(
                 wires,
-                screen_rect,
+                [
+                    screen_rect[0] - pad_px,
+                    screen_rect[1] - pad_px,
+                    screen_rect[2] + pad_px,
+                    screen_rect[3] + pad_px,
+                ],
                 view_rot,
                 eye,
                 bounds,

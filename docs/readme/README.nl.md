@@ -19,7 +19,7 @@
   <a href="https://github.com/HakanSeven12/OpenCADStudio/discussions"><strong>Deelnemen aan discussies</strong></a>
 </p>
 
-<p align="center"><img src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" alt="Werkruimte van Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/workspace.png" alt="Werkruimte van Open CAD Studio" width="100%"></p>
 
 ## Overzicht
 
@@ -36,7 +36,7 @@ Het project wordt actief ontwikkeld. Bewaar reservekopieën van belangrijke prod
 - **GPU-rendering** — versnelde 2D- en 3D-viewports via `wgpu`, met orthografische en perspectiefcamera's.
 - **Uitbreidbare workflows** — native plug-ins, opdrachtscripts, headless conversie en een regelgebaseerde JSON-automatiserings-API.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D-model in Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D-model in Open CAD Studio" width="100%"></p>
 
 ## Bestandsworkflows
 

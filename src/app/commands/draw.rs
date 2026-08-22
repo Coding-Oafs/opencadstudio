@@ -674,9 +674,13 @@ impl OpenCADStudio {
                 }
             }
 
-            "POINT" => {
+            "POINT" | "MULTIPOINT" => {
                 use crate::modules::draw::draw::point::PointCommand;
-                let new_cmd = PointCommand::new();
+                let new_cmd = if cmd == "MULTIPOINT" {
+                    PointCommand::multiple()
+                } else {
+                    PointCommand::new()
+                };
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }

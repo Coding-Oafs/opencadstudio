@@ -20,9 +20,10 @@ use std::sync::Arc;
 
 use acadrust::types::{Color as AcadColor, LineWeight, Transform, Vector3};
 use acadrust::{CadDocument, EntityType, Handle};
+use cadkernel::space::{Plane as KernelPlane, Vec3 as KernelVec3};
 
 use crate::scene::convert::tessellate;
-use crate::scene::model::wire_model::{SnapHint, TangentGeom, WireModel};
+use crate::scene::model::wire_model::{PointMarker, SnapHint, TangentGeom, WireModel};
 
 const MAX_NESTING_DEPTH: usize = 32;
 /// Skip wires whose world-AABB projects to fewer than this many pixels in
@@ -38,6 +39,7 @@ pub struct LocalWire {
     /// Low-bit residual paired with `points` so block-instance wires keep
     /// sub-f32 precision once the renderer translates them to world space.
     pub points_low: Vec<[f32; 3]>,
+    pub point_marker: Option<PointMarker>,
     /// SDF glyph quads for block-internal text, in block-local coordinates.
     /// Non-empty only when SDF text is on and this sub is a TEXT/MTEXT. The
     /// expand-time transform (`emit_wire`) maps each vertex to world exactly
@@ -132,6 +134,7 @@ pub enum LocalSub {
 pub struct BlockDefn {
     pub subs: Vec<LocalSub>,
     pub base_point: Vector3,
+    pub has_point_marker: bool,
     /// Union of every sub's local AABB (including nested-INSERT contributions
     /// resolved at expand time via their own defn's `aabb_local`). XY only —
     /// the wire renderer is 2D-dominant. Expressed in this defn's *offset*
@@ -312,21 +315,47 @@ impl BlockCache {
         // many parents is re-walked per parent — real work on block-heavy
         // drawings — and the per-name walks are independent, so they fan out.
         let this: &Self = self;
-        let resolved: Vec<(&String, [f32; 4])> = names
+        let resolved: Vec<(&String, [f32; 4], bool)> = names
             .par_iter()
             .map(|name| {
                 let mut visited: Vec<String> = Vec::new();
-                (name, this.defn_aabb_recursive(name, &mut visited))
+                let aabb = this.defn_aabb_recursive(name, &mut visited);
+                visited.clear();
+                let has_marker = this.defn_has_point_marker_recursive(name, &mut visited);
+                (name, aabb, has_marker)
             })
             .collect();
         // Phase 2 (serial): store the AABB back into each defn.
-        for (name, aabb) in resolved {
+        for (name, aabb, has_marker) in resolved {
             if let Some(defn_arc) = self.defns.get_mut(name) {
                 let mut defn = (**defn_arc).clone();
                 defn.aabb_local = aabb;
+                defn.has_point_marker = has_marker;
                 *defn_arc = Arc::new(defn);
             }
         }
+    }
+
+    fn defn_has_point_marker_recursive(
+        &self,
+        block_name: &str,
+        visited: &mut Vec<String>,
+    ) -> bool {
+        if visited.iter().any(|name| name == block_name) {
+            return false;
+        }
+        let Some(defn) = self.defns.get(block_name) else {
+            return false;
+        };
+        visited.push(block_name.to_string());
+        let found = defn.subs.iter().any(|sub| match sub {
+            LocalSub::Wire(wire) => wire.point_marker.is_some(),
+            LocalSub::Nested(insert) => {
+                self.defn_has_point_marker_recursive(&insert.block_name, visited)
+            }
+        });
+        visited.pop();
+        found
     }
 
     /// Returns the union AABB for `block_name`'s defn, expressed in **that
@@ -619,6 +648,7 @@ fn build_defn(
     BlockDefn {
         subs,
         base_point: crate::scene::render_graph::block_base_point(doc, block_name),
+        has_point_marker: false,
         aabb_local: [0.0; 4],
         child_count: br.entity_handles.len(),
     }
@@ -816,6 +846,7 @@ fn tessellate_sub_local(
         result.push(LocalWire {
             points: wire.points,
             points_low: wire.points_low,
+            point_marker: wire.point_marker,
             text_verts: wire.text_verts,
             key_vertices: wire.key_vertices,
             snap_pts: wire.snap_pts,
@@ -1069,7 +1100,7 @@ pub fn expand_insert(
     // Whole-Insert pixel-size LOD: if the entire Insert footprint projects
     // to sub-pixel size, skip it entirely.
     if let Some(wpp) = world_per_pixel {
-        if aabb_pixel_size(insert_local, wpp) < MIN_PIXEL_SIZE {
+        if !defn.has_point_marker && aabb_pixel_size(insert_local, wpp) < MIN_PIXEL_SIZE {
             return Some(vec![]);
         }
     }
@@ -1244,6 +1275,9 @@ fn translated_prototype_wire(
     translate_double_single(&mut wire.points, &mut wire.points_low, delta);
     translate_double_single(&mut wire.fill_tris, &mut wire.fill_tris_low, delta);
     translate_double_single(&mut wire.pick_tris, &mut wire.pick_tris_low, delta);
+    if let Some(marker) = &mut wire.point_marker {
+        marker.origin += glam::DVec3::from_array(delta);
+    }
     for (point, _) in &mut wire.snap_pts {
         point.x += delta[0];
         point.y += delta[1];
@@ -1403,6 +1437,7 @@ struct StyleKey {
     /// bands vs thin wires of the same colour/style — in separate batches so the
     /// finalized WireModel carries one correct `world_width`.
     world_width: u32,
+    point_marker: Option<PointMarkerKey>,
     aci: u8,
     plinegen: bool,
     /// Marks batches that emit only `fill_tris` with no wire `points`. The
@@ -1422,6 +1457,15 @@ struct StyleKey {
     depth_bits: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PointMarkerKey {
+    origin: [u64; 3],
+    normal: [u64; 3],
+    axis_x: [u64; 3],
+    axis_y: [u64; 3],
+    viewport_percent: u32,
+}
+
 #[derive(Default, Debug)]
 struct BatchEntry {
     color: [f32; 4],
@@ -1432,6 +1476,7 @@ struct BatchEntry {
     pattern: [f32; 8],
     line_weight_px: f32,
     world_width: f32,
+    point_marker: Option<PointMarker>,
     aci: u8,
     plinegen: bool,
     /// Composed block-local draw-order offset for a band batch (see
@@ -1511,6 +1556,7 @@ impl BatchEntry {
         pat: [f32; 8],
         lw_px: f32,
         world_width: f32,
+        point_marker: Option<PointMarker>,
         aci: u8,
         plinegen: bool,
         _is_fill_only: bool,
@@ -1533,6 +1579,7 @@ impl BatchEntry {
             pattern: pat,
             line_weight_px: lw_px,
             world_width,
+            point_marker,
             aci,
             plinegen,
             fill_is_2d_solid,
@@ -1582,6 +1629,7 @@ impl Batches {
                     }
                 }
                 WireModel {
+                    point_marker: b.point_marker,
                     taper_widths: Vec::new(),
                     world_width: b.world_width,
                     depth_override: b.local_depth,
@@ -1634,6 +1682,7 @@ fn style_key(
     pat: [f32; 8],
     lw_px: f32,
     world_width: f32,
+    point_marker: Option<PointMarker>,
     aci: u8,
     plinegen: bool,
     is_fill_only: bool,
@@ -1666,6 +1715,13 @@ fn style_key(
         ],
         line_weight_px: lw_px.to_bits(),
         world_width: world_width.to_bits(),
+        point_marker: point_marker.map(|marker| PointMarkerKey {
+            origin: marker.origin.to_array().map(f64::to_bits),
+            normal: marker.normal.to_array().map(f64::to_bits),
+            axis_x: marker.axis_x.to_array().map(f64::to_bits),
+            axis_y: marker.axis_y.to_array().map(f64::to_bits),
+            viewport_percent: marker.viewport_percent.to_bits(),
+        }),
         aci,
         plinegen,
         is_fill_only,
@@ -2004,6 +2060,69 @@ fn transformed_wire_length_scale(lw: &LocalWire, xform: &Transform) -> f32 {
     }
 }
 
+fn transformed_point_marker(marker: PointMarker, xform: &Transform) -> (PointMarker, f64) {
+    let origin = xform.apply(Vector3::new(marker.origin.x, marker.origin.y, marker.origin.z));
+    let map_direction = |direction: glam::DVec3| {
+        let mapped = xform.matrix.transform_direction(Vector3::new(
+            direction.x,
+            direction.y,
+            direction.z,
+        ));
+        KernelVec3::new(mapped.x, mapped.y, mapped.z)
+    };
+    let mapped_normal = map_direction(marker.normal);
+    let normal_scale = mapped_normal.length().max(f64::MIN_POSITIVE);
+    let normal = mapped_normal.normalize().unwrap_or(KernelVec3::Z);
+    let mapped_x = map_direction(marker.axis_x);
+    let axis_x = (mapped_x - normal * mapped_x.dot(normal))
+        .normalize()
+        .unwrap_or(KernelVec3::X);
+    let mapped_y = map_direction(marker.axis_y);
+    let axis_y = (mapped_y - normal * mapped_y.dot(normal) - axis_x * mapped_y.dot(axis_x))
+        .normalize()
+        .or_else(|| normal.cross(axis_x).normalize())
+        .unwrap_or(KernelVec3::Y);
+    (
+        PointMarker {
+            origin: glam::DVec3::new(origin.x, origin.y, origin.z),
+            normal: glam::DVec3::from_array(normal.to_array()),
+            axis_x: glam::DVec3::from_array(axis_x.to_array()),
+            axis_y: glam::DVec3::from_array(axis_y.to_array()),
+            viewport_percent: marker.viewport_percent,
+        },
+        normal_scale,
+    )
+}
+
+fn transformed_marker_point(
+    point: KernelVec3,
+    source: PointMarker,
+    target: PointMarker,
+    axial_scale: f64,
+) -> KernelVec3 {
+    let source_origin = KernelVec3::from(source.origin.to_array());
+    let source_normal = KernelVec3::from(source.normal.to_array())
+        .normalize()
+        .unwrap_or(KernelVec3::Z);
+    let delta = point - source_origin;
+    let axial = delta.dot(source_normal);
+    let source_plane = KernelPlane::from_axes(
+        source.origin.to_array(),
+        source.axis_x.to_array(),
+        source.axis_y.to_array(),
+    );
+    let uv = source_plane
+        .project_vector((delta - source_normal * axial).to_array())
+        .unwrap_or([0.0; 2]);
+    let target_plane = KernelPlane::from_axes(
+        target.origin.to_array(),
+        target.axis_x.to_array(),
+        target.axis_y.to_array(),
+    );
+    KernelVec3::from(target_plane.point_at(uv))
+        + KernelVec3::from(target.normal.to_array()) * axial * axial_scale
+}
+
 fn emit_wire(
     lw: &LocalWire,
     accum_xform: &Transform,
@@ -2069,6 +2188,10 @@ fn emit_wire(
     } else {
         0.0
     };
+    let marker_transform = lw
+        .point_marker
+        .map(|marker| transformed_point_marker(marker, accum_xform));
+    let point_marker = marker_transform.map(|(marker, _)| marker);
 
     // Only band wires take a per-child composed depth: their solid area is
     // what covers siblings, and their width already splits them into their own
@@ -2089,6 +2212,7 @@ fn emit_wire(
         final_pat,
         final_lw_px,
         final_world_width,
+        point_marker,
         final_aci,
         lw.plinegen,
         lw.is_fill_only,
@@ -2118,6 +2242,7 @@ fn emit_wire(
             final_pat,
             final_lw_px,
             final_world_width,
+            point_marker,
             final_aci,
             lw.plinegen,
             lw.is_fill_only,
@@ -2151,11 +2276,20 @@ fn emit_wire(
             let pl = lw.points_low.get(idx).copied().unwrap_or([0.0; 3]);
             // Reconstruct the f64 source from (high, low) before applying the
             // insert transform — otherwise the low half is silently dropped.
-            let v = accum_xform.apply(Vector3::new(
+            let source = KernelVec3::new(
                 p[0] as f64 + pl[0] as f64,
                 p[1] as f64 + pl[1] as f64,
                 p[2] as f64 + pl[2] as f64,
-            ));
+            );
+            let mapped = if let (Some(source_marker), Some((target_marker, axial_scale))) =
+                (lw.point_marker, marker_transform)
+            {
+                transformed_marker_point(source, source_marker, target_marker, axial_scale)
+            } else {
+                let point = accum_xform.apply(Vector3::new(source.x, source.y, source.z));
+                KernelVec3::new(point.x, point.y, point.z)
+            };
+            let v = Vector3::new(mapped.x, mapped.y, mapped.z);
             let qx = (v.x) as f32;
             let qy = (v.y) as f32;
             let qz = (v.z) as f32;

@@ -1843,7 +1843,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "PDMODE  new value [0=dot 1=none 2=+ 3=x 4=tick; +32 circle +64 square]:" => Some(("styles", "pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32")),
         "PDMODE = {v}" => Some(("styles", "pdmode-v")),
         "PDMODE set to {v}" => Some(("styles", "pdmode-set-to-v")),
-        "PDSIZE  new point size (0 = 5% of viewport, <0 = absolute):" => Some(("styles", "pdsize-new-point-size-0-5-of-viewport-0-absolu")),
+        "PDSIZE  new point size (0 = 5% of viewport, >0 = absolute, <0 = viewport percentage):" => Some(("styles", "pdsize-new-point-size-0-5-of-viewport-0-absolu")),
         "PDSIZE = {v:.4}" => Some(("styles", "pdsize-v-4")),
         "PDSIZE set to {v:.4}" => Some(("styles", "pdsize-set-to-v-4")),
         "PEDIT  Enter option:" => Some(("modify", "pedit-enter-option")),
