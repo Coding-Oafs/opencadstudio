@@ -2134,7 +2134,17 @@ impl OpenCADStudio {
             }
             "LTSCALE" => {
                 use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new("LTSCALE", "LTSCALE  new global line-type scale:");
+
+                let current = self.tabs[i].scene.document.header.linetype_scale;
+
+                self.command_line
+                    .push_output(crate::tf!("LTSCALE = {current:.4}").as_ref());
+
+                let c = ValuePromptCommand::new(
+                    "LTSCALE",
+                    "LTSCALE  new global line-type scale:",
+                );
+
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
