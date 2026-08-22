@@ -1,5 +1,6 @@
 <p align="center">
   <a href="README.md">English</a> ·
+  <a href="docs/readme/README.bg.md">Български</a> ·
   <a href="docs/readme/README.pt-BR.md">Português (Brasil)</a> ·
   <a href="docs/readme/README.cs.md">Čeština</a> ·
   <a href="docs/readme/README.nl.md">Nederlands</a> ·
@@ -121,9 +122,9 @@ The application is ad-hoc signed but is not currently notarized by Apple.
 
 ## Languages
 
-Open CAD Studio can follow the system language or use any of these 19 interface languages:
+Open CAD Studio can follow the system language or use any of these 20 interface languages:
 
-> Arabic · Brazilian Portuguese · Czech · Dutch · English · Finnish · French · German · Hindi · Hungarian · Italian · Japanese · Korean · Polish · Russian · Simplified Chinese · Spanish · Traditional Chinese · Turkish
+> Arabic · Brazilian Portuguese · Bulgarian · Czech · Dutch · English · Finnish · French · German · Hindi · Hungarian · Italian · Japanese · Korean · Polish · Russian · Simplified Chinese · Spanish · Traditional Chinese · Turkish
 
 Change the language from the application settings. The browser version also uses the browser's preferred locale when **System** is selected.
 
