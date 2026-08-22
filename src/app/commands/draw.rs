@@ -13,27 +13,27 @@ impl OpenCADStudio {
 
             "MLINE" => {
                 use crate::modules::draw::draw::mline::MlineCommand;
-                let style_name = self.tabs[i].scene.document.header.multiline_style.clone();
-                let style = self.tabs[i]
+                let header = &self.tabs[i].scene.document.header;
+                let style_name = header.multiline_style.clone();
+                let scale = header.multiline_scale;
+                let justification = header.multiline_justification;
+                let styles = self.tabs[i]
                     .scene
                     .document
                     .objects
                     .iter()
-                    .find_map(|(handle, object)| match object {
-                        acadrust::objects::ObjectType::MLineStyle(style)
-                            if style.name.eq_ignore_ascii_case(&style_name) =>
-                        {
-                            Some((*handle, style.elements.len()))
+                    .filter_map(|(handle, object)| match object {
+                        acadrust::objects::ObjectType::MLineStyle(style) => {
+                            Some((*handle, style.clone()))
                         }
                         _ => None,
-                    });
-                let (style_handle, element_count) = style
-                    .map(|(handle, count)| (Some(handle), count))
-                    .unwrap_or((None, 2));
-                let cmd_obj = MlineCommand::with_style(
+                    })
+                    .collect();
+                let cmd_obj = MlineCommand::with_styles(
+                    styles,
                     style_name,
-                    style_handle,
-                    element_count,
+                    scale,
+                    justification,
                 );
                 self.command_line.push_info(&cmd_obj.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd_obj));

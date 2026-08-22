@@ -1855,6 +1855,11 @@ pub trait CadCommand: Send {
         None
     }
 
+    /// Current drawing-persisted multiline creation settings.
+    fn mline_settings(&self) -> Option<(f64, i16, String, Option<Handle>)> {
+        None
+    }
+
     /// Returns `true` when the active text prompt expects free-form prose
     /// that can legitimately contain whitespace (the body of a TEXT /
     /// MTEXT / DDEDIT entity, an attribute default value, etc.). For

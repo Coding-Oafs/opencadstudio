@@ -662,6 +662,26 @@ impl OpenCADStudio {
                 tab.dirty = true;
             }
         }
+        let mline_settings = self.tabs[self.active_tab]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.mline_settings());
+        if let Some((scale, justification, style_name, style_handle)) = mline_settings {
+            let tab = &mut self.tabs[self.active_tab];
+            let header = &mut tab.scene.document.header;
+            let style_handle = style_handle.unwrap_or(acadrust::Handle::NULL);
+            let changed = (header.multiline_scale - scale).abs() > f64::EPSILON
+                || header.multiline_justification != justification
+                || !header.multiline_style.eq_ignore_ascii_case(&style_name)
+                || header.current_multiline_style_handle != style_handle;
+            if changed {
+                header.multiline_scale = scale;
+                header.multiline_justification = justification;
+                header.multiline_style = style_name;
+                header.current_multiline_style_handle = style_handle;
+                tab.dirty = true;
+            }
+        }
         let was_active = self.tabs[self.active_tab].active_cmd.is_some();
         let preserve_selection =
             matches!(result, CmdResult::Relaunch(..) | CmdResult::Dispatch(..));

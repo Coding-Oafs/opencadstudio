@@ -2195,6 +2195,20 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                             crate::command::WorkingPlane::default()
                         };
                         for &handle in &handles {
+                            let mline_style = self.tabs[i]
+                                .scene
+                                .document
+                                .get_entity(handle)
+                                .and_then(|entity| match entity {
+                                    acadrust::EntityType::MLine(mline) => {
+                                        crate::entities::mline::resolved_mline_style(
+                                            mline,
+                                            &self.tabs[i].scene.document,
+                                        )
+                                        .cloned()
+                                    }
+                                    _ => None,
+                                });
                             if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(handle)
                             {
                                 crate::scene::view::dispatch::apply_geom_prop_in_working_plane(
@@ -2203,6 +2217,17 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                     &value,
                                     plane,
                                 );
+                                if matches!(field, "ml_justification" | "ml_scale") {
+                                    if let (
+                                        acadrust::EntityType::MLine(mline),
+                                        Some(style),
+                                    ) = (entity, mline_style.as_ref())
+                                    {
+                                        crate::modules::draw::draw::mline::sync_mline_element_parameters(
+                                            mline, style,
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -2399,6 +2424,20 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                             )
                                             .is_none()
                                         {
+                                            let mline_style = self.tabs[i]
+                                                .scene
+                                                .document
+                                                .get_entity(handle)
+                                                .and_then(|entity| match entity {
+                                                    acadrust::EntityType::MLine(mline) => {
+                                                        crate::entities::mline::resolved_mline_style(
+                                                            mline,
+                                                            &self.tabs[i].scene.document,
+                                                        )
+                                                        .cloned()
+                                                    }
+                                                    _ => None,
+                                                });
                                             if let Some(entity) = self.tabs[i]
                                                 .scene
                                                 .document
@@ -2410,6 +2449,17 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                                     &val,
                                                     plane,
                                                 );
+                                                if field == "ml_scale" {
+                                                    if let (
+                                                        acadrust::EntityType::MLine(mline),
+                                                        Some(style),
+                                                    ) = (entity, mline_style.as_ref())
+                                                    {
+                                                        crate::modules::draw::draw::mline::sync_mline_element_parameters(
+                                                            mline, style,
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
                                     }
