@@ -148,6 +148,18 @@ pub fn format_length(value: f64) -> String {
     }
 }
 
+/// Format an area with the drawing's linear precision. Area stays a decimal
+/// scalar even when linear distances use architectural or fractional notation.
+pub fn format_area(value: f64) -> String {
+    let ctx = unit_context();
+    let precision = ctx.luprec.max(0).min(15) as usize;
+    if ctx.lunits == 1 {
+        format!("{:.*e}", precision, value)
+    } else {
+        format!("{:.*}", precision, value)
+    }
+}
+
 /// Format an angle (input in radians) using AUNITS / AUPREC.
 pub fn format_angle(value_rad: f64) -> String {
     let ctx = unit_context();

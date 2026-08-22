@@ -5,8 +5,8 @@ use crate::t;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    edit_prop as edit, parse_f64, rectangle_grip, ro_prop as ro, square_grip,
-    stepper_prop as stepper,
+    edit_prop as edit, edit_scalar_prop as edit_scalar, format_area, format_length, parse_f64,
+    rectangle_grip, ro_prop as ro, square_grip, stepper_prop as stepper,
 };
 use crate::entities::traits::RenderConvertible;
 use crate::scene::convert::acad_to_render::{extrusion_wall_tris, RenderEntity, RenderObject};
@@ -814,6 +814,33 @@ fn set_revision_cloud_arc_length(pline: &mut LwPolyline, requested: f64) {
     pline.vertices = cloud_vertices(&points, magnitude * sign, width_ratios);
 }
 
+pub(crate) fn is_rectangle(pline: &LwPolyline) -> bool {
+    if pline.common.extended_data.get_record("OCS_RECTANGLE").is_some() {
+        return true;
+    }
+    if !pline.is_closed
+        || pline.vertices.len() != 4
+        || pline.vertices.iter().any(|vertex| vertex.bulge.abs() > 1.0e-9)
+    {
+        return false;
+    }
+    let edges: Vec<glam::DVec2> = (0..4)
+        .map(|index| {
+            let from = pline.vertices[index].location;
+            let to = pline.vertices[(index + 1) % 4].location;
+            glam::DVec2::new(to.x - from.x, to.y - from.y)
+        })
+        .collect();
+    let lengths: Vec<f64> = edges.iter().map(|edge| edge.length()).collect();
+    if lengths.iter().any(|length| *length <= 1.0e-12) {
+        return false;
+    }
+    let tolerance = 1.0e-9;
+    edges[0].dot(edges[1]).abs() <= tolerance * lengths[0] * lengths[1]
+        && edges[0].perp_dot(edges[2]).abs() <= tolerance * lengths[0] * lengths[2]
+        && edges[1].perp_dot(edges[3]).abs() <= tolerance * lengths[1] * lengths[3]
+}
+
 fn properties(pline: &LwPolyline) -> Vec<PropSection> {
     let n = pline.vertices.len();
     // The panel's Current Vertex focus, clamped to this polyline's range.
@@ -831,10 +858,8 @@ fn properties(pline: &LwPolyline) -> Vec<PropSection> {
     let cloud_arc_length = revision_cloud_arc_length(pline);
     let vertex_label = if n == 0 {
         "—".to_string()
-    } else if cloud_arc_length.is_some() {
-        format!("{}", vi + 1)
     } else {
-        format!("{} / {}", vi + 1, n)
+        format!("{}", vi + 1)
     };
     let mut misc_props = vec![
         Property {
@@ -861,20 +886,26 @@ fn properties(pline: &LwPolyline) -> Vec<PropSection> {
             arc_length,
         ));
     }
+    let mut geometry_props = vec![
+        stepper(t!("Current Vertex").as_ref(), "current_vertex", vertex_label),
+        edit(t!("Vertex X").as_ref(), "vertex_x", vx),
+        edit(t!("Vertex Y").as_ref(), "vertex_y", vy),
+        edit_scalar(t!("Bulge").as_ref(), "bulge", v.map_or(0.0, |vertex| vertex.bulge)),
+    ];
+    if !is_rectangle(pline) {
+        geometry_props.push(edit(t!("Start segment width").as_ref(), "start_width", start_w));
+        geometry_props.push(edit(t!("End segment width").as_ref(), "end_width", end_w));
+    }
+    geometry_props.extend([
+        edit(t!("Global width").as_ref(), "global_width", pline.constant_width),
+        edit(t!("Elevation").as_ref(), "elevation", pline.elevation),
+        ro(t!("Area").as_ref(), "area", format_area(mp.area)),
+        ro(t!("Length").as_ref(), "length", format_length(mp.perimeter)),
+    ]);
     vec![
         PropSection {
             title: t!("Geometry").into_owned(),
-            props: vec![
-                stepper(t!("Current Vertex").as_ref(), "current_vertex", vertex_label),
-                edit(t!("Vertex X").as_ref(), "vertex_x", vx),
-                edit(t!("Vertex Y").as_ref(), "vertex_y", vy),
-                edit(t!("Start segment width").as_ref(), "start_width", start_w),
-                edit(t!("End segment width").as_ref(), "end_width", end_w),
-                edit(t!("Global width").as_ref(), "global_width", pline.constant_width),
-                edit(t!("Elevation").as_ref(), "elevation", pline.elevation),
-                ro(t!("Area").as_ref(), "area", format!("{:.4}", mp.area)),
-                ro(t!("Length").as_ref(), "length", format!("{:.4}", mp.perimeter)),
-            ],
+            props: geometry_props,
         },
         PropSection {
             title: t!("Misc").into_owned(),
@@ -952,6 +983,11 @@ fn apply_geom_prop(pline: &mut LwPolyline, field: &str, value: &str) {
         "end_width" => {
             if let Some(vtx) = pline.vertices.get_mut(vi) {
                 vtx.end_width = v;
+            }
+        }
+        "bulge" => {
+            if let Some(vtx) = pline.vertices.get_mut(vi) {
+                vtx.bulge = v.clamp(-1.0e6, 1.0e6);
             }
         }
         _ => {}
