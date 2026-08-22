@@ -201,6 +201,7 @@ impl CadCommand for AttdefCommand {
             pt + self.plane.y * d,
         ];
         Some(WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,

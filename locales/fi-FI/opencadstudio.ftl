@@ -3060,7 +3060,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE uusi arvo [0=dot 1=none 2=+ 3=x 4=tick; +32 ympyrä +64 neliö]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE asetettu arvoon __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE uusi pistekoko (0 = 5 % kuvaportista, <0 = absoluuttinen):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE uusi pistekoko (0 = 5 % kuvaportista, >0 = absoluuttinen, <0 = kuvaportin prosenttiosuus):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE asetettu arvoon __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

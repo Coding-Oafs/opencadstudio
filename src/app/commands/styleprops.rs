@@ -2309,7 +2309,7 @@ impl OpenCADStudio {
                 use crate::command::ValuePromptCommand;
                 let c = ValuePromptCommand::new(
                     "PDSIZE",
-                    "PDSIZE  new point size (0 = 5% of viewport, <0 = absolute):",
+                    "PDSIZE  new point size (0 = 5% of viewport, >0 = absolute, <0 = viewport percentage):",
                 );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));

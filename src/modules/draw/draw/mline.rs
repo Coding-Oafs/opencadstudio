@@ -181,6 +181,7 @@ impl CadCommand for MlineCommand {
             .collect();
         pts.push([pt.x, pt.y, pt.z]);
         Some(WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,

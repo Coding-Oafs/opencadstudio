@@ -180,6 +180,7 @@ impl CadCommand for DimBaselineCommand {
         let dim_line_pt2 = dim_line_pt2.as_vec3();
         let pt = pt.as_vec3();
         Some(WireModel {
+            point_marker: None,
             taper_widths: Vec::new(),
             world_width: 0.0,
             depth_override: None,

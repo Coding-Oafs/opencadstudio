@@ -3061,7 +3061,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  novo valor [0=ponto 1=nenhum 2=+ 3=x 4=marca; +32 círculo +64 quadrado]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE definido como __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  novo tamanho do ponto (0 = 5% da janela de visualização, <0 = absoluto):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  novo tamanho do ponto (0 = 5% da janela de visualização, >0 = absoluto, <0 = porcentagem da janela de visualização):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE definido como __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

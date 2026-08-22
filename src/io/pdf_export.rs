@@ -618,9 +618,9 @@ fn append_pdf_page(
                 flush_line(&mut ops, &segment, dot_radius);
                 segment.clear();
             } else {
-                let lo = wire.points_low.get(pi).copied().unwrap_or([0.0; 3]);
-                let wx = (x as f64 + lo[0] as f64 + ox) as f32;
-                let wy = (y as f64 + lo[1] as f64 + oy) as f32;
+                let point = wire.point_world(pi, paper_h as f64 / scale.max(1e-6) as f64);
+                let wx = (point.x + ox) as f32;
+                let wy = (point.y + oy) as f32;
                 segment.push(LinePoint {
                     p: Point::new(Mm(wx), Mm(wy)),
                     bezier: false,
