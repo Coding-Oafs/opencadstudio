@@ -341,8 +341,9 @@ impl OpenCADStudio {
             .abs();
         if !self.point_size_relative && mag == 0.0 {
             let wpp = self.tabs[i].scene.world_per_pixel().unwrap_or(0.0);
+            let viewport_height = self.tabs[i].scene.selection.borrow().vp_size.1;
             mag = if wpp > 0.0 {
-                crate::entities::point::relative_world_size(0.0, wpp)
+                crate::entities::point::relative_world_size(0.0, wpp, viewport_height)
             } else {
                 1.0
             };

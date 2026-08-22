@@ -9,15 +9,8 @@ use crate::scene::convert::acad_to_render::{RenderEntity, RenderObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
 use crate::scene::model::wire_model::SnapHint;
 
-/// Nominal viewport height (px) used to turn a relative PDSIZE percentage into
-/// an on-screen pixel size. The exact viewport height isn't threaded into
-/// tessellation; this reference keeps relative points a roughly constant
-/// fraction of the screen across zoom levels.
-const REL_REF_PX: f64 = 600.0;
-
 /// Resolve a positive (absolute) PDSIZE to a world size. Relative/zero PDSIZE
-/// is handled by [`relative_render`] when a world-per-pixel factor is available;
-/// without one it falls back to a small fixed world size.
+/// is handled by [`relative_render`].
 fn pdsize_world(pdsize: f64) -> f64 {
     if pdsize > 0.0 {
         pdsize
@@ -35,7 +28,9 @@ fn point_render(pt: &Point, pdmode: i16, s: f64) -> RenderEntity {
     // mirrored points (normal 0,0,-1) to the wrong side of the drawing.
     let (wx, wy, wz) = (pt.location.x, pt.location.y, pt.location.z);
     let snap = glam::DVec3::new(wx, wy, wz);
-    if pdmode == 0 {
+    let normal = point_normal(pt);
+    let top = snap + normal * pt.thickness;
+    if pdmode == 0 && pt.thickness.abs() <= 1.0e-10 {
         // Default: a single position (the driver sizes the dot in pixels).
         return RenderEntity {
             pick_tris: Vec::new(),
@@ -46,7 +41,7 @@ fn point_render(pt: &Point, pdmode: i16, s: f64) -> RenderEntity {
             fill_tris: vec![],
         };
     }
-    let pts = point_glyph(wx, wy, wz, pdmode, s);
+    let pts = point_glyph(pt, pdmode, s);
     if pts.is_empty() {
         // PDMODE 1 = nothing — emit an empty Lines wire so picking still works.
         return RenderEntity {
@@ -63,20 +58,22 @@ fn point_render(pt: &Point, pdmode: i16, s: f64) -> RenderEntity {
         object: RenderObject::Lines(pts),
         snap_pts: vec![(snap, SnapHint::Node)],
         tangent_geoms: vec![],
-        key_vertices: vec![[wx, wy, wz]],
+        key_vertices: if pt.thickness.abs() > 1.0e-10 {
+            vec![[wx, wy, wz], [top.x, top.y, top.z]]
+        } else {
+            vec![[wx, wy, wz]]
+        },
         fill_tris: vec![],
     }
 }
 
-/// Viewport-aware override for a relative (≤ 0) PDSIZE: size the glyph from the
-/// world-per-pixel factor so the point stays a roughly constant on-screen size
-/// across zoom. Returns `None` for an absolute PDSIZE, the size-independent
-/// default dot (PDMODE 0), or when no `wpp` is available — the caller then uses
-/// the normal header-driven path.
+/// Build a unit-sized glyph for a relative (≤ 0) PDSIZE. The wire shader scales
+/// its planar displacement from the point origin using the live viewport size,
+/// so zooming and resizing do not require retessellation.
 pub fn relative_render(
     entity: &EntityType,
     document: &acadrust::CadDocument,
-    wpp: Option<f32>,
+    _wpp: Option<f32>,
 ) -> Option<RenderEntity> {
     let EntityType::Point(pt) = entity else {
         return None;
@@ -86,20 +83,55 @@ pub fn relative_render(
     if pdsize > 0.0 || pdmode == 0 {
         return None;
     }
-    let wpp = wpp.filter(|w| *w > 0.0)?;
-    Some(point_render(pt, pdmode, relative_world_size(pdsize, wpp) * 0.5))
+    Some(point_render(pt, pdmode, 0.5))
 }
 
-/// Full on-screen glyph size (world units) for a relative (≤ 0) PDSIZE at the
-/// given world-per-pixel factor. PDSIZE 0 is the 5% default; negative is the
-/// percentage. Used both for rendering and to seed an absolute size when the
-/// user switches the Point Style dialog to absolute units.
-pub fn relative_world_size(pdsize: f64, wpp: f32) -> f64 {
+/// Full glyph size in world units for a relative PDSIZE at the current
+/// viewport height. Used when the style dialog converts a relative value to an
+/// absolute one.
+pub fn relative_world_size(pdsize: f64, wpp: f32, viewport_height_px: f32) -> f64 {
     let pct = if pdsize == 0.0 { 5.0 } else { -pdsize };
-    (pct / 100.0) * REL_REF_PX * wpp as f64
+    (pct / 100.0) * viewport_height_px.max(1.0) as f64 * wpp as f64
 }
 
-fn point_glyph(cx: f64, cy: f64, z: f64, pdmode: i16, s_half: f64) -> Vec<[f64; 3]> {
+/// Percentage and plane normal encoded into the point wire for live GPU
+/// viewport scaling. A zero PDSIZE means the standard five-percent size.
+pub fn relative_marker_spec(
+    entity: &EntityType,
+    document: &acadrust::CadDocument,
+) -> Option<(f32, [f32; 3])> {
+    let EntityType::Point(pt) = entity else {
+        return None;
+    };
+    let size = document.header.point_display_size;
+    if size > 0.0 || effective_pdmode(pt, document.header.point_display_mode) == 0 {
+        return None;
+    }
+    let n = point_normal(pt);
+    Some((
+        if size == 0.0 { 5.0 } else { -size as f32 },
+        [n.x as f32, n.y as f32, n.z as f32],
+    ))
+}
+
+fn point_normal(pt: &Point) -> glam::DVec3 {
+    glam::DVec3::new(pt.normal.x, pt.normal.y, pt.normal.z).normalize_or(glam::DVec3::Z)
+}
+
+fn point_axes(pt: &Point) -> (glam::DVec3, glam::DVec3, glam::DVec3) {
+    let n = point_normal(pt);
+    let (ax, ay) = crate::scene::view::transform::ocs_axes((n.x, n.y, n.z));
+    let base_x = glam::DVec3::new(ax.0, ax.1, ax.2);
+    let base_y = glam::DVec3::new(ay.0, ay.1, ay.2);
+    let (sin, cos) = pt.x_axis_angle.to_radians().sin_cos();
+    (
+        base_x * cos + base_y * sin,
+        -base_x * sin + base_y * cos,
+        n,
+    )
+}
+
+fn point_glyph(pt: &Point, pdmode: i16, s_half: f64) -> Vec<[f64; 3]> {
     // PDMODE bits:
     //   shape:  0=dot, 1=nothing, 2='+', 3='×', 4='|'
     //   +32   = enclose in a circle
@@ -113,6 +145,12 @@ fn point_glyph(cx: f64, cy: f64, z: f64, pdmode: i16, s_half: f64) -> Vec<[f64; 
     // cross pokes out past any enclosing circle/square, which sit at the radius.
     let arm = 2.0 * s_half;
     let nan = [f64::NAN, f64::NAN, f64::NAN];
+    let center = glam::DVec3::new(pt.location.x, pt.location.y, pt.location.z);
+    let (axis_x, axis_y, normal) = point_axes(pt);
+    let map = |x: f64, y: f64, height: f64| {
+        let p = center + axis_x * x + axis_y * y + normal * height;
+        [p.x, p.y, p.z]
+    };
     let mut pts: Vec<[f64; 3]> = Vec::new();
     let mut push_seg = |a: [f64; 3], b: [f64; 3]| {
         if !pts.is_empty() {
@@ -125,35 +163,34 @@ fn point_glyph(cx: f64, cy: f64, z: f64, pdmode: i16, s_half: f64) -> Vec<[f64; 
         // 0 = single dot — emit a tiny "+" so it's visible at any zoom.
         0 => {
             let d = s * 0.05;
-            push_seg([cx - d, cy, z], [cx + d, cy, z]);
-            push_seg([cx, cy - d, z], [cx, cy + d, z]);
+            push_seg(map(-d, 0.0, 0.0), map(d, 0.0, 0.0));
+            push_seg(map(0.0, -d, 0.0), map(0.0, d, 0.0));
         }
         1 => {} // explicit nothing
         2 => {
-            push_seg([cx - arm, cy, z], [cx + arm, cy, z]);
-            push_seg([cx, cy - arm, z], [cx, cy + arm, z]);
+            push_seg(map(-arm, 0.0, 0.0), map(arm, 0.0, 0.0));
+            push_seg(map(0.0, -arm, 0.0), map(0.0, arm, 0.0));
         }
         3 => {
-            push_seg([cx - arm, cy - arm, z], [cx + arm, cy + arm, z]);
-            push_seg([cx - arm, cy + arm, z], [cx + arm, cy - arm, z]);
+            push_seg(map(-arm, -arm, 0.0), map(arm, arm, 0.0));
+            push_seg(map(-arm, arm, 0.0), map(arm, -arm, 0.0));
         }
         4 => {
             // Upward tick rising from the point (length = PDSIZE/2), not a
             // vertical line centred on it.
-            push_seg([cx, cy, z], [cx, cy + s, z]);
+            push_seg(map(0.0, 0.0, 0.0), map(0.0, s, 0.0));
         }
         _ => {
-            push_seg([cx - s, cy, z], [cx + s, cy, z]);
-            push_seg([cx, cy - s, z], [cx, cy + s, z]);
+            push_seg(map(-s, 0.0, 0.0), map(s, 0.0, 0.0));
+            push_seg(map(0.0, -s, 0.0), map(0.0, s, 0.0));
         }
     }
     if circle {
-        // 16-segment polyline circle.
-        const N: usize = 16;
+        const N: usize = 64;
         let mut ring: Vec<[f64; 3]> = Vec::with_capacity(N + 1);
         for i in 0..=N {
             let a = i as f64 * std::f64::consts::TAU / N as f64;
-            ring.push([cx + a.cos() * s, cy + a.sin() * s, z]);
+            ring.push(map(a.cos() * s, a.sin() * s, 0.0));
         }
         if !pts.is_empty() {
             pts.push(nan);
@@ -161,14 +198,32 @@ fn point_glyph(cx: f64, cy: f64, z: f64, pdmode: i16, s_half: f64) -> Vec<[f64; 
         pts.extend(ring);
     }
     if square {
-        let p1 = [cx - s, cy - s, z];
-        let p2 = [cx + s, cy - s, z];
-        let p3 = [cx + s, cy + s, z];
-        let p4 = [cx - s, cy + s, z];
+        let p1 = map(-s, -s, 0.0);
+        let p2 = map(s, -s, 0.0);
+        let p3 = map(s, s, 0.0);
+        let p4 = map(-s, s, 0.0);
         if !pts.is_empty() {
             pts.push(nan);
         }
         pts.extend_from_slice(&[p1, p2, p3, p4, p1]);
+    }
+    if pt.thickness.abs() > 1.0e-10 && !pts.is_empty() {
+        let base = pts.clone();
+        pts.push(nan);
+        pts.extend(base.iter().map(|p| {
+            if p[0].is_finite() {
+                [
+                    p[0] + normal.x * pt.thickness,
+                    p[1] + normal.y * pt.thickness,
+                    p[2] + normal.z * pt.thickness,
+                ]
+            } else {
+                nan
+            }
+        }));
+        pts.push(nan);
+        pts.push(map(0.0, 0.0, 0.0));
+        pts.push(map(0.0, 0.0, pt.thickness));
     }
     pts
 }

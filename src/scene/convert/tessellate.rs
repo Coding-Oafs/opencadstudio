@@ -1310,9 +1310,20 @@ pub fn tessellate(
                     } else {
                         (Vec::new(), Vec::new(), Vec::new())
                     };
+                    let relative_marker =
+                        crate::entities::point::relative_marker_spec(entity, document);
+                    let (taper_widths, world_width) = if let Some((percent, normal)) = relative_marker {
+                        // A negative width is reserved for viewport-relative
+                        // point markers. The first three taper entries carry
+                        // the marker-plane normal; normal taper processing is
+                        // disabled for the sentinel by the wire uploader.
+                        (normal.to_vec(), -percent)
+                    } else {
+                        (Vec::new(), polyline_band_width(entity))
+                    };
                     out.push(WireModel {
-                        taper_widths: Vec::new(),
-                        world_width: polyline_band_width(entity),
+                        taper_widths,
+                        world_width,
                         depth_override: None,
                         display_visible: true,
                         plot_visible: true,
