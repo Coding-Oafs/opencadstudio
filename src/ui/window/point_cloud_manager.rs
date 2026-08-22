@@ -40,11 +40,14 @@ pub struct PointCloudManagerData {
     pub class_count: usize,
     pub color_mode: String,
     pub point_size_px: f32,
+    pub section_width_px: i32,
     pub crs_declared: bool,
     pub indexed: bool,
     pub index_running: bool,
     pub cache: String,
     pub export_progress: Option<(u64, u64)>,
+    pub urban_job_running: bool,
+    pub urban_status: String,
     pub sidecar_available: bool,
     pub selection_filter: String,
     pub resident_tiles: usize,
@@ -220,7 +223,22 @@ pub fn view_window(
             action("1 px", "POINTCLOUDPOINTSIZE 1", attached),
             action("2 px", "POINTCLOUDPOINTSIZE 2", attached),
             action("3 px", "POINTCLOUDPOINTSIZE 3", attached),
+            action("4 px", "POINTCLOUDPOINTSIZE 4", attached),
             action("5 px", "POINTCLOUDPOINTSIZE 5", attached),
+            action("6 px", "POINTCLOUDPOINTSIZE 6", attached),
+            action("8 px", "POINTCLOUDPOINTSIZE 8", attached),
+            action("10 px", "POINTCLOUDPOINTSIZE 10", attached),
+        ]
+        .spacing(6)
+        .align_y(iced::Center),
+        row![
+            text("Slice width:").size(11),
+            slider(1..=1024, data.section_width_px, move |value| {
+                Message::Command(format!("POINTCLOUDSECTIONWIDTH {value}"))
+            })
+            .step(1)
+            .width(Length::Fixed(220.0)),
+            text(format!("{} px", data.section_width_px)).size(11),
         ]
         .spacing(6)
         .align_y(iced::Center),
@@ -323,6 +341,45 @@ pub fn view_window(
     ]
     .spacing(6);
 
+    let urban = column![
+        status(
+            "Status",
+            if data.urban_status.is_empty() {
+                "Ready".to_string()
+            } else {
+                data.urban_status
+            },
+        ),
+        status(
+            "Boston profile",
+            "Buildings ON · Roads ON · Vegetation ON".to_string(),
+        ),
+        status(
+            "Settings",
+            "Road edge +1 ft · Tree radius 12 ft · full-density source stream".to_string(),
+        ),
+        status(
+            "Output",
+            "classified\\*_classified.laz · ASPRS display + UPCP label".to_string(),
+        ),
+        text("The source LAZ is never overwritten. Original classes are retained in source_classification; Boston reference data is current and may differ from the 2013–2014 survey epoch.")
+            .size(10),
+        row![
+            action(
+                "Classify Current Tile",
+                "POINTCLOUDURBANCLASSIFY CURRENT",
+                attached && !data.urban_job_running,
+            ),
+            action(
+                "Classify Source Folder",
+                "POINTCLOUDURBANCLASSIFY FOLDER",
+                attached && !data.urban_job_running,
+            ),
+        ]
+        .spacing(6),
+    ]
+    .spacing(6);
+
     let edit = column![
         text("Viewport tools select displayed points in screen space; edits target stable LAS source indices.")
         .size(11),
@@ -345,6 +402,11 @@ pub fn view_window(
                 has_selection
             ),
             action("Ground 2", "POINTCLOUDCLASSIFYSELECTION 2", has_selection),
+            action(
+                "Vegetation 5",
+                "POINTCLOUDCLASSIFYSELECTION 5",
+                has_selection
+            ),
             action("Building 6", "POINTCLOUDCLASSIFYSELECTION 6", has_selection),
             action(
                 "Low Noise 7",
@@ -423,6 +485,7 @@ pub fn view_window(
         section("Attachment and jobs", overview),
         section("GPU display", display),
         section("CRS and survey safeguards", coordinates),
+        section("Urban classification", urban),
         section("Selection and sparse edits", edit),
         section("Editable class table and displayed statistics", class_rows),
         section("Point-cloud edit audit", audit_rows),

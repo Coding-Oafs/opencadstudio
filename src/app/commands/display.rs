@@ -1523,6 +1523,25 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDURBANCLASSIFY") => {
+                let scope = cmd
+                    .trim_start_matches("POINTCLOUDURBANCLASSIFY")
+                    .trim()
+                    .to_ascii_uppercase();
+                let folder_scope = match scope.as_str() {
+                    "" | "CURRENT" | "TILE" => false,
+                    "FOLDER" | "ALL" => true,
+                    _ => {
+                        self.command_line.push_error(
+                            "Usage: POINTCLOUDURBANCLASSIFY [CURRENT|FOLDER]",
+                        );
+                        return Some(Task::none());
+                    }
+                };
+                return Some(self.start_point_cloud_urban_classification(i, folder_scope));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDRESTORE" => {
                 return Some(self.start_point_cloud_restore(i));
             }
@@ -1540,6 +1559,11 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDINDEXCANCEL" => {
                 self.cancel_point_cloud_index(i);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDINDEXSTATUS" => {
+                self.point_cloud_index_status(i);
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1830,7 +1854,7 @@ impl OpenCADStudio {
                     Ok(width) => self.set_point_cloud_section_width(i, width),
                     Err(_) => self
                         .command_line
-                        .push_error("Usage: POINTCLOUDSECTIONWIDTH <half-width>"),
+                        .push_error("Usage: POINTCLOUDSECTIONWIDTH <pixels>"),
                 }
             }
 
@@ -1850,7 +1874,7 @@ impl OpenCADStudio {
                             i,
                             [*x0, *y0],
                             [*x1, *y1],
-                            1.0,
+                            32.0,
                             crate::scene::model::point_cloud_model::SectionMode::Dim,
                         ),
                         [x0, y0, x1, y1, width] => self.set_point_cloud_section(
@@ -1861,12 +1885,12 @@ impl OpenCADStudio {
                             crate::scene::model::point_cloud_model::SectionMode::Dim,
                         ),
                         _ => self.command_line.push_error(
-                            "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]",
+                            "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [pixels]",
                         ),
                     },
                     Err(_) => self
                         .command_line
-                        .push_error("Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [half-width]"),
+                        .push_error("Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [pixels]"),
                 }
             }
 

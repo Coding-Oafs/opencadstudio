@@ -19,6 +19,9 @@ use std::{
 const CACHE_FORMAT_VERSION: u32 = 2;
 const RECORD_SIZE: usize = 61;
 const MAX_OPEN_TILE_FILES: usize = 64;
+/// Per-tile write buffer. A large buffer cuts flush/reopen churn across the
+/// hundreds of millions of point-writes a full-density tile cache performs.
+const WRITER_BUFFER_BYTES: usize = 1 << 20;
 
 #[derive(Debug)]
 pub enum TileCacheError {
@@ -283,6 +286,19 @@ pub fn build_tiled_cache(
     Ok(manifest)
 }
 
+/// Estimated on-disk size (bytes) of a cache built by [`build_tiled_cache`] for
+/// `point_count` points. Every point is written once at the leaf level and again
+/// at each coarser level whose stride it falls on.
+pub fn estimate_cache_bytes(point_count: u64, target_leaf_points: u64, max_depth: u8) -> u64 {
+    let leaf = leaf_level(point_count, target_leaf_points, max_depth);
+    let mut total_points = 0_u64;
+    for level in 0..=leaf {
+        let stride = level_stride(point_count, target_leaf_points, level);
+        total_points = total_points.saturating_add(point_count.div_ceil(stride));
+    }
+    total_points.saturating_mul(RECORD_SIZE as u64)
+}
+
 pub fn read_tile(
     cache_dir: impl AsRef<Path>,
     tile: &TileEntry,
@@ -446,7 +462,8 @@ impl WriterPool {
                 .create(true)
                 .append(true)
                 .open(self.root.join(tile_file_name(key)))?;
-            self.writers.insert(key, BufWriter::new(file));
+            self.writers
+                .insert(key, BufWriter::with_capacity(WRITER_BUFFER_BYTES, file));
         }
         self.order.retain(|candidate| *candidate != key);
         self.order.push_back(key);

@@ -205,10 +205,31 @@ impl OpenCADStudio {
         let epsg = if argument.eq_ignore_ascii_case("LAS")
             || argument.eq_ignore_ascii_case("POINTCLOUD")
         {
-            self.tabs[i]
+            let source_crs = self.tabs[i]
                 .point_cloud
                 .active()
-                .and_then(|source| source.sample.metadata.crs.horizontal_epsg)
+                .map(|source| source.sample.metadata.crs.clone());
+            // A projected CRS whose WKT omits an EPSG authority on the PROJCS
+            // falls back to its geographic base. Do not silently adopt a degree
+            // CRS for state-plane/UTM foot-or-metre data.
+            if let Some(crs) = source_crs.as_ref() {
+                if let Some(epsg) = crs.horizontal_epsg {
+                    if crs.proj4.is_some()
+                        && ocs_pointcloud::epsg_horizontal_unit(epsg)
+                            .is_some_and(|unit| unit == "degrees")
+                    {
+                        self.command_line.push_error(
+                            format!(
+                                "CRS: the attached cloud uses \"{}\", a projected CRS with no resolvable EPSG authority. Set the drawing CRS explicitly (for example: CRS 6420).",
+                                crs.name.as_deref().unwrap_or("an unnamed projected CRS")
+                            )
+                            .as_str(),
+                        );
+                        return Task::none();
+                    }
+                }
+            }
+            source_crs.and_then(|crs| crs.horizontal_epsg)
         } else {
             argument
                 .trim_start_matches("EPSG:")

@@ -2033,6 +2033,9 @@ pub enum Message {
     /// Copy the world coordinate under the viewport cursor to the clipboard
     /// (right-click → Copy Coordinates).
     CopyViewportCoordinate,
+    /// Copy the viewport coordinate reprojected to WGS84 lon/lat (right-click →
+    /// Copy Coordinates (Lon/Lat)).
+    CopyViewportCoordinateDecimal,
     /// Copy every line currently retained by the PERF panel.
     PerfCopy,
     /// Clear the PERF panel's retained trace.
@@ -3086,6 +3089,11 @@ pub enum Message {
     ),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudTilesLoaded(u64, Result<crate::app::point_cloud::TileLoadBatch, String>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudUrbanClassified(
+        u64,
+        Result<crate::app::point_cloud::UrbanClassificationResult, String>,
+    ),
     /// A background basemap tile fetch finished.
     BasemapLoaded(crate::app::basemap::BasemapLoaded),
     /// Periodic redraw while a basemap job updates its atomic progress.

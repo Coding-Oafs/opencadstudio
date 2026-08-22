@@ -952,6 +952,11 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudUrbanClassified(tab_id, result) => {
+                self.finish_point_cloud_urban_classification(tab_id, result)
+            }
+
             Message::BasemapLoaded(loaded) => {
                 self.install_basemap(loaded);
                 Task::none()
@@ -2024,7 +2029,25 @@ impl OpenCADStudio {
             }
 
             Message::CopyViewportCoordinate => {
-                let text = self.copy_viewport_coordinate_text();
+                let text = self.copy_viewport_coordinate_text(false);
+                if text.is_empty() {
+                    Task::none()
+                } else {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let task = iced::clipboard::write(text.clone()).discard();
+                    #[cfg(target_arch = "wasm32")]
+                    let task = {
+                        crate::sys::write_clipboard_text(&text);
+                        Task::none()
+                    };
+                    self.command_line
+                        .push_output(crate::tf!("Copied coordinate: {text}").as_ref());
+                    task
+                }
+            }
+
+            Message::CopyViewportCoordinateDecimal => {
+                let text = self.copy_viewport_coordinate_text(true);
                 if text.is_empty() {
                     Task::none()
                 } else {

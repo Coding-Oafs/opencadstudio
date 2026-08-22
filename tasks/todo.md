@@ -1,5 +1,18 @@
 # v1.0 — Basemap, spatial settings, measurement, navigation, and release
 
+## v1.0.4 — full-density LiDAR OOM fix
+
+- [x] Root-cause: `Density::Full` materializes the whole file (unbounded `sample()`); auto cache-activation adds a second streaming copy; resample leaks streamed tiles
+- [x] Add `full_density_over_budget()` helper (src/app/point_cloud.rs)
+- [x] Guard single-file Full attach in `start_point_cloud_load` (stream via LOD cache, else fall back to Auto + hint)
+- [x] Guard `set_point_cloud_density` (skip already-streamed sources; activate cache when available; else Auto + hint)
+- [x] Clear streamed tiles/state in `install_point_cloud_resample` (no sustained double copy)
+- [x] `cargo check --bin OpenCADStudio` — passes (pre-existing warnings only)
+- [x] `cargo build --release --bin OpenCADStudio --jobs 1` + `-p dwg-thumbnailer-win`
+- [x] Rebuild the WiX MSI and refresh `dist/v1.0.4` artifacts (msi + portable exe + local-install)
+- [ ] Runtime smoke-test (attach a large tile at Full → streams, no OOM) — not run; needs the GUI against the multi-GB tiles on this memory-constrained box. Repro: `POINTCLOUDDENSITY FULL` then `POINTCLOUDATTACH D:\MA_Lidar\...\tR0_C0.laz`
+
+
 ## v1.0.2 basemap imagery/alignment patch
 
 - [x] Reproduce the renderer-cache blank-frame failure
@@ -66,3 +79,32 @@
 - [ ] Basemap places for Boston LAS (no "cannot reproject")
 - [x] Empty drawing loads a bounded overview and accepts a CRS/site center without LAS
 - [ ] Density re-sample + folder warning
+
+## v1.0.4-local — Palo Alto LiDAR: CRS-agnostic + LOD + UX
+
+### Part A — CRS-agnostic reprojection
+- [x] A1 crs.rs: `projection_from_crs` (proj4-first) + refactor `reproject_with_patches_progress`
+- [x] A1 crs.rs: CRS label helper (no geographic-fallback EPSG when proj4 present) + unit tests
+- [x] A2 point_cloud.rs: reprojection guard/message proj4-aware; export-all CRS identity; crs_info label
+- [x] A3 spatial.rs: `drawing_crs_command` LAS inference rejects geographic fallback w/ guidance
+
+### Part B — LOD progress + efficiency
+- [x] B1 progress: `index_job` + `POINTCLOUDINDEXSTATUS` + finish reports cache size
+- [x] B2 tile_cache.rs: 1 MiB BufWriter buffer + `estimate_cache_bytes` + upfront warning
+
+### Part C — coordinate copy cartesian/decimal
+- [x] C viewport.rs decimal copy (lon/lat + CRS note); Message variant; overlay menu item
+
+### Part D — pixel-width slices (1–1024 px)
+- [x] D model/shader/pipeline px->world; stream band conversion; setters validation
+- [x] D UI slider + replace Wider/Narrower buttons/palette
+
+### Part E — point size up to 10 px
+- [x] E extend 3 UI option lists to 1–10 px
+
+### Part F — basemap camera-driven resolution
+- [x] F slippy-zoom-from-pixels helper + viewport-mode refresh + debounced camera hook
+
+### Verify
+- [x] cargo check --bin OpenCADStudio
+- [x] cargo build --release --bin OpenCADStudio --jobs 1

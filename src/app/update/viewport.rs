@@ -437,9 +437,11 @@ impl OpenCADStudio {
     }
 
     /// Compute the world coordinate under the viewport cursor (from the stored
-    /// context-menu click position) and format it as a "X, Y, Z" clipboard
-    /// string. Returns empty when there is no active drawing.
-    pub(in crate::app) fn copy_viewport_coordinate_text(&self) -> String {
+    /// context-menu click position) and format it as a clipboard string.
+    /// `decimal == false` yields cartesian "X, Y, Z"; `true` reprojects XY to
+    /// WGS84 longitude/latitude using the drawing CRS and annotates the CRS.
+    /// Returns empty when there is no active drawing.
+    pub(in crate::app) fn copy_viewport_coordinate_text(&self, decimal: bool) -> String {
         let i = self.active_tab;
         if self.tabs[i].is_start {
             return String::new();
@@ -454,7 +456,30 @@ impl OpenCADStudio {
         let Some(world) = self.cursor_world_in_tile(i, p_full) else {
             return String::new();
         };
-        format!("{:.6}, {:.6}, {:.6}", world.x, world.y, world.z)
+        if !decimal {
+            return format!("{:.6}, {:.6}, {:.6}", world.x, world.y, world.z);
+        }
+        let Some(ref crs) = self.tabs[i].spatial.drawing_crs else {
+            return format!(
+                "no drawing CRS set; cartesian {:.6}, {:.6}, {:.6}",
+                world.x, world.y, world.z
+            );
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let lonlat = ocs_pointcloud::reproject_xy(crs.epsg, 4326, world.x, world.y);
+        #[cfg(target_arch = "wasm32")]
+        let lonlat = (crs.epsg == 4326).then_some((world.x, world.y));
+        match lonlat {
+            Some((lon, lat)) => format!(
+                "{lon:.7}, {lat:.7}  (WGS84 lon/lat; Z {:.3} {})",
+                world.z,
+                self.tabs[i].spatial.working_unit.short()
+            ),
+            None => format!(
+                "unable to reproject from EPSG:{} to WGS84; cartesian {:.6}, {:.6}, {:.6}",
+                crs.epsg, world.x, world.y, world.z
+            ),
+        }
     }
 
     /// Unproject a canvas-space cursor point into model space through the
@@ -763,6 +788,21 @@ impl OpenCADStudio {
         let gen = self.tabs[i].scene.camera_generation;
         if gen != self.tabs[i].last_synced_camera_gen {
             self.tabs[i].last_synced_camera_gen = gen;
+            // Camera-follow basemap: re-plan tiles at the new zoom when the
+            // camera moves, debounced so a wheel-zoom gesture doesn't start a
+            // fetch storm.
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.basemap.follow_camera
+                && self.basemap.provider != crate::scene::basemap::BasemapProvider::Off
+            {
+                let ready = self.tabs[i]
+                    .last_basemap_follow_at
+                    .map_or(true, |last| t.duration_since(last).as_millis() >= 250);
+                if ready {
+                    self.tabs[i].last_basemap_follow_at = Some(t);
+                    return self.refresh_basemap(self.tabs[i].id);
+                }
+            }
             if self.tabs[i].active_block_edit.is_some() {
                 let camera = self.tabs[i].scene.camera.borrow().clone();
                 if let Some(session) = self.tabs[i].active_block_edit_session_mut() {

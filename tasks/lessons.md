@@ -143,3 +143,19 @@ Rust's native out-of-memory abort (`0xc0000409`).
   PROJ.4 `x_0`/`y_0` are metre values even when `+units=ft` controls coordinate
   input/output. Convert only those linear offsets when translating WKT to
   PROJ.4, and regression-test against a known geographic location.
+
+## A CRS fix is only complete when every consumer routes through the resolved projection
+
+**What happened:** The projected-WKT-without-PROJCS-EPSG lesson (above) was half-applied. The
+basemap path (`world_bounds_from_source`) already preferred the WKT-derived `proj4`, but
+`reproject_with_patches_progress` (`POINTCLOUDREPROJECT`) and the drawing-CRS "LAS" inference
+still read `horizontal_epsg` directly. A California State Plane Zone 3 tile (whose WKT has no
+PROJCS EPSG authority) therefore reprojected its international-feet coordinates as *degrees*.
+
+**How to apply:**
+- Resolve a source `Proj` in exactly one place (`crs::projection_from_crs`: PROJ.4-first, EPSG
+  fallback) and make every transform path use it — never `Proj::from_epsg_code(horizontal_epsg)`.
+- For display, use `CrsInfo::label()` / `horizontal_label()` instead of printing `horizontal_epsg`
+  raw, so a geographic fallback is never presented as the horizontal CRS.
+- Regression-test each new consumer against a projected CRS whose WKT omits the PROJCS authority
+  (the California zone 3 fixture), not only the Boston LCC case.

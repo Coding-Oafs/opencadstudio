@@ -45,6 +45,12 @@ pub struct TileLoadBatch {
 }
 
 #[derive(Clone, Debug)]
+pub struct UrbanClassificationResult {
+    pub outputs: Vec<PathBuf>,
+    pub folder_scope: bool,
+}
+
+#[derive(Clone, Debug)]
 struct ResidentTile {
     points: Arc<Vec<ocs_pointcloud::SamplePoint>>,
     last_used: u64,
@@ -327,6 +333,8 @@ struct PointCloudJobProgress {
     completed: AtomicU64,
     total: u64,
     cancel: AtomicBool,
+    /// Auxiliary count for index builds (tiles written so far).
+    tiles_created: AtomicU64,
 }
 
 impl PointCloudJobProgress {
@@ -335,6 +343,7 @@ impl PointCloudJobProgress {
             completed: AtomicU64::new(0),
             total,
             cancel: AtomicBool::new(false),
+            tiles_created: AtomicU64::new(0),
         }
     }
 }
@@ -352,6 +361,7 @@ pub(super) struct PointCloudAttachment {
     pub(super) cache_path: Option<PathBuf>,
     pub(super) cache_manifest: Option<TileCacheManifest>,
     index_cancel: Option<Arc<AtomicBool>>,
+    index_job: Option<Arc<PointCloudJobProgress>>,
     export_job: Option<Arc<PointCloudJobProgress>>,
     resident_tiles: BTreeMap<ocs_pointcloud::TileKey, ResidentTile>,
     active_tiles: Vec<ocs_pointcloud::TileKey>,
@@ -373,6 +383,7 @@ impl PointCloudAttachment {
             cache_path: None,
             cache_manifest: None,
             index_cancel: None,
+            index_job: None,
             export_job: None,
             resident_tiles: BTreeMap::new(),
             active_tiles: Vec::new(),
@@ -473,6 +484,10 @@ pub(super) struct PointCloudDataset {
     pub(super) export_all_job: Option<Arc<PointCloudJobProgress>>,
     /// Active vertical cross-section; `None` shows the whole cloud.
     pub(super) section: Option<crate::scene::model::point_cloud_model::Section>,
+    /// Packaged Boston UPCP helper state. The helper always streams the full
+    /// source LAZ and writes into a sibling `classified` directory.
+    pub(super) urban_job_running: bool,
+    pub(super) urban_status: String,
     display_generation: u64,
     /// Bumps on style-only changes (color mode, class visibility, class
     /// colors, point size): the GPU rewrites its style uniform, not the
@@ -890,8 +905,45 @@ impl OpenCADStudio {
             return Task::none();
         }
         let tab_id = self.tabs[self.active_tab].id;
-        let density = self.tabs[self.active_tab].point_cloud.display.density;
-        let options = Self::sample_options_for(density);
+        let mut density = self.tabs[self.active_tab].point_cloud.display.density;
+        let budget = self.tabs[self.active_tab].point_cloud.display.cpu_budget_bytes;
+        let options = if density == Density::Full {
+            let point_count = ocs_pointcloud::inspect(&path)
+                .map(|metadata| metadata.point_count)
+                .unwrap_or(u64::MAX);
+            if full_density_over_budget(point_count, budget) {
+                if find_valid_tile_cache(&path, None).is_some() {
+                    self.command_line.push_info(
+                        format!(
+                            "POINTCLOUDATTACH: \"{}\" is too large to hold at full density in memory; streaming full-resolution tiles from its LOD cache instead.",
+                            path.display()
+                        )
+                        .as_str(),
+                    );
+                    // A bounded transient sample is shown only until the first
+                    // stream tick; the cache is auto-activated in
+                    // `install_point_cloud`.
+                    density = Density::Auto;
+                    Self::sample_options_for(Density::Auto)
+                } else {
+                    self.tabs[self.active_tab].point_cloud.display.density = Density::Auto;
+                    density = Density::Auto;
+                    self.command_line.push_error(
+                        format!(
+                            "POINTCLOUDATTACH: \"{}\" is too large to read at full density within the {} MB CPU budget. Falling back to Auto; build the LOD index (POINTCLOUDINDEX) to view it at full density.",
+                            path.display(),
+                            budget / (1024 * 1024)
+                        )
+                        .as_str(),
+                    );
+                    Self::sample_options_for(Density::Auto)
+                }
+            } else {
+                Self::sample_options_for(Density::Full)
+            }
+        } else {
+            Self::sample_options_for(density)
+        };
         let density_desc = match density {
             Density::Auto => "bounded display sample".to_string(),
             Density::EveryNth(n) => format!("1-in-{n} display sample"),
@@ -919,12 +971,22 @@ impl OpenCADStudio {
     pub(super) fn set_point_cloud_density(&mut self, i: usize, density: Density) -> Task<Message> {
         self.tabs[i].point_cloud.display.density = density;
         let tab_id = self.tabs[i].id;
-        let options = Self::sample_options_for(density);
-        let sources: Vec<(String, PathBuf)> = self.tabs[i]
+        let budget = self.tabs[i].point_cloud.display.cpu_budget_bytes;
+        // Snapshot per-source state so the worker closures below don't borrow
+        // the dataset, and so full-density requests can keep already-streamed
+        // sources streaming instead of materializing the whole file again.
+        let sources: Vec<(String, PathBuf, u64, bool)> = self.tabs[i]
             .point_cloud
             .sources
             .iter()
-            .map(|source| (source.id.clone(), source.source_path.clone()))
+            .map(|source| {
+                (
+                    source.id.clone(),
+                    source.source_path.clone(),
+                    source.sample.metadata.point_count,
+                    source.cache_manifest.is_some(),
+                )
+            })
             .collect();
         let count = sources.len();
         let desc = match density {
@@ -939,18 +1001,67 @@ impl OpenCADStudio {
         if sources.is_empty() {
             return Task::none();
         }
-        let tasks: Vec<Task<Message>> = sources
-            .into_iter()
-            .map(|(source_id, path)| {
+        let requested_options = Self::sample_options_for(density);
+        let auto_options = Self::sample_options_for(Density::Auto);
+        let mut tasks: Vec<Task<Message>> = Vec::new();
+        let mut skipped_streaming = 0usize;
+        let mut fell_back = false;
+        for (source_id, path, point_count, cache_active) in sources {
+            if density == Density::Full && full_density_over_budget(point_count, budget) {
+                // Full density would exceed the CPU budget. Keep streaming from
+                // the LOD cache when it is (or can be) active, otherwise fall
+                // back to the bounded Auto sample rather than OOMing.
+                if cache_active {
+                    skipped_streaming += 1;
+                    continue;
+                }
+                if let Some((cache_path, manifest)) = find_valid_tile_cache(&path, None) {
+                    if let Some(source) = self.tabs[i].point_cloud.source_mut(&source_id) {
+                        source.cache_path = Some(cache_path);
+                        source.cache_manifest = Some(manifest);
+                        source.stream_camera_generation = u64::MAX;
+                    }
+                    tasks.push(deferred_message(Message::PointCloudStreamTick(i)));
+                    skipped_streaming += 1;
+                    continue;
+                }
+                fell_back = true;
                 let worker_path = path.clone();
-                background_task(
+                tasks.push(background_task(
                     move || {
-                        ocs_pointcloud::sample(&worker_path, options).map_err(|e| e.to_string())
+                        ocs_pointcloud::sample(&worker_path, auto_options).map_err(|e| e.to_string())
                     },
                     move |result| Message::PointCloudResampled(tab_id, source_id, result),
+                ));
+                continue;
+            }
+            let worker_path = path.clone();
+            tasks.push(background_task(
+                move || {
+                    ocs_pointcloud::sample(&worker_path, requested_options)
+                        .map_err(|e| e.to_string())
+                },
+                move |result| Message::PointCloudResampled(tab_id, source_id, result),
+            ));
+        }
+        if skipped_streaming > 0 {
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDDENSITY: {skipped_streaming} source(s) stream full resolution from their LOD cache; left streaming."
                 )
-            })
-            .collect();
+                .as_str(),
+            );
+        }
+        if fell_back {
+            self.tabs[i].point_cloud.display.density = Density::Auto;
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDDENSITY: one or more sources are too large to read at full density within the {} MB CPU budget; those sources fell back to Auto. Build the LOD index (POINTCLOUDINDEX) to view them at full density.",
+                    budget / (1024 * 1024)
+                )
+                .as_str(),
+            );
+        }
         Task::batch(tasks)
     }
 
@@ -977,6 +1088,17 @@ impl OpenCADStudio {
             let dataset = &mut self.tabs[tab_index].point_cloud;
             if let Some(source) = dataset.source_mut(&source_id) {
                 source.sample = sample;
+                // The display now returns to the sample path (stride != 0), so
+                // release any streamed LOD tiles and streaming state instead of
+                // holding the point set twice.
+                source.resident_tiles.clear();
+                source.active_tiles.clear();
+                source.cache_manifest = None;
+                source.cache_path = None;
+                source.stream_in_flight = false;
+                source.stream_request_id = 0;
+                source.stream_camera_generation = u64::MAX;
+                source.screen_index = None;
             }
             dataset.mark_display_changed();
             dataset.display_model()
@@ -1367,9 +1489,7 @@ impl OpenCADStudio {
                     source.id,
                     crs.name.as_deref().unwrap_or("unnamed CRS"),
                     crs.source.as_deref().unwrap_or("none"),
-                    crs.horizontal_epsg
-                        .map(|code| format!("EPSG:{code}"))
-                        .unwrap_or_else(|| "unresolved".to_string()),
+                    crs.horizontal_label(),
                     crs.vertical_epsg
                         .map(|code| format!("EPSG:{code}"))
                         .unwrap_or_else(|| "unresolved (Z units/datum must be verified)".to_string()),
@@ -1536,9 +1656,27 @@ impl OpenCADStudio {
 
         let cancel = Arc::new(AtomicBool::new(false));
         cloud.index_cancel = Some(Arc::clone(&cancel));
+        let progress = Arc::new(PointCloudJobProgress::new(
+            cloud.sample.metadata.point_count,
+        ));
+        cloud.index_job = Some(Arc::clone(&progress));
+        let estimate_bytes = ocs_pointcloud::estimate_cache_bytes(
+            cloud.sample.metadata.point_count,
+            65_536,
+            12,
+        );
+        if estimate_bytes >= 1024 * 1024 * 1024 {
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDINDEX: this will write ~{:.1} GB of LOD tiles to disk; the build can take several minutes (use POINTCLOUDINDEXSTATUS to monitor).",
+                    estimate_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+                )
+                .as_str(),
+            );
+        }
         self.command_line.push_info(
             format!(
-                "POINTCLOUDINDEX: building disk-backed LOD tiles at \"{}\"; use POINTCLOUDINDEXCANCEL to cancel.",
+                "POINTCLOUDINDEX: building disk-backed LOD tiles at \"{}\"; use POINTCLOUDINDEXSTATUS for progress and POINTCLOUDINDEXCANCEL to cancel.",
                 cache_path.display()
             )
             .as_str(),
@@ -1550,7 +1688,15 @@ impl OpenCADStudio {
                     source,
                     &worker_cache,
                     TileCacheOptions::default(),
-                    |_| !cancel.load(Ordering::Relaxed),
+                    |state| {
+                        progress
+                            .completed
+                            .store(state.points_read, Ordering::Relaxed);
+                        progress
+                            .tiles_created
+                            .store(state.tiles_created as u64, Ordering::Relaxed);
+                        !cancel.load(Ordering::Relaxed)
+                    },
                 )
                 .map_err(|error| error.to_string())
             },
@@ -1574,6 +1720,35 @@ impl OpenCADStudio {
         }
     }
 
+    pub(super) fn point_cloud_index_status(&mut self, tab_index: usize) {
+        let job = self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .filter_map(|source| source.index_job.as_ref())
+            .next()
+            .cloned();
+        let Some(job) = job else {
+            self.command_line
+                .push_info("POINTCLOUDINDEXSTATUS: no index build is running.");
+            return;
+        };
+        let completed = job.completed.load(Ordering::Relaxed);
+        let tiles = job.tiles_created.load(Ordering::Relaxed);
+        let percent = if job.total == 0 {
+            100.0
+        } else {
+            completed as f64 / job.total as f64 * 100.0
+        };
+        self.command_line.push_output(
+            format!(
+                "POINTCLOUDINDEXSTATUS: {completed}/{} points ({percent:.1}%), {} tile(s) written.",
+                job.total, tiles
+            )
+            .as_str(),
+        );
+    }
+
     pub(super) fn finish_point_cloud_index(
         &mut self,
         tab_id: u64,
@@ -1588,6 +1763,7 @@ impl OpenCADStudio {
             return Task::none();
         };
         cloud.index_cancel = None;
+        cloud.index_job = None;
         let manifest = match result {
             Ok(manifest) => manifest,
             Err(error) => {
@@ -1596,13 +1772,21 @@ impl OpenCADStudio {
                 return Task::none();
             }
         };
+        let cache_bytes = manifest
+            .tiles
+            .iter()
+            .map(|tile| tile.point_count)
+            .sum::<u64>()
+            .saturating_mul(manifest.record_size as u64);
         cloud.cache_path = Some(cache_path.clone());
         cloud.cache_manifest = Some(manifest.clone());
         cloud.stream_camera_generation = u64::MAX;
         self.command_line.push_output(
             format!(
-                "POINTCLOUDINDEX: {} tiles indexed through level {}; camera-driven LOD streaming is active.",
-                manifest.tiles.len(), manifest.leaf_level
+                "POINTCLOUDINDEX: {} tiles indexed through level {} (~{} MB); camera-driven LOD streaming is active.",
+                manifest.tiles.len(),
+                manifest.leaf_level,
+                cache_bytes / (1024 * 1024)
             )
             .as_str(),
         );
@@ -1635,8 +1819,15 @@ impl OpenCADStudio {
         let display = self.tabs[tab_index].point_cloud.display.clone();
         // The active cross-section band, captured before the mutable find so
         // the section can steer tile selection while a source is borrowed.
+        // The band is authored in screen pixels; convert to world units using
+        // the current camera so the tile selection matches the shader.
+        let world_per_pixel = if viewport.height > 0.0 {
+            (2.0 * camera.ortho_size()) / viewport.height
+        } else {
+            0.0_f32
+        };
         let section_band = self.tabs[tab_index].point_cloud.section.map(|section| {
-            let half = section.half_width.max(0.0);
+            let half = (section.half_width_px * world_per_pixel as f64).max(0.0);
             let min_x = section.p0[0].min(section.p1[0]) - half;
             let max_x = section.p0[0].max(section.p1[0]) + half;
             let min_y = section.p0[1].min(section.p1[1]) - half;
@@ -1864,7 +2055,7 @@ impl OpenCADStudio {
         tab_index: usize,
         p0: [f64; 2],
         p1: [f64; 2],
-        half_width: f64,
+        half_width_px: f64,
         mode: crate::scene::model::point_cloud_model::SectionMode,
     ) {
         if self.tabs[tab_index].point_cloud.is_empty() {
@@ -1872,16 +2063,16 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSECTION: attach a LAS/LAZ cloud first.");
             return;
         }
-        if !half_width.is_finite() || half_width <= 0.0 {
+        if !half_width_px.is_finite() || !(1.0..=1024.0).contains(&half_width_px) {
             self.command_line
-                .push_error("POINTCLOUDSECTION: half-width must be positive.");
+                .push_error("POINTCLOUDSECTION: half-width must be between 1 and 1024 pixels.");
             return;
         }
         self.tabs[tab_index].point_cloud.section =
             Some(crate::scene::model::point_cloud_model::Section {
                 p0,
                 p1,
-                half_width,
+                half_width_px,
                 mode,
             });
         // A section change densifies its band: invalidate every source's stream
@@ -1923,19 +2114,19 @@ impl OpenCADStudio {
         self.restyle_point_cloud(tab_index);
     }
 
-    /// Change the active section's band half-width.
-    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, half_width: f64) {
+    /// Change the active section's band half-width (screen pixels).
+    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, half_width_px: f64) {
         let Some(mut section) = self.tabs[tab_index].point_cloud.section else {
             self.command_line
                 .push_error("POINTCLOUDSECTIONWIDTH: no section is active.");
             return;
         };
-        if !half_width.is_finite() || half_width <= 0.0 {
+        if !half_width_px.is_finite() || !(1.0..=1024.0).contains(&half_width_px) {
             self.command_line
-                .push_error("POINTCLOUDSECTIONWIDTH: width must be positive.");
+                .push_error("POINTCLOUDSECTIONWIDTH: width must be between 1 and 1024 pixels.");
             return;
         }
-        section.half_width = half_width;
+        section.half_width_px = half_width_px;
         self.tabs[tab_index].point_cloud.section = Some(section);
         for source in &mut self.tabs[tab_index].point_cloud.sources {
             source.stream_camera_generation = u64::MAX;
@@ -3162,13 +3353,14 @@ impl OpenCADStudio {
         let Some(cloud) = dataset.active_mut() else {
             return Task::none();
         };
-        let source_epsg = cloud.sample.metadata.crs.horizontal_epsg;
-        if source_epsg.is_none() {
+        let source_crs = cloud.sample.metadata.crs.clone();
+        if source_crs.horizontal_epsg.is_none() && source_crs.proj4.is_none() {
             self.command_line.push_error(
                 "POINTCLOUDREPROJECT: source horizontal CRS is unresolved; assign/repair CRS metadata before transforming coordinates.",
             );
             return Task::none();
         }
+        let source_label = source_crs.horizontal_label();
         let input = cloud.source_path.clone();
         let edits = cloud.edits.clone();
         let progress = Arc::new(PointCloudJobProgress::new(
@@ -3178,8 +3370,7 @@ impl OpenCADStudio {
         let worker_output = output.clone();
         self.command_line.push_info(
             format!(
-                "POINTCLOUDREPROJECT: streaming EPSG:{} to EPSG:{target_epsg}; XY will transform and Z will be preserved. Output: \"{}\".",
-                source_epsg.unwrap_or_default(),
+                "POINTCLOUDREPROJECT: streaming {source_label} to EPSG:{target_epsg}; XY will transform and Z will be preserved. Output: \"{}\".",
                 output.display()
             )
             .as_str(),
@@ -3315,13 +3506,20 @@ impl OpenCADStudio {
             );
             return Task::none();
         }
-        let mut epsgs: Vec<_> = dataset
+        let mut crs_ids: Vec<_> = dataset
             .sources
             .iter()
-            .map(|source| source.sample.metadata.crs.horizontal_epsg)
+            .map(|source| {
+                let crs = &source.sample.metadata.crs;
+                crs.proj4
+                    .clone()
+                    .or_else(|| crs.horizontal_epsg.map(|code| format!("EPSG:{code}")))
+                    .unwrap_or_else(|| "unresolved".to_string())
+            })
             .collect();
-        epsgs.dedup();
-        if epsgs.len() > 1 {
+        crs_ids.sort();
+        crs_ids.dedup();
+        if crs_ids.len() > 1 {
             self.command_line.push_error(
                 "POINTCLOUDEXPORTALL: sources declare different horizontal CRS values; reproject or split them before merging.",
             );
@@ -3479,6 +3677,199 @@ impl OpenCADStudio {
                 .push_info("POINTCLOUDEXPORTCANCEL: no export is running.");
         }
     }
+
+    /// Runs the packaged UPCP/Boston fusion helper against either the active
+    /// tile or its source folder. The helper writes ASPRS-viewable classes
+    /// while retaining `label` and `source_classification` extra dimensions.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_point_cloud_urban_classification(
+        &mut self,
+        tab_index: usize,
+        folder_scope: bool,
+    ) -> Task<Message> {
+        let tab_id = self.tabs[tab_index].id;
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        if dataset.urban_job_running {
+            self.command_line
+                .push_info("POINTCLOUDURBANCLASSIFY: a classification job is already running.");
+            return Task::none();
+        }
+        let Some(active) = dataset.active() else {
+            self.command_line
+                .push_error("POINTCLOUDURBANCLASSIFY: attach a LAS/LAZ cloud first.");
+            return Task::none();
+        };
+
+        let mut source = active.source_path.clone();
+        let mut input_dir = source.parent().map(PathBuf::from).unwrap_or_default();
+        // A completed classified output may be attached when the user reruns
+        // the workflow. Resolve it back to the original sibling source.
+        if input_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("classified"))
+        {
+            if let (Some(parent), Some(stem), Some(extension)) = (
+                input_dir.parent(),
+                source.file_stem().and_then(|value| value.to_str()),
+                source.extension().and_then(|value| value.to_str()),
+            ) {
+                if let Some(original_stem) = stem.strip_suffix("_classified") {
+                    let candidate = parent.join(format!("{original_stem}.{extension}"));
+                    if candidate.is_file() {
+                        source = candidate;
+                        input_dir = parent.to_path_buf();
+                    }
+                }
+            }
+        }
+        if !source.is_file() || !input_dir.is_dir() {
+            self.command_line
+                .push_error("POINTCLOUDURBANCLASSIFY: the original source tile is unavailable.");
+            return Task::none();
+        }
+
+        let helper = std::env::var_os("OCS_LIDAR_CLASSIFIER")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|parent| parent.join("ocs-lidar-classifier.exe")))
+            });
+        let Some(helper) = helper.filter(|path| path.is_file()) else {
+            self.command_line.push_error(
+                "POINTCLOUDURBANCLASSIFY: packaged ocs-lidar-classifier.exe was not found beside OpenCADStudio.exe.",
+            );
+            return Task::none();
+        };
+
+        let output_dir = input_dir.join("classified");
+        let tile_name = source.file_name().map(|value| value.to_owned());
+        dataset.urban_job_running = true;
+        dataset.urban_status = if folder_scope {
+            "Running full-density source-folder classification".to_string()
+        } else {
+            "Running full-density current-tile classification".to_string()
+        };
+        self.command_line.push_info(
+            format!(
+                "POINTCLOUDURBANCLASSIFY: {} -> \"{}\"; buildings/roads/vegetation enabled (12 ft tree radius)...",
+                if folder_scope { "source folder" } else { "current tile" },
+                output_dir.display()
+            )
+            .as_str(),
+        );
+
+        background_task(
+            move || {
+                let mut command = std::process::Command::new(&helper);
+                command
+                    .arg(&input_dir)
+                    .arg("--output-dir")
+                    .arg(&output_dir)
+                    .arg("--road-extra-ft")
+                    .arg("1")
+                    .arg("--tree-radius-ft")
+                    .arg("12")
+                    .arg("--write-asprs")
+                    .arg("--overwrite");
+                if !folder_scope {
+                    let tile_name = tile_name.ok_or_else(|| {
+                        "POINTCLOUDURBANCLASSIFY: source filename is invalid.".to_string()
+                    })?;
+                    command.arg("--tile").arg(tile_name);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                }
+                let result = command
+                    .output()
+                    .map_err(|error| format!("unable to start classifier: {error}"))?;
+                if !result.status.success() {
+                    let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                    return Err(if stderr.is_empty() { stdout } else { stderr });
+                }
+
+                let manifest_path = output_dir.join("classification_manifest.json");
+                let manifest = std::fs::read_to_string(&manifest_path)
+                    .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
+                let manifest: serde_json::Value = serde_json::from_str(&manifest)
+                    .map_err(|error| format!("invalid classification manifest: {error}"))?;
+                let outputs = manifest
+                    .get("tiles")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|tile| tile.get("status").and_then(|value| value.as_str()) == Some("completed"))
+                    .filter_map(|tile| tile.get("output").and_then(|value| value.as_str()))
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_file())
+                    .collect::<Vec<_>>();
+                if outputs.is_empty() {
+                    return Err("classifier completed without a validated LAZ output".to_string());
+                }
+                Ok(UrbanClassificationResult {
+                    outputs,
+                    folder_scope,
+                })
+            },
+            move |result| Message::PointCloudUrbanClassified(tab_id, result),
+        )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn finish_point_cloud_urban_classification(
+        &mut self,
+        tab_id: u64,
+        result: Result<UrbanClassificationResult, String>,
+    ) -> Task<Message> {
+        let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return Task::none();
+        };
+        self.tabs[tab_index].point_cloud.urban_job_running = false;
+        match result {
+            Err(error) => {
+                self.tabs[tab_index].point_cloud.urban_status = format!("Failed: {error}");
+                self.command_line
+                    .push_error(format!("POINTCLOUDURBANCLASSIFY: {error}").as_str());
+                Task::none()
+            }
+            Ok(result) => {
+                self.tabs[tab_index].point_cloud.urban_status =
+                    format!("Completed {} classified tile(s)", result.outputs.len());
+                self.command_line.push_output(
+                    format!(
+                        "POINTCLOUDURBANCLASSIFY: completed {} full-density tile(s); attaching classified output.",
+                        result.outputs.len()
+                    )
+                    .as_str(),
+                );
+                let prior_active = self.active_tab;
+                self.active_tab = tab_index;
+                self.detach_point_cloud(tab_index);
+                let task = if result.folder_scope {
+                    result
+                        .outputs
+                        .first()
+                        .and_then(|path| path.parent())
+                        .map_or_else(Task::none, |folder| {
+                            self.start_point_cloud_folder_load(folder.to_path_buf())
+                        })
+                } else {
+                    result
+                        .outputs
+                        .first()
+                        .cloned()
+                        .map_or_else(Task::none, |path| self.start_point_cloud_load(path))
+                };
+                self.active_tab = prior_active;
+                task
+            }
+        }
+    }
 }
 
 impl PointCloudDataset {
@@ -3603,6 +3994,10 @@ impl PointCloudDataset {
             class_count: self.classes.classes.len(),
             color_mode: color_mode.to_string(),
             point_size_px: self.display.point_size_px,
+            section_width_px: self
+                .section
+                .map_or(32, |section| section.half_width_px.round() as i32)
+                .clamp(1, 1024),
             crs_declared: any_crs,
             indexed: self
                 .sources
@@ -3614,6 +4009,8 @@ impl PointCloudDataset {
                 |path| path.display().to_string(),
             ),
             export_progress,
+            urban_job_running: self.urban_job_running,
+            urban_status: self.urban_status.clone(),
             sidecar_available: false,
             selection_filter: describe_filter(&self.selection_filter),
             resident_tiles: self
@@ -3972,6 +4369,14 @@ fn find_valid_tile_cache(
                 })
                 .ok()
         })
+}
+
+/// True when a full-density (`Density::Full`) read of `point_count` points would
+/// exceed `cpu_budget_bytes`. Only `Full` is unbounded; `Auto` and explicit
+/// 1-in-N samples are the user's own decimation choices and are left untouched.
+fn full_density_over_budget(point_count: u64, cpu_budget_bytes: usize) -> bool {
+    let point_size = std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1) as u64;
+    point_count.saturating_mul(point_size) > cpu_budget_bytes as u64
 }
 
 /// Guard against pathological scans (junction loops, misdirected roots).

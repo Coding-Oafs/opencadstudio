@@ -60,6 +60,7 @@ drawing-coordinate envelope. Drawing-owned values persist in the adjacent
 | `POINTCLOUDPOINTSIZE <1-32>` | Set the fixed physical-pixel point diameter. |
 | `POINTCLOUDCLASSVISIBLE <class> <ON/OFF>` | Show or hide one class. |
 | `POINTCLOUDSTATS` | Report per-class counts for the current full/sample/LOD working set. |
+| `POINTCLOUDURBANCLASSIFY [CURRENT\|FOLDER]` | Run the bundled full-density Boston urban classifier for the attached tile or its source folder, write new files under `classified`, and replace the attachment with the classified result. Buildings, roads, bridges, ground, noise, and vegetation are written as standard ASPRS display classes while the original class byte and UPCP label are retained as extra dimensions. |
 | `POINTCLOUDCLASSIFY <class> <indices>` | Queue an ASPRS class for source indices. Indices accept comma-separated values and inclusive ranges, for example `POINTCLOUDCLASSIFY 2 10-25,40`. |
 | `POINTCLOUDSELECTPOINT` | Pick the nearest displayed point within a fixed screen-pixel aperture. |
 | `POINTCLOUDMEASURE` | Pick two displayed cloud points and report snapped 3D distance, horizontal distance, and elevation delta in the drawing working unit. |
@@ -92,6 +93,23 @@ drawing-coordinate envelope. Drawing-owned values persist in the adjacent
 LAS/LAZ. A display point retains this index even when the viewer uses a stride,
 so edits are applied to the correct full-resolution record during export.
 The active selection is highlighted amber in the GPU view before editing.
+
+### Boston urban classification profile
+
+The Windows installer includes `ocs-lidar-classifier.exe`, a self-contained
+adapter based on the ordered-fuser methodology in
+Urban_PointCloud_Processing. The LiDAR ribbon and manager can run it without a
+separate Python installation. It processes every source point, uses the City of
+Boston building and street-tree services plus MassDOT/Boston roadway data, and
+writes to a sibling `classified` folder. The installed v1.0.4 profile enables
+buildings, roads, and vegetation; expands roadway centerlines by one foot; and
+uses a conservative 12-foot active-tree radius.
+
+The output stores standard ASPRS classes for immediate class-color viewing:
+ground 2, vegetation 5, building 6, water 9, rail 10, road 11, bridge 17, and
+noise 18. It also stores the UPCP-compatible `label` dimension and the original
+ASPRS byte in `source_classification`, so automated labels remain auditable and
+reversible.
 
 ## Storage, safety, and fidelity
 
@@ -161,9 +179,10 @@ complete TerraScan replacement.
   require loading denser tiles first.
 - Saved drawings persist sidecars automatically. An unsaved drawing cannot have
   an adjacent durable sidecar until it is first saved.
-- Ground, isolated-noise, attribute-rule classification, and DTM contours are
-  available. Building/vegetation classifiers, flight-line processing,
-  thinning, and a watched-folder production queue remain future work.
+- Ground, isolated-noise, attribute-rule classification, DTM contours, and the
+  Boston building/road/vegetation macro classifier are available. Generalized
+  classifiers for other jurisdictions, flight-line processing, thinning, and
+  a watched-folder production queue remain future work.
 - Horizontal reprojection supports EPSG definitions available in the bundled
   pure-Rust database. Grid-based and orthometric vertical datum transformations
   require a separately validated geodetic backend; v0.9.6 preserves Z and says

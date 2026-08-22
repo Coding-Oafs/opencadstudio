@@ -220,6 +220,16 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(crate::tf!("Basemap zoom: {}.", self.basemap.zoom).as_ref());
             }
+            "FOLLOW" => {
+                self.basemap.follow_camera = !self.basemap.follow_camera;
+                self.command_line.push_output(
+                    format!(
+                        "Basemap: camera-follow {}.",
+                        if self.basemap.follow_camera { "on" } else { "off" }
+                    )
+                    .as_str(),
+                );
+            }
             "CENTER" | "LOCATION" | "LOCATE" => {
                 let values = parts.collect::<Vec<_>>();
                 if values.is_empty() {
@@ -326,7 +336,7 @@ impl OpenCADStudio {
             }
             _ => {
                 self.command_line.push_error(
-                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <drawing|default|las|epsg>|CENTER <lon lat [radius-km]>|BOUNDS <minx miny maxx maxy>|ZOOM <z>|OFF].",
+                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <drawing|default|las|epsg>|CENTER <lon lat [radius-km]>|BOUNDS <minx miny maxx maxy>|ZOOM <z>|FOLLOW|OFF].",
                 );
                 return Task::none();
             }
@@ -382,6 +392,37 @@ impl OpenCADStudio {
     /// Resolve the source EPSG (from the attached cloud when `FromLas`), compute
     /// the covered tiles, fetch and decode them on a worker, then install the
     /// world-space quads.
+    /// The camera's visible world-space XY envelope (for camera-follow basemap
+    /// mode) plus the viewport pixel width. `None` when the viewport is not yet
+    /// measurable.
+    fn basemap_viewport(&self, i: usize) -> Option<(([f64; 3], [f64; 3]), f32)> {
+        let canvas = self.tabs[i].scene.selection.borrow().vp_size;
+        let (camera, viewport) = self.tabs[i]
+            .scene
+            .viewport_edit_frame(canvas)
+            .unwrap_or_else(|| {
+                (
+                    self.tabs[i].scene.camera.borrow().clone(),
+                    self.tabs[i]
+                        .scene
+                        .active_model_tile_bounds(canvas.0, canvas.1),
+                )
+            });
+        if viewport.width <= 0.0 || viewport.height <= 0.0 {
+            return None;
+        }
+        let half_h = camera.ortho_size() as f64;
+        let half_w = half_h * (viewport.width / viewport.height) as f64;
+        let center = camera.target;
+        Some((
+            (
+                [center.x - half_w, center.y - half_h, center.z],
+                [center.x + half_w, center.y + half_h, center.z],
+            ),
+            viewport.width,
+        ))
+    }
+
     pub(super) fn refresh_basemap(&mut self, tab_id: u64) -> Task<Message> {
         let i = self.active_tab;
         let settings = self.basemap.clone().normalized();
@@ -406,6 +447,15 @@ impl OpenCADStudio {
         let cloud_bounds = self.tabs[i].point_cloud.bounds();
         let no_spatial_bounds =
             manual_bounds.is_none() && drawing_bounds.is_none() && cloud_bounds.is_none();
+        // Camera-follow mode plans tiles over the visible viewport (not the
+        // whole drawing) and derives the zoom from screen pixels.
+        let (viewport_bounds, viewport_width_px) = if settings.follow_camera {
+            self.basemap_viewport(i)
+                .map(|(bounds, width)| (Some(bounds), Some(width)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
 
         // Resolve the source CRS used to interpret drawing coordinates. A full
         // `CrsInfo` (not just the EPSG) lets projected LAS WKT continue using
@@ -457,8 +507,14 @@ impl OpenCADStudio {
         };
 
         let preferred_bounds: Option<([f64; 3], [f64; 3])> = match settings.projection {
-            BasemapProjection::FromLas => cloud_bounds.or(manual_bounds).or(drawing_bounds),
-            _ => manual_bounds.or(drawing_bounds).or(cloud_bounds),
+            BasemapProjection::FromLas => viewport_bounds
+                .or(cloud_bounds)
+                .or(manual_bounds)
+                .or(drawing_bounds),
+            _ => manual_bounds
+                .or(viewport_bounds)
+                .or(drawing_bounds)
+                .or(cloud_bounds),
         };
         let mut automatic_bootstrap = false;
         let (min, max) = if let Some(bounds) = preferred_bounds {
@@ -510,8 +566,15 @@ impl OpenCADStudio {
         } else {
             MAX_INTERACTIVE_TILES
         };
+        let requested_zoom = if settings.follow_camera {
+            viewport_width_px
+                .map(|width| basemap::zoom_for_pixel_scale(world_bounds, width))
+                .unwrap_or(settings.zoom)
+        } else {
+            settings.zoom
+        };
         let Some((effective_zoom, planned_count)) =
-            basemap::zoom_for_tile_limit(world_bounds, settings.zoom, tile_limit)
+            basemap::zoom_for_tile_limit(world_bounds, requested_zoom, tile_limit)
         else {
             self.command_line
                 .push_error("Basemap: no tiles cover the drawing bounds.");
@@ -535,11 +598,11 @@ impl OpenCADStudio {
                 .push_error("Basemap: no tiles cover the drawing bounds.");
             return Task::none();
         }
-        if effective_zoom < settings.zoom && !automatic_bootstrap {
+        if effective_zoom < requested_zoom && !automatic_bootstrap && !settings.follow_camera {
             self.command_line.push_info(
                 format!(
                     "Basemap: drawing extent is too large for zoom {}; using zoom {effective_zoom} ({planned_count} tiles) to keep the viewport responsive.",
-                    settings.zoom
+                    requested_zoom
                 )
                 .as_str(),
             );

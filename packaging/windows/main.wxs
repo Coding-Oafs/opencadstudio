@@ -4,6 +4,7 @@
 
   Build (CI / locally with WiX Toolset 3.x in PATH):
     candle.exe -arch x64 -dVersion=<x.y.z> -dSource=target\release\OpenCADStudio.exe \
+               -dClassifier=target\release\ocs-lidar-classifier.exe \
                -dIcon=packaging\windows\AppIcon.ico packaging\windows\main.wxs \
                -out packaging\windows\main.wixobj
     light.exe  packaging\windows\main.wixobj -ext WixUIExtension -out OpenCADStudio.msi
@@ -84,6 +85,15 @@
                 IconIndex='0'
                 Advertise='yes' />
             </File>
+
+            <!-- Self-contained Boston UPCP classifier invoked by the LiDAR
+                 ribbon and manager. It owns its Python/geospatial runtime so
+                 the installed workflow does not depend on system Python. -->
+            <File
+              Id='LidarClassifierEXE'
+              Name='ocs-lidar-classifier.exe'
+              DiskId='1'
+              Source='$(var.Classifier)' />
 
             <!-- DWG/DXF file-type icons, generated from the mimetype SVGs
                  (CI: magick image-vnd.{dwg,dxf}.svg -> {dwg,dxf}.ico). -->

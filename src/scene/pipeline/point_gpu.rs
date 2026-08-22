@@ -70,9 +70,10 @@ struct StyleUniforms {
     _pad1: [f32; 2],
     elevation_range: [f32; 2],
     _pad2: [f32; 2],
-    // Cross-section band: p0.xy, p1.xy, and (half_width, mode). mode: 0 =
-    // off, 1 = dim, 2 = discard. `half_width` is in world units; a
-    // degenerate p0==p1 (mode != 0) is treated as "off".
+    // Cross-section band: p0.xy, p1.xy, and (half_width_px, mode). mode: 0 =
+    // off, 1 = dim, 2 = discard. `half_width_px` is in screen pixels (the
+    // shader scales by world_per_pixel); a degenerate p0==p1 (mode != 0) is
+    // treated as "off".
     section_p0: [f32; 2],
     _pad3: [f32; 2],
     section_p1: [f32; 2],
@@ -93,11 +94,11 @@ impl StyleUniforms {
         // Encode the active section (dim or discard). A zero-length segment
         // degrades to "off" so a half-formed section never blanks the cloud.
         let (p0, p1, params) = match style.section {
-            Some(section) if section.p0 != section.p1 && section.half_width > 0.0 => (
+            Some(section) if section.p0 != section.p1 && section.half_width_px > 0.0 => (
                 [section.p0[0] as f32, section.p0[1] as f32],
                 [section.p1[0] as f32, section.p1[1] as f32],
                 [
-                    section.half_width as f32,
+                    section.half_width_px as f32,
                     match section.mode {
                         crate::scene::model::point_cloud_model::SectionMode::Dim => 1.0,
                         crate::scene::model::point_cloud_model::SectionMode::Discard => 2.0,

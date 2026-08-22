@@ -12,6 +12,11 @@ use serde::{Deserialize, Serialize};
 pub struct BasemapSettings {
     pub provider: BasemapProvider,
     pub projection: BasemapProjection,
+    /// When true, the underlay tracks the viewport (camera) and re-plans tiles
+    /// at higher resolution as the user zooms in, instead of covering the whole
+    /// drawing extent at a fixed zoom.
+    #[serde(default)]
+    pub follow_camera: bool,
     /// Source EPSG to reproject from (used when `projection` is `Epsg` or
     /// `FromLas`; `FromLas` fills this from the attached cloud).
     pub source_epsg: Option<u16>,
@@ -29,6 +34,7 @@ impl Default for BasemapSettings {
         Self {
             provider: BasemapProvider::Off,
             projection: BasemapProjection::FromDrawing,
+            follow_camera: false,
             source_epsg: None,
             custom_template: String::new(),
             zoom: 16,
@@ -367,6 +373,20 @@ pub fn zoom_for_tile_limit(
         }
         zoom -= 1;
     }
+}
+
+/// Slippy zoom whose tiles approximately match the screen at the given viewport
+/// width (one tile pixel ≈ one screen pixel). `world_bounds` is the visible
+/// Web-Mercator envelope in metres. Returns a value clamped to 0..22.
+pub fn zoom_for_pixel_scale(world_bounds: [f64; 4], viewport_width_px: f32) -> u32 {
+    const METERS_PER_PX_Z0: f64 = 156_543.033_928_040_97;
+    let world_width = (world_bounds[2] - world_bounds[0]).abs();
+    if world_width <= 0.0 || !world_width.is_finite() || viewport_width_px <= 0.0 {
+        return 0;
+    }
+    let meters_per_px = world_width / viewport_width_px as f64;
+    let zoom = (METERS_PER_PX_Z0 / meters_per_px).log2().floor();
+    zoom.clamp(0.0, 22.0) as u32
 }
 
 /// Materialize the tiles covering `bounds` only after enforcing `max_tiles`.

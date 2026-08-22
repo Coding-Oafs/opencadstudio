@@ -120,7 +120,11 @@ impl CadModule for LidarModule {
                                 ("POINTCLOUDPOINTSIZE 1", "1 pixel", IconKind::Svg(POINT)),
                                 ("POINTCLOUDPOINTSIZE 2", "2 pixels", IconKind::Svg(POINT)),
                                 ("POINTCLOUDPOINTSIZE 3", "3 pixels", IconKind::Svg(POINT)),
+                                ("POINTCLOUDPOINTSIZE 4", "4 pixels", IconKind::Svg(POINT)),
                                 ("POINTCLOUDPOINTSIZE 5", "5 pixels", IconKind::Svg(POINT)),
+                                ("POINTCLOUDPOINTSIZE 6", "6 pixels", IconKind::Svg(POINT)),
+                                ("POINTCLOUDPOINTSIZE 8", "8 pixels", IconKind::Svg(POINT)),
+                                ("POINTCLOUDPOINTSIZE 10", "10 pixels", IconKind::Svg(POINT)),
                             ],
                             default: "POINTCLOUDPOINTSIZE 3",
                         },
@@ -162,6 +166,11 @@ impl CadModule for LidarModule {
                                     IconKind::Svg(POINT),
                                 ),
                                 (
+                                    "POINTCLOUDCLASSIFYSELECTION 5",
+                                    "Vegetation (5)",
+                                    IconKind::Svg(POINT),
+                                ),
+                                (
                                     "POINTCLOUDCLASSIFYSELECTION 7",
                                     "Low Point (7)",
                                     IconKind::Svg(POINT),
@@ -179,6 +188,13 @@ impl CadModule for LidarModule {
                             ],
                             default: "POINTCLOUDCLASSIFYSELECTION 2",
                         },
+                        tool(
+                            "LIDAR_URBAN_CLASSIFY",
+                            "Urban Classify",
+                            "POINTCLOUDURBANCLASSIFY CURRENT",
+                            CLOUD,
+                        )
+                        .into(),
                         tool(
                             "LIDAR_AUTO_GROUND",
                             "Auto Ground",
@@ -242,15 +258,15 @@ impl CadModule for LidarModule {
                         .into(),
                         tool(
                             "LIDAR_SECTION_WIDER",
-                            "Wider Band",
-                            "POINTCLOUDSECTIONWIDTH 2.0",
+                            "Wide Band",
+                            "POINTCLOUDSECTIONWIDTH 128",
                             CLOUD,
                         )
                         .into(),
                         tool(
                             "LIDAR_SECTION_NARROWER",
-                            "Narrower Band",
-                            "POINTCLOUDSECTIONWIDTH 0.5",
+                            "Narrow Band",
+                            "POINTCLOUDSECTIONWIDTH 8",
                             CLOUD,
                         )
                         .into(),

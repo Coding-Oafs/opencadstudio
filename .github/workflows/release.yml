@@ -172,6 +172,27 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Python for the LiDAR classifier
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build self-contained LiDAR classifier
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check `
+            -r scripts/lidar/requirements-boston-upcp.txt `
+            pyinstaller
+          python -m PyInstaller --noconfirm --clean --onefile `
+            --name ocs-lidar-classifier `
+            --distpath target/release `
+            --workpath target/pyinstaller-work `
+            --specpath target/pyinstaller-spec `
+            --collect-all shapely `
+            --collect-all laspy `
+            --collect-all lazrs `
+            scripts/lidar/boston_upcp_classifier.py
+
       - name: Convert SVG icon to ICO
         shell: pwsh
         run: |
@@ -219,7 +240,9 @@ jobs:
           endpoint: ${{ secrets.AZURE_ENDPOINT }}
           signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
-          files: ${{ github.workspace }}\target\release\OpenCADStudio.exe
+          files: |
+            ${{ github.workspace }}\target\release\OpenCADStudio.exe
+            ${{ github.workspace }}\target\release\ocs-lidar-classifier.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -244,6 +267,7 @@ jobs:
           # and `target\release\OpenCADStudio.exe` as a stray input
           # filename.
           $exePath  = (Resolve-Path target\release\OpenCADStudio.exe).Path
+          $classifierPath = (Resolve-Path target\release\ocs-lidar-classifier.exe).Path
           $iconPath = (Resolve-Path packaging\windows\AppIcon.ico).Path
           # GPL-3 license RTF shown on the installer's EULA page.
           $licensePath = (Resolve-Path packaging\windows\License.rtf).Path
@@ -258,6 +282,7 @@ jobs:
           & $candle -arch x64 `
             "-dVersion=$version" `
             "-dSource=$exePath" `
+            "-dClassifier=$classifierPath" `
             "-dIcon=$iconPath" `
             "-dLicense=$licensePath" `
             $mainWxs $uiWxs `

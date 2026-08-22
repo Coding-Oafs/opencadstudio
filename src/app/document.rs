@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 static NEXT_DOCUMENT_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -195,6 +196,8 @@ pub(super) struct DocumentTab {
     pub(super) active_mleader_style: String,
     /// Last camera_generation value written back to the document.
     pub(super) last_synced_camera_gen: u64,
+    /// Timestamp of the last camera-follow basemap refresh, for debouncing.
+    pub(super) last_basemap_follow_at: Option<Instant>,
     /// Render-state key of `scene.document.preview`. Matching saves reuse the
     /// encoded DWG thumbnail instead of rescanning every resident wire.
     #[cfg(not(target_arch = "wasm32"))]
@@ -497,6 +500,7 @@ impl DocumentTab {
             active_block_edit: None,
             active_mleader_style: "Standard".to_string(),
             last_synced_camera_gen: 0,
+            last_basemap_follow_at: None,
             #[cfg(not(target_arch = "wasm32"))]
             thumbnail_cache_key: None,
             is_start: false,

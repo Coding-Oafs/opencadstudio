@@ -121,6 +121,25 @@ pub fn reproject_to_crs(source_epsg: u16, crs: &CrsInfo, x: f64, y: f64) -> Opti
         .and_then(|epsg| reproject_xy(source_epsg, epsg, x, y))
 }
 
+/// Build the best-available horizontal [`Proj`] for a source CRS: the
+/// WKT-derived PROJ.4 string first (accurate for a projected CRS whose WKT
+/// omits an EPSG authority on the `PROJCS`, leaving only the geographic base in
+/// `horizontal_epsg`), then the resolved EPSG code.
+fn projection_from_crs(crs: &CrsInfo) -> Option<Proj> {
+    if let Some(proj4) = crs.proj4.as_deref() {
+        if let Ok(projection) = Proj::from_proj_string(proj4) {
+            return Some(projection);
+        }
+    }
+    crs.horizontal_epsg
+        .and_then(|epsg| Proj::from_epsg_code(epsg).ok())
+}
+
+/// True when `epsg` resolves to a geographic (angular) CRS.
+fn is_geographic_epsg(epsg: u16) -> bool {
+    Proj::from_epsg_code(epsg).is_ok_and(|projection| projection.is_latlong())
+}
+
 /// CRS information recovered from LAS WKT or GeoTIFF (E)VLRs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrsInfo {
@@ -189,12 +208,24 @@ impl CrsInfo {
         }
     }
 
+    /// Human-readable horizontal CRS, avoiding the misleading geographic-EPSG
+    /// fallback described in [`Self::label`].
+    pub fn horizontal_label(&self) -> String {
+        match self.horizontal_epsg {
+            Some(code) if is_geographic_epsg(code) && self.proj4.is_some() => self
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("EPSG:{code}")),
+            Some(code) => format!("EPSG:{code}"),
+            None => self.name.clone().unwrap_or_else(|| "unresolved CRS".to_string()),
+        }
+    }
+
     pub fn label(&self) -> String {
-        let horizontal = self
-            .horizontal_epsg
-            .map(|code| format!("EPSG:{code}"))
-            .or_else(|| self.name.clone())
-            .unwrap_or_else(|| "unresolved CRS".to_string());
+        // A projected CRS whose WKT omits an EPSG authority on the PROJCS
+        // falls back to its geographic base in `horizontal_epsg` (e.g. 6318).
+        // Show the WKT name rather than misleadingly reporting a degree CRS.
+        let horizontal = self.horizontal_label();
         match self.vertical_epsg {
             Some(vertical) => format!("{horizontal} + vertical EPSG:{vertical}"),
             None => horizontal,
@@ -555,16 +586,21 @@ pub fn reproject_with_patches_progress(
 
     let mut reader = Reader::from_path(input)?;
     let source_crs = CrsInfo::from_header(reader.header());
-    let source_epsg = source_crs.horizontal_epsg.ok_or_else(|| {
-        Error::Crs("source horizontal CRS is not a resolvable EPSG code".to_string())
-    })?;
-    if source_epsg == target_epsg {
+    // A projected CRS whose WKT omits an EPSG authority on the PROJCS resolves
+    // `horizontal_epsg` to only its geographic base (e.g. 6318). Reject the
+    // no-op only when the source is unambiguously that same EPSG; otherwise
+    // prefer the WKT-derived PROJ.4 string so state-plane feet are not
+    // reprojected as degrees.
+    if source_crs.proj4.is_none() && source_crs.horizontal_epsg == Some(target_epsg) {
         return Err(Error::Crs(format!(
             "source and target horizontal CRS are both EPSG:{target_epsg}"
         )));
     }
-    let source_projection = Proj::from_epsg_code(source_epsg)
-        .map_err(|error| Error::Crs(format!("EPSG:{source_epsg}: {error}")))?;
+    let source_projection = projection_from_crs(&source_crs).ok_or_else(|| {
+        Error::Crs(
+            "source horizontal CRS is not resolvable (no projected EPSG or PROJ.4)".to_string(),
+        )
+    })?;
     let target_projection = Proj::from_epsg_code(target_epsg)
         .map_err(|error| Error::Crs(format!("EPSG:{target_epsg}: {error}")))?;
     let target_definition = crs_definitions::from_code(target_epsg).ok_or_else(|| {
@@ -827,5 +863,40 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
             assess_survey_readiness(&metadata),
             SurveyReadiness::Blocked(_)
         ));
+    }
+
+    #[test]
+    fn projection_from_crs_prefers_proj4_over_geographic_fallback() {
+        // California State Plane Zone 3 (international feet): the PROJCS carries
+        // no EPSG authority, so `epsg_from_wkt` falls back to the geographic
+        // base (6318) while `proj4_from_wkt` derives the real LCC projection.
+        let wkt = "COMPD_CS[\"NAD83(2011) / California zone 3 (ft) + NAVD88 height (ftUS)\",PROJCS[\"NAD83(2011) / California zone 3 (ft)\",GEOGCS[\"NAD83(2011)\",DATUM[\"NAD83_National_Spatial_Reference_System_2011\",SPHEROID[\"GRS 1980\",6378137,298.257222101,AUTHORITY[\"EPSG\",\"7019\"]],AUTHORITY[\"EPSG\",\"1116\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"6318\"]],PROJECTION[\"Lambert_Conformal_Conic_2SP\"],PARAMETER[\"latitude_of_origin\",36.5],PARAMETER[\"central_meridian\",-120.5],PARAMETER[\"standard_parallel_1\",38.4333333333333],PARAMETER[\"standard_parallel_2\",37.0666666666667],PARAMETER[\"false_easting\",6561679.79002625],PARAMETER[\"false_northing\",1640419.94750656],UNIT[\"International foot\",0.3048],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]],VERT_CS[\"NAVD88 height (ftUS)\",VERT_DATUM[\"North American Vertical Datum 1988\",2005,AUTHORITY[\"EPSG\",\"5103\"]],UNIT[\"US survey foot\",0.304800609601219,AUTHORITY[\"EPSG\",\"9003\"]],AXIS[\"Gravity-related height\",UP],AUTHORITY[\"EPSG\",\"6360\"]]]";
+        let proj4 = proj4_from_wkt(wkt).expect("projected WKT parses");
+        assert!(proj4.starts_with("+proj=lcc"), "got: {proj4}");
+        assert_eq!(epsg_from_wkt(wkt), (Some(6318), Some(6360)));
+
+        let crs = CrsInfo {
+            horizontal_epsg: Some(6318),
+            vertical_epsg: Some(6360),
+            name: Some("NAD83(2011) / California zone 3 (ft)".to_string()),
+            wkt: Some(wkt.to_string()),
+            proj4: Some(proj4),
+            source: Some("WKT".to_string()),
+            parse_warning: None,
+        };
+
+        let projection = projection_from_crs(&crs).expect("resolvable projection");
+        assert!(!projection.is_latlong(), "must resolve to the projected CRS");
+        assert!(
+            crs.label().contains("California zone 3"),
+            "label must not show the geographic fallback: {}",
+            crs.label()
+        );
+
+        // Centre of the R0_C0 tile in state-plane international feet, near Palo Alto.
+        let (longitude, latitude) = reproject_from_crs(&crs, 4326, 6_064_521.0, 1_985_653.0)
+            .expect("state-plane coordinate should transform");
+        assert!((-122.4..=-121.8).contains(&longitude), "longitude={longitude}");
+        assert!((37.2..=37.8).contains(&latitude), "latitude={latitude}");
     }
 }

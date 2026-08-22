@@ -1092,6 +1092,10 @@ pub(super) fn viewport_context_menu_overlay(
             t!("Copy Coordinates").into_owned(),
             Message::CopyViewportCoordinate,
         ));
+        items.push(item(
+            t!("Copy Coordinates (Lon/Lat)").into_owned(),
+            Message::CopyViewportCoordinateDecimal,
+        ));
     }
 
     let menu_col = column(items).spacing(0).width(Length::Fixed(180.0));

@@ -38,8 +38,8 @@ pub use sidecar::{
     SidecarResult, SidecarStore, SourceFingerprint,
 };
 pub use tile_cache::{
-    build_tiled_cache, read_tile, read_tiles_parallel, IndexProgress, TileCacheError,
-    TileCacheManifest, TileCacheOptions, TileCacheResult, TileEntry, TileKey,
+    build_tiled_cache, estimate_cache_bytes, read_tile, read_tiles_parallel, IndexProgress,
+    TileCacheError, TileCacheManifest, TileCacheOptions, TileCacheResult, TileEntry, TileKey,
     MAX_TILE_READ_WORKERS,
 };
 
