@@ -36,7 +36,7 @@ Open CAD Studio तकनीकी ड्राइंग, लेआउट का
 - **GPU रेंडरिंग** — `wgpu` से तेज़ किए गए 2D और 3D व्यूपोर्ट, ऑर्थोग्राफ़िक और पर्सपेक्टिव कैमरा सहित।
 - **विस्तार योग्य कार्यप्रवाह** — मूल प्लगइन, कमांड स्क्रिप्ट, हेडलेस रूपांतरण और पंक्ति-आधारित JSON स्वचालन API।
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio में 3D मॉडल" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio में 3D मॉडल" width="100%"></p>
 
 ## फ़ाइल कार्यप्रवाह
 

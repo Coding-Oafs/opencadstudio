@@ -36,7 +36,7 @@ Open CAD Studio 是用於技術繪圖、配置作業和實體建模的跨平台�
 - **GPU 轉譯** — 透過 `wgpu` 加速二維和三維視埠，並支援正投影與透視相機。
 - **可擴充工作流程** — 支援原生外掛程式、指令碼、無介面轉換和逐行 JSON 自動化 API。
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio 中的三維模型" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio 中的三維模型" width="100%"></p>
 
 ## 檔案工作流程
 

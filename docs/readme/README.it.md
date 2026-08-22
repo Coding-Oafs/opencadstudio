@@ -36,7 +36,7 @@ Il progetto è in sviluppo attivo. Conserva copie di sicurezza dei disegni di pr
 - **Rendering GPU** — viste 2D e 3D accelerate tramite `wgpu`, con telecamere ortografiche e prospettiche.
 - **Flussi estensibili** — plugin nativi, script di comandi, conversione headless e API di automazione JSON basata su righe.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Modello 3D in Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Modello 3D in Open CAD Studio" width="100%"></p>
 
 ## Flussi dei file
 

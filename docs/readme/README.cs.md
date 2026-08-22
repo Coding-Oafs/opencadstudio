@@ -36,7 +36,7 @@ Projekt je aktivně vyvíjen. Důležité produkční výkresy zálohujte a repr
 - **Vykreslování přes GPU** — akcelerované 2D a 3D pohledy pomocí `wgpu`, s ortografickou a perspektivní kamerou.
 - **Rozšiřitelné postupy** — nativní pluginy, příkazové skripty, bezobslužná konverze a řádkové JSON automatizační API.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D model v Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D model v Open CAD Studio" width="100%"></p>
 
 ## Práce se soubory
 

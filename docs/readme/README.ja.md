@@ -36,7 +36,7 @@ Open CAD Studio は、技術製図、レイアウト作業、ソリッドモデ�
 - **GPU レンダリング** — `wgpu` による高速な 2D/3D ビューポートと、正投影・透視投影カメラ。
 - **拡張可能なワークフロー** — ネイティブプラグイン、コマンドスクリプト、ヘッドレス変換、行単位の JSON 自動化 API。
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio の 3D モデル" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio の 3D モデル" width="100%"></p>
 
 ## ファイルワークフロー
 

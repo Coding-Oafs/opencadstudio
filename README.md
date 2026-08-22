@@ -66,7 +66,7 @@ The project is under active development. Keep backups of important production dr
 - **Extensible workflows** — native plugins, command scripts, headless conversion, and a line-based JSON automation API.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D model in Open CAD Studio" width="100%">
+  <img src="site/modeling.png" alt="3D model in Open CAD Studio" width="100%">
 </p>
 
 ## File workflows

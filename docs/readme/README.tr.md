@@ -38,7 +38,7 @@ Proje aktif olarak geliştirilmektedir. Önemli üretim çizimlerinin yedeklerin
 - **GPU ile görüntüleme** — `wgpu` üzerinden hızlandırılmış 2B ve 3B görünüm pencereleri; ortografik ve perspektif kameralar.
 - **Genişletilebilir iş akışları** — yerel eklentiler, komut betikleri, arayüzsüz dönüştürme ve satır tabanlı JSON otomasyon API'si.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio içinde 3B model" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio içinde 3B model" width="100%"></p>
 
 ## Dosya iş akışları
 

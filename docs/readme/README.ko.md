@@ -36,7 +36,7 @@ Open CAD Studio는 기술 도면 작성, 배치 작업, 솔리드 모델링을 �
 - **GPU 렌더링** — `wgpu`로 가속된 2D 및 3D 뷰포트와 직교·원근 카메라를 제공합니다.
 - **확장 가능한 작업 흐름** — 네이티브 플러그인, 명령 스크립트, 헤드리스 변환, 줄 단위 JSON 자동화 API를 지원합니다.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Open CAD Studio의 3D 모델" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Open CAD Studio의 3D 모델" width="100%"></p>
 
 ## 파일 작업 흐름
 

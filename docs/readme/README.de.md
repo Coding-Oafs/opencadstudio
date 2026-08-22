@@ -36,7 +36,7 @@ Das Projekt wird aktiv entwickelt. Bewahre Sicherungskopien wichtiger Produktion
 - **GPU-Darstellung** — beschleunigte 2D- und 3D-Ansichten über `wgpu` mit orthografischen und perspektivischen Kameras.
 - **Erweiterbare Abläufe** — native Plugins, Befehlsskripte, Konvertierung ohne Oberfläche und zeilenbasierte JSON-Automatisierungs-API.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D-Modell in Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D-Modell in Open CAD Studio" width="100%"></p>
 
 ## Dateiabläufe
 

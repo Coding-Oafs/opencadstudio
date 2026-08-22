@@ -36,7 +36,7 @@ Open CAD Studio — кроссплатформенное приложение д
 - **Отрисовка на GPU** — ускоренные 2D- и 3D-виды через `wgpu`, ортографическая и перспективная камеры.
 - **Расширяемые процессы** — нативные плагины, сценарии команд, преобразование без интерфейса и построчный JSON API автоматизации.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D-модель в Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D-модель в Open CAD Studio" width="100%"></p>
 
 ## Работа с файлами
 

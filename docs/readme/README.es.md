@@ -36,7 +36,7 @@ El proyecto está en desarrollo activo. Conserva copias de seguridad de los dibu
 - **Renderizado por GPU** — vistas 2D y 3D aceleradas mediante `wgpu`, con cámaras ortográfica y en perspectiva.
 - **Flujos ampliables** — complementos nativos, scripts de comandos, conversión sin interfaz y una API de automatización JSON basada en líneas.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="Modelo 3D en Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="Modelo 3D en Open CAD Studio" width="100%"></p>
 
 ## Flujos de archivos
 

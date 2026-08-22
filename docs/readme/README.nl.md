@@ -36,7 +36,7 @@ Het project wordt actief ontwikkeld. Bewaar reservekopieën van belangrijke prod
 - **GPU-rendering** — versnelde 2D- en 3D-viewports via `wgpu`, met orthografische en perspectiefcamera's.
 - **Uitbreidbare workflows** — native plug-ins, opdrachtscripts, headless conversie en een regelgebaseerde JSON-automatiserings-API.
 
-<p align="center"><img src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" alt="3D-model in Open CAD Studio" width="100%"></p>
+<p align="center"><img src="../../site/modeling.png" alt="3D-model in Open CAD Studio" width="100%"></p>
 
 ## Bestandsworkflows
 
