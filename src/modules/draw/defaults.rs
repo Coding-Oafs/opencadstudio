@@ -19,6 +19,13 @@ thread_local! {
     static ARRAY_P_ANGLE:   Cell<f64> = Cell::new(360.0); // degrees
     static ARRAY_PATH_COUNT: Cell<f64> = Cell::new(6.0);
     static POLYGON_SIDES:   Cell<f64> = Cell::new(6.0);
+    static RECT_ELEVATION:  Cell<f64> = Cell::new(0.0);
+    static RECT_THICKNESS:  Cell<f64> = Cell::new(0.0);
+    static RECT_WIDTH:      Cell<f64> = Cell::new(0.0);
+    static RECT_ROTATION:   Cell<f64> = Cell::new(0.0);   // degrees
+    static RECT_CHAMFER1:   Cell<f64> = Cell::new(0.0);
+    static RECT_CHAMFER2:   Cell<f64> = Cell::new(0.0);
+    static RECT_FILLET:     Cell<f64> = Cell::new(0.0);
 }
 
 macro_rules! accessors {
@@ -54,3 +61,10 @@ accessors!(get_array_p_count, set_array_p_count, ARRAY_P_COUNT);
 accessors!(get_array_p_angle, set_array_p_angle, ARRAY_P_ANGLE);
 accessors!(get_array_path_count, set_array_path_count, ARRAY_PATH_COUNT);
 accessors!(get_polygon_sides, set_polygon_sides, POLYGON_SIDES);
+accessors!(get_rect_elevation, set_rect_elevation, RECT_ELEVATION);
+accessors!(get_rect_thickness, set_rect_thickness, RECT_THICKNESS);
+accessors!(get_rect_width, set_rect_width, RECT_WIDTH);
+accessors!(get_rect_rotation, set_rect_rotation, RECT_ROTATION);
+accessors!(get_rect_chamfer1, set_rect_chamfer1, RECT_CHAMFER1);
+accessors!(get_rect_chamfer2, set_rect_chamfer2, RECT_CHAMFER2);
+accessors!(get_rect_fillet, set_rect_fillet, RECT_FILLET);

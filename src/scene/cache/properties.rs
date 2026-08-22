@@ -91,6 +91,10 @@ pub fn general_section(entity: &EntityType) -> PropSection {
         ],
     };
 
+    if matches!(entity, EntityType::LwPolyline(polyline) if crate::entities::lwpolyline::is_rectangle(polyline)) {
+        section.props.retain(|prop| prop.field != "handle");
+    }
+
     if matches!(entity, EntityType::Point(_)) {
         section.props.retain(|prop| prop.field != "handle");
         let hyperlink = section.props.iter().position(|prop| prop.field == "hyperlink");
