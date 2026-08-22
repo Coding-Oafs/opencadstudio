@@ -21,21 +21,6 @@ use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
 use glam::DVec3;
 
-/// Build the four corners of an axis-aligned box between opposite corners `a`
-/// and `b`, axis-aligned in the active UCS (`ucs` = UCS→wire affine, identity =
-/// world). The two given corners stay put; the other two are placed square to
-/// the UCS axes instead of the world axes.
-fn ucs_box_corners(a: DVec3, b: DVec3, plane: WorkingPlane) -> [DVec3; 4] {
-    let au = plane.to_local(a);
-    let bu = plane.to_local(b);
-    [
-        plane.to_world(DVec3::new(au.x, au.y, au.z)),
-        plane.to_world(DVec3::new(bu.x, au.y, au.z)),
-        plane.to_world(DVec3::new(bu.x, bu.y, au.z)),
-        plane.to_world(DVec3::new(au.x, bu.y, au.z)),
-    ]
-}
-
 /// Four corners of a box centred at `c` with half-extents taken from `corner`,
 /// axis-aligned in the active UCS (`ucs` = UCS→wire affine, identity = world).
 fn ucs_box_around_center(c: DVec3, corner: DVec3, plane: WorkingPlane) -> [DVec3; 4] {
@@ -94,6 +79,146 @@ fn make_pline(points: &[DVec3], plane: WorkingPlane) -> EntityType {
         is_closed: true,
         ..Default::default()
     }))
+}
+
+#[derive(Clone, Copy)]
+struct RectStyle {
+    chamfer_first: f64,
+    chamfer_second: f64,
+    fillet_radius: f64,
+    width: f64,
+    thickness: f64,
+}
+
+fn rectangle_corners(
+    first: DVec3,
+    cursor: DVec3,
+    plane: WorkingPlane,
+    rotation_deg: f64,
+    fixed_dimensions: Option<(f64, f64)>,
+) -> Option<[DVec3; 4]> {
+    let first_local = plane.to_local(first);
+    let cursor_local = plane.to_local(cursor);
+    let angle = rotation_deg.to_radians();
+    let axis_x = DVec3::new(angle.cos(), angle.sin(), 0.0);
+    let axis_y = DVec3::new(-angle.sin(), angle.cos(), 0.0);
+    let delta = cursor_local - first_local;
+    let raw_width = delta.dot(axis_x);
+    let raw_height = delta.dot(axis_y);
+    let (width, height) = fixed_dimensions.map_or((raw_width, raw_height), |(w, h)| {
+        (w.copysign(raw_width), h.copysign(raw_height))
+    });
+    if width.abs() <= 1.0e-9 || height.abs() <= 1.0e-9 {
+        return None;
+    }
+    let local = [
+        first_local,
+        first_local + axis_x * width,
+        first_local + axis_x * width + axis_y * height,
+        first_local + axis_y * height,
+    ];
+    Some(local.map(|point| plane.to_world(point)))
+}
+
+fn trimmed_rectangle_vertices(
+    corners: [DVec3; 4],
+    plane: WorkingPlane,
+    style: RectStyle,
+) -> Vec<(DVec3, f64)> {
+    let use_fillet = style.fillet_radius > 1.0e-9;
+    let use_chamfer = !use_fillet
+        && (style.chamfer_first > 1.0e-9 || style.chamfer_second > 1.0e-9);
+    if !use_fillet && !use_chamfer {
+        return corners.into_iter().map(|point| (point, 0.0)).collect();
+    }
+
+    let local = corners.map(|point| plane.to_local(point));
+    let area_twice: f64 = (0..4)
+        .map(|index| {
+            let a = local[index];
+            let b = local[(index + 1) % 4];
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
+    let bulge = area_twice.signum() * (std::f64::consts::PI / 8.0).tan();
+    let mut out = Vec::with_capacity(8);
+    for index in 0..4 {
+        let corner = corners[index];
+        let previous = corners[(index + 3) % 4];
+        let next = corners[(index + 1) % 4];
+        let incoming_length = (previous - corner).length();
+        let outgoing_length = (next - corner).length();
+        let max_trim = incoming_length.min(outgoing_length) * 0.499_999;
+        let (incoming_trim, outgoing_trim, arc_bulge) = if use_fillet {
+            let trim = style.fillet_radius.min(max_trim);
+            (trim, trim, bulge)
+        } else {
+            (
+                style.chamfer_first.min(max_trim),
+                style.chamfer_second.min(max_trim),
+                0.0,
+            )
+        };
+        let incoming = corner + (previous - corner).normalize() * incoming_trim;
+        let outgoing = corner + (next - corner).normalize() * outgoing_trim;
+        out.push((incoming, arc_bulge));
+        out.push((outgoing, 0.0));
+    }
+    out
+}
+
+fn make_rect_pline(corners: [DVec3; 4], plane: WorkingPlane, style: RectStyle) -> EntityType {
+    let points = trimmed_rectangle_vertices(corners, plane, style);
+    let local: Vec<(DVec3, f64)> = points
+        .into_iter()
+        .map(|(point, bulge)| (plane.to_local(point), bulge))
+        .collect();
+    let elevation = local.first().map_or(0.0, |(point, _)| point.z);
+    let mut polyline = LwPolyline {
+        vertices: local
+            .iter()
+            .map(|(point, bulge)| {
+                let mut vertex = LwVertex::new(Vector2::new(point.x, point.y));
+                vertex.bulge = *bulge;
+                vertex
+            })
+            .collect(),
+        elevation,
+        is_closed: true,
+        constant_width: style.width,
+        thickness: style.thickness,
+        ..Default::default()
+    };
+    let mut marker = acadrust::xdata::ExtendedDataRecord::new("OCS_RECTANGLE");
+    marker.add_value(acadrust::xdata::XDataValue::Integer16(1));
+    polyline.common.extended_data.add_record(marker);
+    plane.place_entity(EntityType::LwPolyline(polyline))
+}
+
+fn rectangle_wire(corners: [DVec3; 4], plane: WorkingPlane, style: RectStyle) -> WireModel {
+    let vertices = trimmed_rectangle_vertices(corners, plane, style);
+    let mut points = Vec::new();
+    for index in 0..vertices.len() {
+        let (start, bulge) = vertices[index];
+        let end = vertices[(index + 1) % vertices.len()].0;
+        points.push([start.x, start.y, start.z]);
+        if bulge.abs() > 1.0e-9 {
+            let a = plane.to_local(start);
+            let b = plane.to_local(end);
+            if let Some(arc) = crate::entities::common::BulgeArc::from_bulge(
+                [a.x, a.y],
+                [b.x, b.y],
+                bulge,
+            ) {
+                for step in 1..8 {
+                    let point = arc.sample(step as f64 / 8.0);
+                    let world = plane.to_world(DVec3::new(point[0], point[1], a.z));
+                    points.push([world.x, world.y, world.z]);
+                }
+            }
+        }
+    }
+    wire_loop(points)
 }
 
 fn wire_loop(pts: Vec<[f64; 3]>) -> WireModel {
@@ -155,17 +280,78 @@ fn plane_distance(from: DVec3, to: DVec3, plane: WorkingPlane) -> f64 {
 
 // ── Command: Rectangle — Two Corners  (RECT) ──────────────────────────────
 
+#[derive(Clone, Copy)]
+enum RectStep {
+    FirstCorner,
+    Opposite,
+    ChamferFirst,
+    ChamferSecond,
+    Elevation,
+    Fillet,
+    Thickness,
+    Width,
+    Rotation,
+    AreaValue,
+    AreaBasis(f64),
+    AreaDimension { area: f64, by_length: bool },
+    DimensionsLength,
+    DimensionsWidth(f64),
+    PlaceSized { width: f64, height: f64 },
+}
+
 pub struct RectCommand {
-    a: Option<DVec3>,
+    step: RectStep,
+    first: Option<DVec3>,
     plane: WorkingPlane,
+    chamfer_first: f64,
+    chamfer_second: f64,
+    fillet_radius: f64,
+    elevation: f64,
+    thickness: f64,
+    width: f64,
+    rotation_deg: f64,
 }
 
 impl RectCommand {
     pub fn new() -> Self {
         Self {
-            a: None,
+            step: RectStep::FirstCorner,
+            first: None,
             plane: WorkingPlane::default(),
+            chamfer_first: defaults::get_rect_chamfer1().max(0.0),
+            chamfer_second: defaults::get_rect_chamfer2().max(0.0),
+            fillet_radius: defaults::get_rect_fillet().max(0.0),
+            elevation: defaults::get_rect_elevation(),
+            thickness: defaults::get_rect_thickness(),
+            width: defaults::get_rect_width().max(0.0),
+            rotation_deg: defaults::get_rect_rotation(),
         }
+    }
+
+    fn style(&self) -> RectStyle {
+        RectStyle {
+            chamfer_first: self.chamfer_first,
+            chamfer_second: self.chamfer_second,
+            fillet_radius: self.fillet_radius,
+            width: self.width,
+            thickness: self.thickness,
+        }
+    }
+
+    fn finish(&self, cursor: DVec3, fixed_dimensions: Option<(f64, f64)>) -> CmdResult {
+        let Some(first) = self.first else {
+            return CmdResult::NeedPoint;
+        };
+        let Some(corners) = rectangle_corners(
+            first,
+            cursor,
+            self.plane,
+            self.rotation_deg,
+            fixed_dimensions,
+        ) else {
+            return CmdResult::NeedPoint;
+        };
+        CmdResult::CommitAndExit(make_rect_pline(corners, self.plane, self.style()))
     }
 }
 
@@ -177,78 +363,341 @@ impl CadCommand for RectCommand {
         self.plane = plane;
     }
     fn prompt(&self) -> String {
-        if self.a.is_none() {
-            crate::t!("RECT  Specify first corner:").into_owned()
-        } else {
-            crate::t!("RECT  Specify opposite corner:").into_owned()
+        match self.step {
+            RectStep::FirstCorner => crate::t!("RECT  Specify first corner:").into_owned(),
+            RectStep::Opposite => crate::t!("RECT  Specify opposite corner:").into_owned(),
+            RectStep::ChamferFirst => format!(
+                "RECT  Specify first chamfer distance <{}>:",
+                crate::entities::common::format_length(self.chamfer_first)
+            ),
+            RectStep::ChamferSecond => format!(
+                "RECT  Specify second chamfer distance <{}>:",
+                crate::entities::common::format_length(self.chamfer_second)
+            ),
+            RectStep::Elevation => {
+                format!(
+                    "RECT  Specify elevation <{}>:",
+                    crate::entities::common::format_length(self.elevation)
+                )
+            }
+            RectStep::Fillet => {
+                format!(
+                    "RECT  Specify fillet radius <{}>:",
+                    crate::entities::common::format_length(self.fillet_radius)
+                )
+            }
+            RectStep::Thickness => {
+                format!(
+                    "RECT  Specify thickness <{}>:",
+                    crate::entities::common::format_length(self.thickness)
+                )
+            }
+            RectStep::Width => format!(
+                "RECT  Specify width <{}>:",
+                crate::entities::common::format_length(self.width)
+            ),
+            RectStep::Rotation => {
+                format!(
+                    "RECT  Specify rotation angle <{}>:",
+                    crate::entities::common::format_angle(self.rotation_deg.to_radians())
+                )
+            }
+            RectStep::AreaValue => "RECT  Specify rectangle area:".to_string(),
+            RectStep::AreaBasis(_) => {
+                "RECT  Calculate dimensions based on [Length / Width] <Length>:".to_string()
+            }
+            RectStep::AreaDimension { by_length: true, .. } => {
+                "RECT  Specify rectangle length:".to_string()
+            }
+            RectStep::AreaDimension { by_length: false, .. } => {
+                "RECT  Specify rectangle width:".to_string()
+            }
+            RectStep::DimensionsLength => "RECT  Specify rectangle length:".to_string(),
+            RectStep::DimensionsWidth(_) => "RECT  Specify rectangle width:".to_string(),
+            RectStep::PlaceSized { .. } => {
+                "RECT  Specify orientation from the first corner:".to_string()
+            }
         }
     }
 
     fn options(&self) -> Vec<crate::command::CmdOption> {
         use crate::command::CmdOption;
-        // First corner also offers the alternate rectangle methods; later steps
-        // are plain point picks. (#304)
-        if self.a.is_none() {
-            vec![
+        match self.step {
+            RectStep::FirstCorner => vec![
+                CmdOption::new("Chamfer", "CHAMFER"),
+                CmdOption::new("Elevation", "ELEVATION"),
+                CmdOption::new("Fillet", "FILLET"),
+                CmdOption::new("Thickness", "THICKNESS"),
+                CmdOption::new("Width", "WIDTH"),
+            ],
+            RectStep::Opposite => vec![
+                CmdOption::new("Area", "AREA"),
+                CmdOption::new("Dimensions", "DIMENSIONS"),
                 CmdOption::new("Rotation", "ROTATION"),
-                CmdOption::new("Center", "CENTER"),
-            ]
-        } else {
-            vec![]
+            ],
+            RectStep::AreaBasis(_) => vec![
+                CmdOption::new("Length", "LENGTH"),
+                CmdOption::new("Width", "WIDTH"),
+            ],
+            _ => vec![],
         }
     }
 
     fn point_step_accepts_keywords(&self) -> bool {
-        self.a.is_none()
+        matches!(self.step, RectStep::FirstCorner | RectStep::Opposite)
+    }
+
+    fn wants_text_input(&self) -> bool {
+        !matches!(self.step, RectStep::PlaceSized { .. })
+    }
+
+    fn dyn_field(&self) -> crate::command::DynField {
+        match self.step {
+            RectStep::Rotation => crate::command::DynField::Angle,
+            RectStep::ChamferFirst
+            | RectStep::ChamferSecond
+            | RectStep::Elevation
+            | RectStep::Fillet
+            | RectStep::Thickness
+            | RectStep::Width
+            | RectStep::AreaValue
+            | RectStep::AreaBasis(_)
+            | RectStep::AreaDimension { .. }
+            | RectStep::DimensionsLength
+            | RectStep::DimensionsWidth(_) => crate::command::DynField::Scalar,
+            _ => crate::command::DynField::Point,
+        }
     }
 
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
-        // At the first corner, keyword options hand off to the dedicated
-        // variant command. (#304)
-        if self.a.is_none() {
-            return match text.trim().to_uppercase().as_str() {
-                "R" | "ROTATION" => Some(CmdResult::Dispatch("RECT_ROT".into())),
-                "C" | "CENTER" => Some(CmdResult::Dispatch("RECT_CEN".into())),
-                _ => None,
-            };
+        let upper = text.trim().to_uppercase();
+        match self.step {
+            RectStep::FirstCorner => {
+                return match upper.as_str() {
+                    "C" | "CHAMFER" => {
+                        self.step = RectStep::ChamferFirst;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "E" | "ELEVATION" => {
+                        self.step = RectStep::Elevation;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "F" | "FILLET" => {
+                        self.step = RectStep::Fillet;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "T" | "THICKNESS" => {
+                        self.step = RectStep::Thickness;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "W" | "WIDTH" => {
+                        self.step = RectStep::Width;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    _ => None,
+                };
+            }
+            RectStep::Opposite => {
+                return match upper.as_str() {
+                    "A" | "AREA" => {
+                        self.step = RectStep::AreaValue;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "D" | "DIMENSIONS" => {
+                        self.step = RectStep::DimensionsLength;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "R" | "ROTATION" => {
+                        self.step = RectStep::Rotation;
+                        Some(CmdResult::NeedPoint)
+                    }
+                    _ => None,
+                };
+            }
+            RectStep::AreaBasis(area) => {
+                return match upper.as_str() {
+                    "L" | "LENGTH" => {
+                        self.step = RectStep::AreaDimension {
+                            area,
+                            by_length: true,
+                        };
+                        Some(CmdResult::NeedPoint)
+                    }
+                    "W" | "WIDTH" => {
+                        self.step = RectStep::AreaDimension {
+                            area,
+                            by_length: false,
+                        };
+                        Some(CmdResult::NeedPoint)
+                    }
+                    _ => None,
+                };
+            }
+            _ => {}
         }
-        None
+
+        if matches!(self.step, RectStep::Rotation) {
+            let angle = crate::entities::common::parse_typed_angle(text)?;
+            self.rotation_deg = angle.to_degrees();
+            defaults::set_rect_rotation(self.rotation_deg);
+            self.step = RectStep::Opposite;
+            return Some(CmdResult::NeedPoint);
+        }
+        let value = if matches!(self.step, RectStep::AreaValue) {
+            text.trim().replace(',', ".").parse().ok()?
+        } else {
+            crate::entities::common::parse_typed_length(text)?
+        };
+        match self.step {
+            RectStep::ChamferFirst if value >= 0.0 => {
+                self.chamfer_first = value;
+                defaults::set_rect_chamfer1(value);
+                self.step = RectStep::ChamferSecond;
+            }
+            RectStep::ChamferSecond if value >= 0.0 => {
+                self.chamfer_second = value;
+                self.fillet_radius = 0.0;
+                defaults::set_rect_chamfer2(value);
+                defaults::set_rect_fillet(0.0);
+                self.step = RectStep::FirstCorner;
+            }
+            RectStep::Elevation => {
+                self.elevation = value;
+                defaults::set_rect_elevation(value);
+                self.step = RectStep::FirstCorner;
+            }
+            RectStep::Fillet if value >= 0.0 => {
+                self.fillet_radius = value;
+                self.chamfer_first = 0.0;
+                self.chamfer_second = 0.0;
+                defaults::set_rect_fillet(value);
+                defaults::set_rect_chamfer1(0.0);
+                defaults::set_rect_chamfer2(0.0);
+                self.step = RectStep::FirstCorner;
+            }
+            RectStep::Thickness => {
+                self.thickness = value;
+                defaults::set_rect_thickness(value);
+                self.step = RectStep::FirstCorner;
+            }
+            RectStep::Width if value >= 0.0 => {
+                self.width = value;
+                defaults::set_rect_width(value);
+                self.step = RectStep::FirstCorner;
+            }
+            RectStep::AreaValue if value > 0.0 => {
+                self.step = RectStep::AreaBasis(value);
+            }
+            RectStep::AreaDimension { area, by_length } if value > 0.0 => {
+                let (width, height) = if by_length {
+                    (value, area / value)
+                } else {
+                    (area / value, value)
+                };
+                self.step = RectStep::PlaceSized { width, height };
+            }
+            RectStep::DimensionsLength if value > 0.0 => {
+                self.step = RectStep::DimensionsWidth(value);
+            }
+            RectStep::DimensionsWidth(length) if value > 0.0 => {
+                self.step = RectStep::PlaceSized {
+                    width: length,
+                    height: value,
+                };
+            }
+            _ => return None,
+        }
+        Some(CmdResult::NeedPoint)
     }
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
-        match self.a {
-            None => {
-                self.a = Some(pt);
+        match self.step {
+            RectStep::FirstCorner => {
+                let mut local = self.plane.to_local(pt);
+                local.z = self.elevation;
+                self.first = Some(self.plane.to_world(local));
+                self.step = RectStep::Opposite;
                 CmdResult::NeedPoint
             }
-            Some(a) => {
-                let c = ucs_box_corners(a, pt, self.plane);
-                CmdResult::CommitAndExit(make_pline(&c, self.plane))
+            RectStep::Opposite => self.finish(pt, None),
+            RectStep::PlaceSized { width, height } => {
+                self.finish(pt, Some((width, height)))
             }
+            RectStep::Rotation => {
+                let Some(first) = self.first else {
+                    return CmdResult::NeedPoint;
+                };
+                let delta = self.plane.vector_to_local(pt - first);
+                if delta.x.hypot(delta.y) <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
+                self.rotation_deg = delta.y.atan2(delta.x).to_degrees();
+                defaults::set_rect_rotation(self.rotation_deg);
+                self.step = RectStep::Opposite;
+                CmdResult::NeedPoint
+            }
+            _ => CmdResult::NeedPoint,
         }
     }
     fn on_enter(&mut self) -> CmdResult {
-        CmdResult::Cancel
+        match self.step {
+            RectStep::FirstCorner => CmdResult::Cancel,
+            RectStep::ChamferFirst => {
+                self.step = RectStep::ChamferSecond;
+                CmdResult::NeedPoint
+            }
+            RectStep::ChamferSecond => {
+                self.fillet_radius = 0.0;
+                defaults::set_rect_fillet(0.0);
+                self.step = RectStep::FirstCorner;
+                CmdResult::NeedPoint
+            }
+            RectStep::Elevation
+            | RectStep::Fillet
+            | RectStep::Thickness
+            | RectStep::Width => {
+                self.step = RectStep::FirstCorner;
+                CmdResult::NeedPoint
+            }
+            RectStep::Rotation => {
+                self.step = RectStep::Opposite;
+                CmdResult::NeedPoint
+            }
+            RectStep::AreaBasis(area) => {
+                self.step = RectStep::AreaDimension {
+                    area,
+                    by_length: true,
+                };
+                CmdResult::NeedPoint
+            }
+            _ => CmdResult::NeedPoint,
+        }
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
-        let a = self.a?;
-        let c = ucs_box_corners(a, pt, self.plane);
-        Some(wire_loop(vec![
-            [c[0].x, c[0].y, c[0].z],
-            [c[1].x, c[1].y, c[1].z],
-            [c[2].x, c[2].y, c[2].z],
-            [c[3].x, c[3].y, c[3].z],
-        ]))
+        let first = self.first?;
+        let fixed_dimensions = match self.step {
+            RectStep::PlaceSized { width, height } => Some((width, height)),
+            RectStep::Opposite => None,
+            _ => return None,
+        };
+        let corners = rectangle_corners(
+            first,
+            pt,
+            self.plane,
+            self.rotation_deg,
+            fixed_dimensions,
+        )?;
+        Some(rectangle_wire(corners, self.plane, self.style()))
     }
     fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
         use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
-        // Opposite corner: enter width and height (signed deltas from the first
-        // corner), with the rectangle drawn as the guide. First corner is a
-        // normal point pick.
-        self.a.map(|a| DynSpec {
-            anchor: DynAnchor::Point(a),
+        if !matches!(self.step, RectStep::Opposite) || self.rotation_deg.abs() > 1.0e-9 {
+            return None;
+        }
+        self.first.map(|first| DynSpec {
+            anchor: DynAnchor::Point(first),
             fields: vec![
                 DynFieldSpec::new(DynRole::Width),
                 DynFieldSpec::new(DynRole::Height),
@@ -305,6 +754,9 @@ impl CadCommand for RectRotCommand {
                 CmdResult::NeedPoint
             }
             1 => {
+                if plane_distance(self.a, pt, self.plane) <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
                 self.b = pt;
                 self.step = 2;
                 CmdResult::NeedPoint
@@ -318,6 +770,9 @@ impl CadCommand for RectRotCommand {
                 let dir = (b - a).normalize_or_zero();
                 let perp = DVec3::new(-dir.y, dir.x, 0.0);
                 let h = (pt - b).dot(perp); // signed height
+                if h.abs() <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
                 let c = b + perp * h;
                 let d = a + perp * h;
                 let corners = [a, b, c, d].map(|point| self.plane.to_world(point));
@@ -420,6 +875,10 @@ impl CadCommand for RectCenCommand {
                 CmdResult::NeedPoint
             }
             Some(c) => {
+                let delta = self.plane.vector_to_local(pt - c);
+                if delta.x.abs() <= 1.0e-9 || delta.y.abs() <= 1.0e-9 {
+                    return CmdResult::NeedPoint;
+                }
                 let q = ucs_box_around_center(c, pt, self.plane);
                 CmdResult::CommitAndExit(make_pline(&q, self.plane))
             }
