@@ -920,6 +920,8 @@ impl OpenCADStudio {
                     | "SHADEDGE"
                     | "MAXACTVP"
                     | "CMLJUST"
+                    | "CMLSCALE"
+                    | "CMLSTYLE"
                     | "TEXTQLTY"
                     | "SORTENTS"
                     | "FRAME"
@@ -1697,16 +1699,34 @@ impl OpenCADStudio {
                                 }
                             },
                             "CMLJUST" => match &value {
-                                Some(v) => v
-                                    .parse::<i16>()
-                                    .map(|x| {
+                                Some(v) => match v.parse::<i16>() {
+                                    Ok(x @ 0..=2) => {
                                         h.multiline_justification = x;
-                                        (format!("CMLJUST = {x}"), true)
-                                    })
-                                    .map_err(|_| "SETVAR: integer value required.".into()),
+                                        Ok((format!("CMLJUST = {x}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer value from 0 to 2 required.".into()),
+                                },
                                 None => {
                                     Ok((format!("CMLJUST = {}", h.multiline_justification), false))
                                 }
+                            },
+                            "CMLSCALE" => match &value {
+                                Some(v) => match v.parse::<f64>() {
+                                    Ok(x) if x.is_finite() => {
+                                        let changed = h.multiline_scale != x;
+                                        h.multiline_scale = x;
+                                        Ok((format!("CMLSCALE = {x}"), changed))
+                                    }
+                                    _ => Err("SETVAR: finite numeric value required.".into()),
+                                },
+                                None => Ok((format!("CMLSCALE = {}", h.multiline_scale), false)),
+                            },
+                            "CMLSTYLE" => match &value {
+                                Some(_) => Err(
+                                    "SETVAR: CMLSTYLE is read-only here — use the MLSTYLE command."
+                                        .into(),
+                                ),
+                                None => Ok((format!("CMLSTYLE = {}", h.multiline_style), false)),
                             },
                             "TEXTQLTY" => match &value {
                                 Some(v) => v

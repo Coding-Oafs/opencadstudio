@@ -371,6 +371,56 @@ pub fn tessellate(
             acc as f32
         };
         let mut out: Vec<WireModel> = Vec::with_capacity(lines.len());
+        if let Some(style) = crate::entities::mline::resolved_mline_style(m, document) {
+            let triangles =
+                crate::entities::mline::mline_fill_triangles_with_style(m, style);
+            if !triangles.is_empty() {
+                let (fill_tris, fill_tris_low) = points_to_ds(triangles);
+                let fill_color = if selected {
+                    WireModel::SELECTED
+                } else {
+                    match style.fill_color {
+                        AcadColor::ByLayer | AcadColor::ByBlock => entity_color,
+                        other => {
+                            let [r, g, b, _] =
+                                crate::scene::convert::tess_util::aci_to_rgba(&other);
+                            [r, g, b, entity_color[3]]
+                        }
+                    }
+                };
+                out.push(WireModel {
+                    taper_widths: Vec::new(),
+                    world_width: 0.0,
+                    depth_override: None,
+                    display_visible: true,
+                    plot_visible: true,
+                    fill_is_3d: false,
+                    fill_is_2d_solid: true,
+                    render_instance: None,
+                    pick_tris: Vec::new(),
+                    pick_tris_low: Vec::new(),
+                    dash_from_start: false,
+                    dash_align_end: None,
+                    text_verts: Vec::new(),
+                    name: name.clone(),
+                    points: Vec::new(),
+                    points_low: Vec::new(),
+                    color: fill_color,
+                    selected,
+                    pattern_length: 0.0,
+                    pattern: [0.0; 8],
+                    line_weight_px,
+                    snap_pts: Vec::new(),
+                    tangent_geoms: Vec::new(),
+                    aci: 0,
+                    key_vertices: Vec::new(),
+                    aabb: WireModel::UNBOUNDED_AABB,
+                    plinegen: true,
+                    fill_tris,
+                    fill_tris_low,
+                });
+            }
+        }
         let mut snap_attached = false;
         for l in lines {
             if l.points.is_empty() {
