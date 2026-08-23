@@ -292,6 +292,22 @@ def render_svg(
 '''
 
 
+def render_unavailable_svg(repository: str, theme: str) -> str:
+    """Return a valid local fallback when GitHub analytics are unavailable."""
+    colors = THEMES[theme]
+    title = f"{repository.split('/')[-1]} Growth"
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-labelledby="title description">
+  <title id="title">{escape(title)}</title>
+  <desc id="description">Project growth history is temporarily unavailable.</desc>
+  <rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{HEIGHT - 1}" rx="14" fill="{colors["background"]}" stroke="{colors["border"]}" />
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="{WIDTH / 2:.1f}" y="{HEIGHT / 2 - 12:.1f}" text-anchor="middle" fill="{colors["text"]}" font-size="21" font-weight="700">{escape(title)}</text>
+    <text x="{WIDTH / 2:.1f}" y="{HEIGHT / 2 + 22:.1f}" text-anchor="middle" fill="{colors["muted"]}" font-size="14">Project growth history is temporarily unavailable.</text>
+  </g>
+</svg>
+'''
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -302,9 +318,19 @@ def main() -> None:
     args = parser.parse_args()
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    dates = fetch_star_dates(args.repository, token)
-    releases = fetch_release_downloads(args.repository, token)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        dates = fetch_star_dates(args.repository, token)
+        releases = fetch_release_downloads(args.repository, token)
+    except Exception as error:
+        for theme in THEMES:
+            output = args.output_dir / f"star-history-{theme}.svg"
+            output.write_text(
+                render_unavailable_svg(args.repository, theme), encoding="utf-8"
+            )
+        print(f"growth history fallback: {error}")
+        return
+
     for theme in THEMES:
         output = args.output_dir / f"star-history-{theme}.svg"
         output.write_text(
