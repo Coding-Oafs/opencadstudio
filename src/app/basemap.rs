@@ -84,6 +84,54 @@ pub struct BasemapLoaded {
     pub fit_bounds: Option<[f64; 4]>,
 }
 
+struct BasemapBoundsCommand {
+    first: Option<glam::DVec3>,
+}
+
+impl BasemapBoundsCommand {
+    fn new() -> Self {
+        Self { first: None }
+    }
+}
+
+impl CadCommand for BasemapBoundsCommand {
+    fn name(&self) -> &'static str {
+        "BASEMAP BOUNDS"
+    }
+
+    fn prompt(&self) -> String {
+        if self.first.is_some() {
+            "BASEMAP BOUNDS  Specify opposite extent corner:".to_string()
+        } else {
+            "BASEMAP BOUNDS  Specify first extent corner in drawing coordinates:".to_string()
+        }
+    }
+
+    fn on_point(&mut self, point: glam::DVec3) -> crate::command::CmdResult {
+        match self.first {
+            None => {
+                self.first = Some(point);
+                crate::command::CmdResult::NeedPoint
+            }
+            Some(first) => crate::command::CmdResult::Dispatch(format!(
+                "BASEMAP BOUNDS {:.17} {:.17} {:.17} {:.17}",
+                first.x.min(point.x),
+                first.y.min(point.y),
+                first.x.max(point.x),
+                first.y.max(point.y)
+            )),
+        }
+    }
+
+    fn on_enter(&mut self) -> crate::command::CmdResult {
+        crate::command::CmdResult::Cancel
+    }
+
+    fn window_corner_pick(&self) -> bool {
+        true
+    }
+}
+
 impl OpenCADStudio {
     /// `BASEMAP` (no args): toggle the underlay on/off at the stored settings.
     pub(super) fn basemap_toggle(&mut self) -> Task<Message> {
@@ -225,7 +273,11 @@ impl OpenCADStudio {
                 self.command_line.push_output(
                     format!(
                         "Basemap: camera-follow {}.",
-                        if self.basemap.follow_camera { "on" } else { "off" }
+                        if self.basemap.follow_camera {
+                            "on"
+                        } else {
+                            "off"
+                        }
                     )
                     .as_str(),
                 );
@@ -272,15 +324,10 @@ impl OpenCADStudio {
                     return Task::none();
                 };
                 #[cfg(not(target_arch = "wasm32"))]
-                let drawing_bounds = basemap::source_bounds_from_wgs84_area(
-                    area,
-                    &ocs_pointcloud::CrsInfo {
-                        horizontal_epsg: Some(crs.epsg),
-                        ..Default::default()
-                    },
-                );
+                let drawing_bounds =
+                    basemap::source_bounds_from_wgs84_area(area, &crs.as_crs_info());
                 #[cfg(target_arch = "wasm32")]
-                let drawing_bounds = (crs.epsg == 4326).then_some(area);
+                let drawing_bounds = (crs.epsg == Some(4326)).then_some(area);
                 let Some(bounds) = drawing_bounds else {
                     self.command_line.push_error(
                         "BASEMAP CENTER could not transform that site into the drawing CRS.",
@@ -300,6 +347,12 @@ impl OpenCADStudio {
             }
             "BOUNDS" => {
                 let values = parts.collect::<Vec<_>>();
+                if values.is_empty() {
+                    let command = BasemapBoundsCommand::new();
+                    self.command_line.push_info(&command.prompt());
+                    self.tabs[i].active_cmd = Some(Box::new(command));
+                    return Task::none();
+                }
                 if values.len() == 1
                     && matches!(values[0].to_ascii_uppercase().as_str(), "CLEAR" | "UNSET")
                 {
@@ -315,7 +368,7 @@ impl OpenCADStudio {
                     .collect::<Result<Vec<_>, _>>();
                 let Ok(values) = parsed else {
                     self.command_line.push_error(
-                        "BASEMAP BOUNDS <min-x> <min-y> <max-x> <max-y> (drawing CRS coordinates).",
+                        "BASEMAP BOUNDS [<min-x> <min-y> <max-x> <max-y>] (omit coordinates to pick two drawing corners).",
                     );
                     return Task::none();
                 };
@@ -336,7 +389,7 @@ impl OpenCADStudio {
             }
             _ => {
                 self.command_line.push_error(
-                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <drawing|default|las|epsg>|CENTER <lon lat [radius-km]>|BOUNDS <minx miny maxx maxy>|ZOOM <z>|FOLLOW|OFF].",
+                    "BASEMAP [ARCGIS|STREETS|GOOGLE|CUSTOM <t>|PROJ <drawing|default|las|epsg>|CENTER <lon lat [radius-km]>|BOUNDS [minx miny maxx maxy]|ZOOM <z>|FOLLOW|OFF].",
                 );
                 return Task::none();
             }
@@ -424,16 +477,21 @@ impl OpenCADStudio {
     }
 
     pub(super) fn refresh_basemap(&mut self, tab_id: u64) -> Task<Message> {
-        let i = self.active_tab;
+        let Some(i) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return Task::none();
+        };
         let settings = self.basemap.clone().normalized();
         if settings.provider == BasemapProvider::Off {
-            self.clear_basemap();
+            if let Some(job) = self.basemap_job.take() {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+            self.tabs[i].scene.set_basemap_images(Vec::new());
             return Task::none();
         }
 
-        // Resolve drawing/cloud extents before the CRS. An entirely empty tab
-        // is a supported spatial bootstrap case: it can use either a global
-        // Web-Mercator overview or the selected EPSG definition's area of use.
+        // Resolve only real drawing/cloud/manual extents. Falling back to a CRS
+        // area of use (or the whole Web-Mercator world) caused blank drawings
+        // and unresolved California data to request global tile ranges.
         let manual_bounds = self.tabs[i]
             .spatial
             .basemap_bounds
@@ -445,11 +503,14 @@ impl OpenCADStudio {
             )
         });
         let cloud_bounds = self.tabs[i].point_cloud.bounds();
-        let no_spatial_bounds =
-            manual_bounds.is_none() && drawing_bounds.is_none() && cloud_bounds.is_none();
         // Camera-follow mode plans tiles over the visible viewport (not the
         // whole drawing) and derives the zoom from screen pixels.
-        let (viewport_bounds, viewport_width_px) = if settings.follow_camera {
+        // Camera bounds are meaningful only after the project has a spatial
+        // anchor. Otherwise an empty view at the origin can silently request
+        // unrelated map tiles merely because a CRS was selected.
+        let has_spatial_anchor =
+            manual_bounds.is_some() || drawing_bounds.is_some() || cloud_bounds.is_some();
+        let (viewport_bounds, viewport_width_px) = if settings.follow_camera && has_spatial_anchor {
             self.basemap_viewport(i)
                 .map(|(bounds, width)| (Some(bounds), Some(width)))
                 .unwrap_or((None, None))
@@ -457,26 +518,17 @@ impl OpenCADStudio {
             (None, None)
         };
 
-        // Resolve the source CRS used to interpret drawing coordinates. A full
-        // `CrsInfo` (not just the EPSG) lets projected LAS WKT continue using
-        // its PROJ.4 definition. With no content and no CRS, a temporary 3857
-        // world overview is safe because it does not claim to geolocate CAD
-        // coordinates; selecting a drawing CRS replaces it.
+        // Resolve the CRS used by every preferred bound above. Point-cloud
+        // attachments are transformed into the drawing coordinate space, so a
+        // multi-source dataset must also use the drawing CRS here.
         #[cfg(not(target_arch = "wasm32"))]
         let source_crs: ocs_pointcloud::CrsInfo = match settings.projection {
             BasemapProjection::FromDrawing => match self.tabs[i].spatial.drawing_crs.as_ref() {
-                Some(crs) => ocs_pointcloud::CrsInfo {
-                    horizontal_epsg: Some(crs.epsg),
-                    ..Default::default()
-                },
-                None if no_spatial_bounds => ocs_pointcloud::CrsInfo {
-                    horizontal_epsg: Some(3857),
-                    ..Default::default()
-                },
+                Some(crs) => crs.as_crs_info(),
                 None => {
                     self.command_line.push_error(
-                            "Basemap: drawing CRS is unset; use CRS <epsg> to align the underlay with drawing coordinates.",
-                        );
+                        "Basemap: drawing CRS is unset; use CRS <epsg> or attach a referenced LAS/LAZ source first.",
+                    );
                     return Task::none();
                 }
             },
@@ -486,15 +538,22 @@ impl OpenCADStudio {
             },
             BasemapProjection::FromLas => {
                 let crs = self.tabs[i]
-                    .point_cloud
-                    .active()
-                    .map(|s| s.sample.metadata.crs.clone())
-                    .filter(|crs| crs.horizontal_epsg.is_some() || crs.proj4.is_some());
+                    .spatial
+                    .drawing_crs
+                    .as_ref()
+                    .map(crate::app::spatial::DrawingCrs::as_crs_info)
+                    .or_else(|| {
+                        self.tabs[i]
+                            .point_cloud
+                            .active()
+                            .map(|source| source.sample.metadata.crs.clone())
+                    })
+                    .filter(ocs_pointcloud::CrsInfo::is_resolvable);
                 match crs {
                     Some(crs) => crs,
                     None => {
                         self.command_line.push_error(
-                            "Basemap: no attached LAS cloud provides a CRS; use BASEMAP PROJ <epsg>.",
+                            "Basemap: no attached LAS/LAZ source provides a resolvable CRS; set the drawing CRS explicitly.",
                         );
                         return Task::none();
                     }
@@ -506,41 +565,15 @@ impl OpenCADStudio {
             },
         };
 
-        let preferred_bounds: Option<([f64; 3], [f64; 3])> = match settings.projection {
-            BasemapProjection::FromLas => viewport_bounds
-                .or(cloud_bounds)
-                .or(manual_bounds)
-                .or(drawing_bounds),
-            _ => manual_bounds
-                .or(viewport_bounds)
-                .or(drawing_bounds)
-                .or(cloud_bounds),
-        };
-        let mut automatic_bootstrap = false;
-        let (min, max) = if let Some(bounds) = preferred_bounds {
-            bounds
-        } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            let source_bounds = source_crs
-                .horizontal_epsg
-                .and_then(ocs_pointcloud::epsg_area_of_use)
-                .and_then(|area| basemap::source_bounds_from_wgs84_area(area, &source_crs));
-            #[cfg(target_arch = "wasm32")]
-            let source_bounds = match settings.projection {
-                BasemapProjection::WebMercator => Some(basemap::tile_bounds(0, 0, 0)),
-                BasemapProjection::FromDrawing if self.tabs[i].spatial.drawing_crs.is_none() => {
-                    Some(basemap::tile_bounds(0, 0, 0))
-                }
-                _ => None,
-            };
-            let Some(bounds) = source_bounds else {
-                self.command_line.push_error(
-                    "Basemap: no drawing extent is available. Set CRS <epsg>, then use BASEMAP CENTER <longitude> <latitude> [radius-km].",
-                );
-                return Task::none();
-            };
-            automatic_bootstrap = true;
-            ([bounds[0], bounds[1], 0.0], [bounds[2], bounds[3], 0.0])
+        let preferred_bounds: Option<([f64; 3], [f64; 3])> = manual_bounds
+            .or(viewport_bounds)
+            .or(drawing_bounds)
+            .or(cloud_bounds);
+        let Some((min, max)) = preferred_bounds else {
+            self.command_line.push_error(
+                "Basemap: no project extent is available; draw geometry, attach LAS/LAZ, use BASEMAP BOUNDS to pick two corners, or use BASEMAP CENTER <longitude> <latitude> [radius-km].",
+            );
+            return Task::none();
         };
 
         // World bounds (Web Mercator meters) for the drawing envelope.
@@ -559,13 +592,8 @@ impl OpenCADStudio {
         // Count before allocation. A world envelope at zoom 16 covers more
         // than four billion tiles; building that Vec first caused the v1.0.0
         // basemap freeze followed by Rust's native out-of-memory abort.
-        const MAX_BOOTSTRAP_TILES: u64 = 64;
         const MAX_INTERACTIVE_TILES: u64 = 256;
-        let tile_limit = if automatic_bootstrap {
-            MAX_BOOTSTRAP_TILES
-        } else {
-            MAX_INTERACTIVE_TILES
-        };
+        let tile_limit = MAX_INTERACTIVE_TILES;
         let requested_zoom = if settings.follow_camera {
             viewport_width_px
                 .map(|width| basemap::zoom_for_pixel_scale(world_bounds, width))
@@ -598,7 +626,7 @@ impl OpenCADStudio {
                 .push_error("Basemap: no tiles cover the drawing bounds.");
             return Task::none();
         }
-        if effective_zoom < requested_zoom && !automatic_bootstrap && !settings.follow_camera {
+        if effective_zoom < requested_zoom && !settings.follow_camera {
             self.command_line.push_info(
                 format!(
                     "Basemap: drawing extent is too large for zoom {}; using zoom {effective_zoom} ({planned_count} tiles) to keep the viewport responsive.",
@@ -614,23 +642,9 @@ impl OpenCADStudio {
         let provider = settings.provider;
         let worker_tiles: Vec<Tile> = tiles;
         let requested = worker_tiles.len();
-        let fit_bounds = (automatic_bootstrap
-            || (manual_bounds.is_some() && drawing_bounds.is_none() && cloud_bounds.is_none()))
-        .then_some([min[0], min[1], max[0], max[1]]);
-        if automatic_bootstrap {
-            if self.tabs[i].spatial.drawing_crs.is_none() {
-                self.command_line.push_info(
-                    "Basemap: empty drawing; showing a Web Mercator world overview. Set CRS <epsg>, then use Set Location or BASEMAP CENTER for the project site.",
-                );
-            } else {
-                self.command_line.push_info(
-                    format!(
-                        "Basemap: no drawing extent; showing the EPSG area-of-use overview at zoom {effective_zoom}. Use Set Location or BASEMAP CENTER for the project site."
-                    )
-                    .as_str(),
-                );
-            }
-        }
+        let fit_bounds =
+            (manual_bounds.is_some() && drawing_bounds.is_none() && cloud_bounds.is_none())
+                .then_some([min[0], min[1], max[0], max[1]]);
         if let Some(previous) = self.basemap_job.take() {
             previous.cancel.store(true, Ordering::Relaxed);
         }

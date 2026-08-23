@@ -360,8 +360,8 @@ impl OpenCADStudio {
         if let Some((grid_on, _snap_on)) = self.tabs[i].scene.active_tile_grid_snap() {
             self.show_grid = grid_on;
         }
-        let ortho = self.tabs[i].scene.active_camera_projection()
-            == crate::scene::Projection::Orthographic;
+        let ortho =
+            self.tabs[i].scene.active_camera_projection() == crate::scene::Projection::Orthographic;
         self.ribbon.set_ortho(ortho);
     }
 
@@ -466,9 +466,9 @@ impl OpenCADStudio {
             );
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let lonlat = ocs_pointcloud::reproject_xy(crs.epsg, 4326, world.x, world.y);
+        let lonlat = ocs_pointcloud::reproject_from_crs(&crs.as_crs_info(), 4326, world.x, world.y);
         #[cfg(target_arch = "wasm32")]
-        let lonlat = (crs.epsg == 4326).then_some((world.x, world.y));
+        let lonlat = (crs.epsg == Some(4326)).then_some((world.x, world.y));
         match lonlat {
             Some((lon, lat)) => format!(
                 "{lon:.7}, {lat:.7}  (WGS84 lon/lat; Z {:.3} {})",
@@ -476,8 +476,11 @@ impl OpenCADStudio {
                 self.tabs[i].spatial.working_unit.short()
             ),
             None => format!(
-                "unable to reproject from EPSG:{} to WGS84; cartesian {:.6}, {:.6}, {:.6}",
-                crs.epsg, world.x, world.y, world.z
+                "unable to reproject from {} to WGS84; cartesian {:.6}, {:.6}, {:.6}",
+                crs.short_label(),
+                world.x,
+                world.y,
+                world.z
             ),
         }
     }
@@ -575,9 +578,7 @@ impl OpenCADStudio {
                 .iter()
                 .copied()
                 .zip(self.tabs[i].selected_grips.iter())
-                .filter(|(owner, grip)| {
-                    self.tabs[i].hot_grips.contains(&(*owner, grip.id))
-                })
+                .filter(|(owner, grip)| self.tabs[i].hot_grips.contains(&(*owner, grip.id)))
                 .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
                 .map(|(owner, grip)| GripTarget {
                     handle: owner,
@@ -601,9 +602,7 @@ impl OpenCADStudio {
                 .copied()
                 .zip(self.tabs[i].selected_grips.iter())
                 .filter(|(_, grip)| grip.id != crate::app::visibility::VIS_GRIP_ID)
-                .filter(|(_, grip)| {
-                    (grip.world - world).length_squared() <= epsilon_sq
-                })
+                .filter(|(_, grip)| (grip.world - world).length_squared() <= epsilon_sq)
                 .map(|(owner, grip)| GripTarget {
                     handle: owner,
                     grip_id: grip.id,
@@ -1025,8 +1024,7 @@ impl OpenCADStudio {
                 )
             })
         {
-            let classification = self
-                .tabs[i]
+            let classification = self.tabs[i]
                 .active_cmd
                 .as_ref()
                 .and_then(|c| c.brush_classification());
@@ -1471,15 +1469,9 @@ impl OpenCADStudio {
             }
 
             if let Some(axis) = grip.axis {
-                snapped = cursor_on_projected_axis(
-                    p,
-                    bounds,
-                    view_rot,
-                    eye,
-                    grip.origin_world,
-                    axis,
-                )
-                .unwrap_or(snapped);
+                snapped =
+                    cursor_on_projected_axis(p, bounds, view_rot, eye, grip.origin_world, axis)
+                        .unwrap_or(snapped);
             }
 
             let snap_ms = snap_started.elapsed().as_secs_f64() * 1000.0;

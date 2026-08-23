@@ -19,9 +19,10 @@ pub use classify::{
     RuleField, RuleOp,
 };
 pub use crs::{
-    assess_survey_readiness, epsg_area_of_use, epsg_horizontal_unit, inspect_crs,
-    reproject_from_crs, reproject_from_proj4, reproject_to_crs, reproject_with_patches_progress,
-    reproject_xy, CrsInfo, ReprojectionStats, SurveyReadiness,
+    assess_survey_readiness, crs_equivalent, crs_horizontal_unit, epsg_area_of_use,
+    epsg_horizontal_unit, inspect_crs, reproject_between_crs, reproject_bounds_between_crs,
+    reproject_from_crs, reproject_from_proj4, reproject_points_between_crs, reproject_to_crs,
+    reproject_with_patches_progress, reproject_xy, CrsInfo, ReprojectionStats, SurveyReadiness,
 };
 pub use display::{
     classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode, Density,
@@ -519,6 +520,10 @@ pub fn export_with_patches_progress(
 pub struct MergeSource {
     pub path: PathBuf,
     pub edits: EditStore,
+    /// Effective source coordinate space. This is normally read from LAS/LAZ
+    /// metadata; callers set it when an unreferenced source has explicitly
+    /// adopted the drawing CRS.
+    pub source_crs: Option<CrsInfo>,
 }
 
 /// Streams every source into one merged LAS/LAZ in the given order.
@@ -533,6 +538,27 @@ pub struct MergeSource {
 pub fn export_merged_progress(
     sources: &[MergeSource],
     output: &Path,
+    continue_export: impl FnMut(ExportProgress) -> bool,
+) -> Result<ExportStats> {
+    export_merged_internal(sources, output, None, continue_export)
+}
+
+/// Streams multiple LAS/LAZ sources into one output coordinate space.
+/// Horizontal XY values and output bounds are transformed into `target_crs`;
+/// Z is preserved because no vertical-datum operation is implied.
+pub fn export_merged_reprojected_progress(
+    sources: &[MergeSource],
+    output: &Path,
+    target_crs: &CrsInfo,
+    continue_export: impl FnMut(ExportProgress) -> bool,
+) -> Result<ExportStats> {
+    export_merged_internal(sources, output, Some(target_crs), continue_export)
+}
+
+fn export_merged_internal(
+    sources: &[MergeSource],
+    output: &Path,
+    target_crs: Option<&CrsInfo>,
     mut continue_export: impl FnMut(ExportProgress) -> bool,
 ) -> Result<ExportStats> {
     const CHUNK_SIZE: u64 = 65_536;
@@ -547,10 +573,19 @@ pub fn export_merged_progress(
     }
 
     // Compatibility pass: one output point format can only represent sources
-    // that agree on version, format, and horizontal CRS.
+    // that agree on version and point format. The legacy entry point also
+    // requires one horizontal CRS; the reprojected entry point deliberately
+    // accepts mixed source projections.
     let template = Reader::from_path(&sources[0].path)?.header().clone();
     let template_crs = CrsInfo::from_header(&template);
+    let template_effective_crs = sources[0]
+        .source_crs
+        .clone()
+        .unwrap_or_else(|| template_crs.clone());
     let mut total_points = template.number_of_points();
+    let mut source_crs = vec![template_effective_crs];
+    let mut source_bounds = vec![template.bounds()];
+    let mut z_scale = template.transforms().z.scale;
     for source in &sources[1..] {
         let header = Reader::from_path(&source.path)?.header().clone();
         if header.version() != template.version()
@@ -567,27 +602,129 @@ pub fn export_merged_progress(
             )));
         }
         let crs = CrsInfo::from_header(&header);
-        if crs.horizontal_epsg != template_crs.horizontal_epsg {
+        let effective_crs = source.source_crs.clone().unwrap_or_else(|| crs.clone());
+        if target_crs.is_none()
+            && !crs_equivalent(&effective_crs, &source_crs[0])
+            && !(effective_crs.horizontal_epsg.is_none()
+                && effective_crs.proj4.is_none()
+                && source_crs[0].horizontal_epsg.is_none()
+                && source_crs[0].proj4.is_none())
+        {
             return Err(Error::MergeIncompatible(format!(
-                "\"{}\" declares horizontal EPSG {:?} but \"{}\" declares {:?}",
+                "\"{}\" declares {} but \"{}\" declares {}",
                 sources[0].path.display(),
-                template_crs.horizontal_epsg,
+                source_crs[0].horizontal_label(),
                 source.path.display(),
-                crs.horizontal_epsg,
+                effective_crs.horizontal_label(),
             )));
         }
         total_points += header.number_of_points();
+        source_crs.push(effective_crs);
+        source_bounds.push(header.bounds());
+        z_scale = z_scale.min(header.transforms().z.scale);
     }
+
+    let output_header = if let Some(target_crs) = target_crs {
+        let target_projection = crs::projection_from_crs(target_crs).ok_or_else(|| {
+            Error::Crs(format!(
+                "target horizontal CRS is unresolved: {}",
+                target_crs.label()
+            ))
+        })?;
+        let mut union_min = [f64::INFINITY; 3];
+        let mut union_max = [f64::NEG_INFINITY; 3];
+        for ((bounds, source_crs), source) in source_bounds
+            .iter()
+            .zip(source_crs.iter())
+            .zip(sources.iter())
+        {
+            if !source_crs.is_resolvable() {
+                return Err(Error::Crs(format!(
+                    "source horizontal CRS is unresolved for \"{}\"",
+                    source.path.display()
+                )));
+            }
+            let (min, max) = reproject_bounds_between_crs(
+                [bounds.min.x, bounds.min.y, bounds.min.z],
+                [bounds.max.x, bounds.max.y, bounds.max.z],
+                source_crs,
+                target_crs,
+            )
+            .ok_or_else(|| {
+                Error::Crs(format!(
+                    "cannot transform bounds for \"{}\" from {} to {}",
+                    source.path.display(),
+                    source_crs.horizontal_label(),
+                    target_crs.horizontal_label()
+                ))
+            })?;
+            for axis in 0..3 {
+                union_min[axis] = union_min[axis].min(min[axis]);
+                union_max[axis] = union_max[axis].max(max[axis]);
+            }
+        }
+
+        let mut builder = las::Builder::from(template.clone());
+        if builder.version.major < 1 || builder.version.minor < 4 {
+            builder.version = las::Version::new(1, 4);
+        }
+        let horizontal_scale = if target_projection.is_latlong() {
+            1.0e-8
+        } else {
+            0.001
+        };
+        builder.transforms.x = crs::output_transform(union_min[0], union_max[0], horizontal_scale);
+        builder.transforms.y = crs::output_transform(union_min[1], union_max[1], horizontal_scale);
+        builder.transforms.z =
+            crs::output_transform(union_min[2], union_max[2], z_scale.max(f64::EPSILON));
+        let mut header = builder.into_header()?;
+        let wkt = target_crs.wkt.clone().or_else(|| {
+            target_crs.horizontal_epsg.and_then(|epsg| {
+                crs_definitions::from_code(epsg).map(|definition| definition.wkt.to_string())
+            })
+        });
+        let wkt = wkt.ok_or_else(|| {
+            Error::Crs(format!(
+                "{} has no WKT definition for the merged output",
+                target_crs.horizontal_label()
+            ))
+        })?;
+        header
+            .set_wkt_crs(wkt.into_bytes())
+            .map_err(|error| Error::Crs(format!("cannot write target WKT: {error}")))?;
+        header
+    } else {
+        template
+    };
 
     let temporary = temporary_output_path(output);
     let mut temporary_guard = TemporaryOutput::new(temporary.clone());
-    let mut writer = Writer::from_path(&temporary, template)?;
+    let mut writer = Writer::from_path(&temporary, output_header)?;
     let mut stats = ExportStats::default();
 
     for (ordinal, source) in sources.iter().enumerate() {
         let source_id = u16::try_from(ordinal + 1).unwrap_or(u16::MAX);
         let mut reader = Reader::from_path(&source.path)?;
         let point_count = reader.header().number_of_points();
+        let transform = target_crs
+            .filter(|target| !crs_equivalent(&source_crs[ordinal], target))
+            .map(|target| {
+                let source_projection =
+                    crs::projection_from_crs(&source_crs[ordinal]).ok_or_else(|| {
+                        Error::Crs(format!(
+                            "source horizontal CRS is unresolved: {}",
+                            source_crs[ordinal].label()
+                        ))
+                    })?;
+                let target_projection = crs::projection_from_crs(target).ok_or_else(|| {
+                    Error::Crs(format!(
+                        "target horizontal CRS is unresolved: {}",
+                        target.label()
+                    ))
+                })?;
+                Ok::<_, Error>((source_projection, target_projection))
+            })
+            .transpose()?;
         let mut source_index = 0_u64;
         while source_index < point_count {
             let point_data = reader.read_points((point_count - source_index).min(CHUNK_SIZE))?;
@@ -598,6 +735,29 @@ pub fn export_merged_progress(
                 let mut point = point?;
                 if let Some(patch) = source.edits.patch_for(source_index) {
                     apply_point_patch(&mut point, patch, &mut stats)?;
+                }
+                if let Some((source_projection, target_projection)) = transform.as_ref() {
+                    let original_z = point.z;
+                    let coordinate = crs::transform_coordinate(
+                        source_projection,
+                        target_projection,
+                        (point.x, point.y, point.z),
+                    )
+                    .map_err(|error| {
+                        Error::Crs(format!(
+                            "point {source_index} in \"{}\" cannot be transformed: {error}",
+                            source.path.display()
+                        ))
+                    })?;
+                    if !coordinate.0.is_finite() || !coordinate.1.is_finite() {
+                        return Err(Error::Crs(format!(
+                            "point {source_index} in \"{}\" transformed to a non-finite coordinate",
+                            source.path.display()
+                        )));
+                    }
+                    point.x = coordinate.0;
+                    point.y = coordinate.1;
+                    point.z = original_z;
                 }
                 point.point_source_id = source_id;
                 writer.write_point(point)?;
@@ -1142,10 +1302,12 @@ mod tests {
                 MergeSource {
                     path: first,
                     edits: first_edits,
+                    source_crs: None,
                 },
                 MergeSource {
                     path: second,
                     edits: second_edits,
+                    source_crs: None,
                 },
             ],
             &output,
@@ -1192,6 +1354,82 @@ mod tests {
     }
 
     #[test]
+    fn merged_export_reprojects_mixed_sources_into_one_target_crs() {
+        let directory = TestDirectory::new();
+        let geographic = directory.join("merge-geographic.las");
+        let mercator = directory.join("merge-mercator.las");
+        let output = directory.join("merge-target.las");
+
+        let mut builder = Builder::default();
+        builder.version = las::Version::new(1, 4);
+        builder.point_format = Format::new(3).unwrap();
+        let mut header = builder.into_header().unwrap();
+        header
+            .set_wkt_crs(
+                crs_definitions::from_code(4326)
+                    .unwrap()
+                    .wkt
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .unwrap();
+        let mut writer = Writer::from_path(&geographic, header).unwrap();
+        writer
+            .write_point(Point {
+                x: -88.0,
+                y: 41.0,
+                z: 182.75,
+                gps_time: Some(1.0),
+                color: Some(las::Color::new(1, 2, 3)),
+                ..Point::default()
+            })
+            .unwrap();
+        writer.close().unwrap();
+        reproject_with_patches_progress(
+            &geographic,
+            &mercator,
+            &EditStore::default(),
+            3857,
+            |_| true,
+        )
+        .unwrap();
+
+        let target = CrsInfo {
+            horizontal_epsg: Some(3857),
+            ..Default::default()
+        };
+        let stats = export_merged_reprojected_progress(
+            &[
+                MergeSource {
+                    path: geographic,
+                    edits: EditStore::default(),
+                    source_crs: None,
+                },
+                MergeSource {
+                    path: mercator,
+                    edits: EditStore::default(),
+                    source_crs: None,
+                },
+            ],
+            &output,
+            &target,
+            |_| true,
+        )
+        .unwrap();
+        assert_eq!(2, stats.points_written);
+        assert_eq!(Some(3857), inspect(&output).unwrap().crs.horizontal_epsg);
+
+        let mut reader = Reader::from_path(output).unwrap();
+        let chunk = reader.read_points(2).unwrap();
+        let points: Vec<_> = chunk.points().map(|point| point.unwrap()).collect();
+        assert_eq!(2, points.len());
+        assert!((points[0].x - points[1].x).abs() < 0.01);
+        assert!((points[0].y - points[1].y).abs() < 0.01);
+        assert_eq!(182.75, points[0].z);
+        assert_eq!(182.75, points[1].z);
+    }
+
+    #[test]
     fn merged_export_refuses_to_overwrite() {
         let directory = TestDirectory::new();
         let input = directory.join("merge-single.las");
@@ -1202,6 +1440,7 @@ mod tests {
             &[MergeSource {
                 path: input,
                 edits: EditStore::default(),
+                source_crs: None,
             }],
             &output,
             |_| true,
@@ -1326,7 +1565,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(4, version, "v1 databases migrate through every schema revision");
+        assert_eq!(
+            4, version,
+            "v1 databases migrate through every schema revision"
+        );
         assert_eq!(1, filter_column);
         assert_eq!(1, order_column);
     }

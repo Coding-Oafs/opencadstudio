@@ -93,13 +93,44 @@ impl CoordinateUnit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DrawingCrs {
-    pub epsg: u16,
+    /// Projected/geographic EPSG when the source declares one. Projected LAS
+    /// WKT is also valid without this value and is retained below.
+    pub epsg: Option<u16>,
     pub coordinate_unit: CoordinateUnit,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub proj4: Option<String>,
+    #[serde(default)]
+    pub wkt: Option<String>,
 }
 
 impl DrawingCrs {
     pub fn label(&self) -> String {
-        format!("EPSG:{} ({})", self.epsg, self.coordinate_unit.label())
+        format!(
+            "{} ({})",
+            self.as_crs_info().horizontal_label(),
+            self.coordinate_unit.label()
+        )
+    }
+
+    pub fn short_label(&self) -> String {
+        self.as_crs_info().horizontal_label()
+    }
+
+    pub(super) fn working_unit(&self) -> WorkingUnit {
+        self.coordinate_unit.required_working_unit()
+    }
+
+    pub fn as_crs_info(&self) -> ocs_pointcloud::CrsInfo {
+        ocs_pointcloud::CrsInfo {
+            horizontal_epsg: self.epsg,
+            name: self.name.clone(),
+            proj4: self.proj4.clone(),
+            wkt: self.wkt.clone(),
+            source: Some("drawing".to_string()),
+            ..Default::default()
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -109,8 +140,30 @@ impl DrawingCrs {
         let coordinate_unit = CoordinateUnit::from_proj_unit(unit)
             .ok_or_else(|| format!("EPSG:{epsg} uses unsupported horizontal units \"{unit}\""))?;
         Ok(Self {
-            epsg,
+            epsg: Some(epsg),
             coordinate_unit,
+            name: None,
+            proj4: None,
+            wkt: None,
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn from_crs_info(crs: &ocs_pointcloud::CrsInfo) -> Result<Self, String> {
+        let unit = ocs_pointcloud::crs_horizontal_unit(crs)
+            .ok_or_else(|| format!("{} has no resolvable horizontal projection", crs.label()))?;
+        let coordinate_unit = CoordinateUnit::from_proj_unit(unit).ok_or_else(|| {
+            format!(
+                "{} uses unsupported horizontal units \"{unit}\"",
+                crs.horizontal_label()
+            )
+        })?;
+        Ok(Self {
+            epsg: crs.horizontal_epsg,
+            coordinate_unit,
+            name: crs.name.clone(),
+            proj4: crs.proj4.clone(),
+            wkt: crs.wkt.clone(),
         })
     }
 
@@ -119,8 +172,11 @@ impl DrawingCrs {
         // Native performs authoritative validation through proj4rs. The web
         // build currently has no CRS database; retain a useful drawing label.
         Ok(Self {
-            epsg,
+            epsg: Some(epsg),
             coordinate_unit: CoordinateUnit::Meters,
+            name: None,
+            proj4: None,
+            wkt: None,
         })
     }
 }
@@ -188,6 +244,12 @@ impl OpenCADStudio {
             argument.to_ascii_uppercase().as_str(),
             "NONE" | "UNSET" | "CLEAR"
         ) {
+            if !self.tabs[i].point_cloud.is_empty() {
+                self.command_line.push_error(
+                    "CRS: detach the point-cloud dataset before clearing its drawing coordinate space.",
+                );
+                return Task::none();
+            }
             self.tabs[i].spatial.drawing_crs = None;
             self.tabs[i].spatial.normalize();
             self.persist_spatial_settings(i);
@@ -202,54 +264,31 @@ impl OpenCADStudio {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let epsg = if argument.eq_ignore_ascii_case("LAS")
+        let crs = if argument.eq_ignore_ascii_case("LAS")
             || argument.eq_ignore_ascii_case("POINTCLOUD")
         {
-            let source_crs = self.tabs[i]
+            self.tabs[i]
                 .point_cloud
                 .active()
-                .map(|source| source.sample.metadata.crs.clone());
-            // A projected CRS whose WKT omits an EPSG authority on the PROJCS
-            // falls back to its geographic base. Do not silently adopt a degree
-            // CRS for state-plane/UTM foot-or-metre data.
-            if let Some(crs) = source_crs.as_ref() {
-                if let Some(epsg) = crs.horizontal_epsg {
-                    if crs.proj4.is_some()
-                        && ocs_pointcloud::epsg_horizontal_unit(epsg)
-                            .is_some_and(|unit| unit == "degrees")
-                    {
-                        self.command_line.push_error(
-                            format!(
-                                "CRS: the attached cloud uses \"{}\", a projected CRS with no resolvable EPSG authority. Set the drawing CRS explicitly (for example: CRS 6420).",
-                                crs.name.as_deref().unwrap_or("an unnamed projected CRS")
-                            )
-                            .as_str(),
-                        );
-                        return Task::none();
-                    }
-                }
-            }
-            source_crs.and_then(|crs| crs.horizontal_epsg)
+                .map(|source| DrawingCrs::from_crs_info(&source.sample.metadata.crs))
+                .unwrap_or_else(|| Err("attach a LAS/LAZ source before using CRS LAS".to_string()))
         } else {
             argument
                 .trim_start_matches("EPSG:")
                 .trim_start_matches("epsg:")
                 .parse::<u16>()
-                .ok()
+                .map_err(|_| "CRS <EPSG code|LAS|UNSET> (example: CRS 32615).".to_string())
+                .and_then(DrawingCrs::from_epsg)
         };
         #[cfg(target_arch = "wasm32")]
-        let epsg = argument
+        let crs = argument
             .trim_start_matches("EPSG:")
             .trim_start_matches("epsg:")
             .parse::<u16>()
-            .ok();
+            .map_err(|_| "CRS <EPSG code|UNSET> (example: CRS 32615).".to_string())
+            .and_then(DrawingCrs::from_epsg);
 
-        let Some(epsg) = epsg else {
-            self.command_line
-                .push_error("CRS <EPSG code|LAS|UNSET> (example: CRS 32615).");
-            return Task::none();
-        };
-        let crs = match DrawingCrs::from_epsg(epsg) {
+        let crs = match crs {
             Ok(crs) => crs,
             Err(error) => {
                 self.command_line.push_error(&error);
@@ -258,13 +297,21 @@ impl OpenCADStudio {
         };
         let unit = crs.coordinate_unit.required_working_unit();
         let label = crs.label();
-        let previous_epsg = self.tabs[i]
-            .spatial
-            .drawing_crs
-            .as_ref()
-            .map(|current| current.epsg);
-        let cleared_stale_bounds = previous_epsg.is_some_and(|current| current != epsg)
-            && self.tabs[i].spatial.basemap_bounds.take().is_some();
+        let previous = self.tabs[i].spatial.drawing_crs.clone();
+        let changed = previous.as_ref() != Some(&crs);
+        #[cfg(not(target_arch = "wasm32"))]
+        if changed {
+            let old = previous.as_ref().map(DrawingCrs::as_crs_info);
+            if let Err(error) =
+                self.reproject_point_cloud_to_drawing_crs(i, old.as_ref(), &crs.as_crs_info())
+            {
+                self.command_line
+                    .push_error(format!("CRS: {error}").as_str());
+                return Task::none();
+            }
+        }
+        let cleared_stale_bounds =
+            changed && previous.is_some() && self.tabs[i].spatial.basemap_bounds.take().is_some();
         self.tabs[i].spatial.drawing_crs = Some(crs);
         self.tabs[i].spatial.working_unit = unit;
         self.basemap.projection = crate::scene::basemap::BasemapProjection::FromDrawing;
@@ -391,8 +438,11 @@ mod tests {
     fn projected_crs_locks_units_to_its_coordinate_unit() {
         let settings = DrawingSpatialSettings {
             drawing_crs: Some(DrawingCrs {
-                epsg: 32615,
+                epsg: Some(32615),
                 coordinate_unit: CoordinateUnit::Meters,
+                name: None,
+                proj4: None,
+                wkt: None,
             }),
             ..Default::default()
         };
@@ -416,5 +466,31 @@ mod tests {
             DrawingCrs::from_epsg(4326).unwrap().coordinate_unit,
             CoordinateUnit::Degrees
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn drawing_crs_preserves_embedded_projection_without_projected_epsg() {
+        let source = ocs_pointcloud::CrsInfo {
+            horizontal_epsg: Some(6318),
+            name: Some("NAD83(2011) / California zone 3 (ft)".to_string()),
+            proj4: Some("+proj=lcc +lat_0=36.5 +lon_0=-120.5 +lat_1=38.4333333333333 +lat_2=37.0666666666667 +x_0=2000000 +y_0=500000 +ellps=GRS80 +units=ft +no_defs".to_string()),
+            ..Default::default()
+        };
+        let drawing = DrawingCrs::from_crs_info(&source).unwrap();
+        assert_eq!(drawing.coordinate_unit, CoordinateUnit::Feet);
+        assert!(drawing.label().contains("California zone 3"));
+        assert!(ocs_pointcloud::crs_equivalent(
+            &source,
+            &drawing.as_crs_info()
+        ));
+    }
+
+    #[test]
+    fn legacy_numeric_epsg_sidecar_deserializes_as_optional_epsg() {
+        let json = r#"{"epsg":32615,"coordinate_unit":"Meters"}"#;
+        let drawing: DrawingCrs = serde_json::from_str(json).unwrap();
+        assert_eq!(drawing.epsg, Some(32615));
+        assert_eq!(drawing.short_label(), "EPSG:32615");
     }
 }

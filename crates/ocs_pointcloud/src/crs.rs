@@ -125,19 +125,168 @@ pub fn reproject_to_crs(source_epsg: u16, crs: &CrsInfo, x: f64, y: f64) -> Opti
 /// WKT-derived PROJ.4 string first (accurate for a projected CRS whose WKT
 /// omits an EPSG authority on the `PROJCS`, leaving only the geographic base in
 /// `horizontal_epsg`), then the resolved EPSG code.
-fn projection_from_crs(crs: &CrsInfo) -> Option<Proj> {
+pub(crate) fn projection_from_crs(crs: &CrsInfo) -> Option<Proj> {
     if let Some(proj4) = crs.proj4.as_deref() {
         if let Ok(projection) = Proj::from_proj_string(proj4) {
             return Some(projection);
         }
     }
+    if crs.wkt.as_deref().is_some_and(is_projected_wkt)
+        && crs.horizontal_epsg.is_some_and(is_geographic_epsg)
+    {
+        return None;
+    }
     crs.horizontal_epsg
         .and_then(|epsg| Proj::from_epsg_code(epsg).ok())
+}
+
+/// True when two horizontal CRS descriptors resolve to the same coordinate
+/// space. The embedded PROJ.4 definition takes precedence because projected
+/// LAS WKT sometimes exposes only its geographic base EPSG authority.
+pub fn crs_equivalent(left: &CrsInfo, right: &CrsInfo) -> bool {
+    match (left.proj4.as_deref(), right.proj4.as_deref()) {
+        (Some(left), Some(right)) => normalize_proj4(left) == normalize_proj4(right),
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => {
+            left.horizontal_epsg.is_some() && left.horizontal_epsg == right.horizontal_epsg
+        }
+    }
+}
+
+fn normalize_proj4(value: &str) -> Vec<&str> {
+    let mut parts: Vec<_> = value
+        .split_whitespace()
+        .filter(|part| !matches!(*part, "+type=crs" | "+no_defs"))
+        .collect();
+    parts.sort_unstable();
+    parts
+}
+
+/// Horizontal unit reported by the best available CRS definition.
+pub fn crs_horizontal_unit(crs: &CrsInfo) -> Option<&'static str> {
+    projection_from_crs(crs).map(|projection| projection.units())
+}
+
+/// Reproject a coordinate between two complete CRS descriptors. Z is retained
+/// verbatim: this function performs a horizontal transformation only.
+pub fn reproject_between_crs(
+    source: &CrsInfo,
+    target: &CrsInfo,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    if crs_equivalent(source, target) {
+        return Some((x, y));
+    }
+    let source = projection_from_crs(source)?;
+    let target = projection_from_crs(target)?;
+    transform_coordinate(&source, &target, (x, y, 0.0))
+        .ok()
+        .map(|coordinate| (coordinate.0, coordinate.1))
+}
+
+/// Reproject a point slice in place while constructing each projection only
+/// once. This is the display/LOD path for mixed-projection datasets.
+pub fn reproject_points_between_crs(
+    source: &CrsInfo,
+    target: &CrsInfo,
+    points: &mut [crate::SamplePoint],
+) -> Result<()> {
+    if crs_equivalent(source, target) || points.is_empty() {
+        return Ok(());
+    }
+    let source_projection = projection_from_crs(source).ok_or_else(|| {
+        Error::Crs(format!(
+            "source horizontal CRS is unresolved: {}",
+            source.label()
+        ))
+    })?;
+    let target_projection = projection_from_crs(target).ok_or_else(|| {
+        Error::Crs(format!(
+            "target horizontal CRS is unresolved: {}",
+            target.label()
+        ))
+    })?;
+    for point in points {
+        let coordinate = transform_coordinate(
+            &source_projection,
+            &target_projection,
+            (point.position[0], point.position[1], point.position[2]),
+        )
+        .map_err(|error| {
+            Error::Crs(format!(
+                "point {} cannot transform from {} to {}: {error}",
+                point.source_index,
+                source.horizontal_label(),
+                target.horizontal_label()
+            ))
+        })?;
+        if !coordinate.0.is_finite() || !coordinate.1.is_finite() {
+            return Err(Error::Crs(format!(
+                "point {} transformed to a non-finite coordinate",
+                point.source_index
+            )));
+        }
+        point.position[0] = coordinate.0;
+        point.position[1] = coordinate.1;
+    }
+    Ok(())
+}
+
+/// Reproject an XYZ envelope between complete CRS descriptors. Horizontal
+/// edges are densified to capture curvature; Z is preserved.
+pub fn reproject_bounds_between_crs(
+    min: [f64; 3],
+    max: [f64; 3],
+    source: &CrsInfo,
+    target: &CrsInfo,
+) -> Option<([f64; 3], [f64; 3])> {
+    if min.iter().chain(max.iter()).any(|value| !value.is_finite())
+        || min[0] > max[0]
+        || min[1] > max[1]
+        || min[2] > max[2]
+    {
+        return None;
+    }
+    if crs_equivalent(source, target) {
+        return Some((min, max));
+    }
+    let source_projection = projection_from_crs(source)?;
+    let target_projection = projection_from_crs(target)?;
+    let mut out_min = [f64::INFINITY, f64::INFINITY, min[2]];
+    let mut out_max = [f64::NEG_INFINITY, f64::NEG_INFINITY, max[2]];
+    const STEPS: usize = 8;
+    for step in 0..=STEPS {
+        let t = step as f64 / STEPS as f64;
+        let x = min[0] + (max[0] - min[0]) * t;
+        let y = min[1] + (max[1] - min[1]) * t;
+        for (sample_x, sample_y) in [(x, min[1]), (x, max[1]), (min[0], y), (max[0], y)] {
+            let coordinate = transform_coordinate(
+                &source_projection,
+                &target_projection,
+                (sample_x, sample_y, 0.0),
+            )
+            .ok()?;
+            out_min[0] = out_min[0].min(coordinate.0);
+            out_min[1] = out_min[1].min(coordinate.1);
+            out_max[0] = out_max[0].max(coordinate.0);
+            out_max[1] = out_max[1].max(coordinate.1);
+        }
+    }
+    out_min
+        .iter()
+        .chain(out_max.iter())
+        .all(|value| value.is_finite())
+        .then_some((out_min, out_max))
 }
 
 /// True when `epsg` resolves to a geographic (angular) CRS.
 fn is_geographic_epsg(epsg: u16) -> bool {
     Proj::from_epsg_code(epsg).is_ok_and(|projection| projection.is_latlong())
+}
+
+fn is_projected_epsg(epsg: u16) -> bool {
+    Proj::from_epsg_code(epsg).is_ok_and(|projection| !projection.is_latlong())
 }
 
 /// CRS information recovered from LAS WKT or GeoTIFF (E)VLRs.
@@ -171,12 +320,21 @@ impl CrsInfo {
             None
         };
         let name = wkt.as_deref().and_then(wkt_name);
-        let proj4 = wkt.as_deref().and_then(proj4_from_wkt);
+        let embedded_proj4 = wkt.as_deref().and_then(proj4_from_wkt);
         let (horizontal_epsg, vertical_epsg, parse_warning) = if let Some(wkt) = wkt.as_deref() {
             let (horizontal, vertical) = epsg_from_wkt(wkt);
-            let warning = horizontal
-                .is_none()
-                .then(|| "WKT CRS has no resolvable EPSG authority identifier".to_string());
+            let projected = is_projected_wkt(wkt);
+            let projected_epsg = horizontal.filter(|code| !is_geographic_epsg(*code));
+            let warning = if projected && projected_epsg.is_none() && embedded_proj4.is_some() {
+                Some(
+                    "projected WKT has no projected EPSG authority; using its embedded projection"
+                        .to_string(),
+                )
+            } else if horizontal.is_none() && embedded_proj4.is_none() {
+                Some("WKT CRS has no resolvable horizontal definition".to_string())
+            } else {
+                None
+            };
             (horizontal, vertical, warning)
         } else {
             match header.get_geotiff_crs() {
@@ -197,6 +355,12 @@ impl CrsInfo {
                 Err(error) => (None, None, Some(error.to_string())),
             }
         };
+        // Prefer an authoritative projected EPSG definition. The hand-built
+        // projection is the fallback only when WKT lacks a projected authority.
+        let proj4 = embedded_proj4.filter(|_| {
+            !horizontal_epsg.is_some_and(is_projected_epsg)
+                && wkt.as_deref().is_some_and(is_projected_wkt)
+        });
         Self {
             horizontal_epsg,
             vertical_epsg,
@@ -212,12 +376,14 @@ impl CrsInfo {
     /// fallback described in [`Self::label`].
     pub fn horizontal_label(&self) -> String {
         match self.horizontal_epsg {
-            Some(code) if is_geographic_epsg(code) && self.proj4.is_some() => self
+            Some(code) if is_geographic_epsg(code) && self.proj4.is_some() => {
+                self.name.clone().unwrap_or_else(|| format!("EPSG:{code}"))
+            }
+            Some(code) => format!("EPSG:{code}"),
+            None => self
                 .name
                 .clone()
-                .unwrap_or_else(|| format!("EPSG:{code}")),
-            Some(code) => format!("EPSG:{code}"),
-            None => self.name.clone().unwrap_or_else(|| "unresolved CRS".to_string()),
+                .unwrap_or_else(|| "unresolved CRS".to_string()),
         }
     }
 
@@ -230,6 +396,16 @@ impl CrsInfo {
             Some(vertical) => format!("{horizontal} + vertical EPSG:{vertical}"),
             None => horizontal,
         }
+    }
+
+    pub fn is_resolvable(&self) -> bool {
+        if self.proj4.is_none()
+            && self.wkt.as_deref().is_some_and(is_projected_wkt)
+            && self.horizontal_epsg.is_some_and(is_geographic_epsg)
+        {
+            return false;
+        }
+        projection_from_crs(self).is_some()
     }
 }
 
@@ -249,10 +425,37 @@ fn epsg_from_wkt(wkt: &str) -> (Option<u16>, Option<u16>) {
     let (horizontal_wkt, vertical_wkt) = vertical_start
         .map(|start| (&wkt[..start], Some(&wkt[start..])))
         .unwrap_or((wkt, None));
+    let horizontal_codes: Vec<_> = epsg_authorities(horizontal_wkt).collect();
+    let horizontal = if is_projected_wkt(horizontal_wkt) {
+        horizontal_codes
+            .iter()
+            .rev()
+            .copied()
+            .find(|code| is_projected_epsg(*code))
+            .or_else(|| {
+                horizontal_codes
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|code| Proj::from_epsg_code(*code).is_ok())
+            })
+    } else {
+        horizontal_codes
+            .iter()
+            .rev()
+            .copied()
+            .find(|code| Proj::from_epsg_code(*code).is_ok())
+    };
     (
-        epsg_authorities(horizontal_wkt).last(),
+        horizontal,
         vertical_wkt.and_then(|value| epsg_authorities(value).last()),
     )
+}
+
+fn is_projected_wkt(wkt: &str) -> bool {
+    ["PROJCS[", "PROJCRS[", "PROJECTEDCRS["]
+        .iter()
+        .any(|marker| wkt.contains(marker))
 }
 
 fn epsg_authorities(wkt: &str) -> impl Iterator<Item = u16> + '_ {
@@ -283,19 +486,23 @@ fn epsg_authorities(wkt: &str) -> impl Iterator<Item = u16> + '_ {
 /// `epsg_from_wkt` falls back to the geographic code and reprojects feet as
 /// degrees.
 fn proj4_from_wkt(wkt: &str) -> Option<String> {
-    let proj_name = wkt_quoted_after("PROJECTION[", wkt)?;
+    let proj_name =
+        wkt_quoted_after("PROJECTION[", wkt).or_else(|| wkt_quoted_after("METHOD[", wkt))?;
+    let proj_name = normalize_wkt_name(&proj_name);
     let proj = match proj_name.as_str() {
-        "Lambert_Conformal_Conic_2SP"
-        | "Lambert_Conformal_Conic_1SP"
-        | "Lambert_Conformal_Conic" => "lcc",
-        "Transverse_Mercator" => "tmerc",
-        "Mercator_1SP" | "Mercator_2SP" | "Mercator_Auxiliary_Sphere" => "merc",
-        "Albers_Conic_Equal_Area" => "aea",
-        "Polar_Stereographic" | "Stereographic" => "stere",
-        "Lambert_Azimuthal_Equal_Area" => "laea",
-        "Equidistant_Cylindrical" => "eqc",
-        "Cylindrical_Equal_Area" => "cea",
-        "Hotine_Oblique_Mercator" => "omerc",
+        "lambert_conformal_conic_2sp"
+        | "lambert_conformal_conic_1sp"
+        | "lambert_conformal_conic"
+        | "lambert_conic_conformal_2sp"
+        | "lambert_conic_conformal_1sp" => "lcc",
+        "transverse_mercator" => "tmerc",
+        "mercator_1sp" | "mercator_2sp" | "mercator_auxiliary_sphere" => "merc",
+        "albers_conic_equal_area" => "aea",
+        "polar_stereographic" | "stereographic" => "stere",
+        "lambert_azimuthal_equal_area" => "laea",
+        "equidistant_cylindrical" => "eqc",
+        "cylindrical_equal_area" => "cea",
+        "hotine_oblique_mercator" => "omerc",
         _ => return None,
     };
     let mut parts = vec![format!("+proj={proj}")];
@@ -309,13 +516,20 @@ fn proj4_from_wkt(wkt: &str) -> Option<String> {
     let linear_to_metre = horizontal_unit.as_ref().map_or(1.0, |(_, factor)| *factor);
 
     for (name, value) in wkt_parameters(wkt) {
+        let name = normalize_wkt_name(&name);
         let key = match name.as_str() {
-            "latitude_of_origin" | "latitude_of_center" | "latitude_of_natural_origin" => "lat_0",
-            "central_meridian" | "longitude_of_center" | "longitude_of_natural_origin" => "lon_0",
-            "standard_parallel_1" => "lat_1",
-            "standard_parallel_2" => "lat_2",
-            "false_easting" => "x_0",
-            "false_northing" => "y_0",
+            "latitude_of_origin"
+            | "latitude_of_center"
+            | "latitude_of_natural_origin"
+            | "latitude_of_false_origin" => "lat_0",
+            "central_meridian"
+            | "longitude_of_center"
+            | "longitude_of_natural_origin"
+            | "longitude_of_false_origin" => "lon_0",
+            "standard_parallel_1" | "latitude_of_1st_standard_parallel" => "lat_1",
+            "standard_parallel_2" | "latitude_of_2nd_standard_parallel" => "lat_2",
+            "false_easting" | "easting_at_false_origin" => "x_0",
+            "false_northing" | "northing_at_false_origin" => "y_0",
             "scale_factor" | "scale_factor_at_natural_origin" => "k_0",
             _ => continue,
         };
@@ -361,7 +575,31 @@ fn horizontal_wkt_unit(wkt: &str) -> Option<(String, f64)> {
         .unwrap_or(wkt.len());
     wkt_units(&wkt[..vertical_start])
         .into_iter()
-        .find(|(name, _)| !name.eq_ignore_ascii_case("degree"))
+        .rev()
+        .find(|(name, _)| !is_angular_unit(name))
+}
+
+fn is_angular_unit(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains("degree") || name.contains("radian") || name.contains("grad")
+}
+
+fn normalize_wkt_name(name: &str) -> String {
+    name.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 /// The quoted name of the first `KEY["..."]` occurrence after `marker`.
@@ -394,7 +632,11 @@ fn wkt_parameters(wkt: &str) -> Vec<(String, f64)> {
 
 /// The first `SPHEROID["name", a, rf, ...]` as `(name, semi-major, inv-flattening)`.
 fn wkt_spheroid(wkt: &str) -> Option<(String, f64, f64)> {
-    let pos = wkt.find("SPHEROID[")? + "SPHEROID[".len();
+    let (pos, marker_len) = wkt
+        .find("SPHEROID[")
+        .map(|pos| (pos, "SPHEROID[".len()))
+        .or_else(|| wkt.find("ELLIPSOID[").map(|pos| (pos, "ELLIPSOID[".len())))?;
+    let pos = pos + marker_len;
     let after = &wkt[pos..];
     let q = after.find('"')?;
     let name_seg = &after[q + 1..];
@@ -415,8 +657,12 @@ fn wkt_spheroid(wkt: &str) -> Option<(String, f64, f64)> {
 fn wkt_units(wkt: &str) -> Vec<(String, f64)> {
     let mut out = Vec::new();
     let mut rest = wkt;
-    while let Some(pos) = rest.find("UNIT[") {
-        let after = &rest[pos + "UNIT[".len()..];
+    while let Some((pos, marker_len)) = ["LENGTHUNIT[", "UNIT["]
+        .iter()
+        .filter_map(|marker| rest.find(marker).map(|pos| (pos, marker.len())))
+        .min_by_key(|(pos, _)| *pos)
+    {
+        let after = &rest[pos + marker_len..];
         let Some(q) = after.find('"') else { break };
         let name_seg = &after[q + 1..];
         let Some(q2) = name_seg.find('"') else { break };
@@ -513,15 +759,10 @@ pub fn assess_survey_readiness(metadata: &crate::CloudMetadata) -> SurveyReadine
     let crs = &metadata.crs;
     if !metadata.has_crs {
         blocked.push("no CRS is declared".to_string());
-    } else if crs.horizontal_epsg.is_none() {
-        blocked.push("horizontal CRS could not be resolved to an EPSG code".to_string());
+    } else if !crs.is_resolvable() {
+        blocked.push("horizontal CRS could not be resolved to a usable projection".to_string());
     }
-    let geographic = crs.horizontal_epsg == Some(4326)
-        || crs.wkt.as_deref().is_some_and(|wkt| {
-            (wkt.contains("GEOGCS[") || wkt.contains("GEODCRS["))
-                && !wkt.contains("PROJCS[")
-                && !wkt.contains("PROJCRS[")
-        });
+    let geographic = projection_from_crs(crs).is_some_and(|projection| projection.is_latlong());
     if geographic {
         blocked.push(
             "horizontal coordinates are angular; reproject to a suitable projected survey CRS"
@@ -686,7 +927,7 @@ pub fn reproject_with_patches_progress(
     Ok(stats)
 }
 
-fn output_transform(low: f64, high: f64, base_scale: f64) -> las::Transform {
+pub(crate) fn output_transform(low: f64, high: f64, base_scale: f64) -> las::Transform {
     let span = (high - low).abs();
     let safe_scale = (span / 4_000_000_000.0).max(base_scale);
     las::Transform {
@@ -739,7 +980,7 @@ fn transformed_xy_bounds(
     ])
 }
 
-fn transform_coordinate(
+pub(crate) fn transform_coordinate(
     source: &Proj,
     target: &Proj,
     mut coordinate: (f64, f64, f64),
@@ -814,10 +1055,12 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
         // Centre of a real Boston USGS tile in the WKT's international-foot
         // coordinates. This previously transformed to the Atlantic near
         // (-75.56, 26.98) because the false offsets were treated as metres.
-        let (longitude, latitude) =
-            reproject_from_proj4(&proj4, 4326, 787_148.208, 2_940_613.759)
-                .expect("state-plane coordinate should transform");
-        assert!((-71.1..=-70.8).contains(&longitude), "longitude={longitude}");
+        let (longitude, latitude) = reproject_from_proj4(&proj4, 4326, 787_148.208, 2_940_613.759)
+            .expect("state-plane coordinate should transform");
+        assert!(
+            (-71.1..=-70.8).contains(&longitude),
+            "longitude={longitude}"
+        );
         assert!((42.2..=42.5).contains(&latitude), "latitude={latitude}");
     }
 
@@ -886,7 +1129,10 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
         };
 
         let projection = projection_from_crs(&crs).expect("resolvable projection");
-        assert!(!projection.is_latlong(), "must resolve to the projected CRS");
+        assert!(
+            !projection.is_latlong(),
+            "must resolve to the projected CRS"
+        );
         assert!(
             crs.label().contains("California zone 3"),
             "label must not show the geographic fallback: {}",
@@ -896,7 +1142,109 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
         // Centre of the R0_C0 tile in state-plane international feet, near Palo Alto.
         let (longitude, latitude) = reproject_from_crs(&crs, 4326, 6_064_521.0, 1_985_653.0)
             .expect("state-plane coordinate should transform");
-        assert!((-122.4..=-121.8).contains(&longitude), "longitude={longitude}");
+        assert!(
+            (-122.4..=-121.8).contains(&longitude),
+            "longitude={longitude}"
+        );
         assert!((37.2..=37.8).contains(&latitude), "latitude={latitude}");
+
+        let metadata = crate::CloudMetadata {
+            point_count: 1,
+            version_major: 1,
+            version_minor: 4,
+            point_format: 6,
+            compressed: true,
+            bounds_min: [6_064_500.0, 1_985_600.0, 0.0],
+            bounds_max: [6_064_600.0, 1_985_700.0, 10.0],
+            scales: [0.01; 3],
+            offsets: [0.0; 3],
+            system_identifier: String::new(),
+            generating_software: String::new(),
+            creation_date: None,
+            file_source_id: 0,
+            has_crs: true,
+            crs,
+            vlr_count: 1,
+            evlr_count: 0,
+        };
+        assert!(matches!(
+            assess_survey_readiness(&metadata),
+            SurveyReadiness::Ready
+        ));
+    }
+
+    #[test]
+    fn custom_wkt2_projection_is_resolvable_without_root_epsg() {
+        let wkt = r#"PROJCRS["NAD83(2011) / California zone 3 (ftUS)",BASEGEOGCRS["NAD83(2011)",DATUM["NAD83 (National Spatial Reference System 2011)",ELLIPSOID["GRS 1980",6378137,298.257222101,LENGTHUNIT["metre",1]]],ID["EPSG",6318]],CONVERSION["SPCS83 California zone 3",METHOD["Lambert Conic Conformal (2SP)"],PARAMETER["Latitude of false origin",36.5],PARAMETER["Longitude of false origin",-120.5],PARAMETER["Latitude of 1st standard parallel",38.4333333333333],PARAMETER["Latitude of 2nd standard parallel",37.0666666666667],PARAMETER["Easting at false origin",6561666.667],PARAMETER["Northing at false origin",1640416.667]],CS[Cartesian,2],AXIS["easting",east,LENGTHUNIT["US survey foot",0.304800609601219]],AXIS["northing",north,LENGTHUNIT["US survey foot",0.304800609601219]]]"#;
+        assert_eq!(epsg_from_wkt(wkt).0, Some(6318));
+        let proj4 = proj4_from_wkt(wkt).expect("custom WKT2 projection");
+        assert!(proj4.contains("+proj=lcc"), "{proj4}");
+        assert!(proj4.contains("+units=us-ft"), "{proj4}");
+        assert!(proj4.contains("+x_0=2000000"), "{proj4}");
+
+        let custom = CrsInfo {
+            horizontal_epsg: Some(6318),
+            name: Some("NAD83(2011) / California zone 3 (ftUS)".into()),
+            wkt: Some(wkt.into()),
+            proj4: Some(proj4),
+            ..Default::default()
+        };
+        assert!(custom.is_resolvable());
+        let (longitude, latitude) = reproject_between_crs(
+            &custom,
+            &CrsInfo {
+                horizontal_epsg: Some(4326),
+                ..Default::default()
+            },
+            6_064_521.0,
+            1_985_653.0,
+        )
+        .expect("custom WKT2 to WGS84");
+        assert!(
+            (-122.4..=-121.8).contains(&longitude),
+            "longitude={longitude}"
+        );
+        assert!((37.2..=37.8).contains(&latitude), "latitude={latitude}");
+    }
+
+    #[test]
+    fn bounds_and_points_share_the_same_mixed_crs_transform() {
+        let source = CrsInfo {
+            horizontal_epsg: Some(4326),
+            ..Default::default()
+        };
+        let target = CrsInfo {
+            horizontal_epsg: Some(3857),
+            ..Default::default()
+        };
+        let mut points = vec![crate::SamplePoint {
+            source_index: 7,
+            position: [-71.0589, 42.3601, 15.0],
+            intensity: 0,
+            classification: 2,
+            return_number: 1,
+            number_of_returns: 1,
+            scan_angle: 0.0,
+            user_data: 0,
+            point_source_id: 0,
+            gps_time: None,
+            color: None,
+            nir: None,
+            is_synthetic: false,
+            is_key_point: false,
+            is_withheld: false,
+            is_overlap: false,
+        }];
+        reproject_points_between_crs(&source, &target, &mut points).unwrap();
+        let (min, max) = reproject_bounds_between_crs(
+            [-71.1, 42.3, 10.0],
+            [-71.0, 42.4, 20.0],
+            &source,
+            &target,
+        )
+        .unwrap();
+        assert!((min[0]..=max[0]).contains(&points[0].position[0]));
+        assert!((min[1]..=max[1]).contains(&points[0].position[1]));
+        assert_eq!(points[0].position[2], 15.0);
     }
 }

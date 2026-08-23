@@ -326,19 +326,24 @@ fn tile_range(bounds: [f64; 4], zoom: u32) -> Option<(u32, u32, u32, u32)> {
     {
         return None;
     }
+    let bounds = [
+        bounds[0].max(-MERCATOR_HALF),
+        bounds[1].max(-MERCATOR_HALF),
+        bounds[2].min(MERCATOR_HALF),
+        bounds[3].min(MERCATOR_HALF),
+    ];
+    if bounds[2] <= bounds[0] || bounds[3] <= bounds[1] {
+        return None;
+    }
     let n = (1_u64 << zoom) as f64;
-    let clamp_x = |x: f64| -> u32 {
-        (((x + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n)
-            .floor()
-            .clamp(0.0, n - 1.0) as u32
-    };
-    let clamp_y = |y: f64| -> u32 {
-        ((1.0 - (y + MERCATOR_HALF) / (2.0 * MERCATOR_HALF)) * n)
-            .floor()
-            .clamp(0.0, n - 1.0) as u32
-    };
-    let (x0, x1) = (clamp_x(bounds[0]), clamp_x(bounds[2]));
-    let (y0, y1) = (clamp_y(bounds[3]), clamp_y(bounds[1]));
+    let x_index = |x: f64| (x + MERCATOR_HALF) / (2.0 * MERCATOR_HALF) * n;
+    let y_index = |y: f64| (MERCATOR_HALF - y) / (2.0 * MERCATOR_HALF) * n;
+    let first = |value: f64| value.floor().clamp(0.0, n - 1.0) as u32;
+    // Maximum envelope edges are exclusive. `ceil - 1` avoids fetching the
+    // neighbouring tile when an extent lands exactly on an XYZ boundary.
+    let last = |value: f64| (value.ceil() - 1.0).clamp(0.0, n - 1.0) as u32;
+    let (x0, x1) = (first(x_index(bounds[0])), last(x_index(bounds[2])));
+    let (y0, y1) = (first(y_index(bounds[3])), last(y_index(bounds[1])));
     Some((x0, x1, y0, y1))
 }
 
@@ -584,6 +589,23 @@ mod tests {
         assert!(tiles_covering_bounded([1.0, 1.0, 0.0, 0.0], 2, 1)
             .unwrap()
             .is_empty());
+
+        // Exact maximum edges are exclusive: a single XYZ tile extent must
+        // not spill into its east/south neighbours.
+        let exact = tile_bounds(8, 41, 73);
+        let covered = tiles_covering_bounded(exact, 8, 4).unwrap();
+        assert_eq!(covered.len(), 1, "exact tile bounds: {covered:?}");
+        assert_eq!((covered[0].x, covered[0].y), (41, 73));
+
+        // Extents wholly outside Web Mercator are invalid, not clamped onto a
+        // misleading edge tile.
+        assert_eq!(
+            tile_count_covering(
+                [MERCATOR_HALF + 1.0, -10.0, MERCATOR_HALF + 100.0, 10.0,],
+                8,
+            ),
+            0
+        );
     }
 
     #[test]

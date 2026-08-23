@@ -57,15 +57,15 @@ pub enum SectionMode {
 }
 
 /// A vertical cross-section: a horizontal cut segment `p0 → p1` (world XY)
-/// plus a `half_width_px` band on either side, expressed in screen pixels so
-/// the slice stays a fixed on-screen width as the camera zooms. Points outside
+/// plus a total `width_px` band expressed in screen pixels so the slice stays
+/// a fixed on-screen width as the camera zooms. Points outside
 /// the band are dimmed or hidden by the shader, so moving the section is one
 /// uniform write with no instance-buffer rebuild.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Section {
     pub p0: [f64; 2],
     pub p1: [f64; 2],
-    pub half_width_px: f64,
+    pub width_px: f64,
     pub mode: SectionMode,
 }
 

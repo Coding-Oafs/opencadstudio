@@ -37,14 +37,22 @@ and detach. `POINTCLOUDMANAGER` opens it from the command line or a function key
 The source LAS/LAZ is read-only during attachment and editing. A revised cloud
 is created only by **Export LAS/LAZ**.
 
-Drawing CRS and working units no longer depend on a LiDAR attachment. On an
-empty drawing, turning on a basemap shows a small Web Mercator world overview;
-`CRS <EPSG>` immediately replaces it with the CRS area-of-use overview. Use the
-View ribbon's **Set Location** tool (or `BASEMAP CENTER <longitude> <latitude>
-[radius-km]`) to choose the project site without loading LAS or CAD geometry.
-`BASEMAP BOUNDS <minx> <miny> <maxx> <maxy>` remains available for an exact
-drawing-coordinate envelope. Drawing-owned values persist in the adjacent
-`.ocspc` sidecar for a saved DWG/DXF.
+The first attached LAS/LAZ with a resolvable CRS automatically establishes the
+drawing CRS and its horizontal units. Later sources may use different projected
+or geographic CRSs: their display samples, LOD tile bounds, streamed points,
+basemap envelope, coordinate-copy output, contours, and merged export are all
+transformed into the drawing coordinate space. A source with no CRS metadata
+may be attached after `CRS <EPSG>` and is then explicitly interpreted in that
+drawing CRS; a source that declares an unsupported/broken projection is refused
+instead of being silently placed.
+
+An empty drawing never falls back to global Web Mercator or EPSG area-of-use
+tiles. Define a real site with the View ribbon's **Set Location** tool,
+`BASEMAP CENTER <longitude> <latitude> [radius-km]`, or `BASEMAP BOUNDS` and pick
+two opposite corners. Coordinate arguments remain available as
+`BASEMAP BOUNDS <minx> <miny> <maxx> <maxy>`. Drawing-owned CRS, working units,
+and the manual extent persist in the adjacent `.ocspc` sidecar for a saved
+DWG/DXF.
 
 ## Commands
 
@@ -55,7 +63,7 @@ drawing-coordinate envelope. Drawing-owned values persist in the adjacent
 | `POINTCLOUDMANAGER` | Open the click-first LiDAR manager. |
 | `POINTCLOUDRESTORE` | Resolve the saved attachment from the drawing sidecar, validating its fingerprint and repairing a moved relative path. |
 | `POINTCLOUDINFO` | Report source path, source/display point counts, sample stride, pending edits, CRS-VLR presence, and VLR/EVLR counts. |
-| `POINTCLOUDINDEX` / `POINTCLOUDINDEXCANCEL` | Build or open the adjacent disk-backed `.ocstiles` hierarchy, or cancel a build. |
+| `POINTCLOUDINDEX` / `POINTCLOUDINDEXCANCEL` | Build or open every source's adjacent disk-backed `.ocstiles` hierarchy sequentially, or cancel the current dataset batch. One failed source is reported and skipped so the remaining tiles continue. |
 | `POINTCLOUDCOLOR <mode>` | Use `CLASS`, `RGB`, `INTENSITY`, `ELEVATION`, `RETURN`, or `SOURCE` GPU coloration. |
 | `POINTCLOUDPOINTSIZE <1-32>` | Set the fixed physical-pixel point diameter. |
 | `POINTCLOUDCLASSVISIBLE <class> <ON/OFF>` | Show or hide one class. |
@@ -85,7 +93,7 @@ drawing-coordinate envelope. Drawing-owned values persist in the adjacent
 | `POINTCLOUDREPROJECT <EPSG>` | Pick an output LAS/LAZ and stream a reprojected copy. Sparse edits are applied, XY transforms, and Z is deliberately preserved. |
 | `MNUIMPORT` / `MNUEXPORT` | Pick and import/export `$FK5.0$` function-key `.mnu` files. A path argument is also accepted. |
 | `POINTCLOUDEXPORT` | Pick a new `.las`/`.laz` path and stream the full source cloud with pending sparse edits applied. |
-| `POINTCLOUDEXPORTALL [path]` | Stream every attached source into one merged `.las`/`.laz` (picker, or a path argument). Sources must share LAS version, point format and horizontal CRS; each point's `point_source_id` records which file it came from (1..=N). |
+| `POINTCLOUDEXPORTALL [path]` | Stream every attached source into one merged `.las`/`.laz` in the drawing CRS (picker, or a path argument). Sources must share LAS version and point format, but may use different horizontal CRSs; each point's `point_source_id` records its input file (1..=N). |
 | `POINTCLOUDEXPORTSTATUS` / `POINTCLOUDEXPORTCANCEL` | Report or cancel a background export. |
 | `POINTCLOUDDETACH` | Remove the session attachment without modifying the source file. |
 
@@ -101,7 +109,7 @@ adapter based on the ordered-fuser methodology in
 Urban_PointCloud_Processing. The LiDAR ribbon and manager can run it without a
 separate Python installation. It processes every source point, uses the City of
 Boston building and street-tree services plus MassDOT/Boston roadway data, and
-writes to a sibling `classified` folder. The installed v1.0.4 profile enables
+writes to a sibling `classified` folder. The installed v1.0.5 profile enables
 buildings, roads, and vegetation; expands roadway centerlines by one foot; and
 uses a conservative 12-foot active-tree radius.
 
@@ -157,8 +165,10 @@ reversible.
 - `.ptc` parsing accepts header-aware CSV, semicolon, tab, and whitespace forms.
   `.mnu` support reads/writes `$FK5.0$` function keys and preserves unsupported
   VBA/MDL/Scan key-ins with visible compatibility warnings.
-- WKT and GeoTIFF CRS records are inspected into horizontal/vertical EPSG
-  identifiers when possible. Survey-product readiness blocks missing,
+- WKT1, WKT2, and GeoTIFF CRS records are inspected into horizontal/vertical
+  EPSG identifiers when possible. A projected WKT without a root projected
+  EPSG retains its embedded projection definition instead of falling back to
+  the geographic base CRS. Survey-product readiness blocks missing,
   unresolved, geographic, or invalid coordinate systems and warns when the
   vertical datum is unresolved.
 - Copy reprojection uses a bundled pure-Rust EPSG/PROJ pipeline, densifies the
@@ -184,9 +194,10 @@ complete TerraScan replacement.
   classifiers for other jurisdictions, flight-line processing, thinning, and
   a watched-folder production queue remain future work.
 - Horizontal reprojection supports EPSG definitions available in the bundled
-  pure-Rust database. Grid-based and orthometric vertical datum transformations
-  require a separately validated geodetic backend; v0.9.6 preserves Z and says
-  so in the UI and audit log.
+  pure-Rust database plus common embedded WKT projections (including state
+  plane LCC/TM definitions without a root EPSG authority). Grid-based and
+  orthometric vertical datum transformations require a separately validated
+  geodetic backend; v1.0.5 preserves Z and says so in the UI and audit log.
 - COPC, E57, PTS/PTX, raster surface export, and point-cloud-to-CAD feature
   extraction are not implemented.
 

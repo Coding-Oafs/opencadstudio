@@ -15,8 +15,9 @@
 //! run stays reasonable.
 
 use ocs_pointcloud::{
-    build_tiled_cache, export_merged_progress, inspect, read_tiles_parallel, sample, EditStore,
-    MergeSource, PointPatch, SampleOptions, TileCacheOptions, MAX_TILE_READ_WORKERS,
+    build_tiled_cache, export_merged_progress, inspect, read_tiles_parallel,
+    reproject_bounds_between_crs, sample, CrsInfo, EditStore, MergeSource, PointPatch,
+    SampleOptions, TileCacheOptions, MAX_TILE_READ_WORKERS,
 };
 use std::path::{Path, PathBuf};
 
@@ -38,17 +39,63 @@ fn lidar_files(dir: &Path) -> Vec<PathBuf> {
                 })
         })
         .collect();
-    files.sort_by_key(|path| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(u64::MAX));
+    files.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .map(|meta| meta.len())
+            .unwrap_or(u64::MAX)
+    });
     files
 }
 
 fn output_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "ocs-real-data-smoke-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("ocs-real-data-smoke-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch dir");
     dir
+}
+
+#[test]
+#[ignore = "set OCS_LIDAR_SMOKE_DIR to a folder of referenced LAS/LAZ tiles"]
+fn production_crs_metadata_smoke() {
+    let Some(dir) = smoke_dir() else {
+        eprintln!("OCS_LIDAR_SMOKE_DIR not set; skipping");
+        return;
+    };
+    let files = lidar_files(&dir);
+    assert!(
+        !files.is_empty(),
+        "no LAS/LAZ files under {}",
+        dir.display()
+    );
+    let web_mercator = CrsInfo {
+        horizontal_epsg: Some(3857),
+        ..Default::default()
+    };
+    for path in files {
+        let metadata = inspect(&path).expect("inspect real CRS fixture");
+        assert!(metadata.has_crs, "{} has no declared CRS", path.display());
+        assert!(
+            metadata.crs.is_resolvable(),
+            "{} has an unresolved CRS: {}",
+            path.display(),
+            metadata.crs.label()
+        );
+        let world = reproject_bounds_between_crs(
+            metadata.bounds_min,
+            metadata.bounds_max,
+            &metadata.crs,
+            &web_mercator,
+        )
+        .unwrap_or_else(|| panic!("cannot transform bounds for {}", path.display()));
+        eprintln!(
+            "{}: {} -> EPSG:3857 [{:.1}, {:.1}] to [{:.1}, {:.1}]",
+            path.file_name().unwrap().to_string_lossy(),
+            metadata.crs.label(),
+            world.0[0],
+            world.0[1],
+            world.1[0],
+            world.1[1]
+        );
+    }
 }
 
 #[test]
@@ -59,7 +106,11 @@ fn production_folder_pipeline_smoke() {
         return;
     };
     let files = lidar_files(&dir);
-    assert!(!files.is_empty(), "no LAS/LAZ files under {}", dir.display());
+    assert!(
+        !files.is_empty(),
+        "no LAS/LAZ files under {}",
+        dir.display()
+    );
     eprintln!("found {} LAS/LAZ file(s)", files.len());
 
     // Headers and CRS inspection across every tile.
@@ -156,7 +207,10 @@ fn production_folder_pipeline_smoke() {
     let all_levels: u64 = manifest.tiles.iter().map(|tile| tile.point_count).sum();
     let everything = read_tiles_parallel(&cache, &manifest.tiles, MAX_TILE_READ_WORKERS)
         .expect("parallel reads of every level");
-    assert_eq!(all_levels as usize, everything.iter().map(|(_, p)| p.len()).sum::<usize>());
+    assert_eq!(
+        all_levels as usize,
+        everything.iter().map(|(_, p)| p.len()).sum::<usize>()
+    );
 
     // Phase 2 toolset on real data: noise, ground, contours. The noise
     // radius must match the working set's own spacing — a strided sample is
@@ -233,10 +287,12 @@ fn production_folder_pipeline_smoke() {
             MergeSource {
                 path: smallest.clone(),
                 edits: edits.clone(),
+                source_crs: None,
             },
             MergeSource {
                 path: second.clone(),
                 edits: EditStore::default(),
+                source_crs: None,
             },
         ],
         &merged,
@@ -256,17 +312,24 @@ fn production_folder_pipeline_smoke() {
         merged.display(),
         std::fs::metadata(&merged).unwrap().len()
     );
-    assert_eq!(total_points_of(smallest) + total_points_of(second), stats.points_written);
+    assert_eq!(
+        total_points_of(smallest) + total_points_of(second),
+        stats.points_written
+    );
     assert_eq!(classify_count, stats.points_reclassified as u64);
     let merged_metadata = inspect(&merged).expect("inspect merged output");
     assert_eq!(stats.points_written, merged_metadata.point_count);
 
     // Reimport sanity: the merged file samples cleanly with distinct sources.
-    let reimported = sample(&merged, SampleOptions {
-        max_points: 100_000,
-        chunk_size: 65_536,
-        stride: None,
-    }).expect("sample merged output");
+    let reimported = sample(
+        &merged,
+        SampleOptions {
+            max_points: 100_000,
+            chunk_size: 65_536,
+            stride: None,
+        },
+    )
+    .expect("sample merged output");
     let sources: std::collections::BTreeSet<u16> = reimported
         .points
         .iter()
@@ -276,7 +339,11 @@ fn production_folder_pipeline_smoke() {
         "reimported sample sees point_source_ids {sources:?} ({} points)",
         reimported.points.len()
     );
-    assert_eq!(sources.len(), 2, "both files must be identifiable in the merge");
+    assert_eq!(
+        sources.len(),
+        2,
+        "both files must be identifiable in the merge"
+    );
 
     let _ = std::fs::remove_dir_all(&out);
 }

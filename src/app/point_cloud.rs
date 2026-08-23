@@ -356,12 +356,20 @@ pub(super) struct PointCloudAttachment {
     pub(super) id: String,
     pub(super) source_path: PathBuf,
     pub(super) sample: PointSample,
+    /// Effective source coordinate reference. This is LAS metadata when
+    /// declared, or the drawing CRS explicitly assumed for an unreferenced
+    /// source.
+    source_crs: ocs_pointcloud::CrsInfo,
+    crs_assumed_from_drawing: bool,
+    /// Source metadata bounds transformed into the drawing coordinate space.
+    drawing_bounds: ([f64; 3], [f64; 3]),
     pub(super) edits: EditStore,
     pub(super) selection_sets: Vec<SelectionSet>,
     pub(super) cache_path: Option<PathBuf>,
     pub(super) cache_manifest: Option<TileCacheManifest>,
     index_cancel: Option<Arc<AtomicBool>>,
     index_job: Option<Arc<PointCloudJobProgress>>,
+    index_error: Option<String>,
     export_job: Option<Arc<PointCloudJobProgress>>,
     resident_tiles: BTreeMap<ocs_pointcloud::TileKey, ResidentTile>,
     active_tiles: Vec<ocs_pointcloud::TileKey>,
@@ -374,16 +382,22 @@ pub(super) struct PointCloudAttachment {
 
 impl PointCloudAttachment {
     pub(super) fn new(id: String, source_path: PathBuf, sample: PointSample) -> Self {
+        let source_crs = sample.metadata.crs.clone();
+        let drawing_bounds = (sample.metadata.bounds_min, sample.metadata.bounds_max);
         Self {
             id,
             source_path,
             sample,
+            source_crs,
+            crs_assumed_from_drawing: false,
+            drawing_bounds,
             edits: EditStore::default(),
             selection_sets: Vec::new(),
             cache_path: None,
             cache_manifest: None,
             index_cancel: None,
             index_job: None,
+            index_error: None,
             export_job: None,
             resident_tiles: BTreeMap::new(),
             active_tiles: Vec::new(),
@@ -410,6 +424,55 @@ impl PointCloudAttachment {
             })
             .unwrap_or("laz");
         format!("{stem}_classified.{extension}")
+    }
+
+    fn align_sample_to_drawing(
+        &mut self,
+        drawing_crs: &ocs_pointcloud::CrsInfo,
+    ) -> Result<(), String> {
+        if !self.source_crs.is_resolvable() {
+            if self.sample.metadata.has_crs {
+                return Err(format!(
+                    "source declares {}, but its horizontal projection is not supported; repair or reproject the LAS/LAZ CRS before attaching",
+                    self.source_crs.label()
+                ));
+            }
+            self.source_crs = drawing_crs.clone();
+            self.crs_assumed_from_drawing = true;
+        }
+        ocs_pointcloud::reproject_points_between_crs(
+            &self.source_crs,
+            drawing_crs,
+            &mut self.sample.points,
+        )
+        .map_err(|error| error.to_string())?;
+        self.drawing_bounds = ocs_pointcloud::reproject_bounds_between_crs(
+            self.sample.metadata.bounds_min,
+            self.sample.metadata.bounds_max,
+            &self.source_crs,
+            drawing_crs,
+        )
+        .ok_or_else(|| {
+            format!(
+                "cannot transform source bounds from {} to {}",
+                self.source_crs.horizontal_label(),
+                drawing_crs.horizontal_label()
+            )
+        })?;
+        Ok(())
+    }
+
+    fn activate_cache(
+        &mut self,
+        cache_path: PathBuf,
+        manifest: TileCacheManifest,
+        drawing_crs: &ocs_pointcloud::CrsInfo,
+    ) -> Result<(), String> {
+        let manifest = manifest_in_drawing_crs(manifest, &self.source_crs, drawing_crs)?;
+        self.cache_path = Some(cache_path);
+        self.cache_manifest = Some(manifest);
+        self.stream_camera_generation = u64::MAX;
+        Ok(())
     }
 
     pub(super) fn suggested_reprojected_name(&self, target_epsg: u16) -> String {
@@ -482,6 +545,8 @@ pub(super) struct PointCloudDataset {
     pub(super) collection: Option<ocs_pointcloud::CollectionState>,
     /// Dataset-wide merge-export job (POINTCLOUDEXPORTALL).
     pub(super) export_all_job: Option<Arc<PointCloudJobProgress>>,
+    /// `POINTCLOUDINDEX` walks every source sequentially while this is set.
+    index_batch_active: bool,
     /// Active vertical cross-section; `None` shows the whole cloud.
     pub(super) section: Option<crate::scene::model::point_cloud_model::Section>,
     /// Packaged Boston UPCP helper state. The helper always streams the full
@@ -595,10 +660,7 @@ impl PointCloudDataset {
     pub(super) fn bounds(&self) -> Option<([f64; 3], [f64; 3])> {
         let mut bounds: Option<([f64; 3], [f64; 3])> = None;
         for source in &self.sources {
-            let (min, max) = (
-                source.sample.metadata.bounds_min,
-                source.sample.metadata.bounds_max,
-            );
+            let (min, max) = source.drawing_bounds;
             bounds = Some(match bounds {
                 None => (min, max),
                 Some((mut union_min, mut union_max)) => {
@@ -795,11 +857,15 @@ impl OpenCADStudio {
 
     pub(super) fn point_cloud_stream_needed(&self, tab_index: usize) -> bool {
         self.tabs.get(tab_index).is_some_and(|tab| {
-            tab.point_cloud.sources.iter().any(|cloud| {
-                cloud.cache_manifest.is_some()
-                    && !cloud.stream_in_flight
-                    && cloud.stream_camera_generation != tab.scene.camera_generation
-            })
+            !tab.point_cloud
+                .sources
+                .iter()
+                .any(|cloud| cloud.stream_in_flight)
+                && tab.point_cloud.sources.iter().any(|cloud| {
+                    cloud.cache_manifest.is_some()
+                        && !cloud.stream_in_flight
+                        && cloud.stream_camera_generation != tab.scene.camera_generation
+                })
         })
     }
 
@@ -906,7 +972,10 @@ impl OpenCADStudio {
         }
         let tab_id = self.tabs[self.active_tab].id;
         let mut density = self.tabs[self.active_tab].point_cloud.display.density;
-        let budget = self.tabs[self.active_tab].point_cloud.display.cpu_budget_bytes;
+        let budget = self.tabs[self.active_tab]
+            .point_cloud
+            .display
+            .cpu_budget_bytes;
         let options = if density == Density::Full {
             let point_count = ocs_pointcloud::inspect(&path)
                 .map(|metadata| metadata.point_count)
@@ -972,6 +1041,11 @@ impl OpenCADStudio {
         self.tabs[i].point_cloud.display.density = density;
         let tab_id = self.tabs[i].id;
         let budget = self.tabs[i].point_cloud.display.cpu_budget_bytes;
+        let drawing_crs = self.tabs[i]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info);
         // Snapshot per-source state so the worker closures below don't borrow
         // the dataset, and so full-density requests can keep already-streamed
         // sources streaming instead of materializing the whole file again.
@@ -1017,9 +1091,16 @@ impl OpenCADStudio {
                 }
                 if let Some((cache_path, manifest)) = find_valid_tile_cache(&path, None) {
                     if let Some(source) = self.tabs[i].point_cloud.source_mut(&source_id) {
-                        source.cache_path = Some(cache_path);
-                        source.cache_manifest = Some(manifest);
-                        source.stream_camera_generation = u64::MAX;
+                        let target = drawing_crs
+                            .as_ref()
+                            .cloned()
+                            .unwrap_or_else(|| source.source_crs.clone());
+                        if let Err(error) = source.activate_cache(cache_path, manifest, &target) {
+                            self.command_line.push_error(
+                                format!("POINTCLOUDDENSITY: LOD cache ignored: {error}").as_str(),
+                            );
+                            continue;
+                        }
                     }
                     tasks.push(deferred_message(Message::PointCloudStreamTick(i)));
                     skipped_streaming += 1;
@@ -1029,7 +1110,8 @@ impl OpenCADStudio {
                 let worker_path = path.clone();
                 tasks.push(background_task(
                     move || {
-                        ocs_pointcloud::sample(&worker_path, auto_options).map_err(|e| e.to_string())
+                        ocs_pointcloud::sample(&worker_path, auto_options)
+                            .map_err(|e| e.to_string())
                     },
                     move |result| Message::PointCloudResampled(tab_id, source_id, result),
                 ));
@@ -1076,7 +1158,7 @@ impl OpenCADStudio {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
             return Task::none();
         };
-        let sample = match result {
+        let mut sample = match result {
             Ok(sample) => sample,
             Err(error) => {
                 self.command_line
@@ -1084,6 +1166,27 @@ impl OpenCADStudio {
                 return Task::none();
             }
         };
+        let drawing_crs = self.tabs[tab_index]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info);
+        if let (Some(target), Some(source)) = (
+            drawing_crs.as_ref(),
+            self.tabs[tab_index].point_cloud.source(&source_id),
+        ) {
+            if !source.crs_assumed_from_drawing {
+                if let Err(error) = ocs_pointcloud::reproject_points_between_crs(
+                    &source.source_crs,
+                    target,
+                    &mut sample.points,
+                ) {
+                    self.command_line
+                        .push_error(format!("POINTCLOUDDENSITY: {error}").as_str());
+                    return Task::none();
+                }
+            }
+        }
         let model = {
             let dataset = &mut self.tabs[tab_index].point_cloud;
             if let Some(source) = dataset.source_mut(&source_id) {
@@ -1301,10 +1404,7 @@ impl OpenCADStudio {
         // A second picker/queue completion can race the first background read.
         // Recheck at installation time so one physical source never becomes
         // two live attachments even when both reads were already in flight.
-        if self.tabs[tab_index]
-            .point_cloud
-            .contains_source_path(&path)
-        {
+        if self.tabs[tab_index].point_cloud.contains_source_path(&path) {
             self.command_line.push_info(
                 format!(
                     "POINTCLOUDATTACH: \"{}\" is already attached; skipped duplicate.",
@@ -1317,6 +1417,47 @@ impl OpenCADStudio {
 
         let id = self.tabs[tab_index].point_cloud.next_source_id();
         let mut attachment = PointCloudAttachment::new(id, path.clone(), sample);
+        if attachment.sample.metadata.has_crs && !attachment.source_crs.is_resolvable() {
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDATTACH: source declares {}, but its horizontal projection is not supported; repair or reproject the LAS/LAZ CRS before attaching.",
+                    attachment.source_crs.label()
+                )
+                .as_str(),
+            );
+            return self.start_next_queued_point_cloud(tab_id);
+        }
+        let mut inferred_drawing_crs = None;
+        if self.tabs[tab_index].spatial.drawing_crs.is_none()
+            && attachment.source_crs.is_resolvable()
+        {
+            match crate::app::spatial::DrawingCrs::from_crs_info(&attachment.source_crs) {
+                Ok(crs) => {
+                    self.tabs[tab_index].spatial.working_unit = crs.working_unit();
+                    self.tabs[tab_index].spatial.drawing_crs = Some(crs.clone());
+                    self.basemap.projection = crate::scene::basemap::BasemapProjection::FromDrawing;
+                    inferred_drawing_crs = Some(crs.label());
+                }
+                Err(error) => {
+                    self.command_line.push_error(
+                        format!("POINTCLOUDATTACH: cannot adopt the source CRS: {error}").as_str(),
+                    );
+                    return self.start_next_queued_point_cloud(tab_id);
+                }
+            }
+        }
+        if let Some(drawing_crs) = self.tabs[tab_index]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info)
+        {
+            if let Err(error) = attachment.align_sample_to_drawing(&drawing_crs) {
+                self.command_line
+                    .push_error(format!("POINTCLOUDATTACH: {error}").as_str());
+                return self.start_next_queued_point_cloud(tab_id);
+            }
+        }
         let mut restored_sidecar = false;
         if let Some(drawing_path) = self.tabs[tab_index].current_path.as_ref() {
             let sidecar_path = sidecar_path_for_drawing(drawing_path);
@@ -1356,9 +1497,16 @@ impl OpenCADStudio {
         if let Some((cache_path, manifest)) =
             find_valid_tile_cache(&path, attachment.cache_path.as_deref())
         {
-            attachment.cache_path = Some(cache_path);
-            attachment.cache_manifest = Some(manifest);
-            attachment.stream_camera_generation = u64::MAX;
+            let drawing_crs = self.tabs[tab_index]
+                .spatial
+                .drawing_crs
+                .as_ref()
+                .map(crate::app::spatial::DrawingCrs::as_crs_info)
+                .unwrap_or_else(|| attachment.source_crs.clone());
+            if let Err(error) = attachment.activate_cache(cache_path, manifest, &drawing_crs) {
+                self.command_line
+                    .push_error(format!("POINTCLOUDATTACH: LOD cache ignored: {error}").as_str());
+            }
         }
         let metadata = &attachment.sample.metadata;
         let point_count = metadata.point_count;
@@ -1407,6 +1555,33 @@ impl OpenCADStudio {
                 "POINTCLOUDATTACH: restored display settings, selections and sparse edits from the drawing sidecar.",
             );
         }
+        if let Some(label) = inferred_drawing_crs {
+            self.sync_basemap_dropdown();
+            self.persist_spatial_settings(tab_index);
+            self.command_line.push_output(
+                format!(
+                    "CRS: drawing CRS inferred automatically from LAS/LAZ metadata as {label}."
+                )
+                .as_str(),
+            );
+        } else if self.tabs[tab_index]
+            .point_cloud
+            .source(&source_id)
+            .is_some_and(|source| source.crs_assumed_from_drawing)
+        {
+            let label = self.tabs[tab_index]
+                .spatial
+                .drawing_crs
+                .as_ref()
+                .map(crate::app::spatial::DrawingCrs::label)
+                .unwrap_or_else(|| "the drawing CRS".to_string());
+            self.command_line.push_info(
+                format!(
+                    "CRS: this source has no CRS metadata; its coordinates are being interpreted as {label}."
+                )
+                .as_str(),
+            );
+        }
         self.persist_point_cloud(
             tab_index,
             "attach",
@@ -1422,10 +1597,22 @@ impl OpenCADStudio {
         } else {
             Task::none()
         };
+        let more_folder_sources = self
+            .point_cloud_load_queue
+            .iter()
+            .any(|(queued_tab, _)| *queued_tab == tab_id);
+        let basemap_task = if !more_folder_sources
+            && self.basemap.provider != crate::scene::basemap::BasemapProvider::Off
+        {
+            self.refresh_basemap(tab_id)
+        } else {
+            Task::none()
+        };
         // Both continuations are deferred: completing them inline would nest
         // event-loop dispatch frames (see deferred_message).
         Task::batch([
             stream_task,
+            basemap_task,
             deferred_message(Message::PointCloudQueuePump(tab_id)),
         ])
     }
@@ -1470,6 +1657,99 @@ impl OpenCADStudio {
                 .as_str(),
             );
         }
+    }
+
+    /// Re-express every attached source in a new drawing CRS. Source files and
+    /// cache records remain untouched; bounded samples and cache tile bounds
+    /// are transformed for the session, and resident tiles are reloaded.
+    pub(super) fn reproject_point_cloud_to_drawing_crs(
+        &mut self,
+        tab_index: usize,
+        old_drawing_crs: Option<&ocs_pointcloud::CrsInfo>,
+        new_drawing_crs: &ocs_pointcloud::CrsInfo,
+    ) -> Result<(), String> {
+        if self.tabs[tab_index].point_cloud.is_empty() {
+            return Ok(());
+        }
+        if !new_drawing_crs.is_resolvable() {
+            return Err("the requested drawing CRS is not resolvable".to_string());
+        }
+
+        // Validate every transform before mutating any source so a bad CRS
+        // never leaves a partially transformed dataset.
+        for source in &self.tabs[tab_index].point_cloud.sources {
+            if source.crs_assumed_from_drawing
+                || (!source.sample.metadata.has_crs && !source.source_crs.is_resolvable())
+            {
+                continue;
+            }
+            let current = old_drawing_crs.unwrap_or(&source.source_crs);
+            let center = [
+                (source.drawing_bounds.0[0] + source.drawing_bounds.1[0]) * 0.5,
+                (source.drawing_bounds.0[1] + source.drawing_bounds.1[1]) * 0.5,
+            ];
+            ocs_pointcloud::reproject_between_crs(current, new_drawing_crs, center[0], center[1])
+                .ok_or_else(|| {
+                format!(
+                    "cannot transform {} from {} to {}",
+                    source.source_path.display(),
+                    current.horizontal_label(),
+                    new_drawing_crs.horizontal_label()
+                )
+            })?;
+        }
+
+        for source in &mut self.tabs[tab_index].point_cloud.sources {
+            if source.crs_assumed_from_drawing
+                || (!source.sample.metadata.has_crs && !source.source_crs.is_resolvable())
+            {
+                // An unreferenced source is assigned, not reprojected: its
+                // numeric coordinates define the newly selected drawing CRS.
+                source.source_crs = new_drawing_crs.clone();
+                source.crs_assumed_from_drawing = true;
+            } else {
+                let current = old_drawing_crs.unwrap_or(&source.source_crs);
+                ocs_pointcloud::reproject_points_between_crs(
+                    current,
+                    new_drawing_crs,
+                    &mut source.sample.points,
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            source.drawing_bounds = ocs_pointcloud::reproject_bounds_between_crs(
+                source.sample.metadata.bounds_min,
+                source.sample.metadata.bounds_max,
+                &source.source_crs,
+                new_drawing_crs,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "cannot transform bounds for {}",
+                    source.source_path.display()
+                )
+            })?;
+            source.resident_tiles.clear();
+            source.active_tiles.clear();
+            source.stream_in_flight = false;
+            source.stream_request_id = source.stream_request_id.wrapping_add(1).max(1);
+            source.stream_camera_generation = u64::MAX;
+            source.screen_index = None;
+
+            source.cache_manifest = source.cache_path.as_ref().and_then(|cache_path| {
+                TileCacheManifest::open(cache_path)
+                    .ok()
+                    .and_then(|manifest| {
+                        manifest_in_drawing_crs(manifest, &source.source_crs, new_drawing_crs).ok()
+                    })
+            });
+        }
+        self.tabs[tab_index].point_cloud.mark_display_changed();
+        let model = self.tabs[tab_index].point_cloud.display_model();
+        self.tabs[tab_index].scene.set_point_cloud(model);
+        if let Some((min, max)) = self.tabs[tab_index].point_cloud.bounds() {
+            self.tabs[tab_index].scene.fit_external_bounds(min, max);
+        }
+        Ok(())
     }
 
     pub(super) fn point_cloud_crs_info(&mut self, tab_index: usize) {
@@ -1631,11 +1911,51 @@ impl OpenCADStudio {
                 .push_info("POINTCLOUDINDEX: an index build is already running.");
             return Task::none();
         }
-        let Some(cloud) = dataset.active_mut() else {
+        if dataset.sources.is_empty() {
             self.command_line
                 .push_error("POINTCLOUDINDEX: attach a LAS/LAZ cloud first.");
             return Task::none();
+        }
+        if !dataset.index_batch_active {
+            dataset.index_batch_active = true;
+            for source in &mut dataset.sources {
+                source.index_error = None;
+            }
+            self.command_line.push_info(
+                format!(
+                    "POINTCLOUDINDEX: preparing LOD caches for {} source(s), one at a time.",
+                    dataset.sources.len()
+                )
+                .as_str(),
+            );
+        }
+        let Some(source_index) = next_index_source_index(&dataset.sources) else {
+            dataset.index_batch_active = false;
+            let failed = dataset
+                .sources
+                .iter()
+                .filter(|source| source.index_error.is_some())
+                .count();
+            let ready = dataset
+                .sources
+                .iter()
+                .filter(|source| source.cache_manifest.is_some())
+                .count();
+            if failed == 0 {
+                self.command_line.push_output(
+                    format!("POINTCLOUDINDEX: all {ready} source LOD caches are ready.").as_str(),
+                );
+            } else {
+                self.command_line.push_error(
+                    format!(
+                        "POINTCLOUDINDEX: {ready} source cache(s) ready; {failed} source(s) failed. Run POINTCLOUDINDEXSTATUS for details, then retry after correcting the reported cache/source issue."
+                    )
+                    .as_str(),
+                );
+            }
+            return self.start_point_cloud_stream(tab_index);
         };
+        let cloud = &mut dataset.sources[source_index];
         let source_id = cloud.id.clone();
         let source = cloud.source_path.clone();
         let cache_path = cache_path_for_source(&source);
@@ -1646,11 +1966,8 @@ impl OpenCADStudio {
                     Ok(manifest)
                 })
                 .map_err(|error| error.to_string());
-            return Task::done(Message::PointCloudIndexed(
-                tab_id,
-                source_id,
-                cache_path,
-                result,
+            return deferred_message(Message::PointCloudIndexed(
+                tab_id, source_id, cache_path, result,
             ));
         }
 
@@ -1660,11 +1977,8 @@ impl OpenCADStudio {
             cloud.sample.metadata.point_count,
         ));
         cloud.index_job = Some(Arc::clone(&progress));
-        let estimate_bytes = ocs_pointcloud::estimate_cache_bytes(
-            cloud.sample.metadata.point_count,
-            65_536,
-            12,
-        );
+        let estimate_bytes =
+            ocs_pointcloud::estimate_cache_bytes(cloud.sample.metadata.point_count, 65_536, 12);
         if estimate_bytes >= 1024 * 1024 * 1024 {
             self.command_line.push_info(
                 format!(
@@ -1676,8 +1990,9 @@ impl OpenCADStudio {
         }
         self.command_line.push_info(
             format!(
-                "POINTCLOUDINDEX: building disk-backed LOD tiles at \"{}\"; use POINTCLOUDINDEXSTATUS for progress and POINTCLOUDINDEXCANCEL to cancel.",
-                cache_path.display()
+                "POINTCLOUDINDEX [{}]: building disk-backed LOD tiles at \"{}\"; use POINTCLOUDINDEXSTATUS for progress and POINTCLOUDINDEXCANCEL to cancel the batch.",
+                cloud.id,
+                cache_path.display(),
             )
             .as_str(),
         );
@@ -1705,6 +2020,7 @@ impl OpenCADStudio {
     }
 
     pub(super) fn cancel_point_cloud_index(&mut self, tab_index: usize) {
+        self.tabs[tab_index].point_cloud.index_batch_active = false;
         let cancel = self.tabs[tab_index]
             .point_cloud
             .sources
@@ -1713,7 +2029,7 @@ impl OpenCADStudio {
         if let Some(cancel) = cancel {
             cancel.store(true, Ordering::Relaxed);
             self.command_line
-                .push_output("POINTCLOUDINDEXCANCEL: cancellation requested.");
+                .push_output("POINTCLOUDINDEXCANCEL: batch cancellation requested.");
         } else {
             self.command_line
                 .push_info("POINTCLOUDINDEXCANCEL: no index build is running.");
@@ -1729,8 +2045,26 @@ impl OpenCADStudio {
             .next()
             .cloned();
         let Some(job) = job else {
-            self.command_line
-                .push_info("POINTCLOUDINDEXSTATUS: no index build is running.");
+            let failures: Vec<_> = self.tabs[tab_index]
+                .point_cloud
+                .sources
+                .iter()
+                .filter_map(|source| {
+                    source
+                        .index_error
+                        .as_ref()
+                        .map(|error| format!("{}: {error}", source.source_path.display()))
+                })
+                .collect();
+            if failures.is_empty() {
+                self.command_line
+                    .push_info("POINTCLOUDINDEXSTATUS: no index build is running.");
+            } else {
+                for failure in failures {
+                    self.command_line
+                        .push_error(format!("POINTCLOUDINDEXSTATUS: {failure}").as_str());
+                }
+            }
             return;
         };
         let completed = job.completed.load(Ordering::Relaxed);
@@ -1759,17 +2093,27 @@ impl OpenCADStudio {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
             return Task::none();
         };
-        let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&source_id) else {
-            return Task::none();
-        };
-        cloud.index_cancel = None;
-        cloud.index_job = None;
+        let drawing_crs = self.tabs[tab_index]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info);
+        let batch_active = self.tabs[tab_index].point_cloud.index_batch_active;
         let manifest = match result {
             Ok(manifest) => manifest,
             Err(error) => {
+                if let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&source_id) {
+                    cloud.index_cancel = None;
+                    cloud.index_job = None;
+                    cloud.index_error = Some(error.clone());
+                }
                 self.command_line
-                    .push_error(format!("POINTCLOUDINDEX: {error}").as_str());
-                return Task::none();
+                    .push_error(format!("POINTCLOUDINDEX [{source_id}]: {error}").as_str());
+                return if batch_active {
+                    self.start_point_cloud_index(tab_index)
+                } else {
+                    Task::none()
+                };
             }
         };
         let cache_bytes = manifest
@@ -1778,14 +2122,29 @@ impl OpenCADStudio {
             .map(|tile| tile.point_count)
             .sum::<u64>()
             .saturating_mul(manifest.record_size as u64);
-        cloud.cache_path = Some(cache_path.clone());
-        cloud.cache_manifest = Some(manifest.clone());
-        cloud.stream_camera_generation = u64::MAX;
+        let (tile_count, leaf_level) = (manifest.tiles.len(), manifest.leaf_level);
+        let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&source_id) else {
+            return Task::none();
+        };
+        cloud.index_cancel = None;
+        cloud.index_job = None;
+        cloud.index_error = None;
+        let target = drawing_crs.unwrap_or_else(|| cloud.source_crs.clone());
+        if let Err(error) = cloud.activate_cache(cache_path.clone(), manifest, &target) {
+            cloud.index_error = Some(error.clone());
+            self.command_line
+                .push_error(format!("POINTCLOUDINDEX [{source_id}]: {error}").as_str());
+            return if batch_active {
+                self.start_point_cloud_index(tab_index)
+            } else {
+                Task::none()
+            };
+        }
         self.command_line.push_output(
             format!(
-                "POINTCLOUDINDEX: {} tiles indexed through level {} (~{} MB); camera-driven LOD streaming is active.",
-                manifest.tiles.len(),
-                manifest.leaf_level,
+                "POINTCLOUDINDEX [{source_id}]: {} tiles indexed through level {} (~{} MB).",
+                tile_count,
+                leaf_level,
                 cache_bytes / (1024 * 1024)
             )
             .as_str(),
@@ -1796,10 +2155,22 @@ impl OpenCADStudio {
             "built or opened tiled LOD cache",
             &[source_id],
         );
-        self.start_point_cloud_stream(tab_index)
+        if batch_active {
+            self.start_point_cloud_index(tab_index)
+        } else {
+            self.start_point_cloud_stream(tab_index)
+        }
     }
 
     pub(super) fn start_point_cloud_stream(&mut self, tab_index: usize) -> Task<Message> {
+        if self.tabs[tab_index]
+            .point_cloud
+            .sources
+            .iter()
+            .any(|source| source.stream_in_flight)
+        {
+            return Task::none();
+        }
         let (camera, viewport, camera_generation, tab_id) = {
             let tab = &self.tabs[tab_index];
             let canvas = tab.scene.selection.borrow().vp_size;
@@ -1817,6 +2188,11 @@ impl OpenCADStudio {
         // Budgets are cloned before the mutable find so the display settings
         // stay readable while a source is borrowed for scheduling.
         let display = self.tabs[tab_index].point_cloud.display.clone();
+        let drawing_crs = self.tabs[tab_index]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info);
         // The active cross-section band, captured before the mutable find so
         // the section can steer tile selection while a source is borrowed.
         // The band is authored in screen pixels; convert to world units using
@@ -1827,7 +2203,7 @@ impl OpenCADStudio {
             0.0_f32
         };
         let section_band = self.tabs[tab_index].point_cloud.section.map(|section| {
-            let half = (section.half_width_px * world_per_pixel as f64).max(0.0);
+            let half = (0.5 * section.width_px * world_per_pixel as f64).max(0.0);
             let min_x = section.p0[0].min(section.p1[0]) - half;
             let max_x = section.p0[0].max(section.p1[0]) + half;
             let min_y = section.p0[1].min(section.p1[1]) - half;
@@ -1920,6 +2296,8 @@ impl OpenCADStudio {
             .filter(|tile| !cloud.resident_tiles.contains_key(&tile.key))
             .collect();
         let source_id = cloud.id.clone();
+        let source_crs = cloud.source_crs.clone();
+        let drawing_crs = drawing_crs.unwrap_or_else(|| source_crs.clone());
         if missing.is_empty() {
             cloud.active_tiles = selected_keys;
             rebuild_resident_display(cloud);
@@ -1935,9 +2313,13 @@ impl OpenCADStudio {
         let tile_workers = tile_read_workers();
         background_task(
             move || {
-                let loaded =
+                let mut loaded =
                     ocs_pointcloud::read_tiles_parallel(&cache_path, &missing, tile_workers)
                         .map_err(|error| error.to_string())?;
+                for (_, points) in &mut loaded {
+                    ocs_pointcloud::reproject_points_between_crs(&source_crs, &drawing_crs, points)
+                        .map_err(|error| error.to_string())?;
+                }
                 Ok(TileLoadBatch {
                     source_id,
                     request_id,
@@ -2055,7 +2437,7 @@ impl OpenCADStudio {
         tab_index: usize,
         p0: [f64; 2],
         p1: [f64; 2],
-        half_width_px: f64,
+        width_px: f64,
         mode: crate::scene::model::point_cloud_model::SectionMode,
     ) {
         if self.tabs[tab_index].point_cloud.is_empty() {
@@ -2063,16 +2445,16 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSECTION: attach a LAS/LAZ cloud first.");
             return;
         }
-        if !half_width_px.is_finite() || !(1.0..=1024.0).contains(&half_width_px) {
+        if !width_px.is_finite() || !(1.0..=1024.0).contains(&width_px) {
             self.command_line
-                .push_error("POINTCLOUDSECTION: half-width must be between 1 and 1024 pixels.");
+                .push_error("POINTCLOUDSECTION: width must be between 1 and 1024 pixels.");
             return;
         }
         self.tabs[tab_index].point_cloud.section =
             Some(crate::scene::model::point_cloud_model::Section {
                 p0,
                 p1,
-                half_width_px,
+                width_px,
                 mode,
             });
         // A section change densifies its band: invalidate every source's stream
@@ -2115,18 +2497,18 @@ impl OpenCADStudio {
     }
 
     /// Change the active section's band half-width (screen pixels).
-    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, half_width_px: f64) {
+    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, width_px: f64) {
         let Some(mut section) = self.tabs[tab_index].point_cloud.section else {
             self.command_line
                 .push_error("POINTCLOUDSECTIONWIDTH: no section is active.");
             return;
         };
-        if !half_width_px.is_finite() || !(1.0..=1024.0).contains(&half_width_px) {
+        if !width_px.is_finite() || !(1.0..=1024.0).contains(&width_px) {
             self.command_line
                 .push_error("POINTCLOUDSECTIONWIDTH: width must be between 1 and 1024 pixels.");
             return;
         }
-        section.half_width_px = half_width_px;
+        section.width_px = width_px;
         self.tabs[tab_index].point_cloud.section = Some(section);
         for source in &mut self.tabs[tab_index].point_cloud.sources {
             source.stream_camera_generation = u64::MAX;
@@ -3506,31 +3888,24 @@ impl OpenCADStudio {
             );
             return Task::none();
         }
-        let mut crs_ids: Vec<_> = dataset
-            .sources
-            .iter()
-            .map(|source| {
-                let crs = &source.sample.metadata.crs;
-                crs.proj4
-                    .clone()
-                    .or_else(|| crs.horizontal_epsg.map(|code| format!("EPSG:{code}")))
-                    .unwrap_or_else(|| "unresolved".to_string())
-            })
-            .collect();
-        crs_ids.sort();
-        crs_ids.dedup();
-        if crs_ids.len() > 1 {
+        let Some(target_crs) = self.tabs[self.active_tab]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info)
+        else {
             self.command_line.push_error(
-                "POINTCLOUDEXPORTALL: sources declare different horizontal CRS values; reproject or split them before merging.",
+                "POINTCLOUDEXPORTALL: set or infer the drawing CRS before merging sources.",
             );
             return Task::none();
-        }
+        };
         let sources: Vec<ocs_pointcloud::MergeSource> = dataset
             .sources
             .iter()
             .map(|source| ocs_pointcloud::MergeSource {
                 path: source.source_path.clone(),
                 edits: source.edits.clone(),
+                source_crs: Some(source.source_crs.clone()),
             })
             .collect();
         let total: u64 = dataset
@@ -3552,12 +3927,17 @@ impl OpenCADStudio {
         );
         background_task(
             move || {
-                ocs_pointcloud::export_merged_progress(&sources, &worker_output, |state| {
-                    progress
-                        .completed
-                        .store(state.points_read, Ordering::Relaxed);
-                    !progress.cancel.load(Ordering::Relaxed)
-                })
+                ocs_pointcloud::export_merged_reprojected_progress(
+                    &sources,
+                    &worker_output,
+                    &target_crs,
+                    |state| {
+                        progress
+                            .completed
+                            .store(state.points_read, Ordering::Relaxed);
+                        !progress.cancel.load(Ordering::Relaxed)
+                    },
+                )
                 .map_err(|error| error.to_string())
             },
             move |result| Message::PointCloudExportAllFinished(tab_id, output, result),
@@ -3732,9 +4112,10 @@ impl OpenCADStudio {
         let helper = std::env::var_os("OCS_LIDAR_CLASSIFIER")
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| exe.parent().map(|parent| parent.join("ocs-lidar-classifier.exe")))
+                std::env::current_exe().ok().and_then(|exe| {
+                    exe.parent()
+                        .map(|parent| parent.join("ocs-lidar-classifier.exe"))
+                })
             });
         let Some(helper) = helper.filter(|path| path.is_file()) else {
             self.command_line.push_error(
@@ -3803,7 +4184,9 @@ impl OpenCADStudio {
                     .and_then(serde_json::Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter(|tile| tile.get("status").and_then(|value| value.as_str()) == Some("completed"))
+                    .filter(|tile| {
+                        tile.get("status").and_then(|value| value.as_str()) == Some("completed")
+                    })
                     .filter_map(|tile| tile.get("output").and_then(|value| value.as_str()))
                     .map(PathBuf::from)
                     .filter(|path| path.is_file())
@@ -3996,7 +4379,7 @@ impl PointCloudDataset {
             point_size_px: self.display.point_size_px,
             section_width_px: self
                 .section
-                .map_or(32, |section| section.half_width_px.round() as i32)
+                .map_or(32, |section| section.width_px.round() as i32)
                 .clamp(1, 1024),
             crs_declared: any_crs,
             indexed: self
@@ -4061,6 +4444,44 @@ fn tile_read_workers() -> usize {
         .unwrap_or(4)
         .min(ocs_pointcloud::MAX_TILE_READ_WORKERS)
         .max(1)
+}
+
+/// Returns the next source whose LOD cache still needs to be opened or built.
+/// A recorded failure is skipped for the rest of the current batch so one bad
+/// tile cannot trap the dispatcher in an immediate retry loop.
+fn next_index_source_index(sources: &[PointCloudAttachment]) -> Option<usize> {
+    sources
+        .iter()
+        .position(|source| source.cache_manifest.is_none() && source.index_error.is_none())
+}
+
+fn manifest_in_drawing_crs(
+    mut manifest: TileCacheManifest,
+    source_crs: &ocs_pointcloud::CrsInfo,
+    drawing_crs: &ocs_pointcloud::CrsInfo,
+) -> Result<TileCacheManifest, String> {
+    if ocs_pointcloud::crs_equivalent(source_crs, drawing_crs) {
+        return Ok(manifest);
+    }
+    for tile in &mut manifest.tiles {
+        let (min, max) = ocs_pointcloud::reproject_bounds_between_crs(
+            tile.bounds_min,
+            tile.bounds_max,
+            source_crs,
+            drawing_crs,
+        )
+        .ok_or_else(|| {
+            format!(
+                "cannot transform LOD tile {:?} from {} to {}",
+                tile.key,
+                source_crs.horizontal_label(),
+                drawing_crs.horizontal_label()
+            )
+        })?;
+        tile.bounds_min = min;
+        tile.bounds_max = max;
+    }
+    Ok(manifest)
 }
 
 /// Marks a source as streamed. From here the active working set lives in
@@ -4565,6 +4986,38 @@ mod tests {
     }
 
     #[test]
+    fn unreferenced_source_adopts_explicit_drawing_crs_without_moving_points() {
+        let mut source = attachment("unreferenced", 2);
+        let original: Vec<_> = source
+            .sample
+            .points
+            .iter()
+            .map(|point| point.position)
+            .collect();
+        let drawing_crs = ocs_pointcloud::CrsInfo {
+            horizontal_epsg: Some(3857),
+            ..Default::default()
+        };
+
+        source.align_sample_to_drawing(&drawing_crs).unwrap();
+
+        assert!(source.crs_assumed_from_drawing);
+        assert!(ocs_pointcloud::crs_equivalent(
+            &source.source_crs,
+            &drawing_crs
+        ));
+        assert_eq!(
+            original,
+            source
+                .sample
+                .points
+                .iter()
+                .map(|point| point.position)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn dataset_model_concatenates_every_source() {
         let mut dataset = PointCloudDataset::default();
         dataset.sources.push(attachment("a", 3));
@@ -4697,6 +5150,18 @@ mod tests {
             vec![persisted.clone(), default],
             point_cloud_cache_candidates(&source, Some(&persisted))
         );
+    }
+
+    #[test]
+    fn index_batch_advances_past_failed_sources_without_retrying_them() {
+        let mut sources = vec![attachment("a", 1), attachment("b", 1)];
+        assert_eq!(Some(0), next_index_source_index(&sources));
+
+        sources[0].index_error = Some("bad cache".to_string());
+        assert_eq!(Some(1), next_index_source_index(&sources));
+
+        sources[1].index_error = Some("bad source".to_string());
+        assert_eq!(None, next_index_source_index(&sources));
     }
 }
 

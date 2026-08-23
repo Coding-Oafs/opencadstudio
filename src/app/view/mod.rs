@@ -1863,7 +1863,7 @@ impl OpenCADStudio {
                         .spatial
                         .drawing_crs
                         .as_ref()
-                        .map(|crs| format!("EPSG:{}", crs.epsg))
+                        .map(crate::app::spatial::DrawingCrs::short_label)
                         .unwrap_or_else(|| "Unset".to_string());
                     let working_unit_label = tab.spatial.working_unit.short().to_string();
                     let basemap_progress = self
