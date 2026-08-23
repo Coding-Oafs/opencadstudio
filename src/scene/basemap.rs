@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn site_radius_and_crs_area_bootstrap_empty_drawings() {
+    fn site_radius_and_crs_area_transform_round_trip() {
         let site = wgs84_radius_area(-71.0589, 42.3601, 5.0).expect("Boston site");
         assert!(site[0] < -71.0589 && site[2] > -71.0589);
         assert!(site[1] < 42.3601 && site[3] > 42.3601);

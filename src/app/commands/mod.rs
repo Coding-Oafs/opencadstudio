@@ -521,6 +521,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "SHADEDGE",
         "MAXACTVP",
         "CMLJUST",
+        "CMLSCALE",
+        "CMLSTYLE",
         "TEXTQLTY",
         "SORTENTS",
         "FRAME",

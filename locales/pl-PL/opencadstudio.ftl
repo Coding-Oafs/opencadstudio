@@ -313,6 +313,7 @@ common =
     .block-rotation = Obrót bloku
     .blocks = Bloki
     .blue = Niebieski
+    .bulge = Wybrzuszenie
     .boolean-failed-the-solids-may-not-overlap = Wartość logiczna nie powiodła się — bryły nie mogą się nakładać.
     .boolean-select-exactly-two-solids-created-this = Boolean: wybierz dokładnie dwie bryły utworzone w tej sesji.
     .bottom = Dół
@@ -1328,6 +1329,18 @@ draw =
     .ray-specify-through-point = RAY Określ punkt przelotowy:
     .rect-specify-first-corner = RECT Określ pierwszy narożnik:
     .rect-specify-opposite-corner = RECT Określ przeciwny narożnik:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Oblicz wymiary na podstawie [Długości / Szerokości] <Długość>:
+    .rect-specify-elevation = RECT  Określ rzędną <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Określ promień zaokrąglenia <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Określ pierwszą odległość fazowania <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Określ orientację od pierwszego narożnika:
+    .rect-specify-rectangle-area = RECT  Określ pole prostokąta:
+    .rect-specify-rectangle-length = RECT  Określ długość prostokąta:
+    .rect-specify-rectangle-width = RECT  Określ szerokość prostokąta:
+    .rect-specify-rotation-angle = RECT  Określ kąt obrotu <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Określ drugą odległość fazowania <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Określ grubość <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Określ szerokość <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Określ punkt środkowy:
     .rect-cen-specify-corner-point =RECT CEN Określ punkt narożny:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Określ sąsiadujący narożnik (określa kierunek krawędzi):
@@ -3060,7 +3073,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE nowa wartość [0=dot 1=none 2=+ 3=x 4=tick; +32 koło +64 kwadraty]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE ustawione na __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE nowy rozmiar punktu (0 = 5% rzutni, <0 = bezwzględnie):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE nowy rozmiar punktu (0 = 5% rzutni, >0 = bezwzględnie, <0 = procent rzutni):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE ustawione na __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

@@ -920,6 +920,8 @@ impl OpenCADStudio {
                     | "SHADEDGE"
                     | "MAXACTVP"
                     | "CMLJUST"
+                    | "CMLSCALE"
+                    | "CMLSTYLE"
                     | "TEXTQLTY"
                     | "SORTENTS"
                     | "FRAME"
@@ -933,6 +935,14 @@ impl OpenCADStudio {
                     | "SKETCHINC"
                     | "SKPOLY"
                     | "SKTOLERANCE"
+                    | "CENTEREXE"
+                    | "CENTERLAYER"
+                    | "CENTERLTYPE"
+                    | "CENTERLTSCALE"
+                    | "CENTERLTYPEFILE"
+                    | "CENTERCROSSSIZE"
+                    | "CENTERCROSSGAP"
+                    | "CENTERMARKEXE"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -955,7 +965,7 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(
-                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE | CLAYER CELTYPE TEXTSTYLE (read-only)",
+                        "SETVAR: LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG ATTREQ ATTDIA DIMASSOC ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE | CLAYER CELTYPE TEXTSTYLE (read-only)",
                     );
                 } else {
                     let frame_kind = crate::scene::frame::kind_for_name(&name);
@@ -1029,6 +1039,45 @@ impl OpenCADStudio {
                                 ).as_ref());
                                 self.pending_setvar = Some(name.clone());
                             }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    if matches!(
+                        name.as_str(),
+                        "CENTEREXE"
+                            | "CENTERLAYER"
+                            | "CENTERLTYPE"
+                            | "CENTERLTSCALE"
+                            | "CENTERLTYPEFILE"
+                            | "CENTERCROSSSIZE"
+                            | "CENTERCROSSGAP"
+                            | "CENTERMARKEXE"
+                    ) {
+                        let settings = self.tabs[i].scene.centerline_settings();
+                        let current = match name.as_str() {
+                            "CENTEREXE" => settings.extension.to_string(),
+                            "CENTERLAYER" => settings.layer,
+                            "CENTERLTYPE" => settings.linetype,
+                            "CENTERLTSCALE" => settings.linetype_scale.to_string(),
+                            "CENTERLTYPEFILE" => settings.linetype_file,
+                            "CENTERCROSSSIZE" => settings.cross_size,
+                            "CENTERCROSSGAP" => settings.cross_gap,
+                            "CENTERMARKEXE" => i16::from(settings.mark_extensions).to_string(),
+                            _ => unreachable!(),
+                        };
+                        if let Some(value) = &value {
+                            match self.tabs[i].scene.set_centerline_setting(&name, value) {
+                                Ok(message) => {
+                                    self.tabs[i].dirty = true;
+                                    self.command_line.push_output(&message);
+                                }
+                                Err(error) => self.command_line.push_error(&error),
+                            }
+                        } else {
+                            self.command_line.push_output(crate::tf!(
+                                "Enter new value for {name} <{current}>:"
+                            ).as_ref());
+                            self.pending_setvar = Some(name.clone());
                         }
                         return Some(self.finish_dispatch(cmd));
                     }
@@ -1650,16 +1699,34 @@ impl OpenCADStudio {
                                 }
                             },
                             "CMLJUST" => match &value {
-                                Some(v) => v
-                                    .parse::<i16>()
-                                    .map(|x| {
+                                Some(v) => match v.parse::<i16>() {
+                                    Ok(x @ 0..=2) => {
                                         h.multiline_justification = x;
-                                        (format!("CMLJUST = {x}"), true)
-                                    })
-                                    .map_err(|_| "SETVAR: integer value required.".into()),
+                                        Ok((format!("CMLJUST = {x}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer value from 0 to 2 required.".into()),
+                                },
                                 None => {
                                     Ok((format!("CMLJUST = {}", h.multiline_justification), false))
                                 }
+                            },
+                            "CMLSCALE" => match &value {
+                                Some(v) => match v.parse::<f64>() {
+                                    Ok(x) if x.is_finite() => {
+                                        let changed = h.multiline_scale != x;
+                                        h.multiline_scale = x;
+                                        Ok((format!("CMLSCALE = {x}"), changed))
+                                    }
+                                    _ => Err("SETVAR: finite numeric value required.".into()),
+                                },
+                                None => Ok((format!("CMLSCALE = {}", h.multiline_scale), false)),
+                            },
+                            "CMLSTYLE" => match &value {
+                                Some(_) => Err(
+                                    "SETVAR: CMLSTYLE is read-only here — use the MLSTYLE command."
+                                        .into(),
+                                ),
+                                None => Ok((format!("CMLSTYLE = {}", h.multiline_style), false)),
                             },
                             "TEXTQLTY" => match &value {
                                 Some(v) => v
@@ -2087,7 +2154,17 @@ impl OpenCADStudio {
             }
             "LTSCALE" => {
                 use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new("LTSCALE", "LTSCALE  new global line-type scale:");
+
+                let current = self.tabs[i].scene.document.header.linetype_scale;
+
+                self.command_line
+                    .push_output(crate::tf!("LTSCALE = {current:.4}").as_ref());
+
+                let c = ValuePromptCommand::new(
+                    "LTSCALE",
+                    "LTSCALE  new global line-type scale:",
+                );
+
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -2262,7 +2339,7 @@ impl OpenCADStudio {
                 use crate::command::ValuePromptCommand;
                 let c = ValuePromptCommand::new(
                     "PDSIZE",
-                    "PDSIZE  new point size (0 = 5% of viewport, <0 = absolute):",
+                    "PDSIZE  new point size (0 = 5% of viewport, >0 = absolute, <0 = viewport percentage):",
                 );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));

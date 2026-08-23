@@ -314,6 +314,7 @@ common =
     .block-rotation = Blockdrehung
     .blocks = Blöcke
     .blue = Blau
+    .bulge = Wölbung
     .boolean-failed-the-solids-may-not-overlap = Boolean versagte - die Feststoffe überlappen sich möglicherweise nicht.
     .boolean-select-exactly-two-solids-created-this = Boolean: Wählen Sie genau zwei Feststoffe erstellt diese Sitzung.
     .bottom = Unten
@@ -1329,6 +1330,18 @@ draw =
     .ray-specify-through-point = RAY Geben Sie durch Punkt an:
     .rect-specify-first-corner = RECT Geben Sie die erste Ecke an:
     .rect-specify-opposite-corner = RECT Geben Sie die gegenüberliegende Ecke an:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Abmessungen anhand von [Länge / Breite] berechnen <Länge>:
+    .rect-specify-elevation = RECT  Erhebung angeben <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Abrundungsradius angeben <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Ersten Fasenabstand angeben <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Ausrichtung von der ersten Ecke angeben:
+    .rect-specify-rectangle-area = RECT  Rechteckfläche angeben:
+    .rect-specify-rectangle-length = RECT  Rechtecklänge angeben:
+    .rect-specify-rectangle-width = RECT  Rechteckbreite angeben:
+    .rect-specify-rotation-angle = RECT  Drehwinkel angeben <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Zweiten Fasenabstand angeben <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Stärke angeben <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Breite angeben <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Mittelpunkt angeben:
     .rect-cen-specify-corner-point = RECT CEN Eckpunkt angeben:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Angrenzende Ecke angeben (Kantenrichtung definieren):
@@ -3059,7 +3072,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE Neuer Wert [0=Punkt, 1=Kein Symbol, 2=+, 3=×, 4=Strich; +32=Kreis, +64=Quadrat]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE auf __ocs_fmt_0__ gesetzt
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE Neue Punktgröße (0 = 5 % des Ansichtsfensters, < 0 = absolut):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE Neue Punktgröße (0 = 5 % des Ansichtsfensters, > 0 = absolut, < 0 = Ansichtsfenster-Prozentwert):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE auf __ocs_fmt_0__ gesetzt
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

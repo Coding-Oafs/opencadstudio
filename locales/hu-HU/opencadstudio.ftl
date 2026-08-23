@@ -313,6 +313,7 @@ common =
     .block-rotation = Blokkforgatás
     .blocks = Blokkok
     .blue = kék
+    .bulge = Kidudorodás
     .boolean-failed-the-solids-may-not-overlap = A logikai elemzés sikertelen – előfordulhat, hogy a szilárdtestek nem fedik át egymást.
     .boolean-select-exactly-two-solids-created-this = Logikai: jelöljön ki pontosan két szilárdtestet, amelyek ebben a munkamenetben jöttek létre.
     .bottom = Alul
@@ -1328,6 +1329,18 @@ draw =
     .ray-specify-through-point = RAY Pont megadása:
     .rect-specify-first-corner = RECT Adja meg az első sarkot:
     .rect-specify-opposite-corner = RECT Adja meg a szemközti sarkot:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Méretek számítása [Hossz / Szélesség] alapján <Hossz>:
+    .rect-specify-elevation = RECT  Adja meg a magasságot <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Adja meg a lekerekítés sugarát <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Adja meg az első letörési távolságot <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Adja meg az irányt az első saroktól:
+    .rect-specify-rectangle-area = RECT  Adja meg a téglalap területét:
+    .rect-specify-rectangle-length = RECT  Adja meg a téglalap hosszát:
+    .rect-specify-rectangle-width = RECT  Adja meg a téglalap szélességét:
+    .rect-specify-rotation-angle = RECT  Adja meg az elforgatási szöget <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Adja meg a második letörési távolságot <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Adja meg a vastagságot <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Adja meg a szélességet <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Középpont megadása:
     .rect-cen-specify-corner-point =RECT CEN Sarokpont megadása:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Adja meg a szomszédos sarkot (meghatározza az él irányát):
@@ -3060,7 +3073,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE új érték [0=dot 1=none 2=+ 3=x 4=tick; +32 kör +64 négyzet]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = A PDMODE __ocs_fmt_0__ értékre van állítva
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE új pontméret (0 = a nézetablak 5%-a, <0 = abszolút):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE új pontméret (0 = a nézetablak 5%-a, >0 = abszolút, <0 = a nézetablak százaléka):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = A PDSIZE __ocs_fmt_0__ értékre van állítva
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

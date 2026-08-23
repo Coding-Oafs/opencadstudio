@@ -87,7 +87,7 @@ fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
 }
 
 type LayoutPlotParams = (
-    std::sync::Arc<Vec<crate::scene::WireModel>>,
+    std::sync::Arc<Vec<crate::io::pdf_export::PlotWire>>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     crate::io::pdf_export::PlotGroupSplits,
@@ -101,7 +101,7 @@ type LayoutPlotParams = (
 );
 
 type ClippedPlotParams = (
-    Vec<crate::scene::WireModel>,
+    Vec<crate::io::pdf_export::PlotWire>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     crate::io::pdf_export::PlotGroupSplits,
@@ -115,7 +115,7 @@ type ClippedPlotParams = (
 );
 
 fn plot_content_extents(
-    wires: &[crate::scene::WireModel],
+    wires: &[crate::io::pdf_export::PlotWire],
     hatches: &[crate::scene::model::hatch_model::HatchModel],
     wipeouts: &[crate::scene::model::hatch_model::HatchModel],
 ) -> Option<(f64, f64, f64, f64)> {
@@ -160,7 +160,7 @@ fn plot_scene_content(
     paper_space_last: bool,
     render_mode_override: Option<acadrust::entities::ViewportRenderMode>,
 ) -> (
-    std::sync::Arc<Vec<crate::scene::WireModel>>,
+    std::sync::Arc<Vec<crate::io::pdf_export::PlotWire>>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
     crate::io::pdf_export::PlotGroupSplits,
@@ -168,8 +168,18 @@ fn plot_scene_content(
     let (mut paper_wires, mut model_wires) = scene.plot_wire_groups(render_mode_override);
     paper_wires.retain(|wire| wire.plot_visible);
     model_wires.retain(|wire| wire.plot_visible);
-    let paper_hatches = scene.paper_canvas_hatches().as_ref().clone();
-    let paper_wipeouts = scene.paper_canvas_wipeouts().as_ref().clone();
+    let with_depth = |wires: Vec<crate::scene::WireModel>| {
+        let depths = scene.plot_wire_depths(&wires);
+        wires
+            .into_iter()
+            .zip(depths)
+            .map(|(wire, draw_depth)| crate::io::pdf_export::PlotWire { wire, draw_depth })
+            .collect::<Vec<_>>()
+    };
+    let paper_wires = with_depth(paper_wires);
+    let model_wires = with_depth(model_wires);
+    let paper_hatches = scene.paper_plot_hatches().as_ref().clone();
+    let paper_wipeouts = scene.paper_plot_wipeouts().as_ref().clone();
     if scene.current_layout == "Model" {
         let splits = crate::io::pdf_export::PlotGroupSplits {
             wires: paper_wires.len(),
@@ -184,7 +194,11 @@ fn plot_scene_content(
         );
     }
     let (mut model_pattern_wires, model_hatches, model_wipeouts) = scene.viewport_plot_fills();
-    model_pattern_wires.retain(|wire| wire.plot_visible);
+    model_pattern_wires.retain(|(wire, _)| wire.plot_visible);
+    let model_pattern_wires = model_pattern_wires
+        .into_iter()
+        .map(|(wire, draw_depth)| crate::io::pdf_export::PlotWire { wire, draw_depth })
+        .collect::<Vec<_>>();
 
     let (wires, hatches, wipeouts, splits) = if paper_space_last {
         let splits = crate::io::pdf_export::PlotGroupSplits {

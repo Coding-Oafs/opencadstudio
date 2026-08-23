@@ -321,6 +321,7 @@ common =
     .block-rotation = Block rotation
     .blocks = Blocks
     .blue = Blue
+    .bulge = Bulge
     .boolean-failed-the-solids-may-not-overlap = Boolean failed — the solids may not overlap.
     .boolean-select-exactly-two-solids-created-this = Boolean: select exactly two solids created this session.
     .bottom = Bottom
@@ -1176,6 +1177,15 @@ draw =
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ No closed boundary found.
     .inverted = , inverted
+    .loaded-multiline-styles = Loaded multiline styles: __ocs_fmt_0__
+    .mline-current-settings = MLINE  Current settings: Justification = __ocs_fmt_0__, Scale = __ocs_fmt_1__, Style = __ocs_fmt_2__
+        Specify start point or [Justification/Scale/STyle]:
+    .mline-enter-justification = MLINE  Enter justification type [Top/Zero/Bottom] <__ocs_fmt_0__>:
+    .mline-enter-scale-factor-default = MLINE  Enter scale factor <__ocs_fmt_0__>:
+    .mline-enter-style-name = MLINE  Enter style name or [?] <__ocs_fmt_0__>:
+    .mline-specify-next-point-close-undo = MLINE  Specify next point or [Close/Undo]:
+    .mline-specify-next-point-undo = MLINE  Specify next point or [Undo]:
+    .multiline-style-was-not-found = Multiline style "__ocs_arg_style__" was not found.
     .value-2-point = 2-Point
     .value-2d-solid = 2D Solid
     .value-3-point = 3-Point
@@ -1336,6 +1346,18 @@ draw =
     .ray-specify-through-point = RAY  Specify through point:
     .rect-specify-first-corner = RECT  Specify first corner:
     .rect-specify-opposite-corner = RECT  Specify opposite corner:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Calculate dimensions based on [Length / Width] <Length>:
+    .rect-specify-elevation = RECT  Specify elevation <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Specify fillet radius <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Specify first chamfer distance <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Specify orientation from the first corner:
+    .rect-specify-rectangle-area = RECT  Specify rectangle area:
+    .rect-specify-rectangle-length = RECT  Specify rectangle length:
+    .rect-specify-rectangle-width = RECT  Specify rectangle width:
+    .rect-specify-rotation-angle = RECT  Specify rotation angle <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Specify second chamfer distance <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Specify thickness <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Specify width <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN  Specify center point:
     .rect-cen-specify-corner-point = RECT CEN  Specify corner point:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT  Specify adjacent corner (defines edge direction):
@@ -1446,6 +1468,24 @@ draw =
 modify =
     .count-objects =  (__ocs_arg_count__ objects)
     .edge-extend-indented-title-case =  [Edge: Extend]
+    .add-vertex = Add Vertex
+    .closed-cross = Closed Cross
+    .closed-tee = Closed Tee
+    .corner-joint = Corner Joint
+    .cut-all = Cut All
+    .cut-single = Cut Single
+    .delete-vertex = Delete Vertex
+    .merged-cross = Merged Cross
+    .merged-tee = Merged Tee
+    .mledit-choose-an-edit-tool = MLEDIT  Choose an edit tool:
+    .mledit-select-first-multiline = MLEDIT  Select first multiline:
+    .mledit-select-second-multiline = MLEDIT  Select second multiline:
+    .mledit-specify-end-of-weld-range = MLEDIT  Specify the end of the weld range:
+    .mledit-specify-second-cut-point = MLEDIT  Specify the second cut point:
+    .open-cross = Open Cross
+    .open-tee = Open Tee
+    .remove-vertex = Remove Vertex
+    .weld-all = Weld All
     .align-scale-objects-based-on-alignment-points = ALIGN  Scale objects based on alignment points? [Y/N]:
     .align-select-objects-count-selected-enter-when = ALIGN  Select objects (__ocs_arg_count__ selected, Enter when done):
     .align-specify-1st-destination-point = ALIGN  Specify 1st destination point:
@@ -3094,7 +3134,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  new value [0=dot 1=none 2=+ 3=x 4=tick; +32 circle +64 square]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE set to __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  new point size (0 = 5% of viewport, <0 = absolute):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  new point size (0 = 5% of viewport, >0 = absolute, <0 = viewport percentage):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE set to __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

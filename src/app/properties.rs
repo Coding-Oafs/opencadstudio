@@ -1844,6 +1844,41 @@ impl OpenCADStudio {
             &mut entity,
         );
 
+        // Smart centre objects carry their own drawing-level creation style.
+        // Apply it after the generic ribbon style so ordinary LINE entities
+        // keep the existing path while centre lines honour their settings.
+        let center_line = acadrust::entities::CenterLineAssociation::read(
+            &entity.common().extended_data,
+        ).is_some();
+        let center_mark = acadrust::entities::CenterMarkAssociation::read(
+            &entity.common().extended_data,
+        ).is_some();
+        if center_line || center_mark {
+            let settings = self.tabs[i].scene.centerline_settings();
+            if !settings.layer.eq_ignore_ascii_case("Current") {
+                entity.common_mut().layer = settings.layer;
+            }
+            if !settings.linetype.eq_ignore_ascii_case("Current") {
+                entity.common_mut().linetype = settings.linetype;
+            }
+            entity.common_mut().linetype_scale = settings.linetype_scale;
+            let application = if center_mark {
+                acadrust::entities::CENTERMARK_XDATA_APPLICATION
+            } else {
+                acadrust::entities::CENTERLINE_XDATA_APPLICATION
+            };
+            if !self.tabs[i]
+                .scene
+                .document
+                .app_ids
+                .contains(application)
+            {
+                let mut app = acadrust::tables::AppId::new(application);
+                app.handle = self.tabs[i].scene.document.allocate_handle();
+                let _ = self.tabs[i].scene.document.app_ids.add(app);
+            }
+        }
+
         let text_style_annotative = match &entity {
             acadrust::EntityType::Text(text) => {
                 crate::scene::annotative::text_style_is_annotative(
@@ -2056,6 +2091,23 @@ pub(super) fn aggregate_sections(
     let mut result = all_sections.remove(0);
     for sections in all_sections {
         result = merge_sections(&result, &sections);
+    }
+    // Sum the filled area while individual Area rows may still vary.
+    if selected.len() > 1
+        && selected
+            .iter()
+            .all(|(_, entity)| matches!(entity, acadrust::EntityType::Hatch(_)))
+    {
+        let total = selected
+            .iter()
+            .filter_map(|(_, entity)| match entity {
+                acadrust::EntityType::Hatch(hatch) => {
+                    Some(crate::entities::hatch::boundary_area(hatch))
+                }
+                _ => None,
+            })
+            .sum::<f64>();
+        set_row(&mut result, "cumulative_area", format!("{total:.4}"));
     }
     result
 }

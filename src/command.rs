@@ -11,6 +11,22 @@ use crate::scene::Scene;
 use acadrust::{EntityType, Handle};
 use glam::DVec3;
 
+#[derive(Clone, Debug)]
+pub enum HatchEditOperation {
+    Update {
+        origin: Option<(f64, f64)>,
+        disassociate: bool,
+        style: Option<acadrust::entities::HatchStyleType>,
+        annotative: Option<bool>,
+    },
+    RecreateBoundary,
+    Separate,
+    AddBoundaries(Vec<Handle>),
+    RemoveBoundaries(Vec<Handle>),
+    DrawOrderFront,
+    DrawOrderBack,
+}
+
 // ── Working plane ─────────────────────────────────────────────────────────
 
 /// Full-precision coordinate frame used by interactive commands.
@@ -1199,6 +1215,11 @@ pub enum CmdResult {
         boundaries: Vec<EntityType>,
         entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
     },
+    /// Commit independently editable hatch entities for every selected region.
+    CommitHatches {
+        hatches: Vec<HatchModel>,
+        entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
+    },
     /// Copy selected entities with multiple transforms (e.g. rectangular array); end command.
     BatchCopy(Vec<Handle>, Vec<EntityTransform>),
     /// Erase `handle` and replace with new entities; command stays active.
@@ -1208,6 +1229,12 @@ pub enum CmdResult {
     ReplaceMany(Vec<(Handle, Vec<EntityType>)>, Vec<EntityType>),
     /// Replace several entities as one undo step while keeping the command active.
     ReplaceManyContinue(Vec<(Handle, Vec<EntityType>)>),
+    /// Attach one smart centre mark to a newly selected circular source.
+    ReassociateCenterMark {
+        target: Handle,
+        source: Handle,
+        point: DVec3,
+    },
     /// Cancel: discard any preview and end the command.
     Cancel,
     /// Cancel because the active drawing space changed. Cleanup is identical
@@ -1374,6 +1401,7 @@ pub enum CmdResult {
         name: String,
         scale: f32,
         angle: f32,
+        operation: HatchEditOperation,
     },
     /// STRETCH crossing-window selection. The command can accumulate several
     /// independent crossing windows before Enter ends the selection stage.
@@ -1876,6 +1904,11 @@ pub trait CadCommand: Send {
 
     /// Current drawing-persisted SKETCH settings.
     fn sketch_settings(&self) -> Option<(i16, f64, f64)> {
+        None
+    }
+
+    /// Current drawing-persisted multiline creation settings.
+    fn mline_settings(&self) -> Option<(f64, i16, String, Option<Handle>)> {
         None
     }
 

@@ -134,6 +134,8 @@ impl canvas::Program<Message> for HatchPatternPreview {
                     fill_plane_boundary: None,
                     boundary_exterior: None,
                     boundary_sources: None,
+                    boundary_paths: None,
+                    style: acadrust::entities::HatchStyleType::Normal,
                     pattern: self.pattern.clone(),
                     name: String::new(),
                     color: [1.0; 4],

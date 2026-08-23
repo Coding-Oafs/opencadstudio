@@ -317,6 +317,7 @@ common =
     .block-rotation = Вращение блока
     .blocks = Блоки
     .blue = Синий
+    .bulge = Выпуклость
     .boolean-failed-the-solids-may-not-overlap = Булевый не сработал — твердые вещества могут не перекрываться.
     .boolean-select-exactly-two-solids-created-this = Булев: выберите ровно два твердых тела, созданных на этом сеансе.
     .bottom = Снизу
@@ -1332,6 +1333,18 @@ draw =
     .ray-specify-through-point = RAY Укажите через точку:
     .rect-specify-first-corner = RECT Укажите первый угол:
     .rect-specify-opposite-corner = RECT  Укажите противоположный угол:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Рассчитать размеры по [Длине / Ширине] <Длина>:
+    .rect-specify-elevation = RECT  Укажите отметку <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Укажите радиус скругления <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Укажите первое расстояние фаски <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Укажите направление от первого угла:
+    .rect-specify-rectangle-area = RECT  Укажите площадь прямоугольника:
+    .rect-specify-rectangle-length = RECT  Укажите длину прямоугольника:
+    .rect-specify-rectangle-width = RECT  Укажите ширину прямоугольника:
+    .rect-specify-rotation-angle = RECT  Укажите угол поворота <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Укажите второе расстояние фаски <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Укажите толщину <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Укажите ширину <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Укажите центральную точку:
     .rect-cen-specify-corner-point = RECT CEN Укажите угловую точку:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Укажите смежный угол (определите направление кромки):
@@ -3064,7 +3077,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE Новое значение [0=точка 1=нет 2=+ 3=× 4=штрих; +32 окружность +64 квадрат]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE, установленный на __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  новый размер точки (0 = 5% от площади обзора, <0 = абсолютный):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  новый размер точки (0 = 5% от области просмотра, >0 = абсолютный, <0 = процент области просмотра):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE, установленный на __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

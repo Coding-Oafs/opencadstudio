@@ -314,6 +314,7 @@ common =
     .block-rotation = Blokrotatie
     .blocks = Blokken
     .blue = Blauw
+    .bulge = Bolling
     .boolean-failed-the-solids-may-not-overlap = Boolean mislukt . . de vaste stoffen mogen niet overlappen.
     .boolean-select-exactly-two-solids-created-this = Boolean: selecteer precies twee vaste stoffen die deze sessie hebben gemaakt.
     .bottom = Onderkant
@@ -1329,6 +1330,18 @@ draw =
     .ray-specify-through-point = RAY Door het punt opgeven:
     .rect-specify-first-corner = RECT Eerste hoek opgeven:
     .rect-specify-opposite-corner = RECT Geef de andere hoek op:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Bereken afmetingen op basis van [Lengte / Breedte] <Lengte>:
+    .rect-specify-elevation = RECT  Geef hoogte op <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Geef afrondingsstraal op <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Geef eerste afschuiningsafstand op <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Geef richting vanaf de eerste hoek op:
+    .rect-specify-rectangle-area = RECT  Geef oppervlakte van rechthoek op:
+    .rect-specify-rectangle-length = RECT  Geef lengte van rechthoek op:
+    .rect-specify-rectangle-width = RECT  Geef breedte van rechthoek op:
+    .rect-specify-rotation-angle = RECT  Geef rotatiehoek op <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Geef tweede afschuiningsafstand op <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Geef dikte op <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Geef breedte op <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Centrumpunt opgeven:
     .rect-cen-specify-corner-point = RECT CEN Geef hoekpunt op:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Aangrenzende hoek opgeven (randrichting definiëren):
@@ -3061,7 +3074,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  nieuwe waarde [0=punt 1=geen 2=+ 3=x 4=streepje; +32 cirkel +64 vierkant]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE ingesteld op __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  nieuwe puntgrootte (0 = 5% van weergavevenster, <0 = absoluut):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  nieuwe puntgrootte (0 = 5% van weergavevenster, >0 = absoluut, <0 = percentage van weergavevenster):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE ingesteld op __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

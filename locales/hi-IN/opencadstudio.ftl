@@ -302,6 +302,7 @@ common =
     .block-rotation = ब्लॉक रोटेशन
     .blocks = ब्लॉक
     .blue = नीला
+    .bulge = उभार
     .boolean-failed-the-solids-may-not-overlap = बोओलेन विफल रहा - ठोस ओवरलैप नहीं हो सकता।
     .boolean-select-exactly-two-solids-created-this = बोओलान: इस सत्र को बनाने वाले दो ठोस चुनें।
     .bottom = नीचे
@@ -1317,6 +1318,18 @@ draw =
     .ray-specify-through-point = RAY पॉइंट के माध्यम से निर्दिष्ट करें:
     .rect-specify-first-corner = RECT पहले कोने को निर्दिष्ट करें:
     .rect-specify-opposite-corner = RECT विपरीत कोने निर्दिष्ट करें:
+    .rect-calculate-dimensions-based-on-length-width = RECT  [लंबाई / चौड़ाई] के आधार पर आयाम निकालें <लंबाई>:
+    .rect-specify-elevation = RECT  ऊंचाई निर्दिष्ट करें <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  फिलेट त्रिज्या निर्दिष्ट करें <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  पहली चैम्फर दूरी निर्दिष्ट करें <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  पहले कोने से दिशा निर्दिष्ट करें:
+    .rect-specify-rectangle-area = RECT  आयत का क्षेत्रफल निर्दिष्ट करें:
+    .rect-specify-rectangle-length = RECT  आयत की लंबाई निर्दिष्ट करें:
+    .rect-specify-rectangle-width = RECT  आयत की चौड़ाई निर्दिष्ट करें:
+    .rect-specify-rotation-angle = RECT  घूर्णन कोण निर्दिष्ट करें <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  दूसरी चैम्फर दूरी निर्दिष्ट करें <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  मोटाई निर्दिष्ट करें <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  चौड़ाई निर्दिष्ट करें <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN केंद्र बिंदु निर्दिष्ट करें:
     .rect-cen-specify-corner-point = RECT CEN कोने बिंदु निर्दिष्ट करें:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT निकटवर्ती कोने (डिफ़ाइन किनारे दिशा) निर्दिष्ट करें:
@@ -3049,7 +3062,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE नया मान [0=बिंदु 1=कोई नहीं 2=+ 3=× 4=टिक; +32 वृत्त +64 वर्ग]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE सेट करने के लिए __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  नए बिंदु आकार (0 = 5% व्यूपोर्ट, <0 = निरपेक्ष):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  नया बिंदु आकार (0 = व्यूपोर्ट का 5%, >0 = निरपेक्ष, <0 = व्यूपोर्ट प्रतिशत):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE सेट करने के लिए __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

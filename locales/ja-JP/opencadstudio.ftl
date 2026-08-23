@@ -304,6 +304,7 @@ common =
     .block-rotation = ブロック回転
     .blocks = ブロック
     .blue = 青
+    .bulge = ふくらみ
     .boolean-failed-the-solids-may-not-overlap = ブール演算に失敗しました — ソリッドが重なっていない可能性があります。
     .boolean-select-exactly-two-solids-created-this = ブール演算: このセッションで作成したソリッドを 2 つ選択してください。
     .bottom = 下
@@ -1319,6 +1320,18 @@ draw =
     .ray-specify-through-point = RAY  通過点を指定:
     .rect-specify-first-corner = RECT  最初のコーナーを指定:
     .rect-specify-opposite-corner = RECT  反対側のコーナーを指定:
+    .rect-calculate-dimensions-based-on-length-width = RECT  [長さ / 幅] に基づいて寸法を計算 <長さ>:
+    .rect-specify-elevation = RECT  高度を指定 <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  フィレット半径を指定 <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  1 番目の面取り距離を指定 <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  最初のコーナーから方向を指定:
+    .rect-specify-rectangle-area = RECT  長方形の面積を指定:
+    .rect-specify-rectangle-length = RECT  長方形の長さを指定:
+    .rect-specify-rectangle-width = RECT  長方形の幅を指定:
+    .rect-specify-rotation-angle = RECT  回転角度を指定 <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  2 番目の面取り距離を指定 <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  厚さを指定 <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  幅を指定 <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN  中心点を指定:
     .rect-cen-specify-corner-point = RECT CEN  コーナー点を指定:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT  隣接コーナーを指定（エッジ方向を定義）:
@@ -3049,7 +3062,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  新しい値 [0=点 1=なし 2=+ 3=x 4=目盛り、+32 円 +64 正方形]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE を __ocs_fmt_0__ に設定しました
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  新しい点サイズ（0=ビューポートの 5%、<0=絶対値）:
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  新しい点サイズ（0=ビューポートの 5%、>0=絶対値、<0=ビューポートの割合）:
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE を __ocs_fmt_0__ に設定しました
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

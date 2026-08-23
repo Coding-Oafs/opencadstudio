@@ -314,6 +314,7 @@ common =
     .block-rotation = Rotación del bloque
     .blocks = Bloques
     .blue = Azul
+    .bulge = Curvatura
     .boolean-failed-the-solids-may-not-overlap = Falló la operación booleana; es posible que los sólidos no se solapen.
     .boolean-select-exactly-two-solids-created-this = Operación booleana: seleccione exactamente dos sólidos creados en esta sesión.
     .bottom = Inferior
@@ -1329,6 +1330,18 @@ draw =
     .ray-specify-through-point = RAY  Precise el punto de paso:
     .rect-specify-first-corner = RECT  Precise la primera esquina:
     .rect-specify-opposite-corner = RECT  Precise la esquina opuesta:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Calcule las dimensiones según [Longitud / Anchura] <Longitud>:
+    .rect-specify-elevation = RECT  Precise la elevación <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Precise el radio de empalme <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Precise la primera distancia de chaflán <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Precise la orientación desde la primera esquina:
+    .rect-specify-rectangle-area = RECT  Precise el área del rectángulo:
+    .rect-specify-rectangle-length = RECT  Precise la longitud del rectángulo:
+    .rect-specify-rectangle-width = RECT  Precise la anchura del rectángulo:
+    .rect-specify-rotation-angle = RECT  Precise el ángulo de rotación <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Precise la segunda distancia de chaflán <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Precise el espesor <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Precise la anchura <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN  Precise el punto central:
     .rect-cen-specify-corner-point = RECT CEN  Precise el punto de esquina:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT  Precise la esquina adyacente (define la dirección de la arista):
@@ -3061,7 +3074,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  nuevo valor [0=punto 1=ninguno 2=+ 3=x 4=marca; +32 círculo +64 cuadrado]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE establecido en __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  nuevo tamaño de punto (0 = 5 % de la ventana gráfica, <0 = absoluto):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  nuevo tamaño de punto (0 = 5 % de la ventana gráfica, >0 = absoluto, <0 = porcentaje de la ventana gráfica):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE establecido en __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

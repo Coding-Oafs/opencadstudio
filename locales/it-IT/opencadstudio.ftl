@@ -313,6 +313,7 @@ common =
     .block-rotation = Bloccare la rotazione
     .blocks = Blocchi
     .blue = Blu
+    .bulge = Curvatura
     .boolean-failed-the-solids-may-not-overlap = Booleano non riuscito: i solidi potrebbero non sovrapporsi.
     .boolean-select-exactly-two-solids-created-this = Booleano: seleziona esattamente due solidi creati in questa sessione.
     .bottom = In basso
@@ -1328,6 +1329,18 @@ draw =
     .ray-specify-through-point = RAY Specificare il punto di passaggio:
     .rect-specify-first-corner = RECT Specificare il primo angolo:
     .rect-specify-opposite-corner = RECT Specificare l'angolo opposto:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Calcolare le dimensioni in base a [Lunghezza / Larghezza] <Lunghezza>:
+    .rect-specify-elevation = RECT  Specificare l’elevazione <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Specificare il raggio di raccordo <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Specificare la prima distanza di smusso <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Specificare l’orientamento dal primo angolo:
+    .rect-specify-rectangle-area = RECT  Specificare l’area del rettangolo:
+    .rect-specify-rectangle-length = RECT  Specificare la lunghezza del rettangolo:
+    .rect-specify-rectangle-width = RECT  Specificare la larghezza del rettangolo:
+    .rect-specify-rotation-angle = RECT  Specificare l’angolo di rotazione <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Specificare la seconda distanza di smusso <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Specificare lo spessore <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Specificare la larghezza <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Specificare il punto centrale:
     .rect-cen-specify-corner-point =RECT CEN Specificare il punto d'angolo:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Specificare l'angolo adiacente (definisce la direzione del bordo):
@@ -3060,7 +3073,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE nuovo valore [0=punto 1=none 2=+ 3=x 4=tick; +32 cerchio +64 quadrato]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE impostato su __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE nuova dimensione in punti (0 = 5% dell'area visibile, <0 = assoluto):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE nuova dimensione del punto (0 = 5% dell'area visibile, >0 = assoluto, <0 = percentuale dell'area visibile):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE impostato su __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

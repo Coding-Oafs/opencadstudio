@@ -313,6 +313,7 @@ common =
     .block-rotation = 圖塊旋轉
     .blocks = 圖塊
     .blue = 藍色
+    .bulge = 凸度
     .boolean-failed-the-solids-may-not-overlap = 布爾失敗——固件可能不會重疊.
     .boolean-select-exactly-two-solids-created-this = 布爾: 選擇建立此會話的正中兩個固件 。
     .bottom = 底部
@@ -1328,6 +1329,18 @@ draw =
     .ray-specify-through-point = RAY通過點指定 :
     .rect-specify-first-corner = RECT 指定第一角 :
     .rect-specify-opposite-corner = RECT 指定相向角 :
+    .rect-calculate-dimensions-based-on-length-width = RECT  根據 [長度 / 寬度] 計算尺寸 <長度>:
+    .rect-specify-elevation = RECT  指定高程 <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  指定圓角半徑 <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  指定第一個倒角距離 <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  從第一個角點指定方向:
+    .rect-specify-rectangle-area = RECT  指定矩形面積:
+    .rect-specify-rectangle-length = RECT  指定矩形長度:
+    .rect-specify-rectangle-width = RECT  指定矩形寬度:
+    .rect-specify-rotation-angle = RECT  指定旋轉角度 <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  指定第二個倒角距離 <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  指定厚度 <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  指定寬度 <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN  指定中心點：
     .rect-cen-specify-corner-point = RECT CEN  指定角點：
     .rect-rot-specify-adjacent-corner-defines-edge = RECTROT指定相鄰的角( 定邊方向) :
@@ -3056,7 +3069,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE 新值 [0=點 1=無 2=+ 3=× 4=短划；+32 圓 +64 方框]：
     .pdmode-v = PDMODE = __ocs_fmt_0__ 時間軸 :
     .pdmode-set-to-v = PDMODE 設定為__ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE 指定新點大小（0 = 視口的 5%，<0 = 絕對值）：
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE 指定新點大小（0 = 視口的 5%，>0 = 絕對值，<0 = 視口百分比）：
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__ 時間軸 :
     .pdsize-set-to-v-4 = PDSIZE 設定為__ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

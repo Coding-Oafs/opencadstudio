@@ -313,6 +313,7 @@ common =
     .block-rotation = Lohkon kierto
     .blocks = Lohkot
     .blue = Sininen
+    .bulge = Kaarevuus
     .boolean-failed-the-solids-may-not-overlap = Boolen arvo epäonnistui – kiinteät aineet eivät ehkä mene päällekkäin.
     .boolean-select-exactly-two-solids-created-this = Boolen arvo: valitse täsmälleen kaksi tässä istunnossa luotua solidia.
     .bottom = Pohja
@@ -1328,6 +1329,18 @@ draw =
     .ray-specify-through-point = RAY Määritä pisteen kautta:
     .rect-specify-first-corner = RECT Määritä ensimmäinen kulma:
     .rect-specify-opposite-corner = RECT Määritä vastakkainen kulma:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Laske mitat [Pituuden / Leveyden] perusteella <Pituus>:
+    .rect-specify-elevation = RECT  Määritä korkeusasema <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Määritä pyöristyssäde <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  Määritä ensimmäinen viiste-etäisyys <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  Määritä suunta ensimmäisestä kulmasta:
+    .rect-specify-rectangle-area = RECT  Määritä suorakulmion pinta-ala:
+    .rect-specify-rectangle-length = RECT  Määritä suorakulmion pituus:
+    .rect-specify-rectangle-width = RECT  Määritä suorakulmion leveys:
+    .rect-specify-rotation-angle = RECT  Määritä kiertokulma <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  Määritä toinen viiste-etäisyys <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Määritä paksuus <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Määritä leveys <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN Määritä keskipiste:
     .rect-cen-specify-corner-point =RECT CEN Määritä kulmapiste:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT Määritä viereinen kulma (määrittää reunasuunnan):
@@ -3060,7 +3073,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE uusi arvo [0=dot 1=none 2=+ 3=x 4=tick; +32 ympyrä +64 neliö]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE asetettu arvoon __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE uusi pistekoko (0 = 5 % kuvaportista, <0 = absoluuttinen):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE uusi pistekoko (0 = 5 % kuvaportista, >0 = absoluuttinen, <0 = kuvaportin prosenttiosuus):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE asetettu arvoon __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

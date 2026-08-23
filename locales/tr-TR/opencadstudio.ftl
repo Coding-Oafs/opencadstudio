@@ -300,6 +300,7 @@ common =
     .block-rotation = Blok döndürmesi
     .blocks = Bloklar
     .blue = Mavi
+    .bulge = Kavis
     .boolean-failed-the-solids-may-not-overlap = Boolean işlemi başarısız oldu; katılar çakışmıyor olabilir.
     .boolean-select-exactly-two-solids-created-this = Boolean: bu oturumda oluşturulmuş tam iki katı seçin.
     .bottom = Alt
@@ -1151,6 +1152,15 @@ draw =
     .tag-val = [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found = ⚠ Kapalı sınır bulunamadı.
     .inverted = , ters çevrilmiş
+    .loaded-multiline-styles = Yüklü çoklu çizgi stilleri: __ocs_fmt_0__
+    .mline-current-settings = MLINE  Geçerli ayarlar: Hizalama = __ocs_fmt_0__, Ölçek = __ocs_fmt_1__, Stil = __ocs_fmt_2__
+        Başlangıç noktasını belirtin veya [Hizalama/Ölçek/Stil]:
+    .mline-enter-justification = MLINE  Hizalama türünü girin [Üst/Sıfır/Alt] <__ocs_fmt_0__>:
+    .mline-enter-scale-factor-default = MLINE  Ölçek katsayısını girin <__ocs_fmt_0__>:
+    .mline-enter-style-name = MLINE  Stil adını veya [?] girin <__ocs_fmt_0__>:
+    .mline-specify-next-point-close-undo = MLINE  Sonraki noktayı belirtin veya [Kapat/Geri al]:
+    .mline-specify-next-point-undo = MLINE  Sonraki noktayı belirtin veya [Geri al]:
+    .multiline-style-was-not-found = "__ocs_arg_style__" çoklu çizgi stili bulunamadı.
     .value-2-point = 2 Nokta
     .value-2d-solid = 2B Katı
     .value-3-point = 3 Nokta
@@ -1311,6 +1321,18 @@ draw =
     .ray-specify-through-point = RAY  Geçiş noktasını belirtin:
     .rect-specify-first-corner = RECT  İlk köşeyi belirtin:
     .rect-specify-opposite-corner = RECT  Karşı köşeyi belirtin:
+    .rect-calculate-dimensions-based-on-length-width = RECT  Boyutları [Uzunluk / Genişlik] temelinde hesaplayın <Uzunluk>:
+    .rect-specify-elevation = RECT  Kotu belirtin <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  Yuvarlatma yarıçapını belirtin <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  İlk pah mesafesini belirtin <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  İlk köşeden yönü belirtin:
+    .rect-specify-rectangle-area = RECT  Dikdörtgen alanını belirtin:
+    .rect-specify-rectangle-length = RECT  Dikdörtgen uzunluğunu belirtin:
+    .rect-specify-rectangle-width = RECT  Dikdörtgen genişliğini belirtin:
+    .rect-specify-rotation-angle = RECT  Döndürme açısını belirtin <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  İkinci pah mesafesini belirtin <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  Kalınlığı belirtin <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  Genişliği belirtin <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN  Merkez noktasını belirtin:
     .rect-cen-specify-corner-point = RECT CEN  Köşe noktasını belirtin:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT  Bitişik köşeyi belirtin (kenar yönünü tanımlar):
@@ -1421,6 +1443,24 @@ draw =
 modify =
     .count-objects = (__ocs_arg_count__ nesne)
     .edge-extend-indented-title-case = [Kenar: Uzat]
+    .add-vertex = Tepe Noktası Ekle
+    .closed-cross = Kapalı Kesişim
+    .closed-tee = Kapalı T Birleşimi
+    .corner-joint = Köşe Birleşimi
+    .cut-all = Tümünü Kes
+    .cut-single = Tekini Kes
+    .delete-vertex = Tepe Noktasını Sil
+    .merged-cross = Birleşik Kesişim
+    .merged-tee = Birleşik T Birleşimi
+    .mledit-choose-an-edit-tool = MLEDIT  Bir düzenleme aracı seçin:
+    .mledit-select-first-multiline = MLEDIT  İlk çoklu çizgiyi seçin:
+    .mledit-select-second-multiline = MLEDIT  İkinci çoklu çizgiyi seçin:
+    .mledit-specify-end-of-weld-range = MLEDIT  Kaynak aralığının sonunu belirtin:
+    .mledit-specify-second-cut-point = MLEDIT  İkinci kesim noktasını belirtin:
+    .open-cross = Açık Kesişim
+    .open-tee = Açık T Birleşimi
+    .remove-vertex = Tepe Noktasını Kaldır
+    .weld-all = Tümünü Birleştir
     .align-scale-objects-based-on-alignment-points = ALIGN  Nesneler hizalama noktalarına göre ölçeklensin mi? [E/H]:
     .align-select-objects-count-selected-enter-when = ALIGN  Nesneleri seçin (__ocs_arg_count__ seçili, bitirmek için Enter):
     .align-specify-1st-destination-point = ALIGN  1. hedef noktasını belirtin:
@@ -3027,7 +3067,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  Yeni değer [0=nokta 1=yok 2=+ 3=x 4=çentik; +32 çember +64 kare]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = PDMODE __ocs_fmt_0__ olarak ayarlandı
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  Yeni nokta boyutu (0 = görünüm alanının %5'i, <0 = mutlak):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  Yeni nokta boyutu (0 = görünüm alanının %5'i, >0 = mutlak, <0 = görünüm alanı yüzdesi):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = PDSIZE __ocs_fmt_0__ olarak ayarlandı
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

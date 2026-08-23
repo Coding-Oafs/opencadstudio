@@ -326,6 +326,7 @@ common =
     .block-rotation = دوران الكتلة
     .blocks = الكتل
     .blue = أزرق
+    .bulge = التحدب
     .boolean-failed-the-solids-may-not-overlap = فشلت العملية المنطقية — قد لا تتداخل المجسمات.
     .boolean-select-exactly-two-solids-created-this = العملية المنطقية: حدد مجسمين بالضبط أُنشئا في هذه الجلسة.
     .bottom = أسفل
@@ -1341,6 +1342,18 @@ draw =
     .ray-specify-through-point = RAY  حدد نقطة العبور:
     .rect-specify-first-corner = RECT  حدد الزاوية الأولى:
     .rect-specify-opposite-corner = RECT  حدد الزاوية المقابلة:
+    .rect-calculate-dimensions-based-on-length-width = RECT  احسب الأبعاد استنادًا إلى [الطول / العرض] <الطول>:
+    .rect-specify-elevation = RECT  حدد الارتفاع <__ocs_fmt_0__>:
+    .rect-specify-fillet-radius = RECT  حدد نصف قطر التدوير <__ocs_fmt_0__>:
+    .rect-specify-first-chamfer-distance = RECT  حدد مسافة الشطف الأولى <__ocs_fmt_0__>:
+    .rect-specify-orientation-from-the-first-corner = RECT  حدد الاتجاه من الزاوية الأولى:
+    .rect-specify-rectangle-area = RECT  حدد مساحة المستطيل:
+    .rect-specify-rectangle-length = RECT  حدد طول المستطيل:
+    .rect-specify-rectangle-width = RECT  حدد عرض المستطيل:
+    .rect-specify-rotation-angle = RECT  حدد زاوية الدوران <__ocs_fmt_0__>:
+    .rect-specify-second-chamfer-distance = RECT  حدد مسافة الشطف الثانية <__ocs_fmt_0__>:
+    .rect-specify-thickness = RECT  حدد السمك <__ocs_fmt_0__>:
+    .rect-specify-width = RECT  حدد العرض <__ocs_fmt_0__>:
     .rect-cen-specify-center-point = RECT CEN  حدد نقطة المركز:
     .rect-cen-specify-corner-point = RECT CEN  حدد نقطة الزاوية:
     .rect-rot-specify-adjacent-corner-defines-edge = RECT ROT  حدد الزاوية المجاورة (تحدد اتجاه الحافة):
@@ -3073,7 +3086,7 @@ styles =
     .pdmode-new-value-0-dot-1-none-2-3-x-4-tick-32 = PDMODE  القيمة الجديدة [0=نقطة 1=لا شيء 2=+ 3=x 4=شرطة؛ +32 دائرة +64 مربع]:
     .pdmode-v = PDMODE = __ocs_fmt_0__
     .pdmode-set-to-v = عُيّن PDMODE إلى __ocs_fmt_0__
-    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  حجم النقطة الجديد (0 = 5% من منفذ العرض، <0 = مطلق):
+    .pdsize-new-point-size-0-5-of-viewport-0-absolu = PDSIZE  حجم النقطة الجديد (0 = 5% من منفذ العرض، >0 = مطلق، <0 = نسبة مئوية من منفذ العرض):
     .pdsize-v-4 = PDSIZE = __ocs_fmt_0__
     .pdsize-set-to-v-4 = عُيّن PDSIZE إلى __ocs_fmt_0__
     .pickadd = PICKADD = __ocs_fmt_0__ (__ocs_fmt_1__)

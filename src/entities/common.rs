@@ -148,6 +148,18 @@ pub fn format_length(value: f64) -> String {
     }
 }
 
+/// Format an area with the drawing's linear precision. Area stays a decimal
+/// scalar even when linear distances use architectural or fractional notation.
+pub fn format_area(value: f64) -> String {
+    let ctx = unit_context();
+    let precision = ctx.luprec.max(0).min(15) as usize;
+    if ctx.lunits == 1 {
+        format!("{:.*e}", precision, value)
+    } else {
+        format!("{:.*}", precision, value)
+    }
+}
+
 /// Format an angle (input in radians) using AUNITS / AUPREC.
 pub fn format_angle(value_rad: f64) -> String {
     let ctx = unit_context();
@@ -418,6 +430,11 @@ pub fn parse_direction(text: &str) -> Option<f64> {
     let typed = parse_angle(text)?;
     let relative = if ctx.angdir_cw { -typed } else { typed };
     Some(relative + ctx.angbase)
+}
+
+/// Read a direction typed at a command prompt, accepting a decimal comma.
+pub fn parse_typed_direction(text: &str) -> Option<f64> {
+    parse_direction(&text.replace(',', "."))
 }
 
 /// Two interior triangles covering a quad (flat list, 6 vertices) — the

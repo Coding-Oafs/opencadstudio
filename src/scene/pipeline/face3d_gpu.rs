@@ -22,6 +22,48 @@ use crate::scene::model::wire_model::WireModel;
 use iced::wgpu;
 use iced::wgpu::util::DeviceExt;
 
+pub(crate) fn planar_solid_faces_view(wire: &WireModel, view_dir: glam::Vec3) -> bool {
+    if !wire.fill_is_2d_solid || wire.fill_is_3d {
+        return true;
+    }
+    let view = view_dir.as_dvec3().normalize_or_zero();
+    let point = |index: usize| {
+        let high = wire.fill_tris[index];
+        let low = wire
+            .fill_tris_low
+            .get(index)
+            .copied()
+            .unwrap_or([0.0; 3]);
+        glam::DVec3::new(
+            high[0] as f64 + low[0] as f64,
+            high[1] as f64 + low[1] as f64,
+            high[2] as f64 + low[2] as f64,
+        )
+    };
+    (0..wire.fill_tris.len() / 3).any(|triangle| {
+        let first = point(triangle * 3);
+        let second = point(triangle * 3 + 1);
+        let third = point(triangle * 3 + 2);
+        let normal = (second - first).cross(third - first).normalize_or_zero();
+        normal.length_squared() > 0.0 && normal.dot(view).abs() >= 1.0 - 1.0e-5
+    })
+}
+
+pub(crate) fn planar_solid_visibility_key(
+    wires: &[WireModel],
+    view_dir: glam::Vec3,
+) -> u64 {
+    let mut key = 0xcbf29ce484222325_u64;
+    for wire in wires
+        .iter()
+        .filter(|wire| wire.fill_is_2d_solid && !wire.fill_is_3d)
+    {
+        key ^= planar_solid_faces_view(wire, view_dir) as u64;
+        key = key.wrapping_mul(0x100000001b3);
+    }
+    key
+}
+
 // ── Vertex layout ──────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -74,8 +116,8 @@ impl Face3DVertex {
 // ── GPU handle ─────────────────────────────────────────────────────────────
 
 /// One vertex buffer + draw count. Fill data is split into as many chunks
-/// as the device's `max_buffer_size` requires: a mesh-heavy DWG (e.g. a
-/// Navisworks import) can hold tens of millions of fill triangles, and at
+/// as the device's `max_buffer_size` requires: a mesh-heavy drawing can hold
+/// tens of millions of fill triangles, and at
 /// 44 B/vertex a single batched buffer blows past the default 256 MB limit
 /// once enough layers are thawed — wgpu then raises an uncaptured
 /// validation error and aborts the process (#358). Same scheme as the
@@ -149,6 +191,7 @@ impl Face3DGpu {
         all_wires: &[WireModel],
         keep_3d_mesh_fills: bool,
         show_2d_solid_fills: bool,
+        view_dir: glam::Vec3,
         depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
     ) -> Self {
         let depth_of =
@@ -198,6 +241,9 @@ impl Face3DGpu {
                 continue;
             }
             if !show_2d_solid_fills && wire.fill_is_2d_solid {
+                continue;
+            }
+            if !planar_solid_faces_view(wire, view_dir) {
                 continue;
             }
             // A real 3-D surface fill (PolyfaceMesh / PolygonMesh) carries a
@@ -259,6 +305,7 @@ impl Face3DGpu {
             all_wires,
             keep_3d_mesh_fills,
             show_2d_solid_fills,
+            view_dir,
             depth_map,
         );
         Self {
@@ -275,6 +322,7 @@ fn upload_block_chunks(
     wires: &[WireModel],
     keep_3d_mesh_fills: bool,
     show_2d_solid_fills: bool,
+    view_dir: glam::Vec3,
     depth_map: &rustc_hash::FxHashMap<u64, [f32; 2]>,
 ) -> (Vec<BlockFace3DChunk>, Vec<BlockFace3DChunk>) {
     let mut slots = rustc_hash::FxHashMap::default();
@@ -285,6 +333,7 @@ fn upload_block_chunks(
         };
         if wire.fill_tris.is_empty()
             || (!show_2d_solid_fills && wire.fill_is_2d_solid)
+            || !planar_solid_faces_view(wire, view_dir)
             || (wire.fill_is_3d && !keep_3d_mesh_fills)
         {
             continue;

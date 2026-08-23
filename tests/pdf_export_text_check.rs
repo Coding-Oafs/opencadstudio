@@ -11,7 +11,7 @@
 use acadrust::entities::{Dimension, DimensionLinear, Text};
 use acadrust::types::Vector3;
 use acadrust::EntityType;
-use OpenCADStudio::io::pdf_export::{export_pdf, PdfPlotOptions};
+use OpenCADStudio::io::pdf_export::{export_pdf, PdfPlotOptions, PlotWire};
 use OpenCADStudio::scene::Scene;
 
 #[test]
@@ -56,8 +56,16 @@ fn text_and_dim_reach_pdf_export() {
     std::fs::create_dir_all(&dir).expect("temp dir");
 
     let p_text = dir.join("with_text.pdf");
+    let plot_wires: Vec<_> = wires
+        .iter()
+        .cloned()
+        .map(|wire| PlotWire {
+            wire,
+            draw_depth: 0.0,
+        })
+        .collect();
     export_pdf(
-        &wires,
+        &plot_wires,
         &[],
         &[],
         210.0,
@@ -80,7 +88,10 @@ fn text_and_dim_reach_pdf_export() {
         .cloned()
         .map(|mut w| {
             w.text_verts.clear();
-            w
+            PlotWire {
+                wire: w,
+                draw_depth: 0.0,
+            }
         })
         .collect();
     let p_bare = dir.join("no_text.pdf");

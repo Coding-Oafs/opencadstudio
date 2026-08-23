@@ -1,41 +1,33 @@
 // Auto-split from scene/mod.rs. Pure text-move; behaviour unchanged.
 use super::*;
 
-/// Convert a HATCH's own resolved pattern line (world-unit `offset` = step to
-/// the next parallel line, plus a base angle) into a render `PatFamily` whose
-/// geometry is already final — the HatchModel that carries it uses scale 1 and
-/// angle_offset 0 (see `prebaked` in `hatch_model_from_dxf`). The world-space
-/// offset is rotated into the line's local frame so `pattern_segments` and the
-/// GPU shader, which rotate `(dx, dy)` back out by the family angle, reproduce
-/// the exact stored step. `x0/y0` are filled in by the caller (from the stored
-/// `base_point`, relative to `world_origin`) once the boundary anchor is known;
-/// they set the pattern origin, observable for dashed / offset patterns.
-/// Order a hatch boundary path's sampled edges into one tip-to-tail loop.
-///
-/// Real files do not store boundary edges as a sequential walk: associative
-/// hatches list them in boundary-source-entity order, with arbitrary
-/// direction — the next edge in the list may attach to either end of the
-/// chain built so far, or belong to the far side of the loop entirely.
-/// Concatenating them verbatim draws a self-crossing "bowtie" outline and
-/// flips the even-odd fill over the wrong region.
-///
-/// Greedy nearest-endpoint assembly: keep the chain open at both ends and, at
-/// each step, attach the unused edge whose endpoint lies closest to either
-/// end (reversing / prepending as needed). Distance comparison, no tolerance:
-/// a correctly-ordered file matches at distance 0 and reproduces exactly.
-fn chain_path_edges(mut polys: Vec<Vec<[f64; 2]>>) -> Vec<[f64; 2]> {
+/// Order sampled boundary edges into one tip-to-tail loop.
+pub(super) fn chain_path_edges(polys: Vec<Vec<[f64; 2]>>) -> Vec<[f64; 2]> {
+    chain_path_edges_with_directions(polys).0
+}
+
+pub(super) fn chain_path_edges_with_directions(
+    polys: Vec<Vec<[f64; 2]>>,
+) -> (Vec<[f64; 2]>, Vec<f64>) {
     let d2 = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
-    polys.retain(|p| !p.is_empty());
+    let mut directions = vec![0.0; polys.len()];
+    let mut polys: Vec<_> = polys
+        .into_iter()
+        .enumerate()
+        .filter(|(_, points)| !points.is_empty())
+        .collect();
     if polys.is_empty() {
-        return Vec::new();
+        return (Vec::new(), directions);
     }
-    let mut chain: std::collections::VecDeque<[f64; 2]> = polys.swap_remove(0).into();
+    let (first_index, first) = polys.swap_remove(0);
+    directions[first_index] = 1.0;
+    let mut chain: std::collections::VecDeque<[f64; 2]> = first.into();
     while !polys.is_empty() {
         let head = *chain.front().unwrap();
         let tail = *chain.back().unwrap();
         // (distance, index, reverse-points, attach-at-front)
         let mut best = (f64::MAX, 0usize, false, false);
-        for (i, p) in polys.iter().enumerate() {
+        for (i, (_, p)) in polys.iter().enumerate() {
             let s = p[0];
             let e = *p.last().unwrap();
             for c in [
@@ -50,7 +42,8 @@ fn chain_path_edges(mut polys: Vec<Vec<[f64; 2]>>) -> Vec<[f64; 2]> {
             }
         }
         let (_, idx, rev, at_front) = best;
-        let mut p = polys.swap_remove(idx);
+        let (original_index, mut p) = polys.swap_remove(idx);
+        directions[original_index] = if rev { -1.0 } else { 1.0 };
         if rev {
             p.reverse();
         }
@@ -71,7 +64,7 @@ fn chain_path_edges(mut polys: Vec<Vec<[f64; 2]>>) -> Vec<[f64; 2]> {
             chain.extend(it);
         }
     }
-    chain.into()
+    (chain.into(), directions)
 }
 
 fn family_from_stored_line(
@@ -139,6 +132,15 @@ impl Scene {
         let mut layer = acadrust::tables::Layer::new(name);
         layer.handle = self.document.allocate_handle();
         let _ = self.document.layers.add(layer);
+    }
+
+    fn ensure_app_id(&mut self, name: &str) {
+        if name.trim().is_empty() || self.document.app_ids.contains(name) {
+            return;
+        }
+        let mut app_id = acadrust::tables::AppId::new(name);
+        app_id.handle = self.document.allocate_handle();
+        let _ = self.document.app_ids.add(app_id);
     }
 
     pub fn add_entity(&mut self, entity: EntityType) -> Handle {
@@ -263,6 +265,20 @@ impl Scene {
         let creates_layer =
             self.is_recording_undo() && !layer.trim().is_empty() && !self.document.layers.contains(&layer);
         self.ensure_layer(&layer);
+        let app_ids: Vec<String> = entity
+            .common()
+            .extended_data
+            .records()
+            .iter()
+            .map(|record| record.application_name.clone())
+            .collect();
+        let creates_app_id = self.is_recording_undo()
+            && app_ids.iter().any(|name| {
+                !name.trim().is_empty() && !self.document.app_ids.contains(name)
+            });
+        for name in &app_ids {
+            self.ensure_app_id(name);
+        }
 
         // Route to the correct block based on current editing mode:
         //   - BEDIT block editor: geometry belongs to the edited block record,
@@ -315,12 +331,10 @@ impl Scene {
             }
             // Delta-undo: the new handle's before-image is "nothing" (it did not
             // exist). Poison the recording if this add also mutated non-entity
-            // state (a new layer / block) so the app knows a pure-entity delta
-            // would be incomplete. Raster image definitions are captured as
-            // targeted object before-images above.
+            // state (a new layer, application ID, or block).
             if self.is_recording_undo() {
                 self.record_undo_before(handle, None);
-                if creates_layer || mutates_block_structure {
+                if creates_layer || creates_app_id || mutates_block_structure {
                     self.poison_undo_recording();
                 }
             }
@@ -1144,9 +1158,58 @@ impl Scene {
             viewport,
             None,
             false,
+            false,
         )
     }
 
+    fn layer_plottable_in_context(
+        &self,
+        entity: &EntityType,
+        context: &crate::scene::render_graph::RenderContext,
+    ) -> bool {
+        let common = entity.common();
+        let layer = if crate::scene::view::render::is_effective_layer_zero(&common.layer) {
+            context
+                .insert_path
+                .iter()
+                .rev()
+                .find(|insert| {
+                    !crate::scene::view::render::is_effective_layer_zero(&insert.common.layer)
+                })
+                .map(|insert| insert.common.layer.as_str())
+                .unwrap_or(common.layer.as_str())
+        } else {
+            common.layer.as_str()
+        };
+        self.document
+            .layers
+            .get(layer)
+            .map(|layer| layer.is_plottable)
+            .unwrap_or(true)
+    }
+
+    pub(super) fn instanced_plot_hatch_models(
+        &self,
+        layout_block: Handle,
+        hatch_bg: [f32; 4],
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        annotation_scale_handle: Option<Handle>,
+        all_visible: bool,
+        viewport: Option<Handle>,
+    ) -> Vec<HatchModel> {
+        self.instanced_hatch_models_filtered(
+            layout_block,
+            hatch_bg,
+            false,
+            frozen,
+            annotation_scale_handle,
+            all_visible,
+            viewport,
+            None,
+            false,
+            true,
+        )
+    }
     /// Build live hatch overlays for INSERT grip previews. The edited INSERT
     /// is intentionally hidden from the resident scene while its current
     /// document entity moves, so include that hidden target and reuse the full
@@ -1183,6 +1246,7 @@ impl Scene {
             self.active_viewport,
             Some(&targets),
             true,
+            false,
         )
     }
 
@@ -1197,6 +1261,7 @@ impl Scene {
         viewport: Option<Handle>,
         targets: Option<&rustc_hash::FxHashSet<Handle>>,
         include_preview_hidden: bool,
+        plot_only: bool,
     ) -> Vec<HatchModel> {
         let depth_map = self.draw_depth_map();
         let graph = crate::scene::render_graph::RenderSceneGraph::new(
@@ -1213,10 +1278,15 @@ impl Scene {
         graph.walk_root(
             self.render_scene_root(layout_block),
             |entity, context| {
+                let common = entity.common();
+
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return false;
+                }
+
                 if context.is_instanced() {
                     return true;
                 }
-                let common = entity.common();
                 if self.object_isolation.hides(common.handle)
                     || (!include_preview_hidden
                         && self.preview_hidden.contains(&common.handle))
@@ -1254,6 +1324,9 @@ impl Scene {
                 let EntityType::Hatch(source_hatch) = entity else {
                     return;
                 };
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return;
+                }
                 let style = context.style_for(&self.document, entity);
                 let preserve_white_mask = source_hatch.is_solid
                     && matches!(
@@ -1352,6 +1425,7 @@ impl Scene {
             all_visible,
             bg_color,
             false,
+            false,
         )
     }
 
@@ -1363,6 +1437,7 @@ impl Scene {
         all_visible: bool,
         bg_color: [f32; 4],
         tint_insert_selection: bool,
+        plot_only: bool,
     ) -> Vec<HatchModel> {
         let depth_map = self.draw_depth_map();
         let graph = crate::scene::render_graph::RenderSceneGraph::new(
@@ -1377,8 +1452,11 @@ impl Scene {
         graph.walk_root(
             self.render_scene_root(target_block),
             |entity, context| {
-                context.is_instanced()
-                    || !self.entity_temporarily_hidden(entity.common().handle)
+                let common = entity.common();
+                if plot_only && !self.layer_plottable_in_context(entity, context) {
+                    return false;
+                }
+                context.is_instanced() || !self.entity_temporarily_hidden(common.handle)
             },
             |entity, context| {
                 let EntityType::Wipeout(source) = entity else {
@@ -1469,6 +1547,8 @@ impl Scene {
                     fill_plane_boundary,
                     boundary_exterior: None,
                     boundary_sources: None,
+                    boundary_paths: None,
+                    style: acadrust::entities::HatchStyleType::Normal,
                     pattern: model::hatch_model::HatchPattern::Solid,
                     name: "WIPEOUT_FILL".into(),
                     color,
@@ -1620,6 +1700,7 @@ impl Scene {
         }
 
         let mut rings = Vec::new();
+        let mut local_rings = Vec::new();
         let mut ring_sources = Vec::new();
 
         for path in &dxf.paths {
@@ -1634,26 +1715,27 @@ impl Scene {
             for edge in &path.edges {
                 if let Some(curve) = crate::entities::hatch::edge_curve(edge) {
                     edge_polys.push(
-                        curve
-                            .tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE)
-                            .into_iter()
-                            .map(|point| to_xy(point[0], point[1]))
-                            .collect(),
+                        curve.tessellate_angle(cadkernel::tessellation::DEFAULT_ANGLE),
                     );
                 }
             }
-            let mut ring = chain_path_edges(edge_polys);
-            if ring.is_empty() {
+            let mut local_ring = chain_path_edges(edge_polys);
+            if local_ring.is_empty() {
                 continue;
             }
-            if ring.len() >= 3 {
-                let first = ring[0];
-                let last = *ring.last().unwrap();
+            if local_ring.len() >= 3 {
+                let first = local_ring[0];
+                let last = *local_ring.last().unwrap();
                 if (first[0] - last[0]).abs() > 1e-5 || (first[1] - last[1]).abs() > 1e-5 {
-                    ring.push(first);
+                    local_ring.push(first);
                 }
             }
+            let ring = local_ring
+                .iter()
+                .map(|point| to_xy(point[0], point[1]))
+                .collect();
             rings.push(ring);
+            local_rings.push(local_ring);
             ring_sources.push(path.boundary_handles.clone());
         }
 
@@ -1663,9 +1745,15 @@ impl Scene {
 
         let depths = cadkernel::geom2d::ring_nesting_depths(&rings);
         let mut boundary = Vec::new();
+        let mut local_boundary = Vec::new();
         let mut boundary_exterior = Vec::new();
         let mut boundary_sources = Vec::new();
-        for ((ring, sources), depth) in rings.into_iter().zip(ring_sources).zip(depths) {
+        for (((ring, local_ring), sources), depth) in rings
+            .into_iter()
+            .zip(local_rings)
+            .zip(ring_sources)
+            .zip(depths)
+        {
             let keep = match dxf.style {
                 acadrust::entities::HatchStyleType::Normal => true,
                 acadrust::entities::HatchStyleType::Outer => depth <= 1,
@@ -1676,8 +1764,14 @@ impl Scene {
             }
             if !boundary.is_empty() {
                 boundary.push([f64::NAN, f64::NAN]);
+                local_boundary.push([f32::NAN, f32::NAN]);
             }
             boundary.extend(ring);
+            local_boundary.extend(
+                local_ring
+                    .into_iter()
+                    .map(|[x, y]| [x as f32, y as f32]),
+            );
             boundary_exterior.push(depth == 0);
             boundary_sources.push(sources);
         }
@@ -1877,14 +1971,21 @@ impl Scene {
             })
             .collect();
 
+        let storage = crate::entities::curve::ocs_plane(dxf.normal, dxf.elevation);
         Some(HatchModel {
             render_instance: None,
             boundary: std::sync::Arc::new(boundary_f32),
             boundary_wcs: None,
-            fill_plane: None,
-            fill_plane_boundary: None,
+            fill_plane: Some(model::hatch_model::FillPlane {
+                origin: storage.origin,
+                x_axis: storage.x_axis,
+                y_axis: storage.y_axis,
+            }),
+            fill_plane_boundary: Some(std::sync::Arc::new(local_boundary)),
             boundary_exterior: Some(std::sync::Arc::new(boundary_exterior)),
             boundary_sources: Some(std::sync::Arc::new(boundary_sources)),
+            boundary_paths: Some(std::sync::Arc::new(dxf.paths.clone())),
+            style: dxf.style,
             pattern,
             name,
             // A gradient starts from its first stop; other fills use the
@@ -2158,8 +2259,8 @@ impl Scene {
     }
 
     /// Build a solid-fill HatchModel for a DXF Solid entity.
-    /// Conventional DXF SOLID corners use Z-order; legacy entities may already
-    /// be in perimeter order. Use the same non-crossing resolver as wire fill.
+    /// SOLID corners use Z-order. Preserve it in the projected hatch as well so
+    /// intentionally crossing geometry is not silently rewritten.
     pub(super) fn solid_hatch_model(solid: &DxfSolid, color: [f32; 4]) -> HatchModel {
         // Keep the corners in f64 until the AABB centre is known, then store
         // each as a small f32 offset from it — same precision-preserving anchor
@@ -2167,7 +2268,7 @@ impl Scene {
         // to f32 costs ~0.06 units of resolution at UTM magnitudes (~1e6), so
         // the quad snapped to a grid and the fill drifted off its outline.
         let wcs = crate::entities::solid::wcs_corners(solid);
-        let order = crate::entities::solid::perimeter_indices(&wcs);
+        let order = [0, 1, 3, 2];
         let corners: [[f64; 2]; 4] = order.map(|index| [wcs[index][0], wcs[index][1]]);
         let mut min = [f64::INFINITY; 2];
         let mut max = [f64::NEG_INFINITY; 2];
@@ -2203,6 +2304,8 @@ impl Scene {
             fill_plane_boundary: None,
             boundary_exterior: None,
             boundary_sources: None,
+            boundary_paths: None,
+            style: acadrust::entities::HatchStyleType::Normal,
             pattern: model::hatch_model::HatchPattern::Solid,
             name: "SOLID".into(),
             color,
@@ -2222,14 +2325,24 @@ impl Scene {
         entity_style: Option<(acadrust::types::Color, acadrust::types::Transparency)>,
     ) -> Handle {
         let mut dxf = DxfHatch::new();
+        dxf.style = model.style;
+        if let Some(plane) = model.fill_plane {
+            let x = glam::DVec3::from_array(plane.x_axis);
+            let y = glam::DVec3::from_array(plane.y_axis);
+            let normal = x.cross(y).normalize_or(glam::DVec3::Z);
+            dxf.normal = acadrust::types::Vector3::new(normal.x, normal.y, normal.z);
+            dxf.elevation = glam::DVec3::from_array(plane.origin).dot(normal);
+        }
         dxf.is_solid = matches!(
             model.pattern,
             crate::scene::model::hatch_model::HatchPattern::Solid
         );
-        // Prefer exact command geometry; otherwise reconstruct every ring from
-        // the render offsets without dropping its separators.
-        // Build one DXF path per NaN-separated ring and retain each outer/hole role.
-        let reconstructed_wcs: Vec<[f64; 2]> = if model.boundary_wcs.is_none() {
+        // Persist analytic command geometry when available.
+        if let Some(paths) = model.boundary_paths.as_deref() {
+            dxf.paths = paths.clone();
+        } else {
+            // Otherwise reconstruct every ring from render offsets.
+            let reconstructed_wcs: Vec<[f64; 2]> = if model.boundary_wcs.is_none() {
             let [wx, wy] = model.world_origin;
             model
                 .boundary
@@ -2242,18 +2355,18 @@ impl Scene {
                     }
                 })
                 .collect()
-        } else {
-            Vec::new()
-        };
-        let wcs = model
-            .boundary_wcs
-            .as_deref()
-            .map(|points| points.as_slice())
-            .unwrap_or(reconstructed_wcs.as_slice());
-        let mut ring: Vec<Vector2> = Vec::new();
-        let mut first = true;
-        let mut ring_index = 0usize;
-        let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool, index: usize| {
+            } else {
+                Vec::new()
+            };
+            let wcs = model
+                .boundary_wcs
+                .as_deref()
+                .map(|points| points.as_slice())
+                .unwrap_or(reconstructed_wcs.as_slice());
+            let mut ring: Vec<Vector2> = Vec::new();
+            let mut first = true;
+            let mut ring_index = 0usize;
+            let mut push_ring = |r: &mut Vec<Vector2>, is_outer: bool, index: usize| {
             if !r.is_empty() {
                 let edge = PolylineEdge::new(std::mem::take(r), true);
                 let handles: Vec<_> = model
@@ -2279,31 +2392,32 @@ impl Scene {
                 }
                 dxf.paths.push(path);
             }
-        };
-        for &[x, y] in wcs {
-            if x.is_finite() && y.is_finite() {
-                ring.push(Vector2::new(x, y));
-            } else {
-                let is_outer = model
-                    .boundary_exterior
-                    .as_deref()
-                    .and_then(|roles| roles.get(ring_index))
-                    .copied()
-                    .unwrap_or(first);
-                first = false;
-                if !ring.is_empty() {
-                    push_ring(&mut ring, is_outer, ring_index);
-                    ring_index += 1;
+            };
+            for &[x, y] in wcs {
+                if x.is_finite() && y.is_finite() {
+                    ring.push(Vector2::new(x, y));
+                } else {
+                    let is_outer = model
+                        .boundary_exterior
+                        .as_deref()
+                        .and_then(|roles| roles.get(ring_index))
+                        .copied()
+                        .unwrap_or(first);
+                    first = false;
+                    if !ring.is_empty() {
+                        push_ring(&mut ring, is_outer, ring_index);
+                        ring_index += 1;
+                    }
                 }
             }
+            let is_outer = model
+                .boundary_exterior
+                .as_deref()
+                .and_then(|roles| roles.get(ring_index))
+                .copied()
+                .unwrap_or(first);
+            push_ring(&mut ring, is_outer, ring_index);
         }
-        let is_outer = model
-            .boundary_exterior
-            .as_deref()
-            .and_then(|roles| roles.get(ring_index))
-            .copied()
-            .unwrap_or(first);
-        push_ring(&mut ring, is_outer, ring_index);
         dxf.is_associative = dxf
             .paths
             .iter()
@@ -2313,6 +2427,16 @@ impl Scene {
         } else {
             1.0
         };
+        let pattern_origin = model
+            .fill_plane_boundary
+            .as_deref()
+            .and_then(|points| {
+                points
+                    .iter()
+                    .find(|point| point[0].is_finite() && point[1].is_finite())
+            })
+            .map(|point| [point[0] as f64, point[1] as f64])
+            .unwrap_or(model.world_origin);
         if let crate::scene::model::hatch_model::HatchPattern::Pattern(families) = &model.pattern {
             let mut pattern = acadrust::entities::HatchPattern::new(&model.name);
             let rotation = model.angle_offset as f64;
@@ -2330,10 +2454,10 @@ impl Scene {
                 pattern.lines.push(acadrust::entities::HatchPatternLine {
                     angle,
                     base_point: Vector2::new(
-                        model.world_origin[0]
+                        pattern_origin[0]
                             + base_x * rotation_cos
                             - base_y * rotation_sin,
-                        model.world_origin[1]
+                        pattern_origin[1]
                             + base_x * rotation_sin
                             + base_y * rotation_cos,
                     ),
