@@ -184,9 +184,10 @@ jobs:
 
       # Publish one themed growth chart for stars and release downloads.
       - name: Generate project growth charts
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/generate-star-history.py --output-dir dist
+        run: >-
+          python3 scripts/generate-star-history.py
+          --repository HakanSeven12/OpenCADStudio
+          --output-dir dist
 
       # Browsers cannot reliably fetch YouTube playlist/oEmbed responses because
       # of CORS. Build a same-origin listing and thumbnail directory for the
