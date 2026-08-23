@@ -185,7 +185,7 @@ jobs:
       # Publish one themed growth chart for stars and release downloads.
       - name: Generate project growth charts
         env:
-          GITHUB_TOKEN: ${{ secrets.OCS_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/generate-star-history.py --output-dir dist
 
       # Browsers cannot reliably fetch YouTube playlist/oEmbed responses because
