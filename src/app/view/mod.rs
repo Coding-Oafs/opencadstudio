@@ -2993,6 +2993,7 @@ fn start_page_content<'a>(
 
     // Attach LiDAR — the production entry point. Creates a drawing first
     // (the welcome tab has no document), then opens the LAS/LAZ picker.
+    #[cfg(not(target_arch = "wasm32"))]
     let attach_lidar_btn = {
         button(text(crate::tr!("start", "attach-lidar")).size(14))
             .on_press(Message::StartAttachPointCloud)
@@ -3000,14 +3001,18 @@ fn start_page_content<'a>(
             .style(|theme: &Theme, status| start_action_shape(button::primary(theme, status)))
     };
 
-    let primary_row = WrapFlow::new(vec![
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    let mut primary_items = vec![
         outline_btn(crate::tr!("start", "new-drawing"), Message::TabNew).into(),
         outline_btn(crate::tr!("start", "open-file"), Message::OpenFile).into(),
-        attach_lidar_btn.into(),
-    ])
-    .spacing_x(12.0)
-    .row_h(48.0)
-    .report_natural_width(action_width_out.clone());
+    ];
+    #[cfg(not(target_arch = "wasm32"))]
+    primary_items.push(attach_lidar_btn.into());
+
+    let primary_row = WrapFlow::new(primary_items)
+        .spacing_x(12.0)
+        .row_h(48.0)
+        .report_natural_width(action_width_out.clone());
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut secondary_items: Vec<Element<'a, Message>> = vec![

@@ -23,6 +23,7 @@ pub mod plugin_host;
 mod point_cloud;
 mod properties;
 mod recent;
+#[cfg(not(target_arch = "wasm32"))]
 mod scripting;
 pub(crate) mod settings;
 mod shortcuts;
@@ -3080,6 +3081,7 @@ pub enum Message {
         std::path::PathBuf,
         Result<ocs_pointcloud::PointSample, String>,
     ),
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudResampled(u64, String, Result<ocs_pointcloud::PointSample, String>),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudIndexed(

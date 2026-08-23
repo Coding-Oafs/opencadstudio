@@ -63,6 +63,7 @@ pub enum CoordinateUnit {
 }
 
 impl CoordinateUnit {
+    #[cfg(not(target_arch = "wasm32"))]
     fn from_proj_unit(value: &str) -> Option<Self> {
         match value {
             "m" => Some(Self::Meters),
@@ -107,21 +108,33 @@ pub struct DrawingCrs {
 
 impl DrawingCrs {
     pub fn label(&self) -> String {
-        format!(
-            "{} ({})",
-            self.as_crs_info().horizontal_label(),
-            self.coordinate_unit.label()
-        )
+        format!("{} ({})", self.short_label(), self.coordinate_unit.label())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn short_label(&self) -> String {
         self.as_crs_info().horizontal_label()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub fn short_label(&self) -> String {
+        if let Some(epsg) = self.epsg {
+            format!("EPSG:{epsg}")
+        } else if let Some(name) = self.name.as_deref().filter(|name| !name.trim().is_empty()) {
+            name.to_string()
+        } else if self.proj4.is_some() || self.wkt.is_some() {
+            "custom projected CRS".to_string()
+        } else {
+            "drawing CRS".to_string()
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn working_unit(&self) -> WorkingUnit {
         self.coordinate_unit.required_working_unit()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn as_crs_info(&self) -> ocs_pointcloud::CrsInfo {
         ocs_pointcloud::CrsInfo {
             horizontal_epsg: self.epsg,
@@ -244,6 +257,7 @@ impl OpenCADStudio {
             argument.to_ascii_uppercase().as_str(),
             "NONE" | "UNSET" | "CLEAR"
         ) {
+            #[cfg(not(target_arch = "wasm32"))]
             if !self.tabs[i].point_cloud.is_empty() {
                 self.command_line.push_error(
                     "CRS: detach the point-cloud dataset before clearing its drawing coordinate space.",

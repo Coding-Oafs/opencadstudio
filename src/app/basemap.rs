@@ -502,7 +502,10 @@ impl OpenCADStudio {
                 [max.x as f64, max.y as f64, max.z as f64],
             )
         });
+        #[cfg(not(target_arch = "wasm32"))]
         let cloud_bounds = self.tabs[i].point_cloud.bounds();
+        #[cfg(target_arch = "wasm32")]
+        let cloud_bounds = None;
         // Camera-follow mode plans tiles over the visible viewport (not the
         // whole drawing) and derives the zoom from screen pixels.
         // Camera bounds are meaningful only after the project has a spatial
@@ -664,6 +667,7 @@ impl OpenCADStudio {
         );
         #[cfg(not(target_arch = "wasm32"))]
         let cache_root = crate::config::config_dir().map(|path| path.join("basemap_cache"));
+        #[cfg(not(target_arch = "wasm32"))]
         let cache_namespace = provider.cache_namespace(&custom);
         background_task(
             move || {

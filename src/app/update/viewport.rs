@@ -1066,6 +1066,7 @@ impl OpenCADStudio {
         // left button is held, stamp a stroke at every moved cursor position.
         // The existing command is the repeating-click brush; holding the button
         // turns it into a continuous paint stroke.
+        #[cfg(not(target_arch = "wasm32"))]
         if sel.left_down
             && self.tabs[i].active_cmd.as_ref().is_some_and(|c| {
                 matches!(

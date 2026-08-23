@@ -86,6 +86,11 @@ fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn native_paths_match(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left == right
+}
+
 type LayoutPlotParams = (
     std::sync::Arc<Vec<crate::io::pdf_export::PlotWire>>,
     Vec<crate::scene::model::hatch_model::HatchModel>,
