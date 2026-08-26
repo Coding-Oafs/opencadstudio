@@ -23,6 +23,7 @@ mod surface;
 mod tile_cache;
 mod tools;
 mod urban;
+mod urban_arcgis;
 
 pub use classify::{
     classify_by_rules, classify_ground, detect_noise, ClassifyResult, ClassifyRule, GroundOptions,
@@ -86,10 +87,14 @@ pub use tools::{
 };
 pub use urban::{
     classify_urban_folder, classify_urban_tile, inspect_urban_label, parse_geojson_collection,
-    parse_geojson_geometry, ReferenceCollection, ReferenceFeature, ReferenceGeometry,
-    UrbanBatchManifest, UrbanBatchSummary, UrbanClassificationSettings, UrbanJobProgress,
-    UrbanLabelInfo, UrbanLayer, UrbanProfile, UrbanReferenceProvider, UrbanScope, UrbanStage,
-    UrbanTileStats, ASPRS_SEEDS, UPCP_LABELS,
+    parse_geojson_geometry, LocalVectorProvider, ReferenceCollection, ReferenceFeature,
+    ReferenceGeometry, UrbanBatchManifest, UrbanBatchSummary, UrbanClassificationSettings,
+    UrbanJobProgress, UrbanLabelInfo, UrbanLayer, UrbanProfile, UrbanReferenceProvider, UrbanScope,
+    UrbanStage, UrbanTileStats, ASPRS_SEEDS, UPCP_LABELS,
+};
+pub use urban_arcgis::{
+    boston_endpoint, ArcGisEndpoint, ArcGisTransport, BostonArcGisProvider, CustomArcGisConfig,
+    CustomArcGisProvider, RetryPolicy, UreqTransport, WidthFieldMap,
 };
 
 use las::{point::Classification, Header, Point, Reader, Writer};

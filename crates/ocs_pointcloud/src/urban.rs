@@ -823,13 +823,22 @@ pub enum UrbanLayer {
 }
 
 impl UrbanLayer {
-    fn file_suffix(self) -> &'static str {
+    pub(crate) fn file_suffix(self) -> &'static str {
         match self {
             Self::Buildings => "buildings",
             Self::Roads => "roads",
             Self::Trees => "trees",
         }
     }
+}
+
+/// Cache file naming shared by every provider: `<tile>.<layer>.geojson`.
+pub(crate) fn layer_cache_path(
+    references_dir: &Path,
+    tile_stem: &str,
+    layer: UrbanLayer,
+) -> PathBuf {
+    references_dir.join(format!("{tile_stem}.{}.geojson", layer.file_suffix()))
 }
 
 /// Source of versioned reference layers. Implementations must cache the exact
@@ -869,9 +878,7 @@ impl UrbanReferenceProvider for LocalVectorProvider {
         _references_dir: &Path,
         _use_cache: bool,
     ) -> Result<ReferenceCollection, Error> {
-        let path = self
-            .directory
-            .join(format!("{tile_stem}.{}.geojson", layer.file_suffix()));
+        let path = layer_cache_path(&self.directory, tile_stem, layer);
         if !path.is_file() {
             return Ok(ReferenceCollection::default());
         }
@@ -1365,7 +1372,7 @@ pub fn inspect_urban_label(path: &Path) -> Result<Option<UrbanLabelInfo>, Error>
 // Time helper
 // ---------------------------------------------------------------------------
 
-fn unix_ms_now() -> u128 {
+pub(crate) fn unix_ms_now() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
@@ -1373,7 +1380,7 @@ fn unix_ms_now() -> u128 {
 }
 
 /// Format a Unix timestamp (milliseconds) as `YYYY-MM-DDTHH:MM:SSZ`.
-fn iso_utc(unix_ms: u128) -> String {
+pub(crate) fn iso_utc(unix_ms: u128) -> String {
     let seconds = (unix_ms / 1000) as i64;
     let days = seconds.div_euclid(86_400);
     let time_of_day = seconds.rem_euclid(86_400);
