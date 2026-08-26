@@ -4089,6 +4089,7 @@ dependencies = [
  "delaunator",
  "e57",
  "las",
+ "laz",
  "proj4rs",
  "rusqlite",
  "serde",

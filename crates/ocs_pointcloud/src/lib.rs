@@ -22,6 +22,7 @@ mod sidecar;
 mod surface;
 mod tile_cache;
 mod tools;
+mod urban;
 
 pub use classify::{
     classify_by_rules, classify_ground, detect_noise, ClassifyResult, ClassifyRule, GroundOptions,
@@ -83,6 +84,13 @@ pub use tools::{
     production_lidar_tools, DensityRequirement, InvocationSource, ToolDescriptor, ToolInvocation,
     ToolRegistry, ToolRequirements, UndoBehavior,
 };
+pub use urban::{
+    classify_urban_folder, classify_urban_tile, inspect_urban_label, parse_geojson_collection,
+    parse_geojson_geometry, ReferenceCollection, ReferenceFeature, ReferenceGeometry,
+    UrbanBatchManifest, UrbanBatchSummary, UrbanClassificationSettings, UrbanJobProgress,
+    UrbanLabelInfo, UrbanLayer, UrbanProfile, UrbanReferenceProvider, UrbanScope, UrbanStage,
+    UrbanTileStats, ASPRS_SEEDS, UPCP_LABELS,
+};
 
 use las::{point::Classification, Header, Point, Reader, Writer};
 use serde::{Deserialize, Serialize};
@@ -105,6 +113,7 @@ pub enum Error {
     Cancelled(&'static str),
     Crs(String),
     E57(String),
+    Urban(String),
     /// The sources of a merged export disagree on LAS version, point format,
     /// or declared horizontal CRS.
     MergeIncompatible(String),
@@ -136,6 +145,7 @@ impl fmt::Display for Error {
             Self::Cancelled(operation) => write!(f, "{operation} cancelled"),
             Self::Crs(message) => write!(f, "coordinate-reference-system error: {message}"),
             Self::E57(message) => write!(f, "E57 import error: {message}"),
+            Self::Urban(message) => write!(f, "urban classification error: {message}"),
             Self::MergeIncompatible(message) => {
                 write!(f, "cannot merge these sources: {message}")
             }

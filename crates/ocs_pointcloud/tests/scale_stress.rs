@@ -89,13 +89,8 @@ fn multi_million_point_pipeline_is_bounded() {
     );
 
     let start = Instant::now();
-    let manifest = build_tiled_cache(
-        &source,
-        &cache,
-        TileCacheOptions::default(),
-        |_| true,
-    )
-    .expect("build tiled cache");
+    let manifest = build_tiled_cache(&source, &cache, TileCacheOptions::default(), |_| true)
+        .expect("build tiled cache");
     eprintln!(
         "built {} tiles through level {} in {:?}",
         manifest.tiles.len(),
@@ -112,7 +107,10 @@ fn multi_million_point_pipeline_is_bounded() {
     let start = Instant::now();
     let loaded = read_tiles_parallel(&cache, &leaves, MAX_TILE_READ_WORKERS).expect("read leaves");
     let total: usize = loaded.iter().map(|(_, points)| points.len()).sum();
-    assert_eq!(POINT_COUNT as usize, total, "leaf level must hold every source point");
+    assert_eq!(
+        POINT_COUNT as usize, total,
+        "leaf level must hold every source point"
+    );
     eprintln!(
         "parallel-read {} leaf points across {} tiles in {:?}",
         total,
@@ -121,13 +119,12 @@ fn multi_million_point_pipeline_is_bounded() {
     );
 
     // A bounded re-read of a small view never exceeds the target leaf budget.
-    let view = manifest.select_tiles(
-        metadata.bounds_min,
-        metadata.bounds_max,
-        100_000,
-    );
+    let view = manifest.select_tiles(metadata.bounds_min, metadata.bounds_max, 100_000);
     let view_points: u64 = view.iter().map(|tile| tile.point_count).sum();
-    assert!(view_points <= 100_000, "view selection must respect the budget");
+    assert!(
+        view_points <= 100_000,
+        "view selection must respect the budget"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }

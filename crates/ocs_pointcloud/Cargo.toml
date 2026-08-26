@@ -7,6 +7,8 @@ description = "Bounded LAS/LAZ I/O and classification editing for Open CAD Studi
 
 [dependencies]
 las = { version = "0.11.0", features = ["laz-parallel"] }
+# Raw record streaming for the urban classifier's extra-byte-preserving write.
+laz = "0.12"
 proj4rs = { version = "0.1.10", features = ["crs-definitions"] }
 crs-definitions = "0.4.0"
 rusqlite = { version = "0.37", features = ["bundled"] }
