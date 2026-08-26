@@ -25,7 +25,6 @@ impl OpenCADStudio {
     /// `SCRIPT <path>`: launches the script worker thread and starts the
     /// request pump.
     pub(super) fn start_script(&mut self, path: std::path::PathBuf) -> Task<Message> {
-
         if self.script_runner.is_some() {
             self.command_line
                 .push_error("SCRIPT: a script is already running.");
@@ -34,8 +33,9 @@ impl OpenCADStudio {
         let source = match std::fs::read_to_string(&path) {
             Ok(source) => source,
             Err(error) => {
-                self.command_line
-                    .push_error(format!("SCRIPT: cannot read \"{}\": {error}", path.display()).as_str());
+                self.command_line.push_error(
+                    format!("SCRIPT: cannot read \"{}\": {error}", path.display()).as_str(),
+                );
                 return Task::none();
             }
         };
@@ -236,7 +236,9 @@ impl OcsScriptApi for OpenCADStudio {
                     ocs_pointcloud::PointPatch::classification(class),
                 );
                 drop(cloud);
-                self.tabs[tab].point_cloud.note_edit_sources(vec![source_id.to_string()]);
+                self.tabs[tab]
+                    .point_cloud
+                    .note_edit_sources(vec![source_id.to_string()]);
                 self.tabs[tab].point_cloud.mark_display_changed();
                 let model = self.tabs[tab].point_cloud.display_model();
                 self.tabs[tab].scene.set_point_cloud(model);

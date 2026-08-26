@@ -39,4 +39,6 @@ fn shader_sections_clip_from_style_uniform() {
     assert!(SHADER.contains("section_outside"));
     assert!(SHADER.contains("style.section_p0"));
     assert!(SHADER.contains("style.section_params"));
+    assert!(SHADER.contains("let half = 0.5 * style.section_params.x;"));
+    assert!(!SHADER.contains("style.section_params.x * u.world_per_pixel"));
 }

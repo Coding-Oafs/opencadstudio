@@ -47,20 +47,15 @@ impl Tin {
         if triangles.is_empty() {
             return None;
         }
-        let mut bounds = (
-            [f64::INFINITY; 2],
-            [f64::NEG_INFINITY; 2],
-        );
+        let mut bounds = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         for position in &selected {
             for axis in 0..2 {
                 bounds.0[axis] = bounds.0[axis].min(position[axis]);
                 bounds.1[axis] = bounds.1[axis].max(position[axis]);
             }
         }
-        let cell_size = ((bounds.1[0] - bounds.0[0])
-            .max(bounds.1[1] - bounds.0[1])
-            / 64.0)
-            .max(1.0);
+        let cell_size =
+            ((bounds.1[0] - bounds.0[0]).max(bounds.1[1] - bounds.0[1]) / 64.0).max(1.0);
         let mut tin = Self {
             points: selected,
             triangles,
@@ -70,9 +65,13 @@ impl Tin {
         let mut buckets = std::mem::take(&mut tin.buckets);
         for (triangle_index, triangle) in tin.triangles.iter().enumerate() {
             let centroid = [
-                (tin.points[triangle[0]][0] + tin.points[triangle[1]][0] + tin.points[triangle[2]][0])
+                (tin.points[triangle[0]][0]
+                    + tin.points[triangle[1]][0]
+                    + tin.points[triangle[2]][0])
                     / 3.0,
-                (tin.points[triangle[0]][1] + tin.points[triangle[1]][1] + tin.points[triangle[2]][1])
+                (tin.points[triangle[0]][1]
+                    + tin.points[triangle[1]][1]
+                    + tin.points[triangle[2]][1])
                     / 3.0,
             ];
             let cell = tin.cell_of(centroid);
@@ -209,11 +208,7 @@ fn contours_at(tin: &Tin, level: f64) -> Vec<Contour> {
                 continue; // edge parallel to the level
             }
             let t = dp / (dp - dq);
-            crossings.push([
-                p[0] + t * (q[0] - p[0]),
-                p[1] + t * (q[1] - p[1]),
-                level,
-            ]);
+            crossings.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]), level]);
         }
         if crossings.len() == 2 {
             let (first, second) = (crossings[0], crossings[1]);
@@ -226,12 +221,21 @@ fn contours_at(tin: &Tin, level: f64) -> Vec<Contour> {
 
     // Chain segments: each endpoint key maps to (segment, end) pairs.
     let quantize = |point: [f64; 3]| -> (i64, i64) {
-        ((point[0] * 1e6).round() as i64, (point[1] * 1e6).round() as i64)
+        (
+            (point[0] * 1e6).round() as i64,
+            (point[1] * 1e6).round() as i64,
+        )
     };
     let mut endpoints: HashMap<(i64, i64), Vec<(usize, usize)>> = HashMap::new();
     for (index, (start, end)) in segments.iter().enumerate() {
-        endpoints.entry(quantize(*start)).or_default().push((index, 0));
-        endpoints.entry(quantize(*end)).or_default().push((index, 1));
+        endpoints
+            .entry(quantize(*start))
+            .or_default()
+            .push((index, 0));
+        endpoints
+            .entry(quantize(*end))
+            .or_default()
+            .push((index, 1));
     }
     let mut used = vec![false; segments.len()];
     let mut contours = Vec::new();

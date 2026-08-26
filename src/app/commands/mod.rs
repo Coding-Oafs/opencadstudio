@@ -625,6 +625,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "PLOTSTYLEEDITOR",
         "PLOTSTYLEPANEL",
         "POINTCLOUDATTACH",
+        "E57IMPORT",
         "POINTCLOUDABOVELINE",
         "POINTCLOUDBELOWLINE",
         "POINTCLOUDBRUSHCLASSIFY",
@@ -637,11 +638,14 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDCONTOUR",
         "POINTCLOUDCRS",
         "POINTCLOUDDENSITY",
+        "POINTCLOUDDSM",
+        "POINTCLOUDE57IMPORT",
         "POINTCLOUDDETACH",
         "POINTCLOUDEXPORT",
         "POINTCLOUDEXPORTALL",
         "POINTCLOUDEXPORTCANCEL",
         "POINTCLOUDGROUND",
+        "POINTCLOUDHILLSHADE",
         "POINTCLOUDNOISE",
         "POINTCLOUDRULE",
         "POINTCLOUDEXPORTSTATUS",
@@ -665,13 +669,24 @@ inventory::submit!(crate::command::CommandRegistration {
         "POINTCLOUDSELECTPOINT",
         "POINTCLOUDSELECTSLICE",
         "POINTCLOUDSECTION",
+        "POINTCLOUDSECTIONACTIVATE",
         "POINTCLOUDSECTIONCLEAR",
+        "POINTCLOUDSECTIONDELETE",
+        "POINTCLOUDSECTIONDUPLICATE",
+        "POINTCLOUDSECTIONFLIP",
+        "POINTCLOUDSECTIONLOCK",
         "POINTCLOUDSECTIONMOVE",
+        "POINTCLOUDSECTIONS",
+        "POINTCLOUDSECTIONSAVE",
         "POINTCLOUDSECTIONVIEW",
         "POINTCLOUDSECTIONWIDTH",
         "POINTCLOUDSTATS",
+        "POINTCLOUDDTM",
         "POINTCLOUDUNDO",
         "POINTCLOUDURBANCLASSIFY",
+        "SPATIALPROJECTNEW",
+        "SPATIALPROJECTOPEN",
+        "SPATIALPROJECTSAVE",
         "PR",
         "PRINT",
         "PROPERTIES",
@@ -770,10 +785,7 @@ mod marquee_cancel_tests {
         sel.left_press_time = Some(Instant::now());
         sel.left_dragging = true;
         sel.poly_active = true;
-        sel.poly_points = vec![
-            iced::Point::new(10.0, 10.0),
-            iced::Point::new(20.0, 30.0),
-        ];
+        sel.poly_points = vec![iced::Point::new(10.0, 10.0), iced::Point::new(20.0, 30.0)];
         sel.poly_crossing = true;
     }
 

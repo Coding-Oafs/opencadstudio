@@ -5,18 +5,31 @@
 //! then stream the original file when it is time to export a revised LAS/LAZ.
 
 mod classify;
+mod copc;
 mod crs;
 mod display;
 mod dtm;
+mod e57_import;
 mod edit;
+mod jobs;
+mod measurement;
+mod processing;
+mod production_classify;
+mod project;
 mod ptc;
 mod selection;
 mod sidecar;
+mod surface;
 mod tile_cache;
+mod tools;
 
 pub use classify::{
     classify_by_rules, classify_ground, detect_noise, ClassifyResult, ClassifyRule, GroundOptions,
     RuleField, RuleOp,
+};
+pub use copc::{
+    inspect_copc, inspect_copc_http, query_copc, query_copc_http, CopcLod, CopcMetadata, CopcQuery,
+    HttpRangeReader,
 };
 pub use crs::{
     assess_survey_readiness, crs_equivalent, crs_horizontal_unit, epsg_area_of_use,
@@ -29,7 +42,26 @@ pub use display::{
     DisplaySettings,
 };
 pub use dtm::{generate_contours, Contour, Tin};
+pub use e57_import::{import_e57, E57ImportProgress, E57ImportStage, E57ImportStats};
 pub use edit::{EditStore, EditTransaction, PointPatch};
+pub use jobs::{JobCheckpoint, JobQueue, JobRecord, JobStatus, ProtectedOutput};
+pub use measurement::{
+    cloud_to_cloud, point_to_plane, point_to_point, point_to_surface, CloudDistanceStatistics,
+    PlaneMeasurement, SurfaceMeasurement, SurfaceSampler, VectorMeasurement,
+};
+pub use processing::{
+    select_full_density, visit_full_density, FullDensityProgress, ProcessingExtent,
+};
+pub use production_classify::{
+    classify_buildings, classify_roads, classify_vegetation, BuildingClassifier,
+    ClassificationPipeline, ClassifierStage, GroundStage, NoiseStage, PipelineResult,
+    RoadCenterline, RoadClassifier, StageStatistics, VegetationClassifier,
+};
+pub use project::{
+    ModelObjectId, NamedSection, NamedSelection, ProcessingHistoryEntry, ProjectError,
+    ProjectResult, ProjectSource, ProjectSpatialReference, SectionKind, SourceKind, SourceStatus,
+    SpatialProject, TransformationPolicy, PROJECT_SCHEMA_VERSION,
+};
 pub use ptc::{parse_ptc, write_ptc, PtcError};
 pub use selection::{
     select_brush, select_nearest, select_polygon, IndexRange, PointFilter, SelectionSet,
@@ -38,10 +70,18 @@ pub use sidecar::{
     sidecar_path_for_drawing, AttachmentState, AuditEntry, CollectionState, SidecarError,
     SidecarResult, SidecarStore, SourceFingerprint,
 };
+pub use surface::{
+    rasterize_full_density, validate_breaklines, Breakline, BreaklineIssue, BreaklineIssueKind,
+    GridStatistic, RasterSurface,
+};
 pub use tile_cache::{
     build_tiled_cache, estimate_cache_bytes, read_tile, read_tiles_parallel, IndexProgress,
     TileCacheError, TileCacheManifest, TileCacheOptions, TileCacheResult, TileEntry, TileKey,
     MAX_TILE_READ_WORKERS,
+};
+pub use tools::{
+    production_lidar_tools, DensityRequirement, InvocationSource, ToolDescriptor, ToolInvocation,
+    ToolRegistry, ToolRequirements, UndoBehavior,
 };
 
 use las::{point::Classification, Header, Point, Reader, Writer};
@@ -64,6 +104,7 @@ pub enum Error {
     SameInputAndOutput(PathBuf),
     Cancelled(&'static str),
     Crs(String),
+    E57(String),
     /// The sources of a merged export disagree on LAS version, point format,
     /// or declared horizontal CRS.
     MergeIncompatible(String),
@@ -94,6 +135,7 @@ impl fmt::Display for Error {
             ),
             Self::Cancelled(operation) => write!(f, "{operation} cancelled"),
             Self::Crs(message) => write!(f, "coordinate-reference-system error: {message}"),
+            Self::E57(message) => write!(f, "E57 import error: {message}"),
             Self::MergeIncompatible(message) => {
                 write!(f, "cannot merge these sources: {message}")
             }

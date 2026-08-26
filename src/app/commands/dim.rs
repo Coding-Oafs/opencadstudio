@@ -134,8 +134,9 @@ impl OpenCADStudio {
                     _ => None,
                 };
                 if text_align.is_none() && mtext_ap.is_none() {
-                    self.command_line
-                        .push_error(crate::t!("JUSTIFYTEXT: unknown justification option.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("JUSTIFYTEXT: unknown justification option.").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "JUSTIFYTEXT");
@@ -356,8 +357,7 @@ impl OpenCADStudio {
             "TEXTFIT" => {
                 use crate::command::SelectThenValueCommand;
                 let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
-                let c =
-                    SelectThenValueCommand::new("TEXTFIT", "TEXTFIT  target width:", has_sel);
+                let c = SelectThenValueCommand::new("TEXTFIT", "TEXTFIT  target width:", has_sel);
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -420,9 +420,9 @@ impl OpenCADStudio {
                     .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect();
                 self.tabs[i].scene.bump_entities(&changes);
-                self.command_line.push_output(crate::tf!(
-                    "TEXTFIT: fitted {n} text object(s) to width {target}."
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!("TEXTFIT: fitted {n} text object(s) to width {target}.").as_ref(),
+                );
             }
 
             // (text sequential numbering)
@@ -440,20 +440,11 @@ impl OpenCADStudio {
             cmd if cmd.starts_with("TCOUNT ") => {
                 let mut args = cmd.split_whitespace().skip(1);
 
-                let start: i64 = args
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(1);
+                let start: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
 
-                let increment: i64 = args
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(1);
+                let increment: i64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
 
-                let placement = args
-                    .next()
-                    .unwrap_or("O")
-                    .to_uppercase();
+                let placement = args.next().unwrap_or("O").to_uppercase();
 
                 let placement = match placement.as_str() {
                     "O" | "OVERWRITE" => "O",
@@ -493,10 +484,7 @@ impl OpenCADStudio {
                 texts.sort_by(|a, b| {
                     b.2.partial_cmp(&a.2)
                         .unwrap_or(std::cmp::Ordering::Equal)
-                        .then(
-                            a.1.partial_cmp(&b.1)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        )
+                        .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 });
 
                 self.push_undo_snapshot(i, "TCOUNT");
@@ -524,9 +512,7 @@ impl OpenCADStudio {
 
                 let changes: Vec<_> = texts
                     .iter()
-                    .map(|(handle, _, _)| {
-                        (*handle, crate::scene::ChangeKind::Modified)
-                    })
+                    .map(|(handle, _, _)| (*handle, crate::scene::ChangeKind::Modified))
                     .collect();
 
                 self.tabs[i].scene.bump_entities(&changes);
@@ -553,21 +539,22 @@ impl OpenCADStudio {
                     .header
                     .current_mleader_style_name
                     .clone();
-                let style = self.tabs[i]
-                    .scene
-                    .document
-                    .objects
-                    .iter()
-                    .find_map(|(handle, object)| match object {
-                        acadrust::objects::ObjectType::MultiLeaderStyle(style)
-                            if style.name.eq_ignore_ascii_case(&name) =>
-                        {
-                            let mut style = style.clone();
-                            style.handle = *handle;
-                            Some(style)
-                        }
-                        _ => None,
-                    });
+                let style =
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .objects
+                        .iter()
+                        .find_map(|(handle, object)| match object {
+                            acadrust::objects::ObjectType::MultiLeaderStyle(style)
+                                if style.name.eq_ignore_ascii_case(&name) =>
+                            {
+                                let mut style = style.clone();
+                                style.handle = *handle;
+                                Some(style)
+                            }
+                            _ => None,
+                        });
                 let multiplier = self.tabs[i].scene.creation_annotation_multiplier();
                 let new_cmd = style.map_or_else(MLeaderCommand::new, |style| {
                     MLeaderCommand::with_style(style, multiplier)
@@ -591,23 +578,26 @@ impl OpenCADStudio {
                     .header
                     .current_table_style_name
                     .clone();
-                let style = self.tabs[i]
-                    .scene
-                    .document
-                    .objects
-                    .iter()
-                    .find_map(|(handle, object)| match object {
-                        acadrust::objects::ObjectType::TableStyle(style)
-                            if style.name.eq_ignore_ascii_case(&name) =>
-                        {
-                            Some((*handle, style.clone()))
-                        }
-                        _ => None,
-                    });
+                let style =
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .objects
+                        .iter()
+                        .find_map(|(handle, object)| match object {
+                            acadrust::objects::ObjectType::TableStyle(style)
+                                if style.name.eq_ignore_ascii_case(&name) =>
+                            {
+                                Some((*handle, style.clone()))
+                            }
+                            _ => None,
+                        });
                 let multiplier = self.tabs[i].scene.creation_annotation_multiplier();
-                let cmd = style.as_ref().map_or_else(TableCommand::new, |(handle, style)| {
-                    TableCommand::with_style(*handle, style, multiplier)
-                });
+                let cmd = style
+                    .as_ref()
+                    .map_or_else(TableCommand::new, |(handle, style)| {
+                        TableCommand::with_style(*handle, style, multiplier)
+                    });
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
@@ -689,8 +679,9 @@ impl OpenCADStudio {
                     *point = plane.to_local(*point);
                 }
                 if pts.len() < 2 {
-                    self.command_line
-                        .push_error(crate::t!("QDIM: no dimensionable endpoints in the selection.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("QDIM: no dimensionable endpoints in the selection.").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 // Choose the dimension axis from the points' spread: a wider X
@@ -710,14 +701,13 @@ impl OpenCADStudio {
                     pts.dedup_by(|a, b| (a.y - b.y).abs() < 1e-4);
                 }
                 if pts.len() < 2 {
-                    self.command_line
-                        .push_error(crate::t!("QDIM: endpoints collapse to a single position.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("QDIM: endpoints collapse to a single position.").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "QDIM");
-                let v = |p: glam::DVec3| {
-                    acadrust::types::Vector3::new(p.x, p.y, p.z)
-                };
+                let v = |p: glam::DVec3| acadrust::types::Vector3::new(p.x, p.y, p.z);
                 let mut made = 0usize;
                 for w in pts.windows(2) {
                     let (p1, p2) = (w[0], w[1]);
@@ -736,9 +726,8 @@ impl OpenCADStudio {
                     dim.definition_point = v(def);
                     dim.base.definition_point = v(def);
                     dim.base.actual_measurement = dim.measurement();
-                    let entity = acadrust::EntityType::Dimension(
-                        acadrust::entities::Dimension::Linear(dim),
-                    );
+                    let entity =
+                        acadrust::EntityType::Dimension(acadrust::entities::Dimension::Linear(dim));
                     self.commit_entity(plane.place_entity(entity));
                     made += 1;
                 }
@@ -814,13 +803,15 @@ impl OpenCADStudio {
             "ZOOM EXTENTS ALL" | "ZOOM EXTENTS ALL VIEWPORTS" | "ZOOM EA" | "ZEA" => {
                 self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.fit_all_model_viewports();
-                self.command_line.push_output(crate::t!("Zoom Extents — All Viewports").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Zoom Extents — All Viewports").as_ref());
             }
 
             "ZOOM EXTENTS" | "ZOOM E" | "ZOOMEXTENTS" | "ZE" => {
                 self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.fit_all();
-                self.command_line.push_output(crate::t!("Zoom Extents").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Zoom Extents").as_ref());
             }
 
             "ZOOM IN" | "ZOOM I" | "ZI" => {
@@ -832,19 +823,22 @@ impl OpenCADStudio {
             "ZOOM OUT" | "ZO" => {
                 self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.zoom_camera(1.5);
-                self.command_line.push_output(crate::t!("Zoom Out").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Zoom Out").as_ref());
             }
 
             // ZOOM ALL — fit the configured drawing limits.
             "ZOOM ALL" | "ZOOM A" | "ZA" => {
                 self.tabs[i].scene.remember_current_view();
                 self.tabs[i].scene.fit_all_with_limits();
-                self.command_line.push_output(crate::t!("Zoom All").as_ref());
+                self.command_line
+                    .push_output(crate::t!("Zoom All").as_ref());
             }
 
             "ZOOM PREVIOUS" | "ZOOM P" | "ZP" => {
                 if self.tabs[i].scene.restore_previous_view() {
-                    self.command_line.push_output(crate::t!("Zoom Previous").as_ref());
+                    self.command_line
+                        .push_output(crate::t!("Zoom Previous").as_ref());
                 } else {
                     self.command_line
                         .push_error(crate::t!("ZOOM: no previous view.").as_ref());
@@ -866,7 +860,8 @@ impl OpenCADStudio {
                 } else {
                     self.tabs[i].scene.remember_current_view();
                     if self.tabs[i].scene.zoom_to_entities(&handles) {
-                        self.command_line.push_output(crate::t!("Zoom Object").as_ref());
+                        self.command_line
+                            .push_output(crate::t!("Zoom Object").as_ref());
                     } else {
                         self.command_line.push_error(
                             crate::t!("ZOOM: selected objects have no visible bounds.").as_ref(),
@@ -1149,8 +1144,9 @@ impl OpenCADStudio {
                         self.command_line
                             .push_output(crate::tf!("{exploded} object(s) exploded.").as_ref());
                     } else {
-                        self.command_line
-                            .push_info(crate::t!("EXPLODE: no explodable objects selected.").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("EXPLODE: no explodable objects selected.").as_ref(),
+                        );
                     }
                 }
             }
@@ -1214,7 +1210,12 @@ impl OpenCADStudio {
                     .iter()
                     .filter_map(|w| {
                         let h = Scene::handle_from_wire_name(&w.name)?;
-                        self.tabs[i].scene.document.get_entity(h).cloned().map(|e| (h, e))
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(h)
+                            .cloned()
+                            .map(|e| (h, e))
                     })
                     .collect();
                 let new_cmd = ExtrimCommand::new(all);
@@ -1262,12 +1263,14 @@ impl OpenCADStudio {
                             _ => None,
                         });
                 let Some((center, radius)) = found else {
-                    self.command_line
-                        .push_error(crate::t!("DIMJOGGED: select an arc or circle first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("DIMJOGGED: select an arc or circle first.").as_ref(),
+                    );
                     return None;
                 };
                 if radius <= 0.0 {
-                    self.command_line.push_error(crate::t!("DIMJOGGED: invalid radius.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("DIMJOGGED: invalid radius.").as_ref());
                     return None;
                 }
                 let k = std::f64::consts::FRAC_1_SQRT_2;
@@ -1283,8 +1286,9 @@ impl OpenCADStudio {
                     .scene
                     .add_entity(acadrust::EntityType::Dimension(Dimension::Radius(dim)));
                 self.tabs[i].dirty = true;
-                self.command_line
-                    .push_output(crate::t!("DIMJOGGED: created a jogged radius dimension.").as_ref());
+                self.command_line.push_output(
+                    crate::t!("DIMJOGGED: created a jogged radius dimension.").as_ref(),
+                );
             }
 
             // ARCTEXT <text> — lay the text out as one Text entity per character
@@ -1326,7 +1330,8 @@ impl OpenCADStudio {
                 };
                 let chars: Vec<char> = text.chars().filter(|c| !c.is_control()).collect();
                 if chars.is_empty() {
-                    self.command_line.push_error(crate::t!("ARCTEXT: no printable text.").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("ARCTEXT: no printable text.").as_ref());
                     return None;
                 }
                 let n = chars.len();
@@ -1349,8 +1354,9 @@ impl OpenCADStudio {
                     self.tabs[i].scene.add_entity(acadrust::EntityType::Text(t));
                 }
                 self.tabs[i].dirty = true;
-                self.command_line
-                    .push_output(crate::tf!("ARCTEXT: placed {n} character(s) along the arc.").as_ref());
+                self.command_line.push_output(
+                    crate::tf!("ARCTEXT: placed {n} character(s) along the arc.").as_ref(),
+                );
             }
 
             _ => return None,
@@ -1431,10 +1437,8 @@ fn qdim_collect_points(e: &acadrust::EntityType, out: &mut Vec<glam::DVec3>) {
     use acadrust::EntityType as ET;
     let p = |v: &acadrust::types::Vector3| glam::DVec3::new(v.x, v.y, v.z);
     let ocs = |point: (f64, f64, f64), normal: acadrust::types::Vector3| {
-        let world = crate::scene::view::transform::ocs_point_to_wcs(
-            point,
-            (normal.x, normal.y, normal.z),
-        );
+        let world =
+            crate::scene::view::transform::ocs_point_to_wcs(point, (normal.x, normal.y, normal.z));
         glam::DVec3::new(world.0, world.1, world.2)
     };
     match e {
@@ -1477,7 +1481,9 @@ fn qdim_collect_points(e: &acadrust::EntityType, out: &mut Vec<glam::DVec3>) {
 fn sentence_case(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str(),
+        Some(first) => {
+            first.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str()
+        }
         None => String::new(),
     }
 }
@@ -1487,7 +1493,9 @@ fn title_case(s: &str) -> String {
         .map(|w| {
             let mut c = w.chars();
             match c.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str(),
+                Some(f) => {
+                    f.to_uppercase().collect::<String>() + c.as_str().to_lowercase().as_str()
+                }
                 None => String::new(),
             }
         })

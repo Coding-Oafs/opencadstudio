@@ -174,7 +174,12 @@ impl MTextEditorState {
     }
 
     pub fn height_value(&self) -> f64 {
-        self.height.trim().parse::<f64>().ok().filter(|h| *h > 0.0).unwrap_or(0.25)
+        self.height
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|h| *h > 0.0)
+            .unwrap_or(0.25)
     }
 
     /// Pixels per drawing unit used by the editor preview. The dominant glyph
@@ -215,8 +220,8 @@ impl MTextEditorState {
     /// purely by acadrust's `to_mtext_string`.
     fn apply_globals(&self, doc: &mut MTextDocument) {
         let font = self.font.trim();
-        let color =
-            (self.color_aci != 256 && self.color_aci != 0).then(|| MTextColor::Index(self.color_aci));
+        let color = (self.color_aci != 256 && self.color_aci != 0)
+            .then(|| MTextColor::Index(self.color_aci));
         let oblique = parse_non_default(&self.oblique, 0.0);
         let width = parse_non_default(&self.width, 1.0);
         let tracking = parse_non_default(&self.char_space, 0.0);
@@ -395,7 +400,9 @@ fn cells_to_doc(para0: &ParagraphProperties, cells: &[Cell]) -> MTextDocument {
             }
             Cell::Char(ch, props) => match para.spans.last_mut() {
                 Some(s) if s.stacking.is_none() && &s.properties == props => s.text.push(*ch),
-                _ => para.spans.push(MTextSpan::new(ch.to_string(), props.clone())),
+                _ => para
+                    .spans
+                    .push(MTextSpan::new(ch.to_string(), props.clone())),
             },
             Cell::Stack { data, props, head } => {
                 if *head {
@@ -425,7 +432,11 @@ fn para_props_at(para0: &ParagraphProperties, cells: &[Cell], caret: usize) -> P
 
 /// Turn an inserted string (which may carry `\P` breaks) into cells, tagging
 /// every plain char with `span_props` and every break with `para_props`.
-fn str_to_cells(s: &str, span_props: &SpanProperties, para_props: &ParagraphProperties) -> Vec<Cell> {
+fn str_to_cells(
+    s: &str,
+    span_props: &SpanProperties,
+    para_props: &ParagraphProperties,
+) -> Vec<Cell> {
     let mut cells = Vec::new();
     for (i, seg) in s.split("\\P").enumerate() {
         if i > 0 {
@@ -532,7 +543,6 @@ fn cells_delete_range(cells: &mut Vec<Cell>, mut a: usize, mut b: usize) -> usiz
     a
 }
 
-
 // ── App-side editor driver ──────────────────────────────────────────────────
 
 use crate::scene::convert::tessellate;
@@ -610,7 +620,12 @@ impl super::OpenCADStudio {
             return;
         }
         let mut state = MTextEditorState::new(pos, initial, height, handle);
-        if let Some(p) = self.tabs[self.active_tab].scene.selection.borrow().last_move_pos {
+        if let Some(p) = self.tabs[self.active_tab]
+            .scene
+            .selection
+            .borrow()
+            .last_move_pos
+        {
             state.screen_anchor = p;
         }
         // Seed attachment / line-spacing / box width from the entity being edited.
@@ -660,9 +675,10 @@ impl super::OpenCADStudio {
         // wrap width is the drawing-unit span that exactly reaches the right
         // edge of the editor, placing both ruler and slider at their maximum.
         if handle.is_none() {
-            let initial_width = self.mtext_editor.as_ref().map(|ed| {
-                super::view::overlay::MTEXT_EDITOR_WRITING_WIDTH / ed.preview_scale()
-            });
+            let initial_width = self
+                .mtext_editor
+                .as_ref()
+                .map(|ed| super::view::overlay::MTEXT_EDITOR_WRITING_WIDTH / ed.preview_scale());
             if let (Some(ed), Some(width)) = (self.mtext_editor.as_mut(), initial_width) {
                 ed.rect_width = f64::from(width.max(1e-6));
             }
@@ -682,7 +698,9 @@ impl super::OpenCADStudio {
     /// never on the drawing canvas).
     pub(super) fn rebuild_mtext_preview(&mut self) {
         let i = self.active_tab;
-        let Some(ed) = self.mtext_editor.as_ref() else { return };
+        let Some(ed) = self.mtext_editor.as_ref() else {
+            return;
+        };
         let mut mt = ed.build_mtext();
         // A trailing empty paragraph (a fresh line after Enter) is dropped by the
         // layout's parser, so it emits no caret box there and the caret would be
@@ -780,8 +798,7 @@ impl super::OpenCADStudio {
                     if !ed.font.trim().is_empty() {
                         ed.font.clone()
                     } else {
-                        crate::entities::text_support::resolve_text_style(&ed.style, doc)
-                            .font_name
+                        crate::entities::text_support::resolve_text_style(&ed.style, doc).font_name
                     }
                 })
                 .unwrap_or_default()
@@ -818,8 +835,7 @@ impl super::OpenCADStudio {
                     // the one canonical form is the oblique — otherwise an
                     // imported italic run could never be switched off.
                     let on = !all_have(&cells[a..b], |p| {
-                        p.oblique_angle == Some(15.0)
-                            || p.font.as_ref().is_some_and(|f| f.italic)
+                        p.oblique_angle == Some(15.0) || p.font.as_ref().is_some_and(|f| f.italic)
                     });
                     each(&mut cells[a..b], |p| {
                         p.oblique_angle = on.then_some(15.0);
@@ -831,9 +847,7 @@ impl super::OpenCADStudio {
                 MTextFmt::Bold => {
                     // Real bold: set the font's bold flag (the SDF renderer bakes
                     // a wider pen), keeping the run's font name + italic.
-                    let on = !all_have(&cells[a..b], |p| {
-                        p.font.as_ref().is_some_and(|f| f.bold)
-                    });
+                    let on = !all_have(&cells[a..b], |p| p.font.as_ref().is_some_and(|f| f.bold));
                     each(&mut cells[a..b], |p| {
                         let (name, italic) = p
                             .font
@@ -897,8 +911,13 @@ impl super::OpenCADStudio {
                 ParaAlign::Justify => MTextParagraphAlignment::Justified,
             });
             // Paragraph index of a cell = number of breaks before it.
-            let para_of =
-                |idx: usize| cells.iter().take(idx).filter(|c| matches!(c, Cell::Break(..))).count();
+            let para_of = |idx: usize| {
+                cells
+                    .iter()
+                    .take(idx)
+                    .filter(|c| matches!(c, Cell::Break(..)))
+                    .count()
+            };
             let last_cell = if b > a { b - 1 } else { a };
             let first = para_of(a);
             let last = para_of(last_cell);
@@ -990,9 +1009,7 @@ impl super::OpenCADStudio {
             let count = cells.len();
             let caret = match ed.sel {
                 Some((a, b)) if a < b && b <= count => cells_delete_range(&mut cells, a, b),
-                _ if ed.caret < count => {
-                    cells_delete_range(&mut cells, ed.caret, ed.caret + 1)
-                }
+                _ if ed.caret < count => cells_delete_range(&mut cells, ed.caret, ed.caret + 1),
                 _ => ed.caret.min(count),
             };
             ed.content =
@@ -1031,19 +1048,10 @@ impl super::OpenCADStudio {
 
     /// Move the caret to the visually adjacent text line while preserving its
     /// horizontal position as closely as the laid-out glyph boxes allow.
-    pub(super) fn mtext_caret_move_vertical(
-        &mut self,
-        direction: i8,
-        extend_selection: bool,
-    ) {
+    pub(super) fn mtext_caret_move_vertical(&mut self, direction: i8, extend_selection: bool) {
         if let Some(ed) = self.mtext_editor.as_mut() {
             let visible_count = doc_to_cells(&ed.doc).len();
-            let caret = vertical_caret_target(
-                &ed.glyph_boxes,
-                ed.caret,
-                visible_count,
-                direction,
-            );
+            let caret = vertical_caret_target(&ed.glyph_boxes, ed.caret, visible_count, direction);
             ed.caret = caret;
             if extend_selection {
                 ed.sel = Some((ed.sel_anchor.min(caret), ed.sel_anchor.max(caret)));
@@ -1128,7 +1136,11 @@ impl super::OpenCADStudio {
             }
         } else if let Some(ed) = self.mtext_editor.as_mut() {
             // No selection: the global font applies to the whole text.
-            ed.font = if default { String::new() } else { font.to_string() };
+            ed.font = if default {
+                String::new()
+            } else {
+                font.to_string()
+            };
         }
         self.rebuild_mtext_preview();
     }
@@ -1208,7 +1220,9 @@ impl super::OpenCADStudio {
     /// Commit the editor — create a new MText or update the edited one.
     pub(super) fn mtext_commit(&mut self) -> bool {
         let i = self.active_tab;
-        let Some(ed) = self.mtext_editor.take() else { return false };
+        let Some(ed) = self.mtext_editor.take() else {
+            return false;
+        };
         let body_empty = ed.content.text().trim().is_empty();
         let mut mt = ed.build_mtext();
         let annotative = ed.editing.is_none()
@@ -1263,11 +1277,7 @@ impl super::OpenCADStudio {
                 mt.insertion_point.y,
                 mt.insertion_point.z,
             ));
-            mt.insertion_point = acadrust::types::Vector3::new(
-                position.x,
-                position.y,
-                position.z,
-            );
+            mt.insertion_point = acadrust::types::Vector3::new(position.x, position.y, position.z);
             mt.rotation = 0.0;
             self.push_undo_snapshot(i, "MTEXT");
             let handle = self.commit_entity_handle(plane.place_entity(EntityType::MText(mt)));
@@ -1351,11 +1361,7 @@ impl super::OpenCADStudio {
                 mt.insertion_point.y,
                 mt.insertion_point.z,
             ));
-            mt.insertion_point = acadrust::types::Vector3::new(
-                position.x,
-                position.y,
-                position.z,
-            );
+            mt.insertion_point = acadrust::types::Vector3::new(position.x, position.y, position.z);
             mt.rotation = 0.0;
             self.push_undo_snapshot(i, "MTEXT");
             let handle = self.commit_entity_handle(plane.place_entity(EntityType::MText(mt)));
@@ -1406,18 +1412,29 @@ mod cell_tests {
 
     #[test]
     fn roundtrip_idempotent() {
-        for s in ["hello", "a b c", "one\\Ptwo", "a\\Pb\\Pc", "trailing\\P", "a  b", "\\S1/2;"] {
+        for s in [
+            "hello",
+            "a b c",
+            "one\\Ptwo",
+            "a\\Pb\\Pc",
+            "trailing\\P",
+            "a  b",
+            "\\S1/2;",
+        ] {
             let once = rt(s);
             let twice = rt(&once);
-            assert_eq!(once, twice, "not idempotent for {s:?}: {once:?} vs {twice:?}");
+            assert_eq!(
+                once, twice,
+                "not idempotent for {s:?}: {once:?} vs {twice:?}"
+            );
         }
     }
 
     #[test]
     fn cell_count_matches_plain() {
         assert_eq!(cells_of("ab\\Pcd").len(), 5); // a b Break c d
-        // parse_mtext drops the trailing empty paragraph; the app restores it in
-        // rebuild() (raw.ends_with("\\P")), so this pure-parse count is 2.
+                                                  // parse_mtext drops the trailing empty paragraph; the app restores it in
+                                                  // rebuild() (raw.ends_with("\\P")), so this pure-parse count is 2.
         assert_eq!(cells_of("ab\\P").len(), 2);
     }
 
@@ -1434,7 +1451,14 @@ mod cell_tests {
         assert_eq!(back, cells);
         // Typing after the trailing break lands on the new (empty) paragraph.
         let mut c2 = cells.clone();
-        c2.splice(3..3, str_to_cells("x", &SpanProperties::default(), &ParagraphProperties::default()));
+        c2.splice(
+            3..3,
+            str_to_cells(
+                "x",
+                &SpanProperties::default(),
+                &ParagraphProperties::default(),
+            ),
+        );
         assert_eq!(
             paras(&cells_to_doc(&ParagraphProperties::default(), &c2).to_mtext_string()),
             vec!["ab", "x"]
@@ -1444,8 +1468,18 @@ mod cell_tests {
     #[test]
     fn insert_break_splits_paragraph() {
         let mut cells = cells_of("abcd");
-        cells.splice(2..2, str_to_cells("\\P", &SpanProperties::default(), &ParagraphProperties::default()));
-        assert_eq!(paras(&cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string()), vec!["ab", "cd"]);
+        cells.splice(
+            2..2,
+            str_to_cells(
+                "\\P",
+                &SpanProperties::default(),
+                &ParagraphProperties::default(),
+            ),
+        );
+        assert_eq!(
+            paras(&cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string()),
+            vec!["ab", "cd"]
+        );
     }
 
     #[test]
@@ -1453,14 +1487,20 @@ mod cell_tests {
         let mut cells = cells_of("ab\\Pcd"); // [a,b,Break,c,d]
         let caret = cells_delete_range(&mut cells, 2, 3); // delete the Break slot
         assert_eq!(caret, 2);
-        assert_eq!(paras(&cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string()), vec!["abcd"]);
+        assert_eq!(
+            paras(&cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string()),
+            vec!["abcd"]
+        );
     }
 
     #[test]
     fn delete_range_across_paragraphs() {
         let mut cells = cells_of("abc\\Pdef"); // [a,b,c,Break,d,e,f]
         cells_delete_range(&mut cells, 1, 5); // b c Break d
-        assert_eq!(paras(&cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string()), vec!["aef"]);
+        assert_eq!(
+            paras(&cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string()),
+            vec!["aef"]
+        );
     }
 
     #[test]
@@ -1528,7 +1568,7 @@ mod cell_tests {
         assert_eq!(word_range(&cells, 8), (6, 11)); // inside "world"
         assert_eq!(word_range(&cells, 5), (5, 6)); // the space itself
         assert_eq!(word_range(&cells, 11), (6, 11)); // past end → last word
-        // Double-click does not cross a paragraph break.
+                                                     // Double-click does not cross a paragraph break.
         let c2 = cells_of("ab\\Pcd"); // a b Break c d
         assert_eq!(word_range(&c2, 0), (0, 2)); // "ab"
         assert_eq!(word_range(&c2, 2), (2, 3)); // the break alone
@@ -1594,6 +1634,10 @@ mod cell_tests {
         if content_has_trailing_break(&raw) {
             d.paragraphs.push(MTextParagraph::new());
         }
-        assert_eq!(doc_to_cells(&d).len(), 3, "trailing break must survive rebuild");
+        assert_eq!(
+            doc_to_cells(&d).len(),
+            3,
+            "trailing break must survive rebuild"
+        );
     }
 }

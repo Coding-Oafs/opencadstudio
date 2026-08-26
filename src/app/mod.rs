@@ -3076,6 +3076,45 @@ pub enum Message {
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudPathPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
+    PointCloudE57Import,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudE57PathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudE57OutputPathPicked(std::path::PathBuf, Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudE57Imported(
+        std::path::PathBuf,
+        Result<ocs_pointcloud::E57ImportStats, String>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    SpatialProjectNew,
+    #[cfg(not(target_arch = "wasm32"))]
+    SpatialProjectCreatePathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    SpatialProjectOpen,
+    #[cfg(not(target_arch = "wasm32"))]
+    SpatialProjectOpenPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    SpatialProjectSave,
+    #[cfg(not(target_arch = "wasm32"))]
+    SpatialProjectSavePathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudSurfaceSave(crate::app::point_cloud::PointCloudSurfaceProduct, f64),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudSurfacePathPicked(
+        crate::app::point_cloud::PointCloudSurfaceProduct,
+        f64,
+        Option<std::path::PathBuf>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloudSurfaceGenerated(
+        u64,
+        String,
+        crate::app::point_cloud::PointCloudSurfaceProduct,
+        std::path::PathBuf,
+        Result<crate::app::point_cloud::SurfaceJobSummary, String>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudLoaded(
         u64,
         std::path::PathBuf,

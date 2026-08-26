@@ -68,7 +68,11 @@ pub(super) fn normalize_key(value: &str) -> String {
     let mut shift = false;
     let mut key = String::new();
 
-    for part in value.split('+').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in value
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         match part.to_uppercase().as_str() {
             "CTRL" | "CONTROL" => ctrl = true,
             "CMD" | "COMMAND" | "META" | "SUPER" => cmd = true,
@@ -107,15 +111,11 @@ pub(super) fn normalize_key(value: &str) -> String {
 /// intentionally stay out so text fields retain their native shortcuts.
 pub(super) fn is_global_key(key: &str) -> bool {
     let base = key.rsplit('+').next().unwrap_or(key);
-    base.strip_prefix('F').is_some_and(|digits| {
-        !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
-    })
+    base.strip_prefix('F')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()))
         || matches!(base, "ESCAPE")
         || (key.starts_with(ACCEL)
-            && !matches!(
-                key.rsplit('+').next(),
-                Some("A" | "C" | "V" | "X")
-            ))
+            && !matches!(key.rsplit('+').next(), Some("A" | "C" | "V" | "X")))
 }
 
 fn is_named_key(key: &str) -> bool {
@@ -136,9 +136,9 @@ fn is_named_key(key: &str) -> bool {
             | "PAGEUP"
             | "PAGEDOWN"
             | "INSERT"
-    ) || key.strip_prefix('F').is_some_and(|digits| {
-        !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
-    })
+    ) || key
+        .strip_prefix('F')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 impl OpenCADStudio {
@@ -162,7 +162,11 @@ impl OpenCADStudio {
                 self.shortcut_editor_rows = rows;
                 self.persist_settings_if_changed();
                 self.command_line.push_output(
-                    format!("MNUIMPORT: imported {count} function-key binding(s) from \"{}\".", path.display()).as_str(),
+                    format!(
+                        "MNUIMPORT: imported {count} function-key binding(s) from \"{}\".",
+                        path.display()
+                    )
+                    .as_str(),
                 );
                 for warning in import.warnings {
                     self.command_line
@@ -183,7 +187,11 @@ impl OpenCADStudio {
             .map(|(key, action)| (key.clone(), action.clone()));
         match std::fs::write(&path, super::mnu::write(bindings)) {
             Ok(()) => self.command_line.push_output(
-                format!("MNUEXPORT: wrote function-key bindings to \"{}\".", path.display()).as_str(),
+                format!(
+                    "MNUEXPORT: wrote function-key bindings to \"{}\".",
+                    path.display()
+                )
+                .as_str(),
             ),
             Err(error) => self
                 .command_line
@@ -208,7 +216,9 @@ impl OpenCADStudio {
     pub(super) fn run_shortcut(&mut self, key: &str) -> Task<Message> {
         let action = self.shortcut_bindings.get(key).or_else(|| {
             let base = key.rsplit('+').next()?;
-            is_named_key(base).then(|| self.shortcut_bindings.get(base)).flatten()
+            is_named_key(base)
+                .then(|| self.shortcut_bindings.get(base))
+                .flatten()
         });
         let Some(action) = action.cloned() else {
             return Task::none();

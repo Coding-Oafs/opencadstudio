@@ -230,6 +230,11 @@ pub(super) struct DocumentTab {
     /// edits are applied only during explicit export.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) point_cloud: super::point_cloud::PointCloudDataset,
+    /// Open local-first spatial project manifest and its path. Large sources
+    /// remain external; this owns only catalog, named-object, job and
+    /// provenance metadata.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) spatial_project: Option<(PathBuf, ocs_pointcloud::SpatialProject)>,
     /// Per-plugin document state (`plugin::BuiltinPlugin` manifest id → state).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
@@ -511,6 +516,8 @@ impl DocumentTab {
             spatial: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             point_cloud: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            spatial_project: None,
             plugin_state: HashMap::new(),
             suspended_cmd: None,
         }
@@ -577,11 +584,9 @@ impl HistorySnapshot {
                 )
                 .saturating_add(d.selected_before.len().saturating_mul(16))
                 .saturating_add(d.selected_after.len().saturating_mul(16))
-                .saturating_add(
-                    d.active_layer
-                        .as_ref()
-                        .map_or(0, |(before, after)| before.len().saturating_add(after.len())),
-                )
+                .saturating_add(d.active_layer.as_ref().map_or(0, |(before, after)| {
+                    before.len().saturating_add(after.len())
+                }))
                 .saturating_add(d.label.len()),
             HistorySnapshot::ObjectVisibility(v) => v
                 .before

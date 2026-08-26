@@ -40,7 +40,7 @@ pub struct PointCloudManagerData {
     pub class_count: usize,
     pub color_mode: String,
     pub point_size_px: f32,
-    pub section_width_px: i32,
+    pub section_width_map_units: i32,
     pub crs_declared: bool,
     pub indexed: bool,
     pub index_running: bool,
@@ -53,6 +53,12 @@ pub struct PointCloudManagerData {
     pub resident_tiles: usize,
     pub resident_points: usize,
     pub visible_tiles: usize,
+    pub cpu_memory_bytes: usize,
+    pub gpu_memory_bytes: usize,
+    pub lod_label: String,
+    pub pending_tile_requests: usize,
+    pub cancelled_tile_requests: u64,
+    pub stale_tile_results: u64,
     pub crs_label: String,
     pub survey_readiness: String,
     pub class_rows: Vec<PointCloudClassRow>,
@@ -168,6 +174,24 @@ pub fn view_window(
                     data.visible_tiles, data.resident_tiles, data.resident_points
                 ),
             ),
+            status("LOD", data.lod_label),
+            status(
+                "Memory",
+                format!(
+                    "CPU {:.1} MiB / GPU {:.1} MiB",
+                    data.cpu_memory_bytes as f64 / (1024.0 * 1024.0),
+                    data.gpu_memory_bytes as f64 / (1024.0 * 1024.0)
+                ),
+            ),
+            status(
+                "Tile requests",
+                format!(
+                    "{} pending / {} cancelled / {} stale",
+                    data.pending_tile_requests,
+                    data.cancelled_tile_requests,
+                    data.stale_tile_results
+                ),
+            ),
             status("Export", export_status),
             row![
                 action("Attach / Replace", "POINTCLOUDATTACH", true),
@@ -233,12 +257,12 @@ pub fn view_window(
         .align_y(iced::Center),
         row![
             text("Slice width:").size(11),
-            slider(1..=1024, data.section_width_px, move |value| {
+            slider(1..=1024, data.section_width_map_units, move |value| {
                 Message::Command(format!("POINTCLOUDSECTIONWIDTH {value}"))
             })
             .step(1)
             .width(Length::Fixed(220.0)),
-            text(format!("{} px", data.section_width_px)).size(11),
+            text(format!("{} map units", data.section_width_map_units)).size(11),
         ]
         .spacing(6)
         .align_y(iced::Center),

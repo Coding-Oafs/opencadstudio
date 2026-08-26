@@ -43,12 +43,18 @@ impl OpenCADStudio {
                         } else {
                             "model space"
                         };
-                        self.command_line.push_output(crate::tf!(
-                            "Base point ({}, {}, {}) set for {space}.",
-                            nums[0], nums[1], z
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!(
+                                "Base point ({}, {}, {}) set for {space}.",
+                                nums[0],
+                                nums[1],
+                                z
+                            )
+                            .as_ref(),
+                        );
                     } else {
-                        self.command_line.push_error(crate::t!("Usage: BASE <x> <y> [z]").as_ref());
+                        self.command_line
+                            .push_error(crate::t!("Usage: BASE <x> <y> [z]").as_ref());
                     }
                 }
             }
@@ -59,8 +65,9 @@ impl OpenCADStudio {
                 if self.mtext_editor.as_ref().is_some_and(|e| e.show_preview) {
                     return match self.mtext_selected_text() {
                         Some(text) => {
-                            self.command_line
-                                .push_info(crate::t!("Copied selected text to clipboard.").as_ref());
+                            self.command_line.push_info(
+                                crate::t!("Copied selected text to clipboard.").as_ref(),
+                            );
                             Some(iced::clipboard::write(text).discard())
                         }
                         None => Some(Task::none()),
@@ -92,10 +99,10 @@ impl OpenCADStudio {
                         &self.tabs[i].scene.document,
                         &self.clipboard,
                     );
-                    self.command_line.push_info(crate::tf!(
-                        "{} object(s) copied to clipboard.",
-                        self.clipboard.len()
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!("{} object(s) copied to clipboard.", self.clipboard.len())
+                            .as_ref(),
+                    );
                 }
             }
 
@@ -148,12 +155,15 @@ impl OpenCADStudio {
                         &self.tabs[i].scene.document,
                         &self.clipboard,
                     );
-                    self.command_line.push_info(crate::tf!(
-                        "{} object(s) copied to clipboard (base {:.3},{:.3}).",
-                        self.clipboard.len(),
-                        base.x,
-                        base.y
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!(
+                            "{} object(s) copied to clipboard (base {:.3},{:.3}).",
+                            self.clipboard.len(),
+                            base.x,
+                            base.y
+                        )
+                        .as_ref(),
+                    );
                 }
             }
 
@@ -223,10 +233,13 @@ impl OpenCADStudio {
                     self.tabs[i].dirty = true;
                     self.refresh_layer_panel();
                     self.refresh_properties();
-                    self.command_line.push_output(crate::tf!(
-                        "PASTEORIG: {} object(s) pasted at original coordinates.",
-                        count
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!(
+                            "PASTEORIG: {} object(s) pasted at original coordinates.",
+                            count
+                        )
+                        .as_ref(),
+                    );
                 }
             }
 
@@ -298,7 +311,9 @@ impl OpenCADStudio {
                             self.command_line.push_info(&cmd.prompt());
                             self.tabs[i].active_cmd = Some(Box::new(cmd));
                         }
-                        Err(e) => self.command_line.push_error(crate::tf!("PASTEBLOCK: {e}").as_ref()),
+                        Err(e) => self
+                            .command_line
+                            .push_error(crate::tf!("PASTEBLOCK: {e}").as_ref()),
                     }
                 }
             }
@@ -326,8 +341,9 @@ impl OpenCADStudio {
             "INSERT" => {
                 let blocks = self.tabs[i].scene.custom_block_names();
                 if blocks.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("No user-defined blocks found in this drawing.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("No user-defined blocks found in this drawing.").as_ref(),
+                    );
                 } else {
                     use crate::modules::insert::insert_block::InsertBlockCommand;
                     let cmd = InsertBlockCommand::new(blocks);
@@ -339,8 +355,9 @@ impl OpenCADStudio {
             "MINSERT" => {
                 let blocks = self.tabs[i].scene.custom_block_names();
                 if blocks.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("No user-defined blocks found in this drawing.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("No user-defined blocks found in this drawing.").as_ref(),
+                    );
                 } else {
                     use crate::modules::insert::minsert::MinsertCommand;
                     let cmd = MinsertCommand::new(blocks);
@@ -363,14 +380,17 @@ impl OpenCADStudio {
                 let arg = cmd.trim_start_matches("ATTSYNC").trim();
                 let blocks = self.tabs[i].scene.custom_block_names();
                 if arg.is_empty() {
-                    self.command_line.push_info(crate::tf!(
-                        "Usage: ATTSYNC <block name>.  Blocks: {}",
-                        if blocks.is_empty() {
-                            "(none)".to_string()
-                        } else {
-                            blocks.join(", ")
-                        }
-                    ).as_ref());
+                    self.command_line.push_info(
+                        crate::tf!(
+                            "Usage: ATTSYNC <block name>.  Blocks: {}",
+                            if blocks.is_empty() {
+                                "(none)".to_string()
+                            } else {
+                                blocks.join(", ")
+                            }
+                        )
+                        .as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 let Some(block) = blocks.iter().find(|b| b.eq_ignore_ascii_case(arg)).cloned()
@@ -404,9 +424,7 @@ impl OpenCADStudio {
                     .filter_map(|entity| match entity {
                         acadrust::EntityType::Insert(insert)
                             if insert.block_name.eq_ignore_ascii_case(&block)
-                                && !self.tabs[i]
-                                    .scene
-                                    .is_layer_locked(insert.common.handle) =>
+                                && !self.tabs[i].scene.is_layer_locked(insert.common.handle) =>
                         {
                             Some(insert.common.handle)
                         }
@@ -414,9 +432,8 @@ impl OpenCADStudio {
                     })
                     .collect();
                 if inserts.is_empty() {
-                    self.command_line.push_error(
-                        crate::t!("ATTSYNC: no editable block references.").as_ref(),
-                    );
+                    self.command_line
+                        .push_error(crate::t!("ATTSYNC: no editable block references.").as_ref());
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "ATTSYNC");
@@ -428,9 +445,8 @@ impl OpenCADStudio {
                     else {
                         continue;
                     };
-                    ins.attributes.retain(|a| {
-                        attdefs.iter().any(|(t, _)| t.eq_ignore_ascii_case(&a.tag))
-                    });
+                    ins.attributes
+                        .retain(|a| attdefs.iter().any(|(t, _)| t.eq_ignore_ascii_case(&a.tag)));
                     for (tag, default) in &attdefs {
                         if !ins
                             .attributes
@@ -442,7 +458,7 @@ impl OpenCADStudio {
                                     tag.clone(),
                                     default.clone(),
                                 ));
-                            }
+                        }
                     }
                     synced += 1;
                     changes.push((ins.common.handle, crate::scene::ChangeKind::Modified));
@@ -467,20 +483,21 @@ impl OpenCADStudio {
                     .names()
                     .map(|s| s.to_string())
                     .collect();
-                self.command_line.push_output(crate::tf!(
-                    "Blocks ({}): {}",
-                    blocks.len(),
-                    if blocks.is_empty() {
-                        "(none)".to_string()
-                    } else {
-                        blocks.join(", ")
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "Layers ({}): {}",
-                    layers.len(),
-                    layers.join(", ")
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!(
+                        "Blocks ({}): {}",
+                        blocks.len(),
+                        if blocks.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            blocks.join(", ")
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!("Layers ({}): {}", layers.len(), layers.join(", ")).as_ref(),
+                );
             }
 
             // BLOCKPALETTE / BLOCKSPALETTE — toggle the docked Insert Block panel.
@@ -548,10 +565,12 @@ impl OpenCADStudio {
                     })
                     .collect();
                 if xrefs.is_empty() {
-                    self.command_line
-                        .push_output(crate::t!("XREF  No external references in this drawing.").as_ref());
+                    self.command_line.push_output(
+                        crate::t!("XREF  No external references in this drawing.").as_ref(),
+                    );
                 } else {
-                    self.command_line.push_output(crate::t!("XREF  External references:").as_ref());
+                    self.command_line
+                        .push_output(crate::t!("XREF  External references:").as_ref());
                     for line in xrefs {
                         self.command_line.push_output(&line);
                     }
@@ -569,32 +588,44 @@ impl OpenCADStudio {
                         for info in &infos {
                             match info.status {
                                 crate::io::xref::XrefStatus::Loaded => {
-                                    self.command_line
-                                        .push_output(crate::tf!("XREF  Reloaded \"{}\"", info.name).as_ref());
+                                    self.command_line.push_output(
+                                        crate::tf!("XREF  Reloaded \"{}\"", info.name).as_ref(),
+                                    );
                                 }
                                 crate::io::xref::XrefStatus::Recovered => {
-                                    self.command_line.push_error(crate::tf!(
-                                        "XREF  Reloaded with repairs: \"{}\"",
-                                        info.name
-                                    ).as_ref());
+                                    self.command_line.push_error(
+                                        crate::tf!(
+                                            "XREF  Reloaded with repairs: \"{}\"",
+                                            info.name
+                                        )
+                                        .as_ref(),
+                                    );
                                 }
                                 crate::io::xref::XrefStatus::NotFound => {
-                                    self.command_line.push_error(crate::tf!(
-                                        "XREF  Not found: \"{}\" ({})",
-                                        info.name, info.path
-                                    ).as_ref());
+                                    self.command_line.push_error(
+                                        crate::tf!(
+                                            "XREF  Not found: \"{}\" ({})",
+                                            info.name,
+                                            info.path
+                                        )
+                                        .as_ref(),
+                                    );
                                 }
                                 crate::io::xref::XrefStatus::Failed => {
-                                    self.command_line.push_error(crate::tf!(
-                                        "XREF  Reload failed: \"{}\" ({})",
-                                        info.name, info.path
-                                    ).as_ref());
+                                    self.command_line.push_error(
+                                        crate::tf!(
+                                            "XREF  Reload failed: \"{}\" ({})",
+                                            info.name,
+                                            info.path
+                                        )
+                                        .as_ref(),
+                                    );
                                 }
                                 crate::io::xref::XrefStatus::Unloaded => {
-                                    self.command_line.push_info(crate::tf!(
-                                        "XREF  Unloaded (skipped): \"{}\"",
-                                        info.name
-                                    ).as_ref());
+                                    self.command_line.push_info(
+                                        crate::tf!("XREF  Unloaded (skipped): \"{}\"", info.name)
+                                            .as_ref(),
+                                    );
                                 }
                             }
                         }
@@ -607,8 +638,10 @@ impl OpenCADStudio {
                         self.refresh_layer_panel();
                     }
                 } else {
-                    self.command_line
-                        .push_error(crate::t!("XREF  Save the drawing first to resolve relative XREF paths.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("XREF  Save the drawing first to resolve relative XREF paths.")
+                            .as_ref(),
+                    );
                 }
             }
 
@@ -636,9 +669,9 @@ impl OpenCADStudio {
                     Some(p) => {
                         return Some(Task::done(Message::OpenRecent(std::path::PathBuf::from(p))))
                     }
-                    None => self
-                        .command_line
-                        .push_error(crate::t!("XOPEN: select an external reference (xref) to open.").as_ref()),
+                    None => self.command_line.push_error(
+                        crate::t!("XOPEN: select an external reference (xref) to open.").as_ref(),
+                    ),
                 }
             }
 
@@ -673,9 +706,12 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(crate::tf!(
-                    "NCOPY: copied {n} nested object(s) into model space (blocks kept)."
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!(
+                        "NCOPY: copied {n} nested object(s) into model space (blocks kept)."
+                    )
+                    .as_ref(),
+                );
             }
 
             _ => return None,

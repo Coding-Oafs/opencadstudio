@@ -256,7 +256,10 @@ pub fn classify_ground(points: &[SamplePoint], options: &GroundOptions) -> Class
     // above the initial seed surface).
     let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (index, point) in points.iter().enumerate() {
-        cells.entry(cell_of(point.position)).or_default().push(index);
+        cells
+            .entry(cell_of(point.position))
+            .or_default()
+            .push(index);
     }
 
     // Seed representatives: the lowest point of each cell.
@@ -304,7 +307,9 @@ pub fn classify_ground(points: &[SamplePoint], options: &GroundOptions) -> Class
             if residual > options.reject_above || residual.abs() > options.max_distance {
                 continue;
             }
-            let span = plane.nearest_vertex_distance(position).max(options.cell_size * 0.25);
+            let span = plane
+                .nearest_vertex_distance(position)
+                .max(options.cell_size * 0.25);
             let angle = (residual.abs() / span).atan().to_degrees();
             if angle <= options.max_angle_degrees {
                 refinements.push((*cell, candidate));
@@ -388,15 +393,25 @@ impl SurfaceGrid {
                 let b = position(&east);
                 let c = position(&north);
                 let d = position(&northeast);
-                triangles.entry(*cell).or_default().push(Plane { vertices: [a, b, d] });
-                triangles.entry(*cell).or_default().push(Plane { vertices: [a, d, c] });
+                triangles.entry(*cell).or_default().push(Plane {
+                    vertices: [a, b, d],
+                });
+                triangles.entry(*cell).or_default().push(Plane {
+                    vertices: [a, d, c],
+                });
             }
         }
-        Self { triangles, cell_size }
+        Self {
+            triangles,
+            cell_size,
+        }
     }
 
     fn cell_of(&self, x: f64, y: f64) -> (i64, i64) {
-        ((x / self.cell_size).floor() as i64, (y / self.cell_size).floor() as i64)
+        (
+            (x / self.cell_size).floor() as i64,
+            (y / self.cell_size).floor() as i64,
+        )
     }
 
     fn contains_2d(&self, plane: &Plane, x: f64, y: f64) -> bool {
@@ -430,13 +445,9 @@ impl SurfaceGrid {
                             return Some(plane);
                         }
                         let centroid = [
-                            (plane.vertices[0][0]
-                                + plane.vertices[1][0]
-                                + plane.vertices[2][0])
+                            (plane.vertices[0][0] + plane.vertices[1][0] + plane.vertices[2][0])
                                 / 3.0,
-                            (plane.vertices[0][1]
-                                + plane.vertices[1][1]
-                                + plane.vertices[2][1])
+                            (plane.vertices[0][1] + plane.vertices[1][1] + plane.vertices[2][1])
                                 / 3.0,
                         ];
                         let ddx = centroid[0] - position[0];
@@ -561,8 +572,7 @@ mod tests {
         };
         let result = classify_ground(&points, &options);
         assert!(!result.is_empty());
-        let by_index: std::collections::HashMap<u64, u8> =
-            result.patches.into_iter().collect();
+        let by_index: std::collections::HashMap<u64, u8> = result.patches.into_iter().collect();
         let mut ground_count = 0_usize;
         let mut roof_leak = 0_usize;
         for point in &points {

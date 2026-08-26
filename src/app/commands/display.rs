@@ -1354,6 +1354,75 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd == "POINTCLOUDDTM" || cmd.starts_with("POINTCLOUDDTM ") => {
+                let value = cmd.trim_start_matches("POINTCLOUDDTM").trim();
+                let cell_size = if value.is_empty() {
+                    1.0
+                } else if let Ok(value) = value.parse::<f64>() {
+                    value
+                } else {
+                    self.command_line
+                        .push_error("Usage: POINTCLOUDDTM [positive-cell-size]");
+                    return Some(Task::none());
+                };
+                if !cell_size.is_finite() || cell_size <= 0.0 {
+                    self.command_line
+                        .push_error("POINTCLOUDDTM: cell size must be positive.");
+                    return Some(Task::none());
+                }
+                return Some(Task::done(Message::PointCloudSurfaceSave(
+                    crate::app::point_cloud::PointCloudSurfaceProduct::Dtm,
+                    cell_size,
+                )));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd == "POINTCLOUDDSM" || cmd.starts_with("POINTCLOUDDSM ") => {
+                let value = cmd.trim_start_matches("POINTCLOUDDSM").trim();
+                let cell_size = if value.is_empty() {
+                    1.0
+                } else if let Ok(value) = value.parse::<f64>() {
+                    value
+                } else {
+                    self.command_line
+                        .push_error("Usage: POINTCLOUDDSM [positive-cell-size]");
+                    return Some(Task::none());
+                };
+                if !cell_size.is_finite() || cell_size <= 0.0 {
+                    self.command_line
+                        .push_error("POINTCLOUDDSM: cell size must be positive.");
+                    return Some(Task::none());
+                }
+                return Some(Task::done(Message::PointCloudSurfaceSave(
+                    crate::app::point_cloud::PointCloudSurfaceProduct::Dsm,
+                    cell_size,
+                )));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd == "POINTCLOUDHILLSHADE" || cmd.starts_with("POINTCLOUDHILLSHADE ") => {
+                let value = cmd.trim_start_matches("POINTCLOUDHILLSHADE").trim();
+                let cell_size = if value.is_empty() {
+                    1.0
+                } else if let Ok(value) = value.parse::<f64>() {
+                    value
+                } else {
+                    self.command_line
+                        .push_error("Usage: POINTCLOUDHILLSHADE [positive-cell-size]");
+                    return Some(Task::none());
+                };
+                if !cell_size.is_finite() || cell_size <= 0.0 {
+                    self.command_line
+                        .push_error("POINTCLOUDHILLSHADE: cell size must be positive.");
+                    return Some(Task::none());
+                }
+                return Some(Task::done(Message::PointCloudSurfaceSave(
+                    crate::app::point_cloud::PointCloudSurfaceProduct::Hillshade,
+                    cell_size,
+                )));
+            }
+
             cmd if cmd.starts_with("POINTCLOUDCONTOUR") => {
                 let arguments = cmd.trim_start_matches("POINTCLOUDCONTOUR").trim();
                 let interval = arguments
@@ -1496,8 +1565,28 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "E57IMPORT" | "POINTCLOUDE57IMPORT" => {
+                return Some(Task::done(Message::PointCloudE57Import));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDATTACHFOLDER" | "POINTCLOUDATTACHDIR" => {
                 return Some(Task::done(Message::PointCloudFolderAttach));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "SPATIALPROJECTNEW" => {
+                return Some(Task::done(Message::SpatialProjectNew));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "SPATIALPROJECTOPEN" => {
+                return Some(Task::done(Message::SpatialProjectOpen));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "SPATIALPROJECTSAVE" => {
+                return Some(Task::done(Message::SpatialProjectSave));
             }
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1532,9 +1621,8 @@ impl OpenCADStudio {
                     "" | "CURRENT" | "TILE" => false,
                     "FOLDER" | "ALL" => true,
                     _ => {
-                        self.command_line.push_error(
-                            "Usage: POINTCLOUDURBANCLASSIFY [CURRENT|FOLDER]",
-                        );
+                        self.command_line
+                            .push_error("Usage: POINTCLOUDURBANCLASSIFY [CURRENT|FOLDER]");
                         return Some(Task::none());
                     }
                 };
@@ -1821,6 +1909,48 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDSECTIONS" => {
+                self.list_named_point_cloud_sections(i);
+            }
+
+            cmd if cmd.starts_with("POINTCLOUDSECTIONSAVE ") => {
+                let name = cmd.trim_start_matches("POINTCLOUDSECTIONSAVE").trim();
+                self.save_named_point_cloud_section(i, name.to_string());
+            }
+
+            cmd if cmd.starts_with("POINTCLOUDSECTIONACTIVATE ") => {
+                let id = cmd.trim_start_matches("POINTCLOUDSECTIONACTIVATE").trim();
+                self.activate_named_point_cloud_section(i, id);
+            }
+
+            cmd if cmd.starts_with("POINTCLOUDSECTIONDUPLICATE ") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDSECTIONDUPLICATE").trim();
+                let mut parts = arguments.splitn(2, char::is_whitespace);
+                let id = parts.next().unwrap_or_default();
+                let name = parts
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                self.mutate_named_point_cloud_section(i, id, "DUPLICATE", name);
+            }
+
+            cmd if cmd.starts_with("POINTCLOUDSECTIONFLIP ") => {
+                let id = cmd.trim_start_matches("POINTCLOUDSECTIONFLIP").trim();
+                self.mutate_named_point_cloud_section(i, id, "FLIP", None);
+            }
+
+            cmd if cmd.starts_with("POINTCLOUDSECTIONLOCK ") => {
+                let arguments = cmd.trim_start_matches("POINTCLOUDSECTIONLOCK").trim();
+                let mut parts = arguments.split_whitespace();
+                let id = parts.next().unwrap_or_default();
+                self.mutate_named_point_cloud_section(i, id, "LOCK", parts.next());
+            }
+
+            cmd if cmd.starts_with("POINTCLOUDSECTIONDELETE ") => {
+                let id = cmd.trim_start_matches("POINTCLOUDSECTIONDELETE").trim();
+                self.mutate_named_point_cloud_section(i, id, "DELETE", None);
+            }
+
             "POINTCLOUDSECTIONCLEAR" => {
                 self.clear_point_cloud_section(i);
             }
@@ -1854,7 +1984,7 @@ impl OpenCADStudio {
                     Ok(width) => self.set_point_cloud_section_width(i, width),
                     Err(_) => self
                         .command_line
-                        .push_error("Usage: POINTCLOUDSECTIONWIDTH <pixels>"),
+                        .push_error("Usage: POINTCLOUDSECTIONWIDTH <map-width>"),
                 }
             }
 
@@ -1884,13 +2014,13 @@ impl OpenCADStudio {
                             *width,
                             crate::scene::model::point_cloud_model::SectionMode::Dim,
                         ),
-                        _ => self.command_line.push_error(
-                            "Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [pixels]",
-                        ),
+                        _ => self
+                            .command_line
+                            .push_error("Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [map-width]"),
                     },
                     Err(_) => self
                         .command_line
-                        .push_error("Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [pixels]"),
+                        .push_error("Usage: POINTCLOUDSECTION <x0> <y0> <x1> <y1> [map-width]"),
                 }
             }
 

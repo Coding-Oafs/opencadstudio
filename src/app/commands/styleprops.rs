@@ -40,8 +40,9 @@ impl OpenCADStudio {
                 let color = match arg.as_str() {
                     "" => {
                         let c = self.tabs[i].scene.document.header.current_entity_color;
-                        self.command_line
-                            .push_output(crate::tf!("Current object colour: {}", describe(&c)).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("Current object colour: {}", describe(&c)).as_ref(),
+                        );
                         return Some(Task::none());
                     }
                     "BYLAYER" => Some(Color::ByLayer),
@@ -60,8 +61,9 @@ impl OpenCADStudio {
                         self.tabs[i].scene.document.header.current_entity_color = c;
                         self.ribbon.active_color = c;
                         self.tabs[i].dirty = true;
-                        self.command_line
-                            .push_output(crate::tf!("Object colour set to {}.", describe(&c)).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("Object colour set to {}.", describe(&c)).as_ref(),
+                        );
                     }
                     None => {
                         self.command_line.push_error(
@@ -79,7 +81,11 @@ impl OpenCADStudio {
                     "LINETYPE  [List / Set]:",
                     vec![
                         ("List", "LIST", None),
-                        ("Set", "SET", Some("LINETYPE SET  linetype name (ByLayer / ByBlock / …):")),
+                        (
+                            "Set",
+                            "SET",
+                            Some("LINETYPE SET  linetype name (ByLayer / ByBlock / …):"),
+                        ),
                     ],
                 );
                 self.command_line.push_info(&c.prompt());
@@ -99,18 +105,22 @@ impl OpenCADStudio {
                             .map(|lt| format!("{} ({})", lt.name, lt.description))
                             .collect();
                         if ltypes.is_empty() {
-                            self.command_line.push_output(crate::t!("No linetypes defined.").as_ref());
-                        } else {
                             self.command_line
-                                .push_output(crate::tf!("Linetypes: {}", ltypes.join(", ")).as_ref());
+                                .push_output(crate::t!("No linetypes defined.").as_ref());
+                        } else {
+                            self.command_line.push_output(
+                                crate::tf!("Linetypes: {}", ltypes.join(", ")).as_ref(),
+                            );
                         }
                     }
                     // Set the current linetype applied to newly drawn entities.
                     "SET" | "CURRENT" | "S" => {
                         let name = parts.get(1).copied().unwrap_or("");
                         if name.is_empty() {
-                            self.command_line
-                                .push_info(crate::t!("Usage: LINETYPE SET <name | ByLayer | ByBlock>").as_ref());
+                            self.command_line.push_info(
+                                crate::t!("Usage: LINETYPE SET <name | ByLayer | ByBlock>")
+                                    .as_ref(),
+                            );
                         } else {
                             let canon = if name.eq_ignore_ascii_case("BYLAYER") {
                                 Some(("ByLayer".to_string(), acadrust::types::Handle::NULL))
@@ -131,8 +141,9 @@ impl OpenCADStudio {
                                     h.current_linetype_name = nm.clone();
                                     h.current_linetype_handle = handle;
                                     self.tabs[i].dirty = true;
-                                    self.command_line
-                                        .push_output(crate::tf!("Current linetype set to {nm}.").as_ref());
+                                    self.command_line.push_output(
+                                        crate::tf!("Current linetype set to {nm}.").as_ref(),
+                                    );
                                 }
                                 None => {
                                     self.command_line.push_error(crate::tf!(
@@ -221,9 +232,7 @@ impl OpenCADStudio {
                             acadrust::EntityType::AttributeDefinition(a) => {
                                 Some(a.text_style.clone())
                             }
-                            acadrust::EntityType::AttributeEntity(a) => {
-                                Some(a.text_style.clone())
-                            }
+                            acadrust::EntityType::AttributeEntity(a) => Some(a.text_style.clone()),
                             _ => None,
                         })
                         .chain(
@@ -387,9 +396,7 @@ impl OpenCADStudio {
                             .document
                             .text_styles
                             .iter()
-                            .filter(|s| {
-                                s.name != "Standard" && !used_text_styles.contains(&s.name)
-                            })
+                            .filter(|s| s.name != "Standard" && !used_text_styles.contains(&s.name))
                             .map(|s| s.name.clone())
                             .collect()
                     } else {
@@ -473,16 +480,15 @@ impl OpenCADStudio {
                         // Drop the block definition's member entities (and the
                         // BLOCK/ENDBLK delimiters) before the record so no orphaned
                         // geometry survives in the document entity list.
-                        let handles: Vec<_> = if let Some(br) =
-                            self.tabs[i].scene.document.block_records.get(name)
-                        {
-                            let mut h = br.entity_handles.clone();
-                            h.push(br.block_entity_handle);
-                            h.push(br.block_end_handle);
-                            h
-                        } else {
-                            Vec::new()
-                        };
+                        let handles: Vec<_> =
+                            if let Some(br) = self.tabs[i].scene.document.block_records.get(name) {
+                                let mut h = br.entity_handles.clone();
+                                h.push(br.block_entity_handle);
+                                h.push(br.block_end_handle);
+                                h
+                            } else {
+                                Vec::new()
+                            };
                         for h in handles {
                             self.tabs[i].scene.document.remove_entity(h);
                         }
@@ -563,13 +569,17 @@ impl OpenCADStudio {
                     if n_sortents > 0 {
                         parts.push(format!("{n_sortents} stale draw-order table(s)"));
                     }
-                    self.command_line.push_output(crate::tf!(
-                        "PURGE: {} item(s) removed — {}.",
-                        purged + n_sortents,
-                        parts.join(", ")
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!(
+                            "PURGE: {} item(s) removed — {}.",
+                            purged + n_sortents,
+                            parts.join(", ")
+                        )
+                        .as_ref(),
+                    );
                 } else {
-                    self.command_line.push_output(crate::t!("PURGE: nothing to purge.").as_ref());
+                    self.command_line
+                        .push_output(crate::t!("PURGE: nothing to purge.").as_ref());
                 }
             }
 
@@ -582,10 +592,18 @@ impl OpenCADStudio {
                     "CHPROP  property  [Layer / Color / Linetype / LtScale / Transparency]:",
                     vec![
                         ("Layer", "LAYER", Some("CHPROP  new layer name:")),
-                        ("Color", "COLOR", Some("CHPROP  new colour (name / 1-255 / ByLayer):")),
+                        (
+                            "Color",
+                            "COLOR",
+                            Some("CHPROP  new colour (name / 1-255 / ByLayer):"),
+                        ),
                         ("Linetype", "LINETYPE", Some("CHPROP  new linetype name:")),
                         ("LtScale", "LTSCALE", Some("CHPROP  new linetype scale:")),
-                        ("Transparency", "TRANSPARENCY", Some("CHPROP  transparency 0-90:")),
+                        (
+                            "Transparency",
+                            "TRANSPARENCY",
+                            Some("CHPROP  transparency 0-90:"),
+                        ),
                     ],
                     has_sel,
                 );
@@ -644,10 +662,10 @@ impl OpenCADStudio {
                             || (prop == "LTSCALE" && ltscale_val.is_none())
                             || (prop == "TRANSPARENCY" && transparency_val.is_none())
                         {
-                            self.command_line.push_error(crate::tf!(
-                                "CHPROP: invalid value '{}' for {}.",
-                                value, prop
-                            ).as_ref());
+                            self.command_line.push_error(
+                                crate::tf!("CHPROP: invalid value '{}' for {}.", value, prop)
+                                    .as_ref(),
+                            );
                         } else {
                             let mut changed = 0usize;
                             for handle in &handles {
@@ -693,10 +711,10 @@ impl OpenCADStudio {
                                 // re-tessellate the changed entities so they
                                 // repaint immediately (issue #231 class).
                                 self.invalidate_property_targets(i, &handles);
-                                self.command_line.push_output(crate::tf!(
-                                    "CHPROP: {} entity/entities updated.",
-                                    changed
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("CHPROP: {} entity/entities updated.", changed)
+                                        .as_ref(),
+                                );
                             }
                         }
                     }
@@ -735,9 +753,10 @@ impl OpenCADStudio {
                         .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                         .collect();
                     self.tabs[i].scene.bump_entities(&changes);
-                    self.command_line.push_output(crate::tf!(
-                        "SETBYLAYER: reset {changed} entity/entities to ByLayer."
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!("SETBYLAYER: reset {changed} entity/entities to ByLayer.")
+                            .as_ref(),
+                    );
                 }
             }
 
@@ -791,8 +810,9 @@ impl OpenCADStudio {
                     self.tabs[i].scene.erase_entities(&dups);
                     self.tabs[i].dirty = true;
                     self.refresh_properties();
-                    self.command_line
-                        .push_output(crate::tf!("OVERKILL: deleted {n} duplicate object(s).").as_ref());
+                    self.command_line.push_output(
+                        crate::tf!("OVERKILL: deleted {n} duplicate object(s).").as_ref(),
+                    );
                 }
             }
 
@@ -819,43 +839,52 @@ impl OpenCADStudio {
                     } else {
                         u8::from(self.pick_drag_rect)
                     };
-                    self.command_line.push_output(crate::tf!(
-                        "{} = {v}",
-                        if is_add { "PICKADD" } else { "PICKDRAG" }
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!("{} = {v}", if is_add { "PICKADD" } else { "PICKDRAG" })
+                            .as_ref(),
+                    );
                 } else {
                     match arg {
                         "0" | "1" => {
                             let on = arg == "1";
                             if is_add {
                                 self.pick_add = on;
-                                self.command_line.push_output(crate::tf!(
-                                    "PICKADD = {} ({})",
-                                    arg,
-                                    if on {
-                                        "click adds to selection"
-                                    } else {
-                                        "click replaces selection, Shift toggles"
-                                    }
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!(
+                                        "PICKADD = {} ({})",
+                                        arg,
+                                        if on {
+                                            "click adds to selection"
+                                        } else {
+                                            "click replaces selection, Shift toggles"
+                                        }
+                                    )
+                                    .as_ref(),
+                                );
                             } else {
                                 self.pick_drag_rect = on;
-                                self.command_line.push_output(crate::tf!(
-                                    "PICKDRAG = {} ({})",
-                                    arg,
-                                    if on {
-                                        "press-drag draws a rectangle"
-                                    } else {
-                                        "press-drag lassoes"
-                                    }
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!(
+                                        "PICKDRAG = {} ({})",
+                                        arg,
+                                        if on {
+                                            "press-drag draws a rectangle"
+                                        } else {
+                                            "press-drag lassoes"
+                                        }
+                                    )
+                                    .as_ref(),
+                                );
                             }
                             self.persist_settings_if_changed();
                         }
-                        _ => self.command_line.push_error(crate::tf!(
-                            "{}: expected 0 or 1.",
-                            if is_add { "PICKADD" } else { "PICKDRAG" }
-                        ).as_ref()),
+                        _ => self.command_line.push_error(
+                            crate::tf!(
+                                "{}: expected 0 or 1.",
+                                if is_add { "PICKADD" } else { "PICKDRAG" }
+                            )
+                            .as_ref(),
+                        ),
                     }
                 }
             }
@@ -1026,17 +1055,16 @@ impl OpenCADStudio {
                                         }
                                         self.tabs[i].dirty = true;
                                     }
-                                    self.command_line
-                                        .push_output(&format!("{name} = {mode}"));
+                                    self.command_line.push_output(&format!("{name} = {mode}"));
                                 }
                                 _ => self.command_line.push_error(
                                     crate::tf!("SETVAR: {name} requires 0, 1, or 2.").as_ref(),
                                 ),
                             },
                             None => {
-                                self.command_line.push_output(crate::tf!(
-                                    "Enter new value for {name} <{current}>:"
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("Enter new value for {name} <{current}>:").as_ref(),
+                                );
                                 self.pending_setvar = Some(name.clone());
                             }
                         }
@@ -1074,9 +1102,9 @@ impl OpenCADStudio {
                                 Err(error) => self.command_line.push_error(&error),
                             }
                         } else {
-                            self.command_line.push_output(crate::tf!(
-                                "Enter new value for {name} <{current}>:"
-                            ).as_ref());
+                            self.command_line.push_output(
+                                crate::tf!("Enter new value for {name} <{current}>:").as_ref(),
+                            );
                             self.pending_setvar = Some(name.clone());
                         }
                         return Some(self.finish_dispatch(cmd));
@@ -1174,18 +1202,12 @@ impl OpenCADStudio {
                                 Some(v) => match parse_bool(v) {
                                     Some(reversed) => {
                                         self.zoom_wheel_reversed = reversed;
-                                        Ok((
-                                            format!("ZOOMWHEEL = {}", reversed as i32),
-                                            true,
-                                        ))
+                                        Ok((format!("ZOOMWHEEL = {}", reversed as i32), true))
                                     }
                                     None => Err("SETVAR: 0 or 1 required.".into()),
                                 },
                                 None => Ok((
-                                    format!(
-                                        "ZOOMWHEEL = {}",
-                                        self.zoom_wheel_reversed as i32
-                                    ),
+                                    format!("ZOOMWHEEL = {}", self.zoom_wheel_reversed as i32),
                                     false,
                                 )),
                             },
@@ -1197,9 +1219,7 @@ impl OpenCADStudio {
                                     }
                                     _ => Err("SETVAR: integer from 3 to 100 required.".into()),
                                 },
-                                None => {
-                                    Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false))
-                                }
+                                None => Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false)),
                             },
                             "CURSORSIZE" => match &value {
                                 Some(v) => match v.parse::<i32>() {
@@ -1224,11 +1244,13 @@ impl OpenCADStudio {
                             "CURSORTYPE" => match &value {
                                 Some(v) => match v.as_str() {
                                     "0" => {
-                                        self.cursor_type = crate::app::settings::CursorType::Crosshair;
+                                        self.cursor_type =
+                                            crate::app::settings::CursorType::Crosshair;
                                         Ok(("CURSORTYPE = 0".to_string(), true))
                                     }
                                     "1" => {
-                                        self.cursor_type = crate::app::settings::CursorType::Pointer;
+                                        self.cursor_type =
+                                            crate::app::settings::CursorType::Pointer;
                                         Ok(("CURSORTYPE = 1".to_string(), true))
                                     }
                                     _ => Err("SETVAR: 0 or 1 required.".into()),
@@ -1236,7 +1258,10 @@ impl OpenCADStudio {
                                 None => Ok((
                                     format!(
                                         "CURSORTYPE = {}",
-                                        i32::from(self.cursor_type == crate::app::settings::CursorType::Pointer)
+                                        i32::from(
+                                            self.cursor_type
+                                                == crate::app::settings::CursorType::Pointer
+                                        )
                                     ),
                                     false,
                                 )),
@@ -1799,10 +1824,9 @@ impl OpenCADStudio {
                                     }
                                     _ => Err("SETVAR: numeric value from 0 to 1 required.".into()),
                                 },
-                                None => Ok((
-                                    format!("SKTOLERANCE = {}", h.sketch_tolerance),
-                                    false,
-                                )),
+                                None => {
+                                    Ok((format!("SKTOLERANCE = {}", h.sketch_tolerance), false))
+                                }
                             },
                             "CLAYER" => match &value {
                                 Some(_) => Err(
@@ -1855,9 +1879,9 @@ impl OpenCADStudio {
                                 // prompt for a new value on the next line instead
                                 // of only echoing the current one. Enter keeps it.
                                 let current = msg.split('=').nth(1).map(str::trim).unwrap_or("");
-                                self.command_line.push_output(crate::tf!(
-                                    "Enter new value for {name} <{current}>:"
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("Enter new value for {name} <{current}>:").as_ref(),
+                                );
                                 self.pending_setvar = Some(name.clone());
                             }
                         }
@@ -1866,9 +1890,7 @@ impl OpenCADStudio {
                     // TEXTFILL reset the glyph atlas; re-tessellate so text picks
                     // up the re-baked filled / hollow tiles.
                     if name == "TEXTFILL" {
-                        self.tabs[i]
-                            .scene
-                            .invalidate_text_geometry_dependencies();
+                        self.tabs[i].scene.invalidate_text_geometry_dependencies();
                     }
                     // LTSCALE scales the dash pattern baked into every wire, and
                     // PDMODE / PDSIZE decide the point glyph built at tessellation
@@ -1947,8 +1969,9 @@ impl OpenCADStudio {
                         v.join(", ")
                     }
                 };
-                self.command_line
-                    .push_output(crate::t!("FINDNONPURGEABLE: named objects in use (not purgeable):").as_ref());
+                self.command_line.push_output(
+                    crate::t!("FINDNONPURGEABLE: named objects in use (not purgeable):").as_ref(),
+                );
                 self.command_line
                     .push_output(crate::tf!("  Layers: {}", fmt(layers)).as_ref());
                 self.command_line
@@ -1986,22 +2009,30 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(crate::tf!("AUDIT: scanned {total} object(s).").as_ref());
                 if undefined_layers.is_empty() && undefined_blocks.is_empty() {
-                    self.command_line.push_output(crate::t!("AUDIT: no issues found.").as_ref());
+                    self.command_line
+                        .push_output(crate::t!("AUDIT: no issues found.").as_ref());
                 } else {
                     if !undefined_layers.is_empty() {
-                        self.command_line.push_error(crate::tf!(
-                            "AUDIT: reference(s) to undefined layer(s): {}",
-                            undefined_layers.into_iter().collect::<Vec<_>>().join(", ")
-                        ).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!(
+                                "AUDIT: reference(s) to undefined layer(s): {}",
+                                undefined_layers.into_iter().collect::<Vec<_>>().join(", ")
+                            )
+                            .as_ref(),
+                        );
                     }
                     if !undefined_blocks.is_empty() {
-                        self.command_line.push_error(crate::tf!(
-                            "AUDIT: reference(s) to undefined block(s): {}",
-                            undefined_blocks.into_iter().collect::<Vec<_>>().join(", ")
-                        ).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!(
+                                "AUDIT: reference(s) to undefined block(s): {}",
+                                undefined_blocks.into_iter().collect::<Vec<_>>().join(", ")
+                            )
+                            .as_ref(),
+                        );
                     }
-                    self.command_line
-                        .push_info(crate::t!("AUDIT: report only — no automatic repair performed.").as_ref());
+                    self.command_line.push_info(
+                        crate::t!("AUDIT: report only — no automatic repair performed.").as_ref(),
+                    );
                 }
             }
 
@@ -2076,8 +2107,9 @@ impl OpenCADStudio {
                         if type_str == "LAYER" {
                             self.refresh_layer_panel();
                         }
-                        self.command_line
-                            .push_output(crate::tf!("RENAME: '{}' → '{}'.", old_name, new_name).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("RENAME: '{}' → '{}'.", old_name, new_name).as_ref(),
+                        );
                     } else {
                         self.discard_last_undo_entry(i);
                         if !known {
@@ -2122,15 +2154,18 @@ impl OpenCADStudio {
                         self.command_line
                             .push_output(crate::tf!("CLAYER set to \"{name_arg}\"").as_ref());
                     } else {
-                        self.command_line
-                            .push_error(crate::tf!("CLAYER: layer '{}' not found.", name_arg).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!("CLAYER: layer '{}' not found.", name_arg).as_ref(),
+                        );
                     }
                 }
             }
             "CDIMSTY" | "DIMCURRENT" => {
                 use crate::command::ValuePromptCommand;
-                let c =
-                    ValuePromptCommand::new("CDIMSTY", "CDIMSTY  new current dimension style name:");
+                let c = ValuePromptCommand::new(
+                    "CDIMSTY",
+                    "CDIMSTY  new current dimension style name:",
+                );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -2144,11 +2179,13 @@ impl OpenCADStudio {
                     if self.tabs[i].scene.document.dim_styles.contains(&name_arg) {
                         self.tabs[i].scene.document.header.current_dimstyle_name = name_arg.clone();
                         self.tabs[i].dirty = true;
-                        self.command_line
-                            .push_output(crate::tf!("Active dim style set to \"{name_arg}\"").as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("Active dim style set to \"{name_arg}\"").as_ref(),
+                        );
                     } else {
-                        self.command_line
-                            .push_error(crate::tf!("CDIMSTY: dim style '{}' not found.", name_arg).as_ref());
+                        self.command_line.push_error(
+                            crate::tf!("CDIMSTY: dim style '{}' not found.", name_arg).as_ref(),
+                        );
                     }
                 }
             }
@@ -2160,10 +2197,7 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(crate::tf!("LTSCALE = {current:.4}").as_ref());
 
-                let c = ValuePromptCommand::new(
-                    "LTSCALE",
-                    "LTSCALE  new global line-type scale:",
-                );
+                let c = ValuePromptCommand::new("LTSCALE", "LTSCALE  new global line-type scale:");
 
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
@@ -2172,7 +2206,8 @@ impl OpenCADStudio {
                 let val_str = cmd.trim_start_matches("LTSCALE").trim();
                 if val_str.is_empty() {
                     let v = self.tabs[i].scene.document.header.linetype_scale;
-                    self.command_line.push_output(crate::tf!("LTSCALE = {v:.4}").as_ref());
+                    self.command_line
+                        .push_output(crate::tf!("LTSCALE = {v:.4}").as_ref());
                 } else if let Ok(v) = val_str.parse::<f64>() {
                     if v > 0.0 {
                         self.push_undo_snapshot(i, "LTSCALE");
@@ -2187,7 +2222,8 @@ impl OpenCADStudio {
                             .push_error(crate::t!("LTSCALE: value must be positive.").as_ref());
                     }
                 } else {
-                    self.command_line.push_error(crate::t!("Usage: LTSCALE [value]").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("Usage: LTSCALE [value]").as_ref());
                 }
             }
             "PDMODE" => {
@@ -2203,14 +2239,16 @@ impl OpenCADStudio {
                 let val_str = cmd.trim_start_matches("PDMODE").trim();
                 if val_str.is_empty() {
                     let v = self.tabs[i].scene.document.header.point_display_mode;
-                    self.command_line.push_output(crate::tf!("PDMODE = {v}").as_ref());
+                    self.command_line
+                        .push_output(crate::tf!("PDMODE = {v}").as_ref());
                 } else if let Ok(v) = val_str.parse::<i16>() {
                     self.push_undo_snapshot(i, "PDMODE");
                     self.tabs[i].scene.document.header.point_display_mode = v;
                     // Point glyphs are built at tessellation time — rebuild them.
                     self.tabs[i].scene.invalidate_point_dependencies();
                     self.tabs[i].dirty = true;
-                    self.command_line.push_output(crate::tf!("PDMODE set to {v}").as_ref());
+                    self.command_line
+                        .push_output(crate::tf!("PDMODE set to {v}").as_ref());
                 } else {
                     self.command_line.push_error(
                         "Usage: PDMODE [value]  (0=dot 1=none 2=+ 3=x 4=tick; +32 circle, +64 square)",
@@ -2237,8 +2275,10 @@ impl OpenCADStudio {
             }
             "ISAVEBAK" => {
                 use crate::command::ValuePromptCommand;
-                let c =
-                    ValuePromptCommand::new("ISAVEBAK", "ISAVEBAK  write a .bak on save?  [1 / 0]:");
+                let c = ValuePromptCommand::new(
+                    "ISAVEBAK",
+                    "ISAVEBAK  write a .bak on save?  [1 / 0]:",
+                );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -2246,19 +2286,24 @@ impl OpenCADStudio {
                 match cmd.trim_start_matches("ISAVEBAK").trim() {
                     "" => {
                         let v = if self.backup_on_save { 1 } else { 0 };
-                        self.command_line.push_output(crate::tf!("ISAVEBAK = {v}").as_ref());
+                        self.command_line
+                            .push_output(crate::tf!("ISAVEBAK = {v}").as_ref());
                     }
                     "0" => {
                         self.backup_on_save = false;
                         self.persist_settings_if_changed();
-                        self.command_line.push_output(crate::t!("ISAVEBAK set to 0").as_ref());
+                        self.command_line
+                            .push_output(crate::t!("ISAVEBAK set to 0").as_ref());
                     }
                     "1" => {
                         self.backup_on_save = true;
                         self.persist_settings_if_changed();
-                        self.command_line.push_output(crate::t!("ISAVEBAK set to 1").as_ref());
+                        self.command_line
+                            .push_output(crate::t!("ISAVEBAK set to 1").as_ref());
                     }
-                    _ => self.command_line.push_error(crate::t!("Requires 0 or 1").as_ref()),
+                    _ => self
+                        .command_line
+                        .push_error(crate::t!("Requires 0 or 1").as_ref()),
                 }
             }
             "FILEASSOC" => {
@@ -2274,7 +2319,8 @@ impl OpenCADStudio {
                 match cmd.trim_start_matches("FILEASSOC").trim() {
                     "" => {
                         let v = if self.file_assoc_enabled { 1 } else { 0 };
-                        self.command_line.push_output(crate::tf!("FILEASSOC = {v}").as_ref());
+                        self.command_line
+                            .push_output(crate::tf!("FILEASSOC = {v}").as_ref());
                     }
                     "1" => {
                         self.file_assoc_enabled = true;
@@ -2283,24 +2329,27 @@ impl OpenCADStudio {
                             Ok(()) => self.command_line.push_output(
                                 "FILEASSOC set to 1 — registered as a .dwg/.dxf/.bak handler",
                             ),
-                            Err(e) => self
-                                .command_line
-                                .push_error(crate::tf!("FILEASSOC: registration failed: {e}").as_ref()),
+                            Err(e) => self.command_line.push_error(
+                                crate::tf!("FILEASSOC: registration failed: {e}").as_ref(),
+                            ),
                         }
                     }
                     "0" => {
                         self.file_assoc_enabled = false;
                         self.persist_settings_if_changed();
                         match crate::io::file_association::unregister_handler() {
-                            Ok(()) => self
-                                .command_line
-                                .push_output(crate::t!("FILEASSOC set to 0 — unregistered as a file handler").as_ref()),
-                            Err(e) => self
-                                .command_line
-                                .push_error(crate::tf!("FILEASSOC: unregister failed: {e}").as_ref()),
+                            Ok(()) => self.command_line.push_output(
+                                crate::t!("FILEASSOC set to 0 — unregistered as a file handler")
+                                    .as_ref(),
+                            ),
+                            Err(e) => self.command_line.push_error(
+                                crate::tf!("FILEASSOC: unregister failed: {e}").as_ref(),
+                            ),
                         }
                     }
-                    _ => self.command_line.push_error(crate::t!("Requires 0 or 1").as_ref()),
+                    _ => self
+                        .command_line
+                        .push_error(crate::t!("Requires 0 or 1").as_ref()),
                 }
             }
             "SAVETIME" => {
@@ -2330,9 +2379,9 @@ impl OpenCADStudio {
                         };
                         self.command_line.push_output(&msg);
                     }
-                    _ => self
-                        .command_line
-                        .push_error(crate::t!("Requires a non-negative number of minutes (0 = off)").as_ref()),
+                    _ => self.command_line.push_error(
+                        crate::t!("Requires a non-negative number of minutes (0 = off)").as_ref(),
+                    ),
                 }
             }
             "PDSIZE" => {
@@ -2348,7 +2397,8 @@ impl OpenCADStudio {
                 let val_str = cmd.trim_start_matches("PDSIZE").trim();
                 if val_str.is_empty() {
                     let v = self.tabs[i].scene.document.header.point_display_size;
-                    self.command_line.push_output(crate::tf!("PDSIZE = {v:.4}").as_ref());
+                    self.command_line
+                        .push_output(crate::tf!("PDSIZE = {v:.4}").as_ref());
                 } else if let Ok(v) = val_str.parse::<f64>() {
                     self.push_undo_snapshot(i, "PDSIZE");
                     self.tabs[i].scene.document.header.point_display_size = v;
@@ -2373,8 +2423,10 @@ impl OpenCADStudio {
             }
             "LWDISPLAY" => {
                 use crate::command::ValuePromptCommand;
-                let c =
-                    ValuePromptCommand::new("LWDISPLAY", "LWDISPLAY  show lineweights?  [ON / OFF]:");
+                let c = ValuePromptCommand::new(
+                    "LWDISPLAY",
+                    "LWDISPLAY  show lineweights?  [ON / OFF]:",
+                );
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -2387,19 +2439,23 @@ impl OpenCADStudio {
                     _ => Err(()),
                 };
                 match parsed {
-                    Err(_) => self.command_line.push_error(crate::t!("Usage: LWDISPLAY [ON|OFF]").as_ref()),
+                    Err(_) => self
+                        .command_line
+                        .push_error(crate::t!("Usage: LWDISPLAY [ON|OFF]").as_ref()),
                     Ok(Some(v)) => {
                         self.push_undo_snapshot(i, "LWDISPLAY");
                         self.tabs[i].scene.document.header.lineweight_display = v;
                         // No retessellate — the wire shader honours the flag via uniforms.
                         self.tabs[i].dirty = true;
-                        self.command_line
-                            .push_output(crate::tf!("LWDISPLAY {}", if v { "ON" } else { "OFF" }).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("LWDISPLAY {}", if v { "ON" } else { "OFF" }).as_ref(),
+                        );
                     }
                     Ok(None) => {
                         let v = self.tabs[i].scene.document.header.lineweight_display;
-                        self.command_line
-                            .push_output(crate::tf!("LWDISPLAY = {}", if v { "ON" } else { "OFF" }).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("LWDISPLAY = {}", if v { "ON" } else { "OFF" }).as_ref(),
+                        );
                     }
                 }
             }
@@ -2437,7 +2493,8 @@ impl OpenCADStudio {
                             .push_error(crate::t!("CELTSCALE: value must be positive.").as_ref());
                     }
                 } else {
-                    self.command_line.push_error(crate::t!("Usage: CELTSCALE [value]").as_ref());
+                    self.command_line
+                        .push_error(crate::t!("Usage: CELTSCALE [value]").as_ref());
                 }
             }
 
@@ -2466,8 +2523,9 @@ impl OpenCADStudio {
                     .filter(|handle| !self.tabs[i].scene.is_layer_locked(*handle))
                     .collect();
                 if selected_handles.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("SCALETEXT: select Text/MText entities first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("SCALETEXT: select Text/MText entities first.").as_ref(),
+                    );
                 } else {
                     let (use_absolute, value) = match (
                         parts.first().map(|s| s.to_uppercase()).as_deref(),
@@ -2479,8 +2537,9 @@ impl OpenCADStudio {
                     };
                     if let Some(val) = value {
                         if val <= 0.0 {
-                            self.command_line
-                                .push_error(crate::t!("SCALETEXT: value must be positive.").as_ref());
+                            self.command_line.push_error(
+                                crate::t!("SCALETEXT: value must be positive.").as_ref(),
+                            );
                         } else {
                             self.push_undo_snapshot(i, "SCALETEXT");
                             let mut count = 0usize;
@@ -2507,17 +2566,21 @@ impl OpenCADStudio {
                             }
                             if count > 0 {
                                 self.tabs[i].dirty = true;
-                                self.command_line.push_output(crate::tf!(
-                                    "SCALETEXT: scaled {count} text entity(ies)."
-                                ).as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("SCALETEXT: scaled {count} text entity(ies).")
+                                        .as_ref(),
+                                );
                             } else {
-                                self.command_line
-                                    .push_error(crate::t!("SCALETEXT: no Text/MText in selection.").as_ref());
+                                self.command_line.push_error(
+                                    crate::t!("SCALETEXT: no Text/MText in selection.").as_ref(),
+                                );
                             }
                         }
                     } else {
-                        self.command_line
-                            .push_info(crate::t!("Usage: SCALETEXT <factor>  or  SCALETEXT H <height>").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("Usage: SCALETEXT <factor>  or  SCALETEXT H <height>")
+                                .as_ref(),
+                        );
                     }
                 }
             }
@@ -2578,9 +2641,7 @@ fn rename_symbol(doc: &mut acadrust::CadDocument, ty: &str, old: &str, new: &str
             }
             for e in doc.entities_mut() {
                 match e {
-                    EntityType::Dimension(d)
-                        if d.base().style_name.eq_ignore_ascii_case(old) =>
-                    {
+                    EntityType::Dimension(d) if d.base().style_name.eq_ignore_ascii_case(old) => {
                         d.base_mut().style_name = new.to_string();
                     }
                     EntityType::Leader(l) if l.dimension_style.eq_ignore_ascii_case(old) => {
@@ -2601,9 +2662,7 @@ fn rename_symbol(doc: &mut acadrust::CadDocument, ty: &str, old: &str, new: &str
         }
         "LINETYPE" | "LT" => {
             // The three built-ins are fixed names every drawing relies on.
-            if ["BYLAYER", "BYBLOCK", "CONTINUOUS"]
-                .contains(&old.to_uppercase().as_str())
-            {
+            if ["BYLAYER", "BYBLOCK", "CONTINUOUS"].contains(&old.to_uppercase().as_str()) {
                 return false;
             }
             if !rekey(&mut doc.line_types, old, new) {

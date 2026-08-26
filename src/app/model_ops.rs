@@ -8,8 +8,8 @@
 
 use acadrust::entities::Solid3D;
 use acadrust::objects::SolidHistoryOperation;
-use cadkernel::brep::Body;
 use acadrust::{EntityType, Handle};
+use cadkernel::brep::Body;
 use iced::Task;
 
 use super::Message;
@@ -49,8 +49,9 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 2 {
-            self.command_line
-                .push_error(crate::t!("Boolean: select exactly two solids created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("Boolean: select exactly two solids created this session.").as_ref(),
+            );
             return Task::none();
         }
         let a = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -100,8 +101,9 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
-            self.command_line
-                .push_error(crate::t!("SLICE: select exactly one solid created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("SLICE: select exactly one solid created this session.").as_ref(),
+            );
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -125,8 +127,9 @@ impl super::OpenCADStudio {
             lo[axis] = value;
         }
         if hi[axis] <= lo[axis] {
-            self.command_line
-                .push_error(crate::t!("SLICE: the plane does not cross the solid on the kept side.").as_ref());
+            self.command_line.push_error(
+                crate::t!("SLICE: the plane does not cross the solid on the kept side.").as_ref(),
+            );
             return Task::none();
         }
         let center = [
@@ -139,8 +142,9 @@ impl super::OpenCADStudio {
             .as_ref()
             .and_then(|half| solid_model::boolean(Bool::Intersect, &solid, half))
         else {
-            self.command_line
-                .push_error(crate::t!("SLICE failed — the plane may not cross the solid.").as_ref());
+            self.command_line.push_error(
+                crate::t!("SLICE failed — the plane may not cross the solid.").as_ref(),
+            );
             return Task::none();
         };
         self.push_undo_snapshot(i, "SLICE");
@@ -156,10 +160,13 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         let ax = ["X", "Y", "Z"][axis];
-        self.command_line.push_output(crate::tf!(
-            "SLICE: cut at {ax}={value}, kept the {} half.",
-            if keep_low { "lower" } else { "upper" }
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!(
+                "SLICE: cut at {ax}={value}, kept the {} half.",
+                if keep_low { "lower" } else { "upper" }
+            )
+            .as_ref(),
+        );
         Task::none()
     }
 
@@ -176,8 +183,9 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 2 {
-            self.command_line
-                .push_error(crate::t!("INTERFERE: select exactly two solids created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("INTERFERE: select exactly two solids created this session.").as_ref(),
+            );
             return Task::none();
         }
         let a = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -192,8 +200,10 @@ impl super::OpenCADStudio {
                 self.add_solid_model(EntityType::Solid3D(s3d), result, history);
                 self.tabs[i].dirty = true;
                 self.refresh_properties();
-                self.command_line
-                    .push_output(crate::t!("INTERFERE: created an interference solid from the overlap.").as_ref());
+                self.command_line.push_output(
+                    crate::t!("INTERFERE: created an interference solid from the overlap.")
+                        .as_ref(),
+                );
             }
             None => self
                 .command_line
@@ -216,18 +226,19 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
-            self.command_line
-                .push_error(crate::t!("3DROTATE: select exactly one solid created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("3DROTATE: select exactly one solid created this session.").as_ref(),
+            );
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
         let Some(middle) = solid_model::centre(&solid) else {
-            self.command_line
-                .push_error(crate::t!("3DROTATE: could not determine the solid's extent.").as_ref());
+            self.command_line.push_error(
+                crate::t!("3DROTATE: could not determine the solid's extent.").as_ref(),
+            );
             return Task::none();
         };
-        let Some(rotated) =
-            solid_model::turned(&solid, axis, angle_deg.to_radians(), middle)
+        let Some(rotated) = solid_model::turned(&solid, axis, angle_deg.to_radians(), middle)
         else {
             self.command_line
                 .push_error(crate::t!("3DROTATE: could not turn the solid.").as_ref());
@@ -245,10 +256,13 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(crate::tf!(
-            "3DROTATE: rotated {angle_deg}° about the {} axis.",
-            ["X", "Y", "Z"][axis]
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!(
+                "3DROTATE: rotated {angle_deg}° about the {} axis.",
+                ["X", "Y", "Z"][axis]
+            )
+            .as_ref(),
+        );
         Task::none()
     }
 
@@ -285,16 +299,17 @@ impl super::OpenCADStudio {
             // Local box: X 0..len, Y -w/2..w/2, Z 0..h, then turned to lie
             // along the segment and moved onto its start.
             let (sin, cos) = angle.sin_cos();
-            let Some(bx) = solid_model::box_solid([len / 2.0, 0.0, height / 2.0], len, width, height)
-                .and_then(|bx| {
-                    solid_model::placed(
-                        &bx,
-                        [cos, sin, 0.0],
-                        [-sin, cos, 0.0],
-                        [0.0, 0.0, 1.0],
-                        [a[0], a[1], a[2]],
-                    )
-                })
+            let Some(bx) =
+                solid_model::box_solid([len / 2.0, 0.0, height / 2.0], len, width, height)
+                    .and_then(|bx| {
+                        solid_model::placed(
+                            &bx,
+                            [cos, sin, 0.0],
+                            [-sin, cos, 0.0],
+                            [0.0, 0.0, 1.0],
+                            [a[0], a[1], a[2]],
+                        )
+                    })
             else {
                 continue;
             };
@@ -321,9 +336,12 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(crate::tf!(
+        self.command_line.push_output(
+            crate::tf!(
             "POLYSOLID: built a wall solid from {used} segment(s) (width {width}, height {height})."
-        ).as_ref());
+        )
+            .as_ref(),
+        );
         Task::none()
     }
 
@@ -342,14 +360,16 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
-            self.command_line
-                .push_error(crate::t!("3DMIRROR: select exactly one solid created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("3DMIRROR: select exactly one solid created this session.").as_ref(),
+            );
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
         let Some(middle) = solid_model::centre(&solid) else {
-            self.command_line
-                .push_error(crate::t!("3DMIRROR: could not determine the solid's extent.").as_ref());
+            self.command_line.push_error(
+                crate::t!("3DMIRROR: could not determine the solid's extent.").as_ref(),
+            );
             return Task::none();
         };
         let Some(reflected) = solid_model::mirrored(&solid, axis, middle) else {
@@ -368,10 +388,13 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(crate::tf!(
-            "3DMIRROR: added a mirror across the {} plane.",
-            ["X", "Y", "Z"][axis]
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!(
+                "3DMIRROR: added a mirror across the {} plane.",
+                ["X", "Y", "Z"][axis]
+            )
+            .as_ref(),
+        );
         Task::none()
     }
 
@@ -394,8 +417,9 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
-            self.command_line
-                .push_error(crate::t!("3DALIGN: select exactly one solid created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("3DALIGN: select exactly one solid created this session.").as_ref(),
+            );
             return Task::none();
         }
         // Build a right-handed frame (origin + orthonormal axes) from 3 points.
@@ -417,8 +441,10 @@ impl super::OpenCADStudio {
             ))
         };
         let (Some(s), Some(d)) = (frame(src), frame(dst)) else {
-            self.command_line
-                .push_error(crate::t!("3DALIGN: each point triple must be non-coincident and non-collinear.").as_ref());
+            self.command_line.push_error(
+                crate::t!("3DALIGN: each point triple must be non-coincident and non-collinear.")
+                    .as_ref(),
+            );
             return Task::none();
         };
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -440,8 +466,9 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line
-            .push_output(crate::t!("3DALIGN: aligned the solid to the destination points.").as_ref());
+        self.command_line.push_output(
+            crate::t!("3DALIGN: aligned the solid to the destination points.").as_ref(),
+        );
         Task::none()
     }
 
@@ -462,8 +489,9 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.len() != 1 {
-            self.command_line
-                .push_error(crate::t!("SECTION: select exactly one solid created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("SECTION: select exactly one solid created this session.").as_ref(),
+            );
             return Task::none();
         }
         let solid = self.tabs[i].scene.solid_models[&handles[0]].clone();
@@ -494,11 +522,14 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(crate::tf!(
-            "SECTION: created {} section line(s) at {}={value}.",
-            segs.len(),
-            ["X", "Y", "Z"][axis]
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!(
+                "SECTION: created {} section line(s) at {}={value}.",
+                segs.len(),
+                ["X", "Y", "Z"][axis]
+            )
+            .as_ref(),
+        );
         Task::none()
     }
 
@@ -527,12 +558,8 @@ impl super::OpenCADStudio {
         if let EntityType::Solid3D(inner) = &mut entity {
             inner.wires = solid_model::edge_wires(&solid);
         }
-        let history = solid_history::pyramid_op(
-            glam::DMat4::IDENTITY.to_cols_array(),
-            radius,
-            height,
-            n,
-        );
+        let history =
+            solid_history::pyramid_op(glam::DMat4::IDENTITY.to_cols_array(), radius, height, n);
         let handle = self.add_solid_model(entity, solid, history);
         self.tabs[i].scene.deselect_all();
         if !handle.is_null() {
@@ -540,9 +567,10 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line.push_output(crate::tf!(
-            "PYRAMID: created a {n}-sided pyramid (radius {radius}, height {height})."
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!("PYRAMID: created a {n}-sided pyramid (radius {radius}, height {height}).")
+                .as_ref(),
+        );
         Task::none()
     }
 
@@ -578,8 +606,9 @@ impl super::OpenCADStudio {
                 ))
             });
         let Some((handle, fit)) = found else {
-            self.command_line
-                .push_error(crate::t!("SPLINEFIT: select a polyline to fit a spline through.").as_ref());
+            self.command_line.push_error(
+                crate::t!("SPLINEFIT: select a polyline to fit a spline through.").as_ref(),
+            );
             return Task::none();
         };
         if fit.len() < 3 {
@@ -614,10 +643,7 @@ impl super::OpenCADStudio {
         spl.degree = 3;
         spl.control_points = ctrl;
         spl.knots = knots;
-        spl.fit_points = fit
-            .iter()
-            .map(|q| Vector3::new(q[0], q[1], q[2]))
-            .collect();
+        spl.fit_points = fit.iter().map(|q| Vector3::new(q[0], q[1], q[2])).collect();
         // flags.rational defaults to false (non-rational) — exactly what we want.
         self.push_undo_snapshot(i, "SPLINEFIT");
         self.tabs[i].scene.erase_entities(&[handle]);
@@ -686,8 +712,9 @@ impl super::OpenCADStudio {
             .filter(|h| self.tabs[i].scene.solid_models.contains_key(h))
             .collect();
         if handles.is_empty() {
-            self.command_line
-                .push_error(crate::t!("CONVTOSURFACE: select a solid created this session.").as_ref());
+            self.command_line.push_error(
+                crate::t!("CONVTOSURFACE: select a solid created this session.").as_ref(),
+            );
             return Task::none();
         }
         let mut surfaces: Vec<Surface> = Vec::new();
@@ -718,8 +745,9 @@ impl super::OpenCADStudio {
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();
-        self.command_line
-            .push_output(crate::tf!("CONVTOSURFACE: converted {n} solid(s) to surface(s).").as_ref());
+        self.command_line.push_output(
+            crate::tf!("CONVTOSURFACE: converted {n} solid(s) to surface(s).").as_ref(),
+        );
         Task::none()
     }
 }

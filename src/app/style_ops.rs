@@ -66,7 +66,8 @@ pub(crate) fn ensure_standard_styles(doc: &mut acadrust::CadDocument) {
     }) {
         let mut s = MultiLeaderStyle::standard();
         s.handle = doc.allocate_handle();
-        doc.objects.insert(s.handle, ObjectType::MultiLeaderStyle(s));
+        doc.objects
+            .insert(s.handle, ObjectType::MultiLeaderStyle(s));
     }
     if !has(doc, |o| match o {
         ObjectType::MLineStyle(s) => Some(&s.name),
@@ -308,7 +309,11 @@ impl OpenCADStudio {
         let doc = &self.tabs[i].scene.document;
         match kind {
             StyleKind::Text => {
-                if doc.header.current_text_style_name.eq_ignore_ascii_case(name) {
+                if doc
+                    .header
+                    .current_text_style_name
+                    .eq_ignore_ascii_case(name)
+                {
                     return true;
                 }
                 let style_handle = doc.text_styles.get(name).map(|style| style.handle);
@@ -321,16 +326,16 @@ impl OpenCADStudio {
                     EntityType::AttributeDefinition(attribute) => {
                         attribute.text_style.eq_ignore_ascii_case(name)
                     }
-                    EntityType::Insert(insert) => insert.attributes.iter().any(|attribute| {
-                        attribute.text_style.eq_ignore_ascii_case(name)
-                    }),
-                    EntityType::MultiLeader(leader) => [
-                        leader.text_style_handle,
-                        leader.context.text_style_handle,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|handle| Some(handle) == style_handle),
+                    EntityType::Insert(insert) => insert
+                        .attributes
+                        .iter()
+                        .any(|attribute| attribute.text_style.eq_ignore_ascii_case(name)),
+                    EntityType::MultiLeader(leader) => {
+                        [leader.text_style_handle, leader.context.text_style_handle]
+                            .into_iter()
+                            .flatten()
+                            .any(|handle| Some(handle) == style_handle)
+                    }
                     EntityType::Table(table) => table.rows.iter().any(|row| {
                         row.style
                             .as_ref()
@@ -378,9 +383,9 @@ impl OpenCADStudio {
                         EntityType::Leader(leader) => {
                             leader.dimension_style.eq_ignore_ascii_case(name)
                         }
-                        EntityType::Tolerance(tolerance) => tolerance
-                            .dimension_style_name
-                            .eq_ignore_ascii_case(name),
+                        EntityType::Tolerance(tolerance) => {
+                            tolerance.dimension_style_name.eq_ignore_ascii_case(name)
+                        }
                         _ => false,
                     })
             }
@@ -389,14 +394,15 @@ impl OpenCADStudio {
                     return false;
                 };
                 let is_current = match kind {
-                    StyleKind::Table => {
-                        doc.header.current_table_style_name.eq_ignore_ascii_case(name)
-                    }
+                    StyleKind::Table => doc
+                        .header
+                        .current_table_style_name
+                        .eq_ignore_ascii_case(name),
                     StyleKind::MLeader => {
-                        doc.header.current_mleader_style_name.eq_ignore_ascii_case(name)
-                            || self.tabs[i]
-                                .active_mleader_style
-                                .eq_ignore_ascii_case(name)
+                        doc.header
+                            .current_mleader_style_name
+                            .eq_ignore_ascii_case(name)
+                            || self.tabs[i].active_mleader_style.eq_ignore_ascii_case(name)
                     }
                     StyleKind::MLine => doc.header.multiline_style.eq_ignore_ascii_case(name),
                     StyleKind::Text | StyleKind::Dim => false,
@@ -528,7 +534,11 @@ impl OpenCADStudio {
                 if self.ribbon.active_table_style.eq_ignore_ascii_case(old) {
                     self.ribbon.active_table_style = new.to_string();
                 }
-                if doc.header.current_table_style_name.eq_ignore_ascii_case(old) {
+                if doc
+                    .header
+                    .current_table_style_name
+                    .eq_ignore_ascii_case(old)
+                {
                     doc.header.current_table_style_name = new.to_string();
                 }
             }
@@ -777,7 +787,9 @@ impl OpenCADStudio {
         if changed {
             self.tabs[i].dirty = true;
             let (text_names, dim_names, object_handles) = edited.changed_keys(&stage.baseline);
-            self.tabs[i].scene.invalidate_text_style_dependencies_many(&text_names);
+            self.tabs[i]
+                .scene
+                .invalidate_text_style_dependencies_many(&text_names);
             self.tabs[i]
                 .scene
                 .invalidate_dim_style_dependencies_many(&dim_names);
@@ -967,7 +979,8 @@ impl OpenCADStudio {
         let root_h = self.tabs[i].scene.document.header.named_objects_dict_handle;
         let cur_scalelist_h = self.tabs[i].scene.scalelist_dict_handle();
         let doc = &mut self.tabs[i].scene.document;
-        doc.objects.retain(|_, o| !matches!(o, ObjectType::Scale(_)));
+        doc.objects
+            .retain(|_, o| !matches!(o, ObjectType::Scale(_)));
         if let Some(h) = cur_scalelist_h {
             doc.objects.remove(&h);
         }

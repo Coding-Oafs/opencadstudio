@@ -226,23 +226,16 @@ pub(super) fn load_aliases() -> FxHashMap<String, String> {
                     // Only advance the version marker once the migrated table is
                     // actually stored, so a failed set_item leaves the marker
                     // behind and the merge is retried next launch.
-                    if storage
-                        .set_item(WEB_ALIAS_KEY, &to_pgp(&map))
-                        .is_ok()
-                    {
-                        let _ = storage.set_item(
-                            WEB_ALIAS_VERSION_KEY,
-                            &DEFAULT_ALIASES_VERSION.to_string(),
-                        );
+                    if storage.set_item(WEB_ALIAS_KEY, &to_pgp(&map)).is_ok() {
+                        let _ = storage
+                            .set_item(WEB_ALIAS_VERSION_KEY, &DEFAULT_ALIASES_VERSION.to_string());
                     }
                 }
                 map
             }
             None => {
-                let _ = storage.set_item(
-                    WEB_ALIAS_VERSION_KEY,
-                    &DEFAULT_ALIASES_VERSION.to_string(),
-                );
+                let _ =
+                    storage.set_item(WEB_ALIAS_VERSION_KEY, &DEFAULT_ALIASES_VERSION.to_string());
                 default_map()
             }
         };

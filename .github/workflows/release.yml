@@ -15,7 +15,26 @@ on:
           - snap
 
 jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify production point-cloud core
+        run: cargo test -p ocs_pointcloud --lib
+
+      - name: Verify spatial shader contract
+        run: cargo test --test point_cloud_shader
+
+      - name: Check the complete desktop application
+        run: cargo check
+
   build-appimage:
+    needs: verify
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -158,6 +177,7 @@ jobs:
           release: edge
 
   build-windows:
+    needs: verify
     if: github.event_name == 'release' || inputs.target == 'all'
     runs-on: windows-latest
     permissions:
@@ -330,6 +350,7 @@ jobs:
             --clobber --repo ${{ github.repository }}
 
   build-macos:
+    needs: verify
     if: github.event_name == 'release' || inputs.target == 'all'
     runs-on: macos-14    # Apple Silicon (arm64) only
     permissions:

@@ -279,12 +279,19 @@ mod tests {
     #[test]
     fn osmode_encodes_bits_and_suppress() {
         // Endpoint(1) + Midpoint(2) + Intersection(32) = 35, master on.
-        let on = [SnapType::Endpoint, SnapType::Midpoint, SnapType::Intersection];
+        let on = [
+            SnapType::Endpoint,
+            SnapType::Midpoint,
+            SnapType::Intersection,
+        ];
         assert_eq!(osmode_from_snaps(on.iter(), true), 35);
         // Master off sets the suppress bit (16384).
         assert_eq!(osmode_from_snaps(on.iter(), false), 35 | 16384);
         // OCS-only snaps carry no bit and are dropped.
-        assert_eq!(osmode_from_snaps([SnapType::Grid, SnapType::ObjectPick].iter(), true), 0);
+        assert_eq!(
+            osmode_from_snaps([SnapType::Grid, SnapType::ObjectPick].iter(), true),
+            0
+        );
     }
 
     #[test]

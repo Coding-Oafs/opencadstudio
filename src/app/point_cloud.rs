@@ -20,13 +20,416 @@ use ocs_pointcloud::{
     SelectionSet, SidecarStore, TileCacheManifest, TileCacheOptions,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
+
+impl OpenCADStudio {
+    pub(super) fn create_spatial_project(&mut self, tab_index: usize, path: PathBuf) {
+        let name = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Spatial Project")
+            .to_string();
+        self.tabs[tab_index].spatial_project =
+            Some((path.clone(), ocs_pointcloud::SpatialProject::new(name)));
+        self.save_spatial_project(tab_index, Some(path));
+    }
+
+    pub(super) fn open_spatial_project(
+        &mut self,
+        tab_index: usize,
+        path: PathBuf,
+    ) -> Task<Message> {
+        let mut project = match ocs_pointcloud::SpatialProject::open(&path) {
+            Ok(project) => project,
+            Err(error) => {
+                self.command_line
+                    .push_error(format!("SPATIALPROJECTOPEN: {error}").as_str());
+                return Task::none();
+            }
+        };
+        let mut queue = ocs_pointcloud::JobQueue {
+            max_running: 1,
+            jobs: std::mem::take(&mut project.jobs),
+        };
+        let recovered = queue.recover_interrupted();
+        project.jobs = queue.jobs;
+
+        if let Some(section) = project.sections.first() {
+            let nx = section.normal[0];
+            let ny = section.normal[1];
+            let normal_len = (nx * nx + ny * ny).sqrt().max(f64::EPSILON);
+            let direction = [ny / normal_len, -nx / normal_len];
+            let half = section.axis_length * 0.5;
+            self.tabs[tab_index].point_cloud.section =
+                Some(crate::scene::model::point_cloud_model::Section {
+                    p0: [
+                        section.origin[0] - direction[0] * half,
+                        section.origin[1] - direction[1] * half,
+                    ],
+                    p1: [
+                        section.origin[0] + direction[0] * half,
+                        section.origin[1] + direction[1] * half,
+                    ],
+                    width_world: section.total_width,
+                    mode: crate::scene::model::point_cloud_model::SectionMode::Discard,
+                });
+        }
+        let sources: Vec<PathBuf> = project
+            .sources
+            .iter()
+            .filter(|source| {
+                matches!(
+                    source.kind,
+                    ocs_pointcloud::SourceKind::LasLaz
+                        | ocs_pointcloud::SourceKind::Copc
+                        | ocs_pointcloud::SourceKind::Derived
+                )
+            })
+            .filter_map(|source| source.resolve(&path))
+            .filter(|source| {
+                !self.tabs[tab_index]
+                    .point_cloud
+                    .contains_source_path(source)
+            })
+            .collect();
+        let project_name = project.name.clone();
+        self.tabs[tab_index].spatial_project = Some((path.clone(), project));
+        self.command_line.push_output(
+            format!(
+                "SPATIALPROJECTOPEN: opened \"{project_name}\" with {} source(s); recovered {recovered} interrupted job(s).",
+                sources.len()
+            )
+            .as_str(),
+        );
+        Task::batch(
+            sources
+                .into_iter()
+                .map(|source| Task::done(Message::PointCloudPathPicked(Some(source)))),
+        )
+    }
+
+    pub(super) fn save_spatial_project(
+        &mut self,
+        tab_index: usize,
+        path_override: Option<PathBuf>,
+    ) {
+        let (existing_path, mut project) = self.tabs[tab_index]
+            .spatial_project
+            .take()
+            .unwrap_or_else(|| {
+                (
+                    PathBuf::new(),
+                    ocs_pointcloud::SpatialProject::new("Spatial Project"),
+                )
+            });
+        let path = path_override.unwrap_or(existing_path);
+        if path.as_os_str().is_empty() {
+            self.command_line
+                .push_error("SPATIALPROJECTSAVE: choose a .ocsproj path first.");
+            self.tabs[tab_index].spatial_project = Some((path, project));
+            return;
+        }
+
+        project.sources.retain(|source| {
+            !matches!(
+                source.kind,
+                ocs_pointcloud::SourceKind::LasLaz
+                    | ocs_pointcloud::SourceKind::Copc
+                    | ocs_pointcloud::SourceKind::Derived
+            )
+        });
+        for source in &self.tabs[tab_index].point_cloud.sources {
+            let lower = source.source_path.to_string_lossy().to_ascii_lowercase();
+            let kind = if lower.ends_with(".copc.laz") {
+                ocs_pointcloud::SourceKind::Copc
+            } else {
+                ocs_pointcloud::SourceKind::LasLaz
+            };
+            match ocs_pointcloud::ProjectSource::local(&source.id, &path, &source.source_path, kind)
+            {
+                Ok(mut catalog) => {
+                    catalog.crs = source.source_crs.clone();
+                    catalog.point_count = Some(source.sample.metadata.point_count);
+                    catalog.bounds_min = Some(source.drawing_bounds.0);
+                    catalog.bounds_max = Some(source.drawing_bounds.1);
+                    catalog.cache_relative = source.cache_path.as_ref().and_then(|cache| {
+                        path.parent()
+                            .and_then(|base| cache.strip_prefix(base).ok())
+                            .map(PathBuf::from)
+                    });
+                    project.sources.push(catalog);
+                }
+                Err(error) => self.command_line.push_error(
+                    format!(
+                        "SPATIALPROJECTSAVE: cannot catalog {}: {error}",
+                        source.source_path.display()
+                    )
+                    .as_str(),
+                ),
+            }
+        }
+
+        if let Some(section) = self.tabs[tab_index].point_cloud.section {
+            let dx = section.p1[0] - section.p0[0];
+            let dy = section.p1[1] - section.p0[1];
+            let length = (dx * dx + dy * dy).sqrt().max(f64::EPSILON);
+            let named = ocs_pointcloud::NamedSection {
+                id: "active-section".to_string(),
+                name: "Active section".to_string(),
+                kind: ocs_pointcloud::SectionKind::CrossSection,
+                origin: [
+                    (section.p0[0] + section.p1[0]) * 0.5,
+                    (section.p0[1] + section.p1[1]) * 0.5,
+                    0.0,
+                ],
+                normal: [-dy / length, dx / length, 0.0],
+                axis_length: length,
+                total_width: section.width_world,
+                vertical_limits: None,
+                crs: self.tabs[tab_index]
+                    .spatial
+                    .drawing_crs
+                    .as_ref()
+                    .map(crate::app::spatial::DrawingCrs::as_crs_info)
+                    .unwrap_or_default(),
+                locked: false,
+            };
+            if let Err(error) = project.upsert_section(named) {
+                self.command_line
+                    .push_error(format!("SPATIALPROJECTSAVE: {error}").as_str());
+            }
+        }
+
+        let mut named: BTreeMap<String, BTreeMap<String, SelectionSet>> = BTreeMap::new();
+        for source in &self.tabs[tab_index].point_cloud.sources {
+            for selection in &source.selection_sets {
+                named
+                    .entry(selection.name.clone())
+                    .or_default()
+                    .insert(source.id.clone(), selection.clone());
+            }
+        }
+        project.selections = named
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, (name, point_ranges))| ocs_pointcloud::NamedSelection {
+                    id: format!("selection-{}", index + 1),
+                    name,
+                    objects: BTreeSet::new(),
+                    point_ranges,
+                },
+            )
+            .collect();
+        if let Some(crs) = self.tabs[tab_index].spatial.drawing_crs.as_ref() {
+            project.spatial_reference.horizontal = crs.as_crs_info();
+            project.spatial_reference.working_unit =
+                format!("{:?}", crs.working_unit()).to_ascii_lowercase();
+        }
+
+        match project.save_atomic(&path) {
+            Ok(()) => self.command_line.push_output(
+                format!(
+                    "SPATIALPROJECTSAVE: saved {} source(s), {} section(s), and {} named selection(s) to {}.",
+                    project.sources.len(),
+                    project.sections.len(),
+                    project.selections.len(),
+                    path.display()
+                )
+                .as_str(),
+            ),
+            Err(error) => self.command_line
+                .push_error(format!("SPATIALPROJECTSAVE: {error}").as_str()),
+        }
+        self.tabs[tab_index].spatial_project = Some((path, project));
+    }
+
+    pub(super) fn save_named_point_cloud_section(&mut self, tab_index: usize, name: String) {
+        let Some(section) = self.tabs[tab_index].point_cloud.section else {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONSAVE: no section is active.");
+            return;
+        };
+        let crs = self.tabs[tab_index]
+            .spatial
+            .drawing_crs
+            .as_ref()
+            .map(crate::app::spatial::DrawingCrs::as_crs_info)
+            .unwrap_or_default();
+        let Some((project_path, project)) = self.tabs[tab_index].spatial_project.as_mut() else {
+            self.command_line
+                .push_error("POINTCLOUDSECTIONSAVE: create or open a spatial project first.");
+            return;
+        };
+        let dx = section.p1[0] - section.p0[0];
+        let dy = section.p1[1] - section.p0[1];
+        let length = (dx * dx + dy * dy).sqrt().max(f64::EPSILON);
+        let id = project
+            .sections
+            .iter()
+            .find(|item| item.name.eq_ignore_ascii_case(&name))
+            .map(|item| item.id.clone())
+            .unwrap_or_else(|| format!("section-{}", project.sections.len() + 1));
+        let named = ocs_pointcloud::NamedSection {
+            id,
+            name: name.clone(),
+            kind: ocs_pointcloud::SectionKind::CrossSection,
+            origin: [
+                (section.p0[0] + section.p1[0]) * 0.5,
+                (section.p0[1] + section.p1[1]) * 0.5,
+                0.0,
+            ],
+            normal: [-dy / length, dx / length, 0.0],
+            axis_length: length,
+            total_width: section.width_world,
+            vertical_limits: None,
+            crs,
+            locked: false,
+        };
+        match project
+            .upsert_section(named)
+            .and_then(|_| project.save_atomic(project_path.clone()))
+        {
+            Ok(()) => self
+                .command_line
+                .push_output(format!("POINTCLOUDSECTIONSAVE: saved \"{name}\".").as_str()),
+            Err(error) => self
+                .command_line
+                .push_error(format!("POINTCLOUDSECTIONSAVE: {error}").as_str()),
+        }
+    }
+
+    pub(super) fn list_named_point_cloud_sections(&mut self, tab_index: usize) {
+        let Some((_, project)) = self.tabs[tab_index].spatial_project.as_ref() else {
+            self.command_line
+                .push_info("POINTCLOUDSECTIONS: no spatial project is open.");
+            return;
+        };
+        if project.sections.is_empty() {
+            self.command_line
+                .push_info("POINTCLOUDSECTIONS: no named sections.");
+            return;
+        }
+        for section in &project.sections {
+            self.command_line.push_output(
+                format!(
+                    "{} — {} ({:.3} x {:.3} map units{})",
+                    section.id,
+                    section.name,
+                    section.axis_length,
+                    section.total_width,
+                    if section.locked { ", locked" } else { "" }
+                )
+                .as_str(),
+            );
+        }
+    }
+
+    pub(super) fn activate_named_point_cloud_section(&mut self, tab_index: usize, id: &str) {
+        let section = self.tabs[tab_index]
+            .spatial_project
+            .as_ref()
+            .and_then(|(_, project)| {
+                project.sections.iter().find(|section| {
+                    section.id.eq_ignore_ascii_case(id) || section.name.eq_ignore_ascii_case(id)
+                })
+            })
+            .cloned();
+        let Some(section) = section else {
+            self.command_line.push_error(
+                format!("POINTCLOUDSECTIONACTIVATE: section \"{id}\" was not found.").as_str(),
+            );
+            return;
+        };
+        let normal_length = section.normal[0].hypot(section.normal[1]).max(f64::EPSILON);
+        let direction = [
+            section.normal[1] / normal_length,
+            -section.normal[0] / normal_length,
+        ];
+        let half = section.axis_length * 0.5;
+        self.set_point_cloud_section(
+            tab_index,
+            [
+                section.origin[0] - direction[0] * half,
+                section.origin[1] - direction[1] * half,
+            ],
+            [
+                section.origin[0] + direction[0] * half,
+                section.origin[1] + direction[1] * half,
+            ],
+            section.total_width,
+            crate::scene::model::point_cloud_model::SectionMode::Discard,
+        );
+        self.command_line.push_output(
+            format!("POINTCLOUDSECTIONACTIVATE: \"{}\" is active.", section.name).as_str(),
+        );
+    }
+
+    pub(super) fn mutate_named_point_cloud_section(
+        &mut self,
+        tab_index: usize,
+        id: &str,
+        action: &str,
+        argument: Option<&str>,
+    ) {
+        let Some((project_path, project)) = self.tabs[tab_index].spatial_project.as_mut() else {
+            self.command_line
+                .push_error("POINTCLOUDSECTION: no spatial project is open.");
+            return;
+        };
+        let Some(index) = project.sections.iter().position(|section| {
+            section.id.eq_ignore_ascii_case(id) || section.name.eq_ignore_ascii_case(id)
+        }) else {
+            self.command_line
+                .push_error(format!("POINTCLOUDSECTION: section \"{id}\" was not found.").as_str());
+            return;
+        };
+        match action {
+            "DUPLICATE" => {
+                let name = argument.unwrap_or("Section copy");
+                let copy = project.sections[index]
+                    .duplicate(format!("section-{}", project.sections.len() + 1), name);
+                project.sections.push(copy);
+            }
+            "FLIP" => {
+                if project.sections[index].locked {
+                    self.command_line
+                        .push_error("POINTCLOUDSECTIONFLIP: section is locked.");
+                    return;
+                }
+                project.sections[index].flip();
+            }
+            "LOCK" => {
+                project.sections[index].locked = argument.is_none_or(|value| {
+                    !matches!(value.to_ascii_uppercase().as_str(), "OFF" | "NO" | "0")
+                });
+            }
+            "DELETE" => {
+                if project.sections[index].locked {
+                    self.command_line
+                        .push_error("POINTCLOUDSECTIONDELETE: section is locked.");
+                    return;
+                }
+                project.sections.remove(index);
+            }
+            _ => return,
+        }
+        match project.save_atomic(project_path.clone()) {
+            Ok(()) => self.command_line.push_output(
+                format!("POINTCLOUDSECTION{action}: project section state saved.").as_str(),
+            ),
+            Err(error) => self
+                .command_line
+                .push_error(format!("POINTCLOUDSECTION{action}: {error}").as_str()),
+        }
+    }
+}
 
 const DISPLAY_POINT_LIMIT: usize = 1_000_000;
 const DISPLAY_READ_CHUNK: usize = 65_536;
@@ -42,6 +445,208 @@ pub struct TileLoadBatch {
     pub camera_generation: u64,
     pub selected: Vec<ocs_pointcloud::TileKey>,
     pub loaded: Vec<(ocs_pointcloud::TileKey, Vec<ocs_pointcloud::SamplePoint>)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointCloudSurfaceProduct {
+    Dtm,
+    Dsm,
+    Hillshade,
+}
+
+impl PointCloudSurfaceProduct {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dtm => "DTM",
+            Self::Dsm => "DSM",
+            Self::Hillshade => "Hillshade",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceJobSummary {
+    pub rows: usize,
+    pub columns: usize,
+    pub selected_points: u64,
+}
+
+impl OpenCADStudio {
+    pub(super) fn start_point_cloud_surface(
+        &mut self,
+        tab_index: usize,
+        product: PointCloudSurfaceProduct,
+        cell_size: f64,
+        output: PathBuf,
+    ) -> Task<Message> {
+        let Some(source) = self.tabs[tab_index].point_cloud.active() else {
+            self.command_line
+                .push_error("POINTCLOUDSURFACE: attach a LAS/LAZ cloud first.");
+            return Task::none();
+        };
+        let source_path = source.source_path.clone();
+        let filter = self.tabs[tab_index].point_cloud.selection_filter.clone();
+        let extent = self.tabs[tab_index]
+            .point_cloud
+            .section
+            .map(|section| {
+                let dx = section.p1[0] - section.p0[0];
+                let dy = section.p1[1] - section.p0[1];
+                let length = (dx * dx + dy * dy).sqrt().max(f64::EPSILON);
+                ocs_pointcloud::ProcessingExtent::Slab {
+                    origin: [
+                        (section.p0[0] + section.p1[0]) * 0.5,
+                        (section.p0[1] + section.p1[1]) * 0.5,
+                        0.0,
+                    ],
+                    normal: [-dy / length, dx / length, 0.0],
+                    total_width: section.width_world,
+                    vertical_limits: None,
+                }
+            })
+            .unwrap_or(ocs_pointcloud::ProcessingExtent::All);
+        let tab_id = self.tabs[tab_index].id;
+        let job_id = format!(
+            "surface-{}-{}",
+            product.label().to_ascii_lowercase(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        if let Some((project_path, project)) = self.tabs[tab_index].spatial_project.as_mut() {
+            let mut job = ocs_pointcloud::JobRecord::new(
+                format!("lidar.surface.{}", product.label().to_ascii_lowercase()),
+                format!("Create {} surface", product.label()),
+            );
+            job.id = job_id.clone();
+            job.inputs = vec![source_path.to_string_lossy().into_owned()];
+            job.outputs = vec![output.clone()];
+            job.parameters = serde_json::json!({ "cell_size": cell_size, "extent": extent });
+            job.start().ok();
+            project.jobs.push(job);
+            let _ = project.save_atomic(project_path.clone());
+        }
+        self.command_line.push_info(
+            format!(
+                "POINTCLOUD{}: full-density processing started (cell size {cell_size}).",
+                product.label().to_ascii_uppercase()
+            )
+            .as_str(),
+        );
+        Task::perform(
+            async move {
+                let classification = (product == PointCloudSurfaceProduct::Dtm).then_some(2);
+                let statistic = if product == PointCloudSurfaceProduct::Dtm {
+                    ocs_pointcloud::GridStatistic::Minimum
+                } else {
+                    ocs_pointcloud::GridStatistic::Maximum
+                };
+                let result = ocs_pointcloud::rasterize_full_density(
+                    &source_path,
+                    cell_size,
+                    classification,
+                    statistic,
+                    &extent,
+                    &filter,
+                    None,
+                    |_| {},
+                )
+                .and_then(|(surface, progress)| {
+                    if product == PointCloudSurfaceProduct::Hillshade {
+                        surface.write_hillshade_pgm(&output, 315.0, 45.0, false)?;
+                    } else {
+                        surface.write_ascii_grid(&output, false)?;
+                    }
+                    Ok(SurfaceJobSummary {
+                        rows: surface.rows,
+                        columns: surface.columns,
+                        selected_points: progress.selected,
+                    })
+                })
+                .map_err(|error| error.to_string());
+                (tab_id, job_id, product, output, result)
+            },
+            |(tab_id, job_id, product, output, result)| {
+                Message::PointCloudSurfaceGenerated(tab_id, job_id, product, output, result)
+            },
+        )
+    }
+
+    pub(super) fn finish_point_cloud_surface(
+        &mut self,
+        tab_id: u64,
+        job_id: String,
+        product: PointCloudSurfaceProduct,
+        output: PathBuf,
+        result: Result<SurfaceJobSummary, String>,
+    ) {
+        let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let result_text = match &result {
+            Ok(summary) => format!(
+                "{}x{} grid from {} full-density points",
+                summary.columns, summary.rows, summary.selected_points
+            ),
+            Err(error) => error.clone(),
+        };
+        let history_inputs = self.tabs[tab_index]
+            .point_cloud
+            .active()
+            .map(|source| vec![source.source_path.to_string_lossy().into_owned()])
+            .unwrap_or_default();
+        if let Some((project_path, project)) = self.tabs[tab_index].spatial_project.as_mut() {
+            if let Some(job) = project.jobs.iter_mut().find(|job| job.id == job_id) {
+                match &result {
+                    Ok(_) => job.complete(),
+                    Err(error) => job.fail(error),
+                }
+            }
+            project
+                .history
+                .push(ocs_pointcloud::ProcessingHistoryEntry {
+                    id: format!("history-{job_id}"),
+                    created_unix_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    tool_id: format!("lidar.surface.{}", product.label().to_ascii_lowercase()),
+                    inputs: history_inputs,
+                    outputs: vec![output.to_string_lossy().into_owned()],
+                    parameters: serde_json::Value::Null,
+                    software_version: env!("CARGO_PKG_VERSION").to_string(),
+                    crs_transformations: Vec::new(),
+                    status: if result.is_ok() {
+                        "completed"
+                    } else {
+                        "failed"
+                    }
+                    .to_string(),
+                    detail: result_text.clone(),
+                });
+            let _ = project.save_atomic(project_path.clone());
+        }
+        match result {
+            Ok(_) => self.command_line.push_output(
+                format!(
+                    "POINTCLOUD{}: wrote {result_text} to {}.",
+                    product.label().to_ascii_uppercase(),
+                    output.display()
+                )
+                .as_str(),
+            ),
+            Err(error) => self.command_line.push_error(
+                format!(
+                    "POINTCLOUD{}: {error}",
+                    product.label().to_ascii_uppercase()
+                )
+                .as_str(),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -376,6 +981,8 @@ pub(super) struct PointCloudAttachment {
     stream_request_id: u64,
     stream_camera_generation: u64,
     stream_in_flight: bool,
+    cancelled_tile_requests: u64,
+    stale_tile_results: u64,
     lru_clock: u64,
     screen_index: Option<ScreenSpatialIndex>,
 }
@@ -404,6 +1011,8 @@ impl PointCloudAttachment {
             stream_request_id: 0,
             stream_camera_generation: u64::MAX,
             stream_in_flight: false,
+            cancelled_tile_requests: 0,
+            stale_tile_results: 0,
             lru_clock: 0,
             screen_index: None,
         }
@@ -2195,15 +2804,10 @@ impl OpenCADStudio {
             .map(crate::app::spatial::DrawingCrs::as_crs_info);
         // The active cross-section band, captured before the mutable find so
         // the section can steer tile selection while a source is borrowed.
-        // The band is authored in screen pixels; convert to world units using
-        // the current camera so the tile selection matches the shader.
-        let world_per_pixel = if viewport.height > 0.0 {
-            (2.0 * camera.ortho_size()) / viewport.height
-        } else {
-            0.0_f32
-        };
+        // Its width is already in world/map units and must not depend on the
+        // current camera: zooming or rotating keeps the same geographic area.
         let section_band = self.tabs[tab_index].point_cloud.section.map(|section| {
-            let half = (0.5 * section.width_px * world_per_pixel as f64).max(0.0);
+            let half = (0.5 * section.width_world).max(0.0);
             let min_x = section.p0[0].min(section.p1[0]) - half;
             let max_x = section.p0[0].max(section.p1[0]) + half;
             let min_y = section.p0[1].min(section.p1[1]) - half;
@@ -2242,47 +2846,19 @@ impl OpenCADStudio {
             .min(memory_point_budget)
             .min(gpu_point_budget)
             .max(1) as u64;
-        let mut selected = Vec::new();
-        // An active cross-section densifies its band: instead of the camera
-        // frustum LOD, select the FINEST (leaf) tiles intersecting the section
-        // band so the slice shows full-resolution source points (bounded by the
-        // same point budget). Without a section, stream the camera frustum.
-        if let Some((band_min, band_max)) = section_band {
-            // Full-density band: leaf tiles only, still respecting the budget.
-            let leaves: Vec<_> = manifest
-                .tiles
-                .iter()
-                .filter(|tile| {
-                    tile.key.level == manifest.leaf_level && tile.intersects(band_min, band_max)
-                })
-                .cloned()
-                .collect();
-            let count = leaves.iter().map(|tile| tile.point_count).sum::<u64>();
-            if count <= point_budget || manifest.leaf_level == 0 {
-                selected = leaves;
-            } else {
-                // Band too dense for the budget: fall back to `select_tiles`,
-                // which walks down from the root to the finest fitting level.
-                selected = manifest.select_tiles(band_min, band_max, point_budget);
-            }
-        } else {
-            for level in (0..=manifest.leaf_level).rev() {
-                let candidates: Vec<_> = manifest
-                    .tiles
-                    .iter()
-                    .filter(|tile| {
-                        tile.key.level == level
-                            && camera.aabb_visible(tile.bounds_min, tile.bounds_max, viewport)
-                    })
-                    .cloned()
-                    .collect();
-                let count = candidates.iter().map(|tile| tile.point_count).sum::<u64>();
-                if count <= point_budget || level == 0 {
-                    selected = candidates;
-                    break;
-                }
-            }
-        }
+        // Stream only tiles that intersect the live camera frame. An active
+        // section adds its fixed world-space corridor as a second filter; it
+        // must never pull full-density leaves for off-screen parts of the cut.
+        // Walking finest-to-coarsest makes a close view reach leaf/full density
+        // naturally, while a wider view selects a lower-density level that
+        // fits the same CPU/GPU point budget.
+        let selected = select_visible_lod_tiles(
+            &manifest.tiles,
+            manifest.leaf_level,
+            point_budget,
+            section_band,
+            |tile| camera.aabb_visible(tile.bounds_min, tile.bounds_max, viewport),
+        );
         let selected_keys: Vec<_> = selected.iter().map(|tile| tile.key).collect();
         cloud.stream_camera_generation = camera_generation;
         cloud.lru_clock = cloud.lru_clock.wrapping_add(1).max(1);
@@ -2364,8 +2940,12 @@ impl OpenCADStudio {
             cloud.stream_in_flight = false;
             let batch = match result {
                 Ok(batch) if batch.request_id == cloud.stream_request_id => batch,
-                Ok(_) => return,
+                Ok(_) => {
+                    cloud.stale_tile_results = cloud.stale_tile_results.saturating_add(1);
+                    return;
+                }
                 Err(error) => {
+                    cloud.cancelled_tile_requests = cloud.cancelled_tile_requests.saturating_add(1);
                     self.command_line
                         .push_error(format!("POINTCLOUDLOD: {error}").as_str());
                     return;
@@ -2437,7 +3017,7 @@ impl OpenCADStudio {
         tab_index: usize,
         p0: [f64; 2],
         p1: [f64; 2],
-        width_px: f64,
+        width_world: f64,
         mode: crate::scene::model::point_cloud_model::SectionMode,
     ) {
         if self.tabs[tab_index].point_cloud.is_empty() {
@@ -2445,20 +3025,20 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSECTION: attach a LAS/LAZ cloud first.");
             return;
         }
-        if !width_px.is_finite() || !(1.0..=1024.0).contains(&width_px) {
+        if !width_world.is_finite() || !(1.0..=1024.0).contains(&width_world) {
             self.command_line
-                .push_error("POINTCLOUDSECTION: width must be between 1 and 1024 pixels.");
+                .push_error("POINTCLOUDSECTION: width must be between 1 and 1024 map units.");
             return;
         }
         self.tabs[tab_index].point_cloud.section =
             Some(crate::scene::model::point_cloud_model::Section {
                 p0,
                 p1,
-                width_px,
+                width_world,
                 mode,
             });
-        // A section change densifies its band: invalidate every source's stream
-        // so the next tick re-selects leaf tiles inside the band.
+        // A section change invalidates every source's stream so the next tick
+        // re-selects visible tiles at the finest LOD that fits the point budget.
         for source in &mut self.tabs[tab_index].point_cloud.sources {
             source.stream_camera_generation = u64::MAX;
         }
@@ -2496,19 +3076,19 @@ impl OpenCADStudio {
         self.restyle_point_cloud(tab_index);
     }
 
-    /// Change the active section's band half-width (screen pixels).
-    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, width_px: f64) {
+    /// Change the active section's total band width in drawing/map units.
+    pub(super) fn set_point_cloud_section_width(&mut self, tab_index: usize, width_world: f64) {
         let Some(mut section) = self.tabs[tab_index].point_cloud.section else {
             self.command_line
                 .push_error("POINTCLOUDSECTIONWIDTH: no section is active.");
             return;
         };
-        if !width_px.is_finite() || !(1.0..=1024.0).contains(&width_px) {
+        if !width_world.is_finite() || !(1.0..=1024.0).contains(&width_world) {
             self.command_line
-                .push_error("POINTCLOUDSECTIONWIDTH: width must be between 1 and 1024 pixels.");
+                .push_error("POINTCLOUDSECTIONWIDTH: width must be between 1 and 1024 map units.");
             return;
         }
-        section.width_px = width_px;
+        section.width_world = width_world;
         self.tabs[tab_index].point_cloud.section = Some(section);
         for source in &mut self.tabs[tab_index].point_cloud.sources {
             source.stream_camera_generation = u64::MAX;
@@ -4348,6 +4928,33 @@ impl PointCloudDataset {
         } else {
             "not declared".to_string()
         };
+        let resident_points: usize = self
+            .sources
+            .iter()
+            .flat_map(|source| source.resident_tiles.values())
+            .map(|tile| tile.points.len())
+            .sum();
+        let displayed_points: usize = self
+            .sources
+            .iter()
+            .map(PointCloudAttachment::displayed_len)
+            .sum();
+        let mut lod_levels: Vec<u8> = self
+            .sources
+            .iter()
+            .flat_map(|source| source.active_tiles.iter().map(|key| key.level))
+            .collect();
+        lod_levels.sort_unstable();
+        let lod_label = lod_levels.first().zip(lod_levels.last()).map_or_else(
+            || "sample path".to_string(),
+            |(minimum, maximum)| {
+                if minimum == maximum {
+                    format!("level {minimum}")
+                } else {
+                    format!("levels {minimum}-{maximum}")
+                }
+            },
+        );
         PointCloudManagerData {
             attached: true,
             source: source_label,
@@ -4356,11 +4963,7 @@ impl PointCloudDataset {
                 .iter()
                 .map(|source| source.sample.metadata.point_count)
                 .sum(),
-            displayed_points: self
-                .sources
-                .iter()
-                .map(|source| source.displayed_len())
-                .sum(),
+            displayed_points,
             sample_label,
             pending_edits: self.sources.iter().map(|source| source.edits.len()).sum(),
             transactions: self
@@ -4377,9 +4980,9 @@ impl PointCloudDataset {
             class_count: self.classes.classes.len(),
             color_mode: color_mode.to_string(),
             point_size_px: self.display.point_size_px,
-            section_width_px: self
+            section_width_map_units: self
                 .section
-                .map_or(32, |section| section.width_px.round() as i32)
+                .map_or(32, |section| section.width_world.round() as i32)
                 .clamp(1, 1024),
             crs_declared: any_crs,
             indexed: self
@@ -4401,16 +5004,30 @@ impl PointCloudDataset {
                 .iter()
                 .map(|source| source.resident_tiles.len())
                 .sum(),
-            resident_points: self
-                .sources
-                .iter()
-                .flat_map(|source| source.resident_tiles.values())
-                .map(|tile| tile.points.len())
-                .sum(),
+            resident_points,
             visible_tiles: self
                 .sources
                 .iter()
                 .map(|source| source.active_tiles.len())
+                .sum(),
+            cpu_memory_bytes: resident_points
+                .saturating_mul(std::mem::size_of::<ocs_pointcloud::SamplePoint>()),
+            gpu_memory_bytes: displayed_points.saturating_mul(GPU_POINT_BYTES),
+            lod_label,
+            pending_tile_requests: self
+                .sources
+                .iter()
+                .filter(|source| source.stream_in_flight)
+                .count(),
+            cancelled_tile_requests: self
+                .sources
+                .iter()
+                .map(|source| source.cancelled_tile_requests)
+                .sum(),
+            stale_tile_results: self
+                .sources
+                .iter()
+                .map(|source| source.stale_tile_results)
                 .sum(),
             crs_label,
             survey_readiness: survey_readiness.summary(),
@@ -4517,6 +5134,36 @@ fn evict_resident_tiles(cloud: &mut PointCloudAttachment, cpu_budget_bytes: usiz
             bytes = bytes.saturating_sub(tile.points.len().saturating_mul(point_size));
         }
     }
+}
+
+/// Chooses the finest single LOD whose visible tiles fit the point budget.
+/// `section_band` is an additional world-space query, never a substitute for
+/// the camera test: this prevents a long slice from loading off-screen tiles.
+fn select_visible_lod_tiles(
+    tiles: &[ocs_pointcloud::TileEntry],
+    leaf_level: u8,
+    point_budget: u64,
+    section_band: Option<([f64; 3], [f64; 3])>,
+    mut is_visible: impl FnMut(&ocs_pointcloud::TileEntry) -> bool,
+) -> Vec<ocs_pointcloud::TileEntry> {
+    let budget = point_budget.max(1);
+    for level in (0..=leaf_level).rev() {
+        let candidates: Vec<_> = tiles
+            .iter()
+            .filter(|tile| {
+                tile.key.level == level
+                    && is_visible(tile)
+                    && section_band
+                        .is_none_or(|(band_min, band_max)| tile.intersects(band_min, band_max))
+            })
+            .cloned()
+            .collect();
+        let count = candidates.iter().map(|tile| tile.point_count).sum::<u64>();
+        if count <= budget || level == 0 {
+            return candidates;
+        }
+    }
+    Vec::new()
 }
 
 /// Case-insensitive path equality on Windows, where LAS folders routinely
@@ -5162,6 +5809,61 @@ mod tests {
 
         sources[1].index_error = Some("bad source".to_string());
         assert_eq!(None, next_index_source_index(&sources));
+    }
+
+    fn lod_tile(level: u8, x: u32, point_count: u64) -> ocs_pointcloud::TileEntry {
+        ocs_pointcloud::TileEntry {
+            key: ocs_pointcloud::TileKey {
+                level,
+                x,
+                y: 0,
+                z: 0,
+            },
+            file_name: format!("l{level}-{x}.bin"),
+            point_count,
+            bounds_min: [x as f64 * 10.0, 0.0, 0.0],
+            bounds_max: [x as f64 * 10.0 + 9.0, 9.0, 9.0],
+        }
+    }
+
+    #[test]
+    fn lod_never_loads_tiles_outside_the_view_frame() {
+        let tiles = vec![
+            lod_tile(0, 0, 20),
+            lod_tile(1, 0, 60),
+            lod_tile(1, 1, 60),
+            lod_tile(1, 2, 60),
+        ];
+        let section = Some(([0.0, 0.0, f64::NEG_INFINITY], [40.0, 9.0, f64::INFINITY]));
+
+        let selected = select_visible_lod_tiles(&tiles, 1, 100, section, |tile| tile.key.x == 1);
+
+        assert_eq!(
+            vec![ocs_pointcloud::TileKey {
+                level: 1,
+                x: 1,
+                y: 0,
+                z: 0,
+            }],
+            selected.iter().map(|tile| tile.key).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn lod_uses_full_density_close_and_coarser_density_when_wide() {
+        let tiles = vec![lod_tile(0, 0, 40), lod_tile(1, 0, 60), lod_tile(1, 1, 60)];
+        let close = select_visible_lod_tiles(&tiles, 1, 100, None, |tile| tile.key.x == 0);
+        assert_eq!(
+            1, close[0].key.level,
+            "close view should use leaf/full density"
+        );
+
+        let wide = select_visible_lod_tiles(&tiles, 1, 100, None, |_| true);
+        assert_eq!(
+            vec![0],
+            wide.iter().map(|tile| tile.key.level).collect::<Vec<_>>(),
+            "wide view should fall back to the coarser fitting LOD"
+        );
     }
 }
 

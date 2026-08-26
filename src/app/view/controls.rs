@@ -1,6 +1,6 @@
-use super::*;
 use super::super::document::{DynComponent, DynFieldEntry};
 use super::super::Message;
+use super::*;
 use iced::widget::{button, canvas, column, container, mouse_area, row, text, tooltip};
 use iced::{Background, Border, Color, Element, Length, Point, Rectangle, Theme};
 use std::time::Duration;
@@ -38,7 +38,6 @@ impl canvas::Program<Message> for RenderModePreview {
         bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
-    
         use acadrust::entities::ViewportRenderMode as M;
         let mut frame = canvas::Frame::new(renderer, bounds.size());
         let palette = theme.palette();
@@ -47,13 +46,14 @@ impl canvas::Program<Message> for RenderModePreview {
         let accent = palette.primary.base.color;
         let face = palette.primary.weak.color.scale_alpha(0.72);
         let face_alt = palette.primary.strong.color.scale_alpha(0.64);
-        let edge = if self.mode == M::Wireframe3D { accent } else { ink };
+        let edge = if self.mode == M::Wireframe3D {
+            accent
+        } else {
+            ink
+        };
         let shaded = matches!(
             self.mode,
-            M::FlatShaded
-                | M::GouraudShaded
-                | M::FlatShadedWithEdges
-                | M::GouraudShadedWithEdges
+            M::FlatShaded | M::GouraudShaded | M::FlatShadedWithEdges | M::GouraudShadedWithEdges
         );
         let flat = matches!(self.mode, M::FlatShaded | M::FlatShadedWithEdges);
         let smooth = matches!(self.mode, M::GouraudShaded | M::GouraudShadedWithEdges);
@@ -104,9 +104,16 @@ impl canvas::Program<Message> for RenderModePreview {
         }
         if with_edges {
             for (from, to) in [
-                (a, b), (b, c), (c, d), (d, a),
-                (a, e), (b, f), (c, g), (d, h),
-                (e, f), (f, g),
+                (a, b),
+                (b, c),
+                (c, d),
+                (d, a),
+                (a, e),
+                (b, f),
+                (c, g),
+                (d, h),
+                (e, f),
+                (f, g),
             ] {
                 stroke_line(&mut frame, from, to, edge);
             }
@@ -122,8 +129,14 @@ impl canvas::Program<Message> for RenderModePreview {
                 let a1 = (i + 1) as f32 * std::f32::consts::TAU / 12.0;
                 let wedge = canvas::Path::new(|path| {
                     path.move_to(center);
-                    path.line_to(Point::new(center.x + radius * a0.cos(), center.y + radius * a0.sin()));
-                    path.line_to(Point::new(center.x + radius * a1.cos(), center.y + radius * a1.sin()));
+                    path.line_to(Point::new(
+                        center.x + radius * a0.cos(),
+                        center.y + radius * a0.sin(),
+                    ));
+                    path.line_to(Point::new(
+                        center.x + radius * a1.cos(),
+                        center.y + radius * a1.sin(),
+                    ));
                     path.close();
                 });
                 frame.fill(&wedge, if i % 3 == 0 { face_alt } else { face });
@@ -186,7 +199,8 @@ impl canvas::Program<Message> for RenderModePreview {
             &solid,
             canvas::Stroke::default().with_color(edge).with_width(1.0),
         );
-        let hatch_box = canvas::Path::rectangle(Point::new(105.0, 112.0), iced::Size::new(82.0, 31.0));
+        let hatch_box =
+            canvas::Path::rectangle(Point::new(105.0, 112.0), iced::Size::new(82.0, 31.0));
         frame.stroke(
             &hatch_box,
             canvas::Stroke::default().with_color(ink).with_width(1.0),
@@ -218,29 +232,27 @@ pub(super) fn viewport_controls<'a>(
         .iter()
         .map(|style| RenderModeChoice(style.mode))
         .collect();
-    let danger_btn = move |bytes: &'static [u8],
-                           msg: Message,
-                           title: String,
-                           command: &'static str| {
-        let button = button(crate::ui::icons::themed_danger(bytes, 15.0))
-            .on_press(msg)
-            .padding([4, 6])
-            .style(move |theme: &Theme, status| iced::widget::button::Style {
-                background: matches!(
-                    status,
-                    iced::widget::button::Status::Hovered
-                        | iced::widget::button::Status::Pressed
-                )
-                .then_some(Background::Color(theme.palette().danger.weak.color)),
-                border: Border {
-                    radius: 3.0.into(),
+    let danger_btn =
+        move |bytes: &'static [u8], msg: Message, title: String, command: &'static str| {
+            let button = button(crate::ui::icons::themed_danger(bytes, 15.0))
+                .on_press(msg)
+                .padding([4, 6])
+                .style(move |theme: &Theme, status| iced::widget::button::Style {
+                    background: matches!(
+                        status,
+                        iced::widget::button::Status::Hovered
+                            | iced::widget::button::Status::Pressed
+                    )
+                    .then_some(Background::Color(theme.palette().danger.weak.color)),
+                    border: Border {
+                        radius: 3.0.into(),
+                        ..Default::default()
+                    },
+                    text_color: theme.palette().danger.base.color,
                     ..Default::default()
-                },
-                text_color: theme.palette().danger.base.color,
-                ..Default::default()
-            });
-        viewport_tooltip(button, title, command)
-    };
+                });
+            viewport_tooltip(button, title, command)
+        };
 
     // Borderless icon button; an `active` toggle gets an accent tint + fill.
     let icon_btn = move |bytes: &'static [u8],
@@ -253,30 +265,29 @@ pub(super) fn viewport_controls<'a>(
         } else {
             crate::ui::icons::themed(bytes, 15.0)
         };
-        let button = button(icon)
-            .on_press(msg)
-            .padding([4, 6])
-            .style(move |theme: &Theme, status| {
-                let palette = theme.palette();
-                let pair = match (active, status) {
-                    (_, iced::widget::button::Status::Hovered) => {
-                        Some(palette.background.strong)
+        let button =
+            button(icon)
+                .on_press(msg)
+                .padding([4, 6])
+                .style(move |theme: &Theme, status| {
+                    let palette = theme.palette();
+                    let pair = match (active, status) {
+                        (_, iced::widget::button::Status::Hovered) => {
+                            Some(palette.background.strong)
+                        }
+                        (true, _) => Some(palette.primary.weak),
+                        (false, _) => None,
+                    };
+                    iced::widget::button::Style {
+                        background: pair.map(|p| Background::Color(p.color)),
+                        border: Border {
+                            radius: 3.0.into(),
+                            ..Default::default()
+                        },
+                        text_color: pair.map(|p| p.text).unwrap_or(palette.background.base.text),
+                        ..Default::default()
                     }
-                    (true, _) => Some(palette.primary.weak),
-                    (false, _) => None,
-                };
-                iced::widget::button::Style {
-                background: pair.map(|p| Background::Color(p.color)),
-                border: Border {
-                    radius: 3.0.into(),
-                    ..Default::default()
-                },
-                text_color: pair
-                    .map(|p| p.text)
-                    .unwrap_or(palette.background.base.text),
-                ..Default::default()
-                }
-            });
+                });
         viewport_tooltip(button, title, command)
     };
 
@@ -328,9 +339,11 @@ pub(super) fn viewport_controls<'a>(
                 let palette = theme.palette();
                 let active = highlighted;
                 container::Style {
-                    background: active.then_some(Background::Color(
-                        if selected { palette.primary.weak.color } else { palette.background.strong.color },
-                    )),
+                    background: active.then_some(Background::Color(if selected {
+                        palette.primary.weak.color
+                    } else {
+                        palette.background.strong.color
+                    })),
                     text_color: if selected {
                         Some(palette.primary.weak.text)
                     } else if active {
@@ -345,10 +358,12 @@ pub(super) fn viewport_controls<'a>(
                     ..Default::default()
                 }
             });
-        choices = choices.push(mouse_area(option)
-            .interaction(iced::mouse::Interaction::Pointer)
-            .on_enter(Message::PreviewRenderMode(choice.0))
-            .on_press(Message::SetRenderMode(choice.0)));
+        choices = choices.push(
+            mouse_area(option)
+                .interaction(iced::mouse::Interaction::Pointer)
+                .on_enter(Message::PreviewRenderMode(choice.0))
+                .on_press(Message::SetRenderMode(choice.0)),
+        );
     }
     let preview = container(
         column![
@@ -385,45 +400,40 @@ pub(super) fn viewport_controls<'a>(
             .spacing(6)
             .align_y(iced::alignment::Vertical::Top),
     )
-        .padding(6)
-        .style(|theme: &Theme| {
-            let palette = theme.palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.weak.color)),
-                border: Border {
-                    color: palette.background.neutral.color,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                text_color: Some(palette.background.weak.text),
-                ..Default::default()
-            }
-        });
-    let picker: Element<'a, Message> = iced_aw::DropDown::new(
-        picker_head,
-        popup,
-        render_mode_menu_open,
-    )
-    .alignment(iced_aw::drop_down::Alignment::Bottom)
-    .offset(3.0)
-    .on_dismiss(Message::DismissRenderModeMenu)
-    .into();
+    .padding(6)
+    .style(|theme: &Theme| {
+        let palette = theme.palette();
+        container::Style {
+            background: Some(Background::Color(palette.background.weak.color)),
+            border: Border {
+                color: palette.background.neutral.color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            text_color: Some(palette.background.weak.text),
+            ..Default::default()
+        }
+    });
+    let picker: Element<'a, Message> =
+        iced_aw::DropDown::new(picker_head, popup, render_mode_menu_open)
+            .alignment(iced_aw::drop_down::Alignment::Bottom)
+            .offset(3.0)
+            .on_dismiss(Message::DismissRenderModeMenu)
+            .into();
 
     // Thin vertical divider between control groups.
     let sep = || {
         container(iced::widget::Space::new().width(1.0).height(16.0)).style(|theme: &Theme| {
             iced::widget::container::Style {
                 background: Some(Background::Color(
-                    theme.palette().background.neutral.color.scale_alpha(0.7)
+                    theme.palette().background.neutral.color.scale_alpha(0.7),
                 )),
                 ..Default::default()
             }
         })
     };
 
-    let mut bar = row![]
-        .spacing(3)
-        .align_y(iced::alignment::Vertical::Center);
+    let mut bar = row![].spacing(3).align_y(iced::alignment::Vertical::Center);
     bar = bar
         .push(icon_btn(
             crate::ui::icons::GRID,
@@ -466,29 +476,28 @@ pub(super) fn viewport_controls<'a>(
         // would only fire on release). Placed just left of Close.
         if tile_count > 1 {
             let drag = mouse_area(
-                container(crate::ui::icons::themed_success(crate::ui::icons::MOVE, 15.0))
-                    .padding([4, 6])
-                    .style(|_: &Theme| iced::widget::container::Style {
-                        border: Border {
-                            radius: 3.0.into(),
-                            ..Default::default()
-                        },
+                container(crate::ui::icons::themed_success(
+                    crate::ui::icons::MOVE,
+                    15.0,
+                ))
+                .padding([4, 6])
+                .style(|_: &Theme| iced::widget::container::Style {
+                    border: Border {
+                        radius: 3.0.into(),
                         ..Default::default()
-                    }),
+                    },
+                    ..Default::default()
+                }),
             )
             .interaction(iced::mouse::Interaction::Grab)
             .on_press(Message::PaneMoveStart);
             let drag = viewport_tooltip(drag, crate::tr!("viewport", "move"), "VPORTS");
-            bar = bar
-                .push(sep())
-                .push(drag)
-                .push(sep())
-                .push(danger_btn(
-                    crate::ui::icons::CLOSE,
-                    Message::CloseModelViewport,
-                    crate::tr!("viewport", "close"),
-                    "VPORTS SINGLE",
-                ));
+            bar = bar.push(sep()).push(drag).push(sep()).push(danger_btn(
+                crate::ui::icons::CLOSE,
+                Message::CloseModelViewport,
+                crate::tr!("viewport", "close"),
+                "VPORTS SINGLE",
+            ));
         }
     }
 
@@ -497,15 +506,15 @@ pub(super) fn viewport_controls<'a>(
         .style(|theme: &Theme| {
             let palette = theme.palette();
             iced::widget::container::Style {
-            background: Some(Background::Color(
-                palette.background.weak.color.scale_alpha(0.92)
-            )),
-            border: Border {
-                color: palette.background.neutral.color,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..Default::default()
+                background: Some(Background::Color(
+                    palette.background.weak.color.scale_alpha(0.92),
+                )),
+                border: Border {
+                    color: palette.background.neutral.color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
             }
         })
         .into()
@@ -546,8 +555,10 @@ pub(super) fn dyn_component_value(
     // the user separates the values with `,` the entry is a cartesian
     // coordinate pair, so the fields read as signed X/Y deltas to match the
     // committed point (#269).
-    let wh = matches!(f.role, crate::command::DynRole::Width | crate::command::DynRole::Height)
-        && relative
+    let wh = matches!(
+        f.role,
+        crate::command::DynRole::Width | crate::command::DynRole::Height
+    ) && relative
         && !comma_cartesian;
     match f.component {
         DynComponent::X if relative => format!("{:.4}", if wh { dx.abs() } else { dx }),
@@ -558,13 +569,19 @@ pub(super) fn dyn_component_value(
         DynComponent::Z => format!("{:.4}", p.z),
         // Scaled by the role so a diameter box reads twice the radius.
         DynComponent::Distance => {
-            format!("{:.4}", (dx * dx + dy * dy).sqrt() * f.role.value_scale() as f64)
+            format!(
+                "{:.4}",
+                (dx * dx + dy * dy).sqrt() * f.role.value_scale() as f64
+            )
         }
         // Shared rule: unsigned magnitude of the short angle, so CW (below the
         // reference axis) reads positive (e.g. 30°, not -30°/330°). The
         // committed value stays signed (see dyn_resolve_point).
         DynComponent::Angle => {
-            format!("{:.1}", crate::command::dyn_display_angle_deg(dy.atan2(dx) as f32))
+            format!(
+                "{:.1}",
+                crate::command::dyn_display_angle_deg(dy.atan2(dx) as f32)
+            )
         }
         // Typed-only scalar — no geometric value to track when empty.
         DynComponent::Scalar => String::new(),

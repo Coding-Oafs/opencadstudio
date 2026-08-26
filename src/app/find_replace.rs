@@ -43,17 +43,13 @@ impl OpenCADStudio {
             let index = (start + offset) % matches.len();
             let target = matches[index];
             let centered = match target {
-                FindMatchKey::Entity(handle) => {
-                    self.tabs[i].scene.center_camera_on_entity(handle)
-                }
+                FindMatchKey::Entity(handle) => self.tabs[i].scene.center_camera_on_entity(handle),
                 FindMatchKey::BlockEntityInInsert { entity, insert } => self.tabs[i]
                     .scene
                     .center_camera_on_block_entity(insert, entity),
-                FindMatchKey::InsertAttribute { insert, index } => {
-                    self.tabs[i]
-                        .scene
-                        .center_camera_on_insert_attribute(insert, index)
-                }
+                FindMatchKey::InsertAttribute { insert, index } => self.tabs[i]
+                    .scene
+                    .center_camera_on_insert_attribute(insert, index),
             };
             if !centered {
                 continue;
@@ -117,10 +113,7 @@ impl OpenCADStudio {
         }
 
         let handle = match_document_handle(target);
-        if self.tabs[i]
-            .scene
-            .entity_belongs_to_active_space(handle)
-        {
+        if self.tabs[i].scene.entity_belongs_to_active_space(handle) {
             self.invalidate_property_targets(i, &[handle]);
         } else {
             // A block-definition edit must rebuild the definition cache; an
@@ -135,9 +128,9 @@ impl OpenCADStudio {
             "Replaced 1 occurrence in {}; {remaining} matching object(s) remain.",
             match_label(target)
         );
-        self.command_line.push_output(crate::tf!(
-            "FIND/REPLACE: replaced 1 occurrence of \"{search}\"."
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!("FIND/REPLACE: replaced 1 occurrence of \"{search}\".").as_ref(),
+        );
         self.refresh_properties();
     }
 
@@ -171,9 +164,8 @@ impl OpenCADStudio {
             if count > 0 {
                 replaced += count;
                 let handle = match_document_handle(target);
-                changed_outside_active_space |= !self.tabs[i]
-                    .scene
-                    .entity_belongs_to_active_space(handle);
+                changed_outside_active_space |=
+                    !self.tabs[i].scene.entity_belongs_to_active_space(handle);
                 if !changed.contains(&handle) {
                     changed.push(handle);
                 }
@@ -196,9 +188,9 @@ impl OpenCADStudio {
             "Replaced {replaced} occurrence(s) in {} object(s).",
             changed.len()
         );
-        self.command_line.push_output(crate::tf!(
-            "FIND/REPLACE: replaced {replaced} occurrence(s) of \"{search}\"."
-        ).as_ref());
+        self.command_line.push_output(
+            crate::tf!("FIND/REPLACE: replaced {replaced} occurrence(s) of \"{search}\".").as_ref(),
+        );
         self.refresh_properties();
     }
 
@@ -267,12 +259,8 @@ impl OpenCADStudio {
                     continue;
                 }
                 let mut visited = Vec::new();
-                if block_contains_entity(
-                    &scene.document,
-                    &insert.block_name,
-                    entity,
-                    &mut visited,
-                ) {
+                if block_contains_entity(&scene.document, &insert.block_name, entity, &mut visited)
+                {
                     matches.push(FindMatchKey::BlockEntityInInsert {
                         entity,
                         insert: insert.common.handle,
@@ -335,12 +323,8 @@ fn replace_match_text(
             let Some(attribute) = entity.attributes.get_mut(index) else {
                 return 0;
             };
-            let (value, count) = replace_case_insensitive(
-                attribute.get_value(),
-                search,
-                replacement,
-                replace_all,
-            );
+            let (value, count) =
+                replace_case_insensitive(attribute.get_value(), search, replacement, replace_all);
             if count > 0 {
                 attribute.set_value(value);
             }
@@ -374,11 +358,7 @@ fn match_label(target: FindMatchKey) -> String {
     match target {
         FindMatchKey::Entity(handle) => format!("handle {:X}", handle.value()),
         FindMatchKey::BlockEntityInInsert { entity, insert } => {
-            format!(
-                "block {:X}, text {:X}",
-                insert.value(),
-                entity.value()
-            )
+            format!("block {:X}, text {:X}", insert.value(), entity.value())
         }
         FindMatchKey::InsertAttribute { insert, index } => {
             format!("block {:X}, attribute {}", insert.value(), index + 1)

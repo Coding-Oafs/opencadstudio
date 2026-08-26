@@ -251,9 +251,7 @@ impl OpenCADStudio {
         eye: glam::DVec3,
         bounds: iced::Rectangle,
     ) -> Option<crate::snap::OtrackHit> {
-        let intersection = snap.filter(|hit| {
-            hit.snap_type == crate::snap::SnapType::Intersection
-        });
+        let intersection = snap.filter(|hit| hit.snap_type == crate::snap::SnapType::Intersection);
 
         // Ordinary object snaps suppress OTRACK. Extension and Intersection are
         // exceptions: both may lie on an active tracking vector.
@@ -267,22 +265,15 @@ impl OpenCADStudio {
         }
 
         let required_crossing_ray = match snap {
-            Some(extension)
-                if extension.snap_type == crate::snap::SnapType::Extension =>
-            {
-                Some((
-                    extension.extension_origin?,
-                    extension.extension_dir?,
-                ))
+            Some(extension) if extension.snap_type == crate::snap::SnapType::Extension => {
+                Some((extension.extension_origin?, extension.extension_dir?))
             }
             _ => None,
         };
 
         // When Intersection has already won OSNAP selection, test OTRACK at the
         // exact intersection rather than at the free cursor position.
-        let track_cursor = intersection
-            .map(|hit| hit.world)
-            .unwrap_or(cursor);
+        let track_cursor = intersection.map(|hit| hit.world).unwrap_or(cursor);
 
         let step = (self.polar_mode && drafting).then_some(self.polar_increment_deg);
         let (_, (ucs_x, ucs_y, _)) = self.drafting_grid_basis(tab);
@@ -1387,10 +1378,8 @@ impl OpenCADStudio {
                 // acquired tracking point immediately. This lets Extension/OTRACK use the
                 // original edge direction on the very first movement instead of requiring the
                 // cursor to return to the old grip position and dwell there first.
-                self.snapper.acquire_grip_tracking_point(
-                    grip.origin_world,
-                    &self.grip_snap_wires,
-                );
+                self.snapper
+                    .acquire_grip_tracking_point(grip.origin_world, &self.grip_snap_wires);
                 self.grip_text_verts = snap
                     .iter()
                     .flat_map(|w| w.text_verts.iter().copied())
@@ -3544,11 +3533,11 @@ impl OpenCADStudio {
                         if let Some(model) = self.tabs[i].scene.hatches.get(&handle).cloned() {
                             let entity = self.tabs[i].scene.document.get_entity(handle);
                             let annotative = entity.is_some_and(|entity| {
-                                    crate::scene::annotative::is_annotative(
-                                        &self.tabs[i].scene.document,
-                                        entity,
-                                    )
-                                });
+                                crate::scene::annotative::is_annotative(
+                                    &self.tabs[i].scene.document,
+                                    entity,
+                                )
+                            });
                             let (scale, angle) = match entity {
                                 Some(acadrust::EntityType::Hatch(hatch)) => (
                                     hatch.pattern_scale as f32,

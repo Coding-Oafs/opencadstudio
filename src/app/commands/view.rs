@@ -4,7 +4,8 @@ impl OpenCADStudio {
     pub(crate) fn dispatch_view(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             "DONATE" => {
-                self.command_line.push_info(crate::t!("Opening Patreon page...").as_ref());
+                self.command_line
+                    .push_info(crate::t!("Opening Patreon page...").as_ref());
                 return Some(crate::sys::open_url(
                     "https://patreon.com/HakanSeven12",
                     self.main_window,
@@ -12,7 +13,8 @@ impl OpenCADStudio {
             }
 
             "WEBVERSION" => {
-                self.command_line.push_info(crate::t!("Opening OCS Web...").as_ref());
+                self.command_line
+                    .push_info(crate::t!("Opening OCS Web...").as_ref());
                 return Some(crate::sys::open_url(
                     "https://hakanseven12.github.io/OpenCADStudio/",
                     self.main_window,
@@ -20,8 +22,9 @@ impl OpenCADStudio {
             }
 
             "HELP" => {
-                self.command_line
-                    .push_info(crate::t!("Opening OCS Discussions for help and questions...").as_ref());
+                self.command_line.push_info(
+                    crate::t!("Opening OCS Discussions for help and questions...").as_ref(),
+                );
                 return Some(crate::sys::open_url(
                     "https://github.com/HakanSeven12/OpenCADStudio/discussions",
                     self.main_window,
@@ -42,101 +45,145 @@ impl OpenCADStudio {
                     .unwrap_or_else(|| "(unsaved)".to_string());
                 self.command_line
                     .push_output(crate::tf!("Drawing: {}", path_label).as_ref());
-                self.command_line
-                    .push_output(crate::tf!("  Created (Julian):  {:.6}", h.create_date_julian).as_ref());
-                self.command_line
-                    .push_output(crate::tf!("  Updated (Julian):  {:.6}", h.update_date_julian).as_ref());
-                self.command_line
-                    .push_output(crate::tf!("  Total edit time:   {:.4}", h.total_editing_time).as_ref());
-                self.command_line
-                    .push_output(crate::tf!("  User elapsed:      {:.4}", h.user_elapsed_time).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Last saved by:     {}",
-                    if h.last_saved_by.is_empty() {
-                        "(unknown)"
-                    } else {
-                        &h.last_saved_by
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Fingerprint GUID:  {}",
-                    if h.fingerprint_guid.is_empty() {
-                        "(none)"
-                    } else {
-                        &h.fingerprint_guid
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Version GUID:      {}",
-                    if h.version_guid.is_empty() {
-                        "(none)"
-                    } else {
-                        &h.version_guid
-                    }
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!("  Created (Julian):  {:.6}", h.create_date_julian).as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!("  Updated (Julian):  {:.6}", h.update_date_julian).as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!("  Total edit time:   {:.4}", h.total_editing_time).as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!("  User elapsed:      {:.4}", h.user_elapsed_time).as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Last saved by:     {}",
+                        if h.last_saved_by.is_empty() {
+                            "(unknown)"
+                        } else {
+                            &h.last_saved_by
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Fingerprint GUID:  {}",
+                        if h.fingerprint_guid.is_empty() {
+                            "(none)"
+                        } else {
+                            &h.fingerprint_guid
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Version GUID:      {}",
+                        if h.version_guid.is_empty() {
+                            "(none)"
+                        } else {
+                            &h.version_guid
+                        }
+                    )
+                    .as_ref(),
+                );
                 self.command_line
                     .push_output(crate::tf!("  Code page:         {}", h.code_page).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Menu name:         {}",
-                    if h.menu_name.is_empty() {
-                        "(none)"
-                    } else {
-                        &h.menu_name
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Hyperlink base:    {}",
-                    if h.hyperlink_base.is_empty() {
-                        "(none)"
-                    } else {
-                        &h.hyperlink_base
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Project name:      {}",
-                    if h.project_name.is_empty() {
-                        "(none)"
-                    } else {
-                        &h.project_name
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Stylesheet:        {}",
-                    if h.stylesheet.is_empty() {
-                        "(none)"
-                    } else {
-                        &h.stylesheet
-                    }
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Required versions: {:#018x}",
-                    h.required_versions
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  Measurement:       {} ({})",
-                    h.measurement,
-                    if h.measurement == 1 {
-                        "Metric"
-                    } else {
-                        "Imperial"
-                    }
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Menu name:         {}",
+                        if h.menu_name.is_empty() {
+                            "(none)"
+                        } else {
+                            &h.menu_name
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Hyperlink base:    {}",
+                        if h.hyperlink_base.is_empty() {
+                            "(none)"
+                        } else {
+                            &h.hyperlink_base
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Project name:      {}",
+                        if h.project_name.is_empty() {
+                            "(none)"
+                        } else {
+                            &h.project_name
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Stylesheet:        {}",
+                        if h.stylesheet.is_empty() {
+                            "(none)"
+                        } else {
+                            &h.stylesheet
+                        }
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!("  Required versions: {:#018x}", h.required_versions).as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  Measurement:       {} ({})",
+                        h.measurement,
+                        if h.measurement == 1 {
+                            "Metric"
+                        } else {
+                            "Imperial"
+                        }
+                    )
+                    .as_ref(),
+                );
                 self.command_line
                     .push_output(crate::tf!("  Proxy graphics:    {}", h.proxy_graphics).as_ref());
                 self.command_line
                     .push_output(crate::tf!("  Tree depth:        {}", h.tree_depth).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  User vars (int):   {} {} {} {} {}",
-                    h.user_int1, h.user_int2, h.user_int3, h.user_int4, h.user_int5
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  User vars (real):  {:.6} {:.6} {:.6} {:.6} {:.6}",
-                    h.user_real1, h.user_real2, h.user_real3, h.user_real4, h.user_real5
-                ).as_ref());
-                self.command_line.push_output(crate::tf!(
-                    "  User timer:        {}",
-                    if h.user_timer { "On" } else { "Off" }
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  User vars (int):   {} {} {} {} {}",
+                        h.user_int1,
+                        h.user_int2,
+                        h.user_int3,
+                        h.user_int4,
+                        h.user_int5
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  User vars (real):  {:.6} {:.6} {:.6} {:.6} {:.6}",
+                        h.user_real1,
+                        h.user_real2,
+                        h.user_real3,
+                        h.user_real4,
+                        h.user_real5
+                    )
+                    .as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!(
+                        "  User timer:        {}",
+                        if h.user_timer { "On" } else { "Off" }
+                    )
+                    .as_ref(),
+                );
             }
 
             // Edit a USERI1..USERI5 / USERR1..USERR5 slot. Lets the user
@@ -174,9 +221,11 @@ impl OpenCADStudio {
                                 _ => h.user_real5 = val,
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::tf!("USERR{n} = {val}").as_ref());
+                            self.command_line
+                                .push_output(crate::tf!("USERR{n} = {val}").as_ref());
                         } else {
-                            self.command_line.push_info(crate::t!("Usage: USERR <1-5> <real>").as_ref());
+                            self.command_line
+                                .push_info(crate::t!("Usage: USERR <1-5> <real>").as_ref());
                         }
                     }
                     (Some(n @ 1..=5), v, false) => {
@@ -189,14 +238,16 @@ impl OpenCADStudio {
                                 _ => h.user_int5 = val,
                             }
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::tf!("USERI{n} = {val}").as_ref());
+                            self.command_line
+                                .push_output(crate::tf!("USERI{n} = {val}").as_ref());
                         } else {
-                            self.command_line.push_info(crate::t!("Usage: USERI <1-5> <integer>").as_ref());
+                            self.command_line
+                                .push_info(crate::t!("Usage: USERI <1-5> <integer>").as_ref());
                         }
                     }
-                    _ => self
-                        .command_line
-                        .push_info(crate::t!("Usage: USERI <1-5> <int> | USERR <1-5> <real>").as_ref()),
+                    _ => self.command_line.push_info(
+                        crate::t!("Usage: USERI <1-5> <int> | USERR <1-5> <real>").as_ref(),
+                    ),
                 }
             }
 
@@ -213,7 +264,8 @@ impl OpenCADStudio {
                     "https://github.com/HakanSeven12/OpenCADStudio/issues/new?body={}",
                     crate::sys::percent_encode(&body)
                 );
-                self.command_line.push_info(crate::t!("Opening feedback page...").as_ref());
+                self.command_line
+                    .push_info(crate::t!("Opening feedback page...").as_ref());
                 return Some(crate::sys::open_url(&url, self.main_window));
             }
 
@@ -226,7 +278,8 @@ impl OpenCADStudio {
             }
 
             "CHANGELOG" => {
-                self.command_line.push_info(crate::t!("Opening release notes...").as_ref());
+                self.command_line
+                    .push_info(crate::t!("Opening release notes...").as_ref());
                 return Some(crate::sys::open_url(
                     "https://github.com/HakanSeven12/OpenCADStudio/releases",
                     self.main_window,
@@ -249,7 +302,8 @@ impl OpenCADStudio {
             // (the drawing-independent CUI data) to a plain "KEY COMMAND" file.
             "CUIEXPORT" => {
                 use crate::command::ValuePromptCommand;
-                let c = ValuePromptCommand::new("CUIEXPORT", "CUIEXPORT  file to save shortcuts to:");
+                let c =
+                    ValuePromptCommand::new("CUIEXPORT", "CUIEXPORT  file to save shortcuts to:");
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -266,9 +320,9 @@ impl OpenCADStudio {
                 let text: String = keys.iter().map(|(k, v)| format!("{k} {v}\n")).collect();
                 let count = self.shortcut_bindings.len();
                 match std::fs::write(path, text) {
-                    Ok(()) => self.command_line.push_output(crate::tf!(
-                        "CUIEXPORT: wrote {count} shortcut(s) to \"{path}\"."
-                    ).as_ref()),
+                    Ok(()) => self.command_line.push_output(
+                        crate::tf!("CUIEXPORT: wrote {count} shortcut(s) to \"{path}\".").as_ref(),
+                    ),
                     Err(e) => self
                         .command_line
                         .push_error(crate::tf!("CUIEXPORT: cannot write \"{path}\": {e}").as_ref()),
@@ -305,16 +359,16 @@ impl OpenCADStudio {
                             if let Some((k, v)) = line.split_once(char::is_whitespace) {
                                 let key = crate::app::shortcuts::normalize_key(k);
                                 if !key.is_empty() {
-                                    self.shortcut_bindings
-                                        .insert(key, v.trim().to_uppercase());
+                                    self.shortcut_bindings.insert(key, v.trim().to_uppercase());
                                     n += 1;
                                 }
                             }
                         }
                         self.persist_settings_if_changed();
-                        self.command_line.push_output(crate::tf!(
-                            "CUIIMPORT: loaded {n} shortcut(s) from \"{path}\"."
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("CUIIMPORT: loaded {n} shortcut(s) from \"{path}\".")
+                                .as_ref(),
+                        );
                     }
                     Err(e) => self
                         .command_line
@@ -345,15 +399,17 @@ impl OpenCADStudio {
                             } else {
                                 self.shortcut_bindings.insert(key.clone(), cmd_str.clone());
                                 self.persist_settings_if_changed();
-                                self.command_line
-                                    .push_output(crate::tf!("Shortcut set: {key} → {cmd_str}").as_ref());
+                                self.command_line.push_output(
+                                    crate::tf!("Shortcut set: {key} → {cmd_str}").as_ref(),
+                                );
                             }
                         }
                     }
                     "CLEAR" | "DELETE" | "REMOVE" => {
                         let key = parts.get(1).map(|s| s.to_uppercase()).unwrap_or_default();
                         if key.is_empty() {
-                            self.command_line.push_error(crate::t!("Usage: SHORTCUTS CLEAR <key>").as_ref());
+                            self.command_line
+                                .push_error(crate::t!("Usage: SHORTCUTS CLEAR <key>").as_ref());
                         } else if self
                             .shortcut_bindings
                             .remove(&crate::app::shortcuts::normalize_key(&key))
@@ -368,8 +424,10 @@ impl OpenCADStudio {
                         }
                     }
                     _ => {
-                        self.command_line
-                            .push_info(crate::t!("Usage: SHORTCUTS LIST | SET <key> <cmd> | CLEAR <key>").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("Usage: SHORTCUTS LIST | SET <key> <cmd> | CLEAR <key>")
+                                .as_ref(),
+                        );
                     }
                 }
             }
@@ -411,10 +469,13 @@ impl OpenCADStudio {
                         return Some(Task::none());
                     }
                     _ => {
-                        self.command_line.push_error(crate::tf!(
+                        self.command_line.push_error(
+                            crate::tf!(
                             "COLORSCHEME: unknown theme '{}'. Type COLORSCHEME LIST for options.",
                             sub
-                        ).as_ref());
+                        )
+                            .as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -435,8 +496,9 @@ impl OpenCADStudio {
             // ── Layout / viewport ──────────────────────────────────────────
             "MVIEW" => {
                 if self.tabs[i].scene.current_layout == "Model" {
-                    self.command_line
-                        .push_error(crate::t!("MVIEW: switch to a paper space layout first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("MVIEW: switch to a paper space layout first.").as_ref(),
+                    );
                 } else {
                     use crate::modules::layout::mview::MviewCommand;
                     let scene = &self.tabs[i].scene;
@@ -478,8 +540,9 @@ impl OpenCADStudio {
                     // the next command-line entry supplies it.
                     if sub.is_empty() {
                         self.awaiting_vports = true;
-                        self.command_line
-                            .push_info(crate::t!("VPORTS  Configuration [SIngle/2H/2V/4]:").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("VPORTS  Configuration [SIngle/2H/2V/4]:").as_ref(),
+                        );
                         return Some(self.focus_cmd_input());
                     }
                     // Model space: split the tiled viewport layout via pane_grid.
@@ -512,8 +575,9 @@ impl OpenCADStudio {
                                 .push_output(crate::tf!("VPORTS: {n} viewport(s).").as_ref());
                         }
                         None => {
-                            self.command_line
-                                .push_error(crate::t!("VPORTS: use SINGLE | 2H | 2V | 4.").as_ref());
+                            self.command_line.push_error(
+                                crate::t!("VPORTS: use SINGLE | 2H | 2V | 4.").as_ref(),
+                            );
                         }
                     }
                 } else if sub.is_empty() {
@@ -549,11 +613,14 @@ impl OpenCADStudio {
                     if viewports.is_empty() {
                         self.command_line.push_info(crate::t!("No viewports. Use MVIEW to create one, or VPORTS 2H / 2V / 4 / SINGLE.").as_ref());
                     } else {
-                        self.command_line.push_output(crate::tf!(
-                            "{} viewport(s) in layout \"{}\":",
-                            viewports.len(),
-                            scene.current_layout
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!(
+                                "{} viewport(s) in layout \"{}\":",
+                                viewports.len(),
+                                scene.current_layout
+                            )
+                            .as_ref(),
+                        );
                         for (id, center, w, h, scale, is_on, locked) in &viewports {
                             let state = match (is_on, locked) {
                                 (true, true) => "On, Locked",
@@ -679,7 +746,8 @@ impl OpenCADStudio {
                                     self.tabs[i].scene.auto_fit_viewport(handle);
                                 }
                                 Err(e) => {
-                                    self.command_line.push_error(crate::tf!("VPORTS: {e}").as_ref());
+                                    self.command_line
+                                        .push_error(crate::tf!("VPORTS: {e}").as_ref());
                                 }
                             }
                         }
@@ -711,11 +779,10 @@ impl OpenCADStudio {
                             }
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
-                            "VPORTS: created {} viewport(s) [{}].",
-                            rects.len(),
-                            sub
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("VPORTS: created {} viewport(s) [{}].", rects.len(), sub)
+                                .as_ref(),
+                        );
                     }
                 }
             }
@@ -724,11 +791,13 @@ impl OpenCADStudio {
             "VPLAYER" => {
                 let scene = &self.tabs[i].scene;
                 if scene.current_layout == "Model" {
-                    self.command_line
-                        .push_error(crate::t!("VPLAYER: switch to a paper space layout first.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("VPLAYER: switch to a paper space layout first.").as_ref(),
+                    );
                 } else if scene.active_viewport.is_none() {
-                    self.command_line
-                        .push_error(crate::t!("VPLAYER: enter a viewport first (double-click or MS).").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("VPLAYER: enter a viewport first (double-click or MS).").as_ref(),
+                    );
                 } else {
                     use crate::modules::layout::vplayer::VplayerCommand;
                     let vp_handle = scene.active_viewport.unwrap();
@@ -753,13 +822,14 @@ impl OpenCADStudio {
                         }
                     };
                     if frozen_names.is_empty() {
-                        self.command_line
-                            .push_info(crate::t!("VPLAYER: no frozen layers in active viewport.").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("VPLAYER: no frozen layers in active viewport.").as_ref(),
+                        );
                     } else {
-                        self.command_line.push_info(crate::tf!(
-                            "VPLAYER: frozen layers: {}",
-                            frozen_names.join(", ")
-                        ).as_ref());
+                        self.command_line.push_info(
+                            crate::tf!("VPLAYER: frozen layers: {}", frozen_names.join(", "))
+                                .as_ref(),
+                        );
                     }
                     let new_cmd = VplayerCommand::new(vp_handle);
                     self.command_line.push_info(&new_cmd.prompt());
@@ -966,12 +1036,15 @@ impl OpenCADStudio {
                                     }
                                 }
                                 let rel = if above { "above" } else { "below" };
-                                self.command_line.push_info(crate::tf!(
-                                    "DRAWORDER: moved {} entities {} {:x}.",
-                                    selected.len(),
-                                    rel,
-                                    target.value()
-                                ).as_ref());
+                                self.command_line.push_info(
+                                    crate::tf!(
+                                        "DRAWORDER: moved {} entities {} {:x}.",
+                                        selected.len(),
+                                        rel,
+                                        target.value()
+                                    )
+                                    .as_ref(),
+                                );
                             } else if let Some(to_front) = to_front_opt {
                                 let (min_eff, max_eff) = fb_baseline.unwrap_or((1, 0));
                                 for (k, h) in selected.iter().enumerate() {
@@ -983,11 +1056,14 @@ impl OpenCADStudio {
                                     table.add_entry(*h, acadrust::Handle::new(sort));
                                 }
                                 let dir = if to_front { "front" } else { "back" };
-                                self.command_line.push_info(crate::tf!(
-                                    "DRAWORDER: moved {} entities to {}.",
-                                    selected.len(),
-                                    dir
-                                ).as_ref());
+                                self.command_line.push_info(
+                                    crate::tf!(
+                                        "DRAWORDER: moved {} entities to {}.",
+                                        selected.len(),
+                                        dir
+                                    )
+                                    .as_ref(),
+                                );
                             }
                         }
                         // Sort order lives in SortEntitiesTable, which the
@@ -1026,8 +1102,9 @@ impl OpenCADStudio {
                 let src = match self.tabs[i].scene.document.get_entity(vps[0]) {
                     Some(acadrust::EntityType::Viewport(vp)) => vp.clone(),
                     _ => {
-                        self.command_line
-                            .push_error(crate::t!("SYNCPVIEWPORTS: master is not a viewport.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("SYNCPVIEWPORTS: master is not a viewport.").as_ref(),
+                        );
                         return Some(Task::none());
                     }
                 };
@@ -1050,9 +1127,9 @@ impl OpenCADStudio {
                     }
                 }
                 self.tabs[i].dirty = true;
-                self.command_line.push_output(crate::tf!(
-                    "SYNCPVIEWPORTS: synced {n} viewport(s) to the master."
-                ).as_ref());
+                self.command_line.push_output(
+                    crate::tf!("SYNCPVIEWPORTS: synced {n} viewport(s) to the master.").as_ref(),
+                );
             }
 
             // HIDE — hidden-line view of the active viewport.
@@ -1071,9 +1148,7 @@ impl OpenCADStudio {
                     Some(mode) => return Some(Task::done(Message::SetRenderMode(mode))),
                     // Listed from the table, so the names offered are the names
                     // that work.
-                    None => self
-                        .command_line
-                        .push_info(visual_style::keyword_prompt()),
+                    None => self.command_line.push_info(visual_style::keyword_prompt()),
                 }
             }
 

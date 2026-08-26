@@ -13,6 +13,8 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+e57 = { version = "0.11.13", features = ["crc32c"] }
 
 # Delaunay triangulation for the ground TIN and contour generation.
 delaunator = "1.1"

@@ -29,12 +29,7 @@ impl OpenCADStudio {
                         _ => None,
                     })
                     .collect();
-                let cmd_obj = MlineCommand::with_styles(
-                    styles,
-                    style_name,
-                    scale,
-                    justification,
-                );
+                let cmd_obj = MlineCommand::with_styles(styles, style_name, scale, justification);
                 self.command_line.push_info(&cmd_obj.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
             }
@@ -130,25 +125,29 @@ impl OpenCADStudio {
                             if rest.is_empty() {
                                 // List attributes.
                                 if ins.attributes.is_empty() {
-                                    self.command_line.push_output(crate::tf!(
-                                        "  Insert {:x}: no attributes.",
-                                        sh.value()
-                                    ).as_ref());
+                                    self.command_line.push_output(
+                                        crate::tf!("  Insert {:x}: no attributes.", sh.value())
+                                            .as_ref(),
+                                    );
                                 } else {
                                     for attr in &ins.attributes {
-                                        self.command_line.push_output(crate::tf!(
-                                            "  [{tag}] = {val}",
-                                            tag = attr.tag,
-                                            val = attr.get_value()
-                                        ).as_ref());
+                                        self.command_line.push_output(
+                                            crate::tf!(
+                                                "  [{tag}] = {val}",
+                                                tag = attr.tag,
+                                                val = attr.get_value()
+                                            )
+                                            .as_ref(),
+                                        );
                                     }
                                 }
                             }
                         }
                     }
                     if !found_any {
-                        self.command_line
-                            .push_error(crate::t!("ATTEDIT: no Insert entities in selection.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("ATTEDIT: no Insert entities in selection.").as_ref(),
+                        );
                     }
                     // If tag + value supplied, mutate attributes.
                     if parts.len() == 2 && !parts[0].is_empty() {
@@ -176,13 +175,17 @@ impl OpenCADStudio {
                         }
                         if changed > 0 {
                             self.tabs[i].dirty = true;
-                            self.command_line.push_output(crate::tf!(
+                            self.command_line.push_output(
+                                crate::tf!(
                                 "ATTEDIT: updated {changed} attribute(s) [{tag_up}] = {new_val}."
-                            ).as_ref());
+                            )
+                                .as_ref(),
+                            );
                         } else {
-                            self.command_line.push_error(crate::tf!(
-                                "ATTEDIT: tag '{tag_up}' not found in selection."
-                            ).as_ref());
+                            self.command_line.push_error(
+                                crate::tf!("ATTEDIT: tag '{tag_up}' not found in selection.")
+                                    .as_ref(),
+                            );
                         }
                     }
                 }
@@ -240,9 +243,10 @@ impl OpenCADStudio {
                             }
                         }
                         self.tabs[i].dirty = true;
-                        self.command_line.push_output(crate::tf!(
-                            "ATTDISP {sub}: {count} attribute definition(s) updated."
-                        ).as_ref());
+                        self.command_line.push_output(
+                            crate::tf!("ATTDISP {sub}: {count} attribute definition(s) updated.")
+                                .as_ref(),
+                        );
                     }
                     _ => {
                         self.command_line
@@ -385,8 +389,10 @@ impl OpenCADStudio {
                         self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                     }
                     None => {
-                        self.command_line
-                            .push_info(crate::t!("ARC Continue  No previous line or arc to continue.").as_ref());
+                        self.command_line.push_info(
+                            crate::t!("ARC Continue  No previous line or arc to continue.")
+                                .as_ref(),
+                        );
                     }
                 }
             }
@@ -499,10 +505,19 @@ impl OpenCADStudio {
 
             "CENTERREASSOCIATE" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
-                let mark_targets: Vec<_> = handles.iter().copied().filter(|handle| {
-                    let Some(acadrust::EntityType::Line(line)) = self.tabs[i].scene.document.get_entity(*handle) else { return false; };
-                    acadrust::entities::CenterMarkAssociation::read(&line.common.extended_data).is_some()
-                }).collect();
+                let mark_targets: Vec<_> = handles
+                    .iter()
+                    .copied()
+                    .filter(|handle| {
+                        let Some(acadrust::EntityType::Line(line)) =
+                            self.tabs[i].scene.document.get_entity(*handle)
+                        else {
+                            return false;
+                        };
+                        acadrust::entities::CenterMarkAssociation::read(&line.common.extended_data)
+                            .is_some()
+                    })
+                    .collect();
                 if mark_targets.len() == 1 && handles.len() == 1 {
                     use crate::modules::draw::draw::dimcenter::CenterMarkReassociateCommand;
                     let new_cmd = CenterMarkReassociateCommand::new(mark_targets[0]);
@@ -511,25 +526,35 @@ impl OpenCADStudio {
                     return Some(self.finish_dispatch(cmd));
                 }
                 self.push_undo_snapshot(i, "CENTERREASSOCIATE");
-                let count = self.tabs[i].scene.set_centerline_association(&handles, true)
-                    + self.tabs[i].scene.set_center_mark_association(&handles, true);
+                let count = self.tabs[i]
+                    .scene
+                    .set_centerline_association(&handles, true)
+                    + self.tabs[i]
+                        .scene
+                        .set_center_mark_association(&handles, true);
                 if count > 0 {
                     self.tabs[i].dirty = true;
                 }
-                self.command_line
-                    .push_output(&format!("CENTERREASSOCIATE: {count} center object(s) associated."));
+                self.command_line.push_output(&format!(
+                    "CENTERREASSOCIATE: {count} center object(s) associated."
+                ));
             }
 
             "CENTERDISASSOCIATE" => {
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 self.push_undo_snapshot(i, "CENTERDISASSOCIATE");
-                let count = self.tabs[i].scene.set_centerline_association(&handles, false)
-                    + self.tabs[i].scene.set_center_mark_association(&handles, false);
+                let count = self.tabs[i]
+                    .scene
+                    .set_centerline_association(&handles, false)
+                    + self.tabs[i]
+                        .scene
+                        .set_center_mark_association(&handles, false);
                 if count > 0 {
                     self.tabs[i].dirty = true;
                 }
-                self.command_line
-                    .push_output(&format!("CENTERDISASSOCIATE: {count} center object(s) detached."));
+                self.command_line.push_output(&format!(
+                    "CENTERDISASSOCIATE: {count} center object(s) detached."
+                ));
             }
 
             "DIMCENTER" => {
@@ -717,9 +742,7 @@ impl OpenCADStudio {
                     glam::DVec3::from_array(storage.x_axis),
                     glam::DVec3::from_array(storage.y_axis),
                 );
-                let boundary_sources = self.tabs[i]
-                    .scene
-                    .boundary_sources_on_plane(plane, 1.0e-6);
+                let boundary_sources = self.tabs[i].scene.boundary_sources_on_plane(plane, 1.0e-6);
                 let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
                 let selected = self.tabs[i]
                     .scene
@@ -727,20 +750,13 @@ impl OpenCADStudio {
                     .into_iter()
                     .map(|(handle, _)| handle)
                     .collect::<Vec<_>>();
-                let inherited = selected
-                    .iter()
-                    .find_map(|handle| {
-                        let model = self.tabs[i].scene.hatches.get(handle)?.clone();
-                        let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
-                        Some((model, common.color.clone(), common.transparency))
-                    });
-                let new_cmd = HatchCommand::new(
-                    outlines,
-                    boundary_sources,
-                    selected,
-                    inherited,
-                    plane,
-                );
+                let inherited = selected.iter().find_map(|handle| {
+                    let model = self.tabs[i].scene.hatches.get(handle)?.clone();
+                    let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
+                    Some((model, common.color.clone(), common.transparency))
+                });
+                let new_cmd =
+                    HatchCommand::new(outlines, boundary_sources, selected, inherited, plane);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 self.refresh_area_preview(i);
@@ -755,11 +771,11 @@ impl OpenCADStudio {
                     if let Some(model) = self.tabs[i].scene.hatches.get(&h).cloned() {
                         let entity = self.tabs[i].scene.document.get_entity(h);
                         let annotative = entity.is_some_and(|entity| {
-                                crate::scene::annotative::is_annotative(
-                                    &self.tabs[i].scene.document,
-                                    entity,
-                                )
-                            });
+                            crate::scene::annotative::is_annotative(
+                                &self.tabs[i].scene.document,
+                                entity,
+                            )
+                        });
                         let (scale, angle) = match entity {
                             Some(acadrust::EntityType::Hatch(hatch)) => (
                                 hatch.pattern_scale as f32,
@@ -777,8 +793,9 @@ impl OpenCADStudio {
                         self.command_line.push_info(&cmd.prompt());
                         self.tabs[i].active_cmd = Some(Box::new(cmd));
                     } else {
-                        self.command_line
-                            .push_error(crate::t!("HATCHEDIT: selected entity is not a hatch.").as_ref());
+                        self.command_line.push_error(
+                            crate::t!("HATCHEDIT: selected entity is not a hatch.").as_ref(),
+                        );
                     }
                 } else {
                     let cmd = HatcheditCommand::new();
@@ -805,9 +822,7 @@ impl OpenCADStudio {
                 } else {
                     crate::command::WorkingPlane::default()
                 };
-                let sources = self.tabs[i]
-                    .scene
-                    .boundary_sources_on_plane(plane, 1.0e-6);
+                let sources = self.tabs[i].scene.boundary_sources_on_plane(plane, 1.0e-6);
                 let selected = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -882,8 +897,7 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 } else {
                     use crate::modules::draw::modify::mirror::MirrorCommand;
-                    let (wires, text_ghosts) =
-                        self.tabs[i].scene.mirror_preview_parts(&handles);
+                    let (wires, text_ghosts) = self.tabs[i].scene.mirror_preview_parts(&handles);
                     let mirror_text = self.tabs[i].scene.document.header.mirror_text;
                     let new_cmd = MirrorCommand::new(handles, wires, text_ghosts, mirror_text);
                     self.command_line.push_info(&new_cmd.prompt());
@@ -978,8 +992,10 @@ impl OpenCADStudio {
                 if nums.len() >= 2 && nums[0] > 0.0 && nums[1] > 0.0 {
                     return Some(self.solid_polysolid(nums[0], nums[1]));
                 }
-                self.command_line
-                    .push_info(crate::t!("Usage: POLYSOLID <width> <height>   (select a polyline first)").as_ref());
+                self.command_line.push_info(
+                    crate::t!("Usage: POLYSOLID <width> <height>   (select a polyline first)")
+                        .as_ref(),
+                );
             }
 
             // SPLINEFIT — fit a smooth spline through the selected polyline's points.
@@ -1012,8 +1028,9 @@ impl OpenCADStudio {
                     }
                 }
                 if loops.is_empty() {
-                    self.command_line
-                        .push_error(crate::t!("REGION: select closed polylines or circles.").as_ref());
+                    self.command_line.push_error(
+                        crate::t!("REGION: select closed polylines or circles.").as_ref(),
+                    );
                 } else {
                     self.push_undo_snapshot(i, "REGION");
                     let count = loops.len();
@@ -1025,7 +1042,9 @@ impl OpenCADStudio {
                         r.point_of_reference = first;
                         r.wires = vec![w];
                         r.common.layer = self.tabs[i].active_layer.clone();
-                        self.tabs[i].scene.add_entity(acadrust::EntityType::Region(r));
+                        self.tabs[i]
+                            .scene
+                            .add_entity(acadrust::EntityType::Region(r));
                     }
                     self.tabs[i].dirty = true;
                     self.command_line
@@ -1054,8 +1073,10 @@ impl OpenCADStudio {
                     let sides = nums.get(2).map(|s| *s as usize).unwrap_or(4);
                     return Some(self.solid_pyramid(nums[0], nums[1], sides));
                 }
-                self.command_line
-                    .push_info(crate::t!("Usage: PYRAMID <radius> <height> [sides]   (default 4 sides)").as_ref());
+                self.command_line.push_info(
+                    crate::t!("Usage: PYRAMID <radius> <height> [sides]   (default 4 sides)")
+                        .as_ref(),
+                );
             }
 
             // SECTION [X|Y|Z] <value> — draw the cross-section outline of the solid.

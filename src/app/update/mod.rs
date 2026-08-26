@@ -933,6 +933,217 @@ impl OpenCADStudio {
             Message::PointCloudPathPicked(None) => Task::none(),
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57Import => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Import ASTM E57 Scan")
+                        .add_filter("ASTM E57 Point Clouds", &["e57", "E57"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PointCloudE57PathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57PathPicked(Some(input)) => {
+                let file_name = input
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .map(|name| format!("{name}.laz"))
+                    .unwrap_or_else(|| "imported-scan.laz".to_string());
+                Task::perform(
+                    async move {
+                        let output = crate::sys::file_dialog()
+                            .set_title("Save Imported E57 as LAZ")
+                            .set_file_name(file_name)
+                            .add_filter("LAZ Point Cloud", &["laz", "LAZ"])
+                            .add_filter("LAS Point Cloud", &["las", "LAS"])
+                            .save_file()
+                            .await
+                            .map(|handle| crate::sys::handle_path(&handle));
+                        (input, output)
+                    },
+                    |(input, output)| Message::PointCloudE57OutputPathPicked(input, output),
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57PathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57OutputPathPicked(input, Some(output)) => {
+                self.command_line.push_info(
+                    format!(
+                        "E57IMPORT: converting {} at full density...",
+                        input.display()
+                    )
+                    .as_str(),
+                );
+                Task::perform(
+                    async move {
+                        let result = ocs_pointcloud::import_e57(&input, &output, false, |_| true)
+                            .map_err(|error| error.to_string());
+                        (output, result)
+                    },
+                    |(output, result)| Message::PointCloudE57Imported(output, result),
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57OutputPathPicked(_, None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57Imported(output, Ok(stats)) => {
+                self.command_line.push_info(
+                    format!(
+                        "E57IMPORT: wrote {} points from {} scans to {} ({} invalid skipped).",
+                        stats.points_written,
+                        stats.scans,
+                        output.display(),
+                        stats.invalid_points_skipped
+                    )
+                    .as_str(),
+                );
+                self.start_point_cloud_load(output)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudE57Imported(output, Err(error)) => {
+                self.command_line
+                    .push_error(format!("E57IMPORT: {}: {error}", output.display()).as_str());
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectNew => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Create OpenCADStudio Spatial Project")
+                        .set_file_name("spatial-project.ocsproj")
+                        .add_filter("OpenCADStudio Spatial Project", &["ocsproj", "OCSPROJ"])
+                        .save_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::SpatialProjectCreatePathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectCreatePathPicked(Some(path)) => {
+                self.create_spatial_project(self.active_tab, path);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectCreatePathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectOpen => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Open OpenCADStudio Spatial Project")
+                        .add_filter("OpenCADStudio Spatial Project", &["ocsproj", "OCSPROJ"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::SpatialProjectOpenPathPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectOpenPathPicked(Some(path)) => {
+                self.open_spatial_project(self.active_tab, path)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectOpenPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectSave => {
+                if self.tabs[self.active_tab].spatial_project.is_some() {
+                    self.save_spatial_project(self.active_tab, None);
+                    Task::none()
+                } else {
+                    Task::perform(
+                        async {
+                            crate::sys::file_dialog()
+                                .set_title("Save OpenCADStudio Spatial Project")
+                                .set_file_name("spatial-project.ocsproj")
+                                .add_filter(
+                                    "OpenCADStudio Spatial Project",
+                                    &["ocsproj", "OCSPROJ"],
+                                )
+                                .save_file()
+                                .await
+                                .map(|handle| crate::sys::handle_path(&handle))
+                        },
+                        Message::SpatialProjectSavePathPicked,
+                    )
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectSavePathPicked(Some(path)) => {
+                self.save_spatial_project(self.active_tab, Some(path));
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SpatialProjectSavePathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudSurfaceSave(product, cell_size) => {
+                let extension =
+                    if product == crate::app::point_cloud::PointCloudSurfaceProduct::Hillshade {
+                        "pgm"
+                    } else {
+                        "asc"
+                    };
+                let file_name = format!(
+                    "point-cloud-{}.{}",
+                    product.label().to_ascii_lowercase(),
+                    extension
+                );
+                Task::perform(
+                    async move {
+                        let path = crate::sys::file_dialog()
+                            .set_title(format!("Save {} Product", product.label()))
+                            .set_file_name(file_name)
+                            .add_filter(
+                                if extension == "pgm" {
+                                    "Portable Graymap"
+                                } else {
+                                    "ESRI ASCII Grid"
+                                },
+                                &[extension],
+                            )
+                            .save_file()
+                            .await
+                            .map(|handle| crate::sys::handle_path(&handle));
+                        (product, cell_size, path)
+                    },
+                    |(product, cell_size, path)| {
+                        Message::PointCloudSurfacePathPicked(product, cell_size, path)
+                    },
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudSurfacePathPicked(product, cell_size, Some(path)) => {
+                self.start_point_cloud_surface(self.active_tab, product, cell_size, path)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudSurfacePathPicked(_, _, None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloudSurfaceGenerated(tab_id, job_id, product, path, result) => {
+                self.finish_point_cloud_surface(tab_id, job_id, product, path, result);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudLoaded(tab_id, path, result) => {
                 self.install_point_cloud(tab_id, path, result)
             }
@@ -2849,9 +3060,7 @@ impl OpenCADStudio {
 
                         self.tabs[i].layers.refresh_sort();
 
-                        self.tabs[i]
-                            .scene
-                            .invalidate_layer_dependencies(&targets);
+                        self.tabs[i].scene.invalidate_layer_dependencies(&targets);
 
                         self.tabs[i].dirty = true;
                         self.commit_layer_undo(i, undo);
@@ -2868,7 +3077,7 @@ impl OpenCADStudio {
                 }
 
                 Task::none()
-            },
+            }
 
             Message::LayerToggleVpFreeze(layer_idx, vp_col_idx) => {
                 self.on_layer_toggle_vp_freeze(layer_idx, vp_col_idx)

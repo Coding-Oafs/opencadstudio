@@ -303,9 +303,7 @@ impl OpenCADStudio {
             }
 
             "MLEDIT" => {
-                use crate::modules::draw::modify::mledit::{
-                    MlineEditCommand, MlineEditTarget,
-                };
+                use crate::modules::draw::modify::mledit::{MlineEditCommand, MlineEditTarget};
                 let document = &self.tabs[i].scene.document;
                 let targets = document
                     .entities()

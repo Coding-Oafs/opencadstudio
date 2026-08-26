@@ -109,7 +109,7 @@ adapter based on the ordered-fuser methodology in
 Urban_PointCloud_Processing. The LiDAR ribbon and manager can run it without a
 separate Python installation. It processes every source point, uses the City of
 Boston building and street-tree services plus MassDOT/Boston roadway data, and
-writes to a sibling `classified` folder. The installed v1.0.5 profile enables
+writes to a sibling `classified` folder. The installed v1.1.0 profile enables
 buildings, roads, and vegetation; expands roadway centerlines by one foot; and
 uses a conservative 12-foot active-tree radius.
 
@@ -197,7 +197,7 @@ complete TerraScan replacement.
   pure-Rust database plus common embedded WKT projections (including state
   plane LCC/TM definitions without a root EPSG authority). Grid-based and
   orthometric vertical datum transformations require a separately validated
-  geodetic backend; v1.0.5 preserves Z and says so in the UI and audit log.
+  geodetic backend; v1.1.0 preserves Z and says so in the UI and audit log.
 - COPC, E57, PTS/PTX, raster surface export, and point-cloud-to-CAD feature
   extraction are not implemented.
 
