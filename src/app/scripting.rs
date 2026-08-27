@@ -394,6 +394,162 @@ impl OcsScriptApi for OpenCADStudio {
         json!(true)
     }
 
+    fn project_info(&mut self) -> ScriptValue {
+        let tab = self.active_tab;
+        match self.tabs[tab].spatial_project.as_ref() {
+            Some((path, project)) => json!({
+                "open": true,
+                "api_version": 1,
+                "id": project.id,
+                "name": project.name,
+                "path": path.display().to_string(),
+                "schema_version": project.schema_version,
+                "crs": project.spatial_reference.horizontal,
+                "sources": project.sources.len(),
+                "jobs": project.jobs.len(),
+                "history": project.history.len(),
+                "transactions": project.platform.transactions.len(),
+                "workflows": project.platform.workflows.len(),
+                "provenance": project.platform.provenance.len(),
+                "sections": project.sections,
+            }),
+            None => json!({"open": false}),
+        }
+    }
+
+    fn gis_layers(&mut self) -> ScriptValue {
+        let tab = self.active_tab;
+        json!(self.tabs[tab].gis_layers.iter().map(|layer| json!({
+            "name": layer.name,
+            "epsg": layer.epsg,
+            "features": layer.features.len(),
+            "fields": layer.fields,
+            "envelope": layer.envelope(),
+        })).collect::<Vec<_>>())
+    }
+
+    fn gis_import(&mut self, path: &str) -> ScriptValue {
+        let before = self.tabs[self.active_tab].gis_layers.len();
+        self.import_gis_source(self.active_tab, path.into());
+        let after = self.tabs[self.active_tab].gis_layers.len();
+        json!({"ok": after > before, "layers_added": after - before})
+    }
+
+    fn gis_export(&mut self, layer: &str, path: &str) -> ScriptValue {
+        self.export_gis_layer(self.active_tab, layer, path.into());
+        json!({"ok": std::path::Path::new(path).is_file(), "path": path})
+    }
+
+    fn gis_transform(&mut self, layer: &str, target_epsg: i64) -> ScriptValue {
+        let Ok(target_epsg) = u16::try_from(target_epsg) else {
+            return json!({"ok": false, "error": "EPSG code is out of range"});
+        };
+        self.transform_gis_layer(self.active_tab, layer, target_epsg);
+        let epsg = self.tabs[self.active_tab]
+            .gis_layers
+            .iter()
+            .find(|candidate| candidate.name.eq_ignore_ascii_case(layer))
+            .map(|candidate| candidate.epsg);
+        json!({"ok": epsg == Some(target_epsg), "epsg": epsg})
+    }
+
+    fn section_create(&mut self, definition: ScriptValue) -> ScriptValue {
+        let tab = self.active_tab;
+        let Some((project_path, project)) = self.tabs[tab].spatial_project.as_mut() else {
+            return json!({"ok": false, "error": "create or open a spatial project first"});
+        };
+        let vector3 = |name: &str| -> Option<[f64; 3]> {
+            let values = definition.get(name)?.as_array()?;
+            if values.len() != 3 {
+                return None;
+            }
+            Some([
+                values[0].as_f64()?,
+                values[1].as_f64()?,
+                values[2].as_f64()?,
+            ])
+        };
+        let Some(name) = definition.get("name").and_then(|value| value.as_str()) else {
+            return json!({"ok": false, "error": "section name is required"});
+        };
+        let (Some(origin), Some(normal), Some(width)) = (
+            vector3("origin"),
+            vector3("normal"),
+            definition.get("width").and_then(|value| value.as_f64()),
+        ) else {
+            return json!({"ok": false, "error": "origin, normal, and width are required"});
+        };
+        let kind = match definition.get("kind").and_then(|value| value.as_str()).unwrap_or("cross_section") {
+            "plan" => ocs_pointcloud::SectionKind::Plan,
+            "profile" => ocs_pointcloud::SectionKind::Profile,
+            "arbitrary_plane" => ocs_pointcloud::SectionKind::ArbitraryPlane,
+            _ => ocs_pointcloud::SectionKind::CrossSection,
+        };
+        let vertical_limits = definition
+            .get("vertical_limits")
+            .and_then(|value| value.as_array())
+            .filter(|values| values.len() == 2)
+            .and_then(|values| Some([values[0].as_f64()?, values[1].as_f64()?]));
+        let id = format!("section-{}", project.sections.len() + 1);
+        let section = ocs_pointcloud::NamedSection {
+            id: id.clone(),
+            name: name.into(),
+            kind,
+            origin,
+            normal,
+            axis_length: definition.get("axis_length").and_then(|value| value.as_f64()).unwrap_or(100.0),
+            total_width: width,
+            vertical_limits,
+            crs: project.spatial_reference.horizontal.clone(),
+            locked: false,
+        };
+        match project
+            .upsert_section(section.clone())
+            .and_then(|_| project.save_atomic(project_path.clone()))
+        {
+            Ok(()) => json!({"ok": true, "id": id, "name": name, "volume": section}),
+            Err(error) => json!({"ok": false, "error": error.to_string()}),
+        }
+    }
+
+    fn tools_list(&mut self) -> ScriptValue {
+        let mut descriptors: Vec<_> = ocs_pointcloud::production_lidar_tools()
+            .descriptors()
+            .cloned()
+            .collect();
+        descriptors.extend(ocs_reality::reality_tools());
+        descriptors.extend([
+            ocs_pointcloud::ToolDescriptor {
+                id: "gis.import".into(), name: "Import feature layer".into(), category: "GIS / Data".into(),
+                description: "Import GeoPackage or GeoJSON".into(), input_schema: json!({"type":"object","required":["path"]}), output_schema: json!({"type":"object"}),
+                requirements: Default::default(), api_version: 1,
+            },
+            ocs_pointcloud::ToolDescriptor {
+                id: "gis.transform".into(), name: "Transform feature layer".into(), category: "GIS / Geodesy".into(),
+                description: "Explicit CRS transformation with provenance".into(), input_schema: json!({"type":"object","required":["layer","target_epsg"]}), output_schema: json!({"type":"object"}),
+                requirements: ocs_pointcloud::ToolRequirements { requires_crs: true, undo: ocs_pointcloud::UndoBehavior::Transaction, ..Default::default() }, api_version: 1,
+            },
+        ]);
+        json!(descriptors)
+    }
+
+    fn tool_run(&mut self, tool_id: &str, parameters: ScriptValue) -> ScriptValue {
+        match tool_id {
+            "gis.import" => parameters.get("path").and_then(|value| value.as_str()).map_or_else(
+                || json!({"ok": false, "error": "path is required"}),
+                |path| self.gis_import(path),
+            ),
+            "gis.transform" => match (
+                parameters.get("layer").and_then(|value| value.as_str()),
+                parameters.get("target_epsg").and_then(|value| value.as_i64()),
+            ) {
+                (Some(layer), Some(epsg)) => self.gis_transform(layer, epsg),
+                _ => json!({"ok": false, "error": "layer and target_epsg are required"}),
+            },
+            _ => json!({"ok": false, "error": format!("tool '{tool_id}' has no application executor yet")}),
+        }
+    }
+
     fn print(&mut self, message: &str) {
         self.command_line
             .push_output(format!("[script] {message}").as_str());

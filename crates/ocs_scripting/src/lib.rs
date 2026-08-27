@@ -11,9 +11,14 @@
 //! The first engine is Rhai (pure Rust, native and web); the out-of-process
 //! CPython worker speaks the same request protocol over JSON lines.
 
-use rhai::plugin::*;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 use std::path::Path;
 use std::sync::mpsc;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tools;
+#[cfg(not(target_arch = "wasm32"))]
+pub use tools::{EnvironmentHealth, ScriptToolManifest, ScriptTrustStore};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod python;
@@ -67,6 +72,34 @@ pub trait OcsScriptApi {
     fn cloud_urban_status(&mut self) -> ScriptValue;
     /// Requests cancellation of the running urban job.
     fn cloud_urban_cancel(&mut self) -> ScriptValue;
+    /// Current project metadata and durable platform counts.
+    fn project_info(&mut self) -> ScriptValue {
+        serde_json::json!({"open": false})
+    }
+    /// Native GIS layers loaded in the active project.
+    fn gis_layers(&mut self) -> ScriptValue {
+        serde_json::json!([])
+    }
+    fn gis_import(&mut self, _path: &str) -> ScriptValue {
+        serde_json::json!({"ok": false, "error": "GIS is unavailable"})
+    }
+    fn gis_export(&mut self, _layer: &str, _path: &str) -> ScriptValue {
+        serde_json::json!({"ok": false, "error": "GIS is unavailable"})
+    }
+    fn gis_transform(&mut self, _layer: &str, _target_epsg: i64) -> ScriptValue {
+        serde_json::json!({"ok": false, "error": "GIS is unavailable"})
+    }
+    fn section_create(&mut self, _definition: ScriptValue) -> ScriptValue {
+        serde_json::json!({"ok": false, "error": "no project is open"})
+    }
+    /// All typed tools visible to UI/CLI/Python/workflows.
+    fn tools_list(&mut self) -> ScriptValue {
+        serde_json::json!([])
+    }
+    /// Invoke a typed tool using JSON parameters.
+    fn tool_run(&mut self, _tool_id: &str, _parameters: ScriptValue) -> ScriptValue {
+        serde_json::json!({"ok": false, "error": "tool execution is unavailable"})
+    }
     /// Prints a line to the script console.
     fn print(&mut self, message: &str);
 }
@@ -181,6 +214,32 @@ fn dispatch_call(
         }
         "cloud_urban_status" => Ok(api.cloud_urban_status()),
         "cloud_urban_cancel" => Ok(api.cloud_urban_cancel()),
+        "project_info" => Ok(api.project_info()),
+        "gis_layers" => Ok(api.gis_layers()),
+        "gis_import" => {
+            let path: String = arg(args, 0, function)?;
+            Ok(api.gis_import(&path))
+        }
+        "gis_export" => {
+            let layer: String = arg(args, 0, function)?;
+            let path: String = arg(args, 1, function)?;
+            Ok(api.gis_export(&layer, &path))
+        }
+        "gis_transform" => {
+            let layer: String = arg(args, 0, function)?;
+            let target_epsg: i64 = arg(args, 1, function)?;
+            Ok(api.gis_transform(&layer, target_epsg))
+        }
+        "section_create" => {
+            let definition: ScriptValue = arg(args, 0, function)?;
+            Ok(api.section_create(definition))
+        }
+        "tools_list" => Ok(api.tools_list()),
+        "tool_run" => {
+            let tool_id: String = arg(args, 0, function)?;
+            let parameters: ScriptValue = arg(args, 1, function)?;
+            Ok(api.tool_run(&tool_id, parameters))
+        }
         other => Err(format!("unknown script function: {other}")),
     }
 }

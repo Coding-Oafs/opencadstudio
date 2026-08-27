@@ -81,6 +81,7 @@ ocs_pointcloud = { path = "crates/ocs_pointcloud" }
 ocs_scripting = { path = "crates/ocs_scripting" }
 ocs_gis = { path = "crates/ocs_gis" }
 ocs_spatial = { path = "crates/ocs_spatial" }
+ocs_reality = { path = "crates/ocs_reality" }
 ocs_platform = { path = "crates/ocs_platform" }
 meshopt = "0.6.2"
 i18n-embed = { version = "0.16", features = ["desktop-requester"] }

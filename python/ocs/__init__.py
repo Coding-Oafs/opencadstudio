@@ -13,6 +13,9 @@ import json
 import sys
 import threading
 
+API_VERSION = 1
+__version__ = "2.0.0-alpha.1"
+
 # The protocol stream is the process stdout captured at import time,
 # before the console wrapper replaces sys.stdout for user code.
 _PROTOCOL_OUT = sys.stdout
@@ -155,3 +158,91 @@ def cloud_urban_status():
 def cloud_urban_cancel():
     """Request cancellation of the running urban job."""
     return _call("cloud_urban_cancel", [])
+
+
+class Project:
+    """Live handle to the active local-first spatial project."""
+
+    def __init__(self, info):
+        self._info = info
+
+    @property
+    def id(self):
+        return self._info.get("id")
+
+    @property
+    def name(self):
+        return self._info.get("name")
+
+    @property
+    def crs(self):
+        return self._info.get("crs")
+
+    @property
+    def point_clouds(self):
+        return {source["id"]: source for source in cloud_sources()}
+
+    @property
+    def feature_layers(self):
+        return {layer["name"]: layer for layer in gis_layers()}
+
+    @property
+    def sections(self):
+        return _Sections()
+
+    def refresh(self):
+        self._info = _call("project_info", [])
+        return self
+
+
+def current_project():
+    """Return the active Project, or None when no .ocsproj is open."""
+    info = _call("project_info", [])
+    return Project(info) if info.get("open") else None
+
+
+class _Sections:
+    def create(self, name, origin, normal, width, axis_length=100.0,
+               vertical_limits=None, kind="cross_section"):
+        """Create a fixed world-space named section in the active project."""
+        return _call("section_create", [{
+            "name": str(name),
+            "origin": [float(value) for value in origin],
+            "normal": [float(value) for value in normal],
+            "width": float(width),
+            "axis_length": float(axis_length),
+            "vertical_limits": vertical_limits,
+            "kind": str(kind),
+        }])
+
+
+def gis_layers():
+    """Return native feature-layer summaries for the active document."""
+    return _call("gis_layers", [])
+
+
+def gis_import(path):
+    """Import GeoPackage or GeoJSON into the active feature workspace."""
+    return _call("gis_import", [str(path)])
+
+
+def gis_export(layer, path):
+    """Export one feature layer to GeoPackage or GeoJSON."""
+    return _call("gis_export", [str(layer), str(path)])
+
+
+def gis_transform(layer, target_epsg):
+    """Transform a feature layer through the explicit geodesy boundary."""
+    return _call("gis_transform", [str(layer), int(target_epsg)])
+
+
+class _Tools:
+    def list(self):
+        return _call("tools_list", [])
+
+    def run(self, tool_id, **parameters):
+        """Run the same typed tool contract used by UI and workflows."""
+        return _call("tool_run", [str(tool_id), parameters])
+
+
+tools = _Tools()
