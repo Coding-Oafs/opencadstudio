@@ -9,9 +9,13 @@
 //! declared-but-not-executed steps until a validated backend is bundled.
 
 pub mod catalog;
+pub mod compound;
 pub mod transform;
 
 pub use catalog::{AxisOrder, AxisUnit, CrsCatalog, CrsDefinition, CrsKind, VerticalReference};
+pub use compound::{
+    transform_xyz, CompoundTransformationPlan, CoordinateEpoch, VerticalOperation,
+};
 pub use transform::{
     convert_linear, plan_transformation, transform_xy, SpatialError, TransformationMethod,
     TransformationPlan, TransformationProvenance, TransformationStep,
