@@ -4108,6 +4108,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocs_spatial"
+version = "0.1.0"
+dependencies = [
+ "crs-definitions",
+ "proj4rs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ocs_web_worker"
 version = "0.1.0"
 dependencies = [
