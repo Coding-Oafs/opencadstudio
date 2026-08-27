@@ -79,6 +79,8 @@ iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
 ocs_pointcloud = { path = "crates/ocs_pointcloud" }
 ocs_scripting = { path = "crates/ocs_scripting" }
+ocs_gis = { path = "crates/ocs_gis" }
+ocs_spatial = { path = "crates/ocs_spatial" }
 meshopt = "0.6.2"
 i18n-embed = { version = "0.16", features = ["desktop-requester"] }
 rayon = "1"

@@ -235,6 +235,11 @@ pub(super) struct DocumentTab {
     /// provenance metadata.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) spatial_project: Option<(PathBuf, ocs_pointcloud::SpatialProject)>,
+    /// Native editable GIS layers loaded from GeoPackage/GeoJSON. The
+    /// `.ocsproj` stores their external source references; geometry remains in
+    /// the source container and this session working set.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) gis_layers: Vec<ocs_gis::FeatureLayer>,
     /// Per-plugin document state (`plugin::BuiltinPlugin` manifest id → state).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
@@ -518,6 +523,8 @@ impl DocumentTab {
             point_cloud: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             spatial_project: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gis_layers: Vec::new(),
             plugin_state: HashMap::new(),
             suspended_cmd: None,
         }

@@ -1603,6 +1603,41 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "GISLAYERS" => self.list_gis_layers(i),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("GISIMPORT ") => {
+                let path = std::path::PathBuf::from(cmd.trim_start_matches("GISIMPORT").trim());
+                self.import_gis_source(i, path);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd == "GISTOPOLOGY" || cmd.starts_with("GISTOPOLOGY ") => {
+                let name = cmd.trim_start_matches("GISTOPOLOGY").trim();
+                self.validate_gis_layer(i, (!name.is_empty()).then_some(name));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("GISEXPORT ") => {
+                let mut arguments = cmd.trim_start_matches("GISEXPORT").trim().splitn(2, char::is_whitespace);
+                match (arguments.next(), arguments.next()) {
+                    (Some(layer), Some(path)) if !path.trim().is_empty() => {
+                        self.export_gis_layer(i, layer, std::path::PathBuf::from(path.trim()));
+                    }
+                    _ => self.command_line.push_error("Usage: GISEXPORT <layer> <output.gpkg|output.geojson>"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("GISTRANSFORM ") => {
+                let mut arguments = cmd.trim_start_matches("GISTRANSFORM").split_whitespace();
+                match (arguments.next(), arguments.next().and_then(|value| value.parse::<u16>().ok()), arguments.next()) {
+                    (Some(layer), Some(epsg), None) => self.transform_gis_layer(i, layer, epsg),
+                    _ => self.command_line.push_error("Usage: GISTRANSFORM <layer> <target-epsg>"),
+                }
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDEXPORTALL") => {
                 let argument = cmd.trim_start_matches("POINTCLOUDEXPORTALL").trim();
                 if argument.is_empty() {

@@ -98,12 +98,24 @@ impl OpenCADStudio {
                     .contains_source_path(source)
             })
             .collect();
+        let feature_sources: Vec<PathBuf> = project
+            .sources
+            .iter()
+            .filter(|source| matches!(source.kind, ocs_pointcloud::SourceKind::Feature))
+            .filter_map(|source| source.resolve(&path))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let project_name = project.name.clone();
         self.tabs[tab_index].spatial_project = Some((path.clone(), project));
+        for source in &feature_sources {
+            self.import_gis_source(tab_index, source.clone());
+        }
         self.command_line.push_output(
             format!(
-                "SPATIALPROJECTOPEN: opened \"{project_name}\" with {} source(s); recovered {recovered} interrupted job(s).",
-                sources.len()
+                "SPATIALPROJECTOPEN: opened \"{project_name}\" with {} point source(s) and {} feature source(s); recovered {recovered} interrupted job(s).",
+                sources.len(),
+                feature_sources.len()
             )
             .as_str(),
         );
@@ -5886,6 +5898,7 @@ mod tests {
             gps_time: None,
             color: None,
             nir: None,
+            label: None,
             is_synthetic: false,
             is_key_point: false,
             is_withheld: false,

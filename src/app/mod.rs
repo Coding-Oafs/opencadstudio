@@ -10,6 +10,8 @@ pub(crate) mod commands;
 mod document;
 mod expr_eval;
 mod find_replace;
+#[cfg(not(target_arch = "wasm32"))]
+mod gis;
 pub(crate) mod helpers;
 mod history;
 mod layers;
