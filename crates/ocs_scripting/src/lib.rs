@@ -8,11 +8,17 @@
 //! freezing the UI, and every operation goes through the same audited paths
 //! as the ribbon and command line.
 //!
-//! The first engine is Rhai (pure Rust, native and web); Python (PyO3)
-//! follows behind the `python` feature against the same request protocol.
+//! The first engine is Rhai (pure Rust, native and web); the out-of-process
+//! CPython worker speaks the same request protocol over JSON lines.
 
 use rhai::plugin::*;
+use std::path::Path;
 use std::sync::mpsc;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod python;
+#[cfg(not(target_arch = "wasm32"))]
+pub use python::{python_package_path, run_python};
 
 /// Everything a script can ask the application to do. Implemented by the app
 /// on its main thread; mocked in tests.
@@ -515,5 +521,90 @@ mod tests {
         let bridge = ScriptBridge::new(tx);
         let outcome = run_rhai(&bridge, "let x = ;");
         assert!(outcome.is_err());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod python_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn python_available() -> bool {
+        std::process::Command::new("python")
+            .arg("-V")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Full loop: a real CPython interpreter runs a script that imports the
+    /// `ocs` package, makes calls, and prints; the host dispatches them
+    /// against the mock API. Skipped when no interpreter is on PATH.
+    #[test]
+    fn python_worker_runs_end_to_end() {
+        if !python_available() {
+            eprintln!("python is not on PATH; skipping");
+            return;
+        }
+        let package_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        assert!(package_path.join("ocs").join("__init__.py").is_file());
+        let script_dir = std::env::temp_dir().join(format!("ocs-python-{}", std::process::id()));
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let script = script_dir.join("probe.py");
+        std::fs::write(
+            &script,
+            "import ocs\n\
+             sources = ocs.cloud_sources()\n\
+             ocs.log('python sees %d source(s)' % len(sources))\n\
+             ocs.cloud_attach('a.las')\n\
+             print('printed from python')\n",
+        )
+        .unwrap();
+        std::env::set_var("OCS_PYTHON_PATH", &package_path);
+        std::env::set_var("OCS_PYTHON", "python");
+
+        let (tx, rx) = mpsc::channel();
+        let (log_tx, log_rx) = mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for request in rx {
+                match request {
+                    ScriptRequest::Print(message) => log_tx.send(message).unwrap(),
+                    ScriptRequest::Call {
+                        function,
+                        args,
+                        reply,
+                    } => {
+                        let result = if function == "cloud_sources" {
+                            Ok(json!([{"id": "source-1", "points": 100}]))
+                        } else if function == "cloud_attach" {
+                            Ok(json!("source-2"))
+                        } else {
+                            Err(format!("unexpected function {function} {args:?}"))
+                        };
+                        let _ = reply.send(result);
+                    }
+                }
+            }
+        });
+        let bridge = ScriptBridge::new(tx);
+        let outcome = run_python(&bridge, &script).expect("python worker completes");
+        assert!(outcome.log.is_empty() || outcome.log.iter().all(|line| !line.is_empty()));
+        // Both the protocol log and print() reached the console channel.
+        let mut console: Vec<String> = Vec::new();
+        while let Ok(line) = log_rx.try_recv() {
+            console.push(line);
+        }
+        assert!(
+            console
+                .iter()
+                .any(|line| line.contains("python sees 1 source")),
+            "console: {console:?}"
+        );
+        assert!(
+            console
+                .iter()
+                .any(|line| line.contains("printed from python")),
+            "console: {console:?}"
+        );
     }
 }

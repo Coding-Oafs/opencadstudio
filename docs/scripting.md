@@ -64,3 +64,20 @@ is the wire format, so additional engines (Python via PyO3 is planned behind
 a `python` feature) present the same API without new app plumbing. The Rhai
 engine is sandboxed with operation and call-depth limits; a runaway macro
 errors out instead of hanging the app.
+
+## Python (`PYSCRIPT`)
+
+Scripts also run in out-of-process CPython through the same request
+protocol — never on the UI thread, and a crashing interpreter cannot take
+the application with it:
+
+```
+PYSCRIPT D:\survey\check_tiles.py
+```
+
+The interpreter is `OCS_PYTHON` (default `python` on PATH); the `ocs`
+package is located via `OCS_PYTHON_PATH` or beside the executable. The
+package exposes the identical function surface as Rhai — `ocs.command`,
+`ocs.cloud_attach`, `ocs.cloud_stats`, `ocs.cloud_urban_classify`, and the
+rest — plus `print`, which goes to the application script console.
+Tracebacks arrive on stderr prefixed `[python]`.

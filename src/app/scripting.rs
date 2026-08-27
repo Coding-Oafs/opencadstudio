@@ -60,6 +60,49 @@ impl OpenCADStudio {
         Task::done(Message::ScriptPump)
     }
 
+    /// `PYSCRIPT <path.py>`: runs the script in an out-of-process CPython
+    /// worker. Requests arrive on the same pump as Rhai scripts, so both
+    /// engines dispatch through one audited API surface.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_python_script(&mut self, path: std::path::PathBuf) -> Task<Message> {
+        if self.script_runner.is_some() {
+            self.command_line
+                .push_error("PYSCRIPT: a script is already running.");
+            return Task::none();
+        }
+        if !path.is_file() {
+            self.command_line
+                .push_error(format!("PYSCRIPT: \"{}\" was not found.", path.display()).as_str());
+            return Task::none();
+        }
+        if let Err(error) = ocs_scripting::python_package_path() {
+            self.command_line
+                .push_error(format!("PYSCRIPT: {error}").as_str());
+            return Task::none();
+        }
+        let (request_tx, request_rx) = mpsc::channel();
+        let (outcome_tx, outcome_rx) =
+            mpsc::channel::<Result<ocs_scripting::ScriptOutcome, String>>();
+        let worker_path = path.clone();
+        std::thread::spawn(move || {
+            let bridge = ocs_scripting::ScriptBridge::new(request_tx);
+            let outcome = ocs_scripting::run_python(&bridge, &worker_path);
+            let _ = outcome_tx.send(outcome);
+        });
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "python script".to_string());
+        self.script_runner = Some(ScriptRunner {
+            requests: request_rx,
+            outcome: outcome_rx,
+            name,
+        });
+        self.command_line
+            .push_info(format!("PYSCRIPT: \"{}\" started.", path.display()).as_str());
+        Task::done(Message::ScriptPump)
+    }
+
     /// Drains pending script requests, dispatches them against the app, and
     /// reschedules itself while the script runs. The short sleep keeps the
     /// pump from busy-spinning between script calls.

@@ -1560,6 +1560,19 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("PYSCRIPT") => {
+                let trimmed = cmd.trim_start_matches("PYSCRIPT").trim();
+                if trimmed.is_empty() {
+                    self.command_line.push_error(
+                        "Usage: PYSCRIPT <path.py> (runs out-of-process CPython; set OCS_PYTHON to choose the interpreter)",
+                    );
+                    return Some(Task::none());
+                }
+                let path = std::path::PathBuf::from(trimmed);
+                return Some(self.start_python_script(path));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDATTACH" | "RECAP" => {
                 return Some(Task::done(Message::PointCloudAttach));
             }
