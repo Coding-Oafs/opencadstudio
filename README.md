@@ -28,7 +28,7 @@
 <h1 align="center">Open CAD Studio</h1>
 
 <p align="center">
-  Open-source 2D drafting and 3D modeling for desktop and web, built with Rust.
+  A local-first geospatial engineering workstation for CAD, GIS, and LiDAR.
 </p>
 
 <p align="center">
@@ -52,7 +52,9 @@
 
 ## Overview
 
-Open CAD Studio is a cross-platform application for technical drawing, layout work, and solid modeling. It reads and writes DWG and DXF drawings natively, with a shared editing core across the desktop and browser versions.
+Open CAD Studio is a cross-platform geospatial engineering workstation. It moves from surveyed reality and native feature data into precise CAD drawings, surfaces, models, and auditable deliverables while keeping source data local and external. It reads and writes DWG and DXF natively and shares selected editing and viewing cores with the browser build.
+
+The current development line is **v2.0.0-alpha.1**. See the [v1.1→v2 development audit](docs/development-audit-v2.md) for implemented stage gates and the remaining production work.
 
 The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/HakanSeven12/OpenCADStudio/issues).
 
@@ -63,7 +65,9 @@ The project is under active development. Keep backups of important production dr
 - **Documentation tools** — text, dimensions, leaders, tolerances, tables, model space, paper space, viewports, and plot styles.
 - **Kernel-backed 3D modeling** — solid primitives, extrusion, revolution, sweep, loft, Boolean operations, and ACIS entity tessellation.
 - **GPU rendering** — accelerated 2D and 3D viewports through `wgpu`, with orthographic and perspective cameras.
-- **Extensible workflows** — native plugins, command scripts, headless conversion, and a line-based JSON automation API.
+- **LiDAR production** — bounded LAS/LAZ/COPC access, fixed world-space sections, full-density processing, classification, surfaces, and durable jobs.
+- **Native GIS and geodesy** — GeoPackage/GeoJSON feature layers, attributes, topology, and explicit CRS transformation provenance.
+- **Extensible workflows** — isolated CPython, Rhai, native plugins, typed tools, durable workflow graphs, headless conversion, and JSON automation.
 
 <p align="center">
   <img src="site/modeling.png" alt="3D model in Open CAD Studio" width="100%">
@@ -82,6 +86,9 @@ The project is under active development. Keep backups of important production dr
 | STEP AP203 | Export 3D mesh data |
 | PDF | Plot layouts and selected geometry on desktop |
 | CSV | Extract entity property data |
+| LAS / LAZ / COPC / E57 | Attach, inspect, classify, process, and export on desktop |
+| GeoPackage / GeoJSON | Native feature-layer import, editing core, topology, reprojection, and export |
+| 3D Tiles | Local point tileset export (v2 alpha) |
 | CTB / STB | Load and edit plot style tables |
 
 ## Desktop or web
@@ -227,7 +234,7 @@ Bug reports, focused pull requests, translations, documentation improvements, an
 
 ## Support the project
 
-If Open CAD Studio helps your work, support continued development through [GitHub Sponsors](https://github.com/sponsors/HakanSeven12) or [Patreon](https://www.patreon.com/HakanSeven12).
+If Open CAD Studio helps your work, support continued development through
 
 ## License
 

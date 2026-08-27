@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "OpenCADStudio"
-version = "1.1.0"
+version = "2.0.0-alpha.1"
 dependencies = [
  "acadifc",
  "acadrust",
@@ -33,9 +33,13 @@ dependencies = [
  "lyon_tessellation",
  "meshopt",
  "naga 27.0.3",
+ "ocs_gis",
+ "ocs_platform",
  "ocs_plugin_api",
  "ocs_pointcloud",
+ "ocs_reality",
  "ocs_scripting",
+ "ocs_spatial",
  "open",
  "printpdf",
  "rayon",
@@ -4073,6 +4077,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocs_platform"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "ocs_plugin_api"
 version = "0.2.0"
 dependencies = [
@@ -4099,6 +4113,7 @@ dependencies = [
  "e57",
  "las",
  "laz",
+ "ocs_platform",
  "proj4rs",
  "rusqlite",
  "serde",
@@ -4108,12 +4123,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocs_reality"
+version = "0.1.0"
+dependencies = [
+ "ocs_gis",
+ "ocs_pointcloud",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ocs_scripting"
 version = "0.1.0"
 dependencies = [
  "rhai",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
