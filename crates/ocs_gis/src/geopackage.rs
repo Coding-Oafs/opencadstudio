@@ -7,6 +7,7 @@
 
 use crate::feature::{Feature, FeatureLayer, FieldValue};
 use crate::geometry::{geometry_from_wkb, geometry_to_wkb, Geometry};
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, Connection};
 use std::path::Path;
 
@@ -120,13 +121,26 @@ pub fn write_layer(connection: &Connection, layer: &FeatureLayer) -> Result<(), 
         .execute(
             "INSERT OR IGNORE INTO gpkg_spatial_ref_sys
                (srs_name, srs_id, organization, organization_coordsys_id, definition)
-             VALUES (?1, ?2, 'EPSG', ?2, 'EPSG:?2')",
-            params![format!("EPSG:{}", layer.epsg), srs_id],
+             VALUES (?1, ?2, 'EPSG', ?2, ?3)",
+            params![
+                format!("EPSG:{}", layer.epsg),
+                srs_id,
+                format!("EPSG:{}", layer.epsg)
+            ],
         )
         .map_err(|error| error.to_string())?;
+    let field_columns: Vec<String> = layer
+        .fields
+        .iter()
+        .map(|field| sanitize_identifier(field))
+        .collect();
     let mut attribute_columns = String::new();
     for field in &layer.fields {
-        attribute_columns.push_str(&format!(", \"{}\" {}", sanitize_identifier(field), "TEXT"));
+        attribute_columns.push_str(&format!(
+            ", \"{}\" {}",
+            sanitize_identifier(field),
+            field_affinity(layer, field)
+        ));
     }
     connection
         .execute_batch(&format!(
@@ -142,13 +156,17 @@ pub fn write_layer(connection: &Connection, layer: &FeatureLayer) -> Result<(), 
              VALUES ('{table}', 'geom', 'GEOMETRY', {srs_id}, 0, 0);"
         ))
         .map_err(|error| error.to_string())?;
-    let columns = layer.fields.join(", ");
+    let columns = field_columns
+        .iter()
+        .map(|field| format!("\"{field}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let insert_sql = if layer.fields.is_empty() {
-        format!("INSERT INTO \"{table}\" (geom) VALUES (?1)")
+        format!("INSERT INTO \"{table}\" (fid, geom) VALUES (?1, ?2)")
     } else {
         format!(
-            "INSERT INTO \"{table}\" (geom, {columns}) VALUES (?1, {})",
-            (2..=layer.fields.len() + 1)
+            "INSERT INTO \"{table}\" (fid, geom, {columns}) VALUES (?1, ?2, {})",
+            (3..=layer.fields.len() + 2)
                 .map(|index| format!("?{index}"))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -157,20 +175,23 @@ pub fn write_layer(connection: &Connection, layer: &FeatureLayer) -> Result<(), 
     let mut statement = connection.prepare(&insert_sql).map_err(|e| e.to_string())?;
     for feature in &layer.features {
         let blob = encode_gpkg_blob(&feature.geometry, srs_id);
-        let mut parameter_index = 2usize;
+        let mut parameter_index = 3usize;
         for field in &layer.fields {
             let value = feature
                 .properties
                 .get(field)
-                .map(FieldValue::to_sql_text)
-                .unwrap_or_default();
+                .map(field_to_sql)
+                .unwrap_or(SqlValue::Null);
             statement
                 .raw_bind_parameter(parameter_index, value)
                 .map_err(|e| e.to_string())?;
             parameter_index += 1;
         }
         statement
-            .raw_bind_parameter(1, blob)
+            .raw_bind_parameter(1, feature.id as i64)
+            .map_err(|e| e.to_string())?;
+        statement
+            .raw_bind_parameter(2, blob)
             .map_err(|e| e.to_string())?;
         statement.raw_execute().map_err(|e| e.to_string())?;
     }
@@ -201,6 +222,7 @@ pub fn read_layer(connection: &Connection, table: &str) -> Result<FeatureLayer, 
         .prepare(&format!("PRAGMA table_info(\"{table}\")"))
         .map_err(|error| error.to_string())?;
     let mut fields: Vec<String> = Vec::new();
+    let mut field_types: Vec<String> = Vec::new();
     let mut rows = columns_statement
         .query([])
         .map_err(|error| error.to_string())?;
@@ -208,6 +230,7 @@ pub fn read_layer(connection: &Connection, table: &str) -> Result<FeatureLayer, 
         let name: String = row.get(1).map_err(|e| e.to_string())?;
         if name != "fid" && name != geometry_column {
             fields.push(name);
+            field_types.push(row.get(2).map_err(|e| e.to_string())?);
         }
     }
     let field_list = if fields.is_empty() {
@@ -224,25 +247,24 @@ pub fn read_layer(connection: &Connection, table: &str) -> Result<FeatureLayer, 
     };
     let mut statement = connection
         .prepare(&format!(
-            "SELECT \"{geometry_column}\"{field_list} FROM \"{table}\" ORDER BY fid"
+            "SELECT fid, \"{geometry_column}\"{field_list} FROM \"{table}\" ORDER BY fid"
         ))
         .map_err(|error| error.to_string())?;
     let column_count = statement.column_count();
     let mut rows = statement.query([]).map_err(|error| error.to_string())?;
     let mut features = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let blob: Vec<u8> = row.get(0).map_err(|e| e.to_string())?;
+        let id: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let blob: Vec<u8> = row.get(1).map_err(|e| e.to_string())?;
         let geometry = decode_gpkg_blob(&blob)?;
         let mut properties = std::collections::BTreeMap::new();
         for (index, field) in fields.iter().enumerate() {
-            let value: Option<String> = row.get(index + 1).map_err(|e| e.to_string())?;
-            if let Some(value) = value {
-                properties.insert(field.clone(), FieldValue::from_text(&value));
-            }
+            let value: SqlValue = row.get(index + 2).map_err(|e| e.to_string())?;
+            properties.insert(field.clone(), field_from_sql(value, &field_types[index]));
         }
         let _ = column_count;
         features.push(Feature {
-            id: features.len() as u64 + 1,
+            id: id.max(1) as u64,
             geometry,
             properties,
         });
@@ -253,6 +275,59 @@ pub fn read_layer(connection: &Connection, table: &str) -> Result<FeatureLayer, 
         fields,
         features,
     })
+}
+
+fn field_affinity(layer: &FeatureLayer, field: &str) -> &'static str {
+    let mut affinity = "INTEGER";
+    let mut saw_boolean = false;
+    let mut saw_integer = false;
+    for value in layer
+        .features
+        .iter()
+        .filter_map(|feature| feature.properties.get(field))
+    {
+        match value {
+            FieldValue::Text(_) => return "TEXT",
+            FieldValue::Real(_) => affinity = "REAL",
+            FieldValue::Integer(_) => saw_integer = true,
+            FieldValue::Boolean(_) => saw_boolean = true,
+            FieldValue::Null => {}
+        }
+    }
+    if affinity == "INTEGER" && saw_boolean && !saw_integer {
+        "BOOLEAN"
+    } else {
+        affinity
+    }
+}
+
+fn field_to_sql(value: &FieldValue) -> SqlValue {
+    match value {
+        FieldValue::Text(value) => SqlValue::Text(value.clone()),
+        FieldValue::Integer(value) => SqlValue::Integer(*value),
+        FieldValue::Real(value) => SqlValue::Real(*value),
+        FieldValue::Boolean(value) => SqlValue::Integer(i64::from(*value)),
+        FieldValue::Null => SqlValue::Null,
+    }
+}
+
+fn field_from_sql(value: SqlValue, declared_type: &str) -> FieldValue {
+    match value {
+        SqlValue::Null => FieldValue::Null,
+        SqlValue::Integer(value) if declared_type.eq_ignore_ascii_case("BOOLEAN") => {
+            FieldValue::Boolean(value != 0)
+        }
+        SqlValue::Integer(value) => FieldValue::Integer(value),
+        SqlValue::Real(value) => FieldValue::Real(value),
+        SqlValue::Text(value) => FieldValue::Text(value),
+        SqlValue::Blob(value) => FieldValue::Text(format!(
+            "0x{}",
+            value
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )),
+    }
 }
 
 /// Names of every feature table in the container.

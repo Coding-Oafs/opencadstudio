@@ -131,6 +131,31 @@ impl FeatureLayer {
         });
     }
 
+    /// Insert a feature while preserving an externally supplied stable id.
+    /// Importers use this path so selections and audit records survive a
+    /// GeoJSON/GeoPackage round trip.
+    pub fn push_with_id(
+        &mut self,
+        id: u64,
+        geometry: Geometry,
+        properties: BTreeMap<String, FieldValue>,
+    ) -> Result<(), String> {
+        if id == 0 || self.features.iter().any(|feature| feature.id == id) {
+            return Err(format!("feature id {id} must be non-zero and unique"));
+        }
+        for field in properties.keys() {
+            if !self.fields.contains(field) {
+                self.fields.push(field.clone());
+            }
+        }
+        self.features.push(Feature {
+            id,
+            geometry,
+            properties,
+        });
+        Ok(())
+    }
+
     /// Export as a GeoJSON FeatureCollection string (RFC 7946 shapes; the
     /// layer CRS is recorded in a `crs` member when it is not EPSG:4326).
     pub fn to_geojson(&self) -> String {
@@ -196,7 +221,12 @@ impl FeatureLayer {
                     properties.insert(key.clone(), FieldValue::from_json(value));
                 }
             }
-            layer.push(geometry, properties);
+            let id = feature
+                .get("id")
+                .and_then(Value::as_u64)
+                .filter(|id| *id > 0)
+                .unwrap_or(layer.features.len() as u64 + 1);
+            layer.push_with_id(id, geometry, properties)?;
         }
         Ok(layer)
     }

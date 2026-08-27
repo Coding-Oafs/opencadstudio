@@ -7,12 +7,16 @@
 pub mod feature;
 pub mod geometry;
 pub mod geopackage;
+pub mod table;
+pub mod topology;
 
 pub use feature::{Feature, FeatureLayer, FieldValue};
 pub use geometry::{
     geometry_from_geojson, geometry_from_wkb, geometry_to_geojson, geometry_to_wkb, Geometry,
 };
 pub use geopackage::{create_geopackage, feature_tables, open_geopackage, read_layer, write_layer};
+pub use table::{AttributeQuery, AttributeTable, CompareOp, SortDirection, SortField};
+pub use topology::{validate_topology, TopologyIssue, TopologyIssueKind, TopologyRules};
 
 #[cfg(test)]
 mod tests {
@@ -136,7 +140,7 @@ mod tests {
         );
         assert_eq!(
             read.features[1].properties.get("HEIGHT_FT"),
-            Some(&FieldValue::Integer(88))
+            Some(&FieldValue::Real(88.0))
         );
         assert_eq!(read.features[0].geometry, layer.features[0].geometry);
         // The contents envelope was recorded from real bounds.
@@ -164,6 +168,35 @@ mod tests {
         std::fs::write(&path, b"already there").unwrap();
         assert!(create_geopackage(&path).is_err());
         assert!(open_geopackage(&dir.join("missing.gpkg")).is_err());
+    }
+
+    #[test]
+    fn geopackage_preserves_sql_attribute_types_and_feature_ids() {
+        let dir = std::env::temp_dir().join(format!("ocs-gis-types-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("types.gpkg");
+        let _ = std::fs::remove_file(&path);
+        let connection = create_geopackage(&path).unwrap();
+        let mut layer = FeatureLayer::new("typed", 4326);
+        layer
+            .push_with_id(
+                42,
+                Geometry::Point([1.0, 2.0]),
+                BTreeMap::from([
+                    ("count".into(), FieldValue::Integer(7)),
+                    ("ratio".into(), FieldValue::Real(1.5)),
+                    ("active".into(), FieldValue::Boolean(true)),
+                    ("name".into(), FieldValue::Text("survey".into())),
+                ]),
+            )
+            .unwrap();
+        write_layer(&connection, &layer).unwrap();
+        let read = read_layer(&connection, "typed").unwrap();
+        assert_eq!(read.features[0].id, 42);
+        assert_eq!(read.features[0].properties["count"], FieldValue::Integer(7));
+        assert_eq!(read.features[0].properties["ratio"], FieldValue::Real(1.5));
+        assert_eq!(read.features[0].properties["active"], FieldValue::Boolean(true));
+        assert_eq!(read.features[0].properties["name"], FieldValue::Text("survey".into()));
     }
 
     #[test]

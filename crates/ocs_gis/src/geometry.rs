@@ -22,6 +22,29 @@ pub enum Geometry {
 }
 
 impl Geometry {
+    /// Visit every coordinate in storage order. Geometry topology and feature
+    /// identity stay intact, making this the common CAD/GIS reprojection seam.
+    pub fn for_each_point_mut(&mut self, mut visit: impl FnMut(&mut Point2)) {
+        match self {
+            Self::Point(point) => visit(point),
+            Self::MultiPoint(points) | Self::LineString(points) => {
+                for point in points {
+                    visit(point);
+                }
+            }
+            Self::MultiLineString(lines) | Self::Polygon(lines) => {
+                for point in lines.iter_mut().flatten() {
+                    visit(point);
+                }
+            }
+            Self::MultiPolygon(polygons) => {
+                for point in polygons.iter_mut().flatten().flatten() {
+                    visit(point);
+                }
+            }
+        }
+    }
+
     /// WKB geometry type codes (2D variants).
     pub fn wkb_code(&self) -> u32 {
         match self {
