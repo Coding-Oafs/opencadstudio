@@ -1423,6 +1423,7 @@ impl OpenCADStudio {
                 )));
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDCONTOUR") => {
                 let arguments = cmd.trim_start_matches("POINTCLOUDCONTOUR").trim();
                 let interval = arguments
@@ -1987,16 +1988,19 @@ impl OpenCADStudio {
                 self.list_named_point_cloud_sections(i);
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDSECTIONSAVE ") => {
                 let name = cmd.trim_start_matches("POINTCLOUDSECTIONSAVE").trim();
                 self.save_named_point_cloud_section(i, name.to_string());
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDSECTIONACTIVATE ") => {
                 let id = cmd.trim_start_matches("POINTCLOUDSECTIONACTIVATE").trim();
                 self.activate_named_point_cloud_section(i, id);
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDSECTIONDUPLICATE ") => {
                 let arguments = cmd.trim_start_matches("POINTCLOUDSECTIONDUPLICATE").trim();
                 let mut parts = arguments.splitn(2, char::is_whitespace);
@@ -2008,11 +2012,13 @@ impl OpenCADStudio {
                 self.mutate_named_point_cloud_section(i, id, "DUPLICATE", name);
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDSECTIONFLIP ") => {
                 let id = cmd.trim_start_matches("POINTCLOUDSECTIONFLIP").trim();
                 self.mutate_named_point_cloud_section(i, id, "FLIP", None);
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDSECTIONLOCK ") => {
                 let arguments = cmd.trim_start_matches("POINTCLOUDSECTIONLOCK").trim();
                 let mut parts = arguments.split_whitespace();
@@ -2020,11 +2026,13 @@ impl OpenCADStudio {
                 self.mutate_named_point_cloud_section(i, id, "LOCK", parts.next());
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDSECTIONDELETE ") => {
                 let id = cmd.trim_start_matches("POINTCLOUDSECTIONDELETE").trim();
                 self.mutate_named_point_cloud_section(i, id, "DELETE", None);
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             "POINTCLOUDSECTIONCLEAR" => {
                 self.clear_point_cloud_section(i);
             }
