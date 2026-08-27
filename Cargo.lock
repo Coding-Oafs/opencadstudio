@@ -4064,6 +4064,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocs_gis"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ocs_plugin_api"
 version = "0.2.0"
 dependencies = [

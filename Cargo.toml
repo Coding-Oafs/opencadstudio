@@ -7,6 +7,7 @@ build = "build.rs"
 [workspace]
 members = [
     "crates/ocs_plugin_api",
+    "crates/ocs_gis",
     "crates/ocs_pointcloud",
     "crates/ocs_scripting",
     "crates/ocs_spatial",
