@@ -506,8 +506,13 @@ fn write_point(writer: &mut impl Write, point: &SamplePoint) -> io::Result<()> {
         | (u8::from(point.is_synthetic) << 2)
         | (u8::from(point.is_key_point) << 3)
         | (u8::from(point.is_withheld) << 4)
-        | (u8::from(point.is_overlap) << 5);
-    writer.write_all(&[flags])
+        | (u8::from(point.is_overlap) << 5)
+        | (u8::from(point.label.is_some()) << 6);
+    writer.write_all(&[flags])?;
+    if let Some(label) = point.label {
+        writer.write_all(&[label])?;
+    }
+    Ok(())
 }
 
 fn read_point(reader: &mut impl Read) -> io::Result<SamplePoint> {
@@ -537,6 +542,11 @@ fn read_point(reader: &mut impl Read) -> io::Result<SamplePoint> {
         gps_time: gps_time.is_finite().then_some(gps_time),
         color: (flags & 1 != 0).then_some(color),
         nir: (flags & 2 != 0).then_some(nir),
+        label: if flags & 64 != 0 {
+            Some(read_u8(reader)?)
+        } else {
+            None
+        },
         is_synthetic: flags & 4 != 0,
         is_key_point: flags & 8 != 0,
         is_withheld: flags & 16 != 0,

@@ -13,7 +13,7 @@
 //! Point records are copied at the byte level, so every existing dimension
 //! (GPS time, RGB, flags, user extra bytes) survives the rewrite unchanged.
 
-use crate::Error;
+use crate::{Error, SamplePoint};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{
@@ -1366,6 +1366,43 @@ pub fn inspect_urban_label(path: &Path) -> Result<Option<UrbanLabelInfo>, Error>
         point_format: header.point_format,
         provenance,
     }))
+}
+
+/// Fill `points[i].label` from the file's `label` extra byte in one sequential
+/// full-density pass. Returns `false` when the file carries no label
+/// dimension, leaving the points untouched.
+pub fn attach_sample_labels(path: &Path, points: &mut [SamplePoint]) -> Result<bool, Error> {
+    let Some(info) = inspect_urban_label(path)? else {
+        return Ok(false);
+    };
+    let wanted: std::collections::BTreeMap<u64, ()> = points
+        .iter()
+        .map(|point| (point.source_index, ()))
+        .collect();
+    let mut labels: std::collections::BTreeMap<u64, u8> = std::collections::BTreeMap::new();
+    let mut reader = RawPointReader::open(path)?;
+    let record_length = reader.header.record_length as usize;
+    let label_offset = info.label.offset.min(record_length.saturating_sub(1));
+    let mut buf = Vec::new();
+    let mut index: u64 = 0;
+    loop {
+        let count = reader.read_chunk(&mut buf, PROGRESS_CHUNK_POINTS)?;
+        if count == 0 {
+            break;
+        }
+        for offset in 0..count {
+            let source_index = index + offset as u64;
+            if wanted.contains_key(&source_index) {
+                let start = offset * record_length;
+                labels.insert(source_index, buf[start + label_offset]);
+            }
+        }
+        index += count as u64;
+    }
+    for point in points.iter_mut() {
+        point.label = labels.get(&point.source_index).copied();
+    }
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------

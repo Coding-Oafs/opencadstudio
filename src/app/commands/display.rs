@@ -2069,13 +2069,14 @@ impl OpenCADStudio {
                     "ELEVATION" | "HEIGHT" | "Z" => Some(ocs_pointcloud::ColorMode::Elevation),
                     "RETURN" | "RETURNS" => Some(ocs_pointcloud::ColorMode::ReturnNumber),
                     "SOURCE" | "POINTSOURCE" => Some(ocs_pointcloud::ColorMode::PointSource),
+                    "LABEL" | "UPCP" => Some(ocs_pointcloud::ColorMode::Label),
                     _ => None,
                 };
                 if let Some(mode) = mode {
                     self.set_point_cloud_color_mode(i, mode);
                 } else {
                     self.command_line.push_error(
-                        "Usage: POINTCLOUDCOLOR <CLASS|RGB|INTENSITY|ELEVATION|RETURN|SOURCE>",
+                        "Usage: POINTCLOUDCOLOR <CLASS|RGB|INTENSITY|ELEVATION|RETURN|SOURCE|LABEL>",
                     );
                 }
             }

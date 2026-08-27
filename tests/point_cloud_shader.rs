@@ -29,7 +29,19 @@ fn shader_colorizes_from_style_uniform() {
     assert!(SHADER.contains("style.color_mode"));
     // Hidden classes collapse to a zero-size quad instead of being filtered
     // out of the point set on the CPU.
-    assert!(SHADER.contains("class_is_visible(classification)"));
+    assert!(SHADER.contains("class_is_visible(scheme_class)"));
+}
+
+/// The UPCP label mode colors and filters through the same class tables as
+/// ASPRS classification, driven by the label byte packed into the free
+/// attribute slot of the instance layout.
+#[test]
+fn shader_labels_color_through_class_tables() {
+    assert!(SHADER.contains("let label = u32(point.attributes.w);"));
+    assert!(SHADER.contains("style.color_mode == 6u"));
+    assert!(SHADER.contains("class_color(label)"));
+    // Visibility switches to the label scheme in label mode.
+    assert!(SHADER.contains("select(classification, label, style.color_mode == 6u)"));
 }
 
 /// The vertical cross-section must be a shader-side band test (style uniform),

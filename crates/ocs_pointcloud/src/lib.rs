@@ -40,8 +40,8 @@ pub use crs::{
     reproject_with_patches_progress, reproject_xy, CrsInfo, ReprojectionStats, SurveyReadiness,
 };
 pub use display::{
-    classification_statistics, ClassDefinition, ClassStatistics, ClassTable, ColorMode, Density,
-    DisplaySettings,
+    classification_statistics, upcp_class_table, ClassDefinition, ClassStatistics, ClassTable,
+    ColorMode, Density, DisplaySettings,
 };
 pub use dtm::{generate_contours, Contour, Tin};
 pub use e57_import::{import_e57, E57ImportProgress, E57ImportStage, E57ImportStats};
@@ -86,11 +86,11 @@ pub use tools::{
     ToolRegistry, ToolRequirements, UndoBehavior,
 };
 pub use urban::{
-    classify_urban_folder, classify_urban_tile, inspect_urban_label, parse_geojson_collection,
-    parse_geojson_geometry, LocalVectorProvider, ReferenceCollection, ReferenceFeature,
-    ReferenceGeometry, UrbanBatchManifest, UrbanBatchSummary, UrbanClassificationSettings,
-    UrbanJobProgress, UrbanLabelInfo, UrbanLayer, UrbanProfile, UrbanReferenceProvider, UrbanScope,
-    UrbanStage, UrbanTileStats, ASPRS_SEEDS, UPCP_LABELS,
+    attach_sample_labels, classify_urban_folder, classify_urban_tile, inspect_urban_label,
+    parse_geojson_collection, parse_geojson_geometry, LocalVectorProvider, ReferenceCollection,
+    ReferenceFeature, ReferenceGeometry, UrbanBatchManifest, UrbanBatchSummary,
+    UrbanClassificationSettings, UrbanJobProgress, UrbanLabelInfo, UrbanLayer, UrbanProfile,
+    UrbanReferenceProvider, UrbanScope, UrbanStage, UrbanTileStats, ASPRS_SEEDS, UPCP_LABELS,
 };
 pub use urban_arcgis::{
     boston_endpoint, ArcGisEndpoint, ArcGisTransport, BostonArcGisProvider, CustomArcGisConfig,
@@ -256,6 +256,10 @@ pub struct SamplePoint {
     pub gps_time: Option<f64>,
     pub color: Option<[u16; 3]>,
     pub nir: Option<u16>,
+    /// UPCP urban label from the `label` extra byte, when the source carries
+    /// one; `None` for ordinary ASPRS-only clouds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<u8>,
     pub is_synthetic: bool,
     pub is_key_point: bool,
     pub is_withheld: bool,
@@ -279,6 +283,7 @@ impl SamplePoint {
                 .color
                 .map(|color| [color.red, color.green, color.blue]),
             nir: point.nir,
+            label: None,
             is_synthetic: point.is_synthetic,
             is_key_point: point.is_key_point,
             is_withheld: point.is_withheld,

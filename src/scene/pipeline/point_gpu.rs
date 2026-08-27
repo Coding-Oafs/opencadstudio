@@ -43,7 +43,7 @@ fn build_instances(
                     point.intensity as f32,
                     point.return_number as f32,
                     point.point_source_id as f32,
-                    0.0,
+                    point.label as f32,
                 ],
                 color_selected: [
                     point.color.map_or(0.0, |color| color[0] as f32 / 65_535.0),

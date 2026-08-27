@@ -145,8 +145,8 @@ pub use model::mesh_model::MeshLodSet;
 pub use model::object::{GripApply, GripDef};
 pub use model::point_cloud_model::{
     PointChunk, PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION,
-    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_RETURN, COLOR_MODE_RGB,
-    COLOR_MODE_SOURCE,
+    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_LABEL, COLOR_MODE_RETURN,
+    COLOR_MODE_RGB, COLOR_MODE_SOURCE,
 };
 pub use model::wire_model::WireModel;
 pub use pick::selection_state::SelectionState;

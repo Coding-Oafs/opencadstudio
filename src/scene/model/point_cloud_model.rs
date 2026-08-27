@@ -17,6 +17,8 @@ pub struct PointCloudPoint {
     pub point_source_id: u16,
     /// 16-bit source RGB; `None` falls back to the class color.
     pub color: Option<[u16; 3]>,
+    /// UPCP urban label byte; 0 when the source carries no label dimension.
+    pub label: u8,
     pub selected: bool,
 }
 
@@ -27,6 +29,7 @@ pub const COLOR_MODE_INTENSITY: u32 = 2;
 pub const COLOR_MODE_ELEVATION: u32 = 3;
 pub const COLOR_MODE_RETURN: u32 = 4;
 pub const COLOR_MODE_SOURCE: u32 = 5;
+pub const COLOR_MODE_LABEL: u32 = 6;
 
 pub const CLASS_COUNT: usize = 256;
 

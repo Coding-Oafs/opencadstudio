@@ -9,8 +9,8 @@
 use super::{Message, OpenCADStudio};
 use crate::scene::{
     PointChunk, PointCloudModel, PointCloudPoint, PointStyle, COLOR_MODE_CLASSIFICATION,
-    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_RETURN, COLOR_MODE_RGB,
-    COLOR_MODE_SOURCE,
+    COLOR_MODE_ELEVATION, COLOR_MODE_INTENSITY, COLOR_MODE_LABEL, COLOR_MODE_RETURN,
+    COLOR_MODE_RGB, COLOR_MODE_SOURCE,
 };
 use iced::Task;
 use ocs_pointcloud::{
@@ -1227,6 +1227,10 @@ pub(super) struct PointCloudDataset {
     /// Native urban classification job; presence means a job is running.
     pub(super) urban_job: Option<Arc<UrbanJobState>>,
     pub(super) urban_status: String,
+    /// UPCP label class table, present when an attached source carries a
+    /// `label` extra dimension. Label mode colorizes through it instead of
+    /// the ASPRS table so the two schemes never overwrite each other.
+    pub(super) label_classes: Option<ClassTable>,
     display_generation: u64,
     /// Bumps on style-only changes (color mode, class visibility, class
     /// colors, point size): the GPU rewrites its style uniform, not the
@@ -1393,6 +1397,7 @@ impl PointCloudDataset {
                     return_number: point.return_number,
                     point_source_id: point.point_source_id,
                     color: point.color,
+                    label: point.label.unwrap_or(0),
                     selected: active_selection
                         .is_some_and(|selection| selection.contains(point.source_index)),
                 });
@@ -1439,10 +1444,19 @@ impl PointCloudDataset {
 
     /// The colorization state uploaded to the GPU as one uniform write.
     pub(super) fn point_style(&self) -> PointStyle {
+        // Label mode drives the same tables from the UPCP class table so
+        // visibility and colors describe the urban scheme, not ASPRS.
+        let scheme_classes = if matches!(self.display.color_mode, ColorMode::Label) {
+            self.label_classes
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(ocs_pointcloud::upcp_class_table)
+        } else {
+            self.classes.clone()
+        };
         let mut class_visible = [0_u32; 8];
         for class in 0..u8::MAX as u32 + 1 {
-            let visible = self
-                .classes
+            let visible = scheme_classes
                 .classes
                 .get(&(class as u8))
                 .map_or(true, |definition| definition.visible)
@@ -1453,7 +1467,7 @@ impl PointCloudDataset {
         }
         let mut class_colors = [[0.92, 0.92, 0.92, 1.0]; 256];
         for class in 0..u8::MAX as u32 + 1 {
-            let [red, green, blue] = self.classes.color(class as u8);
+            let [red, green, blue] = scheme_classes.color(class as u8);
             class_colors[class as usize] = [
                 red as f32 / 255.0,
                 green as f32 / 255.0,
@@ -1476,6 +1490,7 @@ impl PointCloudDataset {
                 ColorMode::Elevation => COLOR_MODE_ELEVATION,
                 ColorMode::ReturnNumber => COLOR_MODE_RETURN,
                 ColorMode::PointSource => COLOR_MODE_SOURCE,
+                ColorMode::Label => COLOR_MODE_LABEL,
             },
             point_size_px: self.display.point_size_px,
             class_visible,
@@ -1702,7 +1717,14 @@ impl OpenCADStudio {
         let worker_path = path.clone();
         background_task(
             move || {
-                ocs_pointcloud::sample(&worker_path, options).map_err(|error| error.to_string())
+                let mut sample = ocs_pointcloud::sample(&worker_path, options)
+                    .map_err(|error| error.to_string())?;
+                // Urban-classified sources carry their UPCP label in an extra
+                // byte the LAS sampler cannot see; one sequential pass fills
+                // it for the sampled indices. Sources without a label
+                // dimension return false and stay untouched.
+                let _ = ocs_pointcloud::attach_sample_labels(&worker_path, &mut sample.points);
+                Ok(sample)
             },
             move |result| Message::PointCloudLoaded(tab_id, path, result),
         )
@@ -2091,6 +2113,26 @@ impl OpenCADStudio {
 
         let id = self.tabs[tab_index].point_cloud.next_source_id();
         let mut attachment = PointCloudAttachment::new(id, path.clone(), sample);
+        // Auto scheme: switch to UPCP label coloring when the attached
+        // source actually carries urban labels (the sampler only fills them
+        // when a typed label dimension and provenance exist).
+        if attachment
+            .sample
+            .points
+            .iter()
+            .any(|point| point.label.is_some())
+        {
+            let dataset = &mut self.tabs[tab_index].point_cloud;
+            if dataset.label_classes.is_none() {
+                dataset.label_classes = Some(ocs_pointcloud::upcp_class_table());
+            }
+            if matches!(dataset.display.color_mode, ColorMode::Classification) {
+                dataset.display.color_mode = ColorMode::Label;
+                self.command_line.push_info(
+                    "POINTCLOUDATTACH: urban labels detected; coloring by UPCP label (POINTCLOUDCOLOR CLASS switches back).",
+                );
+            }
+        }
         if attachment.sample.metadata.has_crs && !attachment.source_crs.is_resolvable() {
             self.command_line.push_error(
                 format!(
@@ -5104,6 +5146,7 @@ impl PointCloudDataset {
             ColorMode::Elevation => "Elevation",
             ColorMode::ReturnNumber => "Return number",
             ColorMode::PointSource => "Point source",
+            ColorMode::Label => "UPCP label",
         };
         let export_progress = self
             .sources

@@ -1230,6 +1230,7 @@ PROJCS[\"NAD83(2011) / Massachusetts Mainland (ft)\",GEOGCS[\"NAD83(2011)\",DATU
             gps_time: None,
             color: None,
             nir: None,
+            label: None,
             is_synthetic: false,
             is_key_point: false,
             is_withheld: false,

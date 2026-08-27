@@ -13,6 +13,9 @@ pub enum ColorMode {
     Elevation,
     ReturnNumber,
     PointSource,
+    /// UPCP urban `label` extra dimension; falls back to the fallback color
+    /// when a source carries no label.
+    Label,
 }
 
 /// How much of a source cloud to load for display.
@@ -129,6 +132,41 @@ impl ClassTable {
         self.classes.insert(definition.code, definition);
     }
 
+    /// The UPCP label table for urban-classified clouds. Separate from the
+    /// ASPRS table on purpose: label codes collide with unrelated ASPRS
+    /// classes (9 is ground here, water there), and edits to one scheme must
+    /// never silently change the other.
+    pub fn upcp() -> Self {
+        let mut table = Self {
+            classes: BTreeMap::new(),
+        };
+        for (code, name, color) in [
+            (0, "Unknown", [120, 120, 120]),
+            (1, "Road", [75, 75, 75]),
+            (9, "Ground", [163, 107, 56]),
+            (10, "Building", [230, 56, 46]),
+            (14, "Bridge", [38, 217, 242]),
+            (30, "Vegetation", [51, 166, 56]),
+            (99, "Noise", [219, 51, 199]),
+        ] {
+            table.upsert(ClassDefinition {
+                code,
+                name: name.into(),
+                color,
+                visible: true,
+                locked: false,
+            });
+        }
+        table
+    }
+}
+
+/// The default UPCP label class table.
+pub fn upcp_class_table() -> ClassTable {
+    ClassTable::upcp()
+}
+
+impl ClassTable {
     pub fn remove(&mut self, code: u8) -> Option<ClassDefinition> {
         self.classes.remove(&code)
     }

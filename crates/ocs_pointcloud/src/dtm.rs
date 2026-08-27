@@ -314,6 +314,7 @@ mod tests {
             gps_time: None,
             color: None,
             nir: None,
+            label: None,
             is_synthetic: false,
             is_key_point: false,
             is_withheld: false,

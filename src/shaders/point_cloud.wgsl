@@ -109,7 +109,7 @@ fn section_outside(position: vec2<f32>) -> f32 {
 }
 
 fn point_color(classification: u32, intensity: f32, return_number: u32,
-               source_id: u32, rgb: vec3<f32>, elevation: f32) -> vec4<f32> {
+               source_id: u32, rgb: vec3<f32>, elevation: f32, label: u32) -> vec4<f32> {
     if (style.color_mode == 0u) {
         return class_color(classification);
     } else if (style.color_mode == 1u) {
@@ -125,6 +125,12 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
         return elevation_gradient(normalize_range(elevation, style.elevation_range));
     } else if (style.color_mode == 4u) {
         return categorical_hash(return_number);
+    } else if (style.color_mode == 6u) {
+        // UPCP label table; label 0 (unknown/absent) keeps the fallback tone.
+        if (label == 0u) {
+            return vec4<f32>(0.55, 0.55, 0.55, 1.0);
+        }
+        return class_color(label);
     }
     return categorical_hash(source_id);
 }
@@ -139,8 +145,11 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
         + (point.position_low.xyz - u.eye_low);
     let center = u.view_rot * vec4<f32>(relative, 1.0);
     let classification = u32(point.position_low.w);
-    // Hidden classes collapse to a zero-size quad: no fragments, no cost.
-    let visible = class_is_visible(classification);
+    let label = u32(point.attributes.w);
+    // Hidden classes collapse to a zero-size quad: no fragments, no cost. In
+    // label mode the UPCP table drives the same visibility bitfield.
+    let scheme_class = select(classification, label, style.color_mode == 6u);
+    let visible = class_is_visible(scheme_class);
     var half_size_px = select(0.0, style.point_size * 0.5, visible);
     let ndc_offset = local * half_size_px / (u.viewport_size * 0.5);
     var output: VertexOut;
@@ -153,6 +162,7 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
         u32(point.attributes.z),
         point.color_selected.xyz,
         point.position_high_size.z,
+        label,
     );
     if (point.color_selected.w > 0.5) {
         color = vec4<f32>(1.0, 0.82, 0.05, 1.0);
