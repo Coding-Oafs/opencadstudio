@@ -171,19 +171,15 @@ fn compute_mesh_metrics(lods: &[MeshModel]) -> MeshMetrics {
             ab[2] * ac[0] - ab[0] * ac[2],
             ab[0] * ac[1] - ab[1] * ac[0],
         ];
-        let triangle_area = 0.5
-            * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2])
-                .sqrt();
+        let triangle_area =
+            0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
         area += triangle_area;
         for axis in 0..3 {
-            area_centroid_numerator[axis] +=
-                triangle_area * (a[axis] + b[axis] + c[axis]) / 3.0;
+            area_centroid_numerator[axis] += triangle_area * (a[axis] + b[axis] + c[axis]) / 3.0;
         }
-        let tetra = (
-            a[0] * (b[1] * c[2] - b[2] * c[1])
-                - a[1] * (b[0] * c[2] - b[2] * c[0])
-                + a[2] * (b[0] * c[1] - b[1] * c[0])
-        ) / 6.0;
+        let tetra = (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+            + a[2] * (b[0] * c[1] - b[1] * c[0]))
+            / 6.0;
         signed_volume += tetra;
         for axis in 0..3 {
             centroid_numerator[axis] += tetra * (a[axis] + b[axis] + c[axis]) / 4.0;

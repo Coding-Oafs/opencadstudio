@@ -235,9 +235,7 @@ impl MeshInstanceGpu {
             translation[2] as f32,
         ];
         let linear = glam::DMat3::from_cols_array(&[
-            m[0][0], m[1][0], m[2][0],
-            m[0][1], m[1][1], m[2][1],
-            m[0][2], m[1][2], m[2][2],
+            m[0][0], m[1][0], m[2][0], m[0][1], m[1][1], m[2][1], m[0][2], m[1][2], m[2][2],
         ]);
         let normal = if linear.determinant().abs() > 1e-18 {
             linear.inverse().transpose()
@@ -625,18 +623,54 @@ pub fn create_material_resources(
     let bump = material.and_then(|material| material.bump_map.image.as_deref());
     let refraction = material.and_then(|material| material.refraction_map.image.as_deref());
     let normal = material.and_then(|material| material.normal_map.image.as_deref());
-    let diffuse_view =
-        upload_rgba_texture(device, queue, "mesh.material.diffuse", diffuse, [255; 4], true);
-    let specular_view =
-        upload_rgba_texture(device, queue, "mesh.material.specular", specular, [255; 4], true);
-    let reflection_view =
-        upload_rgba_texture(device, queue, "mesh.material.reflection", reflection, [0, 0, 0, 255], true);
-    let opacity_view =
-        upload_rgba_texture(device, queue, "mesh.material.opacity", opacity, [255; 4], false);
-    let bump_view =
-        upload_rgba_texture(device, queue, "mesh.material.bump", bump, [128, 128, 128, 255], false);
-    let refraction_view =
-        upload_rgba_texture(device, queue, "mesh.material.refraction", refraction, [255; 4], true);
+    let diffuse_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.diffuse",
+        diffuse,
+        [255; 4],
+        true,
+    );
+    let specular_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.specular",
+        specular,
+        [255; 4],
+        true,
+    );
+    let reflection_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.reflection",
+        reflection,
+        [0, 0, 0, 255],
+        true,
+    );
+    let opacity_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.opacity",
+        opacity,
+        [255; 4],
+        false,
+    );
+    let bump_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.bump",
+        bump,
+        [128, 128, 128, 255],
+        false,
+    );
+    let refraction_view = upload_rgba_texture(
+        device,
+        queue,
+        "mesh.material.refraction",
+        refraction,
+        [255; 4],
+        true,
+    );
     let normal_view = upload_rgba_texture(
         device,
         queue,
@@ -798,8 +832,7 @@ pub fn create_material_bind_group_from_resources(
     material: Option<&crate::scene::model::material_model::MeshMaterial>,
     face_color: [f32; 4],
 ) -> wgpu::BindGroup {
-    let (material_params, specular, ambient, advanced, flags) =
-        material_vertex_params(material);
+    let (material_params, specular, ambient, advanced, flags) = material_vertex_params(material);
     let surface = MeshSurfaceParams {
         face_color,
         material: material_params,
@@ -893,13 +926,7 @@ pub fn create_material_bind_group(
 ) -> wgpu::BindGroup {
     let resources = create_material_resources(device, queue, material);
     let color = material.map_or([0.8, 0.8, 0.8, 1.0], |material| material.diffuse);
-    create_material_bind_group_from_resources(
-        device,
-        layout,
-        &resources,
-        material,
-        color,
-    )
+    create_material_bind_group_from_resources(device, layout, &resources, material, color)
 }
 
 pub fn upload_chunk_material_bind_groups(
@@ -912,8 +939,7 @@ pub fn upload_chunk_material_bind_groups(
     let mut materials = rustc_hash::FxHashMap::default();
     for chunk in chunks {
         let resources = match chunk.material.as_ref() {
-            None => fallback
-                .get_or_insert_with(|| create_material_resources(device, queue, None)),
+            None => fallback.get_or_insert_with(|| create_material_resources(device, queue, None)),
             Some(material) => {
                 let Some(handle) = material.handle else {
                     let resources = create_material_resources(device, queue, Some(material));
@@ -926,9 +952,9 @@ pub fn upload_chunk_material_bind_groups(
                     ));
                     continue;
                 };
-                materials.entry(handle.value()).or_insert_with(|| {
-                    create_material_resources(device, queue, Some(material))
-                })
+                materials
+                    .entry(handle.value())
+                    .or_insert_with(|| create_material_resources(device, queue, Some(material)))
             }
         };
         chunk.material_bind_group = Some(create_material_bind_group_from_resources(
@@ -1155,13 +1181,15 @@ fn build_instanced_chunk(
     let material = first.material;
     let color = first.color;
     let source_handle = source.handle.value();
-    let compact_vertices = !material_has_textures(material)
-        && (!first.include_edges || !source.edge_verts.is_empty());
+    let compact_vertices =
+        !material_has_textures(material) && (!first.include_edges || !source.edge_verts.is_empty());
     let material_identity = if material_has_textures(material) {
         material.map_or(0, |material| {
             material
                 .handle
-                .map_or(material as *const _ as usize as u64, |handle| handle.value())
+                .map_or(material as *const _ as usize as u64, |handle| {
+                    handle.value()
+                })
         })
     } else {
         0
@@ -1182,15 +1210,7 @@ fn build_instanced_chunk(
         };
         let position = mesh.verts[index];
         let position_low = mesh.verts_low.get(index).copied().unwrap_or([0.0; 3]);
-        let uvs = material_uvs(
-            material,
-            position,
-            normal,
-            bounds,
-            position,
-            normal,
-            bounds,
-        );
+        let uvs = material_uvs(material, position, normal, bounds, position, normal, bounds);
         MeshVertex {
             position,
             normal,
@@ -1214,7 +1234,9 @@ fn build_instanced_chunk(
         .set
         .visual_style
         .as_ref()
-        .map_or(first.display_color, |style| style.edge_color(first.display_color));
+        .map_or(first.display_color, |style| {
+            style.edge_color(first.display_color)
+        });
     let edge_key = (source_handle, edge_color.map(f32::to_bits));
     let shared_edge_buffer = first
         .include_edges
@@ -1305,23 +1327,23 @@ fn build_instanced_chunk(
         0
     };
     let chunk = make_chunk(
-            device,
-            queue,
-            stubs,
-            &verts,
-            opaque_indices,
-            transparent_indices,
-            &wire_indices,
-            &edge_verts,
-            &highlights,
-            &instances,
-            &handles,
-            Some(bounds),
-            material,
-            color,
-            shared_vertex_buffer,
-            shared_edge_buffer,
-        );
+        device,
+        queue,
+        stubs,
+        &verts,
+        opaque_indices,
+        transparent_indices,
+        &wire_indices,
+        &edge_verts,
+        &highlights,
+        &instances,
+        &handles,
+        Some(bounds),
+        material,
+        color,
+        shared_vertex_buffer,
+        shared_edge_buffer,
+    );
     buffers
         .vertices
         .entry(vertex_key)
@@ -1424,10 +1446,7 @@ fn material_map_uv(
         position[0] * m[8] + position[1] * m[9] + position[2] * m[10] + m[11],
     ];
     match map.projection {
-        3 => [
-            p[1].atan2(p[0]) / std::f32::consts::TAU + 0.5,
-            p[2],
-        ],
+        3 => [p[1].atan2(p[0]) / std::f32::consts::TAU + 0.5, p[2]],
         4 => {
             let radius = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
             if radius <= f32::EPSILON {
@@ -1581,10 +1600,8 @@ pub fn build_mesh_batch_filtered(
         rustc_hash::FxHashSet::default();
     let mut total_tris = 0u64;
     let mut ordered: Vec<MeshBatchPart<'_>> = Vec::new();
-    let mut source_indices: rustc_hash::FxHashMap<
-        (bool, u64),
-        (std::sync::Arc<[u32]>, u64),
-    > = rustc_hash::FxHashMap::default();
+    let mut source_indices: rustc_hash::FxHashMap<(bool, u64), (std::sync::Arc<[u32]>, u64)> =
+        rustc_hash::FxHashMap::default();
     let mut face_partitions: rustc_hash::FxHashMap<FacePartitionKey, Vec<CachedFacePart<'_>>> =
         rustc_hash::FxHashMap::default();
     for set in sets {
@@ -1596,9 +1613,9 @@ pub fn build_mesh_batch_filtered(
             continue;
         };
         let display_handle = set.entity_handle();
-        if handles.is_some_and(|wanted| {
-            display_handle.is_none_or(|handle| !wanted.contains(&handle))
-        }) {
+        if handles
+            .is_some_and(|wanted| display_handle.is_none_or(|handle| !wanted.contains(&handle)))
+        {
             continue;
         }
         let display_color = set.display_color().unwrap_or(mesh.color);
@@ -1607,8 +1624,7 @@ pub fn build_mesh_batch_filtered(
             |source| (true, source.handle.value()),
         );
         let triangle_count = mesh.indices.len() / 3;
-        let has_face_materials =
-            mesh.triangle_material_handles.len() == triangle_count
+        let has_face_materials = mesh.triangle_material_handles.len() == triangle_count
             && !set.face_materials.is_empty();
         let has_face_colors = mesh.triangle_colors.len() == triangle_count
             && mesh.triangle_colors.iter().any(Option::is_some);
@@ -1621,8 +1637,10 @@ pub fn build_mesh_batch_filtered(
             .as_ref()
             .map_or(true, |style| style.edges_visible());
         if !has_face_materials && !has_face_colors {
-            let base_color =
-                set.material.as_ref().map_or(display_color, |material| material.diffuse);
+            let base_color = set
+                .material
+                .as_ref()
+                .map_or(display_color, |material| material.diffuse);
             let color = set
                 .visual_style
                 .as_ref()
@@ -1691,8 +1709,7 @@ pub fn build_mesh_batch_filtered(
                 } else {
                     set.material.as_ref()
                 };
-                let base_color =
-                    material.map_or(display_color, |material| material.diffuse);
+                let base_color = material.map_or(display_color, |material| material.diffuse);
                 let base_color = if has_face_colors {
                     mesh.triangle_colors[triangle].unwrap_or(base_color)
                 } else {
@@ -1767,10 +1784,8 @@ pub fn build_mesh_batch_filtered(
             mesh_spatial_key(part.set, spatial_bounds),
         )
     });
-    let mut instance_groups: std::collections::BTreeMap<
-        InstanceGroupKey,
-        Vec<MeshBatchPart<'_>>,
-    > = std::collections::BTreeMap::new();
+    let mut instance_groups: std::collections::BTreeMap<InstanceGroupKey, Vec<MeshBatchPart<'_>>> =
+        std::collections::BTreeMap::new();
     let mut direct_parts = Vec::with_capacity(ordered.len());
     for part in ordered {
         let eligible = part.set.instance_transform.is_some()
@@ -1781,19 +1796,18 @@ pub fn build_mesh_batch_filtered(
                 .len()
                 .saturating_mul(std::mem::size_of::<MeshVertex>())
                 <= hard_budget
-            && part.indices.len().saturating_mul(2 * std::mem::size_of::<u32>())
-                <= hard_budget
             && part
-                .set
-                .instance_source
-                .as_ref()
-                .is_some_and(|source| {
-                    source
-                        .edge_verts
-                        .len()
-                        .saturating_mul(std::mem::size_of::<MeshEdgeVertex>())
-                        <= hard_budget
-                })
+                .indices
+                .len()
+                .saturating_mul(2 * std::mem::size_of::<u32>())
+                <= hard_budget
+            && part.set.instance_source.as_ref().is_some_and(|source| {
+                source
+                    .edge_verts
+                    .len()
+                    .saturating_mul(std::mem::size_of::<MeshEdgeVertex>())
+                    <= hard_budget
+            })
             && part
                 .indices
                 .iter()
@@ -1882,23 +1896,17 @@ pub fn build_mesh_batch_filtered(
         let edge_color = set
             .visual_style
             .as_ref()
-            .map_or(part.display_color, |style| style.edge_color(part.display_color));
+            .map_or(part.display_color, |style| {
+                style.edge_color(part.display_color)
+            });
         let vtx = |vi: usize| {
             let normal = if has_normals {
                 mesh.normals[vi]
             } else {
                 [0.0, 1.0, 0.0]
             };
-            let local_position = uv_mesh
-                .verts
-                .get(vi)
-                .copied()
-                .unwrap_or(mesh.verts[vi]);
-            let local_normal = uv_mesh
-                .normals
-                .get(vi)
-                .copied()
-                .unwrap_or(normal);
+            let local_position = uv_mesh.verts.get(vi).copied().unwrap_or(mesh.verts[vi]);
+            let local_normal = uv_mesh.normals.get(vi).copied().unwrap_or(normal);
             let uv = material_uvs(
                 material,
                 local_position,
@@ -1944,9 +1952,7 @@ pub fn build_mesh_batch_filtered(
                 let available = max_verts.saturating_sub(edge_verts.len());
                 // LineList consumes pairs. Never split a segment between
                 // chunks even when the vertex budget is odd.
-                let take = available
-                    .min(edge_end - edge_start)
-                    & !1usize;
+                let take = available.min(edge_end - edge_start) & !1usize;
                 if take == 0 {
                     chunks.push(make_chunk(
                         device,
@@ -2089,8 +2095,7 @@ pub fn build_mesh_batch_filtered(
                     Vec::new()
                 };
                 if is_transp {
-                    let sub_handles: rustc_hash::FxHashSet<_> =
-                        entity_handle.into_iter().collect();
+                    let sub_handles: rustc_hash::FxHashSet<_> = entity_handle.into_iter().collect();
                     chunks.push(make_chunk(
                         device,
                         queue,
@@ -2110,8 +2115,7 @@ pub fn build_mesh_batch_filtered(
                         None,
                     ));
                 } else {
-                    let sub_handles: rustc_hash::FxHashSet<_> =
-                        entity_handle.into_iter().collect();
+                    let sub_handles: rustc_hash::FxHashSet<_> = entity_handle.into_iter().collect();
                     chunks.push(make_chunk(
                         device,
                         queue,
@@ -2177,7 +2181,11 @@ pub fn build_mesh_batch_filtered(
             verts.push(vtx(i));
         }
         if part.include_faces {
-            let fill = if is_transp { &mut transp_indices } else { &mut indices };
+            let fill = if is_transp {
+                &mut transp_indices
+            } else {
+                &mut indices
+            };
             let index_start = fill.len() as u32;
             for &idx in part.indices.iter() {
                 fill.push(base + idx);

@@ -1,8 +1,8 @@
 use acadrust::entities::{EmbeddedEntity, Solid3D};
 use acadrust::objects::{
     SolidHistoryBox, SolidHistoryBrep, SolidHistoryCylinder, SolidHistoryLoft,
-    SolidHistoryNodeBase, SolidHistoryOperation, SolidHistoryPyramid,
-    SolidHistoryRevolve, SolidHistorySphere, SolidHistorySweep, SolidHistoryTorus,
+    SolidHistoryNodeBase, SolidHistoryOperation, SolidHistoryPyramid, SolidHistoryRevolve,
+    SolidHistorySphere, SolidHistorySweep, SolidHistoryTorus,
 };
 use acadrust::types::{Vector2, Vector3};
 use acadrust::EntityType;
@@ -117,18 +117,20 @@ pub fn apply_primitive_property(
             PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
             _ => return false,
         },
-        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => match field {
-            PROP_RADIUS => {
-                let Some(radius) = positive() else {
-                    return false;
-                };
-                value.major_radius = radius;
-                value.minor_radius = radius;
-                value.x_radius = radius;
+        SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
+            match field {
+                PROP_RADIUS => {
+                    let Some(radius) = positive() else {
+                        return false;
+                    };
+                    value.major_radius = radius;
+                    value.minor_radius = radius;
+                    value.x_radius = radius;
+                }
+                PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
+                _ => return false,
             }
-            PROP_HEIGHT => value.height = positive().unwrap_or(value.height),
-            _ => return false,
-        },
+        }
         SolidHistoryOperation::Sphere(value) if field == PROP_RADIUS => {
             value.radius = positive().unwrap_or(value.radius);
         }
@@ -188,10 +190,22 @@ fn matrix(transform: [f64; 16]) -> Option<glam::DMat4> {
 fn codec_matrix(transform: &acadrust::types::Transform) -> glam::DMat4 {
     let matrix = transform.matrix.m;
     glam::DMat4::from_cols_array(&[
-        matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0],
-        matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1],
-        matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2],
-        matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3],
+        matrix[0][0],
+        matrix[1][0],
+        matrix[2][0],
+        matrix[3][0],
+        matrix[0][1],
+        matrix[1][1],
+        matrix[2][1],
+        matrix[3][1],
+        matrix[0][2],
+        matrix[1][2],
+        matrix[2][2],
+        matrix[3][2],
+        matrix[0][3],
+        matrix[1][3],
+        matrix[2][3],
+        matrix[3][3],
     ])
 }
 
@@ -220,11 +234,13 @@ fn transform_matrix(transform: &EntityTransform) -> Option<glam::DMat4> {
             p1,
             p2,
             working_normal,
-        } => codec_matrix(&crate::scene::view::transform::reflection_about_working_line(
-            *p1,
-            *p2,
-            *working_normal,
-        )),
+        } => codec_matrix(
+            &crate::scene::view::transform::reflection_about_working_line(
+                *p1,
+                *p2,
+                *working_normal,
+            ),
+        ),
         EntityTransform::Affine(value) => codec_matrix(value),
     })
 }
@@ -263,12 +279,7 @@ fn local_point(transform: [f64; 16], point: glam::DVec3) -> Option<glam::DVec3> 
     Some(matrix(transform)?.inverse().transform_point3(point))
 }
 
-fn grip(
-    id: usize,
-    world: glam::DVec3,
-    shape: GripShape,
-    axis: Option<glam::DVec3>,
-) -> GripDef {
+fn grip(id: usize, world: glam::DVec3, shape: GripShape, axis: Option<glam::DVec3>) -> GripDef {
     GripDef {
         id,
         world,
@@ -279,10 +290,7 @@ fn grip(
     }
 }
 
-pub fn primitive_grips(
-    document: &acadrust::CadDocument,
-    handle: acadrust::Handle,
-) -> Vec<GripDef> {
+pub fn primitive_grips(document: &acadrust::CadDocument, handle: acadrust::Handle) -> Vec<GripDef> {
     let Some(operation) = document.solid_history_operation(handle) else {
         return Vec::new();
     };
@@ -355,11 +363,7 @@ pub fn primitive_grips(
             add(
                 GRIP_INNER_RADIUS,
                 value.base.transform,
-                [
-                    (value.major_radius - value.minor_radius).max(0.0),
-                    0.0,
-                    0.0,
-                ],
+                [(value.major_radius - value.minor_radius).max(0.0), 0.0, 0.0],
                 GripShape::Square,
                 None,
             );
@@ -409,14 +413,12 @@ pub fn apply_primitive_grip(
     };
     let positive = |value: f64| value.abs().max(1e-6);
     match operation {
-        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => {
-            match grip_id {
-                GRIP_LENGTH => value.length = positive(local.x),
-                GRIP_WIDTH => value.width = positive(local.y),
-                GRIP_HEIGHT => value.height = local.z.max(1e-6),
-                _ => return false,
-            }
-        }
+        SolidHistoryOperation::Box(value) | SolidHistoryOperation::Wedge(value) => match grip_id {
+            GRIP_LENGTH => value.length = positive(local.x),
+            GRIP_WIDTH => value.width = positive(local.y),
+            GRIP_HEIGHT => value.height = local.z.max(1e-6),
+            _ => return false,
+        },
         SolidHistoryOperation::Cylinder(value) | SolidHistoryOperation::Cone(value) => {
             match grip_id {
                 GRIP_RADIUS => {
@@ -489,12 +491,7 @@ fn embedded(entity: &EntityType) -> Option<EmbeddedEntity> {
     })
 }
 
-pub fn box_op(
-    transform: [f64; 16],
-    length: f64,
-    width: f64,
-    height: f64,
-) -> SolidHistoryOperation {
+pub fn box_op(transform: [f64; 16], length: f64, width: f64, height: f64) -> SolidHistoryOperation {
     SolidHistoryOperation::Box(SolidHistoryBox {
         base: base(transform),
         operation_major: 1,
@@ -521,11 +518,7 @@ pub fn wedge_op(
     })
 }
 
-pub fn cylinder_op(
-    transform: [f64; 16],
-    radius: f64,
-    height: f64,
-) -> SolidHistoryOperation {
+pub fn cylinder_op(transform: [f64; 16], radius: f64, height: f64) -> SolidHistoryOperation {
     SolidHistoryOperation::Cylinder(SolidHistoryCylinder {
         base: base(transform),
         operation_major: 1,
@@ -537,11 +530,7 @@ pub fn cylinder_op(
     })
 }
 
-pub fn cone_op(
-    transform: [f64; 16],
-    radius: f64,
-    height: f64,
-) -> SolidHistoryOperation {
+pub fn cone_op(transform: [f64; 16], radius: f64, height: f64) -> SolidHistoryOperation {
     SolidHistoryOperation::Cone(SolidHistoryCylinder {
         base: base(transform),
         operation_major: 1,

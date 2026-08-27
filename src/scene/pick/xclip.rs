@@ -26,17 +26,12 @@ const NAN3: [f32; 3] = [f32::NAN, f32::NAN, f32::NAN];
 /// (dictionary) → SPATIAL (SpatialFilter)`. Returns `None` when there is no
 /// filter, it is disabled (code 71 = 0), or it has fewer than two boundary
 /// points.
-pub fn insert_spatial_filter<'a>(
-    doc: &'a CadDocument,
-    ins: &Insert,
-) -> Option<&'a SpatialFilter> {
+pub fn insert_spatial_filter<'a>(doc: &'a CadDocument, ins: &Insert) -> Option<&'a SpatialFilter> {
     let xdict = ins.common.xdictionary_handle?;
     let acad_filter = dict_entry(doc, xdict, "ACAD_FILTER")?;
     let spatial = dict_entry(doc, acad_filter, "SPATIAL")?;
     match doc.objects.get(&spatial)? {
-        ObjectType::SpatialFilter(sf)
-            if sf.display_enabled && sf.boundary_points.len() >= 2 =>
-        {
+        ObjectType::SpatialFilter(sf) if sf.display_enabled && sf.boundary_points.len() >= 2 => {
             Some(sf)
         }
         _ => None,
@@ -45,9 +40,7 @@ pub fn insert_spatial_filter<'a>(
 
 fn dict_entry(doc: &CadDocument, dict: Handle, key: &str) -> Option<Handle> {
     match doc.objects.get(&dict)? {
-        ObjectType::Dictionary(d) => {
-            d.entries.iter().find(|(k, _)| k == key).map(|(_, h)| *h)
-        }
+        ObjectType::Dictionary(d) => d.entries.iter().find(|(k, _)| k == key).map(|(_, h)| *h),
         _ => None,
     }
 }
@@ -66,20 +59,14 @@ fn dict_entry(doc: &CadDocument, dict: Handle, key: &str) -> Option<Handle> {
 /// Build the clip boundary in absolute f64 world coordinates so clipping at
 /// large coordinate values remains precise.
 #[cfg(test)]
-fn world_clip_polygon_f64(
-    sf: &SpatialFilter,
-    ins: &Insert,
-) -> Vec<[f64; 2]> {
+fn world_clip_polygon_f64(sf: &SpatialFilter, ins: &Insert) -> Vec<[f64; 2]> {
     world_clip_polygon_for_transform(sf, &ins.get_transform())
 }
 
 /// Build the clip boundary with the exact transform used by the corresponding
 /// block instance. Callers that resolve block base points or parent instances
 /// pass their composed transform here so geometry and clipping share one space.
-pub fn world_clip_polygon_for_transform(
-    sf: &SpatialFilter,
-    xform: &Transform,
-) -> Vec<[f64; 2]> {
+pub fn world_clip_polygon_for_transform(sf: &SpatialFilter, xform: &Transform) -> Vec<[f64; 2]> {
     let inv_block = &sf.inverse_block_transform;
     let local: Vec<[f64; 2]> = if sf.boundary_points.len() == 2 {
         let a = sf.boundary_points[0];
@@ -243,9 +230,7 @@ pub fn clip_wires(wires: &mut Vec<WireModel>, poly: &[[f64; 2]]) {
         }
         w.aabb = bb;
     }
-    wires.retain(|w| {
-        !w.points.is_empty() || !w.fill_tris.is_empty() || !w.text_verts.is_empty()
-    });
+    wires.retain(|w| !w.points.is_empty() || !w.fill_tris.is_empty() || !w.text_verts.is_empty());
 }
 
 /// Double-single split of an f64 into (high, low) f32 — mirrors
@@ -334,10 +319,7 @@ pub fn clip_hatch_boundary(
             continue;
         }
         let start = i;
-        while i < boundary.len()
-            && boundary[i][0].is_finite()
-            && boundary[i][1].is_finite()
-        {
+        while i < boundary.len() && boundary[i][0].is_finite() && boundary[i][1].is_finite() {
             i += 1;
         }
         // Lift the loop into the clip polygon's world space.
@@ -454,9 +436,8 @@ fn clip_polyline(pts: &[[f32; 3]], poly: &[[f32; 2]]) -> Vec<[f32; 3]> {
         let mut last: Option<[f32; 3]> = None;
         for j in 0..seg.len().saturating_sub(1) {
             for (a, b) in clip_segment(seg[j], seg[j + 1], poly) {
-                let contiguous = last.is_some_and(|l| {
-                    (l[0] - a[0]).abs() <= 1e-4 && (l[1] - a[1]).abs() <= 1e-4
-                });
+                let contiguous = last
+                    .is_some_and(|l| (l[0] - a[0]).abs() <= 1e-4 && (l[1] - a[1]).abs() <= 1e-4);
                 if !contiguous {
                     if !out.is_empty() {
                         out.push(NAN3);
@@ -474,11 +455,7 @@ fn clip_polyline(pts: &[[f32; 3]], poly: &[[f32; 2]]) -> Vec<[f32; 3]> {
 /// Return the inside-the-polygon sub-segments of `p0`→`p1` as endpoint pairs.
 /// Handles convex and concave boundaries by testing the midpoint of every
 /// interval between consecutive boundary crossings.
-fn clip_segment(
-    p0: [f32; 3],
-    p1: [f32; 3],
-    poly: &[[f32; 2]],
-) -> Vec<([f32; 3], [f32; 3])> {
+fn clip_segment(p0: [f32; 3], p1: [f32; 3], poly: &[[f32; 2]]) -> Vec<([f32; 3], [f32; 3])> {
     let mut ts: Vec<f32> = vec![0.0, 1.0];
     let n = poly.len();
     let mut j = n - 1;
@@ -734,7 +711,7 @@ mod tests {
     #[test]
     fn hatch_boundary_clipped_kept_and_dropped() {
         let clip = square(); // 0..10
-        // Hatch loop straddling the right edge → clipped to x<=10.
+                             // Hatch loop straddling the right edge → clipped to x<=10.
         let straddle = [[5.0, 5.0], [15.0, 5.0], [15.0, 8.0], [5.0, 8.0]];
         let out = clip_hatch_boundary(&straddle, [0.0, 0.0], &clip);
         assert!(!out.is_empty());
@@ -755,7 +732,12 @@ mod tests {
     fn hatch_boundary_respects_world_origin() {
         // Same geometry as the straddle case but expressed as offsets from a
         // large world_origin — clipping must account for the origin shift.
-        let clip = vec![[1000.0, 1000.0], [1010.0, 1000.0], [1010.0, 1010.0], [1000.0, 1010.0]];
+        let clip = vec![
+            [1000.0, 1000.0],
+            [1010.0, 1000.0],
+            [1010.0, 1010.0],
+            [1000.0, 1010.0],
+        ];
         let origin = [1000.0, 1000.0];
         let loop_off = [[5.0, 5.0], [15.0, 5.0], [15.0, 8.0], [5.0, 8.0]];
         let out = clip_hatch_boundary(&loop_off, origin, &clip);

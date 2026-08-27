@@ -294,8 +294,7 @@ impl WireModel {
         }
         if !out.text_verts.is_empty() {
             let (dx, dy, dz) = (delta.x as f64, delta.y as f64, delta.z as f64);
-            out.text_verts =
-                map_text_verts(&self.text_verts, |x, y, z| (x + dx, y + dy, z + dz));
+            out.text_verts = map_text_verts(&self.text_verts, |x, y, z| (x + dx, y + dy, z + dz));
         }
         out
     }
@@ -306,12 +305,7 @@ impl WireModel {
     }
 
     /// Return a clone rotated about an arbitrary world-space axis.
-    pub fn rotated_about_axis(
-        &self,
-        center: glam::Vec3,
-        axis: glam::Vec3,
-        angle_rad: f32,
-    ) -> Self {
+    pub fn rotated_about_axis(&self, center: glam::Vec3, axis: glam::Vec3, angle_rad: f32) -> Self {
         let rotation = glam::Quat::from_axis_angle(axis.normalize_or_zero(), angle_rad);
         let (s, c) = angle_rad.sin_cos();
         let mut out = self.clone();
@@ -342,10 +336,7 @@ impl WireModel {
             let (s, c) = (s as f64, c as f64);
             out.text_verts = map_text_verts(&self.text_verts, |x, y, z| {
                 let v = glam::DVec3::new(x, y, z) - center;
-                let mapped = center
-                    + v * c
-                    + axis.cross(v) * s
-                    + axis * axis.dot(v) * (1.0 - c);
+                let mapped = center + v * c + axis.cross(v) * s + axis * axis.dot(v) * (1.0 - c);
                 (mapped.x, mapped.y, mapped.z)
             });
         }
@@ -391,22 +382,17 @@ impl WireModel {
     /// outside stay put. Exact for line/polyline vertices (the primary stretch
     /// targets); curve tessellation points may deform where a window edge cuts
     /// through them, matching the per-vertex nature of the operation.
-    pub fn stretched(
-    &self,
-    win_min: glam::Vec3,
-    win_max: glam::Vec3,
-    delta: glam::Vec3,
-) -> Self {
-    self.stretched_windows(&[(win_min, win_max)], delta)
-}
+    pub fn stretched(&self, win_min: glam::Vec3, win_max: glam::Vec3, delta: glam::Vec3) -> Self {
+        self.stretched_windows(&[(win_min, win_max)], delta)
+    }
 
-/// Return a clone for a multi-window STRETCH preview. A point moves exactly
-/// once when it lies inside any of the crossing windows.
-pub fn stretched_windows(
-    &self,
-    windows: &[(glam::Vec3, glam::Vec3)],
-    delta: glam::Vec3,
-) -> Self {
+    /// Return a clone for a multi-window STRETCH preview. A point moves exactly
+    /// once when it lies inside any of the crossing windows.
+    pub fn stretched_windows(
+        &self,
+        windows: &[(glam::Vec3, glam::Vec3)],
+        delta: glam::Vec3,
+    ) -> Self {
         let mut out = self.clone();
         out.name = format!("preview_{}", self.name);
         out.color = Self::CYAN;
@@ -414,10 +400,7 @@ pub fn stretched_windows(
 
         let inside = |x: f32, y: f32| {
             windows.iter().any(|(win_min, win_max)| {
-                x >= win_min.x
-                    && x <= win_max.x
-                    && y >= win_min.y
-                    && y <= win_max.y
+                x >= win_min.x && x <= win_max.x && y >= win_min.y && y <= win_max.y
             })
         };
 
@@ -441,8 +424,7 @@ pub fn stretched_windows(
         }
 
         if !out.text_verts.is_empty() {
-            let (dx, dy, dz) =
-                (delta.x as f64, delta.y as f64, delta.z as f64);
+            let (dx, dy, dz) = (delta.x as f64, delta.y as f64, delta.z as f64);
 
             out.text_verts = map_text_verts(&self.text_verts, |x, y, z| {
                 let inside = windows.iter().any(|(win_min, win_max)| {
@@ -501,15 +483,12 @@ pub fn stretched_windows(
             let p1 = p1.as_dvec3();
             let normal = plane_normal.as_dvec3();
             marker.origin -= 2.0 * normal.dot(marker.origin - p1) * normal;
-            marker.normal =
-                (marker.normal - 2.0 * normal.dot(marker.normal) * normal)
-                    .normalize_or(glam::DVec3::Z);
-            marker.axis_x =
-                (marker.axis_x - 2.0 * normal.dot(marker.axis_x) * normal)
-                    .normalize_or(glam::DVec3::X);
-            marker.axis_y =
-                (marker.axis_y - 2.0 * normal.dot(marker.axis_y) * normal)
-                    .normalize_or(glam::DVec3::Y);
+            marker.normal = (marker.normal - 2.0 * normal.dot(marker.normal) * normal)
+                .normalize_or(glam::DVec3::Z);
+            marker.axis_x = (marker.axis_x - 2.0 * normal.dot(marker.axis_x) * normal)
+                .normalize_or(glam::DVec3::X);
+            marker.axis_y = (marker.axis_y - 2.0 * normal.dot(marker.axis_y) * normal)
+                .normalize_or(glam::DVec3::Y);
         }
         // Glyph quads reflect wholesale (true mirror) — the caller only routes
         // text through here for MIRRTEXT-on; MIRRTEXT-off relocates via

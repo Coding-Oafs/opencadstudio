@@ -93,14 +93,46 @@ impl WireInstance {
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         // Must match `InstanceIn` in wire_indexed.wgsl.
         const ATTRS: &[wgpu::VertexAttribute] = &[
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_a) as u64,      shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_b) as u64,      shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_a_low) as u64,  shader_location: 2, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_b_low) as u64,  shader_location: 3, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, distance_a) as u64, shader_location: 4, format: wgpu::VertexFormat::Float32   },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, distance_b) as u64, shader_location: 5, format: wgpu::VertexFormat::Float32   },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, wire_id) as u64,    shader_location: 6, format: wgpu::VertexFormat::Uint32    },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, taper_ratio) as u64, shader_location: 7, format: wgpu::VertexFormat::Unorm16x2 },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, pos_a) as u64,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, pos_b) as u64,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, pos_a_low) as u64,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, pos_b_low) as u64,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, distance_a) as u64,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, distance_b) as u64,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, wire_id) as u64,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Uint32,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(WireInstance, taper_ratio) as u64,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Unorm16x2,
+            },
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<WireInstance>() as u64,
@@ -208,22 +240,74 @@ impl PackedWireInstance {
         // the web viewport drew no lines at all (#414). The struct fields are
         // laid out so each packed group is contiguous.
         const ATTRS: &[wgpu::VertexAttribute] = &[
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_a) as u64,          shader_location: 0,  format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_b) as u64,          shader_location: 1,  format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, color) as u64,          shader_location: 2,  format: wgpu::VertexFormat::Unorm8x4  },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, pos_a) as u64,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, pos_b) as u64,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, color) as u64,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Unorm8x4,
+            },
             // dists = (distance_a, distance_b, half_width, pattern_length)
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, distance_a) as u64,     shader_location: 3,  format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pat0) as u64,           shader_location: 4,  format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pat1) as u64,           shader_location: 5,  format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, distance_a) as u64,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, pat0) as u64,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, pat1) as u64,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x4,
+            },
             // misc = (draw_depth, align_end, align_total, world_half_width)
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, draw_depth) as u64,     shader_location: 6,  format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_a_low) as u64,      shader_location: 7,  format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_b_low) as u64,      shader_location: 8,  format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, draw_depth) as u64,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, pos_a_low) as u64,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, pos_b_low) as u64,
+                shader_location: 8,
+                format: wgpu::VertexFormat::Float32x3,
+            },
             // taper = (world_hw_a, world_hw_b)
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, world_hw_a) as u64,     shader_location: 9,  format: wgpu::VertexFormat::Float32x2 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, marker_origin_high) as u64, shader_location: 10, format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, marker_origin_low) as u64, shader_location: 11, format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, marker_normal_scale) as u64, shader_location: 12, format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, world_hw_a) as u64,
+                shader_location: 9,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, marker_origin_high) as u64,
+                shader_location: 10,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, marker_origin_low) as u64,
+                shader_location: 11,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(PackedWireInstance, marker_normal_scale) as u64,
+                shader_location: 12,
+                format: wgpu::VertexFormat::Float32x4,
+            },
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<PackedWireInstance>() as u64,
@@ -310,12 +394,36 @@ pub struct BlockWireVertex {
 impl BlockWireVertex {
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         const ATTRS: &[wgpu::VertexAttribute] = &[
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_a) as u64,       shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_b) as u64,       shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_a_low) as u64,   shader_location: 2, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, pos_b_low) as u64,   shader_location: 3, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, distances) as u64,   shader_location: 4, format: wgpu::VertexFormat::Float32x2 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireVertex, taper_ratio) as u64, shader_location: 5, format: wgpu::VertexFormat::Unorm16x2 },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireVertex, pos_a) as u64,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireVertex, pos_b) as u64,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireVertex, pos_a_low) as u64,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireVertex, pos_b_low) as u64,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireVertex, distances) as u64,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireVertex, taper_ratio) as u64,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Unorm16x2,
+            },
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Self>() as u64,
@@ -336,9 +444,21 @@ pub struct BlockWireInstance {
 impl BlockWireInstance {
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         const ATTRS: &[wgpu::VertexAttribute] = &[
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireInstance, translation) as u64,     shader_location: 6, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireInstance, translation_low) as u64, shader_location: 7, format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(BlockWireInstance, depth) as u64,           shader_location: 8, format: wgpu::VertexFormat::Float32x2 },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireInstance, translation) as u64,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireInstance, translation_low) as u64,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(BlockWireInstance, depth) as u64,
+                shader_location: 8,
+                format: wgpu::VertexFormat::Float32x2,
+            },
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Self>() as u64,
@@ -543,8 +663,18 @@ pub(crate) fn emit_wire_packed(
     draw_depth: f32,
 ) -> Vec<PackedWireInstance> {
     let color_u8 = pack_color(color);
-    let pat0 = [wire.pattern[0], wire.pattern[1], wire.pattern[2], wire.pattern[3]];
-    let pat1 = [wire.pattern[4], wire.pattern[5], wire.pattern[6], wire.pattern[7]];
+    let pat0 = [
+        wire.pattern[0],
+        wire.pattern[1],
+        wire.pattern[2],
+        wire.pattern[3],
+    ];
+    let pat1 = [
+        wire.pattern[4],
+        wire.pattern[5],
+        wire.pattern[6],
+        wire.pattern[7],
+    ];
     let half_width = wire.line_weight_px * 0.5;
     let n = wire.points.len();
     let seg_count = n.saturating_sub(1);
@@ -600,8 +730,18 @@ pub(crate) fn emit_wire_native(
     let (marker_origin_high, marker_origin_low, marker_normal_scale) = marker_metadata(wire);
     let cst = WireConst {
         color,
-        pat0: [wire.pattern[0], wire.pattern[1], wire.pattern[2], wire.pattern[3]],
-        pat1: [wire.pattern[4], wire.pattern[5], wire.pattern[6], wire.pattern[7]],
+        pat0: [
+            wire.pattern[0],
+            wire.pattern[1],
+            wire.pattern[2],
+            wire.pattern[3],
+        ],
+        pat1: [
+            wire.pattern[4],
+            wire.pattern[5],
+            wire.pattern[6],
+            wire.pattern[7],
+        ],
         half_width: wire.line_weight_px * 0.5,
         pattern_length: wire.pattern_length,
         draw_depth,
@@ -686,8 +826,7 @@ impl BlockWireGpu {
     ) -> Vec<Self> {
         use wgpu::util::DeviceExt;
 
-        let mut slots: rustc_hash::FxHashMap<(u64, bool), usize> =
-            rustc_hash::FxHashMap::default();
+        let mut slots: rustc_hash::FxHashMap<(u64, bool), usize> = rustc_hash::FxHashMap::default();
         let mut groups: Vec<(bool, Vec<&WireModel>)> = Vec::new();
         for &wire in wires {
             if color_override.is_none() && !wire.display_visible {
@@ -745,16 +884,15 @@ impl BlockWireGpu {
                 contents: bytemuck::bytes_of(&constant),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-            let const_bind_group = std::sync::Arc::new(device.create_bind_group(
-                &wgpu::BindGroupDescriptor {
+            let const_bind_group =
+                std::sync::Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("block_wire.const.bg"),
                     layout: const_bgl,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: const_buffer.as_entire_binding(),
                     }],
-                },
-            ));
+                }));
             let instances: Vec<BlockWireInstance> = group
                 .iter()
                 .filter_map(|wire| {
@@ -785,15 +923,11 @@ impl BlockWireGpu {
                 .collect();
             let max_instances = ((device.limits().max_buffer_size as usize / 10) * 9
                 / std::mem::size_of::<BlockWireInstance>())
-                .max(1);
+            .max(1);
             for chunk in instances.chunks(max_instances) {
                 out.push(Self {
                     vertex_buffer: vertex_buffer.clone(),
-                    instance_buffer: instance_buffer_mapped(
-                        device,
-                        "block_wire.instances",
-                        chunk,
-                    ),
+                    instance_buffer: instance_buffer_mapped(device, "block_wire.instances", chunk),
                     vertex_count: vertices.len() as u32,
                     instance_count: chunk.len() as u32,
                     is_3d_mesh_edge: mesh_edge,
@@ -846,8 +980,7 @@ impl WireGpu {
         const_bgl: Option<&wgpu::BindGroupLayout>,
     ) -> Vec<Self> {
         if let Some(const_bgl) = const_bgl {
-            const MAX_INSTANCES: usize =
-                268_435_456 / std::mem::size_of::<WireInstance>();
+            const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<WireInstance>();
             use crate::par::prelude::*;
             let per: Vec<(Vec<WireInstance>, WireConst)> = wires
                 .par_iter()
@@ -856,8 +989,7 @@ impl WireGpu {
                     emit_wire_native(wire, idx as u32, color, wire_draw_depth(wire, depth_map))
                 })
                 .collect();
-            let mut instances =
-                Vec::with_capacity(per.iter().map(|(items, _)| items.len()).sum());
+            let mut instances = Vec::with_capacity(per.iter().map(|(items, _)| items.len()).sum());
             let mut consts = Vec::with_capacity(per.len());
             for (mut items, constant) in per {
                 instances.append(&mut items);
@@ -870,11 +1002,7 @@ impl WireGpu {
             return instances
                 .chunks(MAX_INSTANCES)
                 .map(|chunk| Self {
-                    instance_buffer: instance_buffer_mapped(
-                        device,
-                        "wire.highlight.ibuf",
-                        chunk,
-                    ),
+                    instance_buffer: instance_buffer_mapped(device, "wire.highlight.ibuf", chunk),
                     first_instance: 0,
                     instance_count: chunk.len() as u32,
                     is_3d_mesh_edge: false,
@@ -884,13 +1012,10 @@ impl WireGpu {
         }
 
         let _ = const_bgl;
-        const MAX_PACKED_INSTANCES: usize =
-            268_435_456 / std::mem::size_of::<PackedWireInstance>();
+        const MAX_PACKED_INSTANCES: usize = 268_435_456 / std::mem::size_of::<PackedWireInstance>();
         let per: Vec<Vec<PackedWireInstance>> = wires
             .iter()
-            .map(|wire| {
-                emit_wire_packed(wire, color, wire_draw_depth(wire, depth_map))
-            })
+            .map(|wire| emit_wire_packed(wire, color, wire_draw_depth(wire, depth_map)))
             .collect();
         let mut instances = Vec::with_capacity(per.iter().map(Vec::len).sum());
         for mut items in per {
@@ -924,8 +1049,7 @@ impl WireGpu {
         const_bgl: Option<&wgpu::BindGroupLayout>,
     ) -> Vec<Self> {
         let Some(const_bgl) = const_bgl else {
-            const MAX_INSTANCES: usize =
-                268_435_456 / std::mem::size_of::<PackedWireInstance>();
+            const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<PackedWireInstance>();
             use crate::par::prelude::*;
             let per: Vec<Vec<PackedWireInstance>> = wires
                 .par_iter()
@@ -938,8 +1062,7 @@ impl WireGpu {
                     emit_wire_packed(wire, wire.color, depth)
                 })
                 .collect();
-            let mut instances =
-                Vec::with_capacity(per.iter().map(Vec::len).sum());
+            let mut instances = Vec::with_capacity(per.iter().map(Vec::len).sum());
             for mut items in per {
                 instances.append(&mut items);
             }
@@ -958,8 +1081,7 @@ impl WireGpu {
                 })
                 .collect();
         };
-        const MAX_INSTANCES: usize =
-            268_435_456 / std::mem::size_of::<WireInstance>();
+        const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<WireInstance>();
         use crate::par::prelude::*;
         let per: Vec<(Vec<WireInstance>, WireConst)> = wires
             .par_iter()
@@ -1014,8 +1136,7 @@ impl WireGpu {
         const_bgl: Option<&wgpu::BindGroupLayout>,
     ) -> Vec<Self> {
         if let Some(const_bgl) = const_bgl {
-            const MAX_INSTANCES: usize =
-                268_435_456 / std::mem::size_of::<WireInstance>();
+            const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<WireInstance>();
             use crate::par::prelude::*;
             // Global `wire_id` = wire index; one shared WireConst buffer for all
             // chunks. Indexed `collect` preserves wire order (the pass relies on
@@ -1028,7 +1149,11 @@ impl WireGpu {
                     // depth — they must NOT take the draw-order z-bias (which
                     // pulls 2D wires toward the camera), or the hidden edges of a
                     // small / distant mesh peek through its own shaded fill.
-                    let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
+                    let dd = if mesh_edge {
+                        0.0
+                    } else {
+                        wire_draw_depth(w, depth_map)
+                    };
                     emit_wire_native(w, idx as u32, w.color, dd)
                 })
                 .collect();
@@ -1059,12 +1184,15 @@ impl WireGpu {
         }
 
         let _ = const_bgl;
-        const MAX_PACKED_INSTANCES: usize =
-            268_435_456 / std::mem::size_of::<PackedWireInstance>();
+        const MAX_PACKED_INSTANCES: usize = 268_435_456 / std::mem::size_of::<PackedWireInstance>();
         let per: Vec<Vec<PackedWireInstance>> = wires
             .iter()
             .map(|w| {
-                let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
+                let dd = if mesh_edge {
+                    0.0
+                } else {
+                    wire_draw_depth(w, depth_map)
+                };
                 emit_wire_packed(w, w.color, dd)
             })
             .collect();
@@ -1106,8 +1234,7 @@ impl WireGpu {
         }
         if let Some(const_bgl) = const_bgl {
             // GPU max buffer size is 256 MB; chunk to stay within the limit.
-            const MAX_INSTANCES: usize =
-                268_435_456 / std::mem::size_of::<WireInstance>();
+            const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<WireInstance>();
             use crate::par::prelude::*;
             // `block_cache` groups wires by style upstream; order within a batch
             // doesn't affect correctness, but indexed `collect` gives each wire a
@@ -1148,8 +1275,7 @@ impl WireGpu {
         }
 
         let _ = const_bgl;
-        const MAX_PACKED_INSTANCES: usize =
-            268_435_456 / std::mem::size_of::<PackedWireInstance>();
+        const MAX_PACKED_INSTANCES: usize = 268_435_456 / std::mem::size_of::<PackedWireInstance>();
         let instances: Vec<PackedWireInstance> = wires
             .iter()
             .flat_map(|w| emit_wire_packed(w, w.color, wire_draw_depth(w, depth_map)))

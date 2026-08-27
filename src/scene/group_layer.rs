@@ -178,10 +178,7 @@ impl Scene {
     /// Return `handles` plus every member of a selectable group containing one
     /// of them. Selection and rollover highlighting share this expansion so the
     /// preview matches what a click will select.
-    pub fn handles_expanded_for_selectable_groups(
-        &self,
-        handles: &[Handle],
-    ) -> HashSet<Handle> {
+    pub fn handles_expanded_for_selectable_groups(&self, handles: &[Handle]) -> HashSet<Handle> {
         let mut expanded: HashSet<Handle> = handles.iter().copied().collect();
         expanded.extend(
             self.document
@@ -189,8 +186,7 @@ impl Scene {
                 .values()
                 .filter_map(|obj| match obj {
                     ObjectType::Group(g)
-                        if g.selectable
-                            && handles.iter().any(|handle| g.contains(*handle)) =>
+                        if g.selectable && handles.iter().any(|handle| g.contains(*handle)) =>
                     {
                         Some(g.entities.clone())
                     }

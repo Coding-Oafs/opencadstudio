@@ -323,8 +323,7 @@ impl SpatialGrid {
             use crate::par::prelude::*;
             use std::sync::atomic::{AtomicU32, Ordering};
 
-            let counts: Vec<AtomicU32> =
-                (0..cell_count).map(|_| AtomicU32::new(0)).collect();
+            let counts: Vec<AtomicU32> = (0..cell_count).map(|_| AtomicU32::new(0)).collect();
             let oversized: Vec<u32> = entries
                 .par_iter()
                 .enumerate()
@@ -521,8 +520,7 @@ impl<T: Copy + Ord + Sync> SpatialSet<T> {
     }
 
     fn prepare_screen(&self) {
-        self.xyz
-            .get_or_init(|| SpatialBvh3::build(&self.entries));
+        self.xyz.get_or_init(|| SpatialBvh3::build(&self.entries));
     }
 
     fn query_screen(
@@ -609,10 +607,8 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
 
     if wire.point_marker.is_none() {
         for start in 0..wire.points.len().saturating_sub(1) {
-            let Some(aabb) = points_aabb3([
-                wire_point(wire, start),
-                wire_point(wire, start + 1),
-            ]) else {
+            let Some(aabb) = points_aabb3([wire_point(wire, start), wire_point(wire, start + 1)])
+            else {
                 continue;
             };
             entries.segments.push(Entry3 {
@@ -647,8 +643,7 @@ fn collect_wire_index_entries(wire_idx: u32, wire: &WireModel) -> WireIndexEntri
         }
     }
     for start in 0..wire.key_vertices.len().saturating_sub(1) {
-        let Some(aabb) =
-            points_aabb3([wire.key_vertices[start], wire.key_vertices[start + 1]])
+        let Some(aabb) = points_aabb3([wire.key_vertices[start], wire.key_vertices[start + 1]])
         else {
             continue;
         };
@@ -765,8 +760,7 @@ impl InteractionIndex {
             .iter()
             .map(|wire| wire.name.parse::<u64>().ok())
             .collect();
-        let mut next_ordinal: rustc_hash::FxHashMap<u64, u32> =
-            rustc_hash::FxHashMap::default();
+        let mut next_ordinal: rustc_hash::FxHashMap<u64, u32> = rustc_hash::FxHashMap::default();
         let wire_ordinals: Vec<Option<u32>> = wire_handles
             .iter()
             .map(|handle| {
@@ -814,8 +808,7 @@ impl InteractionIndex {
         let mut pick_triangle_parts = Vec::with_capacity(per_wire.len());
         let mut glyph_parts = Vec::with_capacity(per_wire.len());
         for (wire_idx, entries) in per_wire.into_iter().enumerate() {
-            max_line_half_width_px =
-                max_line_half_width_px.max(entries.max_line_half_width_px);
+            max_line_half_width_px = max_line_half_width_px.max(entries.max_line_half_width_px);
             max_marker_radius_fraction =
                 max_marker_radius_fraction.max(entries.max_marker_radius_fraction);
             if let Some(entry) = entries.wire {
@@ -982,7 +975,12 @@ impl InteractionIndex {
         rayon::join(
             || {
                 rayon::join(
-                    || rayon::join(|| self.wires.prepare_screen(), || self.segments.prepare_screen()),
+                    || {
+                        rayon::join(
+                            || self.wires.prepare_screen(),
+                            || self.segments.prepare_screen(),
+                        )
+                    },
                     || {
                         rayon::join(
                             || self.snap_points.prepare_screen(),
@@ -1027,8 +1025,8 @@ impl InteractionIndex {
         viewport_height_px: f32,
         include_line_weight: bool,
     ) -> f32 {
-        let radius = base_radius_px
-            .max(self.max_marker_radius_fraction * viewport_height_px.max(0.0));
+        let radius =
+            base_radius_px.max(self.max_marker_radius_fraction * viewport_height_px.max(0.0));
         if include_line_weight {
             radius.max(self.max_line_half_width_px)
         } else {
@@ -1052,12 +1050,7 @@ impl InteractionIndex {
                     .get(index as usize)
                     .copied()
                     .flatten()
-                    .zip(
-                        self.wire_ordinals
-                            .get(index as usize)
-                            .copied()
-                            .flatten(),
-                    )
+                    .zip(self.wire_ordinals.get(index as usize).copied().flatten())
             })
             .collect();
         keys.sort_unstable();
@@ -1087,16 +1080,8 @@ impl InteractionIndex {
         index: u32,
         slots: &rustc_hash::FxHashMap<(u64, u32), u32>,
     ) -> Option<u32> {
-        let handle = self
-            .wire_handles
-            .get(index as usize)
-            .copied()
-            .flatten()?;
-        let ordinal = self
-            .wire_ordinals
-            .get(index as usize)
-            .copied()
-            .flatten()?;
+        let handle = self.wire_handles.get(index as usize).copied().flatten()?;
+        let ordinal = self.wire_ordinals.get(index as usize).copied().flatten()?;
         slots.get(&(handle, ordinal)).copied()
     }
 
@@ -1144,11 +1129,7 @@ impl InteractionIndex {
     ) -> InteractionCandidates {
         InteractionCandidates {
             wires,
-            wire_indices: Some(self.remap_wire_indices(
-                self.wires.query_xy(aabb),
-                slots,
-                false,
-            )),
+            wire_indices: Some(self.remap_wire_indices(self.wires.query_xy(aabb), slots, false)),
             segments: Some(self.remap_refs(
                 self.segments.query_xy(aabb),
                 slots,
@@ -1209,56 +1190,66 @@ impl InteractionIndex {
         InteractionCandidates {
             wires,
             wire_indices: Some(self.remap_wire_indices(
-                self.wires
-                    .query_screen(screen_rect, view_rot, eye, bounds),
+                self.wires.query_screen(screen_rect, view_rot, eye, bounds),
                 slots,
                 true,
             )),
-            segments: Some(self.remap_refs(
-                self.segments
-                    .query_screen(screen_rect, view_rot, eye, bounds),
-                slots,
-                |value| value.wire,
-                |value, wire| value.wire = wire,
-            )),
-            snap_points: Some(self.remap_refs(
-                self.snap_points
-                    .query_screen(screen_rect, view_rot, eye, bounds),
-                slots,
-                |value| value.wire,
-                |value, wire| value.wire = wire,
-            )),
-            key_vertices: Some(self.remap_refs(
-                self.key_vertices
-                    .query_screen(screen_rect, view_rot, eye, bounds),
-                slots,
-                |value| value.wire,
-                |value, wire| value.wire = wire,
-            )),
-            key_segments: Some(self.remap_refs(
-                self.key_segments
-                    .query_screen(screen_rect, view_rot, eye, bounds),
-                slots,
-                |value| value.wire,
-                |value, wire| value.wire = wire,
-            )),
-            fill_triangles: Some(self.remap_refs(
-                self.fill_triangles
-                    .query_screen(screen_rect, view_rot, eye, bounds),
-                slots,
-                |value| value.wire,
-                |value, wire| value.wire = wire,
-            )),
-            pick_triangles: Some(self.remap_refs(
-                self.pick_triangles
-                    .query_screen(screen_rect, view_rot, eye, bounds),
-                slots,
-                |value| value.wire,
-                |value, wire| value.wire = wire,
-            )),
+            segments: Some(
+                self.remap_refs(
+                    self.segments
+                        .query_screen(screen_rect, view_rot, eye, bounds),
+                    slots,
+                    |value| value.wire,
+                    |value, wire| value.wire = wire,
+                ),
+            ),
+            snap_points: Some(
+                self.remap_refs(
+                    self.snap_points
+                        .query_screen(screen_rect, view_rot, eye, bounds),
+                    slots,
+                    |value| value.wire,
+                    |value, wire| value.wire = wire,
+                ),
+            ),
+            key_vertices: Some(
+                self.remap_refs(
+                    self.key_vertices
+                        .query_screen(screen_rect, view_rot, eye, bounds),
+                    slots,
+                    |value| value.wire,
+                    |value, wire| value.wire = wire,
+                ),
+            ),
+            key_segments: Some(
+                self.remap_refs(
+                    self.key_segments
+                        .query_screen(screen_rect, view_rot, eye, bounds),
+                    slots,
+                    |value| value.wire,
+                    |value, wire| value.wire = wire,
+                ),
+            ),
+            fill_triangles: Some(
+                self.remap_refs(
+                    self.fill_triangles
+                        .query_screen(screen_rect, view_rot, eye, bounds),
+                    slots,
+                    |value| value.wire,
+                    |value, wire| value.wire = wire,
+                ),
+            ),
+            pick_triangles: Some(
+                self.remap_refs(
+                    self.pick_triangles
+                        .query_screen(screen_rect, view_rot, eye, bounds),
+                    slots,
+                    |value| value.wire,
+                    |value, wire| value.wire = wire,
+                ),
+            ),
             glyphs: Some(self.remap_refs(
-                self.glyphs
-                    .query_screen(screen_rect, view_rot, eye, bounds),
+                self.glyphs.query_screen(screen_rect, view_rot, eye, bounds),
                 slots,
                 |value| value.wire,
                 |value, wire| value.wire = wire,

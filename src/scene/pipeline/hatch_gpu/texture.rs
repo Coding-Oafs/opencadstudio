@@ -45,9 +45,21 @@ impl TextureHatchPlacement {
             array_stride: std::mem::size_of::<Self>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                wgpu::VertexAttribute { offset: 0, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
-                wgpu::VertexAttribute { offset: 8, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
-                wgpu::VertexAttribute { offset: 16, shader_location: 3, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 8,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
+                },
             ],
         }
     }
@@ -165,7 +177,13 @@ impl TextureHatch {
         let (mode, color2, grad_cos, grad_sin) = match &model.pattern {
             HatchPattern::Solid => (1u32, [0.0f32; 4], 0.0f32, 0.0f32),
             HatchPattern::Pattern(_) => (0u32, [0.0f32; 4], 0.0f32, 0.0f32),
-            HatchPattern::Gradient { angle_deg, color2, kind, invert, .. } => {
+            HatchPattern::Gradient {
+                angle_deg,
+                color2,
+                kind,
+                invert,
+                ..
+            } => {
                 let gk = (kind.shader_kind() | if *invert { 16 } else { 0 }) << 8;
                 if kind.radial() {
                     // Radial: centre is the local origin; grad_cos/sin unused.
@@ -178,8 +196,12 @@ impl TextureHatch {
         };
 
         // ── Bounding box ─────────────────────────────────────────────────
-        let (mut min_x, mut max_x, mut min_y, mut max_y) =
-            (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY);
+        let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        );
         for &[x, y] in model.boundary.iter() {
             if !x.is_finite() || !y.is_finite() {
                 continue;
@@ -197,7 +219,10 @@ impl TextureHatch {
         }
         let vertices: Vec<HatchVertex> = mesh_points
             .into_iter()
-            .map(|[x, y]| HatchVertex { pos: [x, y, 0.0], _pad: 0.0 })
+            .map(|[x, y]| HatchVertex {
+                pos: [x, y, 0.0],
+                _pad: 0.0,
+            })
             .collect();
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("hatch.texture.vbuf"),
@@ -352,8 +377,16 @@ impl TextureHatch {
             // Clamp like the desktop renderer so scale==0 can't make perp_step 0
             // → round(perp/0)=NaN → an invisible hatch.
             scale: model.scale.max(1e-6),
-            grad_cos: if base_mode == 3 { radial_center[0] } else { grad_cos },
-            grad_sin: if base_mode == 3 { radial_center[1] } else { grad_sin },
+            grad_cos: if base_mode == 3 {
+                radial_center[0]
+            } else {
+                grad_cos
+            },
+            grad_sin: if base_mode == 3 {
+                radial_center[1]
+            } else {
+                grad_sin
+            },
             grad_min,
             grad_range,
             origin: [origin[0] as f32, origin[1] as f32],

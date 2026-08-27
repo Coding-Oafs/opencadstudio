@@ -61,7 +61,8 @@ fn sphere_mesh_fallback(body: &Body, output: &mut brep::mesh::BodyMesh) {
         for longitude in 0..=LONGITUDE_CELLS {
             let u = TAU * longitude as f64 / LONGITUDE_CELLS as f64;
             mesh.positions.push(surface.point_at(u, v));
-            mesh.normals.push(surface.normal_at(u, v).unwrap_or([0.0, 0.0, 1.0]));
+            mesh.normals
+                .push(surface.normal_at(u, v).unwrap_or([0.0, 0.0, 1.0]));
         }
     }
 

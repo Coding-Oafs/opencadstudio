@@ -9,9 +9,7 @@ struct TextOrient {
     x_scale: f64,
 }
 
-fn inverse_affine(
-    transform: &acadrust::types::Transform,
-) -> Option<acadrust::types::Transform> {
+fn inverse_affine(transform: &acadrust::types::Transform) -> Option<acadrust::types::Transform> {
     use acadrust::types::{Matrix3, Matrix4, Transform, Vector3};
     let matrix = &transform.matrix.m;
     let linear = Matrix3::from_rows(
@@ -292,10 +290,7 @@ impl Scene {
     /// Entities in anonymous dimension blocks that visually belong to
     /// dimensions inside `block_record`. They must follow a block-coordinate
     /// reframe and be included in BEDIT's discard snapshot.
-    pub(crate) fn block_definition_dependent_handles(
-        &self,
-        block_record: Handle,
-    ) -> Vec<Handle> {
+    pub(crate) fn block_definition_dependent_handles(&self, block_record: Handle) -> Vec<Handle> {
         let Some(record) = self
             .document
             .block_records
@@ -358,17 +353,16 @@ impl Scene {
         let owned: HashSet<Handle> = handles.iter().copied().collect();
         let transform = EntityTransform::Affine(*local_from_old);
         let matrix = &local_from_old.matrix.m;
-        let dependent_transform =
-            EntityTransform::Affine(acadrust::types::Transform::from_matrix(
-                acadrust::types::Matrix4 {
-                    m: [
-                        [matrix[0][0], matrix[0][1], matrix[0][2], 0.0],
-                        [matrix[1][0], matrix[1][1], matrix[1][2], 0.0],
-                        [matrix[2][0], matrix[2][1], matrix[2][2], 0.0],
-                        [0.0, 0.0, 0.0, 1.0],
-                    ],
-                },
-            ));
+        let dependent_transform = EntityTransform::Affine(acadrust::types::Transform::from_matrix(
+            acadrust::types::Matrix4 {
+                m: [
+                    [matrix[0][0], matrix[0][1], matrix[0][2], 0.0],
+                    [matrix[1][0], matrix[1][1], matrix[1][2], 0.0],
+                    [matrix[2][0], matrix[2][1], matrix[2][2], 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            },
+        ));
         let mut changed = Vec::new();
 
         for handle in handles {
@@ -578,10 +572,7 @@ impl Scene {
                 let entity = self.document.get_entity(h)?.clone();
 
                 let annotation_scales = if leader_pair_handles.contains(&h) {
-                    crate::scene::annotative::annotation_scale_handles_for_entity(
-                        &self.document,
-                        h,
-                    )
+                    crate::scene::annotative::annotation_scale_handles_for_entity(&self.document, h)
                 } else {
                     Vec::new()
                 };
@@ -673,8 +664,8 @@ impl Scene {
                 if let Some(model) = new_model {
                     self.hatches.insert(h, model);
                 }
-                let rebuilt_history = self.copy_solid_history(src_handle, h)
-                    && self.transform_solid_history(h, t);
+                let rebuilt_history =
+                    self.copy_solid_history(src_handle, h) && self.transform_solid_history(h, t);
                 if !rebuilt_history
                     && self.document.get_entity(h).is_some_and(|entity| {
                         matches!(
@@ -699,8 +690,7 @@ impl Scene {
         let leader_links: Vec<(Handle, Handle)> = handle_map
             .iter()
             .filter_map(|(&source_handle, &copied_handle)| {
-                let EntityType::Leader(source_leader) =
-                    self.document.get_entity(source_handle)?
+                let EntityType::Leader(source_leader) = self.document.get_entity(source_handle)?
                 else {
                     return None;
                 };
@@ -715,9 +705,7 @@ impl Scene {
             .collect();
 
         for (leader_handle, annotation_handle) in leader_links {
-            if let Some(EntityType::Leader(leader)) =
-                self.document.get_entity_mut(leader_handle)
-            {
+            if let Some(EntityType::Leader(leader)) = self.document.get_entity_mut(leader_handle) {
                 leader.annotation_handle = annotation_handle;
             }
 
@@ -866,18 +854,11 @@ impl Scene {
         true
     }
 
-    fn transform_solid_history(
-        &mut self,
-        handle: Handle,
-        transform: &EntityTransform,
-    ) -> bool {
+    fn transform_solid_history(&mut self, handle: Handle, transform: &EntityTransform) -> bool {
         let Some(mut operation) = self.document.solid_history_operation(handle).cloned() else {
             return false;
         };
-        if !crate::scene::model::solid_history::transform_operation(
-            &mut operation,
-            transform,
-        ) {
+        if !crate::scene::model::solid_history::transform_operation(&mut operation, transform) {
             return false;
         }
         if let EntityTransform::Translate(delta) = transform {
@@ -903,11 +884,8 @@ impl Scene {
         let Some(mut operation) = self.document.solid_history_operation(handle).cloned() else {
             return false;
         };
-        if !crate::scene::model::solid_history::apply_primitive_grip(
-            &mut operation,
-            grip_id,
-            apply,
-        ) {
+        if !crate::scene::model::solid_history::apply_primitive_grip(&mut operation, grip_id, apply)
+        {
             return false;
         }
         self.preview_solid_history(handle, operation)
@@ -1047,7 +1025,8 @@ impl Scene {
             };
 
             let n = leader.vertices.len();
-            if n < 3 || (grip_id != n - 1 && grip_id != n - 2) || leader.annotation_handle.is_null() {
+            if n < 3 || (grip_id != n - 1 && grip_id != n - 2) || leader.annotation_handle.is_null()
+            {
                 return None;
             }
 
@@ -1091,10 +1070,7 @@ impl Scene {
                     if self.sync_displayed_annotation_context(annotation_handle) {
                         self.poison_undo_recording();
                     }
-                    self.bump_entities(&[(
-                        annotation_handle,
-                        crate::scene::ChangeKind::Modified,
-                    )]);
+                    self.bump_entities(&[(annotation_handle, crate::scene::ChangeKind::Modified)]);
                 }
             }
         }

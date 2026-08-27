@@ -1,5 +1,5 @@
-use acadrust::{EntityType, Handle};
 use crate::t;
+use acadrust::{EntityType, Handle};
 
 use crate::scene::model::object::{PropSection, PropValue, Property};
 
@@ -91,14 +91,21 @@ pub fn general_section(entity: &EntityType) -> PropSection {
         ],
     };
 
-    if matches!(entity, EntityType::LwPolyline(polyline) if crate::entities::lwpolyline::is_rectangle(polyline)) {
+    if matches!(entity, EntityType::LwPolyline(polyline) if crate::entities::lwpolyline::is_rectangle(polyline))
+    {
         section.props.retain(|prop| prop.field != "handle");
     }
 
     if matches!(entity, EntityType::Point(_)) {
         section.props.retain(|prop| prop.field != "handle");
-        let hyperlink = section.props.iter().position(|prop| prop.field == "hyperlink");
-        let transparency = section.props.iter().position(|prop| prop.field == "transparency");
+        let hyperlink = section
+            .props
+            .iter()
+            .position(|prop| prop.field == "hyperlink");
+        let transparency = section
+            .props
+            .iter()
+            .position(|prop| prop.field == "transparency");
         if let (Some(hyperlink), Some(transparency)) = (hyperlink, transparency) {
             section.props.swap(hyperlink, transparency);
         }
@@ -108,9 +115,11 @@ pub fn general_section(entity: &EntityType) -> PropSection {
     // types that carry an extrusion thickness expose it (line, circle, arc,
     // polyline, text, 2D solid, …). Show it right after Hyperlink for those.
     if let Some(t) = crate::scene::view::dispatch::entity_thickness(entity) {
-        section
-            .props
-            .push(crate::entities::common::edit_prop(t!("Thickness").as_ref(), "thickness", t));
+        section.props.push(crate::entities::common::edit_prop(
+            t!("Thickness").as_ref(),
+            "thickness",
+            t,
+        ));
     }
 
     section

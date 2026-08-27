@@ -147,9 +147,7 @@ impl Scene {
     fn qselect_candidate_handles(&self, scope: crate::app::QSelectScope) -> Vec<Handle> {
         match scope {
             crate::app::QSelectScope::CurrentSpace => self.current_layout_entity_handles(),
-            crate::app::QSelectScope::CurrentSelection => {
-                self.selected_handles_in_order()
-            }
+            crate::app::QSelectScope::CurrentSelection => self.selected_handles_in_order(),
         }
     }
 
@@ -261,26 +259,24 @@ impl Scene {
             } else {
                 match (property_field, op) {
                     (None, _) | (_, QSelectOp::Any) => true,
-                    (Some(field), op) => {
-                        match self.entity_property_value(e, field) {
-                            Some(actual) => match op {
-                                QSelectOp::Eq => actual.eq_ignore_ascii_case(value),
-                                QSelectOp::Neq => !actual.eq_ignore_ascii_case(value),
-                                QSelectOp::Gt | QSelectOp::Lt => {
-                                    match (
-                                        crate::entities::common::parse_f64(&actual),
-                                        crate::entities::common::parse_f64(value),
-                                    ) {
-                                        (Some(a), Some(b)) if matches!(op, QSelectOp::Gt) => a > b,
-                                        (Some(a), Some(b)) => a < b,
-                                        _ => false,
-                                    }
+                    (Some(field), op) => match self.entity_property_value(e, field) {
+                        Some(actual) => match op {
+                            QSelectOp::Eq => actual.eq_ignore_ascii_case(value),
+                            QSelectOp::Neq => !actual.eq_ignore_ascii_case(value),
+                            QSelectOp::Gt | QSelectOp::Lt => {
+                                match (
+                                    crate::entities::common::parse_f64(&actual),
+                                    crate::entities::common::parse_f64(value),
+                                ) {
+                                    (Some(a), Some(b)) if matches!(op, QSelectOp::Gt) => a > b,
+                                    (Some(a), Some(b)) => a < b,
+                                    _ => false,
                                 }
-                                QSelectOp::Any => true,
-                            },
-                            None => false,
-                        }
-                    }
+                            }
+                            QSelectOp::Any => true,
+                        },
+                        None => false,
+                    },
                 }
             };
             let matches_filter = type_ok && prop_ok;
@@ -304,8 +300,7 @@ impl Scene {
     /// with only the types that actually exist in the drawing.
     pub fn entity_type_names_in_layout(&self) -> Vec<String> {
         use crate::entities::traits::entity_type_name;
-        let mut names: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for h in self.current_layout_entity_handles() {
             if let Some(e) = self.document.get_entity(h) {
                 names.insert(entity_type_name(e).to_string());
@@ -341,17 +336,17 @@ impl Scene {
         type_name: Option<&str>,
         scope: crate::app::QSelectScope,
     ) -> Vec<crate::app::QSelectPropertyChoice> {
+        use crate::app::{QSelectPropertyChoice, QSelectValueEditor};
         use crate::entities::traits::{entity_type_name, EntityTypeOps};
         use crate::scene::model::object::PropValue;
-        use crate::app::{QSelectPropertyChoice, QSelectValueEditor};
 
         let candidate_handles: Vec<Handle> = self
             .qselect_candidate_handles(scope)
             .into_iter()
             .filter(|h| {
-                self.document.get_entity(*h).is_some_and(|entity| {
-                    type_name.is_none_or(|t| entity_type_name(entity) == t)
-                })
+                self.document
+                    .get_entity(*h)
+                    .is_some_and(|entity| type_name.is_none_or(|t| entity_type_name(entity) == t))
             })
             .collect();
 
@@ -370,15 +365,18 @@ impl Scene {
                 .map(|linetype| linetype.name.clone()),
         );
 
-        let choice = |field: &str, label: String, editor: QSelectValueEditor| {
-            QSelectPropertyChoice {
+        let choice =
+            |field: &str, label: String, editor: QSelectValueEditor| QSelectPropertyChoice {
                 field: field.to_string(),
                 label,
                 editor,
-            }
-        };
+            };
         let mut out = vec![
-            choice("handle", crate::t!("Handle").into_owned(), QSelectValueEditor::Text),
+            choice(
+                "handle",
+                crate::t!("Handle").into_owned(),
+                QSelectValueEditor::Text,
+            ),
             choice(
                 "color",
                 crate::t!("Color").into_owned(),
@@ -462,8 +460,7 @@ impl Scene {
                         } else {
                             match prop.value {
                                 PropValue::PlainText(_) => QSelectValueEditor::Text,
-                                PropValue::ReadOnly(ref value)
-                                | PropValue::EditText(ref value) => {
+                                PropValue::ReadOnly(ref value) | PropValue::EditText(ref value) => {
                                     let field = prop.field.to_ascii_lowercase();
                                     let textual = [
                                         "name",
@@ -530,10 +527,7 @@ impl Scene {
                                     QSelectValueEditor::Choice(patterns)
                                 }
                                 PropValue::BoolToggle { .. } => {
-                                    QSelectValueEditor::Choice(vec![
-                                        "false".into(),
-                                        "true".into(),
-                                    ])
+                                    QSelectValueEditor::Choice(vec!["false".into(), "true".into()])
                                 }
                                 PropValue::AttrText { .. } => QSelectValueEditor::Text,
                                 PropValue::Stepper { .. }
@@ -569,7 +563,10 @@ impl Scene {
                     continue;
                 };
                 if let Some(value) = self.entity_property_value(entity, &property.field) {
-                    if !options.iter().any(|option| option.eq_ignore_ascii_case(&value)) {
+                    if !options
+                        .iter()
+                        .any(|option| option.eq_ignore_ascii_case(&value))
+                    {
                         options.push(value);
                     }
                 }
@@ -659,9 +656,7 @@ impl Scene {
                     .flat_map(|s| s.props)
                     .find(|p| p.field == field)?;
                 Some(match prop.value {
-                    PropValue::ReadOnly(s)
-                    | PropValue::EditText(s)
-                    | PropValue::PlainText(s) => s,
+                    PropValue::ReadOnly(s) | PropValue::EditText(s) | PropValue::PlainText(s) => s,
                     PropValue::LayerChoice(s) => s,
                     PropValue::Choice { selected, .. } => selected,
                     PropValue::EditChoice { value, .. } => value,
@@ -702,7 +697,6 @@ impl Scene {
     // ── Erase ─────────────────────────────────────────────────────────────
 
     pub fn erase_entities(&mut self, handles: &[Handle]) {
-
         let erase_handles = self.handles_expanded_for_leader_annotations(handles);
 
         let mut handle_set: HashSet<Handle> = HashSet::default();

@@ -54,9 +54,7 @@ pub(crate) fn body_transform(
             }
         }
     }
-    (values.len() >= 13
-        && values[..13].iter().all(|value| value.is_finite())
-        && values[12] > 0.0)
+    (values.len() >= 13 && values[..13].iter().all(|value| value.is_finite()) && values[12] > 0.0)
         .then(|| {
             (
                 [
@@ -152,10 +150,7 @@ fn parse_acis(
     })
 }
 
-fn remap_acis_material_bindings(
-    set: &mut MeshLodSet,
-    acis: &acadrust::entities::AcisData,
-) {
+fn remap_acis_material_bindings(set: &mut MeshLodSet, acis: &acadrust::entities::AcisData) {
     for lod in &mut set.lods {
         for handle in lod.triangle_material_handles.iter_mut().flatten() {
             let reference = handle.value() as i32;
@@ -179,14 +174,7 @@ fn finish(
     isolines: usize,
     acis: &acadrust::entities::AcisData,
 ) -> Option<MeshLodSet> {
-    let mut set = tessellate_acis(
-        &sat,
-        name,
-        color,
-        facet_res,
-        chordal_deflection,
-        isolines,
-    )?;
+    let mut set = tessellate_acis(&sat, name, color, facet_res, chordal_deflection, isolines)?;
     remap_acis_material_bindings(&mut set, acis);
     Some(set)
 }

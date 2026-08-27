@@ -154,7 +154,11 @@ impl Scene {
                         pcz,
                     ]
                 } else {
-                    [(pcx_d + u * scale_d) as f32, (pcy_d + v * scale_d) as f32, pcz]
+                    [
+                        (pcx_d + u * scale_d) as f32,
+                        (pcy_d + v * scale_d) as f32,
+                        pcz,
+                    ]
                 }
             };
             let in_vp = |x: f32, y: f32| x >= vp_x0 && x <= vp_x1 && y >= vp_y0 && y <= vp_y1;
@@ -165,16 +169,11 @@ impl Scene {
                         return view_height_eff;
                     }
                     let relative = marker.origin
-                        - glam::DVec3::new(
-                            display_center_x,
-                            display_center_y,
-                            display_center_z,
-                        );
+                        - glam::DVec3::new(display_center_x, display_center_y, display_center_z);
                     let depth = relative.x * view_fwd_d.0
                         + relative.y * view_fwd_d.1
                         + relative.z * view_fwd_d.2;
-                    view_height_eff * (camera_dist_d - depth).max(0.001)
-                        / camera_dist_d.max(0.001)
+                    view_height_eff * (camera_dist_d - depth).max(0.001) / camera_dist_d.max(0.001)
                 });
                 let projected_pts: Vec<[f32; 3]> = wire
                     .points
@@ -366,9 +365,7 @@ impl Scene {
     /// Model-space fills projected into every active paper viewport for vector
     /// plotting. The screen renderer projects these on the GPU; PDF generation
     /// needs the equivalent paper-space geometry explicitly.
-    pub fn viewport_plot_fills(
-        &self,
-    ) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>) {
+    pub fn viewport_plot_fills(&self) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>) {
         use acadrust::entities::Viewport;
         use model::hatch_model::HatchPattern;
 
@@ -462,9 +459,7 @@ impl Scene {
                         f32::NEG_INFINITY,
                     ];
                     for [a, b] in hatch.pattern_segments_for_plot() {
-                        let (Some(a), Some(b)) =
-                            (project(a[0], a[1]), project(b[0], b[1]))
-                        else {
+                        let (Some(a), Some(b)) = (project(a[0], a[1]), project(b[0], b[1])) else {
                             continue;
                         };
                         let Some((ax, ay, bx, by)) =
@@ -496,9 +491,7 @@ impl Scene {
                     }
                     continue;
                 }
-                if let Some(hatch) =
-                    project_plot_fill(hatch, &project_3d, xmin, ymin, xmax, ymax)
-                {
+                if let Some(hatch) = project_plot_fill(hatch, &project_3d, xmin, ymin, xmax, ymax) {
                     projected_hatches.push(hatch);
                 }
             }
@@ -603,10 +596,7 @@ pub(crate) fn clip_boundary_polygon_for_document(
     z: f32,
 ) -> Vec<[f32; 3]> {
     use std::f64::consts::TAU;
-    let Some(entity) = document
-        .entities()
-        .find(|e| e.common().handle == handle)
-    else {
+    let Some(entity) = document.entities().find(|e| e.common().handle == handle) else {
         return vec![];
     };
     // Circles and ellipses tessellate directly — their `to_render` returns a
@@ -642,21 +632,12 @@ pub(crate) fn clip_boundary_polygon_for_document(
             let vertices: Vec<([f64; 2], f64)> = polyline
                 .vertices
                 .iter()
-                .map(|vertex| {
-                    (
-                        [vertex.location.x, vertex.location.y],
-                        vertex.bulge,
-                    )
-                })
+                .map(|vertex| ([vertex.location.x, vertex.location.y], vertex.bulge))
                 .collect();
             sample_polyline_clip_boundary(
                 &vertices,
                 polyline.elevation,
-                (
-                    polyline.normal.x,
-                    polyline.normal.y,
-                    polyline.normal.z,
-                ),
+                (polyline.normal.x, polyline.normal.y, polyline.normal.z),
                 z,
             )
         }
@@ -664,45 +645,24 @@ pub(crate) fn clip_boundary_polygon_for_document(
             let vertices: Vec<([f64; 2], f64)> = polyline
                 .vertices
                 .iter()
-                .map(|vertex| {
-                    (
-                        [vertex.location.x, vertex.location.y],
-                        vertex.bulge,
-                    )
-                })
+                .map(|vertex| ([vertex.location.x, vertex.location.y], vertex.bulge))
                 .collect();
             sample_polyline_clip_boundary(
                 &vertices,
                 polyline.elevation,
-                (
-                    polyline.normal.x,
-                    polyline.normal.y,
-                    polyline.normal.z,
-                ),
+                (polyline.normal.x, polyline.normal.y, polyline.normal.z),
                 z,
             )
         }
         EntityType::Polyline(polyline) if polyline.is_closed() => polyline
             .vertices
             .iter()
-            .map(|vertex| {
-                [
-                    vertex.location.x as f32,
-                    vertex.location.y as f32,
-                    z,
-                ]
-            })
+            .map(|vertex| [vertex.location.x as f32, vertex.location.y as f32, z])
             .collect(),
         EntityType::Polyline3D(polyline) if polyline.flags.closed => polyline
             .vertices
             .iter()
-            .map(|vertex| {
-                [
-                    vertex.position.x as f32,
-                    vertex.position.y as f32,
-                    z,
-                ]
-            })
+            .map(|vertex| [vertex.position.x as f32, vertex.position.y as f32, z])
             .collect(),
         // Anything else that draws as a plane curve — a circle, an ellipse, a
         // bulged polyline, a spline — is sampled through its own geometry,
@@ -727,10 +687,7 @@ fn sample_polyline_clip_boundary(
         return Vec::new();
     }
     let to_wcs = |point: [f64; 2]| {
-        crate::scene::view::transform::ocs_point_to_wcs(
-            (point[0], point[1], elevation),
-            normal,
-        )
+        crate::scene::view::transform::ocs_point_to_wcs((point[0], point[1], elevation), normal)
     };
     let mut output = Vec::new();
     let first = to_wcs(vertices[0].0);
@@ -739,12 +696,9 @@ fn sample_polyline_clip_boundary(
         let (start, bulge) = vertices[index];
         let end_index = (index + 1) % vertices.len();
         let end = vertices[end_index].0;
-        if let Some(arc) =
-            crate::entities::common::BulgeArc::from_bulge(start, end, bulge)
-        {
-            let steps = ((arc.sweep.abs() / std::f64::consts::TAU * 64.0).ceil()
-                as usize)
-                .clamp(4, 64);
+        if let Some(arc) = crate::entities::common::BulgeArc::from_bulge(start, end, bulge) {
+            let steps =
+                ((arc.sweep.abs() / std::f64::consts::TAU * 64.0).ceil() as usize).clamp(4, 64);
             for step in 1..=steps {
                 if end_index == 0 && step == steps {
                     break;
@@ -795,11 +749,7 @@ where
         output.extend(clipped);
     };
     if let (Some(plane), Some(boundary)) = (fill.fill_plane, fill.fill_plane_boundary.as_deref()) {
-        let plane = cadkernel::space::Plane::from_axes(
-            plane.origin,
-            plane.x_axis,
-            plane.y_axis,
-        );
+        let plane = cadkernel::space::Plane::from_axes(plane.origin, plane.x_axis, plane.y_axis);
         for &[x, y] in boundary {
             if x.is_nan() || y.is_nan() {
                 flush_ring(&mut ring, &mut output);
@@ -876,12 +826,7 @@ fn polygon_edge_inside(point: [f32; 2], edge: u8, value: f32) -> bool {
     }
 }
 
-fn polygon_edge_intersection(
-    start: [f32; 2],
-    end: [f32; 2],
-    edge: u8,
-    value: f32,
-) -> [f32; 2] {
+fn polygon_edge_intersection(start: [f32; 2], end: [f32; 2], edge: u8, value: f32) -> [f32; 2] {
     if edge <= 1 {
         let dx = end[0] - start[0];
         let t = if dx.abs() > 1e-12 {

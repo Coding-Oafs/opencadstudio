@@ -58,12 +58,7 @@ pub struct GripTarget {
 }
 
 impl GripEdit {
-    pub fn single(
-        handle: Handle,
-        grip_id: usize,
-        is_translate: bool,
-        world: DVec3,
-    ) -> Self {
+    pub fn single(handle: Handle, grip_id: usize, is_translate: bool, world: DVec3) -> Self {
         Self {
             handle,
             grip_id,

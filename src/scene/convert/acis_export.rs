@@ -2,8 +2,8 @@
 //!
 //! Analytic surfaces remain analytic instead of becoming facets.
 
-use cadkernel::acis::append;
 use acadrust::entities::acis::SatDocument;
+use cadkernel::acis::append;
 use cadkernel::brep::Body;
 
 /// Returns `None` when the body contains an unsupported record form.

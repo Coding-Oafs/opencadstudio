@@ -105,8 +105,7 @@ impl MeshTextureMap {
             source: map.source,
             file_name: map.file_name.clone(),
             procedural: map.texture.is_some(),
-            image: load_map_image(map, base_dir)
-                .or_else(|| procedural_map_image(map)),
+            image: load_map_image(map, base_dir).or_else(|| procedural_map_image(map)),
         }
     }
 
@@ -245,8 +244,7 @@ impl MeshMaterial {
             .flat_map(|lod| lod.triangle_material_handles.iter().flatten().copied())
             .collect();
         for handle in handles {
-            let material =
-                resolve_material_handle_with_base(document, handle, self, base_dir);
+            let material = resolve_material_handle_with_base(document, handle, self, base_dir);
             set.face_materials.insert(handle, material);
         }
     }
@@ -288,9 +286,7 @@ fn procedural_map_image(map: &MaterialMap) -> Option<Arc<MaterialImage>> {
             } else {
                 color2
             };
-            rgba.extend(color.map(|channel| {
-                (channel.clamp(0.0, 1.0) * 255.0).round() as u8
-            }));
+            rgba.extend(color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8));
         }
     }
     Some(Arc::new(MaterialImage {

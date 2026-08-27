@@ -12,10 +12,10 @@
 // approximated into a surface nobody asked for. That is the kernel's answer
 // and this module passes it on.
 
+use acadrust::EntityType;
 use cadkernel::brep::{self, Body};
 use cadkernel::geom2d::Curve;
 use cadkernel::space::{PlanarCurve, Plane};
-use acadrust::EntityType;
 
 use crate::entities::curve::entity_curve;
 
@@ -92,12 +92,7 @@ pub fn extruded(entity: &EntityType, height: f64) -> Option<Body> {
 /// The axis has to lie in the profile's plane — a profile and an axis that do
 /// not share one sweep into surfaces with no analytic form, and the kernel
 /// refuses rather than approximating them.
-pub fn revolved(
-    entity: &EntityType,
-    from: [f64; 3],
-    to: [f64; 3],
-    angle: f64,
-) -> Option<Body> {
+pub fn revolved(entity: &EntityType, from: [f64; 3], to: [f64; 3], angle: f64) -> Option<Body> {
     let profile = profile_of(entity)?;
     brep::revolve(
         profile.plane,
@@ -113,11 +108,8 @@ use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 /// SWEEP through the kernel's tolerance-driven mesh API.
 pub fn swept(profile: &EntityType, path: &EntityType, color: [f32; 4]) -> Option<MeshLodSet> {
     let max_angle = cadkernel::tessellation::DEFAULT_ANGLE;
-    let surface = brep::mesh::sweep_surface(
-        &entity_curve(profile)?,
-        &entity_curve(path)?,
-        max_angle,
-    )?;
+    let surface =
+        brep::mesh::sweep_surface(&entity_curve(profile)?, &entity_curve(path)?, max_angle)?;
     mesh_set(surface, color, 1e-9)
 }
 

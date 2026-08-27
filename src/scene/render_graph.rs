@@ -91,8 +91,7 @@ impl InsertStyleSpec {
             ),
             lineweight_bylayer: matches!(
                 insert.common.line_weight,
-                acadrust::types::LineWeight::ByLayer
-                    | acadrust::types::LineWeight::Default
+                acadrust::types::LineWeight::ByLayer | acadrust::types::LineWeight::Default
             ),
             layer0: is_effective_layer_zero(&insert.common.layer),
         }
@@ -170,9 +169,9 @@ impl BlockStyle {
         Self {
             insert,
             layer0: if on_layer0 {
-                parent
-                    .map(|style| style.layer0)
-                    .unwrap_or_else(|| layer_render_style_viewport(document, &entity.common().layer, viewport))
+                parent.map(|style| style.layer0).unwrap_or_else(|| {
+                    layer_render_style_viewport(document, &entity.common().layer, viewport)
+                })
             } else {
                 layer_render_style_viewport(document, &entity.common().layer, viewport)
             },
@@ -272,10 +271,7 @@ impl RenderContext {
     pub fn draw_depth(&self, handle: Handle, depths: &FxHashMap<u64, [f32; 2]>) -> f32 {
         if self.is_instanced() {
             self.depth_base
-                + depths
-                    .get(&handle.value())
-                    .map_or(0.0, |depth| depth[0])
-                    * self.depth_scale
+                + depths.get(&handle.value()).map_or(0.0, |depth| depth[0]) * self.depth_scale
         } else {
             depths
                 .get(&handle.value())
@@ -389,7 +385,6 @@ impl<'a> RenderSceneGraph<'a> {
         }
     }
 
-
     fn walk_insert_instances<V, F>(
         &self,
         insert: &Insert,
@@ -404,7 +399,9 @@ impl<'a> RenderSceneGraph<'a> {
         let block_style = parent
             .block_style
             .map(|style| BlockStyle::for_nested(self.document, insert, style, self.viewport))
-            .unwrap_or_else(|| BlockStyle::for_entity(self.document, &insert_entity, self.viewport));
+            .unwrap_or_else(|| {
+                BlockStyle::for_entity(self.document, &insert_entity, self.viewport)
+            });
         let root_handle = if parent.root_handle.is_null() {
             insert.common.handle
         } else {
@@ -437,14 +434,11 @@ impl<'a> RenderSceneGraph<'a> {
             context.depth_base = depth_base;
             context.depth_scale = depth_scale;
             context.nesting_depth += 1;
-            if let Some(filter) = crate::scene::pick::xclip::insert_spatial_filter(
-                self.document,
-                insert,
-            ) {
-                let polygon = crate::scene::pick::xclip::world_clip_polygon_for_transform(
-                    filter,
-                    &transform,
-                );
+            if let Some(filter) =
+                crate::scene::pick::xclip::insert_spatial_filter(self.document, insert)
+            {
+                let polygon =
+                    crate::scene::pick::xclip::world_clip_polygon_for_transform(filter, &transform);
                 if polygon.len() >= 3 {
                     context.clips.push(polygon);
                 }
@@ -454,13 +448,7 @@ impl<'a> RenderSceneGraph<'a> {
                 .iter()
                 .map(|insert| insert.block_name.clone())
                 .collect();
-            self.walk_block(
-                &insert.block_name,
-                &context,
-                visible,
-                leaf,
-                &mut stack,
-            );
+            self.walk_block(&insert.block_name, &context, visible, leaf, &mut stack);
         }
     }
 
@@ -538,9 +526,8 @@ impl<'a> RenderSceneGraph<'a> {
                 {
                     return;
                 }
-                let placement =
-                    Transform::from_translation(dimension.base().insertion_point)
-                        .then(&context.transform);
+                let placement = Transform::from_translation(dimension.base().insertion_point)
+                    .then(&context.transform);
                 let mut owned = context.clone();
                 owned.transform = placement;
                 if owned.root_handle.is_null() {
@@ -617,9 +604,10 @@ impl<'a> RenderSceneGraph<'a> {
         {
             return false;
         }
-        if self.frozen_layers.is_some_and(|frozen| {
-            layer.is_some_and(|layer| frozen.contains(&layer.handle))
-        }) {
+        if self
+            .frozen_layers
+            .is_some_and(|frozen| layer.is_some_and(|layer| frozen.contains(&layer.handle)))
+        {
             return false;
         }
         !crate::scene::annotative::annotative_offscale_for(
@@ -675,8 +663,7 @@ pub fn insert_instance_transform(
     if offset == [0.0; 3] {
         transform
     } else {
-        Transform::from_translation(Vector3::new(offset[0], offset[1], offset[2]))
-            .then(&transform)
+        Transform::from_translation(Vector3::new(offset[0], offset[1], offset[2])).then(&transform)
     }
 }
 
@@ -713,9 +700,7 @@ pub fn block_contains_hatch(
                                 .iter()
                                 .find(|record| record.handle == handle)
                         })
-                        .is_some_and(|record| {
-                            block_contains_hatch(document, &record.name, memo)
-                        }),
+                        .is_some_and(|record| block_contains_hatch(document, &record.name, memo)),
                     Some(EntityType::MultiLeader(multileader)) => multileader
                         .block_content_handle
                         .and_then(|handle| {
@@ -724,9 +709,7 @@ pub fn block_contains_hatch(
                                 .iter()
                                 .find(|record| record.handle == handle)
                         })
-                        .is_some_and(|record| {
-                            block_contains_hatch(document, &record.name, memo)
-                        }),
+                        .is_some_and(|record| block_contains_hatch(document, &record.name, memo)),
                     _ => false,
                 })
         });

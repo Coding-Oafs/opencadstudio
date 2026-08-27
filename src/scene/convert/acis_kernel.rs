@@ -8,8 +8,8 @@
 //!
 //! Lift and tessellation failures are reported as an incomplete result.
 
-use cadkernel::acis::lift;
 use acadrust::entities::acis::SatDocument;
+use cadkernel::acis::lift;
 use cadkernel::brep;
 
 use crate::scene::convert::solid3d_tess::{body_transform, finalize_mesh};
@@ -75,8 +75,7 @@ pub fn tessellate_sat(
         .filter_map(|record| {
             let owner = record.token_pointer(2)?.0;
             let handle = record.token(3)?.as_integer()?;
-            (owner >= 0 && handle > 0)
-                .then(|| (owner, acadrust::Handle::new(handle as u64)))
+            (owner >= 0 && handle > 0).then(|| (owner, acadrust::Handle::new(handle as u64)))
         })
         .collect();
     let face_colors: std::collections::HashMap<i32, [f32; 4]> = document
@@ -110,11 +109,9 @@ pub fn tessellate_sat(
         DEFAULT_FIT_TOLERANCE
     };
     for (body, placement_scale) in &bodies {
-        let mut tolerance = brep::mesh::TessellationTolerance::new(
-            max_angle,
-            source_fit * placement_scale,
-        )
-        .with_isolines(isolines);
+        let mut tolerance =
+            brep::mesh::TessellationTolerance::new(max_angle, source_fit * placement_scale)
+                .with_isolines(isolines);
         if let Some(deflection) = chordal_deflection {
             tolerance = tolerance.with_chordal_deflection(deflection);
         }
@@ -250,5 +247,4 @@ mod tests {
         let moved = placed([0.0, 0.0, 0.0], quarter_turn());
         assert_eq!(moved, [10.0, 20.0, 30.0]);
     }
-
 }

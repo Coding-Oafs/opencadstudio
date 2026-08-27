@@ -85,20 +85,12 @@ pub(crate) fn explicit_mtext_background(entity: &EntityType) -> Option<[f32; 4]>
     if text.background_fill_flags & 0x01 == 0 || text.background_fill_flags & 0x02 != 0 {
         return None;
     }
-    text.background_color.rgb().map(|(r, g, b)| {
-        [
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-            1.0,
-        ]
-    })
+    text.background_color
+        .rgb()
+        .map(|(r, g, b)| [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
 }
 
-pub(crate) fn text_contrast_background(
-    entity: &EntityType,
-    canvas: [f32; 4],
-) -> [f32; 4] {
+pub(crate) fn text_contrast_background(entity: &EntityType, canvas: [f32; 4]) -> [f32; 4] {
     explicit_mtext_background(entity).unwrap_or(canvas)
 }
 
@@ -176,18 +168,10 @@ fn point_cloud_wires(
         fill_tris: Vec::new(),
         fill_tris_low: Vec::new(),
     }];
-    let mode = crate::scene::frame::mode(
-        document,
-        crate::scene::frame::FrameKind::PointCloudClip,
-    );
+    let mode = crate::scene::frame::mode(document, crate::scene::frame::FrameKind::PointCloudClip);
     if !frame_points.is_empty() {
         let (points, points_low) = points_to_ds(frame_points);
-        let mut frame = WireModel::solid(
-            handle.value().to_string(),
-            points,
-            color,
-            selected,
-        );
+        let mut frame = WireModel::solid(handle.value().to_string(), points, color, selected);
         frame.points_low = points_low;
         frame.line_weight_px = line_weight_px;
         frame.display_visible = mode != 0;
@@ -326,8 +310,7 @@ pub fn tessellate(
         if lines.is_empty() {
             return vec![];
         }
-        let lt_scale =
-            document.header.linetype_scale as f32 * m.common.linetype_scale as f32;
+        let lt_scale = document.header.linetype_scale as f32 * m.common.linetype_scale as f32;
         let snap_pts: Vec<(glam::DVec3, SnapHint)> = m
             .vertices
             .iter()
@@ -381,8 +364,7 @@ pub fn tessellate(
         };
         let mut out: Vec<WireModel> = Vec::with_capacity(lines.len());
         if let Some(style) = crate::entities::mline::resolved_mline_style(m, document) {
-            let triangles =
-                crate::entities::mline::mline_fill_triangles_with_style(m, style);
+            let triangles = crate::entities::mline::mline_fill_triangles_with_style(m, style);
             if !triangles.is_empty() {
                 let (fill_tris, fill_tris_low) = points_to_ds(triangles);
                 let fill_color = if selected {
@@ -444,8 +426,7 @@ pub fn tessellate(
                 match l.color {
                     AcadColor::ByLayer | AcadColor::ByBlock => entity_color,
                     other => {
-                        let [r, g, b, _] =
-                            crate::scene::convert::tess_util::aci_to_rgba(&other);
+                        let [r, g, b, _] = crate::scene::convert::tess_util::aci_to_rgba(&other);
                         [r, g, b, entity_color[3]]
                     }
                 }
@@ -614,14 +595,9 @@ pub fn tessellate(
         return out;
     }
 
-    if let Some(wires) = point_cloud_wires(
-        document,
-        handle,
-        entity,
-        selected,
-        color,
-        line_weight_px,
-    ) {
+    if let Some(wires) =
+        point_cloud_wires(document, handle, entity, selected, color, line_weight_px)
+    {
         return wires;
     }
 
@@ -647,10 +623,7 @@ pub fn tessellate(
 
                 // Scale MTEXT around its attachment point.
                 let ref_origin = match entity {
-                    EntityType::MText(m) => [
-                        m.insertion_point.x,
-                        m.insertion_point.y,
-                    ],
+                    EntityType::MText(m) => [m.insertion_point.x, m.insertion_point.y],
                     _ => stroke_groups
                         .first()
                         .map(|g| g.origin)
@@ -701,16 +674,13 @@ pub fn tessellate(
                 // require bidi or joined-script shaping keep their already
                 // shaped vector geometry because the per-glyph SDF path has no
                 // cluster-position data.
-                for group in stroke_groups
-                    .iter()
-                    .filter(|group| {
-                        force_text_strokes
-                            || group.run.is_none()
-                            || group.run.as_ref().is_some_and(|run| {
-                                crate::scene::text::web_font::requires_shaping(&run.text)
-                            })
-                    })
-                {
+                for group in stroke_groups.iter().filter(|group| {
+                    force_text_strokes
+                        || group.run.is_none()
+                        || group.run.as_ref().is_some_and(|run| {
+                            crate::scene::text::web_font::requires_shaping(&run.text)
+                        })
+                }) {
                     let lx_v = group.origin[0];
                     let ly_v = group.origin[1];
                     let slx_v = (lx_v - ref_lx_v) * anno + ref_lx_v;
@@ -718,7 +688,7 @@ pub fn tessellate(
                     let bin_key = if split_by_color { group.color } else { None };
                     let group_bold = group.run.as_ref().is_some_and(|r| r.bold);
                     let bi = find_or_make(bin_key, group_bold, &mut bins, &mut bin_first);
-                    
+
                     // 1. Process outline strokes
                     for stroke in &group.strokes {
                         if stroke.len() < 2 {
@@ -811,8 +781,7 @@ pub fn tessellate(
 
                 // Derive the pick box from the rendered glyph quads.
                 let text_aabb = if !sdf_verts.is_empty() {
-                    let (mut nx, mut ny, mut xx, mut xy) =
-                        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                    let (mut nx, mut ny, mut xx, mut xy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
                     for v in &sdf_verts {
                         let x = v.pos[0] as f64 + v.pos_low[0] as f64;
                         let y = v.pos[1] as f64 + v.pos_low[1] as f64;
@@ -904,11 +873,7 @@ pub fn tessellate(
                                 // colour around the same box.
                                 if has_frame {
                                     let loop_xy = [
-                                        corners[0],
-                                        corners[1],
-                                        corners[2],
-                                        corners[3],
-                                        corners[0],
+                                        corners[0], corners[1], corners[2], corners[3], corners[0],
                                     ];
                                     let mut fp = Vec::with_capacity(5);
                                     let mut fpl = Vec::with_capacity(5);
@@ -957,9 +922,7 @@ pub fn tessellate(
                     // bounds as a separate outline wire so the text box is
                     // visible for testing. The empty text wire below is left
                     // untouched (still the SDF + pick target).
-                    if !sdf_verts.is_empty()
-                        && crate::scene::text::sdf_atlas::text_box_debug()
-                    {
+                    if !sdf_verts.is_empty() && crate::scene::text::sdf_atlas::text_box_debug() {
                         let [nx, ny, xx, xy] = text_aabb;
                         let (nx, ny, xx, xy) = (nx as f64, ny as f64, xx as f64, xy as f64);
                         let mut pts = Vec::with_capacity(5);
@@ -1077,9 +1040,9 @@ pub fn tessellate(
                             render_instance: None,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                            dash_from_start: false,
+                            dash_align_end: None,
+                            text_verts: Vec::new(),
                             name: name.clone(),
                             points: bin.pts,
                             points_low: bin.pts_low,
@@ -1122,9 +1085,9 @@ pub fn tessellate(
                             render_instance: None,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                            dash_from_start: false,
+                            dash_align_end: None,
+                            text_verts: Vec::new(),
                             name: name.clone(),
                             points: Vec::new(),
                             points_low: Vec::new(),
@@ -1199,9 +1162,9 @@ pub fn tessellate(
                         render_instance: None,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                        dash_from_start: false,
+                        dash_align_end: None,
+                        text_verts: Vec::new(),
                         name,
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -1230,11 +1193,8 @@ pub fn tessellate(
                         // Split into a coarse float and a fine correction, so
                         // a point at survey coordinates keeps its last
                         // millimetres instead of losing them to f32.
-                        let [x, y, z] = [
-                            position[0] as f32,
-                            position[1] as f32,
-                            position[2] as f32,
-                        ];
+                        let [x, y, z] =
+                            [position[0] as f32, position[1] as f32, position[2] as f32];
                         let [xl, yl, zl] = [
                             (position[0] - x as f64) as f32,
                             (position[1] - y as f64) as f32,
@@ -1247,9 +1207,7 @@ pub fn tessellate(
                         // the view with crosses. The tessellation cache keys on
                         // world-per-pixel, so this re-sizes on zoom and stays a
                         // constant on-screen size. (#139)
-                        let s = world_per_pixel
-                            .map(|w| (w * 0.75).max(1e-6))
-                            .unwrap_or(0.1);
+                        let s = world_per_pixel.map(|w| (w * 0.75).max(1e-6)).unwrap_or(0.1);
                         let snap_pts = te.snap_pts;
                         let key_vertices: Vec<[f64; 3]> = te
                             .key_vertices
@@ -1268,9 +1226,9 @@ pub fn tessellate(
                             render_instance: None,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                            dash_from_start: false,
+                            dash_align_end: None,
+                            text_verts: Vec::new(),
                             name,
                             points: vec![
                                 [x - s, y, z],
@@ -1300,8 +1258,6 @@ pub fn tessellate(
                     }
                 }
             }
-
-
 
             RenderObject::Lines(points) => {
                 // Points are world-space f64 from entity converters (polyline,
@@ -1357,18 +1313,17 @@ pub fn tessellate(
                 };
                 // Basic curve entities use the Lines path for large-coordinate precision,
                 // but they must still preserve the entity's resolved linetype pattern.
-                let (edge_pattern_length, edge_pattern) =
-                    if matches!(
-                        entity,
-                        EntityType::Line(_)
-                            | EntityType::Circle(_)
-                            | EntityType::Arc(_)
-                            | EntityType::Ellipse(_)
-                    ) {
-                        (pattern_length, pattern)
-                    } else {
-                        (0.0, [0.0; 8])
-                    };
+                let (edge_pattern_length, edge_pattern) = if matches!(
+                    entity,
+                    EntityType::Line(_)
+                        | EntityType::Circle(_)
+                        | EntityType::Arc(_)
+                        | EntityType::Ellipse(_)
+                ) {
+                    (pattern_length, pattern)
+                } else {
+                    (0.0, [0.0; 8])
+                };
                 if !local_pts.is_empty() {
                     let (snap, keys, tangents) = if is_first {
                         is_first = false;
@@ -1394,9 +1349,9 @@ pub fn tessellate(
                         render_instance: None,
                         pick_tris,
                         pick_tris_low,
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                        dash_from_start: false,
+                        dash_align_end: None,
+                        text_verts: Vec::new(),
                         name: name.clone(),
                         points: local_pts,
                         points_low: local_pts_low,
@@ -1432,9 +1387,9 @@ pub fn tessellate(
                         world_width: 0.0,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                        dash_from_start: false,
+                        dash_align_end: None,
+                        text_verts: Vec::new(),
                         name: name.clone(),
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -1473,9 +1428,9 @@ pub fn tessellate(
                         render_instance: None,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                        dash_from_start: false,
+                        dash_align_end: None,
+                        text_verts: Vec::new(),
                         name,
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -1521,9 +1476,9 @@ pub fn tessellate(
                     render_instance: None,
                     pick_tris,
                     pick_tris_low,
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+                    dash_from_start: false,
+                    dash_align_end: None,
+                    text_verts: Vec::new(),
                     name,
                     points: local_pts,
                     points_low: local_pts_low,
@@ -1591,13 +1546,11 @@ pub fn tessellate(
                     fill_tris_low: Vec::new(),
                 }];
             }
-
         }
     }
 
     // ── Fallback for Viewport / Insert / Hatch / Ole2Frame ────────────────
-    let (mut points_f64, snap_pts, tangent_geoms, mut key_vertices) =
-        fallback_geometry(entity);
+    let (mut points_f64, snap_pts, tangent_geoms, mut key_vertices) = fallback_geometry(entity);
     let clipped_viewport_polygon = match entity {
         EntityType::Viewport(viewport) if !viewport.clip_boundary_handle.is_null() => {
             let polygon = crate::scene::project::clip_boundary_polygon_for_document(
@@ -1608,13 +1561,7 @@ pub fn tessellate(
             if polygon.len() >= 3 {
                 let polygon: Vec<[f64; 3]> = polygon
                     .into_iter()
-                    .map(|point| {
-                        [
-                            point[0] as f64,
-                            point[1] as f64,
-                            point[2] as f64,
-                        ]
-                    })
+                    .map(|point| [point[0] as f64, point[1] as f64, point[2] as f64])
                     .collect();
                 points_f64 = polygon.clone();
                 points_f64.push(polygon[0]);
@@ -1645,8 +1592,10 @@ pub fn tessellate(
     }
     // fallback_geometry still emits offset-relative f32 snap points; widen to
     // f64 for the WireModel's double-single-era snap buffer.
-    let snap_pts: Vec<(glam::DVec3, SnapHint)> =
-        snap_pts.into_iter().map(|(p, h)| (p.as_dvec3(), h)).collect();
+    let snap_pts: Vec<(glam::DVec3, SnapHint)> = snap_pts
+        .into_iter()
+        .map(|(p, h)| (p.as_dvec3(), h))
+        .collect();
     // A paper-space viewport is a window, not a wireframe: give it an interior
     // pick surface so a click anywhere inside the frame selects it. Ranked
     // below edge and fill hits, so content drawn inside still wins the click.
@@ -1657,12 +1606,13 @@ pub fn tessellate(
     // and this file class centres the sheet viewport off-origin, so neither
     // the id nor the geometry heuristic alone is reliable), with
     // `is_content_viewport` as the fallback classifier.
-    let is_sheet_vp = |vp: &acadrust::entities::Viewport| {
-        let h = vp.common.handle;
-        document.objects.values().any(|obj| {
-            matches!(obj, acadrust::objects::ObjectType::Layout(l) if l.viewport == h)
-        }) || !crate::scene::Scene::is_content_viewport(vp)
-    };
+    let is_sheet_vp =
+        |vp: &acadrust::entities::Viewport| {
+            let h = vp.common.handle;
+            document.objects.values().any(
+                |obj| matches!(obj, acadrust::objects::ObjectType::Layout(l) if l.viewport == h),
+            ) || !crate::scene::Scene::is_content_viewport(vp)
+        };
     let (pick_tris, pick_tris_low) = match entity {
         EntityType::Viewport(vp) if !is_sheet_vp(vp) => {
             if let Some(polygon) = clipped_viewport_polygon.as_ref() {
@@ -1692,9 +1642,9 @@ pub fn tessellate(
         render_instance: None,
         pick_tris,
         pick_tris_low,
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
+        dash_from_start: false,
+        dash_align_end: None,
+        text_verts: Vec::new(),
         name,
         points,
         points_low,
@@ -1714,18 +1664,36 @@ pub fn tessellate(
     }]
 }
 
-
-
 #[derive(Clone)]
 pub(crate) enum ArrowKind {
     None,
-    Triangle { size: f32, filled: bool, size_mul: f32 },
-    Tick { size: f32 },
-    Open { size: f32, half_angle: f32 },
-    Dot { size: f32, filled: bool },
-    Origin { size: f32 },
-    Box_ { size: f32, filled: bool },
-    Datum { size: f32, filled: bool },
+    Triangle {
+        size: f32,
+        filled: bool,
+        size_mul: f32,
+    },
+    Tick {
+        size: f32,
+    },
+    Open {
+        size: f32,
+        half_angle: f32,
+    },
+    Dot {
+        size: f32,
+        filled: bool,
+    },
+    Origin {
+        size: f32,
+    },
+    Box_ {
+        size: f32,
+        filled: bool,
+    },
+    Datum {
+        size: f32,
+        filled: bool,
+    },
     Custom {
         size: f32,
         lines: Vec<[f32; 3]>,
@@ -1772,10 +1740,7 @@ fn arrow_from_block_name(name: Option<&str>, dimasz: f32) -> ArrowKind {
 fn builtin_arrow_from_block_name(name: &str, dimasz: f32) -> Option<ArrowKind> {
     // Built-in arrow block names may carry a leading underscore. Normalize it
     // before matching the canonical names.
-    let n = name
-        .trim()
-        .trim_start_matches('_')
-        .to_ascii_uppercase();
+    let n = name.trim().trim_start_matches('_').to_ascii_uppercase();
     match n.as_str() {
         "" | "CLOSEDFILLED" => Some(ArrowKind::Triangle {
             size: dimasz,
@@ -1865,17 +1830,9 @@ fn custom_arrow_from_block(
     }
 
     let depths = rustc_hash::FxHashMap::default();
-    let graph = crate::scene::render_graph::RenderSceneGraph::new(
-        doc,
-        None,
-        None,
-        true,
-        &depths,
-    );
-    let insert = acadrust::entities::Insert::new(
-        record.name.clone(),
-        acadrust::types::Vector3::ZERO,
-    );
+    let graph = crate::scene::render_graph::RenderSceneGraph::new(doc, None, None, true, &depths);
+    let insert =
+        acadrust::entities::Insert::new(record.name.clone(), acadrust::types::Vector3::ZERO);
     let mut lines = Vec::new();
     let mut fill = Vec::new();
     let mut deferred_hatch = false;
@@ -1890,12 +1847,7 @@ fn custom_arrow_from_block(
             }
             let mut placed = entity.clone();
             placed.apply_transform(&context.transform);
-            append_custom_arrow_leaf(
-                doc,
-                &placed,
-                &mut lines,
-                &mut fill,
-            );
+            append_custom_arrow_leaf(doc, &placed, &mut lines, &mut fill);
         },
     );
     if lines.is_empty() && fill.is_empty() && !deferred_hatch {
@@ -1924,12 +1876,7 @@ fn append_custom_arrow_leaf(
         | EntityType::MultiLeader(_)
         | EntityType::Insert(_) => return,
         EntityType::Hatch(hatch) => {
-            append_custom_hatch_geometry(
-                hatch,
-                acadrust::types::Vector3::ZERO,
-                lines,
-                fill,
-            );
+            append_custom_hatch_geometry(hatch, acadrust::types::Vector3::ZERO, lines, fill);
             return;
         }
         _ => {}
@@ -1991,16 +1938,8 @@ fn append_custom_hatch_geometry(
             if !lines.is_empty() && !lines.last().is_some_and(|point| point[0].is_nan()) {
                 lines.push([f32::NAN; 3]);
             }
-            lines.push([
-                (start[0] - base.x) as f32,
-                (start[1] - base.y) as f32,
-                z,
-            ]);
-            lines.push([
-                (end[0] - base.x) as f32,
-                (end[1] - base.y) as f32,
-                z,
-            ]);
+            lines.push([(start[0] - base.x) as f32, (start[1] - base.y) as f32, z]);
+            lines.push([(end[0] - base.x) as f32, (end[1] - base.y) as f32, z]);
         }
         return;
     }
@@ -2113,7 +2052,6 @@ impl DimGeom {
     }
 }
 
-
 /// Convert an acadrust `Color` to RGBA, falling back to `inherited` for
 /// `ByLayer` / `ByBlock` (assumes those are already resolved upstream).
 pub(crate) fn color_or_inherit(c: &AcadColor, inherited: [f32; 4]) -> [f32; 4] {
@@ -2127,7 +2065,6 @@ pub(crate) fn color_or_inherit(c: &AcadColor, inherited: [f32; 4]) -> [f32; 4] {
         None => inherited,
     }
 }
-
 
 // ── Entity Z helper ───────────────────────────────────────────────────────
 

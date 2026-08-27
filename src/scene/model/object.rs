@@ -22,10 +22,7 @@ pub enum PropValue {
     /// Editable text plus a dropdown of existing options (block reference
     /// Name row): picking an option re-points the reference, submitting a
     /// new name renames the definition.
-    EditChoice {
-        value: String,
-        options: Vec<String>,
-    },
+    EditChoice { value: String, options: Vec<String> },
     /// ACI/RGB/ByLayer/ByBlock color — rendered as a color picker.
     ColorChoice(AcadColor),
     /// Color varies across the current multi-selection.
@@ -40,7 +37,10 @@ pub enum PropValue {
     BoolToggle { field: &'static str, value: bool },
     /// A 0-based index navigated with ◀ / ▶ buttons (e.g. a polyline's Current
     /// Vertex). `display` is the label shown between the arrows (e.g. "2 / 7").
-    Stepper { field: &'static str, display: String },
+    Stepper {
+        field: &'static str,
+        display: String,
+    },
     /// Hatch pattern name — rendered as a combo_box from the catalog.
     HatchPatternChoice(String),
     /// Block attribute value keyed by its (dynamic, runtime) tag — rendered as
