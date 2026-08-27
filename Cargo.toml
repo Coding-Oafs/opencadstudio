@@ -9,6 +9,7 @@ members = [
     "crates/ocs_plugin_api",
     "crates/ocs_gis",
     "crates/ocs_pointcloud",
+    "crates/ocs_reality",
     "crates/ocs_scripting",
     "crates/ocs_spatial",
     "crates/ocs_web_worker",

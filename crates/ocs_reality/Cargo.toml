@@ -1,0 +1,12 @@
+[package]
+name = "ocs_reality"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Reality-to-model analysis algorithms for OpenCADStudio"
+
+[dependencies]
+ocs_gis = { path = "../ocs_gis" }
+ocs_pointcloud = { path = "../ocs_pointcloud" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
