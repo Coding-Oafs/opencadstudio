@@ -138,17 +138,20 @@ jobs:
           if [ "$EVENT_NAME" = "release" ]; then
             VERSION="${REF_NAME#v}"
             if [ "v$VERSION" != "$REF_NAME" ]; then
-              echo "::error::Release tag must be vX.Y.Z"
+              echo "::error::Release tag must be vX.Y.Z[-prerelease]"
               exit 1
             fi
           else
-            VERSION="$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' Cargo.toml | head -1)"
+            VERSION="$(sed -n 's/^version = "\([0-9][0-9.]*\)\(-[A-Za-z0-9.]*\)\{0,1\}"/\1\2/p' Cargo.toml | head -1)"
           fi
-          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
             echo "::error::Invalid package version: $VERSION"
             exit 1
           fi
-          sed -i "s/^version: .*/version: '$VERSION'/" snap/snapcraft.yaml
+          # Snap versions forbid hyphens; encode a pre-release marker as a
+          # "+" suffix instead (2.0.0-alpha.1 -> 2.0.0+alpha.1).
+          SNAP_VERSION="${VERSION//-/+}"
+          sed -i "s/^version: .*/version: '$SNAP_VERSION'/" snap/snapcraft.yaml
 
       - name: Build snap
         id: snapcraft
@@ -271,6 +274,10 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
+          # MSI ProductVersion is numeric-only (x.y.z); strip any pre-release
+          # suffix (v2.0.0-alpha.1 -> 2.0.0) so the marker survives in the tag
+          # and asset names while the installer metadata stays valid.
+          $version = $version -replace '-.*$', ''
           # workflow_dispatch runs use the branch name as ref_name, which
           # is not a valid MSI ProductVersion — fall back to 0.0.0 so test
           # builds still produce an installer.
