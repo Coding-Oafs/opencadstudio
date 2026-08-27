@@ -20,7 +20,7 @@ mod mtext_editor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod plugin_host;
 #[cfg(not(target_arch = "wasm32"))]
-mod point_cloud;
+pub(crate) mod point_cloud;
 mod properties;
 mod recent;
 #[cfg(not(target_arch = "wasm32"))]

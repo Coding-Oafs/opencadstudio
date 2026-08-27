@@ -933,6 +933,72 @@ impl crate::command::CadCommand for PointCloudScreenBrushCommand {
     }
 }
 
+/// Live state of a native urban classification job, polled by the manager
+/// UI on redraw ticks. The background worker mutates the atomics; cancel is
+/// a cooperative flag checked between point chunks.
+#[derive(Debug)]
+pub(super) struct UrbanJobState {
+    pub cancel: AtomicBool,
+    /// `UrbanStage` discriminant: 0 loading, 1 classifying, 2 validating,
+    /// 3 completed.
+    pub stage: AtomicU64,
+    pub points_done: AtomicU64,
+    pub points_total: AtomicU64,
+    pub tile_index: AtomicU64,
+    pub tile_total: AtomicU64,
+    pub building_features: AtomicU64,
+    pub road_features: AtomicU64,
+    pub tree_features: AtomicU64,
+    pub output_path: std::sync::Mutex<PathBuf>,
+    pub started_at: std::time::Instant,
+}
+
+impl UrbanJobState {
+    fn new() -> Self {
+        Self {
+            cancel: AtomicBool::new(false),
+            stage: AtomicU64::new(0),
+            points_done: AtomicU64::new(0),
+            points_total: AtomicU64::new(0),
+            tile_index: AtomicU64::new(0),
+            tile_total: AtomicU64::new(1),
+            building_features: AtomicU64::new(0),
+            road_features: AtomicU64::new(0),
+            tree_features: AtomicU64::new(0),
+            output_path: std::sync::Mutex::new(PathBuf::new()),
+            started_at: std::time::Instant::now(),
+        }
+    }
+
+    pub fn snapshot(&self) -> UrbanJobSnapshot {
+        UrbanJobSnapshot {
+            stage: self.stage.load(Ordering::Relaxed),
+            points_done: self.points_done.load(Ordering::Relaxed),
+            points_total: self.points_total.load(Ordering::Relaxed),
+            tile_index: self.tile_index.load(Ordering::Relaxed),
+            tile_total: self.tile_total.load(Ordering::Relaxed),
+            building_features: self.building_features.load(Ordering::Relaxed),
+            road_features: self.road_features.load(Ordering::Relaxed),
+            tree_features: self.tree_features.load(Ordering::Relaxed),
+            elapsed_ms: self.started_at.elapsed().as_millis(),
+        }
+    }
+}
+
+/// Redraw-time copy of [`UrbanJobState`] for the manager window.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UrbanJobSnapshot {
+    pub stage: u64,
+    pub points_done: u64,
+    pub points_total: u64,
+    pub tile_index: u64,
+    pub tile_total: u64,
+    pub building_features: u64,
+    pub road_features: u64,
+    pub tree_features: u64,
+    pub elapsed_ms: u128,
+}
+
 #[derive(Debug)]
 struct PointCloudJobProgress {
     completed: AtomicU64,
@@ -1158,9 +1224,8 @@ pub(super) struct PointCloudDataset {
     index_batch_active: bool,
     /// Active vertical cross-section; `None` shows the whole cloud.
     pub(super) section: Option<crate::scene::model::point_cloud_model::Section>,
-    /// Packaged Boston UPCP helper state. The helper always streams the full
-    /// source LAZ and writes into a sibling `classified` directory.
-    pub(super) urban_job_running: bool,
+    /// Native urban classification job; presence means a job is running.
+    pub(super) urban_job: Option<Arc<UrbanJobState>>,
     pub(super) urban_status: String,
     display_generation: u64,
     /// Bumps on style-only changes (color mode, class visibility, class
@@ -4638,18 +4703,67 @@ impl OpenCADStudio {
         }
     }
 
-    /// Runs the packaged UPCP/Boston fusion helper against either the active
-    /// tile or its source folder. The helper writes ASPRS-viewable classes
-    /// while retaining `label` and `source_classification` extra dimensions.
+    /// Runs the native UPCP/Boston fusion engine against either the active
+    /// tile or its source folder. The source `classification` byte is never
+    /// modified; results carry a uint8 `label` extra dimension plus
+    /// provenance and publish only after a validated atomic write.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn start_point_cloud_urban_classification(
         &mut self,
         tab_index: usize,
         folder_scope: bool,
     ) -> Task<Message> {
+        self.start_point_cloud_urban_classification_with_scope(tab_index, folder_scope, None, None)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_point_cloud_urban_classification_with_scope(
+        &mut self,
+        tab_index: usize,
+        folder_scope: bool,
+        input_override: Option<PathBuf>,
+        output_override: Option<PathBuf>,
+    ) -> Task<Message> {
+        let settings = ocs_pointcloud::UrbanClassificationSettings {
+            scope: if folder_scope {
+                ocs_pointcloud::UrbanScope::Folder
+            } else {
+                ocs_pointcloud::UrbanScope::CurrentTile
+            },
+            output_folder: output_override.clone(),
+            ..Default::default()
+        };
+        self.start_point_cloud_urban_job(tab_index, settings, input_override)
+    }
+
+    /// Starts a native urban classification from a settings object, e.g. a
+    /// script-supplied JSON preset. Returns an error message when the
+    /// settings are unusable.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_point_cloud_urban_classification_from_settings(
+        &mut self,
+        tab_index: usize,
+        settings: ocs_pointcloud::UrbanClassificationSettings,
+    ) -> Result<Task<Message>, String> {
+        if !matches!(settings.scope, ocs_pointcloud::UrbanScope::CurrentTile)
+            && settings.output_folder.is_none()
+        {
+            // Folder scope without an explicit output still works: it derives
+            // the sibling `classified` directory from the active source.
+        }
+        Ok(self.start_point_cloud_urban_job(tab_index, settings, None))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_point_cloud_urban_job(
+        &mut self,
+        tab_index: usize,
+        settings: ocs_pointcloud::UrbanClassificationSettings,
+        input_override: Option<PathBuf>,
+    ) -> Task<Message> {
         let tab_id = self.tabs[tab_index].id;
         let dataset = &mut self.tabs[tab_index].point_cloud;
-        if dataset.urban_job_running {
+        if dataset.urban_job.is_some() {
             self.command_line
                 .push_info("POINTCLOUDURBANCLASSIFY: a classification job is already running.");
             return Task::none();
@@ -4683,30 +4797,67 @@ impl OpenCADStudio {
                 }
             }
         }
+        if let Some(input) = input_override {
+            if input.is_dir() {
+                input_dir = input;
+            } else if input.is_file() {
+                source = input.clone();
+                input_dir = input.parent().map(PathBuf::from).unwrap_or_default();
+            }
+        }
         if !source.is_file() || !input_dir.is_dir() {
             self.command_line
                 .push_error("POINTCLOUDURBANCLASSIFY: the original source tile is unavailable.");
             return Task::none();
         }
 
-        let helper = std::env::var_os("OCS_LIDAR_CLASSIFIER")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::current_exe().ok().and_then(|exe| {
-                    exe.parent()
-                        .map(|parent| parent.join("ocs-lidar-classifier.exe"))
-                })
-            });
-        let Some(helper) = helper.filter(|path| path.is_file()) else {
-            self.command_line.push_error(
-                "POINTCLOUDURBANCLASSIFY: packaged ocs-lidar-classifier.exe was not found beside OpenCADStudio.exe.",
-            );
-            return Task::none();
+        let output_dir = settings
+            .output_folder
+            .clone()
+            .filter(|path| path.is_dir() || path.parent().is_some())
+            .unwrap_or_else(|| input_dir.join("classified"));
+        let folder_scope = matches!(settings.scope, ocs_pointcloud::UrbanScope::Folder);
+        let references_dir = output_dir.join("references");
+        // Explicit profiles win; AutoDetect resolves against the cloud CRS
+        // (the Boston layers are published in the EPSG:6492 survey-foot grid).
+        let (provider, profile_label) = match &settings.profile {
+            ocs_pointcloud::UrbanProfile::BostonArcGis => (
+                Box::new(ocs_pointcloud::BostonArcGisProvider::new())
+                    as Box<dyn ocs_pointcloud::UrbanReferenceProvider>,
+                "Boston ArcGIS".to_string(),
+            ),
+            ocs_pointcloud::UrbanProfile::LocalDirectory { path } => (
+                Box::new(ocs_pointcloud::LocalVectorProvider::new(path.clone()))
+                    as Box<dyn ocs_pointcloud::UrbanReferenceProvider>,
+                format!("local references ({})", path.display()),
+            ),
+            ocs_pointcloud::UrbanProfile::AutoDetect => {
+                let crs = &active.source_crs;
+                if crs.horizontal_epsg == Some(6492)
+                    || crs
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.contains("6492"))
+                    || crs.wkt.as_deref().is_some_and(|wkt| wkt.contains("6492"))
+                {
+                    (
+                        Box::new(ocs_pointcloud::BostonArcGisProvider::new())
+                            as Box<dyn ocs_pointcloud::UrbanReferenceProvider>,
+                        "Boston ArcGIS (auto-detected)".to_string(),
+                    )
+                } else {
+                    (
+                        Box::new(ocs_pointcloud::LocalVectorProvider::new(
+                            references_dir.clone(),
+                        ))
+                            as Box<dyn ocs_pointcloud::UrbanReferenceProvider>,
+                        "local/cached references".to_string(),
+                    )
+                }
+            }
         };
-
-        let output_dir = input_dir.join("classified");
-        let tile_name = source.file_name().map(|value| value.to_owned());
-        dataset.urban_job_running = true;
+        let state = Arc::new(UrbanJobState::new());
+        dataset.urban_job = Some(Arc::clone(&state));
         dataset.urban_status = if folder_scope {
             "Running full-density source-folder classification".to_string()
         } else {
@@ -4714,73 +4865,154 @@ impl OpenCADStudio {
         };
         self.command_line.push_info(
             format!(
-                "POINTCLOUDURBANCLASSIFY: {} -> \"{}\"; buildings/roads/vegetation enabled (12 ft tree radius)...",
+                "POINTCLOUDURBANCLASSIFY: {} via {} -> \"{}\"; buildings/roads/vegetation enabled (12 ft tree radius)...",
                 if folder_scope { "source folder" } else { "current tile" },
+                profile_label,
                 output_dir.display()
             )
             .as_str(),
         );
 
+        let run_source = source.clone();
+        let run_input_dir = input_dir.clone();
+        let run_output_dir = output_dir.clone();
+        let progress_state = Arc::clone(&state);
         background_task(
             move || {
-                let mut command = std::process::Command::new(&helper);
-                command
-                    .arg(&input_dir)
-                    .arg("--output-dir")
-                    .arg(&output_dir)
-                    .arg("--road-extra-ft")
-                    .arg("1")
-                    .arg("--tree-radius-ft")
-                    .arg("12")
-                    .arg("--write-asprs")
-                    .arg("--overwrite");
-                if !folder_scope {
-                    let tile_name = tile_name.ok_or_else(|| {
-                        "POINTCLOUDURBANCLASSIFY: source filename is invalid.".to_string()
-                    })?;
-                    command.arg("--tile").arg(tile_name);
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                }
-                let result = command
-                    .output()
-                    .map_err(|error| format!("unable to start classifier: {error}"))?;
-                if !result.status.success() {
-                    let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-                    let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
-                    return Err(if stderr.is_empty() { stdout } else { stderr });
-                }
-
-                let manifest_path = output_dir.join("classification_manifest.json");
-                let manifest = std::fs::read_to_string(&manifest_path)
-                    .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
-                let manifest: serde_json::Value = serde_json::from_str(&manifest)
-                    .map_err(|error| format!("invalid classification manifest: {error}"))?;
-                let outputs = manifest
-                    .get("tiles")
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter(|tile| {
-                        tile.get("status").and_then(|value| value.as_str()) == Some("completed")
+                let progress = &mut |tick: ocs_pointcloud::UrbanJobProgress| {
+                    progress_state.stage.store(
+                        match tick.stage {
+                            ocs_pointcloud::UrbanStage::LoadingReferences => 0u64,
+                            ocs_pointcloud::UrbanStage::Classifying => 1,
+                            ocs_pointcloud::UrbanStage::Validating => 2,
+                            ocs_pointcloud::UrbanStage::Completed => 3,
+                        },
+                        Ordering::Relaxed,
+                    );
+                    progress_state
+                        .points_done
+                        .store(tick.points_processed, Ordering::Relaxed);
+                    progress_state
+                        .points_total
+                        .store(tick.points_total, Ordering::Relaxed);
+                    progress_state
+                        .tile_index
+                        .store(tick.tile_index as u64, Ordering::Relaxed);
+                    progress_state
+                        .tile_total
+                        .store(tick.tile_total as u64, Ordering::Relaxed);
+                    progress_state
+                        .building_features
+                        .store(tick.building_features as u64, Ordering::Relaxed);
+                    progress_state
+                        .road_features
+                        .store(tick.road_features as u64, Ordering::Relaxed);
+                    progress_state
+                        .tree_features
+                        .store(tick.tree_features as u64, Ordering::Relaxed);
+                    if let Ok(mut path) = progress_state.output_path.lock() {
+                        *path = tick.output_path;
+                    }
+                };
+                let cancel_flag = &state.cancel;
+                let mut provider = provider;
+                let result = if folder_scope {
+                    ocs_pointcloud::classify_urban_folder(
+                        &run_input_dir,
+                        &run_output_dir,
+                        &settings,
+                        provider.as_mut(),
+                        cancel_flag,
+                        progress,
+                    )
+                    .map(|summary| UrbanClassificationResult {
+                        outputs: summary.outputs,
+                        folder_scope: true,
                     })
-                    .filter_map(|tile| tile.get("output").and_then(|value| value.as_str()))
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_file())
-                    .collect::<Vec<_>>();
-                if outputs.is_empty() {
-                    return Err("classifier completed without a validated LAZ output".to_string());
-                }
-                Ok(UrbanClassificationResult {
-                    outputs,
-                    folder_scope,
-                })
+                } else {
+                    ocs_pointcloud::classify_urban_tile(
+                        &run_source,
+                        &run_output_dir,
+                        &settings,
+                        provider.as_mut(),
+                        cancel_flag,
+                        progress,
+                    )
+                    .map(|stats| UrbanClassificationResult {
+                        outputs: vec![stats.output],
+                        folder_scope: false,
+                    })
+                };
+                let _ = run_source;
+                result.map_err(|error| error.to_string())
             },
             move |result| Message::PointCloudUrbanClassified(tab_id, result),
         )
+    }
+
+    /// Request cancellation of the running urban classification. Partial
+    /// outputs are removed; completed tiles stay published.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn cancel_point_cloud_urban_classification(&mut self) {
+        let tab = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.point_cloud.urban_job.is_some());
+        if let Some(tab) = tab {
+            if let Some(job) = tab.point_cloud.urban_job.as_ref() {
+                job.cancel.store(true, Ordering::Relaxed);
+                tab.point_cloud.urban_status = "Cancelling after the current chunk...".to_string();
+                self.command_line
+                    .push_output("POINTCLOUDURBANCANCEL: cancellation requested.");
+            }
+        } else {
+            self.command_line
+                .push_info("POINTCLOUDURBANCANCEL: no urban classification is running.");
+        }
+    }
+
+    /// Report the live urban classification state to the command line.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn point_cloud_urban_status(&mut self, tab_index: usize) {
+        let dataset = &self.tabs[tab_index].point_cloud;
+        match &dataset.urban_job {
+            None => {
+                let status = if dataset.urban_status.is_empty() {
+                    "no job has run".to_string()
+                } else {
+                    dataset.urban_status.clone()
+                };
+                self.command_line
+                    .push_output(format!("POINTCLOUDURBANSTATUS: {status}").as_str());
+            }
+            Some(job) => {
+                let snapshot = job.snapshot();
+                let stage = match snapshot.stage {
+                    0 => "loading references",
+                    1 => "classifying",
+                    2 => "validating output",
+                    _ => "completed",
+                };
+                self.command_line.push_output(
+                    format!(
+                        "POINTCLOUDURBANSTATUS: {stage}; tile {}/{}; {}/{} points; {} buildings · {} roads · {} trees; {:.1}s elapsed.",
+                        snapshot.tile_index,
+                        snapshot.tile_total,
+                        snapshot.points_done,
+                        if snapshot.points_total == 0 {
+                            snapshot.points_done
+                        } else {
+                            snapshot.points_total
+                        },
+                        snapshot.building_features,
+                        snapshot.road_features,
+                        snapshot.tree_features,
+                        snapshot.elapsed_ms as f64 / 1000.0,
+                    )
+                    .as_str(),
+                );
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -4792,12 +5024,26 @@ impl OpenCADStudio {
         let Some(tab_index) = self.tabs.iter().position(|tab| tab.id == tab_id) else {
             return Task::none();
         };
-        self.tabs[tab_index].point_cloud.urban_job_running = false;
+        let cancelled = self.tabs[tab_index]
+            .point_cloud
+            .urban_job
+            .as_ref()
+            .is_some_and(|job| job.cancel.load(Ordering::Relaxed));
+        self.tabs[tab_index].point_cloud.urban_job = None;
         match result {
             Err(error) => {
-                self.tabs[tab_index].point_cloud.urban_status = format!("Failed: {error}");
-                self.command_line
-                    .push_error(format!("POINTCLOUDURBANCLASSIFY: {error}").as_str());
+                self.tabs[tab_index].point_cloud.urban_status = if cancelled {
+                    format!("Cancelled: {error}")
+                } else {
+                    format!("Failed: {error}")
+                };
+                self.command_line.push_error(
+                    format!(
+                        "POINTCLOUDURBANCLASSIFY: {}{error}",
+                        if cancelled { "cancelled: " } else { "" }
+                    )
+                    .as_str(),
+                );
                 Task::none()
             }
             Ok(result) => {
@@ -4995,7 +5241,14 @@ impl PointCloudDataset {
                 |path| path.display().to_string(),
             ),
             export_progress,
-            urban_job_running: self.urban_job_running,
+            urban_job_running: self.urban_job.is_some(),
+            urban_progress: self.urban_job.as_ref().map(|job| job.snapshot()),
+            urban_output: self
+                .urban_job
+                .as_ref()
+                .and_then(|job| job.output_path.lock().ok())
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             urban_status: self.urban_status.clone(),
             sidecar_available: false,
             selection_filter: describe_filter(&self.selection_filter),

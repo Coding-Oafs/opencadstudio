@@ -295,6 +295,62 @@ impl OcsScriptApi for OpenCADStudio {
         json!(files)
     }
 
+    fn cloud_urban_classify(&mut self, settings_json: &str) -> ScriptValue {
+        let tab = self.active_tab;
+        match serde_json::from_str::<ocs_pointcloud::UrbanClassificationSettings>(settings_json) {
+            Ok(settings) => {
+                match self.start_point_cloud_urban_classification_from_settings(tab, settings) {
+                    Ok(_) => json!({ "started": true }),
+                    Err(error) => json!({ "started": false, "reason": error }),
+                }
+            }
+            Err(error) => json!({
+                "started": false,
+                "reason": format!("invalid urban classification settings: {error}"),
+            }),
+        }
+    }
+
+    fn cloud_urban_status(&mut self) -> ScriptValue {
+        let tab = self.active_tab;
+        let dataset = &self.tabs[tab].point_cloud;
+        match dataset.urban_job.as_ref() {
+            None => json!({
+                "running": false,
+                "status": if dataset.urban_status.is_empty() {
+                    "idle".to_string()
+                } else {
+                    dataset.urban_status.clone()
+                },
+            }),
+            Some(job) => {
+                let snapshot = job.snapshot();
+                json!({
+                    "running": true,
+                    "stage": match snapshot.stage {
+                        0 => "loading_references",
+                        1 => "classifying",
+                        2 => "validating",
+                        _ => "completed",
+                    },
+                    "tile": snapshot.tile_index,
+                    "tiles": snapshot.tile_total,
+                    "points_done": snapshot.points_done,
+                    "points_total": snapshot.points_total,
+                    "building_features": snapshot.building_features,
+                    "road_features": snapshot.road_features,
+                    "tree_features": snapshot.tree_features,
+                    "elapsed_ms": snapshot.elapsed_ms as u64,
+                })
+            }
+        }
+    }
+
+    fn cloud_urban_cancel(&mut self) -> ScriptValue {
+        self.cancel_point_cloud_urban_classification();
+        json!(true)
+    }
+
     fn print(&mut self, message: &str) {
         self.command_line
             .push_output(format!("[script] {message}").as_str());

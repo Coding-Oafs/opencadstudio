@@ -1,5 +1,6 @@
 // Batch classification over a folder of LAS/LAZ tiles: for each file —
-// attach, remove isolated noise, densify bare-earth ground, export a
+// attach, remove isolated noise, densify bare-earth ground, optionally fuse
+// official building/road/tree reference layers (urban UPCP labels), export a
 // classified copy, detach, and move to the next. Edit the constants below
 // and run with:
 //   SCRIPT scripts/library/batch_classify.rhai
@@ -11,6 +12,10 @@ let noise_class = 7;
 let ground_cell = 10.0;        // surface grid cell (project units)
 let ground_distance = 0.75;    // max distance from local surface
 let ground_angle = 30.0;       // max slope angle in degrees
+// Urban fusion adds a UPCP `label` extra byte from official reference
+// layers; the source ASPRS classification byte is never modified. Leave
+// false for purely geometric batches.
+let urban_fusion = false;
 
 let files = ocs.cloud_list_folder(folder);
 if files.len() == 0 {
@@ -35,6 +40,31 @@ if files.len() == 0 {
 
         ocs.command("POINTCLOUDNOISE " + noise_radius + " " + noise_neighbors + " " + noise_class);
         ocs.command("POINTCLOUDGROUND " + ground_cell + " " + ground_distance + " " + ground_angle);
+
+        if urban_fusion {
+            // Full-density native fusion: seeds from the ASPRS classes the
+            // geometric stages produced, then fuses buildings/roads/trees.
+            let started = ocs.cloud_urban_classify(`{"scope":"current"}`);
+            if !started.started {
+                ocs.log("urban fusion refused: " + started.reason);
+            } else {
+                let guard = 0;
+                loop {
+                    let status = ocs.cloud_urban_status();
+                    if !status.running {
+                        if status.status != "" {
+                            ocs.log("urban fusion: " + status.status);
+                        }
+                        break;
+                    }
+                    guard = guard + 1;
+                    if guard > 30000 {
+                        ocs.log("urban fusion stalled; continuing");
+                        break;
+                    }
+                }
+            }
+        }
 
         // Both ".las" and ".laz" are four characters: trim the extension
         // and append the delivery suffix.

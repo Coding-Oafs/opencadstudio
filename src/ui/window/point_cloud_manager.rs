@@ -47,6 +47,8 @@ pub struct PointCloudManagerData {
     pub cache: String,
     pub export_progress: Option<(u64, u64)>,
     pub urban_job_running: bool,
+    pub urban_progress: Option<crate::app::point_cloud::UrbanJobSnapshot>,
+    pub urban_output: String,
     pub urban_status: String,
     pub sidecar_available: bool,
     pub selection_filter: String,
@@ -365,18 +367,52 @@ pub fn view_window(
     ]
     .spacing(6);
 
-    let urban = column![
+    let urban_progress_rows: Vec<Element<'static, Message>> = if let Some(job) = data.urban_progress
+    {
+        let stage = match job.stage {
+            0 => "Loading references",
+            1 => "Classifying",
+            2 => "Validating output",
+            _ => "Completed",
+        };
+        let points = format!(
+            "{} / {} points",
+            job.points_done,
+            if job.points_total == 0 {
+                job.points_done
+            } else {
+                job.points_total
+            }
+        );
+        vec![
+            status("Stage", stage.to_string()),
+            status("Tile", format!("{}/{}", job.tile_index, job.tile_total)),
+            status("Points", points),
+            status(
+                "References",
+                format!(
+                    "{} buildings · {} roads · {} trees",
+                    job.building_features, job.road_features, job.tree_features
+                ),
+            ),
+            status("Elapsed", format!("{:.1}s", job.elapsed_ms as f64 / 1000.0)),
+        ]
+    } else {
+        Vec::new()
+    };
+
+    let mut urban = column![
         status(
             "Status",
             if data.urban_status.is_empty() {
                 "Ready".to_string()
             } else {
-                data.urban_status
+                data.urban_status.clone()
             },
         ),
         status(
-            "Boston profile",
-            "Buildings ON · Roads ON · Vegetation ON".to_string(),
+            "Profile",
+            "Auto-detect (Boston ArcGIS for EPSG:6492, local references otherwise)".to_string(),
         ),
         status(
             "Settings",
@@ -384,10 +420,20 @@ pub fn view_window(
         ),
         status(
             "Output",
-            "classified\\*_classified.laz · ASPRS display + UPCP label".to_string(),
+            "classified\\*_classified.laz · UPCP label extra byte + provenance".to_string(),
         ),
-        text("The source LAZ is never overwritten. Original classes are retained in source_classification; Boston reference data is current and may differ from the 2013–2014 survey epoch.")
+    ];
+    if !data.urban_output.is_empty() {
+        urban = urban.push(status("Writing", data.urban_output.clone()));
+    }
+    if data.urban_progress.is_some() {
+        urban = urban.push(column(urban_progress_rows).spacing(6));
+    }
+    urban = urban.push(
+        text("The source LAZ is never modified. The ASPRS classification byte is preserved; results carry a UPCP `label` extra dimension. Reference layers are current and may differ from the 2013–2014 survey epoch.")
             .size(10),
+    );
+    urban = urban.push(
         row![
             action(
                 "Classify Current Tile",
@@ -401,8 +447,11 @@ pub fn view_window(
             ),
         ]
         .spacing(6),
-    ]
-    .spacing(6);
+    );
+    if data.urban_job_running {
+        urban = urban.push(action("Cancel", "POINTCLOUDURBANCANCEL", true));
+    }
+    let urban = urban.spacing(6);
 
     let edit = column![
         text("Viewport tools select displayed points in screen space; edits target stable LAS source indices.")

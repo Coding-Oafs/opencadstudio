@@ -52,6 +52,15 @@ pub trait OcsScriptApi {
     fn cloud_detach(&mut self) -> ScriptValue;
     /// Lists the LAS/LAZ files directly under a folder (not recursive).
     fn cloud_list_folder(&mut self, path: &str) -> ScriptValue;
+    /// Starts a native urban classification from a settings JSON preset;
+    /// returns `{started, reason}` immediately.
+    fn cloud_urban_classify(&mut self, settings_json: &str) -> ScriptValue;
+    /// Urban job status: `{running, stage, tile, tiles, points_done,
+    /// points_total, building_features, road_features, tree_features,
+    /// elapsed_ms, status}`.
+    fn cloud_urban_status(&mut self) -> ScriptValue;
+    /// Requests cancellation of the running urban job.
+    fn cloud_urban_cancel(&mut self) -> ScriptValue;
     /// Prints a line to the script console.
     fn print(&mut self, message: &str);
 }
@@ -133,10 +142,7 @@ fn dispatch_call(
             Ok(api.cloud_filter(&filter))
         }
         "cloud_select_slice" => {
-            let (low, high): (f64, f64) = (
-                arg(args, 0, function)?,
-                arg(args, 1, function)?,
-            );
+            let (low, high): (f64, f64) = (arg(args, 0, function)?, arg(args, 1, function)?);
             Ok(api.cloud_select_slice(low, high))
         }
         "cloud_select_clear" => Ok(api.cloud_select_clear()),
@@ -163,6 +169,12 @@ fn dispatch_call(
             let path: String = arg(args, 0, function)?;
             Ok(api.cloud_list_folder(&path))
         }
+        "cloud_urban_classify" => {
+            let settings_json: String = arg(args, 0, function)?;
+            Ok(api.cloud_urban_classify(&settings_json))
+        }
+        "cloud_urban_status" => Ok(api.cloud_urban_status()),
+        "cloud_urban_cancel" => Ok(api.cloud_urban_cancel()),
         other => Err(format!("unknown script function: {other}")),
     }
 }
@@ -194,7 +206,9 @@ impl ScriptBridge {
     }
 
     pub fn print(&self, message: &str) {
-        let _ = self.requests.send(ScriptRequest::Print(message.to_string()));
+        let _ = self
+            .requests
+            .send(ScriptRequest::Print(message.to_string()));
     }
 }
 
@@ -227,7 +241,12 @@ pub fn run_rhai(bridge: &ScriptBridge, source: &str) -> Result<ScriptOutcome, St
 
     method!("command", [command], "command", [command.clone()]);
     method!("cloud_attach", [path], "cloud_attach", [path.clone()]);
-    method!("cloud_attach_folder", [path], "cloud_attach_folder", [path.clone()]);
+    method!(
+        "cloud_attach_folder",
+        [path],
+        "cloud_attach_folder",
+        [path.clone()]
+    );
     method!("cloud_filter", [filter], "cloud_filter", [filter.clone()]);
     method!(
         "cloud_select_slice",
@@ -247,14 +266,32 @@ pub fn run_rhai(bridge: &ScriptBridge, source: &str) -> Result<ScriptOutcome, St
         "cloud_classify",
         [source.clone(), classification.clone(), indices.clone()]
     );
-    method!("cloud_export_all", [path], "cloud_export_all", [path.clone()]);
-    method!("cloud_list_folder", [path], "cloud_list_folder", [path.clone()]);
+    method!(
+        "cloud_export_all",
+        [path],
+        "cloud_export_all",
+        [path.clone()]
+    );
+    method!(
+        "cloud_list_folder",
+        [path],
+        "cloud_list_folder",
+        [path.clone()]
+    );
+    method!(
+        "cloud_urban_classify",
+        [settings],
+        "cloud_urban_classify",
+        [settings.clone()]
+    );
     method!("cloud_sources", [], "cloud_sources", []);
     method!("cloud_stats", [], "cloud_stats", []);
     method!("cloud_select_clear", [], "cloud_select_clear", []);
     method!("cloud_undo", [], "cloud_undo", []);
     method!("cloud_detach", [], "cloud_detach", []);
     method!("cloud_export_status", [], "cloud_export_status", []);
+    method!("cloud_urban_status", [], "cloud_urban_status", []);
+    method!("cloud_urban_cancel", [], "cloud_urban_cancel", []);
     let log_for_method = log.clone();
     engine.register_fn(
         "log",
@@ -341,7 +378,10 @@ mod tests {
 
     impl OcsScriptApi for MockApp {
         fn command(&mut self, command: &str) -> ScriptValue {
-            self.calls.lock().unwrap().push(format!("command {command}"));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("command {command}"));
             json!(true)
         }
         fn cloud_attach(&mut self, path: &str) -> ScriptValue {
@@ -349,10 +389,7 @@ mod tests {
             json!("source-1")
         }
         fn cloud_attach_folder(&mut self, path: &str) -> ScriptValue {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("folder {path}"));
+            self.calls.lock().unwrap().push(format!("folder {path}"));
             json!(6)
         }
         fn cloud_sources(&mut self) -> ScriptValue {
@@ -383,12 +420,7 @@ mod tests {
                 .push(format!("classify {classification}"));
             json!(42)
         }
-        fn cloud_classify(
-            &mut self,
-            source: &str,
-            class: i64,
-            indices: &str,
-        ) -> ScriptValue {
+        fn cloud_classify(&mut self, source: &str, class: i64, indices: &str) -> ScriptValue {
             self.calls
                 .lock()
                 .unwrap()
@@ -412,13 +444,25 @@ mod tests {
         fn cloud_list_folder(&mut self, path: &str) -> ScriptValue {
             json!([format!("{path}\\a.laz"), format!("{path}\\b.laz")])
         }
+        fn cloud_urban_classify(&mut self, settings_json: &str) -> ScriptValue {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("urban {settings_json}"));
+            json!({ "started": true })
+        }
+        fn cloud_urban_status(&mut self) -> ScriptValue {
+            json!({ "running": false })
+        }
+        fn cloud_urban_cancel(&mut self) -> ScriptValue {
+            json!(true)
+        }
         fn print(&mut self, message: &str) {
             self.calls.lock().unwrap().push(format!("print {message}"));
         }
     }
 
-    fn serve_loopback(
-    ) -> (mpsc::Sender<ScriptRequest>, Arc<Mutex<Vec<String>>>) {
+    fn serve_loopback() -> (mpsc::Sender<ScriptRequest>, Arc<Mutex<Vec<String>>>) {
         let (tx, rx) = mpsc::channel();
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
         let recorded = calls.clone();
@@ -444,6 +488,11 @@ mod tests {
                 ocs.cloud_select_slice(10.0, 20.0);
                 ocs.cloud_classify_selection(2);
             }
+            ocs.cloud_urban_classify(`{"scope":"folder"}`);
+            let urban = ocs.cloud_urban_status();
+            if (urban["running"]) {
+                ocs.cloud_urban_cancel();
+            }
             ocs.cloud_export_all("D:\\out\\merged.laz");
         "#;
         let outcome = run_rhai(&bridge, script).expect("script runs");
@@ -451,6 +500,7 @@ mod tests {
         assert!(calls.iter().any(|c| c.starts_with("folder")));
         assert!(calls.iter().any(|c| c.contains("slice")));
         assert!(calls.iter().any(|c| c == "classify 2"));
+        assert!(calls.iter().any(|c| c.starts_with("urban")));
         assert!(calls.iter().any(|c| c.starts_with("export")));
         assert!(
             outcome.log.iter().any(|line| line.contains("6 tiles")),

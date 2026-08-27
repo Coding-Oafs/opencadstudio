@@ -1612,6 +1612,22 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            cmd if cmd.starts_with("POINTCLOUDURBANCLASSIFYFOLDER") => {
+                let mut parts = cmd.split_whitespace().skip(1);
+                let input = parts.next().map(std::path::PathBuf::from);
+                let output = parts.next().map(std::path::PathBuf::from);
+                if parts.next().is_some() {
+                    self.command_line.push_error(
+                        "Usage: POINTCLOUDURBANCLASSIFYFOLDER [source-folder] [output-folder]",
+                    );
+                    return Some(Task::none());
+                }
+                return Some(
+                    self.start_point_cloud_urban_classification_with_scope(i, true, input, output),
+                );
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("POINTCLOUDURBANCLASSIFY") => {
                 let scope = cmd
                     .trim_start_matches("POINTCLOUDURBANCLASSIFY")
@@ -1627,6 +1643,16 @@ impl OpenCADStudio {
                     }
                 };
                 return Some(self.start_point_cloud_urban_classification(i, folder_scope));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDURBANCANCEL" => {
+                self.cancel_point_cloud_urban_classification();
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUDURBANSTATUS" => {
+                self.point_cloud_urban_status(i);
             }
 
             #[cfg(not(target_arch = "wasm32"))]
