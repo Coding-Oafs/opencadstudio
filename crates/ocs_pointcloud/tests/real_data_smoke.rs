@@ -351,3 +351,87 @@ fn production_folder_pipeline_smoke() {
 fn total_points_of(path: &Path) -> u64 {
     inspect(path).expect("inspect").point_count
 }
+
+#[test]
+#[ignore = "set OCS_LIDAR_SMOKE_DIR to a folder of real LAS/LAZ tiles"]
+fn urban_native_classification_smoke() {
+    use ocs_pointcloud::{
+        classify_urban_tile, inspect, inspect_urban_label, UrbanClassificationSettings,
+    };
+    use std::sync::atomic::AtomicBool;
+
+    let Some(dir) = smoke_dir() else {
+        eprintln!("OCS_LIDAR_SMOKE_DIR not set; skipping");
+        return;
+    };
+    let Some(smallest) = lidar_files(&dir).into_iter().next() else {
+        eprintln!("no LAS/LAZ files in the smoke dir; skipping");
+        return;
+    };
+    // Offline-safe: seeds only, no reference services. The full validation
+    // pass inside classify_urban_tile already proves point-for-point fidelity
+    // and the unchanged ASPRS histogram on real production data.
+    struct SeedOnly;
+    impl ocs_pointcloud::UrbanReferenceProvider for SeedOnly {
+        fn load(
+            &mut self,
+            _layer: ocs_pointcloud::UrbanLayer,
+            _tile_stem: &str,
+            _bounds: [f64; 4],
+            _references_dir: &Path,
+            _use_cache: bool,
+        ) -> Result<ocs_pointcloud::ReferenceCollection, ocs_pointcloud::Error> {
+            Ok(ocs_pointcloud::ReferenceCollection::default())
+        }
+    }
+    let out = output_dir().join("urban");
+    std::fs::create_dir_all(&out).expect("output dir");
+    let settings = UrbanClassificationSettings {
+        building_fuser: false,
+        road_fuser: false,
+        vegetation_fuser: false,
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let mut progress = |tick: ocs_pointcloud::UrbanJobProgress| {
+        eprintln!(
+            "[urban] {} {:?} {}/{} points",
+            tick.tile_name, tick.stage, tick.points_processed, tick.points_total
+        );
+    };
+    let stats = classify_urban_tile(
+        &smallest,
+        &out,
+        &settings,
+        &mut SeedOnly,
+        &cancel,
+        &mut progress,
+    )
+    .expect("urban classification completes on real data");
+    assert_eq!(stats.status, "completed");
+    assert_eq!(
+        stats.point_count,
+        Some(inspect(&smallest).expect("inspect").point_count)
+    );
+    let output = stats.output.clone();
+    let label = inspect_urban_label(&output)
+        .expect("inspect output")
+        .expect("classified output carries a label dimension");
+    assert!(label.provenance.is_some(), "provenance VLR present");
+    let source_points = stats
+        .original_classification_counts
+        .as_ref()
+        .expect("histogram")
+        .values()
+        .filter_map(|value| value.as_u64())
+        .sum::<u64>();
+    let labelled = stats
+        .upcp_label_counts
+        .as_ref()
+        .expect("labels")
+        .values()
+        .filter_map(|value| value.as_u64())
+        .sum::<u64>();
+    assert_eq!(source_points, labelled, "every point received a label");
+    eprintln!("[urban] wrote {}", output.display());
+}

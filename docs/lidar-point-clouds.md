@@ -64,11 +64,13 @@ DWG/DXF.
 | `POINTCLOUDRESTORE` | Resolve the saved attachment from the drawing sidecar, validating its fingerprint and repairing a moved relative path. |
 | `POINTCLOUDINFO` | Report source path, source/display point counts, sample stride, pending edits, CRS-VLR presence, and VLR/EVLR counts. |
 | `POINTCLOUDINDEX` / `POINTCLOUDINDEXCANCEL` | Build or open every source's adjacent disk-backed `.ocstiles` hierarchy sequentially, or cancel the current dataset batch. One failed source is reported and skipped so the remaining tiles continue. |
-| `POINTCLOUDCOLOR <mode>` | Use `CLASS`, `RGB`, `INTENSITY`, `ELEVATION`, `RETURN`, or `SOURCE` GPU coloration. |
+| `POINTCLOUDCOLOR <mode>` | Use `CLASS`, `RGB`, `INTENSITY`, `ELEVATION`, `RETURN`, `SOURCE`, or `LABEL` GPU coloration. `LABEL` colors by the UPCP urban label when the attached source carries one. |
 | `POINTCLOUDPOINTSIZE <1-32>` | Set the fixed physical-pixel point diameter. |
 | `POINTCLOUDCLASSVISIBLE <class> <ON/OFF>` | Show or hide one class. |
 | `POINTCLOUDSTATS` | Report per-class counts for the current full/sample/LOD working set. |
-| `POINTCLOUDURBANCLASSIFY [CURRENT\|FOLDER]` | Run the bundled full-density Boston urban classifier for the attached tile or its source folder, write new files under `classified`, and replace the attachment with the classified result. Buildings, roads, bridges, ground, noise, and vegetation are written as standard ASPRS display classes while the original class byte and UPCP label are retained as extra dimensions. |
+| `POINTCLOUDURBANCLASSIFY [CURRENT\|FOLDER]` | Run the native full-density urban classifier for the attached tile or its source folder, write validated outputs under `classified`, and replace the attachment with the classified result. The source `classification` byte is never modified; the result carries a uint8 UPCP `label` extra dimension plus provenance. |
+| `POINTCLOUDURBANCLASSIFYFOLDER [source-folder] [output-folder]` | Classify an explicit folder non-interactively; defaults derive from the attached source. |
+| `POINTCLOUDURBANSTATUS` / `POINTCLOUDURBANCANCEL` | Report live stage/tile/points/reference counts, or cancel after the current chunk (partial outputs are removed; completed tiles stay published). |
 | `POINTCLOUDCLASSIFY <class> <indices>` | Queue an ASPRS class for source indices. Indices accept comma-separated values and inclusive ranges, for example `POINTCLOUDCLASSIFY 2 10-25,40`. |
 | `POINTCLOUDSELECTPOINT` | Pick the nearest displayed point within a fixed screen-pixel aperture. |
 | `POINTCLOUDMEASURE` | Pick two displayed cloud points and report snapped 3D distance, horizontal distance, and elevation delta in the drawing working unit. |
@@ -102,22 +104,38 @@ LAS/LAZ. A display point retains this index even when the viewer uses a stride,
 so edits are applied to the correct full-resolution record during export.
 The active selection is highlighted amber in the GPU view before editing.
 
-### Boston urban classification profile
+### Urban classification (native UPCP fusion)
 
-The Windows installer includes `ocs-lidar-classifier.exe`, a self-contained
-adapter based on the ordered-fuser methodology in
-Urban_PointCloud_Processing. The LiDAR ribbon and manager can run it without a
-separate Python installation. It processes every source point, uses the City of
-Boston building and street-tree services plus MassDOT/Boston roadway data, and
-writes to a sibling `classified` folder. The installed v1.1.0 profile enables
-buildings, roads, and vegetation; expands roadway centerlines by one foot; and
-uses a conservative 12-foot active-tree radius.
+Urban classification runs natively in `ocs_pointcloud`, using the
+ordered-fuser methodology adapted from
+Urban_PointCloud_Processing with the Python batch adapter kept as the
+reference implementation and regression oracle
+(`scripts/lidar/boston_upcp_classifier.py`). Every physical source point is
+streamed — never a viewer sample or resident LOD tile — and each pass:
 
-The output stores standard ASPRS classes for immediate class-color viewing:
-ground 2, vegetation 5, building 6, water 9, rail 10, road 11, bridge 17, and
-noise 18. It also stores the UPCP-compatible `label` dimension and the original
-ASPRS byte in `source_classification`, so automated labels remain auditable and
-reversible.
+1. seeds trusted labels from existing ASPRS classes (2->9 ground,
+   17->14 bridge, 18->99 noise);
+2. fuses class 1 points inside official building footprints (UPCP 10),
+   class 2 points inside width-buffered road centerlines (UPCP 1, with the
+   `SURFACE_WD` / `NUM_LANES*12` / road-class width fallback plus a one-foot
+   edge allowance), and remaining class 1 points inside 12-foot active
+   street-tree buffers (UPCP 30);
+3. preserves the source `classification` byte untouched;
+4. appends a uint8 `label` extra byte (Extra Bytes VLR) and an
+   OpenCADStudio provenance VLR; and
+5. publishes `<tile>_classified.laz` only after validating point count,
+   format, scales/offsets, CRS, and a full lockstep byte comparison against
+   the source.
+
+The profile auto-detects: clouds in EPSG:6492 use the Boston ArcGIS
+reference layers (queried by envelope with paging, retries, and an exact
+response cache under `classified/references` that enables fully offline
+reruns); other CRSs fall back to local/cached GeoJSON references. Attaching
+a classified output switches the viewer to `POINTCLOUDCOLOR LABEL`, which
+colorizes and filters through the UPCP class table without touching the
+ASPRS table or its edits. Scripts drive the same engine through
+`ocs.cloud_urban_classify(settings_json)`, `ocs.cloud_urban_status()`, and
+`ocs.cloud_urban_cancel()`.
 
 ## Storage, safety, and fidelity
 
