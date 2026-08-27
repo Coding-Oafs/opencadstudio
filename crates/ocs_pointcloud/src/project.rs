@@ -13,7 +13,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 1;
+/// Schema 2 adds the v2 platform state. Schema-1 projects remain readable;
+/// the serde default produces an empty platform state and the next atomic
+/// save upgrades the manifest.
+pub const PROJECT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug)]
 pub enum ProjectError {
@@ -359,6 +362,9 @@ pub struct SpatialProject {
     pub scripts: Vec<PathBuf>,
     pub legacy_sidecar: Option<PathBuf>,
     pub metadata: BTreeMap<String, Value>,
+    /// Cross-domain transactions, workflows, standards, trust, and complete
+    /// provenance. These records are small; source geometry remains external.
+    pub platform: ocs_platform::PlatformState,
 }
 
 impl Default for SpatialProject {
@@ -382,6 +388,7 @@ impl Default for SpatialProject {
             scripts: Vec::new(),
             legacy_sidecar: None,
             metadata: BTreeMap::new(),
+            platform: ocs_platform::PlatformState::default(),
         }
     }
 }
@@ -482,6 +489,7 @@ impl SpatialProject {
         for section in &self.sections {
             section.validate()?;
         }
+        self.platform.validate().map_err(ProjectError::Invalid)?;
         Ok(())
     }
 }
@@ -576,5 +584,20 @@ mod tests {
         assert_eq!(section.origin, copy.origin);
         assert_eq!(section.total_width, copy.total_width);
         assert!(!copy.locked);
+    }
+
+    #[test]
+    fn schema_one_projects_upgrade_with_empty_platform_state() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "id": "legacy-project",
+            "name": "Legacy",
+            "created_unix_ms": 1,
+            "updated_unix_ms": 1
+        });
+        let project: SpatialProject = serde_json::from_value(json).unwrap();
+        project.validate().unwrap();
+        assert!(project.platform.transactions.is_empty());
+        assert_eq!(project.schema_version, 1);
     }
 }
