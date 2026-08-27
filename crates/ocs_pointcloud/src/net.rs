@@ -1,8 +1,4 @@
-//! Shared native HTTP client configuration.
-//!
-//! Desktop requests use the operating system's certificate verifier so roots
-//! installed by administrators, corporate proxies, and security software are
-//! honoured without weakening TLS verification.
+//! HTTP agents for remote point-cloud sources.
 //!
 //! Name resolution orders IPv4 addresses ahead of IPv6 ones: ureq's TCP
 //! connector only falls through to the next resolved address on
@@ -10,22 +6,18 @@
 //! any other error (VPN and WFP filters commonly surface `WSAEACCES`) fails
 //! every request even though the same host answers on IPv4. Trying IPv4
 //! first sidesteps that; IPv6 remains available after the IPv4 candidates.
+//! Mirrors the agent in the app's `src/network.rs`.
 
-#![cfg(not(target_arch = "wasm32"))]
-
-use std::time::Duration;
-use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 
-pub(crate) fn agent(timeout: Duration) -> ureq::Agent {
-    let tls = TlsConfig::builder()
-        .root_certs(RootCerts::PlatformVerifier)
-        .build();
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
-        .tls_config(tls)
-        .build();
+/// Agent with default configuration (environment proxy pickup included).
+pub(crate) fn default_agent() -> ureq::Agent {
+    agent(ureq::config::Config::default())
+}
+
+/// Agent with the caller's configuration and the IPv4-first resolver.
+pub(crate) fn agent(config: ureq::config::Config) -> ureq::Agent {
     ureq::Agent::with_parts(config, DefaultConnector::default(), Ipv4FirstResolver)
 }
 
@@ -62,15 +54,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_uses_platform_verifier_without_disabling_tls() {
-        let agent = agent(Duration::from_secs(1));
-        let tls = agent.config().tls_config();
-
-        assert!(matches!(tls.root_certs(), &RootCerts::PlatformVerifier));
-        assert!(!tls.disable_verification());
-    }
-
-    #[test]
     fn ipv4_first_orders_v4_ahead_of_v6_and_keeps_all_addrs() {
         let mut addrs = ResolvedSocketAddrs::from_fn(|_| "0.0.0.0:0".parse().unwrap());
         let v6 = |n: u8| format!("[2001:db8::{n}]:443").parse().unwrap();
@@ -82,31 +65,10 @@ mod tests {
 
         ipv4_first(&mut addrs);
 
-        let families: Vec<&str> = addrs.iter().map(|a| if a.is_ipv4() { "4" } else { "6" }).collect();
+        let families: Vec<&str> =
+            addrs.iter().map(|a| if a.is_ipv4() { "4" } else { "6" }).collect();
         assert_eq!(families, vec!["4", "4", "6", "6", "6"]);
         assert_eq!(addrs[0].to_string(), "10.0.0.1:443");
         assert_eq!(addrs[4].to_string(), "[2001:db8::3]:443");
-    }
-
-    /// On-demand live check of the production fetch stack against a real tile
-    /// server. Ignored by default so offline machines don't fail the suite:
-    ///
-    /// ```text
-    /// cargo test --release probe_arcgis_tile_fetch -- --ignored --nocapture
-    /// ```
-    #[test]
-    #[ignore = "hits the network"]
-    fn probe_arcgis_tile_fetch() {
-        let agent = agent(Duration::from_secs(8));
-        let mut resp = agent
-            .get("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/3/2/4")
-            .header(
-                "User-Agent",
-                concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION")),
-            )
-            .call()
-            .expect("tile fetch failed");
-        let bytes = resp.body_mut().read_to_vec().expect("body read failed");
-        assert!(!bytes.is_empty(), "empty tile body");
     }
 }

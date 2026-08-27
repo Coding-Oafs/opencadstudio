@@ -139,7 +139,7 @@ impl HttpRangeReader {
                 "COPC URL must use http or https",
             ));
         }
-        let agent = ureq::Agent::new_with_defaults();
+        let agent = crate::net::default_agent();
         let response = agent
             .get(url)
             .header("Range", "bytes=0-0")

@@ -13,6 +13,7 @@ mod e57_import;
 mod edit;
 mod jobs;
 mod measurement;
+mod net;
 mod processing;
 mod production_classify;
 mod project;

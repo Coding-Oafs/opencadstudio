@@ -40,7 +40,7 @@ impl UreqTransport {
             .timeout_global(Some(Duration::from_secs(120)))
             .build();
         Self {
-            agent: ureq::Agent::new_with_config(config),
+            agent: crate::net::agent(config),
         }
     }
 }
