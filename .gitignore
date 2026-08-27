@@ -39,3 +39,13 @@ __pycache__/
 # Per-user API keys (never committed). The Google Maps key is read from
 # <config>/OpenCADStudio/google_maps_key.txt or OCS_GOOGLE_MAPS_KEY.
 google_maps_key.txt
+
+# Local agent/tooling state and linked worktrees
+.zcode/
+.worktrees/
+
+# Local WiX installer build artifacts (candle/light outputs)
+packaging/windows/*.wixobj
+packaging/windows/*.wixpdb
+packaging/windows/*.log
+packaging/windows/*.msi
