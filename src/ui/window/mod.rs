@@ -12,6 +12,8 @@ pub mod print_all;
 pub mod plugin_manager;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod point_cloud_manager;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod platform_manager;
 pub mod shortcuts;
 pub mod layers;
 pub mod update_notice;

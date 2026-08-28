@@ -7,10 +7,8 @@
 // `None` when up to date / on network failure / on parse error.
 
 #[cfg(not(target_arch = "wasm32"))]
-const RELEASES_API: &str =
-    "https://api.github.com/repos/HakanSeven12/OpenCADStudio/releases/latest";
-pub const RELEASES_PAGE: &str =
-    "https://github.com/HakanSeven12/OpenCADStudio/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/Coding-Oafs/opencadstudio/releases/latest";
+pub const RELEASES_PAGE: &str = "https://github.com/Coding-Oafs/opencadstudio/releases/latest";
 
 /// Minimum age before a freshly-published release is offered to the user.
 /// GitHub Actions takes ~15 min to build and attach the platform binaries
@@ -51,7 +49,10 @@ fn fetch_latest_if_outdated() -> Option<UpdateInfo> {
     let agent = crate::network::agent(std::time::Duration::from_secs(5));
     let body = agent
         .get(RELEASES_API)
-        .header("User-Agent", concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION")),
+        )
         .header("Accept", "application/vnd.github+json")
         .call()
         .ok()?
@@ -61,7 +62,7 @@ fn fetch_latest_if_outdated() -> Option<UpdateInfo> {
     let latest = extract_string_field(&body, "tag_name")?
         .trim_start_matches('v')
         .to_string();
-    if latest == env!("CARGO_PKG_VERSION") {
+    if !is_newer_release(env!("CARGO_PKG_VERSION"), &latest) {
         return None;
     }
     // Suppress the notification until the release is old enough for the
@@ -80,7 +81,23 @@ fn fetch_latest_if_outdated() -> Option<UpdateInfo> {
     }
     // Release notes are optional; treat missing as empty.
     let notes = extract_string_field(&body, "body").unwrap_or_default();
-    Some(UpdateInfo { version: latest, body: notes })
+    Some(UpdateInfo {
+        version: latest,
+        body: notes,
+    })
+}
+
+/// GitHub's `latest` endpoint is repository-scoped, but release histories can
+/// still contain old fork-point tags. Compare semantic versions instead of
+/// treating every different tag as an upgrade, which would otherwise offer a
+/// downgrade such as v0.9.8 to an installed v2 prerelease.
+#[cfg(not(target_arch = "wasm32"))]
+fn is_newer_release(installed: &str, candidate: &str) -> bool {
+    let parse = |value: &str| semver::Version::parse(value.trim().trim_start_matches('v'));
+    match (parse(installed), parse(candidate)) {
+        (Ok(installed), Ok(candidate)) => candidate > installed,
+        _ => false,
+    }
 }
 
 /// Parse a GitHub timestamp like `2026-05-29T12:34:56Z` into UNIX seconds.
@@ -89,8 +106,13 @@ fn fetch_latest_if_outdated() -> Option<UpdateInfo> {
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_iso8601_utc(s: &str) -> Option<u64> {
     let b = s.as_bytes();
-    if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T'
-        || b[13] != b':' || b[16] != b':' || b[19] != b'Z'
+    if b.len() != 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[19] != b'Z'
     {
         return None;
     }
@@ -122,10 +144,7 @@ fn parse_iso8601_utc(s: &str) -> Option<u64> {
         return None;
     }
     Some(
-        days_since_epoch as u64 * 86_400
-            + hour as u64 * 3_600
-            + minute as u64 * 60
-            + second as u64,
+        days_since_epoch as u64 * 86_400 + hour as u64 * 3_600 + minute as u64 * 60 + second as u64,
     )
 }
 
@@ -186,4 +205,18 @@ fn extract_string_field(body: &str, field: &str) -> Option<String> {
         i += ch.len_utf8();
     }
     None
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_release_comparison_never_offers_a_downgrade() {
+        assert!(!is_newer_release("2.0.0-alpha.1", "0.9.8"));
+        assert!(!is_newer_release("2.0.0", "2.0.0-alpha.1"));
+        assert!(is_newer_release("2.0.0-alpha.1", "2.0.0"));
+        assert!(is_newer_release("1.9.9", "v2.0.0"));
+        assert!(!is_newer_release("2.0.0", "not-a-version"));
+    }
 }

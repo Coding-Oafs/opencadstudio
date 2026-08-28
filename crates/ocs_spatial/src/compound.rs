@@ -1,11 +1,13 @@
 //! Compound horizontal/vertical transformations with epoch-aware provenance.
 //!
-//! Executable constant-offset vertical operations support local engineering
-//! datums today. Grid operations remain explicit and fail closed until a
-//! validated PROJ grid backend is configured; they are never silently
-//! approximated.
+//! Constant-offset operations support local engineering datums. Grid
+//! operations execute only through the checksum-pinned bundled PROJ worker;
+//! missing or modified resources fail closed and are never approximated.
 
-use crate::{transform_xy, SpatialError, TransformationPlan, TransformationProvenance};
+use crate::{
+    plan_transformation, transform_xy, CrsCatalog, ProjGridBackend, SpatialError,
+    TransformationPlan, TransformationProvenance,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -40,6 +42,8 @@ pub enum VerticalOperation {
         name: String,
         checksum_sha256: String,
         accuracy_metres: Option<f64>,
+        #[serde(default)]
+        inverse: bool,
     },
 }
 
@@ -83,6 +87,7 @@ impl CompoundTransformationPlan {
                 name,
                 checksum_sha256,
                 accuracy_metres,
+                ..
             } => {
                 if name.trim().is_empty()
                     || checksum_sha256.len() != 64
@@ -107,10 +112,64 @@ pub fn transform_xyz(
     points: &mut [[f64; 3]],
 ) -> Result<TransformationProvenance, SpatialError> {
     plan.validate()?;
-    if let VerticalOperation::Grid { name, .. } = &plan.vertical {
-        return Err(SpatialError::VerticalNotExecuted(format!(
-            "required grid '{name}' is not available through the current backend"
-        )));
+    if let VerticalOperation::Grid {
+        name,
+        checksum_sha256,
+        accuracy_metres,
+        inverse,
+    } = &plan.vertical
+    {
+        let catalog = CrsCatalog::well_known();
+        let to_geographic = plan_transformation(&catalog, plan.horizontal.source_epsg, 4326, &[])?;
+        let from_geographic =
+            plan_transformation(&catalog, 4326, plan.horizontal.target_epsg, &[])?;
+        let mut geographic: Vec<[f64; 3]> = points.to_vec();
+        let mut xy: Vec<[f64; 2]> = geographic
+            .iter()
+            .map(|point| [point[0], point[1]])
+            .collect();
+        let before = transform_xy(&to_geographic, &mut xy)?;
+        for (point, transformed) in geographic.iter_mut().zip(xy) {
+            point[0] = transformed[0];
+            point[1] = transformed[1];
+        }
+        ProjGridBackend::discover()?.transform_vertical_grid(
+            name,
+            checksum_sha256,
+            *inverse,
+            &mut geographic,
+        )?;
+        let mut xy: Vec<[f64; 2]> = geographic
+            .iter()
+            .map(|point| [point[0], point[1]])
+            .collect();
+        let after = transform_xy(&from_geographic, &mut xy)?;
+        for ((output, geographic), transformed) in points.iter_mut().zip(geographic).zip(xy) {
+            *output = [transformed[0], transformed[1], geographic[2]];
+        }
+        let mut steps = before.steps;
+        steps.push(format!(
+            "PROJ vgridshift {} grid '{}' (SHA-256 {})",
+            if *inverse { "inverse" } else { "forward" },
+            name,
+            checksum_sha256
+        ));
+        steps.extend(after.steps);
+        return Ok(TransformationProvenance {
+            source_epsg: plan.horizontal.source_epsg,
+            target_epsg: plan.horizontal.target_epsg,
+            source_unit: before.source_unit,
+            target_unit: after.target_unit,
+            steps,
+            backend: "proj4rs + bundled PROJ grid worker".into(),
+            accuracy_metres: combine_accuracy(
+                combine_accuracy(before.accuracy_metres, after.accuracy_metres),
+                *accuracy_metres,
+            ),
+            coordinate_epoch: plan.coordinate_epoch.map(|epoch| format!("{:.4}", epoch.0)),
+            point_count: points.len() as u64,
+            executed_utc: after.executed_utc,
+        });
     }
     let mut horizontal: Vec<[f64; 2]> = points.iter().map(|point| [point[0], point[1]]).collect();
     let mut provenance = transform_xy(&plan.horizontal, &mut horizontal)?;
@@ -191,6 +250,7 @@ mod tests {
                 name: "g2018u0.bin".into(),
                 checksum_sha256: "a".repeat(64),
                 accuracy_metres: Some(0.03),
+                inverse: false,
             },
             coordinate_epoch: None,
         };
@@ -199,5 +259,28 @@ mod tests {
             transform_xyz(&grid, &mut points),
             Err(SpatialError::VerticalNotExecuted(_))
         ));
+    }
+
+    #[test]
+    #[ignore = "requires the packaged PROJ worker and official GEOID18 grid"]
+    fn bundled_geoid18_grid_changes_vertical_coordinate() {
+        let horizontal = plan_transformation(&CrsCatalog::well_known(), 4326, 4326, &[]).unwrap();
+        let plan = CompoundTransformationPlan {
+            horizontal,
+            source_vertical_epsg: Some(4979),
+            target_vertical_epsg: Some(5703),
+            vertical: VerticalOperation::Grid {
+                name: "us_noaa_g2018u0.tif".into(),
+                checksum_sha256: "fa9a407ac7ee3f5a3694008e4bcd09ce9cc250452f0c3b11700a4960340abce2"
+                    .into(),
+                accuracy_metres: Some(0.03),
+                inverse: false,
+            },
+            coordinate_epoch: Some(CoordinateEpoch(2020.0)),
+        };
+        let mut points = [[-71.0589, 42.3601, 0.0]];
+        let provenance = transform_xyz(&plan, &mut points).unwrap();
+        assert!(points[0][2].abs() > 1.0);
+        assert!(provenance.backend.contains("bundled PROJ"));
     }
 }

@@ -1604,6 +1604,11 @@ impl OpenCADStudio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
+            "WORKFLOWSTANDARDS" | "WORKFLOW" | "STANDARDS" => {
+                return Some(Task::done(Message::PlatformManagerOpen));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             "GISLAYERS" => self.list_gis_layers(i),
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -1620,21 +1625,32 @@ impl OpenCADStudio {
 
             #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("GISEXPORT ") => {
-                let mut arguments = cmd.trim_start_matches("GISEXPORT").trim().splitn(2, char::is_whitespace);
+                let mut arguments = cmd
+                    .trim_start_matches("GISEXPORT")
+                    .trim()
+                    .splitn(2, char::is_whitespace);
                 match (arguments.next(), arguments.next()) {
                     (Some(layer), Some(path)) if !path.trim().is_empty() => {
                         self.export_gis_layer(i, layer, std::path::PathBuf::from(path.trim()));
                     }
-                    _ => self.command_line.push_error("Usage: GISEXPORT <layer> <output.gpkg|output.geojson>"),
+                    _ => self
+                        .command_line
+                        .push_error("Usage: GISEXPORT <layer> <output.gpkg|output.geojson>"),
                 }
             }
 
             #[cfg(not(target_arch = "wasm32"))]
             cmd if cmd.starts_with("GISTRANSFORM ") => {
                 let mut arguments = cmd.trim_start_matches("GISTRANSFORM").split_whitespace();
-                match (arguments.next(), arguments.next().and_then(|value| value.parse::<u16>().ok()), arguments.next()) {
+                match (
+                    arguments.next(),
+                    arguments.next().and_then(|value| value.parse::<u16>().ok()),
+                    arguments.next(),
+                ) {
                     (Some(layer), Some(epsg), None) => self.transform_gis_layer(i, layer, epsg),
-                    _ => self.command_line.push_error("Usage: GISTRANSFORM <layer> <target-epsg>"),
+                    _ => self
+                        .command_line
+                        .push_error("Usage: GISTRANSFORM <layer> <target-epsg>"),
                 }
             }
 
@@ -1645,6 +1661,11 @@ impl OpenCADStudio {
                     return Some(Task::done(Message::PointCloudExportAll));
                 }
                 return Some(self.start_point_cloud_export_all(std::path::PathBuf::from(argument)));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            "POINTCLOUD3DTILES" | "POINTCLOUD3DTILESEXPORT" => {
+                return Some(Task::done(Message::PointCloud3DTilesExport));
             }
 
             #[cfg(not(target_arch = "wasm32"))]

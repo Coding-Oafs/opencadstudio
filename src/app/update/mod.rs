@@ -1093,6 +1093,334 @@ impl OpenCADStudio {
             Message::SpatialProjectSavePathPicked(None) => Task::none(),
 
             #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformManagerOpen => {
+                let platform = self.tabs[self.active_tab]
+                    .spatial_project
+                    .as_ref()
+                    .map(|(_, project)| &project.platform);
+                self.platform_manager.load(platform);
+                self.active_modal = Some(super::ModalKind::PlatformManager);
+                self.reset_modal_geometry();
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformManagerTab(tab) => {
+                self.platform_manager.tab = tab;
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformWorkflowEdit(action) => {
+                self.platform_manager.workflow.perform(action);
+                self.platform_manager.status = "Workflow has unapplied edits.".into();
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformWorkflowNew => {
+                self.platform_manager.reset_workflow();
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformWorkflowApply => {
+                let definition = serde_json::from_str::<ocs_platform::WorkflowDefinition>(
+                    &self.platform_manager.workflow.text(),
+                );
+                let result = definition.and_then(|definition| {
+                    let lidar = ocs_pointcloud::production_lidar_tools();
+                    let reality = ocs_reality::reality_tools();
+                    definition
+                        .execution_order(|id| {
+                            lidar.descriptor(id).is_some()
+                                || reality.iter().any(|tool| tool.id == id)
+                        })
+                        .map_err(|error| serde_json::Error::io(std::io::Error::other(error)))?;
+                    let (_, project) = self.tabs[self.active_tab]
+                        .spatial_project
+                        .as_mut()
+                        .ok_or_else(|| {
+                            serde_json::Error::io(std::io::Error::other(
+                                "create or open a spatial project first",
+                            ))
+                        })?;
+                    if let Some(existing) = project
+                        .platform
+                        .workflows
+                        .iter_mut()
+                        .find(|value| value.id == definition.id)
+                    {
+                        *existing = definition.clone();
+                    } else {
+                        project.platform.workflows.push(definition.clone());
+                    }
+                    Ok(definition)
+                });
+                match result {
+                    Ok(definition) => {
+                        self.save_spatial_project(self.active_tab, None);
+                        self.platform_manager.status = format!(
+                            "Workflow '{}' is valid and saved ({} node(s)).",
+                            definition.name,
+                            definition.nodes.len()
+                        );
+                        self.command_line.push_info("WORKFLOW: definition validated and saved.");
+                    }
+                    Err(error) => {
+                        self.platform_manager.status = format!("Workflow error: {error}");
+                        self.command_line
+                            .push_error(format!("WORKFLOW: {error}").as_str());
+                    }
+                }
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformWorkflowDelete => {
+                let id = serde_json::from_str::<ocs_platform::WorkflowDefinition>(
+                    &self.platform_manager.workflow.text(),
+                )
+                .map(|value| value.id);
+                match (id, self.tabs[self.active_tab].spatial_project.as_mut()) {
+                    (Ok(id), Some((_, project))) => {
+                        let before = project.platform.workflows.len();
+                        project.platform.workflows.retain(|value| value.id != id);
+                        let deleted = before != project.platform.workflows.len();
+                        self.save_spatial_project(self.active_tab, None);
+                        self.platform_manager.status = if deleted {
+                            format!("Workflow '{id}' deleted.")
+                        } else {
+                            format!("Workflow '{id}' was not present.")
+                        };
+                    }
+                    (Err(error), _) => {
+                        self.platform_manager.status = format!("Workflow error: {error}")
+                    }
+                    (_, None) => {
+                        self.platform_manager.status =
+                            "Create or open a spatial project first.".into()
+                    }
+                }
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsEdit(action) => {
+                self.platform_manager.standards.perform(action);
+                self.platform_manager.status = "Standards package has unapplied edits.".into();
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsNew => {
+                self.platform_manager.reset_standards();
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsApply => {
+                let parsed = serde_json::from_str::<ocs_platform::StandardsPackage>(
+                    &self.platform_manager.standards.text(),
+                );
+                let result = parsed.and_then(|mut package| {
+                    if package.signature.is_none() {
+                        package
+                            .seal()
+                            .map_err(|error| serde_json::Error::io(std::io::Error::other(error)))?;
+                    }
+                    package
+                        .validate()
+                        .map_err(|error| serde_json::Error::io(std::io::Error::other(error)))?;
+                    let (_, project) = self.tabs[self.active_tab]
+                        .spatial_project
+                        .as_mut()
+                        .ok_or_else(|| {
+                            serde_json::Error::io(std::io::Error::other(
+                                "create or open a spatial project first",
+                            ))
+                        })?;
+                    if let Some(signer) = package.signer.as_ref() {
+                        if !project.platform.trusted_signers.contains(signer) {
+                            return Err(serde_json::Error::io(std::io::Error::other(
+                                "signature is valid, but its signer is not trusted; review it and choose Trust Signer",
+                            )));
+                        }
+                    }
+                    if let Some(existing) = project
+                        .platform
+                        .standards
+                        .iter_mut()
+                        .find(|value| value.id == package.id)
+                    {
+                        *existing = package.clone();
+                    } else {
+                        project.platform.standards.push(package.clone());
+                    }
+                    Ok(package)
+                });
+                match result {
+                    Ok(package) => {
+                        self.platform_manager.standards =
+                            iced::widget::text_editor::Content::with_text(
+                                &serde_json::to_string_pretty(&package).unwrap_or_default(),
+                            );
+                        self.save_spatial_project(self.active_tab, None);
+                        self.platform_manager.status = format!(
+                            "Standards '{}' validated, sealed, and saved.",
+                            package.name
+                        );
+                        self.command_line
+                            .push_info("STANDARDS: package validated and saved.");
+                    }
+                    Err(error) => {
+                        self.platform_manager.status = format!("Standards error: {error}");
+                        self.command_line
+                            .push_error(format!("STANDARDS: {error}").as_str());
+                    }
+                }
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsDelete => {
+                let id = serde_json::from_str::<ocs_platform::StandardsPackage>(
+                    &self.platform_manager.standards.text(),
+                )
+                .map(|value| value.id);
+                match (id, self.tabs[self.active_tab].spatial_project.as_mut()) {
+                    (Ok(id), Some((_, project))) => {
+                        let before = project.platform.standards.len();
+                        project.platform.standards.retain(|value| value.id != id);
+                        let deleted = before != project.platform.standards.len();
+                        self.save_spatial_project(self.active_tab, None);
+                        self.platform_manager.status = if deleted {
+                            format!("Standards package '{id}' deleted.")
+                        } else {
+                            format!("Standards package '{id}' was not present.")
+                        };
+                    }
+                    (Err(error), _) => {
+                        self.platform_manager.status = format!("Standards error: {error}")
+                    }
+                    (_, None) => {
+                        self.platform_manager.status =
+                            "Create or open a spatial project first.".into()
+                    }
+                }
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsTrustSigner => {
+                let package = serde_json::from_str::<ocs_platform::StandardsPackage>(
+                    &self.platform_manager.standards.text(),
+                );
+                match (package, self.tabs[self.active_tab].spatial_project.as_mut()) {
+                    (Ok(package), Some((_, project))) => match package.signer {
+                        Some(signer) => {
+                            project.platform.trusted_signers.insert(signer);
+                            self.save_spatial_project(self.active_tab, None);
+                            self.platform_manager.status =
+                                "Signer trusted for this spatial project; Apply is now enabled.".into();
+                        }
+                        None => {
+                            self.platform_manager.status =
+                                "This package is unsigned; there is no signer to trust.".into()
+                        }
+                    },
+                    (Err(error), _) => {
+                        self.platform_manager.status = format!("Standards error: {error}")
+                    }
+                    (_, None) => {
+                        self.platform_manager.status =
+                            "Create or open a spatial project first.".into()
+                    }
+                }
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsImport => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Import Company Standards")
+                        .add_filter("OpenCADStudio Standards", &["json", "ocsstandards"])
+                        .pick_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PlatformStandardsImportPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsImportPicked(Some(path)) => {
+                match std::fs::read_to_string(&path) {
+                    Ok(json) => match serde_json::from_str::<ocs_platform::StandardsPackage>(&json) {
+                        Ok(package) => {
+                            self.platform_manager.standards =
+                                iced::widget::text_editor::Content::with_text(
+                                    &serde_json::to_string_pretty(&package).unwrap_or(json),
+                                );
+                            self.platform_manager.status = format!(
+                                "Imported '{}'; review and Apply to save it.",
+                                path.display()
+                            );
+                        }
+                        Err(error) => {
+                            self.platform_manager.status = format!("Import error: {error}")
+                        }
+                    },
+                    Err(error) => self.platform_manager.status = format!("Import error: {error}"),
+                }
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsImportPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsExport => Task::perform(
+                async {
+                    crate::sys::file_dialog()
+                        .set_title("Export Company Standards")
+                        .set_file_name("company-standards.ocsstandards")
+                        .add_filter("OpenCADStudio Standards", &["ocsstandards", "json"])
+                        .save_file()
+                        .await
+                        .map(|handle| crate::sys::handle_path(&handle))
+                },
+                Message::PlatformStandardsExportPicked,
+            ),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsExportPicked(Some(path)) => {
+                let json = self.platform_manager.standards.text();
+                self.platform_manager.status = match serde_json::from_str::<
+                    ocs_platform::StandardsPackage,
+                >(&json)
+                .and_then(|package| {
+                    package
+                        .validate()
+                        .map_err(|error| serde_json::Error::io(std::io::Error::other(error)))?;
+                    std::fs::write(&path, json)
+                        .map_err(serde_json::Error::io)
+                        .map(|_| package)
+                }) {
+                    Ok(package) => format!(
+                        "Exported validated standards '{}' to {}.",
+                        package.name,
+                        path.display()
+                    ),
+                    Err(error) => format!("Export error: {error}"),
+                };
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PlatformStandardsExportPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudSurfaceSave(product, cell_size) => {
                 let extension =
                     if product == crate::app::point_cloud::PointCloudSurfaceProduct::Hillshade {
@@ -1246,6 +1574,39 @@ impl OpenCADStudio {
             #[cfg(not(target_arch = "wasm32"))]
             Message::PointCloudExportAllFinished(tab_id, path, result) => {
                 self.finish_point_cloud_export_all(tab_id, path, result);
+                Task::none()
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloud3DTilesExport => {
+                if self.tabs[self.active_tab].point_cloud.active().is_none() {
+                    self.command_line
+                        .push_error("POINTCLOUD3DTILES: attach a LAS/LAZ cloud first.");
+                    return Task::none();
+                }
+                Task::perform(
+                    async {
+                        crate::sys::file_dialog()
+                            .set_title("Choose 3D Tiles Output Folder")
+                            .pick_folder()
+                            .await
+                            .map(|handle| crate::sys::handle_path(&handle).join("3d-tiles"))
+                    },
+                    Message::PointCloud3DTilesPathPicked,
+                )
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloud3DTilesPathPicked(Some(path)) => {
+                self.start_point_cloud_3d_tiles_export(path)
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloud3DTilesPathPicked(None) => Task::none(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::PointCloud3DTilesFinished(tab_id, path, result) => {
+                self.finish_point_cloud_3d_tiles_export(tab_id, path, result);
                 Task::none()
             }
 

@@ -54,7 +54,7 @@
 
 Open CAD Studio is a cross-platform geospatial engineering workstation. It moves from surveyed reality and native feature data into precise CAD drawings, surfaces, models, and auditable deliverables while keeping source data local and external. It reads and writes DWG and DXF natively and shares selected editing and viewing cores with the browser build.
 
-The current development line is **v2.0.0-alpha.1**. See the [v1.1→v2 development audit](docs/development-audit-v2.md) for implemented stage gates and the remaining production work.
+The current release line is **v2.0.0**. See the [v1.1→v2 development audit](docs/development-audit-v2.md) and [v2.0.0 release notes](docs/v2.0.0-release-notes.md) for the implemented stage gates and verification record.
 
 The project is under active development. Keep backups of important production drawings and report reproducible problems through [GitHub Issues](https://github.com/HakanSeven12/OpenCADStudio/issues).
 

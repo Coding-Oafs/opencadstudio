@@ -648,6 +648,8 @@ pub(super) struct OpenCADStudio {
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
+    #[cfg(not(target_arch = "wasm32"))]
+    platform_manager: crate::ui::window::platform_manager::PlatformManagerState,
     /// Plot modal geometry preserved while the Plot Style editor is open as
     /// a child dialog. None means Plotstyle was opened directly (e.g. command).
     plotstyle_parent_plot_geometry: Option<(iced::Vector, iced::Vector)>,
@@ -1575,6 +1577,8 @@ pub enum ModalKind {
     PluginManager,
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudManager,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformManager,
     UpdateNotice,
     Layers,
     LayerStateManager,
@@ -3101,6 +3105,36 @@ pub enum Message {
     #[cfg(not(target_arch = "wasm32"))]
     SpatialProjectSavePathPicked(Option<std::path::PathBuf>),
     #[cfg(not(target_arch = "wasm32"))]
+    PlatformManagerOpen,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformManagerTab(crate::ui::window::platform_manager::PlatformManagerTab),
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformWorkflowEdit(iced::widget::text_editor::Action),
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformWorkflowNew,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformWorkflowApply,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformWorkflowDelete,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsEdit(iced::widget::text_editor::Action),
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsNew,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsApply,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsDelete,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsTrustSigner,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsImport,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsImportPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsExport,
+    #[cfg(not(target_arch = "wasm32"))]
+    PlatformStandardsExportPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
     PointCloudSurfaceSave(crate::app::point_cloud::PointCloudSurfaceProduct, f64),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudSurfacePathPicked(
@@ -3161,6 +3195,16 @@ pub enum Message {
         u64,
         std::path::PathBuf,
         Result<ocs_pointcloud::ExportStats, String>,
+    ),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloud3DTilesExport,
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloud3DTilesPathPicked(Option<std::path::PathBuf>),
+    #[cfg(not(target_arch = "wasm32"))]
+    PointCloud3DTilesFinished(
+        u64,
+        std::path::PathBuf,
+        Result<ocs_platform::OctreeTilesetExport, String>,
     ),
     #[cfg(not(target_arch = "wasm32"))]
     PointCloudReproject(u16),
@@ -3380,6 +3424,8 @@ impl OpenCADStudio {
             color_picker_tab: ColorPickerTab::Index,
             recent_colors: Vec::new(),
             active_modal: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            platform_manager: Default::default(),
             plotstyle_parent_plot_geometry: None,
             find_replace: FindReplaceState::default(),
             aec_drop_acknowledged: false,

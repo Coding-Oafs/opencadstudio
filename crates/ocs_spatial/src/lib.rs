@@ -4,18 +4,18 @@
 //! The crate is the policy layer the roadmap calls for: every CRS hop is
 //! planned and reported before it runs, accuracies are stated (or honestly
 //! missing), and outputs can carry [`TransformationProvenance`] describing
-//! exactly what executed. Math currently runs on the pure-Rust `proj4rs`
-//! backend; grid-based datum shifts and geoid models are modelled as
-//! declared-but-not-executed steps until a validated backend is bundled.
+//! exactly what executed. Ordinary horizontal math uses the pure-Rust
+//! `proj4rs` backend; checksum-pinned datum/geoid grids execute in the bundled
+//! out-of-process PROJ backend shipped with desktop releases.
 
 pub mod catalog;
 pub mod compound;
+pub mod proj_backend;
 pub mod transform;
 
 pub use catalog::{AxisOrder, AxisUnit, CrsCatalog, CrsDefinition, CrsKind, VerticalReference};
-pub use compound::{
-    transform_xyz, CompoundTransformationPlan, CoordinateEpoch, VerticalOperation,
-};
+pub use compound::{transform_xyz, CompoundTransformationPlan, CoordinateEpoch, VerticalOperation};
+pub use proj_backend::{ProjBackendHealth, ProjGridBackend};
 pub use transform::{
     convert_linear, plan_transformation, transform_xy, SpatialError, TransformationMethod,
     TransformationPlan, TransformationProvenance, TransformationStep,

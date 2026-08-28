@@ -36,7 +36,7 @@
       Id='*'
       Keywords='Installer'
       Description='Open CAD Studio Installer'
-      Manufacturer='Hakan Seven'
+      Manufacturer='Open CAD Studio'
       InstallerVersion='450'
       Languages='1033'
       Compressed='yes'
@@ -52,10 +52,10 @@
 
     <Icon Id='AppIcon.ico' SourceFile='$(var.Icon)' />
     <Property Id='ARPPRODUCTICON' Value='AppIcon.ico' />
-    <Property Id='ARPHELPLINK' Value='https://github.com/HakanSeven12/OpenCADStudio' />
-    <Property Id='ARPURLINFOABOUT' Value='https://github.com/HakanSeven12/OpenCADStudio' />
-    <Property Id='ARPURLUPDATEINFO' Value='https://github.com/HakanSeven12/OpenCADStudio/releases' />
-    <Property Id='ARPCONTACT' Value='Hakan Seven' />
+    <Property Id='ARPHELPLINK' Value='https://github.com/Coding-Oafs/opencadstudio' />
+    <Property Id='ARPURLINFOABOUT' Value='https://github.com/Coding-Oafs/opencadstudio' />
+    <Property Id='ARPURLUPDATEINFO' Value='https://github.com/Coding-Oafs/opencadstudio/releases' />
+    <Property Id='ARPCONTACT' Value='Open CAD Studio' />
     <Property Id='ARPCOMMENTS' Value='2D/3D CAD application for DWG and DXF drawings.' />
     <!--
       Hide "Repair" from the Apps & Features entry — there is no repair flow.
@@ -94,6 +94,14 @@
               Name='ocs-lidar-classifier.exe'
               DiskId='1'
               Source='$(var.Classifier)' />
+
+            <!-- Isolated pyproj/libproj worker. The checksum-pinned grid is
+                 kept external so the Rust host can verify it before use. -->
+            <File
+              Id='ProjWorkerEXE'
+              Name='ocs-proj-worker.exe'
+              DiskId='1'
+              Source='$(var.ProjWorker)' />
 
             <!-- DWG/DXF file-type icons, generated from the mimetype SVGs
                  (CI: magick image-vnd.{dwg,dxf}.svg -> {dwg,dxf}.ico). -->
@@ -135,6 +143,17 @@
               </Extension>
             </ProgId>
           </Component>
+
+          <Directory Id='ProjDataDir' Name='proj-data'>
+            <Component Id='ProjGridData' Guid='f6a26cb8-1ed4-4aaa-91a3-d24773383e56' Win64='yes'>
+              <File
+                Id='ProjGridGEOID18'
+                Name='us_noaa_g2018u0.tif'
+                DiskId='1'
+                Source='$(var.ProjGrid)'
+                KeyPath='yes' />
+            </Component>
+          </Directory>
 
           <!--
             Default Programs registration. The ProgId/Extension rows above
@@ -259,6 +278,7 @@
 
     <Feature Id='Complete' Title='Open CAD Studio' Level='1' Display='expand'>
       <ComponentRef Id='MainExecutable' />
+      <ComponentRef Id='ProjGridData' />
       <ComponentRef Id='DefaultPrograms' />
       <ComponentRef Id='ProgramMenuDirComp' />
       <!-- Optional, user-deselectable in the feature tree (default on). -->

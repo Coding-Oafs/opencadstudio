@@ -245,6 +245,8 @@ pub struct UrbanBatchSummary {
 // Raw LAS/LAZ container access
 // ---------------------------------------------------------------------------
 
+const LASZIP_RECORD_ID: u16 = 22_204;
+
 /// One raw VLR, header fields plus the record payload verbatim.
 #[derive(Clone, Debug)]
 struct RawVlr {
@@ -331,7 +333,9 @@ impl RawHeader {
     fn laszip_vlr(&self) -> Option<&RawVlr> {
         self.vlrs
             .iter()
-            .find(|vlr| vlr.user_id == "laszip encoded" && vlr.record_id == 2220)
+            .find(|vlr| {
+                vlr.user_id == "laszip encoded" && vlr.record_id == LASZIP_RECORD_ID
+            })
     }
 
     fn wkt(&self) -> Option<&[u8]> {
@@ -395,8 +399,11 @@ fn parse_raw_header(bytes: Vec<u8>) -> Result<RawHeader, Error> {
         ])
     };
     let f64_at = |offset: usize| f64::from_bits(u64_at(offset));
-    let version = (bytes[25], bytes[26]);
-    let header_size = u16_at(24) as usize;
+    // LAS public-header offsets: version major/minor at 24/25 and public
+    // header size at 94. Reading header size at 24 accidentally treated the
+    // version bytes as a u16 and skipped into the middle of valid VLR data.
+    let version = (bytes[24], bytes[25]);
+    let header_size = u16_at(94) as usize;
     if header_size < 107 || header_size > bytes.len() {
         return Err(Error::Urban(format!("invalid header size {header_size}")));
     }
@@ -408,10 +415,12 @@ fn parse_raw_header(bytes: Vec<u8>) -> Result<RawHeader, Error> {
     }
     let v1_4 = version.1 >= 4;
     // Field positions are identical across LAS versions: VLR count u32 at
-    // 100 (u16 + reserved on paper pre-1.4, u32 in practice), point format
-    // u8 at 104, record length u16 at 105, legacy point count u32 at 107.
+    // 100, point format u8 at 104, record length u16 at 105, and legacy point
+    // count u32 at 107.
     let vlr_count = u32_at(100);
-    let point_format = bytes[104];
+    // LASzip marks compressed point data in the high bit of the format byte;
+    // the low six bits remain the logical ASPRS point-format id.
+    let point_format = bytes[104] & 0x3f;
     let record_length = u16_at(105);
     let legacy_count = u32_at(107) as u64;
     let point_count = if v1_4 {
@@ -1639,7 +1648,9 @@ pub fn classify_urban_tile(
     let mut out_vlrs: Vec<RawVlr> = header
         .vlrs
         .iter()
-        .filter(|vlr| !(vlr.user_id == "laszip encoded" && vlr.record_id == 2220))
+        .filter(|vlr| {
+            !(vlr.user_id == "laszip encoded" && vlr.record_id == LASZIP_RECORD_ID)
+        })
         .cloned()
         .collect();
     out_vlrs.push(label_extra_bytes_vlr());
@@ -1730,7 +1741,7 @@ fn write_classified_laz(
     laz_vlr.write_to(&mut laz_payload).map_err(Error::Io)?;
     let laszip_vlr = RawVlr {
         user_id: "laszip encoded".to_string(),
-        record_id: 2220,
+        record_id: LASZIP_RECORD_ID,
         description: "laszip encoded".to_string(),
         data: laz_payload,
     };
@@ -1752,7 +1763,7 @@ fn write_classified_laz(
     let patch_u64 = |bytes: &mut [u8], offset: usize, value: u64| {
         bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes())
     };
-    header_bytes[104] = header.point_format;
+    header_bytes[104] = header.point_format | 0x80;
     patch_u16(&mut header_bytes, 105, out_record_length);
     patch_u32(&mut header_bytes, 100, all_vlrs.len() as u32);
     patch_u32(&mut header_bytes, 96, offset_to_point_data as u32);

@@ -9,6 +9,7 @@ mod options;
 mod overkill;
 mod purge;
 mod user_interface;
+mod workflow_standards;
 
 use crate::modules::{CadModule, IconKind, RibbonGroup, RibbonItem};
 
@@ -67,6 +68,10 @@ impl CadModule for ManageModule {
                     ],
                 },
                 // ── Cleanup ───────────────────────────────────────────────────────
+                RibbonGroup {
+                    title: "Standards & Automation",
+                    tools: vec![RibbonItem::LargeTool(workflow_standards::tool())],
+                },
                 RibbonGroup {
                     title: "Cleanup",
                     tools: vec![

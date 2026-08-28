@@ -651,9 +651,14 @@ fn export_merged_internal(
     let mut z_scale = template.transforms().z.scale;
     for source in &sources[1..] {
         let header = Reader::from_path(&source.path)?.header().clone();
-        if header.version() != template.version()
-            || header.point_format() != template.point_format()
-        {
+        let mut header_format = header.point_format().clone();
+        let mut template_format = template.point_format().clone();
+        // Compression is a container/storage choice, not part of the logical
+        // point record layout. A LAS and LAZ with otherwise identical formats
+        // can be merged losslessly into whichever output extension was chosen.
+        header_format.is_compressed = false;
+        template_format.is_compressed = false;
+        if header.version() != template.version() || header_format != template_format {
             return Err(Error::MergeIncompatible(format!(
                 "\"{}\" uses LAS {} point format {:?}, but \"{}\" uses LAS {} point format {:?}",
                 sources[0].path.display(),

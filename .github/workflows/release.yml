@@ -27,6 +27,31 @@ jobs:
       - name: Verify production point-cloud core
         run: cargo test -p ocs_pointcloud --lib
 
+      - name: Verify v2 platform and geodesy contracts
+        run: |
+          cargo test -p ocs_platform
+          cargo test -p ocs_spatial
+
+      - name: Download public real-data LiDAR fixtures
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/lidar-smoke-fixtures | Out-Null
+          Invoke-WebRequest `
+            -Uri https://raw.githubusercontent.com/PDAL/PDAL/master/test/data/las/autzen_trim.las `
+            -OutFile target/lidar-smoke-fixtures/autzen_trim.las
+          Invoke-WebRequest `
+            -Uri https://raw.githubusercontent.com/PDAL/PDAL/master/test/data/laz/autzen_trim.laz `
+            -OutFile target/lidar-smoke-fixtures/autzen_trim.laz
+
+      - name: Verify real-data LiDAR production pipelines
+        shell: pwsh
+        run: |
+          $env:OCS_LIDAR_SMOKE_DIR = (Resolve-Path target/lidar-smoke-fixtures).Path
+          cargo test -p ocs_pointcloud --test real_data_smoke -- --ignored --test-threads=1
+
+      - name: Verify two-million-point release scale
+        run: cargo test -p ocs_pointcloud --release --test scale_stress -- --ignored
+
       - name: Verify spatial shader contract
         run: cargo test --test point_cloud_shader
 
@@ -59,6 +84,21 @@ jobs:
           OCS_PATREON_TOKEN: ${{ secrets.OCS_PATREON_TOKEN }}
         run: cargo build --release
 
+      - name: Build bundled PROJ grid worker
+        run: |
+          python3 -m pip install --disable-pip-version-check pyinstaller pyproj==3.7.2
+          python3 -m PyInstaller --noconfirm --clean --onefile \
+            --name ocs-proj-worker --distpath target/release \
+            --workpath target/pyinstaller-proj-work \
+            --specpath target/pyinstaller-proj-spec \
+            --collect-all pyproj scripts/spatial/proj_worker.py
+          mkdir -p target/release/proj-data
+          curl --fail --location --retry 3 \
+            https://cdn.proj.org/us_noaa_g2018u0.tif \
+            --output target/release/proj-data/us_noaa_g2018u0.tif
+          echo "fa9a407ac7ee3f5a3694008e4bcd09ce9cc250452f0c3b11700a4960340abce2  target/release/proj-data/us_noaa_g2018u0.tif" | sha256sum --check
+          target/release/ocs-proj-worker --self-test
+
       - name: Prepare AppDir
         run: |
           mkdir -p AppDir/usr/bin
@@ -66,6 +106,8 @@ jobs:
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           mkdir -p AppDir/usr/share/metainfo
           cp target/release/OpenCADStudio AppDir/usr/bin/OpenCADStudio
+          cp target/release/ocs-proj-worker AppDir/usr/bin/ocs-proj-worker
+          cp -R target/release/proj-data AppDir/usr/bin/proj-data
           cp packaging/OpenCADStudio.desktop AppDir/usr/share/applications/io.github.HakanSeven12.OpenCadStudio.desktop
           cp packaging/io.github.HakanSeven12.OpenCadStudio.metainfo.xml AppDir/usr/share/metainfo/
           rsvg-convert -w 256 -h 256 assets/logo.svg \
@@ -216,6 +258,31 @@ jobs:
             --collect-all lazrs `
             scripts/lidar/boston_upcp_classifier.py
 
+      - name: Build bundled PROJ grid worker
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyproj==3.7.2
+          python -m PyInstaller --noconfirm --clean --onefile `
+            --name ocs-proj-worker `
+            --distpath target/release `
+            --workpath target/pyinstaller-proj-work `
+            --specpath target/pyinstaller-proj-spec `
+            --collect-all pyproj `
+            scripts/spatial/proj_worker.py
+          New-Item -ItemType Directory -Force target/release/proj-data | Out-Null
+          Invoke-WebRequest `
+            -Uri https://cdn.proj.org/us_noaa_g2018u0.tif `
+            -OutFile target/release/proj-data/us_noaa_g2018u0.tif
+          $actual = (Get-FileHash -Algorithm SHA256 target/release/proj-data/us_noaa_g2018u0.tif).Hash.ToLowerInvariant()
+          if ($actual -ne 'fa9a407ac7ee3f5a3694008e4bcd09ce9cc250452f0c3b11700a4960340abce2') {
+            throw "GEOID18 grid checksum mismatch: $actual"
+          }
+          target/release/ocs-proj-worker.exe --self-test
+
+          $env:OCS_PROJ_WORKER = (Resolve-Path target/release/ocs-proj-worker.exe).Path
+          $env:OCS_PROJ_DATA = (Resolve-Path target/release/proj-data).Path
+          cargo test -p ocs_spatial bundled_geoid18_grid_changes_vertical_coordinate -- --ignored
+
       - name: Convert SVG icon to ICO
         shell: pwsh
         run: |
@@ -266,6 +333,7 @@ jobs:
           files: |
             ${{ github.workspace }}\target\release\OpenCADStudio.exe
             ${{ github.workspace }}\target\release\ocs-lidar-classifier.exe
+            ${{ github.workspace }}\target\release\ocs-proj-worker.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -295,6 +363,8 @@ jobs:
           # filename.
           $exePath  = (Resolve-Path target\release\OpenCADStudio.exe).Path
           $classifierPath = (Resolve-Path target\release\ocs-lidar-classifier.exe).Path
+          $projWorkerPath = (Resolve-Path target\release\ocs-proj-worker.exe).Path
+          $projGridPath = (Resolve-Path target\release\proj-data\us_noaa_g2018u0.tif).Path
           $iconPath = (Resolve-Path packaging\windows\AppIcon.ico).Path
           # GPL-3 license RTF shown on the installer's EULA page.
           $licensePath = (Resolve-Path packaging\windows\License.rtf).Path
@@ -310,6 +380,8 @@ jobs:
             "-dVersion=$version" `
             "-dSource=$exePath" `
             "-dClassifier=$classifierPath" `
+            "-dProjWorker=$projWorkerPath" `
+            "-dProjGrid=$projGridPath" `
             "-dIcon=$iconPath" `
             "-dLicense=$licensePath" `
             $mainWxs $uiWxs `
@@ -344,16 +416,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
-          # Ship both the bare .exe (portable, no install) and the
-          # .msi (installer with Start Menu shortcut + .dwg / .dxf
-          # file association). The `-portable` / `-installer` suffix
-          # makes the distinction obvious on the release page.
-          $exe = "OpenCADStudio-$tag-windows-x86_64-portable.exe"
+          # The portable package includes both isolated processing workers and
+          # the checksum-pinned PROJ grid beside the app; a bare executable
+          # would silently omit v2 capabilities.
+          $portable = "OpenCADStudio-$tag-windows-x86_64-portable"
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          Copy-Item target/release/OpenCADStudio.exe $portable/
+          Copy-Item target/release/ocs-lidar-classifier.exe $portable/
+          Copy-Item target/release/ocs-proj-worker.exe $portable/
+          Copy-Item target/release/proj-data $portable/proj-data -Recurse
+          Copy-Item target/release/dwg_thumbnailer_win.dll $portable/
+          Compress-Archive -Path "$portable/*" -DestinationPath "$portable.zip"
           $msi = "OpenCADStudio-$tag-windows-x86_64-installer.msi"
-          Move-Item target\release\OpenCADStudio.exe $exe
           Move-Item OpenCADStudio.msi $msi
           gh release upload $tag `
-            $exe $msi `
+            "$portable.zip" $msi `
             --clobber --repo ${{ github.repository }}
 
   build-macos:
@@ -386,6 +463,21 @@ jobs:
           # crate-type is only emitted when the crate is built as a target (as a
           # plain dependency cargo produces just the rlib), so build it here.
           cargo build --release --target aarch64-apple-darwin -p dwg-thumbnailer
+
+      - name: Build bundled PROJ grid worker
+        run: |
+          python3 -m pip install --disable-pip-version-check pyinstaller pyproj==3.7.2
+          python3 -m PyInstaller --noconfirm --clean --onefile \
+            --name ocs-proj-worker --distpath target/proj-worker \
+            --workpath target/pyinstaller-proj-work \
+            --specpath target/pyinstaller-proj-spec \
+            --collect-all pyproj scripts/spatial/proj_worker.py
+          mkdir -p target/proj-data
+          curl --fail --location --retry 3 \
+            https://cdn.proj.org/us_noaa_g2018u0.tif \
+            --output target/proj-data/us_noaa_g2018u0.tif
+          echo "fa9a407ac7ee3f5a3694008e4bcd09ce9cc250452f0c3b11700a4960340abce2  target/proj-data/us_noaa_g2018u0.tif" | shasum -a 256 -c
+          target/proj-worker/ocs-proj-worker --self-test
 
       - name: Build .icns from SVG
         run: |
@@ -452,6 +544,9 @@ jobs:
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/PlugIns"
           cp target/aarch64-apple-darwin/release/OpenCADStudio "$APP/Contents/MacOS/OpenCADStudio"
           chmod +x "$APP/Contents/MacOS/OpenCADStudio"
+          cp target/proj-worker/ocs-proj-worker "$APP/Contents/MacOS/ocs-proj-worker"
+          chmod +x "$APP/Contents/MacOS/ocs-proj-worker"
+          cp -R target/proj-data "$APP/Contents/MacOS/proj-data"
           cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cp DWG.icns DXF.icns "$APP/Contents/Resources/"
           # QuickLook thumbnail extension.

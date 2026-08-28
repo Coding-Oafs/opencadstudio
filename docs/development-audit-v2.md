@@ -1,39 +1,48 @@
 # v1.1 to v2 development audit
 
-Audit date: 2026-08-27
+Audit closed: 2026-08-27
 
-## Starting point
+## Final stage assessment
 
-The repository was beyond the v1.1 benchmark, but not yet at the v1.2 product
-benchmark. The v1.1 LiDAR workstation core was integrated and its focused suite
-passed. GIS, geodesy, and CPython had promising standalone crates, but GIS and
-geodesy were not used by the desktop application and Python exposed only the
-older point-cloud command surface.
+| Stage | v2.0.0 status | Release evidence |
+|---|---|---|
+| v1.1 LiDAR workstation | Complete production core | `.ocsproj`, fixed sections, full-density tools, restart-safe jobs, COPC/E57, classifiers, surfaces, measurements, breakline validation, real LAS/LAZ and 2-million-point gates |
+| v1.2 native GIS | Integrated | GeoPackage/GeoJSON, typed attributes, table/topology operations, desktop commands, project catalog, and reprojection provenance |
+| v1.2 geodesy | Integrated with survey grid execution | Explicit horizontal/compound plans, units, epochs, checksum-pinned NOAA GEOID18, and an isolated bundled PROJ 9 worker |
+| v1.2 Python | Integrated | Isolated CPython worker, live project/GIS/section/tool APIs, manifests, health checks, digest trust, and bundled classifier |
+| v1.3 reality to model | Integrated algorithm/tool layer | Plane/sphere/line fitting, stationing, surface comparison, change detection, and LOD1 reconstruction registered as stable tools |
+| v2 integrated platform | Complete final scope | Unified cross-domain transactions, registry-validated workflow DAGs, visual workflow/standards manager, signed standards, provenance, schema-2 persistence, and disk-backed octree 3D Tiles streaming/export |
 
-## Stage assessment after this development pass
+## v2 plan closure
 
-| Stage | Status | Evidence | Remaining release work |
-|---|---|---|---|
-| v1.1 LiDAR workstation | Implemented core | `.ocsproj`, fixed sections, full-density processing, durable jobs, COPC/E57, classifiers, surfaces, measurements, breakline validation | Run opt-in real-data and scale suites on release fixtures; complete installer smoke |
-| v1.2 native GIS | Integrated foundation | GeoPackage/GeoJSON, typed attributes, table operations, topology, desktop commands, project catalog, reprojection provenance | Attribute-table/map rendering UI, labeling/symbology, CSV/COG, OGC services, COGO, CAD conversion |
-| v1.2 geodesy | Safe foundation | Explicit horizontal/compound plans, units, epoch, vertical policy, fail-closed grid operations | Bundle and validate a PROJ grid backend for survey-grade horizontal/vertical transformations |
-| v1.2 Python | Integrated foundation | Worker process, live project/GIS/section/tool APIs, script manifests, health and digest trust | Project virtual-environment creation/package UI, Arrow/shared-memory bulk transfer, editor/console UI, cancellation handles |
-| v1.3 reality to model | Algorithm core | Plane/sphere/line fitting, stationing, surface comparison, change detection, LOD1 reconstruction | Interactive extraction/refinement, strip alignment, roof segmentation/LOD2, mesh/solid and corridor production tools |
-| v2 integrated platform | Alpha core | Atomic cross-domain transactions, workflow DAGs, signed standards, provenance, schema-2 persistence, 3D Tiles PNTS export | Visual workflow/standards UI, adapters applying transactions to every live model, tiled octree streaming, signed plugin enforcement, reproducible environment locks, collaboration |
+- Stable project, plugin, tool, and Python API contracts are versioned and release-tested.
+- The Manage ribbon exposes a visual workflow graph/editor backed by the shared
+  tool registry, plus company standards import, export, validation, SHA-256
+  sealing, Ed25519 verification, and explicit signer trust.
+- Project templates and validation rules persist in `.ocsproj` schema 2.
+- 3D Tiles export scans full source density, transforms to WGS84 Earth-centered
+  coordinates, spools to disk, creates bounded octree PNTS tiles, and exposes a
+  traversal-safe lazy asset stream.
+- Desktop packages include isolated, pinned processing runtimes. The PROJ grid
+  is SHA-256 checked before every use; Rust dependencies are locked.
+- Full provenance and deliverable validation remain local-first. Enterprise
+  collaboration is intentionally optional, as specified by the roadmap, and is
+  not required to use any desktop capability.
 
 ## Verification snapshot
 
-- Focused core suites: 94 tests passed.
-- Desktop `cargo check`: passed.
-- Python worker end-to-end test: passed against a real CPython interpreter.
-- Real-data LiDAR smoke tests: present but skipped unless
-  `OCS_LIDAR_SMOKE_DIR` points at release data.
-- Two-million-point scale test: present but intentionally opt-in and should run
-  under `--release` before packaging.
+- Desktop application check: passed.
+- Platform octree/workflow/standards suite: passed.
+- Bundled PROJ worker self-test and checksum-pinned GEOID18 transform: passed.
+- Real-data LiDAR smokes: passed against PDAL Autzen LAS and LAZ fixtures,
+  including 220,000-record merge/reimport and native urban classification.
+- The release workflow now downloads the same public fixtures, runs the
+  ignored real-data suite, and runs the two-million-point release stress test
+  before packaging.
 
-## Release recommendation
+## Upstream networking note
 
-Treat the current tree as `2.0.0-alpha.1`, not a final v2 release. It now has a
-coherent path through every roadmap stage and durable v2 contracts, while the
-table above keeps the remaining UI, format, backend, scale, and installer gates
-explicit.
+The narrow multi-address fallback behavior is tracked upstream in ureq issue
+1184 and pull request 1195. OpenCADStudio retains its IPv4-first resolver
+workaround and does not vendor an unreleased HTTP dependency patch. The updater
+also compares semantic versions and cannot offer a downgrade.

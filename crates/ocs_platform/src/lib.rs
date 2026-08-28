@@ -9,4 +9,7 @@ mod state;
 mod tiles3d;
 
 pub use state::*;
-pub use tiles3d::{export_point_tileset, PointTile, TilesetExport};
+pub use tiles3d::{
+    export_point_octree_tileset, export_point_tileset, OctreeOptions, OctreeTilesetExport,
+    PointOctreeWriter, PointTile, TilesetExport, TilesetStream,
+};

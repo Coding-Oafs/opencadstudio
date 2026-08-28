@@ -4687,6 +4687,145 @@ impl OpenCADStudio {
         }
     }
 
+    pub(super) fn start_point_cloud_3d_tiles_export(&mut self, output: PathBuf) -> Task<Message> {
+        let tab_id = self.tabs[self.active_tab].id;
+        let dataset = &self.tabs[self.active_tab].point_cloud;
+        let Some(source) = dataset.active() else {
+            self.command_line
+                .push_error("POINTCLOUD3DTILES: attach a LAS/LAZ cloud first.");
+            return Task::none();
+        };
+        if dataset
+            .sources
+            .iter()
+            .any(|source| source.export_job.is_some())
+            || dataset.export_all_job.is_some()
+        {
+            self.command_line
+                .push_error("POINTCLOUD3DTILES: another export is already running.");
+            return Task::none();
+        }
+        if !source.source_crs.is_resolvable() {
+            self.command_line.push_error(
+                "POINTCLOUD3DTILES: declare or assume the source CRS before exporting standards-compliant Earth-centered tiles.",
+            );
+            return Task::none();
+        }
+        let source_path = source.source_path.clone();
+        let source_crs = source.source_crs.clone();
+        let total = source.sample.metadata.point_count;
+        let progress = Arc::new(PointCloudJobProgress::new(total));
+        self.tabs[self.active_tab]
+            .point_cloud
+            .active_mut()
+            .expect("active source was checked")
+            .export_job = Some(Arc::clone(&progress));
+        let worker_output = output.clone();
+        self.command_line.push_info(
+            format!(
+                "POINTCLOUD3DTILES: streaming {total} full-density records into a disk-backed octree at '{}'...",
+                output.display()
+            )
+            .as_str(),
+        );
+        background_task(
+            move || {
+                let mut writer = ocs_platform::PointOctreeWriter::create(
+                    &worker_output,
+                    0.0,
+                    ocs_platform::OctreeOptions::default(),
+                    false,
+                )
+                .map_err(|error| error.to_string())?;
+                let wgs84 = ocs_pointcloud::CrsInfo {
+                    horizontal_epsg: Some(4326),
+                    name: Some("WGS 84".into()),
+                    ..Default::default()
+                };
+                let height_scale = match ocs_pointcloud::crs_horizontal_unit(&source_crs) {
+                    Some("us-ft") => 1200.0 / 3937.0,
+                    Some("ft") => 0.3048,
+                    _ => 1.0,
+                };
+                let mut chunk = Vec::with_capacity(65_536);
+                let scan = ocs_pointcloud::visit_full_density(
+                    &source_path,
+                    &ocs_pointcloud::ProcessingExtent::All,
+                    &ocs_pointcloud::PointFilter::default(),
+                    Some(&progress.cancel),
+                    |state| {
+                        progress.completed.store(state.scanned, Ordering::Relaxed);
+                    },
+                    |point| {
+                        chunk.push(point.clone());
+                        if chunk.len() == 65_536 {
+                            write_ecef_tile_chunk(
+                                &source_crs,
+                                &wgs84,
+                                height_scale,
+                                &mut chunk,
+                                &mut writer,
+                            )?;
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+                write_ecef_tile_chunk(
+                    &source_crs,
+                    &wgs84,
+                    height_scale,
+                    &mut chunk,
+                    &mut writer,
+                )
+                .map_err(|error| error.to_string())?;
+                progress.completed.store(scan.scanned, Ordering::Relaxed);
+                writer.finish().map_err(|error| error.to_string())
+            },
+            move |result| Message::PointCloud3DTilesFinished(tab_id, output, result),
+        )
+    }
+
+    pub(super) fn finish_point_cloud_3d_tiles_export(
+        &mut self,
+        tab_id: u64,
+        output: PathBuf,
+        result: Result<ocs_platform::OctreeTilesetExport, String>,
+    ) {
+        let tab_index = self.tabs.iter().position(|tab| tab.id == tab_id);
+        let mut touched = Vec::new();
+        if let Some(tab_index) = tab_index {
+            if let Some(source) = self.tabs[tab_index].point_cloud.active_mut() {
+                source.export_job = None;
+                touched.push(source.id.clone());
+            }
+        }
+        match result {
+            Ok(export) => {
+                let detail = format!(
+                    "streamed {} points into {} PNTS tiles (depth {}, {:.1} MiB) at '{}'",
+                    export.point_count,
+                    export.tile_count,
+                    export.max_depth,
+                    export.byte_length as f64 / (1024.0 * 1024.0),
+                    output.display()
+                );
+                self.command_line
+                    .push_output(format!("POINTCLOUD3DTILES: {detail}.").as_str());
+                if let Some(tab_index) = tab_index {
+                    self.persist_point_cloud(tab_index, "3d_tiles_export", &detail, &touched);
+                }
+            }
+            Err(error) => {
+                self.command_line
+                    .push_error(format!("POINTCLOUD3DTILES: {error}").as_str());
+                if let Some(tab_index) = tab_index {
+                    self.persist_point_cloud(tab_index, "3d_tiles_export_failed", &error, &touched);
+                }
+            }
+        }
+    }
+
     pub(super) fn suggested_merged_export_name(&self, tab_index: usize) -> String {
         let dataset = &self.tabs[tab_index].point_cloud;
         let stem = dataset
@@ -5343,6 +5482,37 @@ impl PointCloudDataset {
             audit_rows: Vec::new(),
         }
     }
+}
+
+fn write_ecef_tile_chunk(
+    source_crs: &ocs_pointcloud::CrsInfo,
+    wgs84: &ocs_pointcloud::CrsInfo,
+    height_scale: f64,
+    points: &mut Vec<ocs_pointcloud::SamplePoint>,
+    writer: &mut ocs_platform::PointOctreeWriter,
+) -> ocs_pointcloud::Result<()> {
+    if points.is_empty() {
+        return Ok(());
+    }
+    ocs_pointcloud::reproject_points_between_crs(source_crs, wgs84, points)?;
+    const SEMI_MAJOR: f64 = 6_378_137.0;
+    const FLATTENING: f64 = 1.0 / 298.257_223_563;
+    const ECCENTRICITY_SQUARED: f64 = FLATTENING * (2.0 - FLATTENING);
+    for point in points.drain(..) {
+        let longitude = point.position[0].to_radians();
+        let latitude = point.position[1].to_radians();
+        let height = point.position[2] * height_scale;
+        let sin_latitude = latitude.sin();
+        let cos_latitude = latitude.cos();
+        let prime_vertical =
+            SEMI_MAJOR / (1.0 - ECCENTRICITY_SQUARED * sin_latitude.powi(2)).sqrt();
+        writer.write_point([
+            (prime_vertical + height) * cos_latitude * longitude.cos(),
+            (prime_vertical + height) * cos_latitude * longitude.sin(),
+            (prime_vertical * (1.0 - ECCENTRICITY_SQUARED) + height) * sin_latitude,
+        ])?;
+    }
+    Ok(())
 }
 
 fn background_task<T, F, M>(work: F, map: M) -> Task<Message>
