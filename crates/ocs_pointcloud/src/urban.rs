@@ -2144,9 +2144,9 @@ mod tests {
         let record_length = records.first().map(|r| r.len()).unwrap_or(fixed);
         let mut header = vec![0u8; 375];
         header[0..4].copy_from_slice(b"LASF");
-        header[24..26].copy_from_slice(&(375u16).to_le_bytes());
-        header[25] = 1;
-        header[26] = 4;
+        header[24] = 1;
+        header[25] = 4;
+        header[94..96].copy_from_slice(&(375u16).to_le_bytes());
         let vlr_bytes: usize = vlrs.iter().map(|v| 54 + v.data.len()).sum();
         header[96..100].copy_from_slice(&((375 + vlr_bytes) as u32).to_le_bytes());
         header[100..104].copy_from_slice(&(vlrs.len() as u32).to_le_bytes());
