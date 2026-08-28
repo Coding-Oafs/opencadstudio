@@ -71,6 +71,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Python for the PROJ worker
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: |
           sudo apt-get update -q
@@ -141,7 +146,7 @@ jobs:
           mv Open*CAD*Studio*.AppImage OpenCADStudio.AppImage
 
       - name: Upload AppImage to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.target == 'all'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -200,7 +205,7 @@ jobs:
         uses: snapcore/action-build@v1
 
       - name: Upload snap to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.target == 'all'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SNAP: ${{ steps.snapcraft.outputs.snap }}
@@ -410,7 +415,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Upload artifacts to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.target == 'all'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -448,6 +453,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+
+      - name: Install Python for the PROJ worker
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install librsvg (for rsvg-convert)
         env:
@@ -589,7 +599,7 @@ jobs:
           test -f OpenCADStudio.dmg
 
       - name: Upload .dmg to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.target == 'all'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -598,7 +608,7 @@ jobs:
           gh release upload ${{ github.ref_name }} "$ASSET" --clobber --repo ${{ github.repository }}
 
       - name: Emit Homebrew cask sha256
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.target == 'all'
         run: |
           # Print the values needed to bump the Homebrew cask
           # (packaging/homebrew/open-cad-studio.rb) for this release, so the
