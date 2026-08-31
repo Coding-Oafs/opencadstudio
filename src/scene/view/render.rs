@@ -355,6 +355,20 @@ impl shader::Primitive for Primitive {
         let instance_ids: Vec<u64> = self.viewports.iter().map(|vp| vp.instance_id).collect();
         let slots = pipeline.resolve_slots(device, queue, &instance_ids);
 
+        // One GPU point arena for the whole drawing: every viewport frame that
+        // shows the cloud draws from the same instance buffers. All non-empty
+        // `vp.point_cloud` Arcs within a primitive are clones of the scene's
+        // single model, so uploading it once here serves every slot; paper-sheet
+        // frames carry a fresh empty model and draw nothing.
+        let shared_point_cloud = self
+            .viewports
+            .iter()
+            .find(|vp| !vp.point_cloud.points.is_empty() || !vp.point_cloud.chunks.is_empty())
+            .map(|vp| std::sync::Arc::clone(&vp.point_cloud));
+        if let Some(model) = shared_point_cloud.as_ref() {
+            pipeline.point_gpu.upload(device, queue, model);
+        }
+
         for (i, vp) in self.viewports.iter().enumerate() {
             let inner = &mut pipeline.inners[slots[i]];
             // Pipeline slots are addressed by list index, but off-canvas
@@ -381,7 +395,6 @@ impl shader::Primitive for Primitive {
                 inner.cached_mesh_source = None;
                 inner.cached_face3d_source = None;
                 inner.cached_face3d_depth_source = None;
-                inner.point_gpu.reset();
                 inner.wire_cull_key = (u64::MAX, u64::MAX, 0, 0);
                 inner.hatch_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
                 inner.wipeout_lod_key = (usize::MAX, u64::MAX, 0, 0, false);
@@ -474,7 +487,7 @@ impl shader::Primitive for Primitive {
                 inner.skip_geometry = true;
                 continue;
             };
-            inner.point_gpu.upload(device, queue, &vp.point_cloud);
+            // Points are uploaded once per frame above, from the shared model.
             // Third component is the *selected-set* signature (not
             // selection_generation, which also bumps on hover) so a rollover
             // doesn't re-upload the static hatch / face3d buffers.
@@ -1127,6 +1140,14 @@ impl shader::Primitive for Primitive {
         let ch = clip.height as f32;
         let clip_right = clip.x + clip.width;
         let clip_bottom = clip.y + clip.height;
+        // Identity of the drawing-wide cloud model uploaded in `prepare`.
+        // Slots carrying it draw points from the shared arena; slots with a
+        // different (empty placeholder) model draw none.
+        let shared_point_cloud = self
+            .viewports
+            .iter()
+            .find(|vp| !vp.point_cloud.points.is_empty() || !vp.point_cloud.chunks.is_empty())
+            .map(|vp| Arc::as_ptr(&vp.point_cloud));
         for vp in &self.viewports {
             let Some(slot) = pipeline.slot_by_instance.get(&vp.instance_id) else {
                 continue;
@@ -1159,6 +1180,7 @@ impl shader::Primitive for Primitive {
             // the draw path so meshes use the wireframe pipeline + the
             // pre-built triangle-edge index buffer.
             let mesh_wireframe = !vp.mesh_fill;
+            let draw_points = shared_point_cloud == Some(Arc::as_ptr(&vp.point_cloud));
             inner.render(
                 encoder,
                 target,
@@ -1168,6 +1190,8 @@ impl shader::Primitive for Primitive {
                 mesh_wireframe,
                 vp.hidden_line,
                 vp.show_3d_edges,
+                &pipeline.point_gpu,
+                draw_points,
             );
             // The ViewCube renders directly to the surface at the full
             // viewport rect. Skip it when the viewport's top-right corner

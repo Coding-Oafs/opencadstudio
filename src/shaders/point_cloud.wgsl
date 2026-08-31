@@ -27,12 +27,18 @@ struct Style {
     _pad1: vec2<f32>,
     elevation_range: vec2<f32>,
     _pad2: vec2<f32>,
+    // Cross-section band, expressed RELATIVE to `section_origin` (the segment
+    // midpoint): p0.xy, p1.xy, (total world width, mode: 0=off 1=dim 2=discard),
+    // and the origin's own high/low split. Forming the point's XY the same way
+    // — (high − origin_high) + (low − origin_low) — cancels the large parts
+    // first, so the capsule test keeps survey-scale precision instead of
+    // comparing two independently rounded absolute f32 coordinates.
     section_p0: vec2<f32>,
-    _pad3: vec2<f32>,
     section_p1: vec2<f32>,
-    _pad4: vec2<f32>,
-    section_params: vec2<f32>, // (total world width, mode: 0=off 1=dim 2=discard)
-    _pad5: vec2<f32>,
+    section_params: vec2<f32>,
+    section_origin_high: vec2<f32>,
+    section_origin_low: vec2<f32>,
+    _pad3: vec2<f32>,
     class_visible: array<vec4<u32>, 8>,
     class_colors: array<vec4<f32>, 256>,
 }
@@ -52,7 +58,8 @@ struct VertexOut {
 
 fn class_is_visible(classification: u32) -> bool {
     let shift = classification % 32u;
-    let word = style.class_visible[classification / 32u][shift];
+    let word_index = classification / 32u;
+    let word = style.class_visible[word_index / 4u][word_index % 4u];
     return ((word >> shift) & 1u) == 1u;
 }
 
@@ -86,12 +93,15 @@ fn categorical_hash(value: u32) -> vec4<f32> {
 
 // Returns 0 when the point lies inside the section band (or there is no
 // section), 1 when it lies outside but should be dimmed, and 2 when it lies
-// outside and should be discarded. `position` is the world-space XY.
-fn section_outside(position: vec2<f32>) -> f32 {
+// outside and should be discarded. `high_xy`/`low_xy` are the point's
+// double-single split world XY; both are re-based onto the section's local
+// origin before the capsule distance so the test is exact at map scale.
+fn section_outside(high_xy: vec2<f32>, low_xy: vec2<f32>) -> f32 {
     let mode = style.section_params.y;
     if (mode <= 0.5) {
         return 0.0;
     }
+    let position = (high_xy - style.section_origin_high) + (low_xy - style.section_origin_low);
     let seg = style.section_p1 - style.section_p0;
     let seg_len_sq = dot(seg, seg);
     let to_point = position - style.section_p0;
@@ -151,9 +161,7 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
     let scheme_class = select(classification, label, style.color_mode == 6u);
     let visible = class_is_visible(scheme_class);
     var half_size_px = select(0.0, style.point_size * 0.5, visible);
-    let ndc_offset = local * half_size_px / (u.viewport_size * 0.5);
     var output: VertexOut;
-    output.clip_position = center + vec4<f32>(ndc_offset * center.w, 0.0, 0.0);
     output.local = local;
     var color = point_color(
         classification,
@@ -169,13 +177,15 @@ fn point_color(classification: u32, intensity: f32, return_number: u32,
     }
     // Cross-section: collapse hidden points to a zero-size quad (no
     // fragments, no cost) and fade dimmed points into the background.
-    let outside = section_outside(point.position_high_size.xy);
+    let outside = section_outside(point.position_high_size.xy, point.position_low.xy);
     if (outside >= 2.0) {
         half_size_px = 0.0;
         color.a = 0.0;
     } else if (outside >= 1.0) {
         color = vec4<f32>(color.rgb * 0.15, color.a * 0.15);
     }
+    let ndc_offset = local * half_size_px / (u.viewport_size * 0.5);
+    output.clip_position = center + vec4<f32>(ndc_offset * center.w, 0.0, 0.0);
     output.color = color;
     return output;
 }

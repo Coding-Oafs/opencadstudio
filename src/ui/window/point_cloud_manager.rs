@@ -259,9 +259,11 @@ pub fn view_window(
         .align_y(iced::Center),
         row![
             text("Slice width:").size(11),
-            slider(1..=1024, data.section_width_map_units, move |value| {
-                Message::Command(format!("POINTCLOUDSECTIONWIDTH {value}"))
-            })
+            slider(
+                1..=crate::app::point_cloud::MAX_SECTION_WIDTH_WORLD as i32,
+                data.section_width_map_units,
+                move |value| Message::Command(format!("POINTCLOUDSECTIONWIDTH {value}"))
+            )
             .step(1)
             .width(Length::Fixed(220.0)),
             text(format!("{} map units", data.section_width_map_units)).size(11),

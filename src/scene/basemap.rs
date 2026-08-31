@@ -74,7 +74,10 @@ impl BasemapProvider {
         match self {
             Self::ArcGisImagery => "arcgis-imagery".to_string(),
             Self::ArcGisStreets => "arcgis-streets".to_string(),
-            Self::GoogleHybrid => "google-hybrid".to_string(),
+            // Include the requested locale in the namespace so an older
+            // provider-localized disk entry cannot override the explicit
+            // English request below.
+            Self::GoogleHybrid => "google-hybrid-en-us-v2".to_string(),
             Self::Off => "off".to_string(),
             Self::Custom => {
                 use sha2::{Digest, Sha256};
@@ -97,7 +100,7 @@ impl BasemapProvider {
                 "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
             }
             BasemapProvider::GoogleHybrid => {
-                "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key={key}"
+                "https://mt1.google.com/vt/lyrs=y&hl=en&gl=us&x={x}&y={y}&z={z}&key={key}"
             }
             BasemapProvider::Off | BasemapProvider::Custom => "",
         }
@@ -457,6 +460,58 @@ pub fn reproject_bounds_3857(bounds: [f64; 4], crs: &ocs_pointcloud::CrsInfo) ->
     Some(out)
 }
 
+/// Densification of a reprojected tile mesh. 8×8 quads per tile keep curved
+/// reprojection error well under a pixel at typical zooms for a trivial vertex
+/// count (81 vertices, 128 triangles per tile).
+pub const TILE_MESH_GRID: usize = 8;
+
+/// One tessellated tile-mesh vertex: the drawing-CRS world position of an
+/// image UV sample point (u right, v down from the tile's top edge).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TileMeshVertex {
+    pub world: [f64; 2],
+    pub uv: [f64; 2],
+}
+
+/// Tessellate one Web-Mercator tile into a world-space mesh in the drawing
+/// CRS. Every grid vertex transforms its own EPSG:3857 position, so the
+/// rotation, shear and curved edges the tile acquires under reprojection are
+/// preserved instead of being stretched over an axis-aligned quad — the cause
+/// of the overlaps and gaps that showed while orbiting. Adjacent tiles
+/// evaluate shared boundary vertices through this same function at identical
+/// UV coordinates, so their edges land on identical world positions and the
+/// seam stays closed. Returns `None` when the projection is unavailable.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn tile_world_mesh(
+    tile: &Tile,
+    crs: &ocs_pointcloud::CrsInfo,
+    grid: usize,
+) -> Option<Vec<TileMeshVertex>> {
+    let [min_x, min_y, max_x, max_y] = tile.bounds;
+    let direct = crs.horizontal_epsg == Some(3857) && crs.proj4.is_none();
+    let mut vertices = Vec::with_capacity((grid + 1) * (grid + 1));
+    for iy in 0..=grid {
+        // Image row 0 is the tile's top (north) edge = max northing, so v
+        // grows downward from max_y.
+        let v = iy as f64 / grid as f64;
+        let y = max_y - (max_y - min_y) * v;
+        for ix in 0..=grid {
+            let u = ix as f64 / grid as f64;
+            let x = min_x + (max_x - min_x) * u;
+            let (world_x, world_y) = if direct {
+                (x, y)
+            } else {
+                ocs_pointcloud::reproject_to_crs(3857, crs, x, y)?
+            };
+            vertices.push(TileMeshVertex {
+                world: [world_x, world_y],
+                uv: [u, v],
+            });
+        }
+    }
+    Some(vertices)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +588,8 @@ mod tests {
     fn google_tile_url_substitutes_key_and_coords() {
         let url = google_tile_url("SECRET123", 3, 2, 1);
         assert!(url.contains("lyrs=y"), "url = {url}");
+        assert!(url.contains("hl=en"), "url = {url}");
+        assert!(url.contains("gl=us"), "url = {url}");
         assert!(url.contains("x=2"), "url = {url}");
         assert!(url.contains("y=1"), "url = {url}");
         assert!(url.contains("z=3"), "url = {url}");
@@ -548,6 +605,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(reproject_bounds_3857(b, &crs), Some(b));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn tile_mesh_maps_texture_top_to_geographic_north() {
+        let tile = Tile {
+            z: 8,
+            x: 41,
+            y: 73,
+            bounds: tile_bounds(8, 41, 73),
+        };
+        let crs = ocs_pointcloud::CrsInfo {
+            horizontal_epsg: Some(3857),
+            ..Default::default()
+        };
+        let mesh = tile_world_mesh(&tile, &crs, 1).expect("identity mesh");
+        assert_eq!(mesh.len(), 4);
+        assert_eq!(mesh[0].uv, [0.0, 0.0]);
+        assert_eq!(mesh[1].uv, [1.0, 0.0]);
+        assert_eq!(mesh[2].uv, [0.0, 1.0]);
+        assert_eq!(mesh[3].uv, [1.0, 1.0]);
+        assert_eq!(mesh[0].world, [tile.bounds[0], tile.bounds[3]]);
+        assert_eq!(mesh[3].world, [tile.bounds[2], tile.bounds[1]]);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -86,7 +86,6 @@ pub struct Pipeline {
     /// Same shader as wire_pipeline but depth_compare=Greater, depth_write_enabled=false.
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
-    pub(crate) point_gpu: point_gpu::PointGpu,
     block_wire_xray_pipeline: wgpu::RenderPipeline,
     /// Layout for the per-wire `WireConst` storage buffer (group 1 of the wire /
     /// xray pipelines). `Some` on any storage-capable device; `None` in packed
@@ -359,70 +358,9 @@ impl Pipeline {
             mapped_at_creation: false,
         });
 
-        // Bind group layout 0 — shared by wire and hatch pipelines.
-        let frame_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("viewer.frame_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-            ],
-        });
+        // Bind group layout 0 — shared by wire and hatch pipelines, and by the
+        // drawing-wide point-cloud arena (see [`MultiPipeline::point_gpu`]).
+        let frame_bgl = create_frame_bgl(device);
         let shadow_frame_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow.frame_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -617,8 +555,6 @@ impl Pipeline {
             read_mask: 0xff,
             write_mask: 0x00,
         };
-        let point_gpu =
-            point_gpu::PointGpu::new(device, format, &frame_bgl, content_stencil.clone());
 
         let background_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("background.shader"),
@@ -2195,7 +2131,6 @@ impl Pipeline {
             wire_black_pipeline,
             block_wire_black_pipeline,
             wire_xray_pipeline,
-            point_gpu,
             block_wire_xray_pipeline,
             wire_const_bgl,
             block_wire_const_bgl,
@@ -3520,6 +3455,8 @@ impl Pipeline {
         mesh_wireframe: bool,
         hidden_line: bool,
         show_3d_edges: bool,
+        point_gpu: &point_gpu::PointGpu,
+        draw_points: bool,
     ) {
         let vp = Rectangle::<u32> {
             x: 0,
@@ -4161,8 +4098,9 @@ impl Pipeline {
                     multiview_mask: None,
                 });
                 pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
-                self.point_gpu
-                    .draw(&mut pass, &self.uniform_bind_group, stencil_ref);
+                if draw_points {
+                    point_gpu.draw(&mut pass, &self.uniform_bind_group, stencil_ref);
+                }
             }
 
             // ── Pass 5: wires ─────────────────────────────────────────────────
@@ -4748,6 +4686,76 @@ fn create_msaa_texture(
     })
 }
 
+/// Bind group layout 0 shared by the wire / hatch pipelines and the
+/// drawing-wide LiDAR point arena. Built by one function so the per-slot
+/// pipelines and the shared point pipeline stay layout-compatible even if
+/// the descriptor evolves.
+fn create_frame_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("viewer.frame_bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+        ],
+    })
+}
+
 /// Holds one inner `Pipeline` per viewport drawn this frame. A single
 /// shader widget owns one `MultiPipeline`; the unified renderer grows the
 /// `inners` vector to match the viewport count and draws each into its own
@@ -4780,6 +4788,13 @@ pub struct MultiPipeline {
             std::sync::Arc<rustc_hash::FxHashMap<u64, Vec<u32>>>,
         ),
     >,
+    /// The drawing-wide LiDAR point arena. Every viewport frame that shows the
+    /// cloud draws from this ONE set of instance buffers — the arena pages
+    /// streamed tiles in and out by chunk key — instead of each pipeline slot
+    /// uploading and holding its own copy (four view frames used to multiply
+    /// the nominal GPU point budget by four). Style changes rewrite the small
+    /// uniform; model rebuilds patch incrementally by chunk identity.
+    pub(crate) point_gpu: point_gpu::PointGpu,
 }
 
 impl MultiPipeline {
@@ -4905,6 +4920,21 @@ fn install_gpu_error_handler(device: &wgpu::Device) {
 impl iced::widget::shader::Pipeline for MultiPipeline {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         install_gpu_error_handler(device);
+        // The point arena's pipeline must be layout-compatible with the
+        // per-slot frame bind groups; `create_frame_bgl` guarantees that.
+        let frame_bgl = create_frame_bgl(device);
+        let content_stencil_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        };
+        let content_stencil = wgpu::StencilState {
+            front: content_stencil_face,
+            back: content_stencil_face,
+            read_mask: 0xff,
+            write_mask: 0x00,
+        };
         Self {
             inners: vec![Pipeline::new(device, queue, format)],
             format,
@@ -4912,6 +4942,12 @@ impl iced::widget::shader::Pipeline for MultiPipeline {
             slot_last_used: vec![0],
             slot_clock: 0,
             wire_buffer_cache: rustc_hash::FxHashMap::default(),
+            point_gpu: point_gpu::PointGpu::new(
+                device,
+                format,
+                &frame_bgl,
+                content_stencil.clone(),
+            ),
         }
     }
 }

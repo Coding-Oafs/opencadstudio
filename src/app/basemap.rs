@@ -448,6 +448,15 @@ impl OpenCADStudio {
     /// The camera's visible world-space XY envelope (for camera-follow basemap
     /// mode) plus the viewport pixel width. `None` when the viewport is not yet
     /// measurable.
+    ///
+    /// The envelope is derived by unprojecting the viewport's four corners onto
+    /// the basemap ground plane (world XY at elevation 0), so roll, orbit and
+    /// perspective all produce the true visible footprint instead of an
+    /// axis-aligned box around the orbit target. Corner rays that never reach
+    /// the plane (a horizon in perspective) fall back to the legacy
+    /// target-centred ortho envelope, which is also unioned in whenever the
+    /// footprint is only partially bounded so the imagery never shrinks behind
+    /// the drawing.
     fn basemap_viewport(&self, i: usize) -> Option<(([f64; 3], [f64; 3]), f32)> {
         let canvas = self.tabs[i].scene.selection.borrow().vp_size;
         let (camera, viewport) = self.tabs[i]
@@ -467,13 +476,55 @@ impl OpenCADStudio {
         let half_h = camera.ortho_size() as f64;
         let half_w = half_h * (viewport.width / viewport.height) as f64;
         let center = camera.target;
-        Some((
-            (
-                [center.x - half_w, center.y - half_h, center.z],
-                [center.x + half_w, center.y + half_h, center.z],
-            ),
-            viewport.width,
-        ))
+        let legacy_envelope = (
+            [center.x - half_w, center.y - half_h, center.z],
+            [center.x + half_w, center.y + half_h, center.z],
+        );
+        // Generous clamp for near-horizon corner rays: keeps the footprint
+        // finite without capping ordinary perspective orbits, which see a
+        // legitimately larger ground area than the ortho-equivalent box.
+        let max_radius = (half_w.hypot(half_h) * 32.0).max(1024.0);
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let hits: Vec<[f64; 2]> = corners
+            .iter()
+            .filter_map(|&(ndc_x, ndc_y)| basemap_ground_hit(&camera, ndc_x, ndc_y, viewport))
+            .map(|hit| {
+                let dx = hit[0] - center.x;
+                let dy = hit[1] - center.y;
+                let radius = dx.hypot(dy);
+                if radius <= max_radius {
+                    hit
+                } else {
+                    let scale = max_radius / radius;
+                    [center.x + dx * scale, center.y + dy * scale]
+                }
+            })
+            .collect();
+        let bounds = if hits.len() == corners.len() {
+            let mut min = [f64::INFINITY; 2];
+            let mut max = [f64::NEG_INFINITY; 2];
+            for hit in hits {
+                for axis in 0..2 {
+                    min[axis] = min[axis].min(hit[axis]);
+                    max[axis] = max[axis].max(hit[axis]);
+                }
+            }
+            ([min[0], min[1], center.z], [max[0], max[1], center.z])
+        } else {
+            // Partially or fully unbounded footprint: union the bounded hits
+            // (still exact for the corners that do hit) with the legacy
+            // envelope so partially-visible ground stays covered.
+            let mut min = legacy_envelope.0;
+            let mut max = legacy_envelope.1;
+            for hit in hits {
+                min[0] = min[0].min(hit[0]);
+                min[1] = min[1].min(hit[1]);
+                max[0] = max[0].max(hit[0]);
+                max[1] = max[1].max(hit[1]);
+            }
+            (min, max)
+        };
+        Some((bounds, viewport.width))
     }
 
     pub(super) fn refresh_basemap(&mut self, tab_id: u64) -> Task<Message> {
@@ -705,17 +756,49 @@ impl OpenCADStudio {
                     // other projected content instead of landing at Mercator
                     // meters (millions of metres off for non-3857 sources).
                     // A no-op when the source is already 3857.
+                    //
+                    // The tile is rendered as a tessellated mesh whose every
+                    // vertex reprojects individually: the rotation, shear and
+                    // curved edges the tile gains in the target CRS survive
+                    // instead of being stretched out over an axis-aligned quad
+                    // (which left overlaps and gaps while orbiting). Adjacent
+                    // tiles evaluate shared boundary vertices identically, so
+                    // seams stay closed. A projection failure rejects the tile
+                    // instead of placing raw Mercator metres into the drawing
+                    // CRS, which would create a plausible-looking but
+                    // geographically false patch far from its neighbours.
                     #[cfg(not(target_arch = "wasm32"))]
-                    let quad_bounds = basemap::reproject_bounds_3857(tile.bounds, &worker_crs)
-                        .unwrap_or(tile.bounds);
+                    let Some(mesh_vertices): Option<Vec<([f64; 2], [f64; 2])>> =
+                        basemap::tile_world_mesh(tile, &worker_crs, basemap::TILE_MESH_GRID).map(
+                            |mesh| {
+                                mesh.iter()
+                                    .map(|vertex| (vertex.world, vertex.uv))
+                                    .collect()
+                            },
+                        )
+                    else {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        completed.fetch_add(1, Ordering::Relaxed);
+                        return None;
+                    };
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let image = ImageModel::from_tessellated_world_mesh(
+                        &url,
+                        decoded.pixels,
+                        decoded.width,
+                        decoded.height,
+                        &mesh_vertices,
+                        basemap::TILE_MESH_GRID,
+                        0.0,
+                        0.0,
+                    );
                     #[cfg(target_arch = "wasm32")]
-                    let quad_bounds = tile.bounds;
                     let image = ImageModel::from_world_quad(
                         &url,
                         decoded.pixels,
                         decoded.width,
                         decoded.height,
-                        quad_bounds,
+                        tile.bounds,
                         0.0,
                         0.0,
                     );
@@ -812,4 +895,42 @@ impl OpenCADStudio {
             );
         }
     }
+}
+
+/// Intersect one viewport corner's view ray with the basemap ground plane
+/// (world XY at elevation 0). The ray is built eye-relative through the
+/// relative-to-eye matrix, matching the renderer's precision at survey-scale
+/// coordinates. Returns `None` when the ray runs parallel to or away from the
+/// ground (a perspective corner above the horizon).
+fn basemap_ground_hit(
+    camera: &crate::scene::Camera,
+    ndc_x: f32,
+    ndc_y: f32,
+    bounds: iced::Rectangle,
+) -> Option<[f64; 2]> {
+    use crate::scene::Projection;
+
+    let eye = camera.eye();
+    let inverse = camera.view_proj_rte(bounds).inverse();
+    let near = inverse.project_point3(glam::Vec3::new(ndc_x, ndc_y, 0.0));
+    let direction = match camera.projection {
+        Projection::Perspective => {
+            let far = inverse.project_point3(glam::Vec3::new(ndc_x, ndc_y, 1.0));
+            (far - near).normalize()
+        }
+        Projection::Orthographic => camera.rotation * glam::Vec3::NEG_Z,
+    };
+    // Plane z = 0 expressed eye-relative: only its z offset enters the solve,
+    // measured from the near-plane point the ray starts at.
+    let denominator = direction.z;
+    if denominator.abs() < 1e-6 {
+        return None;
+    }
+    let plane_z_rel = -eye.z as f32;
+    let t = (plane_z_rel - near.z) / denominator;
+    if !(t > 0.0) {
+        return None;
+    }
+    let hit = near + direction * t;
+    Some([eye.x + hit.x as f64, eye.y + hit.y as f64])
 }

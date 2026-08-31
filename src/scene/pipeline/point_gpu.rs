@@ -70,15 +70,20 @@ struct StyleUniforms {
     _pad1: [f32; 2],
     elevation_range: [f32; 2],
     _pad2: [f32; 2],
-    // Cross-section band: p0.xy, p1.xy, and (width_world, mode). mode: 0 =
-    // off, 1 = dim, 2 = discard. `width_world` is the total band width in
-    // drawing/map units; a degenerate p0==p1 (mode != 0) is treated as "off".
+    // Cross-section band relative to `section_origin` (the segment midpoint):
+    // p0.xy, p1.xy, (width_world, mode), plus the origin's high/low split.
+    // mode: 0 = off, 1 = dim, 2 = discard. `width_world` is the total band
+    // width in drawing/map units; a degenerate p0==p1 (mode != 0) is "off".
+    // Rebasing both the band and each point's double-single XY onto the same
+    // local origin keeps the GPU capsule test precise at survey-scale
+    // coordinates, where two independently rounded absolute f32s differ by
+    // more than the band itself.
     section_p0: [f32; 2],
-    _pad3: [f32; 2],
     section_p1: [f32; 2],
-    _pad4: [f32; 2],
     section_params: [f32; 2],
-    _pad5: [f32; 2],
+    section_origin_high: [f32; 2],
+    section_origin_low: [f32; 2],
+    _pad3: [f32; 2],
     class_visible: [[u32; 4]; 8],
     class_colors: [[f32; 4]; 256],
 }
@@ -92,19 +97,39 @@ impl StyleUniforms {
         }
         // Encode the active section (dim or discard). A zero-length segment
         // degrades to "off" so a half-formed section never blanks the cloud.
-        let (p0, p1, params) = match style.section {
-            Some(section) if section.p0 != section.p1 && section.width_world > 0.0 => (
-                [section.p0[0] as f32, section.p0[1] as f32],
-                [section.p1[0] as f32, section.p1[1] as f32],
-                [
-                    section.width_world as f32,
-                    match section.mode {
-                        crate::scene::model::point_cloud_model::SectionMode::Dim => 1.0,
-                        crate::scene::model::point_cloud_model::SectionMode::Discard => 2.0,
-                    },
-                ],
-            ),
-            _ => ([0.0; 2], [0.0; 2], [0.0; 2]),
+        let (p0, p1, params, origin_high, origin_low) = match style.section {
+            Some(section) if section.p0 != section.p1 && section.width_world > 0.0 => {
+                let origin = [
+                    (section.p0[0] + section.p1[0]) * 0.5,
+                    (section.p0[1] + section.p1[1]) * 0.5,
+                ];
+                let origin_high = [origin[0] as f32, origin[1] as f32];
+                let origin_low = [
+                    (origin[0] - origin_high[0] as f64) as f32,
+                    (origin[1] - origin_high[1] as f64) as f32,
+                ];
+                let relative = |point: [f64; 2]| [point[0] - origin[0], point[1] - origin[1]];
+                (
+                    [
+                        relative(section.p0)[0] as f32,
+                        relative(section.p0)[1] as f32,
+                    ],
+                    [
+                        relative(section.p1)[0] as f32,
+                        relative(section.p1)[1] as f32,
+                    ],
+                    [
+                        section.width_world as f32,
+                        match section.mode {
+                            crate::scene::model::point_cloud_model::SectionMode::Dim => 1.0,
+                            crate::scene::model::point_cloud_model::SectionMode::Discard => 2.0,
+                        },
+                    ],
+                    origin_high,
+                    origin_low,
+                )
+            }
+            _ => ([0.0; 2], [0.0; 2], [0.0; 2], [0.0; 2], [0.0; 2]),
         };
         Self {
             color_mode: style.color_mode,
@@ -115,11 +140,11 @@ impl StyleUniforms {
             elevation_range: style.elevation_range,
             _pad2: [0.0; 2],
             section_p0: p0,
-            _pad3: [0.0; 2],
             section_p1: p1,
-            _pad4: [0.0; 2],
             section_params: params,
-            _pad5: [0.0; 2],
+            section_origin_high: origin_high,
+            section_origin_low: origin_low,
+            _pad3: [0.0; 2],
             class_visible,
             class_colors: style.class_colors,
         }
@@ -279,7 +304,7 @@ fn plan_arena(state: &ArenaState, chunks: &[PointChunk]) -> ArenaUpdate {
 /// area past every live slot.
 fn allocate_slot(free: &mut Vec<(u32, u32)>, bump: &mut u32, chunk: &PointChunk) -> Slot {
     let mut best: Option<usize> = None;
-    for (index, (offset, len)) in free.iter().enumerate() {
+    for (index, (_offset, len)) in free.iter().enumerate() {
         if *len >= chunk.len
             && best.is_none_or(|current| {
                 let (_, current_len) = free[current];
@@ -521,11 +546,11 @@ impl PointGpu {
                 elevation_range: [0.0, 0.0],
                 _pad2: [0.0; 2],
                 section_p0: [0.0; 2],
-                _pad3: [0.0; 2],
                 section_p1: [0.0; 2],
-                _pad4: [0.0; 2],
                 section_params: [0.0; 2],
-                _pad5: [0.0; 2],
+                section_origin_high: [0.0; 2],
+                section_origin_low: [0.0; 2],
+                _pad3: [0.0; 2],
                 class_visible: [[u32::MAX; 4]; 8],
                 class_colors: [[0.92, 0.92, 0.92, 1.0]; 256],
             }),
@@ -569,6 +594,8 @@ impl PointGpu {
         {
             if !model.chunks.is_empty() {
                 self.upload_arena(device, queue, model);
+                self.geometry_generation = model.geometry_generation;
+                self.source_id = source_id;
                 return;
             }
             // Models without chunk identity fall back to whole-buffer upload.

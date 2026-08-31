@@ -49,3 +49,7 @@ packaging/windows/*.wixobj
 packaging/windows/*.wixpdb
 packaging/windows/*.log
 packaging/windows/*.msi
+
+# Local release packages built at the repository root
+/*.msi
+/*.wixpdb

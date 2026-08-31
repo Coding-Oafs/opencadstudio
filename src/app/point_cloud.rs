@@ -66,6 +66,14 @@ impl OpenCADStudio {
             let normal_len = (nx * nx + ny * ny).sqrt().max(f64::EPSILON);
             let direction = [ny / normal_len, -nx / normal_len];
             let half = section.axis_length * 0.5;
+            // Clamp the persisted band into the currently accepted range: a
+            // project saved under different limits (or hand-edited) must not
+            // import a degenerate or out-of-range section silently.
+            let width_world = section
+                .total_width
+                .is_finite()
+                .then(|| section.total_width.clamp(1.0, MAX_SECTION_WIDTH_WORLD))
+                .unwrap_or(32.0);
             self.tabs[tab_index].point_cloud.section =
                 Some(crate::scene::model::point_cloud_model::Section {
                     p0: [
@@ -76,7 +84,7 @@ impl OpenCADStudio {
                         section.origin[0] + direction[0] * half,
                         section.origin[1] + direction[1] * half,
                     ],
-                    width_world: section.total_width,
+                    width_world,
                     mode: crate::scene::model::point_cloud_model::SectionMode::Discard,
                 });
         }
@@ -449,6 +457,12 @@ const MAX_COMMAND_EDIT_POINTS: usize = 5_000_000;
 /// GPU cost of one point instance (two position vec4s + attribute vec4 +
 /// color/flag vec4); drives the display point budget.
 const GPU_POINT_BYTES: usize = crate::scene::pipeline::point_gpu::POINT_INSTANCE_BYTES;
+
+/// Upper bound for a cross-section band's total width, in drawing/map units.
+/// Wide corridor cuts legitimately need more than a kilometre of band, so the
+/// historical 1,024-unit cap forced artificially narrow sections; 3,072 keeps
+/// the streamed working set bounded while covering road-scale corridors.
+pub(crate) const MAX_SECTION_WIDTH_WORLD: f64 = 3072.0;
 
 #[derive(Clone, Debug)]
 pub struct TileLoadBatch {
@@ -1248,6 +1262,12 @@ pub(super) struct PointCloudDataset {
     /// colors, point size): the GPU rewrites its style uniform, not the
     /// instance buffer.
     style_generation: u64,
+    /// Bumps whenever the cross-section changes. A Discard-mode section
+    /// compacts the display model on the CPU, so every chunk's contents (and
+    /// not just the style uniform) depend on the corridor; folding this
+    /// revision into each chunk's generation forces the ranged rewrites that
+    /// keep the GPU arena in sync with the compacted point stream.
+    section_revision: u64,
     /// Cached sample intensity range for style updates that skip a full
     /// display rebuild.
     resolved_intensity_range: Option<[u16; 2]>,
@@ -1370,28 +1390,91 @@ impl PointCloudDataset {
         let mut chunks = Vec::new();
         let mut chunk_offset: u32 = 0;
         let mut intensity_range = self.display.intensity_range.unwrap_or([u16::MAX, 0]);
-        for source in &self.sources {
+        // A Discard-mode section compacts the model on the CPU: points outside
+        // the corridor never enter the GPU arena or draw bandwidth at all
+        // (they would have been collapsed to zero-size quads by the shader
+        // anyway). Dim mode keeps every point — the outside ones render faded.
+        let discard_corridor = self.section.as_ref().and_then(|section| {
+            (section.p0 != section.p1
+                && matches!(
+                    section.mode,
+                    crate::scene::model::point_cloud_model::SectionMode::Discard
+                ))
+            .then(|| SectionCorridor {
+                p0: section.p0,
+                p1: section.p1,
+                half_width: (0.5 * section.width_world).max(0.0),
+            })
+        });
+        // Enforce the real GPU ceiling after exact corridor compaction. Tile
+        // selection uses a conservative spatial estimate; clustered points can
+        // exceed that estimate, so this final guard is what makes the memory
+        // budget a guarantee instead of a suggestion. A narrow discard slice
+        // may use up to 4x the ordinary point budget, but never more than the
+        // configured GPU byte budget or u32 instance addressing permits.
+        let configured_limit = if discard_corridor.is_some() {
+            self.display.point_budget.saturating_mul(4)
+        } else {
+            self.display.point_budget
+        };
+        let display_point_limit = configured_limit
+            .min(self.display.gpu_budget_bytes / GPU_POINT_BYTES.max(1))
+            .min(u32::MAX as usize)
+            .max(1);
+        // Budget every source before copying any points. A single global
+        // `points.len() < limit` guard made source order visible: the first
+        // large LAS/LAZ consumed the entire GPU budget and every later source
+        // disappeared as a rectangular hole. Water-filling guarantees each
+        // non-empty source a fair share and redistributes unused shares from
+        // sparse sources without exceeding the same hard global ceiling.
+        let available: Vec<_> = self
+            .sources
+            .iter()
+            .map(|source| source_display_point_count(source, discard_corridor.as_ref()))
+            .collect();
+        let source_quotas = fair_point_quotas(&available, display_point_limit);
+        for (source_index, source) in self.sources.iter().enumerate() {
+            let source_available = available[source_index];
+            let source_quota = source_quotas[source_index];
+            let mut eligible_seen = 0_usize;
             let active_selection = source
                 .selection_sets
                 .iter()
                 .find(|selection| selection.name == "active");
-            let generation = source_chunk_generation(source);
+            let generation = source_chunk_generation(
+                source,
+                source_quota,
+                self.display_generation,
+                self.section_revision,
+            );
             let tiled = source.sample.stride == 0 && !source.active_tiles.is_empty();
             // A unified view of the source's active points: the streamed
             // resident tiles when tiled, otherwise the bounded sample. Only
             // references are collected — the points stay owned by
-            // `resident_tiles` / `sample`, never duplicated here.
-            let active: Vec<&ocs_pointcloud::SamplePoint> = if tiled {
-                source
-                    .active_tiles
-                    .iter()
-                    .filter_map(|key| source.resident_tiles.get(key))
-                    .flat_map(|tile| tile.points.iter())
-                    .collect()
-            } else {
-                source.sample.points.iter().collect()
-            };
-            for sampled in active {
+            // `resident_tiles` / `sample`, never duplicated here. `kept`
+            // tracks per-chunk survivor counts so chunk ranges stay aligned
+            // with the compacted stream.
+            let mut push_point = |sampled: &ocs_pointcloud::SamplePoint,
+                                  points: &mut Vec<PointCloudPoint>,
+                                  intensity_range: &mut [u16; 2]|
+             -> bool {
+                if points.len() >= display_point_limit {
+                    return false;
+                }
+                if let Some(corridor) = discard_corridor {
+                    if !corridor.contains_xy(sampled.position[0], sampled.position[1]) {
+                        return false;
+                    }
+                }
+                let eligible_index = eligible_seen;
+                eligible_seen = eligible_seen.saturating_add(1);
+                // When a source has more active points than its share, sample
+                // uniformly across its whole deterministic stream. Taking the
+                // first N points instead produced another geometric rectangle:
+                // early tiles rendered and later tiles vanished.
+                if !stratified_keep(eligible_index, source_available, source_quota) {
+                    return false;
+                }
                 let point = source.edits.patch_for(sampled.source_index).map_or_else(
                     || sampled.clone(),
                     |patch| sampled.clone().with_patch(patch),
@@ -1413,33 +1496,40 @@ impl PointCloudDataset {
                     selected: active_selection
                         .is_some_and(|selection| selection.contains(point.source_index)),
                 });
-            }
+                true
+            };
             // Chunk the stream by upload identity: one chunk per streamed
             // tile, or one per source for a bounded sample. The point order
             // built above matches active-tile order, so chunk ranges align.
             if tiled {
                 for key in &source.active_tiles {
-                    let len = source
-                        .resident_tiles
-                        .get(key)
-                        .map_or(0, |tile| tile.points.len()) as u32;
+                    let mut kept = 0_u32;
+                    if let Some(tile) = source.resident_tiles.get(key) {
+                        for sampled in tile.points.iter() {
+                            kept +=
+                                u32::from(push_point(sampled, &mut points, &mut intensity_range));
+                        }
+                    }
                     chunks.push(PointChunk {
                         key: tile_chunk_key(&source.id, key),
                         generation,
                         offset: chunk_offset,
-                        len,
+                        len: kept,
                     });
-                    chunk_offset += len;
+                    chunk_offset += kept;
                 }
             } else {
-                let len = source.sample.points.len() as u32;
+                let mut kept = 0_u32;
+                for sampled in &source.sample.points {
+                    kept += u32::from(push_point(sampled, &mut points, &mut intensity_range));
+                }
                 chunks.push(PointChunk {
                     key: tile_chunk_key(&source.id, &SAMPLE_CHUNK_TILE),
                     generation,
                     offset: chunk_offset,
-                    len,
+                    len: kept,
                 });
-                chunk_offset += len;
+                chunk_offset += kept;
             }
         }
         debug_assert_eq!(chunk_offset as usize, points.len());
@@ -1558,10 +1648,12 @@ impl OpenCADStudio {
 
     pub(super) fn point_cloud_stream_needed(&self, tab_index: usize) -> bool {
         self.tabs.get(tab_index).is_some_and(|tab| {
-            !tab.point_cloud
-                .sources
-                .iter()
-                .any(|cloud| cloud.stream_in_flight)
+            !tab.point_cloud.index_batch_active
+                && !tab
+                    .point_cloud
+                    .sources
+                    .iter()
+                    .any(|cloud| cloud.stream_in_flight)
                 && tab.point_cloud.sources.iter().any(|cloud| {
                     cloud.cache_manifest.is_some()
                         && !cloud.stream_in_flight
@@ -2891,6 +2983,14 @@ impl OpenCADStudio {
     }
 
     pub(super) fn start_point_cloud_stream(&mut self, tab_index: usize) -> Task<Message> {
+        // A multi-source index batch is an atomic preparation phase. Starting
+        // LOD streaming as each source finishes mixes coarse samples and tiled
+        // sources for minutes, causing the large rectangular density changes
+        // visible in the Boston captures. Keep the existing complete display
+        // until every source cache has been published.
+        if self.tabs[tab_index].point_cloud.index_batch_active {
+            return Task::none();
+        }
         if self.tabs[tab_index]
             .point_cloud
             .sources
@@ -2899,20 +2999,28 @@ impl OpenCADStudio {
         {
             return Task::none();
         }
-        let (camera, viewport, camera_generation, tab_id) = {
+        let (view_frames, camera_generation, tab_id) = {
             let tab = &self.tabs[tab_index];
             let canvas = tab.scene.selection.borrow().vp_size;
-            let (camera, viewport) = tab.scene.viewport_edit_frame(canvas).unwrap_or_else(|| {
-                (
+            let mut frames: Vec<_> = tab
+                .scene
+                .active_viewports(canvas.0, canvas.1, tab.render_mode)
+                .into_iter()
+                .filter(|view| {
+                    !view.paper_sheet
+                        && view.screen_rect.width > 1.0
+                        && view.screen_rect.height > 1.0
+                })
+                .map(|view| (view.camera, view.screen_rect))
+                .collect();
+            if frames.is_empty() {
+                frames.push((
                     tab.scene.camera.borrow().clone(),
                     tab.scene.active_model_tile_bounds(canvas.0, canvas.1),
-                )
-            });
-            (camera, viewport, tab.scene.camera_generation, tab.id)
+                ));
+            }
+            (frames, tab.scene.camera_generation, tab.id)
         };
-        if viewport.width <= 1.0 || viewport.height <= 1.0 {
-            return Task::none();
-        }
         // Budgets are cloned before the mutable find so the display settings
         // stay readable while a source is borrowed for scheduling.
         let display = self.tabs[tab_index].point_cloud.display.clone();
@@ -2921,21 +3029,26 @@ impl OpenCADStudio {
             .drawing_crs
             .as_ref()
             .map(crate::app::spatial::DrawingCrs::as_crs_info);
-        // The active cross-section band, captured before the mutable find so
-        // the section can steer tile selection while a source is borrowed.
-        // Its width is already in world/map units and must not depend on the
-        // current camera: zooming or rotating keeps the same geographic area.
-        let section_band = self.tabs[tab_index].point_cloud.section.map(|section| {
-            let half = (0.5 * section.width_world).max(0.0);
-            let min_x = section.p0[0].min(section.p1[0]) - half;
-            let max_x = section.p0[0].max(section.p1[0]) + half;
-            let min_y = section.p0[1].min(section.p1[1]) - half;
-            let max_y = section.p0[1].max(section.p1[1]) + half;
-            (
-                [min_x, min_y, f64::NEG_INFINITY],
-                [max_x, max_y, f64::INFINITY],
-            )
-        });
+        // The active cross-section corridor, captured before the mutable find
+        // so the section can steer tile selection while a source is borrowed.
+        // The capsule around the cut is exactly what the shader clips to, and
+        // its width is already in world/map units: zooming or rotating keeps
+        // the same geographic area.
+        let section_corridor = self.tabs[tab_index]
+            .point_cloud
+            .section
+            .filter(|section| {
+                section.p0 != section.p1
+                    && matches!(
+                        section.mode,
+                        crate::scene::model::point_cloud_model::SectionMode::Discard
+                    )
+            })
+            .map(|section| SectionCorridor {
+                p0: section.p0,
+                p1: section.p1,
+                half_width: (0.5 * section.width_world).max(0.0),
+            });
         // One source streams per tick; the stream-needed check keeps calling
         // back until every source has caught up with the camera.
         let source_count = self.tabs[tab_index].point_cloud.len().max(1);
@@ -2956,27 +3069,37 @@ impl OpenCADStudio {
         else {
             return Task::none();
         };
-        let memory_point_budget = display.cpu_budget_bytes
-            / source_count
-            / std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
-        let gpu_point_budget = display.gpu_budget_bytes / source_count / GPU_POINT_BYTES;
-        let point_budget = display
-            .point_budget
-            .min(memory_point_budget)
-            .min(gpu_point_budget)
-            .max(1) as u64;
-        // Stream only tiles that intersect the live camera frame. An active
-        // section adds its fixed world-space corridor as a second filter; it
-        // must never pull full-density leaves for off-screen parts of the cut.
-        // Walking finest-to-coarsest makes a close view reach leaf/full density
-        // naturally, while a wider view selects a lower-density level that
-        // fits the same CPU/GPU point budget.
+        // Reserve CPU space for the compacted display Vec as well as the raw
+        // resident tile records. Without this subtraction the nominal 1 GB CPU
+        // cache plus a second several-hundred-MB display copy could exceed the
+        // configured ceiling even though both individual counters looked safe.
+        let (point_budget, _resident_cpu_bytes, resident_point_budget) =
+            point_stream_budgets(&display, source_count, section_corridor.is_some());
+        // Mixed screen-space-error refinement: a tile refines while its
+        // estimated point spacing still spans more than a couple of pixels.
+        // An active section adds its world-space corridor as a second filter;
+        // it must never pull tiles for off-screen parts of the cut, and it
+        // must never substitute for the camera test.
+        let spacing_px = |tile: &ocs_pointcloud::TileEntry| -> f32 {
+            view_frames
+                .iter()
+                .filter(|(camera, viewport)| {
+                    camera.aabb_visible(tile.bounds_min, tile.bounds_max, *viewport)
+                })
+                .map(|(camera, viewport)| tile_spacing_px(tile, camera, *viewport))
+                .fold(0.0_f32, f32::max)
+        };
         let selected = select_visible_lod_tiles(
             &manifest.tiles,
-            manifest.leaf_level,
             point_budget,
-            section_band,
-            |tile| camera.aabb_visible(tile.bounds_min, tile.bounds_max, viewport),
+            resident_point_budget.max(1) as u64,
+            section_corridor.as_ref(),
+            |tile| {
+                view_frames.iter().any(|(camera, viewport)| {
+                    camera.aabb_visible(tile.bounds_min, tile.bounds_max, *viewport)
+                })
+            },
+            spacing_px,
         );
         let selected_keys: Vec<_> = selected.iter().map(|tile| tile.key).collect();
         cloud.stream_camera_generation = camera_generation;
@@ -2996,8 +3119,13 @@ impl OpenCADStudio {
         if missing.is_empty() {
             cloud.active_tiles = selected_keys;
             rebuild_resident_display(cloud);
-            let model = self.tabs[tab_index].point_cloud.display_model();
-            self.tabs[tab_index].scene.set_point_cloud(model);
+            if point_stream_frontier_ready(
+                &self.tabs[tab_index].point_cloud.sources,
+                camera_generation,
+            ) {
+                let model = self.tabs[tab_index].point_cloud.display_model();
+                self.tabs[tab_index].scene.set_point_cloud(model);
+            }
             return Task::none();
         }
 
@@ -3051,8 +3179,17 @@ impl OpenCADStudio {
                     }
                 }
             };
-            let cpu_budget = self.tabs[tab_index].point_cloud.display.cpu_budget_bytes
-                / self.tabs[tab_index].point_cloud.len().max(1);
+            let dataset = &self.tabs[tab_index].point_cloud;
+            let discard_section = dataset.section.is_some_and(|section| {
+                section.p0 != section.p1
+                    && matches!(
+                        section.mode,
+                        crate::scene::model::point_cloud_model::SectionMode::Discard
+                    )
+            });
+            let (_, cpu_budget, _) =
+                point_stream_budgets(&dataset.display, dataset.len().max(1), discard_section);
+            let scene_camera_generation = self.tabs[tab_index].scene.camera_generation;
             let Some(cloud) = self.tabs[tab_index].point_cloud.source_mut(&batch_source) else {
                 return;
             };
@@ -3081,6 +3218,18 @@ impl OpenCADStudio {
                     },
                 );
             }
+            // Generation guard: the tiles above join the residency pool — they
+            // may still be visible under the current camera — but a batch
+            // selected for an older camera must never replace the view's
+            // active draw list. The stream dispatcher re-selects on the next
+            // tick and reuses whatever is still resident instead of blanking
+            // the view or flashing last rotation's tiles.
+            let stale = camera_generation != scene_camera_generation;
+            if stale {
+                cloud.stale_tile_results = cloud.stale_tile_results.saturating_add(1);
+                evict_resident_tiles(cloud, cpu_budget);
+                return;
+            }
             cloud.active_tiles = batch.selected;
             let active = cloud.active_tiles.clone();
             for key in &active {
@@ -3096,6 +3245,17 @@ impl OpenCADStudio {
                 camera_generation,
             )
         };
+        // Publish only when every indexed source has completed selection for
+        // the same camera generation. Individual source completions update the
+        // resident pool invisibly; the scene keeps drawing its previous full
+        // frontier until this barrier opens, eliminating source-by-source
+        // rectangular flashes during zoom and rotation.
+        if !point_stream_frontier_ready(
+            &self.tabs[tab_index].point_cloud.sources,
+            camera_generation,
+        ) {
+            return;
+        }
         let model = self.tabs[tab_index].point_cloud.display_model();
         let points = model.points.len();
         self.tabs[tab_index].scene.set_point_cloud(model);
@@ -3113,6 +3273,20 @@ impl OpenCADStudio {
     /// Applies a style-only change (color mode, class visibility, class
     /// colors, point size): shares the resident point data and rewrites just
     /// the GPU style uniform — no instance-buffer rebuild, no CPU point pass.
+    /// Rebuild the display model after a cross-section change. A Discard-mode
+    /// corridor compacts the point stream on the CPU, so the change is
+    /// geometric (chunk lengths and contents), not just a style-uniform
+    /// rewrite — and every source re-selects tiles against the new corridor.
+    pub(super) fn rebuild_after_section_change(&mut self, tab_index: usize) {
+        let dataset = &mut self.tabs[tab_index].point_cloud;
+        dataset.section_revision = dataset.section_revision.wrapping_add(1).max(1);
+        for source in &mut dataset.sources {
+            source.stream_camera_generation = u64::MAX;
+        }
+        let model = dataset.display_model();
+        self.tabs[tab_index].scene.set_point_cloud(model);
+    }
+
     pub(super) fn restyle_point_cloud(&mut self, tab_index: usize) {
         let style = self.tabs[tab_index].point_cloud.point_style();
         let point_size = self.tabs[tab_index].point_cloud.display.point_size_px;
@@ -3144,9 +3318,14 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSECTION: attach a LAS/LAZ cloud first.");
             return;
         }
-        if !width_world.is_finite() || !(1.0..=1024.0).contains(&width_world) {
-            self.command_line
-                .push_error("POINTCLOUDSECTION: width must be between 1 and 1024 map units.");
+        if !width_world.is_finite() || !(1.0..=MAX_SECTION_WIDTH_WORLD).contains(&width_world) {
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDSECTION: width must be between 1 and {} map units.",
+                    MAX_SECTION_WIDTH_WORLD as u64
+                )
+                .as_str(),
+            );
             return;
         }
         self.tabs[tab_index].point_cloud.section =
@@ -3156,12 +3335,7 @@ impl OpenCADStudio {
                 width_world,
                 mode,
             });
-        // A section change invalidates every source's stream so the next tick
-        // re-selects visible tiles at the finest LOD that fits the point budget.
-        for source in &mut self.tabs[tab_index].point_cloud.sources {
-            source.stream_camera_generation = u64::MAX;
-        }
-        self.restyle_point_cloud(tab_index);
+        self.rebuild_after_section_change(tab_index);
     }
 
     /// Move the active section by `delta` along its normal (perpendicular to
@@ -3189,10 +3363,7 @@ impl OpenCADStudio {
             ..section
         };
         self.tabs[tab_index].point_cloud.section = Some(moved);
-        for source in &mut self.tabs[tab_index].point_cloud.sources {
-            source.stream_camera_generation = u64::MAX;
-        }
-        self.restyle_point_cloud(tab_index);
+        self.rebuild_after_section_change(tab_index);
     }
 
     /// Change the active section's total band width in drawing/map units.
@@ -3202,17 +3373,19 @@ impl OpenCADStudio {
                 .push_error("POINTCLOUDSECTIONWIDTH: no section is active.");
             return;
         };
-        if !width_world.is_finite() || !(1.0..=1024.0).contains(&width_world) {
-            self.command_line
-                .push_error("POINTCLOUDSECTIONWIDTH: width must be between 1 and 1024 map units.");
+        if !width_world.is_finite() || !(1.0..=MAX_SECTION_WIDTH_WORLD).contains(&width_world) {
+            self.command_line.push_error(
+                format!(
+                    "POINTCLOUDSECTIONWIDTH: width must be between 1 and {} map units.",
+                    MAX_SECTION_WIDTH_WORLD as u64
+                )
+                .as_str(),
+            );
             return;
         }
         section.width_world = width_world;
         self.tabs[tab_index].point_cloud.section = Some(section);
-        for source in &mut self.tabs[tab_index].point_cloud.sources {
-            source.stream_camera_generation = u64::MAX;
-        }
-        self.restyle_point_cloud(tab_index);
+        self.rebuild_after_section_change(tab_index);
     }
 
     /// Remove the active section and show the whole cloud again.
@@ -3222,10 +3395,7 @@ impl OpenCADStudio {
                 .push_info("POINTCLOUDSECTIONCLEAR: no section was active.");
             return;
         }
-        for source in &mut self.tabs[tab_index].point_cloud.sources {
-            source.stream_camera_generation = u64::MAX;
-        }
-        self.restyle_point_cloud(tab_index);
+        self.rebuild_after_section_change(tab_index);
     }
 
     /// Snap the active pane's camera to look along the active section line
@@ -4771,14 +4941,8 @@ impl OpenCADStudio {
                     },
                 )
                 .map_err(|error| error.to_string())?;
-                write_ecef_tile_chunk(
-                    &source_crs,
-                    &wgs84,
-                    height_scale,
-                    &mut chunk,
-                    &mut writer,
-                )
-                .map_err(|error| error.to_string())?;
+                write_ecef_tile_chunk(&source_crs, &wgs84, height_scale, &mut chunk, &mut writer)
+                    .map_err(|error| error.to_string())?;
                 progress.completed.store(scan.scanned, Ordering::Relaxed);
                 writer.finish().map_err(|error| error.to_string())
             },
@@ -5541,6 +5705,134 @@ fn tile_read_workers() -> usize {
         .max(1)
 }
 
+/// Per-source render and resident-cache ceilings. The CPU limit includes both
+/// the raw `SamplePoint` tile pool and the compact `PointCloudPoint` display
+/// Vec; the GPU limit is always absolute. Discard slices may spend four times
+/// the normal display-point target because exact CPU compaction removes the
+/// vast majority of points before upload.
+fn point_stream_budgets(
+    display: &DisplaySettings,
+    source_count: usize,
+    discard_section: bool,
+) -> (u64, usize, u64) {
+    const SECTION_BUDGET_MULTIPLIER: u64 = 4;
+    let source_count = source_count.max(1);
+    let configured = (display.point_budget / source_count).max(1) as u64;
+    let requested = if discard_section {
+        configured.saturating_mul(SECTION_BUDGET_MULTIPLIER)
+    } else {
+        configured
+    };
+    let gpu_points = (display.gpu_budget_bytes / source_count / GPU_POINT_BYTES.max(1)).max(1);
+    let display_points = requested.min(gpu_points as u64).max(1);
+    let display_cpu_bytes =
+        (display_points as usize).saturating_mul(std::mem::size_of::<PointCloudPoint>());
+    let sample_bytes = std::mem::size_of::<ocs_pointcloud::SamplePoint>().max(1);
+    let resident_cpu_bytes = (display.cpu_budget_bytes / source_count)
+        .saturating_sub(display_cpu_bytes)
+        .max(sample_bytes);
+    let resident_points = (resident_cpu_bytes / sample_bytes).max(1) as u64;
+    (display_points, resident_cpu_bytes, resident_points)
+}
+
+/// Number of points this source can contribute to the current display before
+/// the global GPU quota is divided. In discard mode this is the exact survivor
+/// count, not a tile-area estimate, so unused slice capacity can be reassigned
+/// to other sources without a second oversized upload.
+fn source_display_point_count(
+    source: &PointCloudAttachment,
+    corridor: Option<&SectionCorridor>,
+) -> usize {
+    let tiled = source.sample.stride == 0 && !source.active_tiles.is_empty();
+    let includes = |point: &ocs_pointcloud::SamplePoint| {
+        corridor.is_none_or(|corridor| corridor.contains_xy(point.position[0], point.position[1]))
+    };
+    if tiled {
+        source
+            .active_tiles
+            .iter()
+            .filter_map(|key| source.resident_tiles.get(key))
+            .map(|tile| match corridor {
+                None => tile.points.len(),
+                Some(_) => tile.points.iter().filter(|point| includes(point)).count(),
+            })
+            .sum()
+    } else {
+        match corridor {
+            None => source.sample.points.len(),
+            Some(_) => source
+                .sample
+                .points
+                .iter()
+                .filter(|point| includes(point))
+                .count(),
+        }
+    }
+}
+
+/// Divide a hard point limit fairly between sources. This is progressive
+/// filling: small sources receive everything they have, then their unused
+/// share is divided evenly among the remaining large sources.
+fn fair_point_quotas(available: &[usize], limit: usize) -> Vec<usize> {
+    let mut quotas = vec![0; available.len()];
+    let mut ranked: Vec<_> = available
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    ranked.sort_by_key(|&(index, count)| (count, index));
+    let total_available = available
+        .iter()
+        .fold(0_usize, |sum, count| sum.saturating_add(*count));
+    let mut remaining = limit.min(total_available);
+    let mut cursor = 0;
+    while cursor < ranked.len() {
+        let active = ranked.len() - cursor;
+        let fair_share = remaining / active;
+        let (index, count) = ranked[cursor];
+        if count <= fair_share {
+            quotas[index] = count;
+            remaining -= count;
+            cursor += 1;
+            continue;
+        }
+        let extra = remaining % active;
+        for (position, &(index, count)) in ranked[cursor..].iter().enumerate() {
+            quotas[index] = (fair_share + usize::from(position < extra)).min(count);
+        }
+        break;
+    }
+    quotas
+}
+
+/// Deterministic even sampling by eligible stream rank. Exactly `quota`
+/// points survive when `quota < available`, spread from the beginning through
+/// the end rather than concentrated in the first files or octree tiles.
+fn stratified_keep(index: usize, available: usize, quota: usize) -> bool {
+    if quota >= available {
+        return index < available;
+    }
+    if quota == 0 || index >= available {
+        return false;
+    }
+    let before = (index as u128 * quota as u128) / available as u128;
+    let after = ((index + 1) as u128 * quota as u128) / available as u128;
+    after > before
+}
+
+/// True only when every tiled source has installed a selection for the same
+/// camera generation and no read is still in flight. Untiled sources retain
+/// their stable bounded sample and do not participate in the barrier.
+fn point_stream_frontier_ready(sources: &[PointCloudAttachment], camera_generation: u64) -> bool {
+    sources
+        .iter()
+        .filter(|source| source.cache_manifest.is_some())
+        .all(|source| {
+            !source.stream_in_flight && source.stream_camera_generation == camera_generation
+        })
+}
+
 /// Returns the next source whose LOD cache still needs to be opened or built.
 /// A recorded failure is skipped for the rest of the current batch so one bad
 /// tile cannot trap the dispatcher in an immediate retry loop.
@@ -5614,34 +5906,270 @@ fn evict_resident_tiles(cloud: &mut PointCloudAttachment, cpu_budget_bytes: usiz
     }
 }
 
-/// Chooses the finest single LOD whose visible tiles fit the point budget.
-/// `section_band` is an additional world-space query, never a substitute for
-/// the camera test: this prevents a long slice from loading off-screen tiles.
-fn select_visible_lod_tiles(
-    tiles: &[ocs_pointcloud::TileEntry],
-    leaf_level: u8,
-    point_budget: u64,
-    section_band: Option<([f64; 3], [f64; 3])>,
-    mut is_visible: impl FnMut(&ocs_pointcloud::TileEntry) -> bool,
-) -> Vec<ocs_pointcloud::TileEntry> {
-    let budget = point_budget.max(1);
-    for level in (0..=leaf_level).rev() {
-        let candidates: Vec<_> = tiles
-            .iter()
-            .filter(|tile| {
-                tile.key.level == level
-                    && is_visible(tile)
-                    && section_band
-                        .is_none_or(|(band_min, band_max)| tile.intersects(band_min, band_max))
-            })
-            .cloned()
-            .collect();
-        let count = candidates.iter().map(|tile| tile.point_count).sum::<u64>();
-        if count <= budget || level == 0 {
-            return candidates;
+/// The active cross-section as a world-space capsule: every point within
+/// `half_width` of the segment p0→p1 belongs to the cut. This is the exact
+/// region the shader dims/discards, so the CPU uses the same geometry for tile
+/// selection, budget estimation, and display compaction instead of the slice's
+/// axis-aligned bounding box, which badly over-selected diagonal sections.
+#[derive(Clone, Copy, Debug)]
+struct SectionCorridor {
+    p0: [f64; 2],
+    p1: [f64; 2],
+    half_width: f64,
+}
+
+impl SectionCorridor {
+    fn contains_xy(&self, x: f64, y: f64) -> bool {
+        let seg = [self.p1[0] - self.p0[0], self.p1[1] - self.p0[1]];
+        let len_sq = seg[0] * seg[0] + seg[1] * seg[1];
+        let t = if len_sq <= f64::EPSILON {
+            0.0
+        } else {
+            (((x - self.p0[0]) * seg[0] + (y - self.p0[1]) * seg[1]) / len_sq).clamp(0.0, 1.0)
+        };
+        let cx = self.p0[0] + seg[0] * t;
+        let cy = self.p0[1] + seg[1] * t;
+        (x - cx).hypot(y - cy) <= self.half_width
+    }
+
+    /// Squared distance from the segment to an XY box. `f(t) = distance(seg(t),
+    /// box)` is convex in `t`, so ternary search finds its minimum reliably;
+    /// the box distance itself is the clamp-and-subtract identity.
+    fn segment_box_distance(&self, min: &[f64; 3], max: &[f64; 3]) -> f64 {
+        let seg = [self.p1[0] - self.p0[0], self.p1[1] - self.p0[1]];
+        let mut low = 0.0_f64;
+        let mut high = 1.0_f64;
+        let point_distance = |t: f64| -> f64 {
+            let x = self.p0[0] + seg[0] * t;
+            let y = self.p0[1] + seg[1] * t;
+            let cx = x.clamp(min[0], max[0]);
+            let cy = y.clamp(min[1], max[1]);
+            (x - cx).hypot(y - cy)
+        };
+        for _ in 0..64 {
+            let a = low + (high - low) / 3.0;
+            let b = high - (high - low) / 3.0;
+            if point_distance(a) <= point_distance(b) {
+                high = b;
+            } else {
+                low = a;
+            }
+        }
+        point_distance(0.5 * (low + high))
+    }
+
+    fn tile_intersects(&self, tile: &ocs_pointcloud::TileEntry) -> bool {
+        self.segment_box_distance(&tile.bounds_min, &tile.bounds_max) <= self.half_width
+    }
+
+    /// Deterministic estimate of the fraction of a tile's points that survive
+    /// the corridor clip, sampled on a fixed grid over the tile's XY footprint.
+    /// Budgeting this number (instead of the raw tile point count) lets a slice
+    /// select full-density leaves when only a sliver of each tile is displayed.
+    fn tile_clip_fraction(&self, tile: &ocs_pointcloud::TileEntry) -> f64 {
+        const SAMPLES: u64 = 8;
+        let mut inside = 0_u64;
+        for iy in 0..SAMPLES {
+            for ix in 0..SAMPLES {
+                let x = tile.bounds_min[0]
+                    + (f64::from(ix as u32) + 0.5) * (tile.bounds_max[0] - tile.bounds_min[0])
+                        / SAMPLES as f64;
+                let y = tile.bounds_min[1]
+                    + (f64::from(iy as u32) + 0.5) * (tile.bounds_max[1] - tile.bounds_min[1])
+                        / SAMPLES as f64;
+                inside += u64::from(self.contains_xy(x, y));
+            }
+        }
+        inside as f64 / (SAMPLES * SAMPLES) as f64
+    }
+}
+
+/// Estimated world-space spacing between neighbouring points in a tile,
+/// derived from its cell volume and point count. Drives the screen-space-error
+/// refinement decision.
+fn tile_spacing_world(tile: &ocs_pointcloud::TileEntry) -> f64 {
+    let mut volume = 1.0_f64;
+    for axis in 0..3 {
+        let span = (tile.bounds_max[axis] - tile.bounds_min[axis]).max(1e-6);
+        volume *= span;
+    }
+    (volume / tile.point_count.max(1) as f64).cbrt()
+}
+
+/// Project a tile's approximate point spacing into one viewport. Selection
+/// takes the maximum over every visible view frame, so zooming any frame asks
+/// for denser data while all frames share the same resident/GPU tile pool.
+fn tile_spacing_px(
+    tile: &ocs_pointcloud::TileEntry,
+    camera: &crate::scene::Camera,
+    viewport: iced::Rectangle,
+) -> f32 {
+    let spacing = tile_spacing_world(tile) as f32;
+    let target_world_per_pixel = match camera.projection {
+        crate::scene::Projection::Orthographic => {
+            (2.0 * camera.ortho_size()) / viewport.height.max(1.0)
+        }
+        crate::scene::Projection::Perspective => {
+            2.0 * camera.distance * (camera.fov_y * 0.5).tan() / viewport.height.max(1.0)
         }
     }
-    Vec::new()
+    .max(f32::EPSILON);
+    match camera.projection {
+        crate::scene::Projection::Orthographic => spacing / target_world_per_pixel,
+        crate::scene::Projection::Perspective => {
+            let center = glam::DVec3::new(
+                (tile.bounds_min[0] + tile.bounds_max[0]) * 0.5,
+                (tile.bounds_min[1] + tile.bounds_max[1]) * 0.5,
+                (tile.bounds_min[2] + tile.bounds_max[2]) * 0.5,
+            );
+            let distance = ((center - camera.eye()).length() as f32).max(1.0);
+            spacing / (target_world_per_pixel * distance / camera.distance.max(1.0))
+        }
+    }
+    .max(0.0)
+}
+
+/// Chooses a mixed-resolution tile set by hierarchical screen-space-error
+/// traversal rather than one uniform level for the whole view.
+///
+/// Starting from the level-0 roots of every visible region, a node is refined
+/// into its eight children while its estimated point spacing still covers more
+/// than [`REFINE_SPACING_PX`] screen pixels and the children's charged point
+/// count fits the remaining budget; otherwise the node itself is emitted. The
+/// charge is the *post-slice* estimate when a section corridor is active, so a
+/// slice displaying a sliver of a tile is no longer billed for the whole tile.
+///
+/// The returned frontier contains no ancestor/descendant overlap. While a new
+/// frontier loads, the caller keeps drawing the previous complete frontier;
+/// once ready, every visible view frame switches atomically.
+fn select_visible_lod_tiles(
+    tiles: &[ocs_pointcloud::TileEntry],
+    point_budget: u64,
+    resident_point_budget: u64,
+    section: Option<&SectionCorridor>,
+    mut is_visible: impl FnMut(&ocs_pointcloud::TileEntry) -> bool,
+    mut spacing_px: impl FnMut(&ocs_pointcloud::TileEntry) -> f32,
+) -> Vec<ocs_pointcloud::TileEntry> {
+    /// Refine a node only while its point spacing still spans this many pixels;
+    /// denser nodes add no visible detail and only burn budget.
+    const REFINE_SPACING_PX: f32 = 2.0;
+
+    let budget = point_budget.max(1);
+    let resident_budget = resident_point_budget.max(1);
+    fn passes(
+        tile: &ocs_pointcloud::TileEntry,
+        section: Option<&SectionCorridor>,
+        is_visible: &mut dyn FnMut(&ocs_pointcloud::TileEntry) -> bool,
+    ) -> bool {
+        is_visible(tile) && section.is_none_or(|corridor| corridor.tile_intersects(tile))
+    }
+    let charged = |tile: &ocs_pointcloud::TileEntry| -> u64 {
+        match section {
+            Some(corridor) => {
+                ((tile.point_count as f64) * corridor.tile_clip_fraction(tile)).ceil() as u64
+            }
+            None => tile.point_count,
+        }
+    };
+
+    let mut by_key = BTreeMap::new();
+    for tile in tiles {
+        by_key.insert(tile.key, tile);
+    }
+    let child_keys = |key: ocs_pointcloud::TileKey| {
+        (0..2).flat_map(move |dx| {
+            (0..2).flat_map(move |dy| {
+                (0..2).map(move |dz| ocs_pointcloud::TileKey {
+                    level: key.level + 1,
+                    x: key.x * 2 + dx,
+                    y: key.y * 2 + dy,
+                    z: key.z * 2 + dz,
+                })
+            })
+        })
+    };
+
+    // The frontier starts at visible roots. Every refinement atomically
+    // replaces one parent with its visible children and accounts for the
+    // entire live frontier, so queued-but-not-yet-emitted nodes cannot make the
+    // final selection overshoot the budget (the prior `committed` counter did).
+    let mut queue = std::collections::BinaryHeap::new();
+    let mut frontier: BTreeMap<ocs_pointcloud::TileKey, &ocs_pointcloud::TileEntry> =
+        BTreeMap::new();
+    let mut committed = 0_u64;
+    let mut resident_committed = 0_u64;
+    for (&tile_key, &tile) in &by_key {
+        if tile_key.level == 0 && passes(tile, section, &mut is_visible) {
+            frontier.insert(tile_key, tile);
+            committed = committed.saturating_add(charged(tile));
+            resident_committed = resident_committed.saturating_add(tile.point_count);
+            queue.push(QueueEntry {
+                spacing_px: spacing_px(tile),
+                key: tile_key,
+            });
+        }
+    }
+    while let Some(entry) = queue.pop() {
+        let Some(&tile) = by_key.get(&entry.key) else {
+            continue;
+        };
+        if !frontier.contains_key(&entry.key) {
+            continue;
+        }
+        let children: Vec<_> = child_keys(entry.key)
+            .filter_map(|key| by_key.get(&key).copied())
+            .filter(|child| passes(child, section, &mut is_visible))
+            .collect();
+        let child_cost = children.iter().map(|child| charged(child)).sum::<u64>();
+        let child_resident_cost = children.iter().map(|child| child.point_count).sum::<u64>();
+        let refined_cost = committed
+            .saturating_sub(charged(tile))
+            .saturating_add(child_cost);
+        let refined_resident_cost = resident_committed
+            .saturating_sub(tile.point_count)
+            .saturating_add(child_resident_cost);
+        let refine = !children.is_empty()
+            && spacing_px(tile) > REFINE_SPACING_PX
+            && refined_cost <= budget
+            && refined_resident_cost <= resident_budget;
+        if refine {
+            frontier.remove(&entry.key);
+            committed = refined_cost;
+            resident_committed = refined_resident_cost;
+            for child in children {
+                frontier.insert(child.key, child);
+                queue.push(QueueEntry {
+                    spacing_px: spacing_px(child),
+                    key: child.key,
+                });
+            }
+        }
+    }
+    frontier.values().map(|tile| (*tile).clone()).collect()
+}
+
+/// Max-heap entry for the refinement queue: worst screen-space error first.
+#[derive(PartialEq)]
+struct QueueEntry {
+    spacing_px: f32,
+    key: ocs_pointcloud::TileKey,
+}
+
+impl Eq for QueueEntry {}
+
+impl Ord for QueueEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.spacing_px
+            .partial_cmp(&other.spacing_px)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| self.key.cmp(&other.key))
+    }
+}
+
+impl PartialOrd for QueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Case-insensitive path equality on Windows, where LAS folders routinely
@@ -5677,15 +6205,29 @@ fn tile_chunk_key(source_id: &str, tile: &ocs_pointcloud::TileKey) -> u64 {
 
 /// Content revision of one source's rendered points: any edit, undo, or
 /// selection change must produce a different value so its chunks re-upload.
-fn source_chunk_generation(source: &PointCloudAttachment) -> u64 {
+fn source_chunk_generation(
+    source: &PointCloudAttachment,
+    source_quota: usize,
+    display_generation: u64,
+    section_revision: u64,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
     let selection_len: u64 = source
         .selection_sets
         .iter()
         .find(|selection| selection.name == "active")
         .map_or(0, SelectionSet::len);
-    (source.edits.transaction_count() as u64) << 44
-        ^ (source.displayed_len() as u64) << 24
-        ^ selection_len
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.id.hash(&mut hasher);
+    source.active_tiles.hash(&mut hasher);
+    source.sample.stride.hash(&mut hasher);
+    source.displayed_len().hash(&mut hasher);
+    source_quota.hash(&mut hasher);
+    source.edits.transaction_count().hash(&mut hasher);
+    selection_len.hash(&mut hasher);
+    display_generation.hash(&mut hasher);
+    section_revision.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn categorical(value: u32) -> [f32; 4] {
@@ -5877,12 +6419,14 @@ fn cache_path_for_source(source: &std::path::Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("point-cloud");
-    source.with_file_name(format!("{name}.ocstiles"))
+    source.with_file_name(format!("{name}.ocstiles-v3"))
 }
 
 /// The persisted sidecar path wins when valid, but a cache beside the source
 /// is also discovered automatically. Older sidecars can therefore pick up an
-/// already-built `<source>.ocstiles` directory without requiring a rebuild.
+/// already-built current-format `<source>.ocstiles-v3` directory without
+/// requiring a rebuild. A persisted older path is still tried first and is
+/// ignored safely when its manifest version is obsolete.
 fn point_cloud_cache_candidates(
     source: &std::path::Path,
     persisted: Option<&std::path::Path>,
@@ -6156,6 +6700,94 @@ mod tests {
     }
 
     #[test]
+    fn display_budget_is_fair_across_overlapping_sources() {
+        let mut dataset = PointCloudDataset::default();
+        dataset.display.point_budget = 100;
+        dataset.display.gpu_budget_bytes = GPU_POINT_BYTES * 100;
+        for source_number in 0..4_u16 {
+            let mut source = attachment(&format!("source-{source_number}"), 100);
+            for point in &mut source.sample.points {
+                point.point_source_id = source_number;
+            }
+            dataset.sources.push(source);
+        }
+
+        let model = dataset.display_model();
+        assert_eq!(100, model.points.len());
+        let mut counts = [0_usize; 4];
+        for point in model.points.iter() {
+            counts[point.point_source_id as usize] += 1;
+        }
+        assert_eq!([25, 25, 25, 25], counts);
+    }
+
+    #[test]
+    fn fair_quotas_redistribute_sparse_source_capacity() {
+        assert_eq!(vec![10, 45, 45], fair_point_quotas(&[10, 100, 100], 100));
+        assert_eq!(vec![25, 25, 25, 25], fair_point_quotas(&[100; 4], 100));
+        assert_eq!(vec![1, 1, 0], fair_point_quotas(&[10; 3], 2));
+    }
+
+    #[test]
+    fn stratified_source_cap_spans_the_full_stream() {
+        let kept: Vec<_> = (0..100)
+            .filter(|index| stratified_keep(*index, 100, 4))
+            .collect();
+        assert_eq!(4, kept.len());
+        assert!(kept[0] >= 20, "selection is not concentrated at the start");
+        assert!(kept[3] >= 95, "selection reaches the end of the source");
+    }
+
+    #[test]
+    fn multi_source_frontier_opens_only_when_every_source_is_ready() {
+        let manifest = || TileCacheManifest {
+            format_version: 3,
+            source_path: PathBuf::from("cloud.las"),
+            source_fingerprint: ocs_pointcloud::SourceFingerprint {
+                byte_length: 0,
+                modified_unix_ms: None,
+                sampled_sha256: String::new(),
+            },
+            source_metadata: sample_metadata(1, 0.0, 1.0),
+            leaf_level: 0,
+            target_leaf_points: 1,
+            record_size: 61,
+            tiles: Vec::new(),
+        };
+        let mut sources = vec![attachment("a", 1), attachment("b", 1)];
+        for source in &mut sources {
+            source.cache_manifest = Some(manifest());
+        }
+        sources[0].stream_camera_generation = 7;
+        sources[1].stream_camera_generation = 6;
+        assert!(!point_stream_frontier_ready(&sources, 7));
+
+        sources[1].stream_camera_generation = 7;
+        sources[1].stream_in_flight = true;
+        assert!(!point_stream_frontier_ready(&sources, 7));
+
+        sources[1].stream_in_flight = false;
+        assert!(point_stream_frontier_ready(&sources, 7));
+    }
+
+    #[test]
+    fn gpu_chunk_generation_tracks_frontier_and_quota_changes() {
+        let mut source = attachment("source", 10);
+        let generation = source_chunk_generation(&source, 10, 1, 0);
+        source.active_tiles.push(ocs_pointcloud::TileKey {
+            level: 1,
+            x: 1,
+            y: 0,
+            z: 0,
+        });
+        assert_ne!(generation, source_chunk_generation(&source, 10, 1, 0));
+        assert_ne!(
+            source_chunk_generation(&source, 10, 1, 0),
+            source_chunk_generation(&source, 5, 1, 0)
+        );
+    }
+
+    #[test]
     fn dataset_chunks_cover_the_point_stream_exactly() {
         let mut dataset = PointCloudDataset::default();
         dataset.sources.push(attachment("a", 3));
@@ -6261,7 +6893,7 @@ mod tests {
     #[test]
     fn cache_candidates_fall_back_to_the_source_sidecar_directory() {
         let source = PathBuf::from("survey").join("tile.laz");
-        let default = source.with_file_name("tile.laz.ocstiles");
+        let default = source.with_file_name("tile.laz.ocstiles-v3");
         assert_eq!(
             vec![default.clone()],
             point_cloud_cache_candidates(&source, None)
@@ -6313,16 +6945,28 @@ mod tests {
             lod_tile(1, 1, 60),
             lod_tile(1, 2, 60),
         ];
-        let section = Some(([0.0, 0.0, f64::NEG_INFINITY], [40.0, 9.0, f64::INFINITY]));
+        let section = SectionCorridor {
+            p0: [15.0, 4.5],
+            p1: [25.0, 4.5],
+            half_width: 7.0,
+        };
 
-        let selected = select_visible_lod_tiles(&tiles, 1, 100, section, |tile| tile.key.x == 1);
+        // Only the x==1 child intersects the corridor and the view frame.
+        let selected = select_visible_lod_tiles(
+            &tiles,
+            100,
+            100,
+            Some(&section),
+            |tile| tile.key.level == 0 || tile.key.x == 1,
+            |_| 8.0,
+        );
 
         assert_eq!(
             vec![ocs_pointcloud::TileKey {
                 level: 1,
                 x: 1,
                 y: 0,
-                z: 0,
+                z: 0
             }],
             selected.iter().map(|tile| tile.key).collect::<Vec<_>>()
         );
@@ -6331,18 +6975,142 @@ mod tests {
     #[test]
     fn lod_uses_full_density_close_and_coarser_density_when_wide() {
         let tiles = vec![lod_tile(0, 0, 40), lod_tile(1, 0, 60), lod_tile(1, 1, 60)];
-        let close = select_visible_lod_tiles(&tiles, 1, 100, None, |tile| tile.key.x == 0);
-        assert_eq!(
-            1, close[0].key.level,
-            "close view should use leaf/full density"
+        // A close view (large screen-space spacing on the root) refines into
+        // the leaf children when they fit the budget.
+        let close =
+            select_visible_lod_tiles(&tiles, 100, 100, None, |tile| tile.key.x == 0, |_| 8.0);
+        assert!(
+            close.iter().any(|tile| tile.key.level == 1),
+            "close view should refine to leaf/full density"
         );
 
-        let wide = select_visible_lod_tiles(&tiles, 1, 100, None, |_| true);
+        // A wide view (sub-pixel spacing) keeps the coarse root.
+        let wide = select_visible_lod_tiles(&tiles, 100, 100, None, |_| true, |_| 0.5);
         assert_eq!(
             vec![0],
             wide.iter().map(|tile| tile.key.level).collect::<Vec<_>>(),
-            "wide view should fall back to the coarser fitting LOD"
+            "wide view should keep the coarser fitting LOD"
         );
+    }
+
+    #[test]
+    fn lod_refines_within_budget_and_keeps_mixed_levels() {
+        // Two level-1 tiles under one root: one branch refines into leaves and
+        // the sibling stays coarse. The parent itself must not remain and
+        // double-draw the same region.
+        let tiles = vec![
+            lod_tile(0, 0, 40),
+            lod_tile(1, 0, 60),
+            lod_tile(1, 1, 60),
+            lod_tile(2, 0, 70),
+            lod_tile(2, 1, 70),
+        ];
+        let selected = select_visible_lod_tiles(
+            &tiles,
+            210,
+            210,
+            None,
+            |_| true,
+            |tile| {
+                if tile.key.level == 1 && tile.key.x == 1 {
+                    0.5
+                } else {
+                    8.0
+                }
+            },
+        );
+        let levels: Vec<_> = selected.iter().map(|tile| tile.key.level).collect();
+        assert!(levels.contains(&2), "visible branch refines to leaves");
+        assert!(levels.contains(&1), "the sibling branch stays coarse");
+        assert!(!levels.contains(&0), "refined parent is not double-drawn");
+        assert!(selected.iter().map(|tile| tile.point_count).sum::<u64>() <= 210);
+    }
+
+    #[test]
+    fn discard_sections_receive_four_times_the_normal_display_budget() {
+        let display = DisplaySettings {
+            point_budget: 1_000_000,
+            gpu_budget_bytes: 512 * 1024 * 1024,
+            cpu_budget_bytes: 1024 * 1024 * 1024,
+            ..DisplaySettings::default()
+        };
+        let (normal, _, _) = point_stream_budgets(&display, 1, false);
+        let (section, _, _) = point_stream_budgets(&display, 1, true);
+        assert_eq!(1_000_000, normal);
+        assert_eq!(4_000_000, section);
+
+        let gpu_limited = DisplaySettings {
+            gpu_budget_bytes: GPU_POINT_BYTES * 2_000_000,
+            ..display
+        };
+        let (section, _, _) = point_stream_budgets(&gpu_limited, 1, true);
+        assert_eq!(2_000_000, section, "the hard GPU ceiling still wins");
+    }
+
+    #[test]
+    fn section_corridor_clips_diagonal_cuts_without_over_selection() {
+        // A 45° cut across a square footprint: the corridor test must reject
+        // the far corner tile that the axis-aligned band used to pull in.
+        let corridor = SectionCorridor {
+            p0: [0.0, 0.0],
+            p1: [10.0, 10.0],
+            half_width: 1.0,
+        };
+        let near = ocs_pointcloud::TileEntry {
+            key: ocs_pointcloud::TileKey {
+                level: 1,
+                x: 0,
+                y: 0,
+                z: 0,
+            },
+            file_name: "near.bin".into(),
+            point_count: 10,
+            bounds_min: [0.0, 0.0, 0.0],
+            bounds_max: [5.0, 5.0, 5.0],
+        };
+        let far = ocs_pointcloud::TileEntry {
+            key: ocs_pointcloud::TileKey {
+                level: 1,
+                x: 1,
+                y: 1,
+                z: 0,
+            },
+            file_name: "far.bin".into(),
+            point_count: 10,
+            bounds_min: [5.0, 5.0, 0.0],
+            bounds_max: [10.0, 10.0, 5.0],
+        };
+        assert!(corridor.tile_intersects(&near));
+        // The far tile touches the diagonal only at its (5,5) corner vertex.
+        assert!(corridor.tile_intersects(&far));
+        let corner = ocs_pointcloud::TileEntry {
+            bounds_min: [8.0, 0.0, 0.0],
+            bounds_max: [10.0, 2.0, 5.0],
+            ..far.clone()
+        };
+        assert!(
+            !corridor.tile_intersects(&corner),
+            "a tile off the diagonal corridor must not be selected"
+        );
+        // Distance from the segment to a box it passes through is zero.
+        assert_eq!(
+            0.0,
+            corridor.segment_box_distance(&near.bounds_min, &near.bounds_max)
+        );
+    }
+
+    #[test]
+    fn corridor_contains_matches_the_shader_capsule() {
+        let corridor = SectionCorridor {
+            p0: [0.0, 0.0],
+            p1: [10.0, 0.0],
+            half_width: 2.0,
+        };
+        assert!(corridor.contains_xy(5.0, 1.9));
+        assert!(!corridor.contains_xy(5.0, 2.1));
+        // Beyond the segment endpoints the capsule caps round, not square.
+        assert!(corridor.contains_xy(11.5, 0.0));
+        assert!(!corridor.contains_xy(11.5, 1.9));
     }
 }
 

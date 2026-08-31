@@ -828,20 +828,16 @@ impl OpenCADStudio {
         let gen = self.tabs[i].scene.camera_generation;
         if gen != self.tabs[i].last_synced_camera_gen {
             self.tabs[i].last_synced_camera_gen = gen;
-            // Camera-follow basemap: re-plan tiles at the new zoom when the
-            // camera moves, debounced so a wheel-zoom gesture doesn't start a
-            // fetch storm.
+            // Camera-follow basemap uses a trailing-edge debounce. Recording
+            // the latest change (instead of immediately returning a fetch)
+            // guarantees one request for the final view while an orbit or
+            // wheel gesture still produces only one network batch.
             #[cfg(not(target_arch = "wasm32"))]
             if self.basemap.follow_camera
                 && self.basemap.provider != crate::scene::basemap::BasemapProvider::Off
             {
-                let ready = self.tabs[i]
-                    .last_basemap_follow_at
-                    .map_or(true, |last| t.duration_since(last).as_millis() >= 250);
-                if ready {
-                    self.tabs[i].last_basemap_follow_at = Some(t);
-                    return self.refresh_basemap(self.tabs[i].id);
-                }
+                self.tabs[i].last_basemap_follow_at = Some(t);
+                self.tabs[i].basemap_follow_pending = true;
             }
             if self.tabs[i].active_block_edit.is_some() {
                 let camera = self.tabs[i].scene.camera.borrow().clone();
@@ -857,6 +853,18 @@ impl OpenCADStudio {
             } else if self.tabs[i].scene.sync_camera_to_document() {
                 self.tabs[i].dirty = true;
             }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.tabs[i].basemap_follow_pending
+            && self.basemap.follow_camera
+            && self.basemap.provider != crate::scene::basemap::BasemapProvider::Off
+            && self.tabs[i]
+                .last_basemap_follow_at
+                .is_some_and(|last| t.duration_since(last).as_millis() >= 250)
+        {
+            self.tabs[i].basemap_follow_pending = false;
+            return self.refresh_basemap(self.tabs[i].id);
         }
 
         // Surface any plugin-guard panic messages that piled up since

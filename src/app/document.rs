@@ -198,6 +198,11 @@ pub(super) struct DocumentTab {
     pub(super) last_synced_camera_gen: u64,
     /// Timestamp of the last camera-follow basemap refresh, for debouncing.
     pub(super) last_basemap_follow_at: Option<Instant>,
+    /// A camera change occurred after the last camera-follow request. Kept
+    /// until the trailing-edge debounce fires so the final pan/zoom/orbit
+    /// position can never be skipped merely because it landed inside the
+    /// debounce window.
+    pub(super) basemap_follow_pending: bool,
     /// Render-state key of `scene.document.preview`. Matching saves reuse the
     /// encoded DWG thumbnail instead of rescanning every resident wire.
     #[cfg(not(target_arch = "wasm32"))]
@@ -511,6 +516,7 @@ impl DocumentTab {
             active_mleader_style: "Standard".to_string(),
             last_synced_camera_gen: 0,
             last_basemap_follow_at: None,
+            basemap_follow_pending: false,
             #[cfg(not(target_arch = "wasm32"))]
             thumbnail_cache_key: None,
             is_start: false,

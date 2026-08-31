@@ -16,8 +16,15 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const CACHE_FORMAT_VERSION: u32 = 2;
+// v3 stores canonical octree-cell bounds in every TileEntry. Older manifests
+// stored only the bounds of that level's decimated sample, which could exclude
+// visible descendants and make frustum traversal lose points after rotation.
+const CACHE_FORMAT_VERSION: u32 = 3;
+/// Base bytes per record. Labeled points append one extra byte (see
+/// [`write_point`]), so a tile's on-disk length lies between
+/// `point_count * RECORD_SIZE` and `point_count * (RECORD_SIZE + 1)`.
 const RECORD_SIZE: usize = 61;
+const LABELED_RECORD_SIZE: usize = RECORD_SIZE + 1;
 const MAX_OPEN_TILE_FILES: usize = 64;
 /// Per-tile write buffer. A large buffer cuts flush/reopen churn across the
 /// hundreds of millions of point-writes a full-density tile cache performs.
@@ -70,7 +77,7 @@ impl From<serde_json::Error> for TileCacheError {
 
 pub type TileCacheResult<T> = std::result::Result<T, TileCacheError>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TileKey {
     pub level: u8,
     pub x: u32,
@@ -261,12 +268,15 @@ pub fn build_tiled_cache(
 
     let tiles = stats
         .into_iter()
-        .map(|(key, stats)| TileEntry {
-            key,
-            file_name: tile_file_name(key),
-            point_count: stats.point_count,
-            bounds_min: stats.bounds_min,
-            bounds_max: stats.bounds_max,
+        .map(|(key, stats)| {
+            let (bounds_min, bounds_max) = tile_cell_bounds(&metadata, key);
+            TileEntry {
+                key,
+                file_name: tile_file_name(key),
+                point_count: stats.point_count,
+                bounds_min,
+                bounds_max,
+            }
         })
         .collect();
     let manifest = TileCacheManifest {
@@ -305,17 +315,32 @@ pub fn read_tile(
 ) -> TileCacheResult<Vec<SamplePoint>> {
     let file = File::open(cache_dir.as_ref().join(&tile.file_name))?;
     let length = file.metadata()?.len();
-    let expected = tile.point_count.saturating_mul(RECORD_SIZE as u64);
-    if length != expected {
+    // Records are variable-width: 61 bytes, plus one more when the flags word
+    // marks the point as labeled. Only the bounded range can be checked up
+    // front; the exact width of each record follows from its own flags byte,
+    // so the read below validates the stream precisely by consuming exactly
+    // `length` bytes.
+    let min_expected = tile.point_count.saturating_mul(RECORD_SIZE as u64);
+    let max_expected = tile.point_count.saturating_mul(LABELED_RECORD_SIZE as u64);
+    if length < min_expected || length > max_expected {
         return Err(TileCacheError::InvalidCache(format!(
-            "{} has {length} bytes; expected {expected}",
+            "{} has {length} bytes; expected between {min_expected} and {max_expected}",
             tile.file_name
         )));
     }
-    let mut reader = BufReader::new(file);
+    let mut reader = CountingReader {
+        inner: BufReader::new(file),
+        consumed: 0,
+    };
     let mut points = Vec::with_capacity(usize::try_from(tile.point_count).unwrap_or(usize::MAX));
     for _ in 0..tile.point_count {
         points.push(read_point(&mut reader)?);
+    }
+    if reader.consumed != length {
+        return Err(TileCacheError::InvalidCache(format!(
+            "{} decoded to {} bytes but holds {length}; the record stream is inconsistent with its point count",
+            tile.file_name, reader.consumed
+        )));
     }
     Ok(points)
 }
@@ -404,6 +429,30 @@ fn tile_key(metadata: &CloudMetadata, position: [f64; 3], level: u8) -> TileKey 
         y: coordinate(1),
         z: coordinate(2),
     }
+}
+
+/// Exact spatial cell represented by an octree key. These bounds, rather than
+/// the min/max of the level's decimated records, are the conservative contract
+/// required by parent-to-child frustum and section traversal.
+fn tile_cell_bounds(metadata: &CloudMetadata, key: TileKey) -> ([f64; 3], [f64; 3]) {
+    let cells = 1_u32
+        .checked_shl(key.level.into())
+        .unwrap_or(u32::MAX)
+        .max(1);
+    let indices = [key.x, key.y, key.z];
+    let mut min = [0.0; 3];
+    let mut max = [0.0; 3];
+    for axis in 0..3 {
+        let low = metadata.bounds_min[axis];
+        let span = metadata.bounds_max[axis] - low;
+        min[axis] = low + span * f64::from(indices[axis]) / f64::from(cells);
+        max[axis] = if indices[axis] + 1 >= cells {
+            metadata.bounds_max[axis]
+        } else {
+            low + span * f64::from(indices[axis] + 1) / f64::from(cells)
+        };
+    }
+    (min, max)
 }
 
 fn tile_file_name(key: TileKey) -> String {
@@ -560,6 +609,21 @@ fn read_u8(reader: &mut impl Read) -> io::Result<u8> {
     Ok(bytes[0])
 }
 
+/// Read wrapper that counts consumed bytes so `read_tile` can prove the
+/// variable-width record stream ends exactly at the file boundary.
+struct CountingReader<R: Read> {
+    inner: R,
+    consumed: u64,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.consumed += read as u64;
+        Ok(read)
+    }
+}
+
 fn read_u16(reader: &mut impl Read) -> io::Result<u16> {
     let mut bytes = [0; 2];
     reader.read_exact(&mut bytes)?;
@@ -608,5 +672,161 @@ impl Drop for TemporaryDirectory {
         if !self.committed {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ocs-tile-cache-test-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    fn sample(index: u64, label: Option<u8>) -> SamplePoint {
+        SamplePoint {
+            source_index: index,
+            position: [index as f64 * 3.0, 5.0e5 + index as f64, 42.0],
+            intensity: 100,
+            classification: 2,
+            return_number: 1,
+            number_of_returns: 3,
+            scan_angle: -12.5,
+            user_data: 7,
+            point_source_id: 900,
+            gps_time: Some(50_000.0 + index as f64),
+            color: Some([10, 20, 30]),
+            nir: Some(40),
+            label,
+            is_synthetic: false,
+            is_key_point: index % 2 == 0,
+            is_withheld: false,
+            is_overlap: false,
+        }
+    }
+
+    #[test]
+    fn octree_cell_bounds_are_conservative_and_contiguous() {
+        let metadata = CloudMetadata {
+            point_count: 1,
+            version_major: 1,
+            version_minor: 4,
+            point_format: 6,
+            compressed: false,
+            bounds_min: [100.0, 200.0, -20.0],
+            bounds_max: [180.0, 280.0, 60.0],
+            scales: [0.01; 3],
+            offsets: [0.0; 3],
+            system_identifier: String::new(),
+            generating_software: String::new(),
+            creation_date: None,
+            file_source_id: 0,
+            has_crs: false,
+            crs: Default::default(),
+            vlr_count: 0,
+            evlr_count: 0,
+        };
+        let left = tile_cell_bounds(
+            &metadata,
+            TileKey {
+                level: 1,
+                x: 0,
+                y: 0,
+                z: 0,
+            },
+        );
+        let right = tile_cell_bounds(
+            &metadata,
+            TileKey {
+                level: 1,
+                x: 1,
+                y: 0,
+                z: 0,
+            },
+        );
+        assert_eq!(left.0, metadata.bounds_min);
+        assert_eq!(left.1, [140.0, 240.0, 20.0]);
+        assert_eq!(right.0[0], left.1[0]);
+        assert_eq!(right.1[0], metadata.bounds_max[0]);
+    }
+
+    /// Labeled records are one byte wider than the 61-byte base; a tile mixing
+    /// both widths must still validate and round-trip exactly. The old fixed
+    /// `point_count * 61` length check rejected such tiles outright.
+    #[test]
+    fn read_tile_round_trips_mixed_labeled_and_unlabeled_records() {
+        let path = scratch("mixed.bin");
+        let points = vec![sample(0, None), sample(1, Some(6)), sample(2, Some(0))];
+        {
+            let file = File::create(&path).unwrap();
+            let mut writer = BufWriter::new(file);
+            for point in &points {
+                write_point(&mut writer, point).unwrap();
+            }
+            writer.flush().unwrap();
+        }
+        let tile = TileEntry {
+            key: TileKey {
+                level: 1,
+                x: 0,
+                y: 0,
+                z: 0,
+            },
+            file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            point_count: points.len() as u64,
+            bounds_min: [0.0; 3],
+            bounds_max: [1.0; 3],
+        };
+        let directory = path.parent().unwrap();
+        let loaded = read_tile(directory, &tile).unwrap();
+        assert_eq!(points, loaded);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(directory);
+    }
+
+    #[test]
+    fn read_tile_rejects_truncated_and_padded_streams() {
+        let path = scratch("bad.bin");
+        let points: Vec<_> = (0..3).map(|index| sample(index, None)).collect();
+        let mut bytes = Vec::new();
+        for point in &points {
+            write_point(&mut bytes, point).unwrap();
+        }
+        // Truncation inside the last record: inside the length range but the
+        // stream cannot decode to the recorded point count.
+        fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+        let tile = TileEntry {
+            key: TileKey {
+                level: 0,
+                x: 0,
+                y: 0,
+                z: 0,
+            },
+            file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            point_count: points.len() as u64,
+            bounds_min: [0.0; 3],
+            bounds_max: [1.0; 3],
+        };
+        let directory = path.parent().unwrap();
+        assert!(read_tile(directory, &tile).is_err());
+        // Trailing pad byte: decodes fine but does not end at the boundary.
+        let mut padded = bytes.clone();
+        padded.push(0);
+        fs::write(&path, &padded).unwrap();
+        assert!(read_tile(directory, &tile).is_err());
+        // The exact stream is accepted.
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(3, read_tile(directory, &tile).unwrap().len());
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(directory);
     }
 }

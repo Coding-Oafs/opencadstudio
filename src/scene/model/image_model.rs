@@ -363,6 +363,90 @@ impl ImageModel {
         }
     }
 
+    /// Build a world-space textured mesh from a tessellated vertex grid (used
+    /// by the reprojected basemap underlay). `grid` is the number of quads per
+    /// edge; `vertices` holds the row-major `(grid + 1)²` samples of
+    /// `(world XY, uv)` with `uv.v` measured down from the image's top edge.
+    /// Each quad becomes two triangles; every vertex carries an RTE-split
+    /// position so survey-scale coordinates stay precise. Texel (0,0) maps to
+    /// the top-left sample (`uv = (0, 0)`), matching [`ImageModel::from_world_quad`].
+    pub fn from_tessellated_world_mesh(
+        label: &str,
+        pixels: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        vertices: &[([f64; 2], [f64; 2])],
+        grid: usize,
+        elevation: f64,
+        draw_depth: f32,
+    ) -> Self {
+        let z = elevation;
+        let split = |x: f64, y: f64| -> ([f32; 3], [f32; 3]) {
+            let (hx, hy, hz) = (x as f32, y as f32, z as f32);
+            (
+                [hx, hy, hz],
+                [
+                    (x - hx as f64) as f32,
+                    (y - hy as f64) as f32,
+                    (z - hz as f64) as f32,
+                ],
+            )
+        };
+        let at = |ix: usize, iy: usize| &vertices[iy * (grid + 1) + ix];
+        let mut verts: Vec<ImageQuadVertex> = Vec::with_capacity(grid * grid * 6);
+        let emit = |sample: &([f64; 2], [f64; 2]), verts: &mut Vec<ImageQuadVertex>| {
+            let (world, uv) = *sample;
+            let (pos, pos_low) = split(world[0], world[1]);
+            // WebGPU texture row 0 is v=0. `tile_world_mesh` deliberately
+            // emits row 0 at the north/top edge, so keep v unchanged. Flipping
+            // it here mirrors every XYZ tile independently and makes adjacent
+            // north/south edges sample unrelated rows.
+            verts.push(ImageQuadVertex {
+                pos,
+                uv: [uv[0] as f32, uv[1] as f32],
+                pos_low,
+            });
+        };
+        for iy in 0..grid {
+            for ix in 0..grid {
+                let v00 = at(ix, iy);
+                let v10 = at(ix + 1, iy);
+                let v11 = at(ix + 1, iy + 1);
+                let v01 = at(ix, iy + 1);
+                // (v00, v01, v11) and (v00, v11, v10): both wound CCW viewed
+                // from +Z, matching the flat quad's convention.
+                for sample in [v00, v01, v11, v00, v11, v10] {
+                    emit(sample, &mut verts);
+                }
+            }
+        }
+        // Hit-test corners: the axis-aligned box around the whole mesh.
+        let mut min = [f64::INFINITY; 2];
+        let mut max = [f64::NEG_INFINITY; 2];
+        for (world, _) in vertices {
+            for axis in 0..2 {
+                min[axis] = min[axis].min(world[axis]);
+                max[axis] = max[axis].max(world[axis]);
+            }
+        }
+        let (c0, l0) = split(min[0], min[1]);
+        let (c1, l1) = split(max[0], min[1]);
+        let (c2, l2) = split(max[0], max[1]);
+        let (c3, l3) = split(min[0], max[1]);
+        Self {
+            render_instance: None,
+            file_path: label.to_string(),
+            pixels,
+            width,
+            height,
+            opacity: 1.0,
+            corners: [c0, c1, c2, c3],
+            corners_low: [l0, l1, l2, l3],
+            draw_depth,
+            verts,
+        }
+    }
+
     /// Build an ImageModel from an OLE2FRAME's embedded presentation.
     /// The blob's compound file is parsed for the native raster or the cached
     /// metafile picture (rasterized by the `gdi` player); returns `None` when
@@ -572,6 +656,35 @@ fn fetch_remote(url: &str) -> Option<Vec<u8>> {
 #[cfg(target_arch = "wasm32")]
 fn fetch_remote(_url: &str) -> Option<Vec<u8>> {
     None
+}
+
+#[cfg(test)]
+mod world_mesh_tests {
+    use super::*;
+
+    #[test]
+    fn tessellated_mesh_keeps_top_row_at_texture_v_zero() {
+        let samples = [
+            ([0.0, 1.0], [0.0, 0.0]),
+            ([1.0, 1.0], [1.0, 0.0]),
+            ([0.0, 0.0], [0.0, 1.0]),
+            ([1.0, 0.0], [1.0, 1.0]),
+        ];
+        let model = ImageModel::from_tessellated_world_mesh(
+            "tile",
+            Arc::new(vec![255; 4]),
+            1,
+            1,
+            &samples,
+            1,
+            0.0,
+            0.0,
+        );
+        assert_eq!(model.verts[0].uv, [0.0, 0.0]);
+        assert_eq!(model.verts[1].uv, [0.0, 1.0]);
+        assert_eq!(model.verts[2].uv, [1.0, 1.0]);
+        assert_eq!(model.verts[5].uv, [1.0, 0.0]);
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

@@ -155,7 +155,7 @@ pub use pipeline::viewcube::{
     hit_test, hit_test_cardinal, hover_id, CubeRegion, NudgeDir, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD,
     VIEWCUBE_PX, VIEWCUBE_REGION_PX, VIEWCUBE_RENDER_PX,
 };
-use view::camera::Camera;
+pub use view::camera::Camera;
 pub use view::camera::Projection;
 
 use crate::command::EntityTransform;

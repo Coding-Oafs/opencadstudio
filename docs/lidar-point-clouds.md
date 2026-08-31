@@ -63,7 +63,7 @@ DWG/DXF.
 | `POINTCLOUDMANAGER` | Open the click-first LiDAR manager. |
 | `POINTCLOUDRESTORE` | Resolve the saved attachment from the drawing sidecar, validating its fingerprint and repairing a moved relative path. |
 | `POINTCLOUDINFO` | Report source path, source/display point counts, sample stride, pending edits, CRS-VLR presence, and VLR/EVLR counts. |
-| `POINTCLOUDINDEX` / `POINTCLOUDINDEXCANCEL` | Build or open every source's adjacent disk-backed `.ocstiles` hierarchy sequentially, or cancel the current dataset batch. One failed source is reported and skipped so the remaining tiles continue. |
+| `POINTCLOUDINDEX` / `POINTCLOUDINDEXCANCEL` | Build or open every source's adjacent disk-backed `.ocstiles-v3` hierarchy sequentially, or cancel the current dataset batch. One failed source is reported and skipped so the remaining tiles continue. |
 | `POINTCLOUDCOLOR <mode>` | Use `CLASS`, `RGB`, `INTENSITY`, `ELEVATION`, `RETURN`, `SOURCE`, or `LABEL` GPU coloration. `LABEL` colors by the UPCP urban label when the attached source carries one. |
 | `POINTCLOUDPOINTSIZE <1-32>` | Set the fixed physical-pixel point diameter. |
 | `POINTCLOUDCLASSVISIBLE <class> <ON/OFF>` | Show or hide one class. |
@@ -153,7 +153,7 @@ ASPRS table or its edits. Scripts drive the same engine through
   rewrites only that uniform — the instance buffer is rebuilt solely when the
   point set or per-point attributes change (tile loads, edits, selections).
 - A versioned, rebuildable tiled LOD cache adjacent to the source:
-  `<cloud>.las.ocstiles` or `<cloud>.laz.ocstiles`. It retains full leaf records,
+  `<cloud>.las.ocstiles-v3` or `<cloud>.laz.ocstiles-v3`. It retains full leaf records,
   deterministic coarser levels, caps simultaneously open tile files, and
   rejects a cache when the source fingerprint has changed.
 - Camera-frustum-driven tile selection chooses the finest visible level that
